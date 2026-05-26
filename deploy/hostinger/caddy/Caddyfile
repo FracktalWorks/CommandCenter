@@ -1,0 +1,36 @@
+# Edit the hostnames below to match the DNS records pointed at this VPS.
+# Caddy auto-provisions TLS certs from Let's Encrypt on first request.
+#
+# Reload after edits:  sudo systemctl reload caddy
+
+{
+    # Set an email for ACME registration (Let's Encrypt expiry alerts go here).
+    email ops@fracktal.in
+    admin off
+}
+
+# --- Gateway (FastAPI) ---
+brain.fracktal.in {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8080 {
+        header_up X-Real-IP {remote_host}
+    }
+}
+
+# --- Langfuse (self-hosted observability) ---
+langfuse.fracktal.in {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:3000
+}
+
+# --- n8n (Phase 0.5+, when enabled) ---
+# n8n.fracktal.in {
+#     encode zstd gzip
+#     reverse_proxy 127.0.0.1:5678
+# }
+
+# --- Skill Workbench (Phase 0.5+, when enabled) ---
+# workbench.fracktal.in {
+#     encode zstd gzip
+#     reverse_proxy 127.0.0.1:3001
+# }

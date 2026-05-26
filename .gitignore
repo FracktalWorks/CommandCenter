@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.uv-cache/
+dist/
+build/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# IDE
+.idea/
+*.swp
+.DS_Store
+
+# Tests / cov
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / workbench
+node_modules/
+.next/
+out/
+
+# Data / runtime
+*.log
+data/
+logs/
+.tmp/
+tmp/
+
+# Docker volumes (if mounted locally)
+infra/volumes/

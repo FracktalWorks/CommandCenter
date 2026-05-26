@@ -1,0 +1,15 @@
+# promptfoo cases for quiet_deal_followup
+description: quiet_deal_followup regression
+providers:
+  - id: file://./_runner.py
+prompts:
+  - "{{deal_id}} {{channel}}"
+tests:
+  - vars: { deal_id: "00000000-0000-0000-0000-000000000001", channel: "email" }
+    assert:
+      - type: contains
+        value: "[deal:"
+  - vars: { deal_id: "00000000-0000-0000-0000-000000000002", channel: "whatsapp" }
+    assert:
+      - type: javascript
+        value: "output.length < 600"

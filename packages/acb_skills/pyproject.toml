@@ -1,0 +1,16 @@
+[project]
+name = "acb-skills"
+version = "0.0.1"
+description = "Read-side skill registry: walks the skills/ tree, parses SKILL.md, returns typed records."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "pydantic>=2.9",
+    "pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["acb_skills"]

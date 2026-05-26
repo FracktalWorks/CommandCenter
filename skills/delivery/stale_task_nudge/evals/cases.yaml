@@ -1,0 +1,12 @@
+description: stale_task_nudge regression
+providers:
+  - id: file://./_runner.py
+prompts:
+  - "{{task_id}}"
+tests:
+  - vars: { task_id: "00000000-0000-0000-0000-000000000001" }
+    assert:
+      - type: contains
+        value: "[task:"
+      - type: javascript
+        value: "output.length <= 280"

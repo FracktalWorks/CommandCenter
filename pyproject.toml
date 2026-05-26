@@ -1,0 +1,90 @@
+# Root pyproject — uv workspace for the AI Company Brain monorepo.
+# Apps + shared packages each live in their own sub-pyproject and are
+# stitched together as a uv workspace so they share a single .venv + lockfile.
+
+[project]
+name = "ai-company-brain"
+version = "0.0.1"
+description = "Fracktal Works internal multi-agent brain — mirror + reasoning + action layer over ClickUp/Zoho/Odoo."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = { text = "Proprietary" }
+authors = [{ name = "Fracktal Works" }]
+dependencies = [
+    # Each member is brought in via the workspace; this top-level project is the umbrella.
+    "acb-common",
+    "acb-schemas",
+    "acb-graph",
+    "acb-llm",
+    "acb-audit",
+    "acb-skills",
+    "gateway",
+    "orchestrator",
+    "ingestion",
+    "reconciler",
+    "action-broker",
+    "escalation-ui",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+    "ruff>=0.7",
+    "mypy>=1.13",
+    "types-requests",
+    "httpx>=0.27",
+    "pre-commit>=4.0",
+    "ipython>=8.29",
+]
+
+[tool.uv.workspace]
+members = [
+    "apps/*",
+    "packages/*",
+]
+
+[tool.uv.sources]
+acb-common    = { workspace = true }
+acb-schemas   = { workspace = true }
+acb-graph     = { workspace = true }
+acb-llm       = { workspace = true }
+acb-audit     = { workspace = true }
+acb-skills     = { workspace = true }
+gateway        = { workspace = true }
+orchestrator  = { workspace = true }
+ingestion     = { workspace = true }
+reconciler    = { workspace = true }
+action-broker  = { workspace = true }
+escalation-ui  = { workspace = true }
+
+# ---------- Tooling config ----------
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["workbench", "infra"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP", "SIM", "RUF"]
+ignore = ["E501"]  # line length handled by formatter
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+disallow_untyped_decorators = false
+exclude = ["workbench/", "infra/", "build/", "dist/"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests", "apps", "packages"]
+markers = [
+    "integration: requires docker-compose stack",
+    "slow: long-running tests",
+]

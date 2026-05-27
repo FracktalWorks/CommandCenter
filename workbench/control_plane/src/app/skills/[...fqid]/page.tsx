@@ -30,6 +30,7 @@ export default async function SkillDetail({ params }: Props) {
       authority={skill.authority}
       rollout={skill.rollout_stage}
       version={skill.version}
+      description={skill.description}
       openhandsUrl={process.env.NEXT_PUBLIC_OPENHANDS_URL ?? "http://localhost:3000"}
     />
   );

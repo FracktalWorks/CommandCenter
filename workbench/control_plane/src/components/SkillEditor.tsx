@@ -14,6 +14,7 @@ type Props = {
   authority: string;
   rollout: string;
   version: string;
+  description?: string;
   openhandsUrl: string;
 };
 
@@ -32,6 +33,9 @@ export default function SkillEditor(props: Props) {
   const [save, setSave] = useState<SaveState>({ kind: "idle" });
   const dirty = raw !== props.initialRaw;
   const setupDone = useRef(false);
+  const seedDone = useRef(false);
+  const [iframeUrl, setIframeUrl] = useState<string>(props.openhandsUrl);
+  const [seedStatus, setSeedStatus] = useState<"idle" | "seeding" | "ready" | "failed">("idle");
 
   const [diffOpen, setDiffOpen] = useState(false);
   const [diff, setDiff] = useState<string | null>(null);
@@ -58,6 +62,42 @@ export default function SkillEditor(props: Props) {
     setupDone.current = true;
     fetch("/api/openhands-setup").catch(() => null);
   }, []);
+
+  // Pre-seed an OpenHands conversation so the right pane lands on a session
+  // that already knows which SKILL.md to open. Resumes if a conversation_id
+  // was previously stashed for this skill.
+  useEffect(() => {
+    if (seedDone.current) return;
+    seedDone.current = true;
+    const cacheKey = `oh-conv:${props.fqid}`;
+    const cached = typeof window !== "undefined" ? window.localStorage.getItem(cacheKey) : null;
+    if (cached) {
+      setIframeUrl(`${props.openhandsUrl}/conversations/${cached}`);
+      setSeedStatus("ready");
+      return;
+    }
+    setSeedStatus("seeding");
+    fetch("/api/openhands-seed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fqid: props.fqid,
+        relPath: props.relPath,
+        description: props.description,
+      }),
+    })
+      .then((r) => r.json())
+      .then((body: { ok: boolean; conversation_id?: string; url?: string }) => {
+        if (body.ok && body.conversation_id && body.url) {
+          window.localStorage.setItem(cacheKey, body.conversation_id);
+          setIframeUrl(body.url);
+          setSeedStatus("ready");
+        } else {
+          setSeedStatus("failed");
+        }
+      })
+      .catch(() => setSeedStatus("failed"));
+  }, [props.fqid, props.relPath, props.description, props.openhandsUrl]);
 
   async function onSave() {
     setSave({ kind: "saving" });
@@ -226,11 +266,16 @@ export default function SkillEditor(props: Props) {
         </div>
         <div className="flex w-1/2 flex-col">
           <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/40 px-4 py-2 text-xs uppercase text-zinc-500">
-            <span>OpenHands sandbox</span>
-            <a href={props.openhandsUrl} target="_blank" rel="noreferrer" className="text-blue-400 normal-case hover:underline">open in new tab &rarr;</a>
+            <span>
+              OpenHands sandbox
+              {seedStatus === "seeding" && <span className="ml-2 normal-case text-zinc-400">seeding…</span>}
+              {seedStatus === "ready" && <span className="ml-2 normal-case text-emerald-400">seeded</span>}
+              {seedStatus === "failed" && <span className="ml-2 normal-case text-red-400">seed failed — cold start</span>}
+            </span>
+            <a href={iframeUrl} target="_blank" rel="noreferrer" className="text-blue-400 normal-case hover:underline">open in new tab &rarr;</a>
           </div>
           <iframe
-            src={props.openhandsUrl}
+            src={iframeUrl}
             title="OpenHands"
             className="flex-1 w-full bg-zinc-950"
           />

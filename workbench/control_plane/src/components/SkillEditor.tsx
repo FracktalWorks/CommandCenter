@@ -23,11 +23,21 @@ type SaveState =
   | { kind: "ok"; at: string }
   | { kind: "err"; msg: string };
 
+type PrResult =
+  | { ok: true; branch: string; hash: string; pushed: boolean; prUrl: string | null; pushCmd: string }
+  | { ok: false; error: string };
+
 export default function SkillEditor(props: Props) {
   const [raw, setRaw] = useState(props.initialRaw);
   const [save, setSave] = useState<SaveState>({ kind: "idle" });
   const dirty = raw !== props.initialRaw;
   const setupDone = useRef(false);
+
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [diff, setDiff] = useState<string | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [prLoading, setPrLoading] = useState(false);
+  const [prResult, setPrResult] = useState<PrResult | null>(null);
 
   // Expose current skill content + metadata to the CopilotKit chat overlay
   useCopilotReadable({
@@ -63,8 +73,50 @@ export default function SkillEditor(props: Props) {
         return;
       }
       setSave({ kind: "ok", at: new Date().toLocaleTimeString() });
+      // Refresh diff after save so the panel reflects the latest on-disk state
+      if (diffOpen) void loadDiff();
     } catch (e) {
       setSave({ kind: "err", msg: (e as Error).message });
+    }
+  }
+
+  async function loadDiff() {
+    setDiffLoading(true);
+    try {
+      const res = await fetch(`/api/skills/${props.fqid}/diff`);
+      const body = await res.json();
+      setDiff(body.diff ?? "");
+    } catch {
+      setDiff(null);
+    } finally {
+      setDiffLoading(false);
+    }
+  }
+
+  function onToggleDiff() {
+    if (diffOpen) {
+      setDiffOpen(false);
+    } else {
+      setDiffOpen(true);
+      setPrResult(null);
+      void loadDiff();
+    }
+  }
+
+  async function onOpenPr() {
+    setPrLoading(true);
+    setPrResult(null);
+    try {
+      const res = await fetch(`/api/skills/${props.fqid}/pr`, { method: "POST" });
+      const body: PrResult = await res.json();
+      setPrResult(body);
+      if (body.ok && body.prUrl) {
+        window.open(body.prUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch (e) {
+      setPrResult({ ok: false, error: (e as Error).message });
+    } finally {
+      setPrLoading(false);
     }
   }
 
@@ -88,6 +140,19 @@ export default function SkillEditor(props: Props) {
             {save.kind === "err" && <span className="text-xs text-red-400">error: {save.msg}</span>}
             {save.kind === "saving" && <span className="text-xs text-zinc-400">saving&hellip;</span>}
             <button
+              onClick={onToggleDiff}
+              className="rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm hover:bg-zinc-700"
+            >
+              {diffOpen ? "Close diff" : "Diff ↓"}
+            </button>
+            <button
+              onClick={onOpenPr}
+              disabled={prLoading}
+              className="rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {prLoading ? "Creating…" : "Open PR ↗"}
+            </button>
+            <button
               onClick={onSave}
               disabled={!dirty || save.kind === "saving"}
               className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
@@ -97,6 +162,47 @@ export default function SkillEditor(props: Props) {
           </div>
         </div>
       </div>
+
+      {/* Diff panel */}
+      {diffOpen && (
+        <div className="border-b border-zinc-800 bg-black/50 max-h-72 overflow-auto">
+          {diffLoading ? (
+            <div className="px-5 py-3 text-xs text-zinc-500">Loading diff…</div>
+          ) : diff === null ? (
+            <div className="px-5 py-3 text-xs text-red-400">Failed to load diff.</div>
+          ) : diff.trim() === "" ? (
+            <div className="px-5 py-3 text-xs text-zinc-500">No changes vs HEAD. Save your edits first, then view the diff.</div>
+          ) : (
+            <pre className="px-5 py-3 font-mono text-xs leading-5 select-text">
+              {diff.split("\n").map((line, i) => (
+                <span
+                  key={i}
+                  className={
+                    line.startsWith("+") && !line.startsWith("+++")
+                      ? "text-emerald-400 block"
+                      : line.startsWith("-") && !line.startsWith("---")
+                      ? "text-red-400 block"
+                      : line.startsWith("@@")
+                      ? "text-blue-400 block"
+                      : "text-zinc-500 block"
+                  }
+                >
+                  {line || " "}
+                </span>
+              ))}
+            </pre>
+          )}
+          {prResult && (
+            <div className={`mx-5 mb-3 rounded px-3 py-2 text-xs font-mono ${prResult.ok ? "bg-emerald-950/60 text-emerald-300" : "bg-red-950/60 text-red-300"}`}>
+              {prResult.ok
+                ? prResult.pushed
+                  ? <>Branch <b>{prResult.branch}</b> pushed. {prResult.prUrl ? <a href={prResult.prUrl} target="_blank" rel="noreferrer" className="underline">Open PR on GitHub ↗</a> : "No remote configured."}</>
+                  : <>Branch <b>{prResult.branch}</b> created locally. Run: <code>{prResult.pushCmd}</code></>
+                : `Error: ${prResult.error}`}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Two-pane: Monaco | OpenHands */}
       <div className="flex flex-1 overflow-hidden">

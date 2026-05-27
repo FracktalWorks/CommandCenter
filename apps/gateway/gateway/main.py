@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from acb_common import configure_logging, get_logger, get_settings
 from orchestrator.agents.pull_agent import answer as pull_answer
+from orchestrator.agents.sales_pull_agent import answer as sales_pull_answer
 
 _log = get_logger("gateway")
 
@@ -65,6 +66,23 @@ async def pull(req: PullRequest) -> PullResponse:
         text = await pull_answer(req.query, user_email=req.user_email)
     except Exception as exc:  # surface upstream errors as 200 with diagnostic text
         _log.exception("pull.failed")
+        return PullResponse(answer=f"[agent error] {type(exc).__name__}: {exc}", citations=[])
+    citations = sorted({m.group(0) for m in CITATION_RE.finditer(text)})
+    return PullResponse(answer=text, citations=citations)
+
+
+# ---------- Sales Pull (WBS 1.5) ----------
+
+@app.post("/pull/sales", response_model=PullResponse, tags=["pull"])
+async def pull_sales(req: PullRequest) -> PullResponse:
+    """Sales-flavoured pull: uses customer-360 / quiet-deal context blocks."""
+    from acb_llm.guardrails import CITATION_RE
+
+    _log.info("pull.sales.received", query=req.query, user=req.user_email)
+    try:
+        text = await sales_pull_answer(req.query, user_email=req.user_email)
+    except Exception as exc:
+        _log.exception("pull.sales.failed")
         return PullResponse(answer=f"[agent error] {type(exc).__name__}: {exc}", citations=[])
     citations = sorted({m.group(0) for m in CITATION_RE.finditer(text)})
     return PullResponse(answer=text, citations=citations)

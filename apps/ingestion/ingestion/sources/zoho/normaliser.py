@@ -36,6 +36,63 @@ def _decimal(value: Any) -> Decimal | None:
         return None
 
 
+# ---- deal_type heuristic (WBS 1.1) ---------------------------------------
+
+_SOFTWARE_RX = ("software", "saas", "license", "licence", "subscription", "platform", "annual contract")
+_SERVICE_RX = ("service", "consult", "amc", "support", "training", "implementation", "installation", "warranty")
+_PRODUCT_RX = ("printer", "machine", "hardware", "kit", "spare", "filament", "device", "module", "component")
+
+
+def infer_deal_type(deal: dict[str, Any]) -> str | None:
+    """Best-effort guess at deal_type from Zoho fields.
+
+    Order of precedence:
+        1. An explicit custom field — ``Deal_Type``, ``Type``, ``Category``.
+        2. Pipeline / Layout name (e.g. ``Software Pipeline``).
+        3. Keyword match in the deal name.
+
+    Returns one of ``product`` / ``service`` / ``software``, or ``None`` if
+    we have no signal — the DB CHECK constraint accepts NULL.
+    """
+    # 1) Explicit custom field
+    for key in ("Deal_Type", "Type", "Category"):
+        val = deal.get(key)
+        if isinstance(val, str):
+            v = val.strip().lower()
+            if v in {"product", "service", "software"}:
+                return v
+            if any(t in v for t in _SOFTWARE_RX):
+                return "software"
+            if any(t in v for t in _SERVICE_RX):
+                return "service"
+            if any(t in v for t in _PRODUCT_RX) or "hardware" in v:
+                return "product"
+
+    # 2) Pipeline / Layout name
+    for key in ("Pipeline", "Layout"):
+        v = deal.get(key)
+        name = (v or {}).get("name") if isinstance(v, dict) else v
+        if isinstance(name, str):
+            blob = name.lower()
+            if any(t in blob for t in _SOFTWARE_RX):
+                return "software"
+            if any(t in blob for t in _SERVICE_RX):
+                return "service"
+            if any(t in blob for t in _PRODUCT_RX):
+                return "product"
+
+    # 3) Free-text fall-back on the deal name itself.
+    blob = (deal.get("Deal_Name") or "").lower()
+    if any(t in blob for t in _SOFTWARE_RX):
+        return "software"
+    if any(t in blob for t in _SERVICE_RX):
+        return "service"
+    if any(t in blob for t in _PRODUCT_RX):
+        return "product"
+    return None
+
+
+
 def normalise_accounts(session: Session, accounts: list[dict[str, Any]]) -> int:
     """Upsert Zoho Accounts as Customers. Returns count."""
     n = 0
@@ -126,15 +183,16 @@ def normalise_deals(session: Session, deals: list[dict[str, Any]]) -> int:
             stage=d.get("Stage"),
             last_activity_at=_iso_to_dt(d.get("Last_Activity_Time") or d.get("Modified_Time")),
             value_inr=_decimal(d.get("Amount")),
-            deal_type=None,  # not natively mapped; leave NULL to satisfy CHECK
+            deal_type=infer_deal_type(d),
         )
         n += 1
     return n
 
 
 __all__ = [
+    "infer_deal_type",
     "normalise_accounts",
     "normalise_contacts",
-    "normalise_users",
     "normalise_deals",
+    "normalise_users",
 ]

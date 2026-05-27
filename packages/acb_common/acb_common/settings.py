@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     zoho_api_domain: str = "https://www.zohoapis.com"
     zoho_accounts_url: str = "https://accounts.zoho.com"
     zoho_region: str = "in"
+    zoho_webhook_secret: str = ""        # HMAC secret for /webhooks/zoho (WBS 1.1)
 
 
 @lru_cache(maxsize=1)

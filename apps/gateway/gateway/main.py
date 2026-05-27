@@ -30,6 +30,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Webhook routers (Phase 1 ingestion entry points)
+try:
+    from ingestion.sources.clickup.webhook import router as _clickup_router
+
+    app.include_router(_clickup_router)
+except Exception:  # pragma: no cover - keep gateway bootable even if optional dep missing
+    pass
+
+try:
+    from ingestion.sources.zoho.webhook import router as _zoho_router
+
+    app.include_router(_zoho_router)
+except Exception:  # pragma: no cover
+    pass
+
 
 # ---------- Health ----------
 

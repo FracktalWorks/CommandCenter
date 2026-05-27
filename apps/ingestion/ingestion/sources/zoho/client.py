@@ -79,19 +79,38 @@ async def _headers() -> dict[str, str]:
     }
 
 
-async def _list_module(module: str, *, per_page: int = 200) -> list[dict[str, Any]]:
-    """Paginated GET of an entire Zoho module (Accounts, Deals, Contacts, Users)."""
+async def _list_module(
+    module: str,
+    *,
+    per_page: int = 200,
+    modified_since: "datetime | None" = None,
+) -> list[dict[str, Any]]:
+    """Paginated GET of a Zoho module.
+
+    When ``modified_since`` is provided, sends the ``If-Modified-Since`` header
+    Zoho honours on Accounts/Deals/Contacts to return only records changed
+    after that timestamp — the basis of incremental sync (WBS 1.1).
+    """
     s = get_settings()
     out: list[dict[str, Any]] = []
     page = 1
+    headers = await _headers()
+    if modified_since is not None:
+        # Zoho expects RFC 1123, e.g. "Tue, 01 Jan 2026 00:00:00 +0000".
+        if modified_since.tzinfo is None:
+            modified_since = modified_since.replace(tzinfo=timezone.utc)
+        headers = {
+            **headers,
+            "If-Modified-Since": modified_since.strftime("%a, %d %b %Y %H:%M:%S %z"),
+        }
     async with httpx.AsyncClient(timeout=60.0) as http:
         while True:
             r = await http.get(
                 f"{s.zoho_api_domain}/crm/v2/{module}",
-                headers=await _headers(),
+                headers=headers,
                 params={"page": page, "per_page": per_page},
             )
-            if r.status_code == 204:
+            if r.status_code == 204 or r.status_code == 304:
                 break
             r.raise_for_status()
             body = r.json()
@@ -104,16 +123,26 @@ async def _list_module(module: str, *, per_page: int = 200) -> list[dict[str, An
     return out
 
 
-async def list_accounts() -> list[dict[str, Any]]:
-    return await _list_module("Accounts")
+async def list_accounts(*, modified_since: "datetime | None" = None) -> list[dict[str, Any]]:
+    return await _list_module("Accounts", modified_since=modified_since)
 
 
-async def list_deals() -> list[dict[str, Any]]:
-    return await _list_module("Deals")
+async def list_deals(*, modified_since: "datetime | None" = None) -> list[dict[str, Any]]:
+    return await _list_module("Deals", modified_since=modified_since)
 
 
-async def list_contacts() -> list[dict[str, Any]]:
-    return await _list_module("Contacts")
+async def list_contacts(*, modified_since: "datetime | None" = None) -> list[dict[str, Any]]:
+    return await _list_module("Contacts", modified_since=modified_since)
+
+
+async def list_notes(*, modified_since: "datetime | None" = None) -> list[dict[str, Any]]:
+    """Notes are first-class activity rows in Zoho CRM (WBS 1.1)."""
+    return await _list_module("Notes", modified_since=modified_since)
+
+
+async def list_tasks(*, modified_since: "datetime | None" = None) -> list[dict[str, Any]]:
+    """Zoho CRM Tasks (not to be confused with ClickUp tasks)."""
+    return await _list_module("Tasks", modified_since=modified_since)
 
 
 async def list_users() -> list[dict[str, Any]]:
@@ -131,7 +160,9 @@ async def list_users() -> list[dict[str, Any]]:
 __all__ = [
     "get_access_token",
     "list_accounts",
-    "list_deals",
     "list_contacts",
+    "list_deals",
+    "list_notes",
+    "list_tasks",
     "list_users",
 ]

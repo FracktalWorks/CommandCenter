@@ -36,7 +36,11 @@ services:
       retries: 20
 
   redis:
-    image: redis:7-alpine
+    # Phase 1 (WBS 1.8): upgraded from redis:7-alpine to redis-stack-server so
+    # we get RediSearch + RedisJSON, which LiteLLM's `redis-semantic` cache
+    # backend depends on. The vanilla Redis command set (used by everything
+    # else: queues, rate-limits, locks) is unchanged.
+    image: redis/redis-stack-server:7.4.0-v0
     container_name: acb-redis
     <<: *restart
     profiles: ["core", "obs"]

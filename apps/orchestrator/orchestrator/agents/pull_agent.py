@@ -30,7 +30,7 @@ _SYSTEM_UNGROUNDED = (
 )
 
 
-async def answer(query: str, *, user_email: str | None = None) -> str:
+async def answer(query: str, *, user_email: str | None = None, trace_id: str | None = None) -> str:
     """Run the full Phase-0 Pull pipeline and return the answer string."""
     with get_session() as s:
         hits = retrieve(s, query)
@@ -41,7 +41,7 @@ async def answer(query: str, *, user_email: str | None = None) -> str:
             actor=f"user:{user_email or 'anonymous'}",
             action="pull_query",
             target="agent:pull",
-            payload={"query": query, "hits": len(hits)},
+            payload={"query": query, "hits": len(hits), "trace_id": trace_id},
         )
     )
 
@@ -73,7 +73,7 @@ async def answer(query: str, *, user_email: str | None = None) -> str:
                 actor="agent:pull",
                 action="guardrail_block",
                 target="agent:pull",
-                payload={"reason": str(exc), "raw": raw},
+                payload={"reason": str(exc), "raw": raw, "trace_id": trace_id},
             )
         )
         return (

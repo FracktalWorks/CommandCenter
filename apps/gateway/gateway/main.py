@@ -82,15 +82,19 @@ class PullResponse(BaseModel):
 async def pull(req: PullRequest) -> PullResponse:
     """Phase-0 wire: gateway -> pull_agent -> retrieval+LLM+guardrails."""
     from acb_llm.guardrails import CITATION_RE  # local import to avoid cold-start cost
+    import uuid
 
-    _log.info("pull.received", query=req.query, user=req.user_email)
+    trace_id = uuid.uuid4().hex
+    _log.info("pull.received", query=req.query, user=req.user_email, trace_id=trace_id)
     try:
-        text = await pull_answer(req.query, user_email=req.user_email)
+        text = await pull_answer(req.query, user_email=req.user_email, trace_id=trace_id)
     except Exception as exc:  # surface upstream errors as 200 with diagnostic text
-        _log.exception("pull.failed")
-        return PullResponse(answer=f"[agent error] {type(exc).__name__}: {exc}", citations=[])
+        _log.exception("pull.failed", trace_id=trace_id)
+        return PullResponse(
+            answer=f"[agent error] {type(exc).__name__}: {exc}", citations=[], trace_id=trace_id
+        )
     citations = sorted({m.group(0) for m in CITATION_RE.finditer(text)})
-    return PullResponse(answer=text, citations=citations)
+    return PullResponse(answer=text, citations=citations, trace_id=trace_id)
 
 
 # ---------- Sales Pull (WBS 1.5) ----------
@@ -99,12 +103,16 @@ async def pull(req: PullRequest) -> PullResponse:
 async def pull_sales(req: PullRequest) -> PullResponse:
     """Sales-flavoured pull: uses customer-360 / quiet-deal context blocks."""
     from acb_llm.guardrails import CITATION_RE
+    import uuid
 
-    _log.info("pull.sales.received", query=req.query, user=req.user_email)
+    trace_id = uuid.uuid4().hex
+    _log.info("pull.sales.received", query=req.query, user=req.user_email, trace_id=trace_id)
     try:
-        text = await sales_pull_answer(req.query, user_email=req.user_email)
+        text = await sales_pull_answer(req.query, user_email=req.user_email, trace_id=trace_id)
     except Exception as exc:
-        _log.exception("pull.sales.failed")
-        return PullResponse(answer=f"[agent error] {type(exc).__name__}: {exc}", citations=[])
+        _log.exception("pull.sales.failed", trace_id=trace_id)
+        return PullResponse(
+            answer=f"[agent error] {type(exc).__name__}: {exc}", citations=[], trace_id=trace_id
+        )
     citations = sorted({m.group(0) for m in CITATION_RE.finditer(text)})
-    return PullResponse(answer=text, citations=citations)
+    return PullResponse(answer=text, citations=citations, trace_id=trace_id)

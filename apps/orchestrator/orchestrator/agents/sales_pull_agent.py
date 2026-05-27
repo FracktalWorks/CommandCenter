@@ -38,7 +38,7 @@ _SYSTEM_UNGROUNDED = (
 )
 
 
-async def answer(query: str, *, user_email: str | None = None) -> str:
+async def answer(query: str, *, user_email: str | None = None, trace_id: str | None = None) -> str:
     """Run the sales-focused Pull pipeline and return the answer string."""
     with get_session() as s:
         hits = sales_context(s, query)
@@ -49,7 +49,7 @@ async def answer(query: str, *, user_email: str | None = None) -> str:
             actor=f"user:{user_email or 'anonymous'}",
             action="sales_pull_query",
             target="agent:sales_pull",
-            payload={"query": query, "hits": len(hits)},
+            payload={"query": query, "hits": len(hits), "trace_id": trace_id},
         )
     )
 
@@ -80,7 +80,7 @@ async def answer(query: str, *, user_email: str | None = None) -> str:
                 actor="agent:sales_pull",
                 action="guardrail_block",
                 target="agent:sales_pull",
-                payload={"reason": str(exc), "raw": raw},
+                payload={"reason": str(exc), "raw": raw, "trace_id": trace_id},
             )
         )
         return (

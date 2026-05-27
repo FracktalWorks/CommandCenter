@@ -18,7 +18,9 @@ const LITELLM_KEY = process.env.LITELLM_MASTER_KEY ?? "sk-local-dev-change-me";
 
 // From inside the OpenHands Docker container, LiteLLM is at host.docker.internal.
 const LITELLM_URL_IN_DOCKER = "http://host.docker.internal:4000";
-const LLM_MODEL = "tier3-opus";
+// Must be prefixed with "openai/" so OpenHands' internal litellm client
+// routes the call to the LiteLLM proxy's OpenAI-compatible endpoint.
+const LLM_MODEL = "openai/tier3-opus";
 
 export async function GET() {
   try {
@@ -27,8 +29,13 @@ export async function GET() {
       cache: "no-store",
     });
     if (checkRes.ok) {
-      // Settings already exist — nothing to do
-      return NextResponse.json({ ok: true, seeded: false });
+      // Settings exist — but re-seed to ensure the model is correct
+      // (e.g. after a container rebuild with a fixed LLM_MODEL value)
+      const existing = await checkRes.json().catch(() => ({})) as Record<string, unknown>;
+      if (existing.llm_model === LLM_MODEL) {
+        return NextResponse.json({ ok: true, seeded: false });
+      }
+      // Fall through to re-seed with correct model
     }
     if (checkRes.status !== 404) {
       // Unexpected error (e.g. OpenHands not running)

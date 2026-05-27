@@ -165,8 +165,9 @@ services:
       # callbacks (http://host.docker.internal:{port}/api/v1/webhooks) work.
       OH_SANDBOX_HOST_PORT: "3002"
       LOG_ALL_EVENTS: "true"
-      # Pre-wire LLM to the local LiteLLM proxy (Gemini 2.5 Pro via tier3-opus)
-      LLM_MODEL: "tier3-opus"
+      # Pre-wire LLM to the local LiteLLM proxy (Gemini 2.5 Pro via tier3-opus).
+      # Must use "openai/" prefix so OpenHands' internal litellm routes to the proxy.
+      LLM_MODEL: "openai/tier3-opus"
       LLM_BASE_URL: "http://host.docker.internal:4000"
       LLM_API_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-change-me}
     ports:

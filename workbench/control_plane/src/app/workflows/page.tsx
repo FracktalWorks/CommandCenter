@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { useCopilotReadable } from "@copilotkit/react-core";
+import { useAgentContext } from "@copilotkit/react-core/v2";
 
 // n8n is proxied through Next.js at /n8n/ (same-origin) to avoid
 // cross-port ERR_CONNECTION_REFUSED in the browser iframe.
@@ -19,7 +19,7 @@ export default function Workflows() {
   const authAttempted = useRef(false);
 
   // Expose Workflow Editor context to the CopilotKit chat overlay
-  useCopilotReadable({
+  useAgentContext({
     description: "Currently active pane in the Jannet.AI Control Plane: Workflow Editor (n8n)",
     value: {
       pane: "workflow-editor",

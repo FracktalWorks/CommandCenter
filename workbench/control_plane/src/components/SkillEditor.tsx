@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { useCopilotReadable } from "@copilotkit/react-core";
+import { useAgentContext } from "@copilotkit/react-core/v2";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
@@ -40,7 +40,7 @@ export default function SkillEditor(props: Props) {
   const [prResult, setPrResult] = useState<PrResult | null>(null);
 
   // Expose current skill content + metadata to the CopilotKit chat overlay
-  useCopilotReadable({
+  useAgentContext({
     description: "Currently open skill in the Skill Studio editor",
     value: {
       fqid: props.fqid,

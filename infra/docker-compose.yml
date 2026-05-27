@@ -152,13 +152,15 @@ services:
   # Configure your LLM via the OpenHands Settings UI on first launch.
   # To use the local LiteLLM proxy: set base_url = http://host.docker.internal:4000
   openhands:
-    image: ghcr.io/all-hands-ai/openhands:latest
+    image: ghcr.io/all-hands-ai/openhands:0.59
     container_name: acb-openhands
     <<: *restart
     profiles: ["sandbox"]
     environment:
-      # Image used for per-conversation sandboxes (Docker-in-Docker)
-      SANDBOX_RUNTIME_CONTAINER_IMAGE: ghcr.io/all-hands-ai/runtime:latest
+      # Image used for per-conversation sandboxes (Docker-in-Docker).
+      # Must match the openhands image version — runtime:latest was Aug 2024
+      # (miniforge3) but 0.59 expects micromamba; use the pinned runtime tag.
+      SANDBOX_RUNTIME_CONTAINER_IMAGE: ghcr.io/all-hands-ai/runtime:0.59-nikolaik
       # Tell OpenHands which host port it's exposed on so sandbox webhook
       # callbacks (http://host.docker.internal:{port}/api/v1/webhooks) work.
       OH_SANDBOX_HOST_PORT: "3002"

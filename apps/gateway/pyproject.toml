@@ -12,6 +12,7 @@ dependencies = [
     "acb-common",
     "acb-schemas",
     "acb-llm",
+    "acb-auth",
     "orchestrator",
 ]
 

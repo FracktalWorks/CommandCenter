@@ -4,9 +4,10 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from pydantic import BaseModel
 
+from acb_auth import UserContext, get_current_user, require_role, UserRole
 from acb_common import configure_logging, get_logger, get_settings
 from orchestrator.agents.pull_agent import answer as pull_answer
 from orchestrator.agents.sales_pull_agent import answer as sales_pull_answer
@@ -79,7 +80,7 @@ class PullResponse(BaseModel):
 
 
 @app.post("/pull", response_model=PullResponse, tags=["pull"])
-async def pull(req: PullRequest) -> PullResponse:
+async def pull(req: PullRequest, _user: UserContext = Depends(get_current_user)) -> PullResponse:
     """Phase-0 wire: gateway -> pull_agent -> retrieval+LLM+guardrails."""
     from acb_llm.guardrails import CITATION_RE  # local import to avoid cold-start cost
     import uuid
@@ -99,7 +100,8 @@ async def pull(req: PullRequest) -> PullResponse:
 
 # ---------- Sales Pull (WBS 1.5) ----------
 
-@app.post("/pull/sales", response_model=PullResponse, tags=["pull"])
+@app.post("/pull/sales", response_model=PullResponse, tags=["pull"],
+          dependencies=[require_role(UserRole.EXECUTIVE)])
 async def pull_sales(req: PullRequest) -> PullResponse:
     """Sales-flavoured pull: uses customer-360 / quiet-deal context blocks."""
     from acb_llm.guardrails import CITATION_RE

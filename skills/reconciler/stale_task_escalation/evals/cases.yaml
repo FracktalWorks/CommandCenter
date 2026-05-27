@@ -1,0 +1,19 @@
+﻿description: stale_task_escalation golden cases
+providers:
+  - id: file://../../../../evals/_runner.py
+    label: acb-tier1
+prompts:
+  - "{{task_id}} {{days_in_stage}}"
+tests:
+  - vars: { task_id: "00000000-0000-0000-0000-000000000070", days_in_stage: 14 }
+    assert:
+      - type: contains
+        value: "[task:"
+      - type: contains
+        value: "low"
+  - vars: { task_id: "00000000-0000-0000-0000-000000000071", days_in_stage: 60 }
+    assert:
+      - type: contains
+        value: "[task:"
+      - type: contains
+        value: "high"

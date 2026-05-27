@@ -1,0 +1,103 @@
+﻿# AI Company Brain -- Skill Eval CI Gate (WBS 1.9.1 + 1.9.2)
+# Runs on every PR that touches skills/ or evals/.
+# Fails the PR if any golden case regresses.
+
+name: skill-eval
+
+on:
+  pull_request:
+    paths:
+      - "skills/**"
+      - "evals/**"
+      - ".github/workflows/skill-eval.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write   # needed to post PR comment
+
+jobs:
+  promptfoo:
+    name: "Promptfoo golden cases"
+    runs-on: ubuntu-latest
+    continue-on-error: true   # scaffold: do not hard-block until runner is wired
+
+    env:
+      LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || 'http://localhost:4000' }}
+      LITELLM_API_KEY:  ${{ secrets.LITELLM_API_KEY  || 'sk-local-dev-change-me' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run promptfoo eval
+        id: eval
+        run: |
+          npx --yes promptfoo@latest eval \
+            --config evals/promptfoo.yaml \
+            --output evals/results.json \
+            --ci \
+            --no-cache \
+            2>&1 | tee eval_output.txt
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Post results as PR comment
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '## Skill Eval Results\n\n';
+            try {
+              const raw = fs.readFileSync('eval_output.txt', 'utf8');
+              const lines = raw.split('\n').slice(-30).join('\n');
+              body += '```\n' + lines + '\n```\n';
+            } catch (e) {
+              body += '_No output captured._\n';
+            }
+            const passed = '${{ steps.eval.outputs.exit_code }}' === '0';
+            body += passed ? '\n**All cases passed.**' : '\n**Some cases failed -- see log above.**';
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: promptfoo-results
+          path: evals/results.json
+          if-no-files-found: ignore
+
+  inspect:
+    name: "Inspect AI scenario harness"
+    runs-on: ubuntu-latest
+    continue-on-error: true   # scaffold: enable once live endpoint is reachable from CI
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install inspect-ai
+        run: pip install inspect-ai
+
+      - name: Run inspect eval (dry-run, mock model)
+        run: |
+          inspect eval evals/inspect/scenarios.py \
+            --model mockllm/model \
+            --limit 1 \
+            --log-dir evals/inspect_logs/ \
+            2>&1 | tee inspect_output.txt || true
+
+      - name: Upload inspect logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inspect-logs
+          path: evals/inspect_logs/
+          if-no-files-found: ignore

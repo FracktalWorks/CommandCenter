@@ -18,6 +18,7 @@ dependencies = [
     "acb-llm",
     "acb-audit",
     "acb-skills",
+    "acb-auth",
     "gateway",
     "orchestrator",
     "ingestion",
@@ -53,6 +54,7 @@ acb-graph     = { workspace = true }
 acb-llm       = { workspace = true }
 acb-audit     = { workspace = true }
 acb-skills     = { workspace = true }
+acb-auth       = { workspace = true }
 gateway        = { workspace = true }
 orchestrator  = { workspace = true }
 ingestion     = { workspace = true }

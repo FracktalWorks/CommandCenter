@@ -1,0 +1,19 @@
+﻿description: project_status_summary golden cases
+providers:
+  - id: file://../../../evals/_runner.py
+    label: acb-tier1
+prompts:
+  - "{{project_id}}"
+tests:
+  - vars: { project_id: "00000000-0000-0000-0000-000000000010" }
+    assert:
+      - type: contains
+        value: "[project:"
+      - type: javascript
+        value: "output.length <= 600"
+  - vars: { project_id: "00000000-0000-0000-0000-000000000011" }
+    assert:
+      - type: contains
+        value: "[project:"
+      - type: not-contains
+        value: "None"

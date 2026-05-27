@@ -1,7 +1,7 @@
 """Postgres + pgvector + Apache AGE access layer.
 Phase 0: vanilla SQLAlchemy session factory + lightweight repository helpers.
 """
-from acb_graph import models, repo
+from acb_graph import models, repo, resolver
 from acb_graph.db import get_engine, get_session
 
-__all__ = ["get_engine", "get_session", "models", "repo"]
+__all__ = ["get_engine", "get_session", "models", "repo", "resolver"]

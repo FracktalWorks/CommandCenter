@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     zoho_region: str = "in"
     zoho_webhook_secret: str = ""        # HMAC secret for /webhooks/zoho (WBS 1.1)
 
+    # Gmail (Phase 1, WBS 1.3)
+    gmail_sa_json_path: str = ""         # service-account key file
+    gmail_workspace_domain: str = ""     # e.g. fracktal.in
+    gmail_default_user: str = ""         # default mailbox to impersonate
+    gmail_pubsub_token: str = ""         # bearer token expected on /webhooks/gmail
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

@@ -45,6 +45,13 @@ try:
 except Exception:  # pragma: no cover
     pass
 
+try:
+    from ingestion.sources.gmail.webhook import router as _gmail_router
+
+    app.include_router(_gmail_router)
+except Exception:  # pragma: no cover
+    pass
+
 
 # ---------- Health ----------
 

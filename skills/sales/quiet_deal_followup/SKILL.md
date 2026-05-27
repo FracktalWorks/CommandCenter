@@ -29,7 +29,7 @@ that the deal owner can review, edit, and send.
 
 ## Steps
 1. Load the deal via `graph.read.deal_360(deal_id)`. Fail if not found.
-2. Skip drafting when `stage` matches `^closed` (case-insensitive) — emit a `{ "skip": true, "reason": "stage_closed" }` payload instead.
+2. Skip drafting when `stage` matches `^closed` (case-insensitive) ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ emit a `{ "skip": true, "reason": "stage_closed" }` payload instead.
 3. Read the deal's last 3 messages (any channel) for tone calibration.
 4. Draft:
    - Acknowledge the gap honestly ("just circling back").
@@ -41,7 +41,7 @@ that the deal owner can review, edit, and send.
 ## Constraints
 - <= 120 words (email) or <= 60 words (WhatsApp).
 - No emojis unless the last 3 messages used emojis.
-- Never invent a price or a delivery date — say "we will confirm" instead.
+- Never invent a price or a delivery date ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ say "we will confirm" instead.
 
 ## Tests
 See `evals/cases.yaml` (promptfoo) and `evals/scenarios.yaml` (Inspect AI).

@@ -26,8 +26,8 @@ export default function Home() {
           </Link>
         ))}
       </div>
-      <div className="mt-12 rounded-lg border border-amber-900/40 bg-amber-950/20 p-4 text-sm text-amber-200">
-        <b>Heads up:</b> This is the Phase 0.5 shell. Google SSO (NextAuth, restricted to <code>@fracktal.in</code>) and CopilotKit chat are wired in Phase 0.5.6.
+      <div className="mt-12 rounded-lg border border-zinc-800 bg-zinc-900/30 p-4 text-sm text-zinc-400">
+        <b>Phase 0.5:</b> Skill Studio, Workflow Editor, and AI chat overlay are live. Google SSO activates once <code>AUTH_GOOGLE_ID</code> / <code>AUTH_GOOGLE_SECRET</code> are set in <code>.env.local</code>.
       </div>
     </div>
   );

@@ -13,6 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 import Sidebar from "@/components/Sidebar";
+import Providers from "@/components/Providers";
 
 export const metadata: Metadata = {
   title: "Jannet.AI Control Plane",
@@ -30,10 +31,12 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-zinc-950 text-zinc-100">
-        <div className="flex min-h-screen">
-          <Sidebar />
-          <main className="flex-1 overflow-auto">{children}</main>
-        </div>
+        <Providers>
+          <div className="flex min-h-screen">
+            <Sidebar />
+            <main className="flex-1 overflow-auto">{children}</main>
+          </div>
+        </Providers>
       </body>
     </html>
   );

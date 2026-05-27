@@ -24,6 +24,7 @@ dependencies = [
     "reconciler",
     "action-broker",
     "escalation-ui",
+    "bcrypt>=5.0.0",
 ]
 
 [dependency-groups]

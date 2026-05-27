@@ -36,6 +36,36 @@
   - `npm run build` clean (4 static routes); dev server returns **HTTP 200** on `/`.
   - SSO (NextAuth Google `@fracktal.in`) + CopilotKit chat deferred to 0.5.6.
 
+- **Phase 0.5.4 (Skill Studio pane) — DONE 2026-05-26.**
+  - `workbench/control_plane/src/lib/skills.ts` — Node fs loader mirroring `acb_skills` (gray-matter frontmatter parse, BOM-safe, path-traversal guard).
+  - `GET /api/skills`, `GET|PUT /api/skills/[domain]/[skill_id]` — full read/write CRUD against the on-disk SKILL.md.
+  - `/skills` catalogue: real data, authority + rollout-stage badges, deep-links to detail.
+  - `/skills/<domain>/<id>` detail: Monaco editor (left, dark `vs-dark`, markdown mode) + OpenHands iframe (right) + dirty-tracked **Save** button (HTTP 200, JSON validation before write).
+  - All 5 new endpoints HTTP 200 in dev (skill list returns both production skills `delivery/stale_task_nudge`, `sales/quiet_deal_followup`); production build clean.
+
+- **Phase 0.5.5 (Workflow Editor pane) — DONE 2026-05-26.**
+  - `infra/docker-compose.yml` adds `n8n` service under new `workflows` profile (port `5678`, basic auth, persistent `acb-n8n-data` volume).
+  - `/workflows` page replaces stub with full-window iframe to `${NEXT_PUBLIC_N8N_URL}` and "Open n8n ↦" external link.
+  - `scripts/n8n_export.py` — Git-sync exporter: pulls all workflows via `/rest/workflows`, dumps sorted-key JSON to `workflows/<id>.json` for review-friendly diffs.
+
+- **Phase 0.5.6 (NextAuth Google SSO + CopilotKit pervasive chat) — DONE 2026-05-26.**
+  - NextAuth v5 (`next-auth@beta`): Google provider, callback rejects any email not ending in `@fracktal.in`. Dev-friendly: if `AUTH_GOOGLE_ID`/`AUTH_GOOGLE_SECRET` are unset, auth no-ops and the proxy lets all traffic through.
+  - `src/proxy.ts` (Next 16 successor to `middleware.ts`) protects every non-`/api/auth`, non-`/signin` route; unauth → 302 `/signin?callbackUrl=…`.
+  - CopilotKit (`@copilotkit/react-core` + `react-ui` + `runtime`): `<CopilotSidebar>` in root `Providers.tsx`, runtime at `POST /api/copilot` proxies to LiteLLM via `OpenAIAdapter` (`baseURL=http://localhost:4000/v1`, model `tier2-gemini` by default).
+  - Production build: **11 routes** clean (`/`, `/_not-found`, `/api/auth/[...nextauth]`, `/api/copilot`, `/api/skills`, `/api/skills/[...fqid]`, `/observability`, `/signin`, `/skills`, `/skills/[...fqid]`, `/workflows`) + Proxy middleware. All 8 page/API routes HTTP 200 in dev smoke test.
+  - `.env.example` now documents `SKILLS_ROOT`, `NEXT_PUBLIC_OPENHANDS_URL`, `NEXT_PUBLIC_N8N_URL`, `AUTH_SECRET`/`AUTH_GOOGLE_*`, `COPILOT_LLM_BASE_URL`/`COPILOT_MODEL`, plus n8n basic-auth + encryption-key.
+
+- **Phase 0.5 (M1.5 exit) — PASSED 2026-05-27.** Full-system test green.
+  - Docker stack: `acb-postgres` ✅ `acb-redis` ✅ `acb-litellm` (36 h healthy) ✅ `acb-n8n` (16 h) ✅.
+  - pytest: **22/22** green (`uv run pytest -q`).
+  - Control-plane (port 3001): all 10 routes HTTP 200 (`/`, `/signin`, `/skills`, `/api/skills`, `/skills/sales/quiet_deal_followup`, `/api/skills/sales/quiet_deal_followup`, `/workflows`, `/observability`, `/api/auth/session`, Gateway `/health`).
+  - Skill write path: `PUT /api/skills/sales/quiet_deal_followup` → 200 ok=True.
+  - LiteLLM proxy: `POST /v1/chat/completions` (tier2-sonnet → Gemini 2.5 Flash) → 200 `"pong"`.
+  - Gateway `/pull`: RAG answer with live DB citations confirmed (200, Zoho deal cited).
+  - n8n API key created (JWT, scopes workflow:list/read/create/update/delete), stored in `.env` as `N8N_API_KEY`. `scripts/n8n_export.py` exit 0.
+  - CopilotKit `/api/copilot` reachable; internal CopilotKit protocol validated end-to-end via browser sidebar.
+  - Outstanding before remote deploy: Hetzner provisioning, real Google OAuth credentials.
+
 ---
 
 ## Mermaid Gantt

@@ -41,3 +41,6 @@ tmp/
 
 # Docker volumes (if mounted locally)
 infra/volumes/
+
+# Theia IDE (old PRD — ADR-014 removed)
+ide/

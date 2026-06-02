@@ -10,9 +10,10 @@
 - **Source of truth lives in ClickUp, Zoho, Odoo.** CommandCenter is a read-mostly mirror with approval-gated writes.
 - **Pull + Push + Ambient** interaction modes must all be supported.
 - **Decoupled agent and skill repositories.** Every agent and every skill lives in its own GitHub repository. The Core engine contains no agent logic or skill files.
-- **Dynamic runtime loading.** Agent and skill repos are cloned and imported at event time, not at server startup. A running Core server never needs a redeploy to pick up new agent logic.
+- **Persistent runtime loading.** Agent and skill repos are cloned once into a persistent local cache and refreshed via `git pull` on each event (~0.5 s). No full re-clone per run; no server redeploy to pick up new agent logic.
 - **Ephemeral sandboxed execution.** All agent task execution runs inside short-lived OpenHands containers, destroyed after each run.
-- **Self-mutation with a human gate.** Agents fix their own source code in isolated dev sandboxes and open PRs. `max_mutation_attempts = 1` prevents loops. Humans must merge before the live system consumes any self-authored change.
+- **Hot-patch self-mutation with an audit gate.** When an agent fails, the Self_Mutation_Node applies a tested code fix directly to the persistent local clone (the fix is live immediately) and opens a GitHub PR as an audit record. A human can **merge** (canonicalise the fix in the remote repo) or **reject/close** (Core reverts the local clone to `origin/main`). `max_mutation_attempts = 1` prevents loops.
+- **Platform-owned credentials; agent-declared dependencies.** All integration credentials (API keys, OAuth tokens, webhook secrets) are stored encrypted in Core's Integration Registry. Agent `config.json` declares which integrations it needs by name; the Dynamic Agent Loader injects only those credentials into LangGraph state. No credential ever lives in an agent or skill repo.
 - **No in-app skill/workflow authoring.** All development happens in VS Code + Git. The Control Plane is for chat, observability, and HITL approval — not editing.
 - **Tiered LLM routing** (cheap classifier → expensive reasoner) for cost.
 - **MVP-first iterative build** with ~2 engineers + AI assistance.
@@ -137,13 +138,23 @@ FracktalWorks/skill-action-broker          ← Skill: approval queue write + aud
 **Agent repo layout:**
 ```
 agent-<name>/
-  config.json        # model tier, execution budget, cron/trigger, required skill repos (by GitHub URL)
+  config.json        # model tier, execution budget, cron/trigger, required skill repos,
+                     #   AND required integrations (by name only — no credentials here)
+                     # Example:
+                     #   {
+                     #     "skill_repos": ["skill-clickup-sync", "skill-graph-write"],
+                     #     "integrations": ["clickup", "zoho-crm"],
+                     #     "model_tier": "tier-2",
+                     #     "max_mutation_attempts": 1
+                     #   }
   graph.py           # LangGraph StateGraph definition — the agent's business logic
   instructions.md    # Agent persona, operating context, decision guidelines
   tests/             # pytest suite; must pass in CI before any PR can merge
   evals/             # Promptfoo golden cases + Inspect AI scenario tests
   CHANGELOG.md
 ```
+
+**SECURITY: No credentials in agent repos.** `config.json` lists integration *names*; the Core Integration Registry holds the actual keys. Skills receive credentials via LangGraph `state["integrations"]` — never from environment variables directly.
 
 **Skill repo layout:**
 ```
@@ -164,14 +175,17 @@ skill-<name>/
 ### Step 1 — Event Routing
 Webhook/cron → Core FastAPI `gw` container → identifies target agent from payload → calls `Dynamic Agent Loader`.
 
-### Step 2 — Dynamic Cloning + Import
+### Step 2 — Resident Repo Cache + Import
 Dynamic Agent Loader:
 1. Reads agent name from event metadata.
-2. `git clone https://github.com/FracktalWorks/agent-<name>` into `/tmp/agents/<run_id>/agent`.
-3. Reads `config.json`; clones each listed skill repo into `/tmp/agents/<run_id>/skills/<skill>`.
-4. `sys.path.append('/tmp/agents/<run_id>/agent')` + `sys.path.append('/tmp/agents/<run_id>/skills/<skill>')` for each skill.
-5. `importlib.import_module('graph')` → obtains `build_graph()` function.
-6. Calls `build_graph()` → returns a compiled LangGraph `StateGraph`.
+2. **First call:** `git clone` agent repo into `{agents_clone_dir}/repos/agent-<name>/` (full clone, one-time, ~5–20 s).
+   **Subsequent calls:** `git pull --ff-only` on the existing clone (< 0.5 s).
+3. Reads `config.json` → `skill_repos` list and `integrations` list.
+4. Ensures each skill repo is present and up-to-date via the same clone-once / pull-on-demand strategy.
+5. `sys.path.insert(0, clone_dir)` for agent + each skill (cleaned up after each run; clone itself persists).
+6. `importlib.import_module('graph')` with a unique per-run module name → `build_graph()`.
+7. **Credential injection:** queries Core Integration Registry for each name in `config.json["integrations"]`; injects a typed `IntegrationContext` dict into the initial LangGraph state. Skills read credentials from `state["integrations"]["<name>"]` — never from environment directly.
+8. Calls `build_graph()` → returns a `StateGraph` (to be compiled with PostgresSaver checkpointer by executor).
 
 ### Step 3 — Stateful Orchestration
 LangGraph initialises the `StateGraph` from the returned graph object. `PostgresSaver` connects to persistent Postgres — all state transitions, tool outputs, and error logs are persisted to DB. The graph routes Actions to OpenHands worker containers.
@@ -179,7 +193,7 @@ LangGraph initialises the `StateGraph` from the returned graph object. `Postgres
 ### Step 4 — Sandboxed Execution
 OpenHands SDK spins ephemeral worker container. Agent executes its skill functions inside the container. Outputs and errors are piped back to LangGraph state via the SDK. Container is destroyed when the action node completes.
 
-### Step 5 — Self-Mutation (on error)
+### Step 5 — Hot-Patch Self-Mutation (on error)
 ```
 Error in worker container
         │
@@ -188,40 +202,59 @@ LangGraph routes to Self_Mutation_Node
         │
         ▼
 Check: mutation_attempts_this_run >= 1?
-   YES → Skip mutation; log; exit.
+   YES → Skip mutation; log + audit; exit.
    NO  → Continue ↓
         │
         ▼
-Provision new OpenHands dev sandbox
-        │
-        ▼
-Clone agent's own repo (agent-<name>) into sandbox
+Work from persistent local clone of agent-<name>
+(already authenticated via GITHUB_TOKEN in remote URL;
+ bot git identity already configured)
         │
         ▼
 Read failure telemetry from Langfuse (error trace, inputs, stack)
         │
         ▼
-Agent proposes code fix → implements in cloned repo → runs pytest
+OpenHands dev sandbox: propose fix in local clone → run pytest
         │
         ▼
-Tests pass? → commit fix to new branch → GitHub API opens PR:
-             Title: "Auto-fix: <error description>"
-             Body:  failure telemetry + diff + test results
+     Tests pass?
+     │          │
+    NO          YES
+     │           │
+     ▼           ▼
+git reset    git commit fix to local clone main branch
+--hard HEAD  (fix is now LIVE — next pull will use it)
+     │           │
+     ▼           ▼
+Log failure  Push new branch auto-fix/{run_id[:8]} to origin
+             Open GitHub PR:
+               Title: "Auto-fix: <error description>"
+               Body:  telemetry + diff + test results +
+                      "⚠️ Fix is already live in persistent clone.
+                       Merge = canonicalise. Close = rollback."
         │
         ▼
 mutation_attempts_this_run = 1 (max reached)
         │
         ▼
-Destroy all sandbox containers → log PR URL in audit
+Destroy dev sandbox containers → log PR URL in audit
         │
         ▼
-Human reviews + merges PR (required before live system adopts change)
-        │
-        ▼
-CI runs evals on PR branch → on pass, Core picks up new agent code on next event
+     Human reviews PR (async)
+     │               │
+   MERGE           CLOSE / REJECT
+     │               │
+     ▼               ▼
+Remote main now   PR Event Handler receives GitHub webhook
+matches live      → Core: git reset --hard origin/main
+clone (no         on the agent's local clone
+additional        → agent reverts to pre-fix behaviour
+action needed)    → logged in audit as rollback
 ```
 
-**Human gate is non-negotiable.** The live system will not execute any self-authored code change until a human clicks Merge on the PR.
+**Hot-patch model rationale:** Applying the fix to the live clone immediately means production recovers in minutes (not hours). The PR is not a gate before recovery — it is an audit record and a rollback trigger. Closing it is the human's "I disagree with this fix" button.
+
+**New infrastructure required:** A `POST /webhooks/github` endpoint in Core that receives `pull_request.closed` (unmerged) events from agent repos, identifies the affected local clone, and issues `git reset --hard origin/main`.
 
 ---
 
@@ -298,30 +331,45 @@ sequenceDiagram
 
 ---
 
-## 9. Sequence — Self-Mutation Flow
+## 9. Sequence — Hot-Patch Self-Mutation Flow
 
 ```mermaid
 sequenceDiagram
     participant Orch as LangGraph Orchestrator
     participant Mut as Self_Mutation_Node
+    participant Clone as Persistent Local Clone
     participant OH as OpenHands Dev Sandbox
-    participant GH as GitHub API
+    participant GH as GitHub (Remote)
+    participant PRH as PR Event Handler (Core)
     participant Human as Human Reviewer
 
     Orch->>Mut: Error in worker (mutation_attempts=0)
-    Mut->>OH: Provision dev sandbox
-    Mut->>OH: git clone agent-<name>
-    Mut->>OH: Inject failure telemetry (stack, inputs, trace)
-    OH->>OH: Propose code fix + run pytest
-    OH->>GH: Open PR "Auto-fix: <error description>"
-    Mut->>Orch: mutation_attempts=1; PR URL logged
-    Mut->>OH: Destroy dev sandbox
-    Note over Human: Async review
-    Human->>GH: Review diff + test results
-    Human->>GH: Click Merge
-    GH->>GH: CI evals pass
-    Note over Orch: Next event for this agent
-    Orch->>Orch: Dynamic Agent Loader pulls updated repo
+    Mut->>OH: Provision dev sandbox (mounts local clone)
+    Mut->>OH: Inject failure telemetry from Langfuse
+    OH->>Clone: Implement fix in local clone + run pytest
+    alt Tests pass
+        OH->>Clone: git commit fix (local main branch)
+        Note over Clone: Fix is LIVE on next event
+        OH->>GH: git push origin auto-fix/{run_id[:8]}
+        OH->>GH: Open PR — body: telemetry + diff + "Merge=persist, Close=rollback"
+        Mut->>Orch: mutation_attempts=1; PR URL in audit
+        Mut->>OH: Destroy dev sandbox
+        Note over Human: Async review
+        alt Human merges PR
+            Human->>GH: Click Merge
+            GH->>GH: CI evals pass
+            Note over Clone: Next git pull keeps fix
+        else Human closes/rejects PR
+            Human->>GH: Close PR without merging
+            GH->>PRH: webhook: pull_request.closed (unmerged)
+            PRH->>Clone: git reset --hard origin/main
+            Note over Clone: Agent reverted to pre-fix state
+        end
+    else Tests fail
+        OH->>Clone: git reset --hard HEAD (discard changes)
+        Mut->>Orch: mutation failed; logged in audit
+        Mut->>OH: Destroy dev sandbox
+    end
 ```
 
 ---
@@ -412,10 +460,10 @@ flowchart TD
 ### ADR-012: GPTCache + LLMLingua-2 for token efficiency
 - **Decision:** GPTCache (MIT) semantic cache in front of LiteLLM (1h TTL); LLMLingua-2 (MIT, CPU) post-processes tool outputs >1k tokens.
 
-### ADR-013: Per-agent and per-skill GitHub repos; dynamic cloning at runtime
-- **Context:** Monorepo approach couples agent logic to Core deployments and prevents per-agent independent versioning, CI, and self-mutation.
-- **Decision:** Every agent lives in its own `agent-<name>` GitHub repo. Every skill lives in its own `skill-<name>` GitHub repo (pip-installable Python package). The Core engine (`CommandCenter-Core`) contains no agent logic or skill files. Dynamic Agent Loader clones repos into a transient volume at event time.
-- **Consequences:** Any agent or skill can be updated, versioned, tested, and deployed independently. Self-mutation PRs only touch the relevant agent's own repo — not Core. The running Core server never needs redeploy to adopt new agent logic. Dynamic cloning adds ~2–5s to cold-start latency (acceptable vs the 30s NFR-01 target).
+### ADR-013: Per-agent and per-skill GitHub repos; persistent clone cache at runtime
+- **Context:** Monorepo approach couples agent logic to Core deployments and prevents per-agent independent versioning, CI, and self-mutation. Earlier v2 draft cloned fresh on every event (~2–5 s overhead).
+- **Decision:** Every agent lives in its own `agent-<name>` GitHub repo. Every skill lives in its own `skill-<name>` GitHub repo (pip-installable Python package). The Core engine contains no agent logic or skill files. Dynamic Agent Loader **clones once** into a persistent directory (`{agents_clone_dir}/repos/{repo-name}/`) and does `git pull --ff-only` on each event (~0.5 s).
+- **Consequences:** Any agent or skill can be updated independently. Self-mutation PRs touch only the agent's own repo. First-event latency is ~5–20 s (clone); all subsequent events are ~0.5 s (pull). The persistent clone is also the working tree for Self_Mutation_Node (no separate sandbox clone needed). Bot git identity is configured once in each clone so all commits carry proper authorship.
 
 ### ADR-014: No in-app skill/workflow editor; VS Code + Git is the authoring environment
 - **Context:** Previously planned OpenHands-backed Skill Studio pane inside the Control Plane.
@@ -445,12 +493,152 @@ flowchart TD
 ### ADR-020: Decoupled per-agent and per-skill GitHub repos
 - **See ADR-013.** This is the primary structural decision of v2. Each agent repo is independently deployable, testable, and self-improvable. Each skill repo is a versioned Python package. The Core engine is a pure runtime host.
 
-### ADR-021: Self-mutation loop with max_mutation_attempts = 1 and mandatory human PR gate
-- **See ADR-006.** This is the primary safety constraint of v2. `Self_Mutation_Node` may open exactly one PR per failure event. The live system cannot consume the fix until a human merges. PR has no self-merge permission; CI must pass; same eval gate as any human-authored PR.
+### ADR-021: Hot-patch self-mutation with audit-gate PR and rollback on rejection
+- **Context (revised from ADR-006):** Waiting for human PR merge before a fix is live means production stays broken for hours. The goal of self-mutation is fast recovery — the human gate is for safety and auditability, not for speed.
+- **Decision:**
+  1. Self_Mutation_Node applies the tested fix directly to the **persistent local clone** (on the live `main` branch). The fix is immediately active for the next event — no wait.
+  2. It simultaneously opens a GitHub PR (branch `auto-fix/{run_id[:8]}`) as an **audit record** and a **rollback trigger**.
+  3. PR body clearly states: *"This fix is already live in the persistent clone. Merge = persist to remote. Close = Core will revert the clone to `origin/main`."*
+  4. `max_mutation_attempts = 1` per failure event — no loop.
+  5. A new **PR Event Handler** (`POST /webhooks/github` in Core) receives GitHub `pull_request.closed` events. If closed without merging: `git reset --hard origin/main` on the affected clone.
+- **Consequences:** Production recovers in minutes. Human review is still required to canonicalise the fix in the repo. A human who disagrees with the fix closes the PR and the rollback is automatic. CI evals gate the PR merge as normal.
+
+### ADR-022: Platform-level Integration Registry; agent-declared credential dependencies
+- **Context:** Integration credentials (API keys, OAuth tokens, webhook secrets) must be accessible to agents and skills at runtime. The naive approaches — storing credentials in agent repos (security risk), or injecting all credentials into all agents (no least-privilege), or per-agent .env files (operational burden) — are all unacceptable.
+- **Decision (industry-standard pattern):**
+  1. **Core owns the Integration Registry** — all credentials stored encrypted in Postgres (`integrations` table), managed via the Control Plane admin UI and `.env`. Follows the pattern used by n8n, Prefect, Temporal, and GitHub Actions.
+  2. **Agent `config.json` declares dependencies** by integration *name* only: `"integrations": ["clickup", "zoho-crm"]`. No credential values ever appear in agent repos.
+  3. **Dynamic Agent Loader injects** only the declared integrations as a typed `IntegrationContext` dict in the initial LangGraph state (`state["integrations"]`). An agent that doesn't declare an integration cannot access it.
+  4. **Skills read from state**, not from environment variables: `ctx = state["integrations"]["clickup"]` → `ctx.api_token`, `ctx.webhook_secret`, etc.
+  5. **OAuth lifecycle** (token refresh, PKCE flows) is managed by Core, not by individual skills. Skills call a `Core.ensure_token("zoho-crm")` helper that handles refresh transparently.
+- **Consequences:** Credentials never in agent repos (no GitHub secret leak risk). Least-privilege enforced at load time. Adding a new integration to an agent is a one-line `config.json` change + admin UI registration. OAuth rotation happens once in Core and propagates to all agents automatically. Skills remain stateless and testable without real credentials (mock `IntegrationContext` in tests).
 
 ---
 
-## 13. Open Questions for PDR
+## 13. Chat Interface, Session Management & Memory Architecture
+
+### 13.1 Chat surface — Control Plane
+
+The Control Plane (`workbench/control_plane`) exposes a dedicated **`/chat` page** as the primary human-facing interface to Jannet. This is a full-page chat (not just the floating CopilotSidebar overlay) with session management.
+
+**Technology:** CopilotKit v1.57 (`@copilotkit/react-core`, `@copilotkit/react-ui`, `@copilotkit/runtime`). CopilotKit also developed the **AG-UI Protocol** — the emerging standard for bi-directional agent↔UI streaming — which is used as the upgrade path to full LangGraph backend.
+
+**Chat page layout:**
+```
++--chat page-------------------------------------------+
+| Left panel (w-72)          | Main chat area           |
+|   - Session list           |   - CopilotChat          |
+|   - "New session" button   |   - Session header       |
+|   - Memory panel           |   (per-session threadId) |
+|     (Mem0 stored facts)    |                          |
++-----------------------------+--------------------------+
+```
+
+**Session isolation:** Each `ChatSession` is assigned a UUID stored in localStorage. `CopilotKitProvider` receives this UUID as `threadId`, isolating message history per session. When upgrading to LangGraph backend, this UUID becomes the LangGraph `thread_id` checkpointer key — maintaining continuity.
+
+### 13.2 Memory stack (how memory improves over time)
+
+```
+User sends a message
+        │
+        ▼
+CopilotKit frontend
+  useCopilotReadable injects:
+    • Stored Mem0 memories (fetched from /api/chat/memories)
+    • Current session context
+        │
+        ▼
+/api/copilot (Next.js route)
+  → CopilotRuntime → BuiltInAgent (now) / LangGraphAgent (upgrade)
+  → LLM receives memories as readable context
+        │
+        ▼
+User switches session or navigates away
+        │
+        ▼
+Chat page auto-saves conversation
+  → POST /api/chat/memories { userId, messages }
+        │
+        ▼
+Mem0 extracts semantic facts from conversation
+  (e.g. "User prefers weekly project summaries on Monday morning")
+        │
+        ▼
+Facts stored in Mem0 (self-hosted, backed by Postgres)
+        │
+        ▼
+Next conversation: facts retrieved and injected as context ↑
+Next orchestrator run: executor.py queries Mem0 for user context ↑
+```
+
+**Improvement loop:** Every conversation enriches Mem0. The orchestrator and agents query Mem0 at run-start so accumulated knowledge improves *all* interactions — not just the chat UI. A delivery agent scheduling a push notification, for example, will know the user prefers WhatsApp over email because that preference was captured in a past chat session.
+
+### 13.3 CopilotKit ↔ LangGraph ↔ OpenHands integration
+
+The three layers are cleanly separated and compose vertically:
+
+| Layer | Component | Role |
+|---|---|---|
+| **UI** | CopilotKit `CopilotChat` + `useCopilotReadable` | Renders chat, streams responses, injects memory context |
+| **Bridge** | CopilotKit `LangGraphAgent` → `POST /api/copilot` | Connects frontend to backend via AG-UI/streaming protocol |
+| **Orchestrator** | LangGraph `StateGraph` + `PostgresSaver` | Stateful workflow; routes to skill nodes, mutation node |
+| **Execution** | OpenHands SDK worker container | Executes individual skill functions in an ephemeral sandbox |
+| **Memory** | Mem0 + Graphiti on Postgres | Episodic + entity memory; read by both chat UI and orchestrator |
+
+**Current backend:** `BuiltInAgent` (LiteLLM proxy) — fast, no orchestrator dependency, suitable for conversational Q&A.
+
+**Upgrade path (when orchestrator is stable):**
+```typescript
+// In /api/copilot/route.ts — replace BuiltInAgent with:
+import { LangGraphAgent } from "@copilotkit/runtime";
+const agent = new LangGraphAgent({
+  name: "orchestrator",
+  deploymentUrl: process.env.GATEWAY_URL + "/agent/langgraph",
+  // threadId forwarded from CopilotKitProvider.threadId → LangGraph checkpointer
+});
+```
+This routes every chat message through the full LangGraph orchestrator, giving the chat UI access to all agents, skills, and OpenHands execution. The `threadId` becomes the LangGraph checkpoint key so conversation state persists across page reloads.
+
+**OpenHands is NOT directly connected to CopilotKit.** It is the execution layer *under* LangGraph. The dependency is:
+```
+CopilotKit → LangGraph → OpenHands (one-way, orchestrator pulls execution results)
+```
+
+### 13.4 Memory API
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/api/chat/memories?userId=<id>` | GET | Fetch up to 20 stored memories for a user |
+| `/api/chat/memories` | POST | Save a conversation to Mem0 (fires after session) |
+| `/api/chat/memories?id=<memoryId>` | DELETE | Delete a specific memory |
+
+Memory is **best-effort** — if `MEM0_API_URL` is not set, all endpoints return empty / no-op. The chat UI degrades gracefully. Orchestrator still runs without memory context.
+
+### ADR-023: CopilotKit as the chat UI layer; Mem0 as the cross-surface memory store
+
+- **Context:** Chat UI needs to maintain session state and improve over time. Memory accumulated in chat should benefit background agent runs, not just the chat session that created it.
+- **Decision:**
+  1. CopilotKit (`/chat` page, `useCopilotReadable`, `CopilotChat`) is the Control Plane chat surface.
+  2. Each chat session is isolated by UUID `threadId` in `CopilotKitProvider`. The same UUID becomes the LangGraph checkpoint key when upgraded.
+  3. After every chat session, Mem0 is called to extract and persist semantic facts (async, fire-and-forget — not on the critical path).
+  4. At run-start, the LangGraph executor queries Mem0 for user-relevant memories and injects them into the initial agent state alongside the `IntegrationContext` (ADR-022).
+  5. Backend is `BuiltInAgent` until the LangGraph gateway exposes an AG-UI-compatible endpoint, then upgraded to `LangGraphAgent` via a config flag.
+- **Consequences:** Memory improves continuously with use. Chat context, agent execution context, and entity graph (Graphiti/ADR-011) are all enriched from the same Mem0 store. No separate memory stack needed for chat vs agents.
+
+---
+
+### ADR-024: Dispatch & supervision plane between the Gateway and ephemeral OpenHands runs
+
+- **Context:** The base model is event-driven and ephemeral: a webhook/cron event hits the Interaction Gateway, the agent is loaded, runs, and is torn down. This cleanly covers *externally triggered* work, but leaves several automatic / long-running use cases unhandled — internally generated work, burst protection, redelivered (at-least-once) webhooks, hung or non-converging runs, and runaway budget. Mission Control (MIT, builderz-labs/mission-control) solves these with a durable task queue plus per-agent supervision; we adopt the same shape without abandoning our ephemeral-execution model.
+- **Decision:** Insert a thin **Dispatch & Supervision plane** between the Gateway and the OpenHands executor. It has two halves:
+  1. **Durable dispatch queue.** Triggers (webhook, cron, *and agent-to-agent / human-created tasks*) enqueue a durable `Task` row in Postgres rather than invoking the loader directly. A dispatcher drains the queue with **bounded worker concurrency**, **retry with backoff**, a **dead-letter sink** for runs that crash before `Self_Mutation_Node`, and an **idempotency key** per trigger so a redelivered webhook never double-spawns an agent.
+  2. **Long-run supervisor.** Each in-flight run reports a **heartbeat**; a watchdog enforces a **max-runtime** ceiling and reaps/escalates hung runs, a **loop / non-convergence detector** (no state progress over N steps) kills spinning agents, and the agent's declared `execution_budget` is enforced as a **hard mid-run abort** (not just an advisory config value).
+  3. **Recurring = template + dated child runs.** A recurring (cron/NL) schedule is stored as an immutable template; each fire spawns a dated child `Task`, keeping the schedule definition unmutated and giving clean per-run history.
+- **Consequences:** Long-running and autonomous agents gain liveness, bounded resource use, and idempotent triggering. Self_Mutation_Node still owns *error* recovery; the supervisor owns *liveness/cost* failures that have no code fix (hang, loop, budget). Adds one Postgres-backed queue and a supervisor loop to Core — no new external dependency (reuses Postgres + LangGraph). The dispatch queue is also the natural home for the future internal "agent inbox" / task board (L2-13 operator surface).
+
+---
+
+## 14. Open Questions for PDR
 
 1. **Confidence thresholds** — what success rate per agent justifies promotion to autonomous write authority?
 2. **Retention** — how long do raw transcripts and message bodies live? (Legal/HR review needed.)
@@ -459,4 +647,6 @@ flowchart TD
 5. **WhatsApp community ingestion** — confirm Meta's policy on the agent reading group messages as a participant.
 6. **Self-mutation PR auto-close** — should unmerged self-mutation PRs expire after N days, or stay open indefinitely?
 7. **Multiple failing agents** — if three agents fail simultaneously, do all three open PRs concurrently? (Currently: yes, one PR each, each limited to 1 attempt. Confirm acceptable.)
+8. **Dispatch concurrency ceiling** — what is the bounded worker-pool size per host, and is concurrency capped globally or per-agent? (ADR-024.)
+9. **Watchdog thresholds** — default max-runtime and loop-detection step count before a long-running agent is reaped/escalated. (ADR-024.)
 - **Source of truth lives in ClickUp, Zoho, Odoo.** The brain is a *read-mostly mirror* with approval-gated writes.

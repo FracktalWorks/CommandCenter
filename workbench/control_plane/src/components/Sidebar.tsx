@@ -6,9 +6,8 @@ import { usePathname } from "next/navigation";
 type Pane = { href: string; label: string; emoji: string; note: string };
 
 const PANES: Pane[] = [
-  { href: "/skills",        label: "Skill Studio",     emoji: "[S]", note: "Author SKILL.md + evals" },
-  { href: "/workflows",     label: "Workflow Editor",  emoji: "[W]", note: "LangGraph (coming L3)"     },
-  { href: "/observability", label: "Observability",    emoji: "[O]", note: "Audit log + traces"      },
+  { href: "/chat",          label: "Chat",          emoji: "[C]", note: "Jannet · sessions · memory" },
+  { href: "/observability", label: "Observability", emoji: "[O]", note: "Audit log · escalations · traces" },
 ];
 
 export default function Sidebar() {
@@ -44,7 +43,7 @@ export default function Sidebar() {
         })}
       </nav>
       <div className="mt-auto px-2 pt-6 text-xs text-zinc-600">
-        Phase 0.5 shell &middot; SSO TBD
+        Phase 1 &middot; Self-Mutation Loop
       </div>
     </aside>
   );

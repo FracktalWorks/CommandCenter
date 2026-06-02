@@ -53,6 +53,13 @@ try:
 except Exception:  # pragma: no cover
     pass
 
+try:
+    from gateway.routes.agent import router as _agent_router
+
+    app.include_router(_agent_router)
+except Exception:  # pragma: no cover - keep gateway bootable if orchestrator not installed
+    pass
+
 
 # ---------- Health ----------
 

@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     gmail_default_user: str = ""         # default mailbox to impersonate
     gmail_pubsub_token: str = ""         # bearer token expected on /webhooks/gmail
 
+    # Dynamic Agent Loader (v2 — ADR-013)
+    github_token: str = ""                        # PAT for private agent/skill repos (optional)
+    github_org: str = "FracktalWorks"             # org that owns agent-* and skill-* repos
+    agents_clone_dir: str = "/tmp/acb_agents"     # transient clone root; cleaned up after each run
+
+    # OpenHands Self-Mutation Sandbox (v2 — ADR-021)
+    openhands_api_url: str = ""   # e.g. http://openhands:3000; leave blank to disable mutation
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

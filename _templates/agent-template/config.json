@@ -1,0 +1,8 @@
+{
+  "name": "{{ agent_name }}",
+  "description": "One-line description of what this agent does.",
+  "version": "0.1.0",
+  "skill_repos": [],
+  "max_mutation_attempts": 1,
+  "tags": []
+}

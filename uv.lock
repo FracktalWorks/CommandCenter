@@ -17,10 +17,10 @@ members = [
     "acb-schemas",
     "acb-skills",
     "action-broker",
-    "ai-company-brain",
     "escalation-ui",
     "gateway",
     "ingestion",
+    "jannet-ai",
     "orchestrator",
     "reconciler",
 ]
@@ -38,7 +38,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "acb-common", editable = "packages/acb_common" },
-    { name = "acb-graph", editable = "packages/acb_graph" },
+    { name = "acb-graph", editable = "level4/packages/acb_graph" },
     { name = "sqlalchemy", specifier = ">=2.0" },
 ]
 
@@ -87,7 +87,7 @@ requires-dist = [
 [[package]]
 name = "acb-graph"
 version = "0.0.1"
-source = { editable = "packages/acb_graph" }
+source = { editable = "level4/packages/acb_graph" }
 dependencies = [
     { name = "acb-common" },
     { name = "acb-schemas" },
@@ -159,7 +159,7 @@ requires-dist = [
 [[package]]
 name = "action-broker"
 version = "0.0.1"
-source = { editable = "apps/action_broker" }
+source = { editable = "level4/apps/action_broker" }
 dependencies = [
     { name = "acb-audit" },
     { name = "acb-common" },
@@ -173,75 +173,10 @@ dependencies = [
 requires-dist = [
     { name = "acb-audit", editable = "packages/acb_audit" },
     { name = "acb-common", editable = "packages/acb_common" },
-    { name = "acb-graph", editable = "packages/acb_graph" },
+    { name = "acb-graph", editable = "level4/packages/acb_graph" },
     { name = "acb-schemas", editable = "packages/acb_schemas" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
-]
-
-[[package]]
-name = "ai-company-brain"
-version = "0.0.1"
-source = { virtual = "." }
-dependencies = [
-    { name = "acb-audit" },
-    { name = "acb-auth" },
-    { name = "acb-common" },
-    { name = "acb-graph" },
-    { name = "acb-llm" },
-    { name = "acb-schemas" },
-    { name = "acb-skills" },
-    { name = "action-broker" },
-    { name = "bcrypt" },
-    { name = "escalation-ui" },
-    { name = "gateway" },
-    { name = "ingestion" },
-    { name = "orchestrator" },
-    { name = "reconciler" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "httpx" },
-    { name = "ipython" },
-    { name = "mypy" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-    { name = "types-requests" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "acb-audit", editable = "packages/acb_audit" },
-    { name = "acb-auth", editable = "packages/acb_auth" },
-    { name = "acb-common", editable = "packages/acb_common" },
-    { name = "acb-graph", editable = "packages/acb_graph" },
-    { name = "acb-llm", editable = "packages/acb_llm" },
-    { name = "acb-schemas", editable = "packages/acb_schemas" },
-    { name = "acb-skills", editable = "packages/acb_skills" },
-    { name = "action-broker", editable = "apps/action_broker" },
-    { name = "bcrypt", specifier = ">=5.0.0" },
-    { name = "escalation-ui", editable = "apps/escalation_ui" },
-    { name = "gateway", editable = "apps/gateway" },
-    { name = "ingestion", editable = "apps/ingestion" },
-    { name = "orchestrator", editable = "apps/orchestrator" },
-    { name = "reconciler", editable = "apps/reconciler" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "ipython", specifier = ">=8.29" },
-    { name = "mypy", specifier = ">=1.13" },
-    { name = "pre-commit", specifier = ">=4.0" },
-    { name = "pytest", specifier = ">=8.3" },
-    { name = "pytest-asyncio", specifier = ">=0.24" },
-    { name = "pytest-cov", specifier = ">=5.0" },
-    { name = "ruff", specifier = ">=0.7" },
-    { name = "types-requests" },
 ]
 
 [[package]]
@@ -839,7 +774,7 @@ wheels = [
 [[package]]
 name = "escalation-ui"
 version = "0.0.1"
-source = { editable = "apps/escalation_ui" }
+source = { editable = "level4/apps/escalation_ui" }
 dependencies = [
     { name = "acb-audit" },
     { name = "acb-common" },
@@ -853,7 +788,7 @@ dependencies = [
 requires-dist = [
     { name = "acb-audit", editable = "packages/acb_audit" },
     { name = "acb-common", editable = "packages/acb_common" },
-    { name = "acb-graph", editable = "packages/acb_graph" },
+    { name = "acb-graph", editable = "level4/packages/acb_graph" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "streamlit", specifier = ">=1.40" },
@@ -1001,7 +936,7 @@ wheels = [
 [[package]]
 name = "gateway"
 version = "0.0.1"
-source = { editable = "apps/gateway" }
+source = { editable = "level4/apps/gateway" }
 dependencies = [
     { name = "acb-auth" },
     { name = "acb-common" },
@@ -1025,7 +960,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "itsdangerous", specifier = ">=2.2" },
-    { name = "orchestrator", editable = "apps/orchestrator" },
+    { name = "orchestrator", editable = "level4/apps/orchestrator" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
 
@@ -1264,7 +1199,7 @@ wheels = [
 [[package]]
 name = "ingestion"
 version = "0.0.1"
-source = { editable = "apps/ingestion" }
+source = { editable = "level4/apps/ingestion" }
 dependencies = [
     { name = "acb-common" },
     { name = "acb-graph" },
@@ -1279,7 +1214,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "acb-common", editable = "packages/acb_common" },
-    { name = "acb-graph", editable = "packages/acb_graph" },
+    { name = "acb-graph", editable = "level4/packages/acb_graph" },
     { name = "acb-schemas", editable = "packages/acb_schemas" },
     { name = "apscheduler", specifier = ">=3.10" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -1338,6 +1273,71 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/9c/cb/8ac0172223afbccb63986cc25049b154ecfb5e85932587206f42317be31d/itsdangerous-2.2.0.tar.gz", hash = "sha256:e0050c0b7da1eea53ffaf149c0cfbb5c6e2e2b69c4bef22c81fa6eb73e5f6173", size = 54410, upload-time = "2024-04-16T21:28:15.614Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl", hash = "sha256:c6242fc49e35958c8b15141343aa660db5fc54d4f13a1db01a3f5891b98700ef", size = 16234, upload-time = "2024-04-16T21:28:14.499Z" },
+]
+
+[[package]]
+name = "jannet-ai"
+version = "0.0.1"
+source = { virtual = "." }
+dependencies = [
+    { name = "acb-audit" },
+    { name = "acb-auth" },
+    { name = "acb-common" },
+    { name = "acb-graph" },
+    { name = "acb-llm" },
+    { name = "acb-schemas" },
+    { name = "acb-skills" },
+    { name = "action-broker" },
+    { name = "bcrypt" },
+    { name = "escalation-ui" },
+    { name = "gateway" },
+    { name = "ingestion" },
+    { name = "orchestrator" },
+    { name = "reconciler" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "ipython" },
+    { name = "mypy" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+    { name = "types-requests" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "acb-audit", editable = "packages/acb_audit" },
+    { name = "acb-auth", editable = "packages/acb_auth" },
+    { name = "acb-common", editable = "packages/acb_common" },
+    { name = "acb-graph", editable = "level4/packages/acb_graph" },
+    { name = "acb-llm", editable = "packages/acb_llm" },
+    { name = "acb-schemas", editable = "packages/acb_schemas" },
+    { name = "acb-skills", editable = "packages/acb_skills" },
+    { name = "action-broker", editable = "level4/apps/action_broker" },
+    { name = "bcrypt", specifier = ">=5.0.0" },
+    { name = "escalation-ui", editable = "level4/apps/escalation_ui" },
+    { name = "gateway", editable = "level4/apps/gateway" },
+    { name = "ingestion", editable = "level4/apps/ingestion" },
+    { name = "orchestrator", editable = "level4/apps/orchestrator" },
+    { name = "reconciler", editable = "level4/apps/reconciler" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "ipython", specifier = ">=8.29" },
+    { name = "mypy", specifier = ">=1.13" },
+    { name = "pre-commit", specifier = ">=4.0" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "pytest-cov", specifier = ">=5.0" },
+    { name = "ruff", specifier = ">=0.7" },
+    { name = "types-requests" },
 ]
 
 [[package]]
@@ -2045,7 +2045,7 @@ wheels = [
 [[package]]
 name = "orchestrator"
 version = "0.0.1"
-source = { editable = "apps/orchestrator" }
+source = { editable = "level4/apps/orchestrator" }
 dependencies = [
     { name = "acb-audit" },
     { name = "acb-common" },
@@ -2061,7 +2061,7 @@ dependencies = [
 requires-dist = [
     { name = "acb-audit", editable = "packages/acb_audit" },
     { name = "acb-common", editable = "packages/acb_common" },
-    { name = "acb-graph", editable = "packages/acb_graph" },
+    { name = "acb-graph", editable = "level4/packages/acb_graph" },
     { name = "acb-llm", editable = "packages/acb_llm" },
     { name = "acb-schemas", editable = "packages/acb_schemas" },
     { name = "deepagents", specifier = ">=0.6" },
@@ -2749,7 +2749,7 @@ wheels = [
 [[package]]
 name = "reconciler"
 version = "0.0.1"
-source = { editable = "apps/reconciler" }
+source = { editable = "level4/apps/reconciler" }
 dependencies = [
     { name = "acb-common" },
     { name = "acb-graph" },
@@ -2760,7 +2760,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "acb-common", editable = "packages/acb_common" },
-    { name = "acb-graph", editable = "packages/acb_graph" },
+    { name = "acb-graph", editable = "level4/packages/acb_graph" },
     { name = "acb-schemas", editable = "packages/acb_schemas" },
     { name = "httpx", specifier = ">=0.27" },
 ]

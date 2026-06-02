@@ -1,29 +1,17 @@
 # LiteLLM proxy config — ADR-008. Master key from $LITELLM_MASTER_KEY.
 # Tier names MUST match acb_llm.client._TIER_MODEL.
-
-# Tier names MUST match acb_llm.client._TIER_MODEL.
 #
-# Phase 0 default routing — uses ONLY hosted models, no GPU required. This
-# works identically on the Windows dev box and on a Hostinger KVM-4 VPS.
-#
-# When a GPU host is added later, point `tier1-local-qwen3` at the vLLM URL
-# (uncomment the second block and remove the Haiku fallback). The acb_llm
-# client stays unchanged.
+# Dev routing: Gemini API via GEMINI_API_KEY (all tiers).
+# Future: swap Tier 1 to vLLM/Qwen3 when a GPU host is added — tier names
+# stay identical so acb_llm.client needs no changes.
 model_list:
-  # ---- Tier 1: cheap, fast classifier / triage ----
-  # TEMP (Phase 0 testing): Gemini key only. Swap back to Anthropic / vLLM
-  # once those keys land — the tier *names* (tier1-local-qwen3, tier2-sonnet,
-  # tier3-opus) must stay identical because acb_llm.client._TIER_MODEL pins them.
+  # ---- Tier 1: fast classifier / triage (cheapest) ----
+  # gemini-3.1-flash-lite: stable, frontier-class at fraction of cost (May 2026)
   - model_name: tier1-local-qwen3
     litellm_params:
-      model: gemini/gemini-2.5-flash-lite
+      model: gemini/gemini-3.1-flash-lite
       api_key: os.environ/GEMINI_API_KEY
-  # Original Anthropic route (re-enable when ANTHROPIC_API_KEY is set):
-  # - model_name: tier1-local-qwen3
-  #   litellm_params:
-  #     model: anthropic/claude-3-5-haiku-latest
-  #     api_key: os.environ/ANTHROPIC_API_KEY
-  # When vLLM is available, swap the above for:
+  # Future (when GPU host is available — swap above for this):
   # - model_name: tier1-local-qwen3
   #   litellm_params:
   #     model: openai/Qwen/Qwen3-8B-Instruct
@@ -31,29 +19,29 @@ model_list:
   #     api_key: "EMPTY"
 
   # ---- Tier 2: structured extraction / drafting ----
+  # gemini-2.5-flash: stable, best price-performance for high-volume reasoning
+  # reasoning_effort: "none" disables thinking tokens (budget_tokens=0,
+  # includeThoughts=false) — prevents the Vercel AI SDK text-part ID mismatch
+  # crash ("text part X not found") that occurs when thinking tokens stream
+  # through the @ai-sdk/openai-compatible provider in CopilotKit's BuiltInAgent.
   - model_name: tier2-sonnet
     litellm_params:
       model: gemini/gemini-2.5-flash
       api_key: os.environ/GEMINI_API_KEY
-  # - model_name: tier2-sonnet
-  #   litellm_params:
-  #     model: anthropic/claude-3-5-sonnet-latest
-  #     api_key: os.environ/ANTHROPIC_API_KEY
+      reasoning_effort: "none"
 
-  # ---- Tier 3: multi-hop reasoning / strategy ----
+  # ---- Tier 3: multi-hop reasoning / strategy / agentic orchestration ----
+  # gemini-3.5-flash: stable, most intelligent model for agentic tasks (May 2026)
   - model_name: tier3-opus
     litellm_params:
-      model: gemini/gemini-2.5-pro
+      model: gemini/gemini-3.5-flash
       api_key: os.environ/GEMINI_API_KEY
-  # - model_name: tier3-opus
-  #   litellm_params:
-  #     model: anthropic/claude-3-opus-latest
-  #     api_key: os.environ/ANTHROPIC_API_KEY
 
   # ---- Embeddings (used by the redis-semantic cache, WBS 1.8) ----
+  # gemini-embedding-2: multimodal embedding model (text/image/video/audio/PDF)
   - model_name: text-embedding-3-small
     litellm_params:
-      model: gemini/text-embedding-004
+      model: gemini/gemini-embedding-2
       api_key: os.environ/GEMINI_API_KEY
 
 litellm_settings:
@@ -65,11 +53,12 @@ litellm_settings:
   # (already configured in docker-compose.yml) and an embedding model defined
   # in the model_list above.
   cache_params:
-    type: redis-semantic
-    host: redis
-    port: 6379
-    similarity_threshold: 0.85    # 0.0 = always hit, 1.0 = exact match only
-    redis_semantic_cache_embedding_model: text-embedding-3-small
+    type: redis
+    url: redis://redis:6379
+    # Phase 1 (WBS 1.8): upgrade to redis-semantic once a standalone embedding
+    # sidecar is available (avoids startup chicken-and-egg with the proxy itself).
+    # similarity_threshold: 0.85
+    # redis_semantic_cache_embedding_model: text-embedding-3-small
   # Anthropic + OpenAI prompt caching is on by default per ADR-008.
 
 general_settings:

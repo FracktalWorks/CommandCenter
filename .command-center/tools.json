@@ -1,0 +1,188 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "id": "24afc0ee-fbbe-45e4-9190-60cb5a691bd0",
+      "name": "List Calendar Events",
+      "description": "Lists events on a Google Calendar.",
+      "integrationId": "9b32d294-d391-4578-b5e7-c2caedbed2db",
+      "method": "GET",
+      "path": "/calendars/{calendarId}/events",
+      "params": [
+        {
+          "key": "calendarId",
+          "label": "calendarId",
+          "description": "The ID of the calendar to retrieve events from. Use 'primary' for the user's default calendar.",
+          "type": "string",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "key": "maxResults",
+          "label": "maxResults",
+          "description": "Maximum number of events to return. Defaults to 250.",
+          "type": "number",
+          "required": false,
+          "location": "query"
+        },
+        {
+          "key": "timeMin",
+          "label": "timeMin",
+          "description": "Start time (inclusive) for events to query, in RFC3339 format (e.g., 2023-10-27T10:00:00-07:00).",
+          "type": "string",
+          "required": false,
+          "location": "query"
+        },
+        {
+          "key": "timeMax",
+          "label": "timeMax",
+          "description": "End time (exclusive) for events to query, in RFC3339 format (e.g., 2023-10-27T17:00:00-07:00).",
+          "type": "string",
+          "required": false,
+          "location": "query"
+        },
+        {
+          "key": "q",
+          "label": "q",
+          "description": "Free-text search terms to find events that match this query in the summary, description, or location fields.",
+          "type": "string",
+          "required": false,
+          "location": "query"
+        },
+        {
+          "key": "singleEvents",
+          "label": "singleEvents",
+          "description": "Whether to expand recurring events into instances. Defaults to false.",
+          "type": "boolean",
+          "required": false,
+          "location": "query"
+        }
+      ],
+      "responseDescription": "A list of calendar events matching the criteria.",
+      "enabled": true,
+      "createdAt": "2026-06-01T18:24:56.550Z",
+      "updatedAt": "2026-06-01T18:24:56.550Z"
+    },
+    {
+      "id": "50637dd7-08c2-435c-8d04-d6d2ebb1208b",
+      "name": "Create Calendar Event",
+      "description": "Creates a new event on a Google Calendar.",
+      "integrationId": "9b32d294-d391-4578-b5e7-c2caedbed2db",
+      "method": "POST",
+      "path": "/calendars/{calendarId}/events",
+      "params": [],
+      "responseDescription": "The created calendar event object.",
+      "enabled": true,
+      "createdAt": "2026-06-01T18:25:00.603Z",
+      "updatedAt": "2026-06-01T18:25:00.603Z"
+    },
+    {
+      "id": "076985f1-e1f6-4c69-b943-e435fd26cc02",
+      "name": "Update Calendar Event",
+      "description": "Updates an existing event on a Google Calendar.",
+      "integrationId": "9b32d294-d391-4578-b5e7-c2caedbed2db",
+      "method": "PUT",
+      "path": "/calendars/{calendarId}/events/{eventId}",
+      "params": [
+        {
+          "key": "calendarId",
+          "label": "calendarId",
+          "description": "The ID of the calendar the event belongs to. Use 'primary' for the user's default calendar.",
+          "type": "string",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "key": "eventId",
+          "label": "eventId",
+          "description": "The ID of the event to update.",
+          "type": "string",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "key": "summary",
+          "label": "summary",
+          "description": "New title of the event.",
+          "type": "string",
+          "required": false,
+          "location": "body"
+        },
+        {
+          "key": "description",
+          "label": "description",
+          "description": "New description of the event.",
+          "type": "string",
+          "required": false,
+          "location": "body"
+        },
+        {
+          "key": "location",
+          "label": "location",
+          "description": "New geographic location of the event.",
+          "type": "string",
+          "required": false,
+          "location": "body"
+        },
+        {
+          "key": "start",
+          "label": "start",
+          "description": "New start time of the event. Can be 'dateTime' or 'date'.",
+          "type": "string",
+          "required": false,
+          "location": "body"
+        },
+        {
+          "key": "end",
+          "label": "end",
+          "description": "New end time of the event. Can be 'dateTime' or 'date'.",
+          "type": "string",
+          "required": false,
+          "location": "body"
+        },
+        {
+          "key": "attendees",
+          "label": "attendees",
+          "description": "New list of attendees, each as an object with an 'email' property.",
+          "type": "string",
+          "required": false,
+          "location": "body"
+        }
+      ],
+      "responseDescription": "The updated calendar event object.",
+      "enabled": true,
+      "createdAt": "2026-06-01T18:25:05.207Z",
+      "updatedAt": "2026-06-01T18:25:05.207Z"
+    },
+    {
+      "id": "b7abdbcc-547d-48c3-9d4b-ccc9f222c043",
+      "name": "Delete Calendar Event",
+      "description": "Deletes an event from a Google Calendar.",
+      "integrationId": "9b32d294-d391-4578-b5e7-c2caedbed2db",
+      "method": "DELETE",
+      "path": "/calendars/{calendarId}/events/{eventId}",
+      "params": [
+        {
+          "key": "calendarId",
+          "label": "calendarId",
+          "description": "The ID of the calendar the event belongs to. Use 'primary' for the user's default calendar.",
+          "type": "string",
+          "required": true,
+          "location": "path"
+        },
+        {
+          "key": "eventId",
+          "label": "eventId",
+          "description": "The ID of the event to delete.",
+          "type": "string",
+          "required": true,
+          "location": "path"
+        }
+      ],
+      "responseDescription": "Empty response on successful deletion.",
+      "enabled": true,
+      "createdAt": "2026-06-01T18:25:07.971Z",
+      "updatedAt": "2026-06-01T18:25:07.971Z"
+    }
+  ]
+}

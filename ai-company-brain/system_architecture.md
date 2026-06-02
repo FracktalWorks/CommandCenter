@@ -1,7 +1,9 @@
-﻿# System Architecture — AI Company Brain
+﻿# System Architecture — AI Company Brain (now Jannet.AI **Level 4**)
 
-> Project: AI Company Brain · Org: Fracktal Works · Date: 2026-05-25
-> Status: v0.4 architecture (Workflow Editor pane + pervasive AI chat in every pane added). Will be revised at PDR.
+> ⚠️ **Re-sequenced (2026-05-31).** Under the Jannet.AI platform reframe, this document now describes the **Level 4 (Company Intelligence)** target, not the current build order. The platform is built top-down L1→L4; see [`project_plan.md`](project_plan.md) and [`product_requirements.md`](product_requirements.md) for the current plan. The n8n-based workflow authoring and four-pane workbench described below are **superseded** by the forked-Theia shell + our own agent-native workflow engine (React Flow canvas). This doc will be revised at the L1 design gate.
+
+> Project: AI Company Brain · Org: Fracktal Works · Date: 2026-05-27
+> Status: v0.5 architecture (four-layer model; Microsoft 365 capture; LLM workflow authoring; Odoo pull-forward to Phase 2). Will be revised at PDR.
 
 ---
 
@@ -30,17 +32,19 @@ C4Context
     System_Ext(clickup, "ClickUp", "Source of truth: tasks, projects, kanban stages")
     System_Ext(zoho, "Zoho CRM", "Source of truth: deals, contacts, sales activity")
     System_Ext(odoo, "Odoo ERP", "Source of truth: MO, PO, inventory, finance")
-    System_Ext(gmail, "Google Workspace", "Internal email")
+    System_Ext(outlook, "Microsoft 365 (Outlook/Exchange)", "Internal email via Microsoft Graph API")
+    System_Ext(teams, "Microsoft Teams", "Internal messaging (if in use)")
     System_Ext(wa, "WhatsApp Business Cloud API", "Company community/groups")
     System_Ext(meet, "Google Meet / Zoom / Teams", "Meetings (via bot)")
-    System_Ext(llm, "LLM Providers", "OpenAI / Anthropic / local")
+    System_Ext(llm, "LLM Providers", "Gemini API (Tier 1/2/3) · vLLM local (future Tier 1)")
 
     Rel(exec, brain, "Asks questions, reviews suggestions, sets policy")
     Rel(emp, brain, "Receives nudges, approves actions, asks Qs")
     Rel(brain, clickup, "Webhook in / REST out (approval-gated)")
     Rel(brain, zoho, "Webhook in / REST out (approval-gated)")
-    Rel(brain, odoo, "Webhook + RPC in / RPC out (read-only v1)")
-    Rel(brain, gmail, "Domain-wide Gmail API + Pub/Sub")
+    Rel(brain, odoo, "JSON-RPC in / JSON-RPC out (read-only Phase 2; writes Phase 5)")
+    Rel(brain, outlook, "Microsoft Graph change notifications in / send via Graph out")
+    Rel(brain, teams, "Webhook in (future capture surface)")
     Rel(brain, wa, "Webhook in / Cloud API send")
     Rel(brain, meet, "Bot joins on invite, streams audio")
     Rel(brain, llm, "Tiered routing: classify / extract / reason")
@@ -71,7 +75,7 @@ C4Container
         Container(compress, "Token Compressor", "LLMLingua-2 (MIT, CPU)", "50-60% compression of long tool outputs before model context")
         Container(obs, "Observability", "Langfuse (MIT, self-hosted) + OpenTelemetry", "LLM traces, cost per tier, eval scores; OTel via openllmetry SDK")
         Container(n8n, "Workflow Automation", "n8n (BSL, self-hosted)", "Visual workflow editor; cron + event triggers; 850+ integrations; n8n UI exposed as Workflow Editor pane in Control Plane")
-        Container(wb, "Skill Workbench (Control Plane)", "Next.js + CopilotKit + AG-UI + Agent Inbox", "Four-pane online UI: (1) Chat / Agent Inbox · (2) Skill Studio (Monaco + OpenHands embed + Promptfoo runner) · (3) Observability (Langfuse embed) · (4) Workflow Editor (n8n embed). Pervasive AI chat assistant in every pane via CopilotKit useCopilotReadable.")
+        Container(wb, "Skill Workbench (Control Plane)", "Next.js + CopilotKit + AG-UI + Agent Inbox", "Four-pane online UI: (1) Chat / Agent Inbox · (2) Skill Studio (Monaco + OpenHands embed + Promptfoo runner) · (3) Observability (Langfuse embed) · (4) Workflow Editor (n8n embed). Pervasive AI chat in every pane. Chat can create skills via OpenHands API and create n8n workflows via n8n REST API — unified authoring, no tool-switching.")
         Container(oh, "OpenHands (Skill IDE backend)", "OpenHands (Apache-2.0, self-hosted)", "Sandboxed editor + terminal + filesystem + LLM-assisted code drafting; scoped to the skills repo")
         Container(e2b, "Sandbox Runner", "E2B (Firecracker microVMs, self-hosted)", "Code execution sandbox for 'Try it' runs in Workbench and CI eval pipelines")
         Container(evals, "Eval Harness", "Promptfoo + Inspect AI", "Per-skill golden cases + scenario tests; CI gate on skill PRs")
@@ -79,8 +83,8 @@ C4Container
 
     System_Ext(gh, "GitHub (single source of truth)", "Two repos: ai-company-brain (infra/prompts/configs) · ai-company-brain-skills (Anthropic SKILL.md format). Weekly upstream sync from anthropics/skills and VoltAgent/awesome-agent-skills.")
 
-    System_Ext(src, "ClickUp / Zoho / Odoo / Gmail / WhatsApp / Meet", "Sources of truth + capture surfaces")
-    System_Ext(llms, "LLM tier 1/2/3", "Haiku / Sonnet / Opus class")
+    System_Ext(src, "ClickUp / Zoho / Odoo / Outlook / WhatsApp / Meet", "Sources of truth + capture surfaces")
+    System_Ext(llms, "LLM tier 1/2/3", "Gemini Flash Lite / Flash / Flash-3.5 (dev); vLLM/Qwen3 (future Tier 1)")
 
     Rel(user, gw, "HTTPS / WS")
     Rel(gw, orch, "Invoke workflow")

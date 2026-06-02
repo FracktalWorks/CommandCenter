@@ -59,11 +59,12 @@ class Settings(BaseSettings):
     zoho_region: str = "in"
     zoho_webhook_secret: str = ""        # HMAC secret for /webhooks/zoho (WBS 1.1)
 
-    # Gmail (Phase 1, WBS 1.3)
-    gmail_sa_json_path: str = ""         # service-account key file
-    gmail_workspace_domain: str = ""     # e.g. fracktal.in
-    gmail_default_user: str = ""         # default mailbox to impersonate
-    gmail_pubsub_token: str = ""         # bearer token expected on /webhooks/gmail
+    # Outlook / Exchange Online (Phase 1, WBS 1.3)
+    outlook_client_id: str = ""          # Azure app registration client ID
+    outlook_client_secret: str = ""      # Azure app registration secret
+    outlook_tenant_id: str = ""          # Entra ID / Azure AD tenant ID
+    outlook_default_user: str = ""       # default mailbox UPN to watch
+    outlook_webhook_secret: str = ""     # clientState secret for Graph change notifications
 
 
 @lru_cache(maxsize=1)

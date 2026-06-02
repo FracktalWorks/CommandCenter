@@ -1,4 +1,4 @@
-# AI Company Brain — convenience targets (use `make <target>` or invoke uv directly).
+# Jannet.AI — convenience targets (use `make <target>` or invoke uv directly).
 .PHONY: sync lint fmt type test cov gateway infra-up infra-down infra-logs clean
 
 sync:
@@ -11,14 +11,12 @@ fmt:
 uv run ruff format .
 
 type:
-uv run mypy apps packages
-
+	uv run mypy packages level4
 test:
 uv run pytest
 
 cov:
-uv run pytest --cov=apps --cov=packages --cov-report=term-missing
-
+	uv run pytest --cov=packages --cov=level4 --cov-report=term-missing
 gateway:
 uv run uvicorn gateway.main:app --reload --host 0.0.0.0 --port 8080
 

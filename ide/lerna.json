@@ -1,0 +1,13 @@
+{
+  "version": "independent",
+  "npmClient": "yarn",
+  "packages": [
+    "extensions/*",
+    "browser-app"
+  ],
+  "command": {
+    "run": {
+      "stream": true
+    }
+  }
+}

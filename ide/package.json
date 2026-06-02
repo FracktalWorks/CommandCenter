@@ -1,0 +1,24 @@
+{
+  "private": true,
+  "name": "command-center-ide",
+  "description": "Command Center — self-hosted multi-agent platform shell, built on the Eclipse Theia platform.",
+  "engines": {
+    "yarn": ">=1.7.0 <2",
+    "node": ">=18"
+  },
+  "scripts": {
+    "build:browser": "yarn --cwd browser-app bundle",
+    "prepare": "lerna run prepare",
+    "postinstall": "theia check:theia-version",
+    "start:browser": "yarn --cwd browser-app start",
+    "watch:browser": "lerna run --parallel watch --ignore browser-app"
+  },
+  "devDependencies": {
+    "lerna": "^8.1.0",
+    "@theia/cli": "1.72.1"
+  },
+  "workspaces": [
+    "extensions/*",
+    "browser-app"
+  ]
+}

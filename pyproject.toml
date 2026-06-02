@@ -1,11 +1,12 @@
-# Root pyproject — uv workspace for the AI Company Brain monorepo.
-# Apps + shared packages each live in their own sub-pyproject and are
-# stitched together as a uv workspace so they share a single .venv + lockfile.
+# Root pyproject — uv workspace for the Jannet.AI platform monorepo.
+# Active platform packages live under packages/; the shelved company-brain
+# (Level 4) subtree lives under level4/. All members share a single
+# .venv + lockfile so platform and L4 code build and test together.
 
 [project]
-name = "ai-company-brain"
+name = "jannet-ai"
 version = "0.0.1"
-description = "Fracktal Works internal multi-agent brain — mirror + reasoning + action layer over ClickUp/Zoho/Odoo."
+description = "Jannet.AI — self-hosted agent platform (cloud IDE → multi-agent → workflows → company intelligence)."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 license = { text = "Proprietary" }
@@ -43,8 +44,9 @@ dev = [
 
 [tool.uv.workspace]
 members = [
-    "apps/*",
     "packages/*",
+    "level4/packages/*",
+    "level4/apps/*",
 ]
 
 [tool.uv.sources]
@@ -86,7 +88,8 @@ exclude = ["workbench/", "infra/", "build/", "dist/"]
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers"
 asyncio_mode = "auto"
-testpaths = ["tests", "apps", "packages"]
+testpaths = ["tests", "packages", "level4"]
+pythonpath = ["level4"]
 markers = [
     "integration: requires docker-compose stack",
     "slow: long-running tests",

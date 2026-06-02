@@ -1,4 +1,6 @@
-﻿# Research Summary — AI Company Brain (Fracktal Works)
+﻿# Research Summary — AI Company Brain (now Jannet.AI **Level 4** reference)
+
+> ⚠️ **Re-sequenced (2026-05-31).** This research underpins **Level 4 (Company Intelligence)**. Note two platform-level supersessions: the **IDE shell** is now a forked **Theia** (not the Next.js four-pane workbench), and **workflows** run on our **own agent-native engine + React Flow canvas** (n8n is dropped). See [`project_plan.md`](project_plan.md) PD-01…PD-06.
 
 > Compiled: 2026-05-25 · Updated: 2026-05-25 (v0.3 — Skill Workbench / editability addition) · Project slug: `ai-company-brain`
 > Scope: state-of-the-art for an internal, self-improving multi-agent "company OS" mirroring ClickUp/Zoho/Odoo, ingesting email/WhatsApp/meetings, serving ~20 employees.

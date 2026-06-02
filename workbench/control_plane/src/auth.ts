@@ -1,23 +1,29 @@
 import NextAuth from "next-auth";
-import Google from "next-auth/providers/google";
+import MicrosoftEntraId from "next-auth/providers/microsoft-entra-id";
 
 const ALLOWED_DOMAIN = process.env.AUTH_ALLOWED_DOMAIN ?? "fracktal.in";
 
 /**
- * Dev-friendly: if no Google credentials are configured we expose an empty
+ * Dev-friendly: if no Microsoft credentials are configured we expose an empty
  * `providers` array and the middleware will allow all traffic. As soon as
- * AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET / AUTH_SECRET are set, auth flips on.
+ * AUTH_MICROSOFT_CLIENT_ID / AUTH_MICROSOFT_CLIENT_SECRET / AUTH_MICROSOFT_TENANT_ID
+ * / AUTH_SECRET are set, auth flips on.
  */
-const hasGoogle = Boolean(process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET);
+const hasMicrosoft = Boolean(
+  process.env.AUTH_MICROSOFT_CLIENT_ID &&
+  process.env.AUTH_MICROSOFT_CLIENT_SECRET &&
+  process.env.AUTH_MICROSOFT_TENANT_ID
+);
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   trustHost: true,
   secret: process.env.AUTH_SECRET ?? "dev-local-insecure-change-me",
-  providers: hasGoogle
+  providers: hasMicrosoft
     ? [
-        Google({
-          clientId: process.env.AUTH_GOOGLE_ID!,
-          clientSecret: process.env.AUTH_GOOGLE_SECRET!,
+        MicrosoftEntraId({
+          clientId: process.env.AUTH_MICROSOFT_CLIENT_ID!,
+          clientSecret: process.env.AUTH_MICROSOFT_CLIENT_SECRET!,
+          tenantId: process.env.AUTH_MICROSOFT_TENANT_ID!,
         }),
       ]
     : [],
@@ -38,4 +44,4 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
 });
 
-export const isAuthEnabled = hasGoogle;
+export const isAuthEnabled = hasMicrosoft;

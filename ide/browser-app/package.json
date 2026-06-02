@@ -1,0 +1,58 @@
+{
+  "private": true,
+  "name": "browser-app",
+  "version": "0.1.0",
+  "description": "Command Center browser application — the Theia-based multi-agent platform shell.",
+  "dependencies": {
+    "@theia/core": "1.72.1",
+    "@theia/editor": "1.72.1",
+    "@theia/editor-preview": "1.72.1",
+    "@theia/filesystem": "1.72.1",
+    "@theia/getting-started": "1.72.1",
+    "@theia/keymaps": "1.72.1",
+    "@theia/markers": "1.72.1",
+    "@theia/messages": "1.72.1",
+    "@theia/monaco": "1.72.1",
+    "@theia/navigator": "1.72.1",
+    "@theia/outline-view": "1.72.1",
+    "@theia/preferences": "1.72.1",
+    "@theia/process": "1.72.1",
+    "@theia/search-in-workspace": "1.72.1",
+    "@theia/terminal": "1.72.1",
+    "@theia/vsx-registry": "1.72.1",
+    "@theia/workspace": "1.72.1",
+    "@theia/ai-core": "1.72.1",
+    "@theia/ai-chat": "1.72.1",
+    "@theia/ai-chat-ui": "1.72.1",
+    "@theia/ai-history": "1.72.1",
+    "@theia/ai-ide": "1.72.1",
+    "@theia/ai-google": "1.72.1",
+    "@theia/ai-mcp": "1.72.1",
+    "@theia/ai-mcp-ui": "1.72.1",
+    "@theia/ai-openai": "1.72.1",
+    "@theia/ai-anthropic": "1.72.1",
+    "command-center-branding": "0.1.0",
+    "command-center-config-plane": "0.1.0"
+  },
+  "devDependencies": {
+    "@theia/cli": "1.72.1"
+  },
+  "scripts": {
+    "bundle": "yarn rebuild && theia build --mode development",
+    "rebuild": "theia rebuild:browser --cacheRoot ..",
+    "start": "theia start --hostname 0.0.0.0 --port 3000",
+    "watch": "yarn rebuild && theia build --watch --mode development"
+  },
+  "theia": {
+    "target": "browser",
+    "frontend": {
+      "config": {
+        "applicationName": "Command Center",
+        "preferences": {
+          "files.enableTrash": false,
+          "security.workspace.trust.enabled": false
+        }
+      }
+    }
+  }
+}

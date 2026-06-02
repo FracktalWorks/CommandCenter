@@ -1,0 +1,10 @@
+node_modules/
+lib/
+.browser_modules/
+plugins/
+.theia/
+*.log
+gen-webpack*.js
+webpack.config.js
+src-gen/
+.crash-reports/

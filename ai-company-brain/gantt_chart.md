@@ -1,4 +1,6 @@
-﻿# Gantt Chart — AI Company Brain
+﻿# Gantt Chart — AI Company Brain (now Jannet.AI **Level 4** reference)
+
+> ⚠️ **Re-sequenced (2026-05-31).** This schedule reflects the legacy bottom-up company-brain build (the "Gate Status" section below records real progress that now feeds **Level 4**). The current top-down platform plan (L1→L4) has no fixed calendar; see [`project_plan.md`](project_plan.md) §6 milestones.
 
 > Start date: 2026-06-01 · Team: 2 engineers · MVP-first, iterative · Version: 0.4 (Workflow Editor pane + pervasive AI chat added to Phase 0.5)
 > Calendar units = weeks. All durations are PERT estimates from `wbs.md`.

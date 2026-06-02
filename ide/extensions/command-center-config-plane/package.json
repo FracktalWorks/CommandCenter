@@ -1,0 +1,35 @@
+{
+  "name": "command-center-config-plane",
+  "version": "0.1.0",
+  "description": "Command Center Config Plane â€” manage API keys, MCP servers, OAuth tokens, and model selection (Theia extension).",
+  "keywords": [
+    "theia-extension"
+  ],
+  "license": "Apache-2.0",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "dependencies": {
+    "@theia/ai-chat": "1.72.1",
+    "@theia/ai-chat-ui": "1.72.1",
+    "@theia/ai-core": "1.72.1",
+    "@theia/core": "1.72.1"
+  },
+  "devDependencies": {
+    "rimraf": "^5.0.0",
+    "typescript": "~5.4.5"
+  },
+  "scripts": {
+    "prepare": "yarn run clean && yarn run build",
+    "clean": "rimraf lib",
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/command-center-config-plane-frontend-module",
+      "backend": "lib/node/command-center-config-plane-backend-module"
+    }
+  ]
+}

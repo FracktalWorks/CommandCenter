@@ -8,10 +8,11 @@ from acb_skills import load_skill, load_skills
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILLS_DIR = REPO_ROOT / "skills"
+L4_SKILLS_DIR = REPO_ROOT / "level4" / "skills"
 
 
 def test_load_skills_finds_production_only() -> None:
-    skills = load_skills(SKILLS_DIR)
+    skills = load_skills(L4_SKILLS_DIR)
     fqids = {s.fqid for s in skills}
     # The two seeded production skills must show up.
     assert "sales/quiet_deal_followup" in fqids
@@ -28,7 +29,7 @@ def test_load_skills_can_include_examples() -> None:
 
 
 def test_skill_frontmatter_parses_fields() -> None:
-    md = SKILLS_DIR / "sales" / "quiet_deal_followup" / "SKILL.md"
+    md = L4_SKILLS_DIR / "sales" / "quiet_deal_followup" / "SKILL.md"
     s = load_skill(md)
     assert s.frontmatter.name == "quiet_deal_followup"
     assert s.frontmatter.authority == "suggest"

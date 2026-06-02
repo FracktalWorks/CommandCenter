@@ -1,4 +1,6 @@
-﻿# References — AI Company Brain
+﻿# References — AI Company Brain (now Jannet.AI **Level 4** reference)
+
+> ⚠️ **Re-sequenced (2026-05-31).** Bibliography for the **Level 4** target. Platform-level bases added under the reframe — **Eclipse Theia** (IDE shell), **React Flow / @xyflow** (workflow canvas) — are tracked in [`project_plan.md`](project_plan.md) / [`product_requirements.md`](product_requirements.md), not yet folded into this list.
 
 > Compiled 2026-05-25. Citation format: IEEE-style numerical with URL + access date for web sources, DOI for academic papers.
 
@@ -239,3 +241,35 @@
 [90] Promptfoo. *Open-source LLM evaluation + red-teaming* (golden cases, regression diffs). URL: [promptfoo.dev](https://www.promptfoo.dev/). GitHub: [github.com/promptfoo/promptfoo](https://github.com/promptfoo/promptfoo). Accessed 2026-05-25.
 
 [91] UK AI Safety Institute. *Inspect AI — Framework for large language model evaluations* (MIT). URL: [inspect.ai-safety-institute.org.uk](https://inspect.ai-safety-institute.org.uk/). GitHub: [github.com/UKGovernmentBEIS/inspect_ai](https://github.com/UKGovernmentBEIS/inspect_ai). Accessed 2026-05-25.
+
+---
+
+## Pattern / Idea Sources (self-hosted AI workspaces) — added 2026-06-01
+
+> Two MIT-licensed, self-hosted reference apps reviewed as **idea/pattern sources** (not drop-in code — different stacks). We mine the best aspects to harden Jannet's agent-enrichment, control-plane, and ops layers. The Jannet differentiator (soul + standing directives + Reflector self-improvement loop) is not present in either; these mainly de-risk the *memory*, *orchestration*, *eval*, and *security* surfaces around it.
+
+### Odysseus — self-hosted AI workspace
+
+[92] pewdiepie-archdaemon. *Odysseus — Self-hosted AI workspace* (MIT, ~15.6k stars; FastAPI + vanilla JS; ChromaDB + fastembed). GitHub: [github.com/pewdiepie-archdaemon/odysseus](https://github.com/pewdiepie-archdaemon/odysseus). Accessed 2026-06-01.
+
+**Best aspects to adopt:**
+- **Retrieval-backed memory/skills** — ChromaDB + fastembed (ONNX) with **hybrid vector + keyword retrieval** and import/export. Apply to directives/feedback: embed and retrieve only *contextually relevant* directives per turn instead of injecting every active directive into the agent YAML (keeps prompts lean as directives accumulate). Aligns with Mem0 [71] / Graphiti [72] direction.
+- **Built-in email triage** (IMAP/SMTP): urgency reminders, auto-tag, auto-summary, auto-reply drafts, per-account routing — direct reference for `skills/triage/*` and sales follow-up drafting.
+- **Cron-style scheduled tasks** the agent can act on (ntfy/browser/email channels) — pattern for reconciler/escalation flows (`stale_task_nudge`, `quiet_deal_escalation`).
+- **Deep Research** multi-step gather→read→synthesize (adapted from Tongyi DeepResearch) — pattern for research/summary agents.
+- **Secrets hygiene** (`data/` gitignored, post-boot `auth.json` review) — relevant since Jannet handles email/CRM credentials.
+
+### Mission Control — AI agent orchestration dashboard
+
+[93] builderz-labs. *Mission Control — Self-hosted AI agent orchestration dashboard* (MIT, ~5.1k stars; Next.js 16 + React 19 + TypeScript 5.7; SQLite/better-sqlite3 WAL; Zustand; WebSocket + SSE). GitHub: [github.com/builderz-labs/mission-control](https://github.com/builderz-labs/mission-control). Accessed 2026-06-01.
+
+**Best aspects to adopt:**
+- **Agent SOUL system with bidirectional workspace sync** — independent validation of our soul/identity layer; their disk↔DB sync mirrors our `customAgents.yml` regeneration. Confirms the direction and suggests two-way sync (edit on disk *or* UI).
+- **Four-layer agent eval framework** — output evals (golden-dataset scoring), trace evals (convergence/loop detection), component evals (tool reliability p50/p95/p99), and **drift detection** (10% threshold vs 4-week rolling baseline). Strong upgrade path for `evals/` beyond Promptfoo [90] / Inspect [91]; ties feedback signals to measurable agent quality.
+- **Quality gates ("Aegis")** — block task completion without sign-off; maps onto escalation_ui / reconciler human-in-the-loop approval (cf. Agent Inbox [87]).
+- **Agent trust scoring + security audit** — posture score (0–100), secret detection across agent messages, MCP call auditing, injection-attempt tracking, hook profiles (minimal/standard/strict). Directly reinforces our OWASP/guardrails posture [43–49].
+- **Skills Hub with pre-install security scanner** — prompt-injection / credential-leak / exfiltration / dangerous-shell checks before installing a skill; bidirectional disk↔DB sync. Apply to the Skill Workbench [80–83] before importing third-party `SKILL.md`.
+- **Natural-language recurring tasks** ("every morning at 9am" → cron) via template-clone spawning — concrete pattern for the scheduler/reconciler.
+- **Framework adapters** normalizing registration/heartbeats/task-reporting across OpenClaw/CrewAI/LangGraph/AutoGen/Claude SDK — reference for a gateway-agnostic agent registry [1–5].
+- **Cost tracking** with per-model breakdowns + token logs — pairs with LiteLLM [75] / Langfuse [73].
+- **Real-time UX**: WebSocket + SSE with smart polling that pauses when idle; zero-external-deps SQLite (WAL) — lightweight ops baseline for the control plane.

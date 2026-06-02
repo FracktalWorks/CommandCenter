@@ -1,4 +1,6 @@
-﻿# Risk Register — AI Company Brain
+﻿# Risk Register — AI Company Brain (now Jannet.AI **Level 4** reference)
+
+> ⚠️ **Re-sequenced (2026-05-31).** Risks here apply to the **Level 4 (Company Intelligence)** target. Current platform risks (Theia fork drift, two-runtime creep, Open VSX gap, L1 scope creep) are in [`project_plan.md`](project_plan.md) §8. The L4 risks below (R-01…R-15) remain valid for when L4 begins.
 
 > Project: AI Company Brain · Org: Fracktal Works · Date: 2026-05-25
 > Scoring: Probability (1=Low / 2=Med / 3=High) · Impact (1=Low / 2=Med / 3=High / 4=Critical)

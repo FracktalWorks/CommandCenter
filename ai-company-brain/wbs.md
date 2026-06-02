@@ -1,6 +1,8 @@
-﻿# Work Breakdown Structure — AI Company Brain
+﻿# Work Breakdown Structure — AI Company Brain (now Jannet.AI **Level 4** feeder)
 
-> Project: AI Company Brain · Org: Fracktal Works · Date: 2026-05-25 · Version: 0.4
+> ⚠️ **Re-sequenced (2026-05-31).** This WBS reflects the legacy bottom-up company-brain build. Under the Jannet.AI platform reframe it now feeds **Level 4 (Company Intelligence)**. The current top-down plan (L1 Theia IDE → L2 multi-agent → L3 our own workflow engine → L4 company intelligence) lives in [`project_plan.md`](project_plan.md). Phases referencing n8n and the four-pane workbench are superseded. A fresh per-level WBS is generated at each level's design gate.
+
+> Project: AI Company Brain · Org: Fracktal Works · Date: 2026-05-27 · Version: 0.5
 > Team: 2 engineers + AI assistance · Iterative, MVP-first, no hard deadline
 
 This WBS is phase-decomposed by *capability slice*, not by traditional V-model phases, because the project is software-only and iterative. Each phase delivers a deployed, working slice.
@@ -18,7 +20,7 @@ Effort uses **engineer-weeks (ew)** with PERT triple-point estimates: (O, M, P) 
 | 0.3 | ClickUp ingestor | Webhook receiver + REST poller + entity normaliser + canonical-key resolver | (1, 2, 4) | 2.2 |
 | 0.4 | Reconciler v0 | Nightly full-pull diff + escalation queue UI (simple Streamlit) | (1, 2, 3) | 2.0 |
 | 0.5 | LangGraph + Deep Agents harness skeleton | State machine harness, Deep Agents sub-agent wiring, tiered LLM router, audit log writer | (1, 2, 4) | 2.2 |
-| 0.6 | Gateway + auth | FastAPI + Google SSO restricted to fracktal.in domain | (0.5, 1, 2) | 1.1 |
+| 0.6 | Gateway + auth | FastAPI + Microsoft Entra ID SSO restricted to fracktal.in domain | (0.5, 1, 2) | 1.1 |
 | 0.7 | Pull agent v0 (“ClickUp Q&A”) | Single Deep Agents sub-agent, answers “status of project / person / task” with citations | (1, 2, 3) | 2.0 |
 | 0.8 | Guardrails v0 | Schema-validated outputs, citation enforcement, unresolved-entity abort | (0.5, 1, 2) | 1.1 |
 | 0.9 | Observability (Langfuse + OTel) | Self-hosted Langfuse (docker-compose, Postgres+ClickHouse); openllmetry OTel SDK; cost meter per tier | (0.5, 1, 1.5) | 1.0 |
@@ -43,7 +45,8 @@ Runs immediately after Phase 0 so that all skills from Phase 1 onward are author
 | 0.5.4 | Skill Studio pane | Skill catalogue (table + search + tags); Monaco editor for `SKILL.md`; embedded OpenHands iframe; "Try it" runner (stub → wired to E2B in Phase 2.9); Langfuse traces embed; Git diff + open-PR flow | (0.5, 1, 2) | 1.1 |
 | 0.5.6 | Workflow Editor pane (n8n embed) | Iframe the self-hosted n8n instance as Pane 4; session-cookie auth passthrough; verify active/inactive toggle, execution log, and workflow canvas work in iframe context; n8n Git sync config so saves commit workflow JSON to `ai-company-brain` repo | (0.1, 0.3, 0.5) | 0.3 |
 | 0.5.7 | Pervasive AI chat (CopilotKit `useCopilotReadable`) | Wire `useCopilotReadable` context hooks in each pane: Skill Studio exposes `{current_skill_yaml, last_eval_result, pr_diff}`; Observability exposes `{current_trace_json}`; Workflow Editor exposes `{current_workflow_json, last_execution_log}`; floating chat overlay button in every pane header; single CopilotKit provider wraps the app for shared session history | (0.5, 1, 2) | 1.1 |
-| 0.5.5 | Phase 0.5 review (M1.5: Workbench live) | Demo: hand-author one new skill end-to-end in the UI; chat with the agent about it from within the Skill Studio pane; toggle a workflow on/off from Pane 4 | (0.1, 0.25, 0.5) | 0.25 |
+| 0.5.8 | **LLM workflow authoring via n8n REST API** | Implement a `workflow_author` tool in the CopilotKit backend that (a) generates n8n workflow JSON from a natural-language description using Tier-2 LLM, (b) validates the JSON against the n8n workflow schema, (c) creates or updates the workflow via `POST /rest/workflows` and optionally activates it. The chat confirms the created workflow and links to it in the Workflow Editor pane. This closes the loop between chat intent and deployed automation — the user never needs to open n8n manually to create a workflow. | (1, 1.5, 3) | 1.7 |
+| 0.5.5 | Phase 0.5 review (M1.5: Workbench live) | Demo: hand-author one new skill end-to-end in the UI; chat with the agent about it from within the Skill Studio pane; toggle a workflow on/off from Pane 4; **ask the chat to create a new n8n workflow — it should appear in Pane 4 deployed and active** | (0.1, 0.25, 0.5) | 0.25 |
 | **Phase 0.5 total** | | | | **~6.5 ew** (~3.25 cw) |
 
 **Phase 0.5 exit criteria (M1.5):**
@@ -51,22 +54,22 @@ Runs immediately after Phase 0 so that all skills from Phase 1 onward are author
 - One skill adopted from `anthropics/skills` upstream and one hand-authored skill are both in production.
 - Agent Inbox shows a live HITL queue.
 - The Workflow Editor pane (n8n) is accessible; at least one workflow can be toggled active/inactive and the execution log is visible.
-- The AI chat overlay is present in every pane; asking "explain this" from within the Skill Studio and from within a Langfuse trace both return contextually relevant responses.
-
+- The AI chat overlay is present in every pane; asking "explain this" from within the Skill Studio and from within a Langfuse trace both return contextually relevant responses.- **Saying “create a workflow that sends a WhatsApp nudge when a task is stale for 7 days” in the chat produces a deployed n8n workflow visible in Pane 4 — no manual n8n editing required.**
 ## Phase 1 — Capture Expansion (Zoho + Email)
 
 | WBS | Work Package | (O, M, P) ew | PERT ew |
 |---|---|---|---|
 | 1.1 | Zoho CRM ingestor (webhooks + REST + MCP server) | (1, 2, 3) | 2.0 |
 | 1.2 | Customer/Person entity resolution (deterministic + LLM fallback) | (1, 2, 4) | 2.2 |
-| 1.3 | Gmail capture: domain-wide delegation + Pub/Sub | (1, 2, 3) | 2.0 |
+| 1.3 | Outlook/Exchange capture: Microsoft Graph change notifications + app-only OAuth | (1, 2, 3) | 2.0 |
 | 1.4 | Email triage (Tier-1 classifier → graph link) | (1, 2, 3) | 2.0 |
 | 1.5 | Sales Pull agent (deal status, pipeline, customer 360) | (1, 2, 3) | 2.0 |
 | 1.6 | Reconciler v1 (multi-source diff) | (0.5, 1, 2) | 1.1 |
 | 1.7 | RBAC scaffold (exec / employee roles) | (0.5, 1, 2) | 1.1 |
 | 1.8 | Semantic cache + token compression | GPTCache in front of LiteLLM (1h TTL triage decisions); LLMLingua-2 on tool outputs >1k tokens | (0.5, 1, 2) | 1.1 |
-| 1.9 | Phase 1 review | (0.25, 0.5, 1) | 0.5 |
-| **Phase 1 total** | | | **~14 ew** (~7 cw) |
+| 1.9 | **Data quality skills — Layer 2 foundation** | Author 5 data-quality skills: (a) find duplicate contacts in Zoho, (b) find ClickUp tasks with no owner/due date, (c) find Zoho deals with no close date or stale stage, (d) flag entity-resolution ambiguities needing human confirmation, (e) surface CRM records that should be merged. Each skill: detected → surfaced in chat + Action Broker queue → Suggest+Apply fix via write-back (Phase 3). In Phase 1 these are read-only detection skills; fixes become available when Action Broker lands (Phase 3). | (1, 1.5, 3) | 1.7 |
+| 1.10 | Phase 1 review | (0.25, 0.5, 1) | 0.5 |
+| **Phase 1 total** | | | **~15.7 ew** (~8 cw) |
 
 ## Phase 1.9 — Skill Eval Harness (CI Gate)
 
@@ -91,8 +94,9 @@ Runs in parallel with the tail of Phase 1 so that all Phase-2 skills ship with r
 | 2.6 | Delivery agent (stale-task detection, ping, escalate) | (1, 2, 3) | 2.0 |
 | 2.7 | HR/Utilization agent v0 (kanban-stage-staleness dashboard) | (1, 2, 3) | 2.0 |
 | 2.8 | Mem0 + Graphiti memory integration | Mem0 episodic memory per user/account; Graphiti bi-temporal entity KG; both on existing Postgres; Deep Agents tools wired | (1, 1.5, 3) | 1.7 |
-| 2.9 | Phase 2 review | (0.25, 0.5, 1) | 0.5 |
-| **Phase 2 total** | | | **~15.5 ew** (~7.75 cw) |
+| 2.9 | **Odoo read-only ingestor (pull-forward from Phase 5)** | Thin ingestor for MO, PO, and inventory via Odoo JSON-RPC. Brings manufacturing order status, purchase order status, and stock levels into the entity graph. Enables delivery-risk and project-status queries that need both ClickUp (task status) and Odoo (MO status). Full Strategy agent and finance analysis remain Phase 5. | (1, 2, 4) | 2.2 |
+| 2.10 | Phase 2 review | (0.25, 0.5, 1) | 0.5 |
+| **Phase 2 total** | | | **~17.7 ew** (~8.85 cw) |
 
 ## Phase 2.9 — Self-Hosted E2B Sandbox
 

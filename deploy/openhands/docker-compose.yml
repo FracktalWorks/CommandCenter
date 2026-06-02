@@ -1,4 +1,4 @@
-# OpenHands self-host for Jannet.AI Skill Workbench.
+# OpenHands self-host for CommandCenter Skill Workbench.
 #
 # Mounts:
 #   - /var/run/docker.sock  -> required: OpenHands spawns a runtime container per session.
@@ -16,7 +16,7 @@
 services:
   openhands:
     image: docker.all-hands.dev/all-hands-ai/openhands:${OPENHANDS_VERSION:-0.55}
-    container_name: jannet-openhands
+    container_name: commandcenter-openhands
     pull_policy: always
     restart: unless-stopped
     ports:
@@ -42,9 +42,9 @@ services:
       - ./openhands-state:/.openhands
       - ../../skills:/opt/workspace_base/skills:rw
     networks:
-      - jannet
+      - commandcenter
 
 networks:
-  jannet:
-    name: jannet_net
+  commandcenter:
+    name: commandcenter_net
     external: false

@@ -79,9 +79,8 @@ Your setup — a WhatsApp Community spanning teams — needs the **WhatsApp Busi
 - For *reading* community messages, the agent's number must be a participant of each group/community.
 - **OpenBSP** ([Reddit thread](https://www.reddit.com/r/WhatsappBusinessAPI/comments/1snaxlu/opensource_whatsapp_business_platform/)) is a self-hostable WhatsApp Business Platform that connects directly to Meta's Cloud API — worth evaluating[^16].
 - **Chatwoot** offers WhatsApp Embedded Signup for OAuth-style onboarding[^17].
-- **n8n** has first-class WhatsApp Business Cloud and webhook nodes[^18].
 
-**Recommendation:** Meta Cloud API + n8n webhook ingestion → publish to internal message bus → ingestion agent normalises into the graph. Use OpenBSP as a fallback if you outgrow direct Meta integration.
+**Recommendation:** Meta Cloud API → LangGraph ingestion agent → publish to internal message bus → ingestion agent normalises into the graph. Use OpenBSP as a fallback if you outgrow direct Meta integration.
 
 ## 6. Email Capture (Internal Only)
 
@@ -96,16 +95,16 @@ This avoids any per-user OAuth dance and respects domain admin policy. Consent m
 Since these are the **source of truth**, the brain is a *read-mostly mirror with approval-gated writes*.
 
 **ClickUp:**
-- REST API + webhooks for real-time deltas[^19].
+- REST API + webhooks for real-time deltas.
 - Kanban-stage events are exposed (your utilization signal lives here).
 - "Time since last status change" per task = your *task-staleness metric* — directly answers your utilization question without time tracking.
 
 **Zoho CRM:**
-- REST API v8 + webhooks; n8n has first-class Zoho node[^20].
+- REST API v8 + webhooks; all major operations are available via the Zoho MCP server.
 - Deal stage, last activity timestamp, owner — your sales-velocity signal.
 
 **Odoo ERP:**
-- XML-RPC and JSON-RPC; n8n integration is community-maintained but functional[^21].
+- XML-RPC and JSON-RPC; community MCP server available.
 - Source of truth for purchase orders, manufacturing orders, inventory.
 
 **Sync architecture (anti-drift):**
@@ -187,15 +186,14 @@ Alternatives considered:
 
 **Decision:** OpenHands as the Skill Studio backend (ADR-014).
 
-### 12.3 Control Plane UI — CopilotKit + AG-UI + Agent Inbox + n8n embed + pervasive chat
+### 12.3 Control Plane UI — CopilotKit + AG-UI + Agent Inbox + pervasive chat
 
 For the chat surface, HITL queue, workflow editor, and pervasive AI assistance:
 - **CopilotKit** ([copilotkit.ai](https://www.copilotkit.ai/), MIT)[^85] is the most mature OSS for in-app agentic UI in 2026. They are the company behind the **AG-UI Protocol**[^86] (agent–user interaction, bi-directional) which is becoming a de-facto standard for connecting frontends to any agent backend.
 - **LangChain Agent Inbox** ([agent-inbox-langgraph-example](https://github.com/langchain-ai/agent-inbox-langgraph-example))[^87] is the canonical pattern for HITL approval queues over LangGraph — perfect for surfacing Annealer-drafted skill PRs to humans.
-- **n8n** (BSL, already self-hosted for ingestion) is embedded as Pane 4 (Workflow Editor) via iframe. n8n’s own UI provides the full drag-and-drop workflow canvas, active/inactive toggle, and execution log — no custom workflow UI needed.
-- **CopilotKit `useCopilotReadable`** injects each pane’s current context into a floating chat overlay so the AI assistant is aware of the open skill YAML, Langfuse trace, or n8n workflow JSON depending on which pane is active.
+- **CopilotKit `useCopilotReadable`** injects each pane's current context into a floating chat overlay so the AI assistant is aware of the open skill YAML or Langfuse trace depending on which pane is active.
 
-**Decision:** Four-pane Next.js Control Plane: (1) Chat/Agent Inbox, (2) Skill Studio, (3) Observability, (4) Workflow Editor. Pervasive AI chat overlay in every pane via `useCopilotReadable`. Chat pane usable standalone (ADR-014, ADR-018, ADR-019).
+**Decision:** Three-pane Next.js Control Plane: (1) Chat/Agent Inbox, (2) Skill Studio, (3) Observability. Pervasive AI chat overlay in every pane via `useCopilotReadable`. Chat pane usable standalone (ADR-014, ADR-019).
 
 ### 12.4 Sandbox runtime — self-hosted E2B
 
@@ -216,7 +214,7 @@ Both run in the E2B sandbox so behaviour is consistent with production. Merge is
 ### 12.6 Git as the source of truth
 
 Two GitHub repos under the Fracktal org:
-1. `ai-company-brain` — infra, scripts, sub-agent prompts, LiteLLM router config, n8n workflow JSON, Langfuse dataset definitions, Promptfoo eval cases.
+1. `ai-company-brain` — infra, scripts, sub-agent prompts, LiteLLM router config, Langfuse dataset definitions, Promptfoo eval cases.
 2. `ai-company-brain-skills` — skill registry only, Anthropic `SKILL.md` format, monorepo of `skills/<domain>/<skill_id>/`.
 
 **No live edits to running prompts.** Every change is a PR; CI runs evals; merge auto-deploys via webhook → Skill Registry pulls + stages at 10% shadow. Rollback = `git revert`. Annealer-drafted skills are PRs like any other; they appear in the Workbench Agent Inbox for human review (ADR-015).
@@ -230,14 +228,13 @@ Two GitHub repos under the Fracktal org:
 | Upstreams | `anthropics/skills`, `VoltAgent/awesome-agent-skills` | MIT | Weekly upstream sync |
 | Studio backend | **OpenHands** (self-hosted) | Apache-2.0 | Sandboxed IDE + LLM-assisted drafting (Pane 2) |
 | Chat / HITL | **CopilotKit + AG-UI** + LangChain Agent Inbox | MIT | Chat pane (Pane 1) + approval queue; usable standalone |
-| **Workflow Editor** | **n8n embed (iframe of self-hosted instance)** | BSL | **Pane 4: visual workflow canvas, active/inactive toggle, execution log. n8n already in stack — zero new infra** |
-| **Pervasive AI chat** | **CopilotKit `useCopilotReadable`** | MIT | **Floating AI chat overlay in every pane; automatically seeded with pane context (open skill YAML / trace / workflow JSON)** |
+| **Pervasive AI chat** | **CopilotKit `useCopilotReadable`** | MIT | **Floating AI chat overlay in every pane; automatically seeded with pane context (open skill YAML / trace)** |
 | Sandbox | **E2B** (self-hosted, Firecracker) | Apache-2.0 | "Try it" + CI eval execution |
 | Evals | **Promptfoo + Inspect AI** | MIT | CI-gated regression |
 | Observability | Langfuse (embed) | MIT | Per-skill traces in the Studio (Pane 3) |
 | Runtime harness | Deep Agents (already in stack) | MIT | Reads `SKILL.md` natively |
 
-Total new components: 4 (OpenHands, E2B, CopilotKit/AG-UI shell, Promptfoo+Inspect harness). Workflow Editor (n8n) and pervasive chat (`useCopilotReadable`) are additions to the CopilotKit integration shell — no new infrastructure. All MIT/Apache-2.0/BSL, all self-hostable. Total new effort: ~9 ew across Phases 0.5, 1.9, 2.9 plus +2 ew expansion in Phase 4.
+Total new components: 4 (OpenHands, E2B, CopilotKit/AG-UI shell, Promptfoo+Inspect harness). Pervasive chat (`useCopilotReadable`) is an addition to the CopilotKit integration shell — no new infrastructure. All MIT/Apache-2.0, all self-hostable. Total new effort: ~9 ew across Phases 0.5, 1.9, 2.9 plus +2 ew expansion in Phase 4.
 
 ---
 
@@ -260,10 +257,6 @@ Total new components: 4 (OpenHands, E2B, CopilotKit/AG-UI shell, Promptfoo+Inspe
 [^15]: WhatsApp Business Developer Hub. [whatsappbusiness.com/developers/developer-hub](https://whatsappbusiness.com/developers/developer-hub/) (Accessed 2026-05-25).
 [^16]: r/WhatsappBusinessAPI. *Open-source WhatsApp Business Platform (OpenBSP)*. (Accessed 2026-05-25).
 [^17]: Chatwoot. *WhatsApp Embedded Signup*. [developers.chatwoot.com](https://developers.chatwoot.com/self-hosted/configuration/features/integrations/whatsapp-embedded-signup) (Accessed 2026-05-25).
-[^18]: n8n. *Webhook + WhatsApp Business Cloud integration*. [n8n.io/integrations/webhook/and/whatsapp-business-cloud](https://n8n.io/integrations/webhook/and/whatsapp-business-cloud/) (Accessed 2026-05-25).
-[^19]: n8n. *ClickUp integrations*. [n8n.io/integrations/clickup](https://n8n.io/integrations/clickup/) (Accessed 2026-05-25).
-[^20]: n8n. *Zoho CRM integration*. (Accessed 2026-05-25).
-[^21]: Odoo-BS. *Odoo n8n Integration*. [odoo-bs.com/n8n-odoo-integration](https://www.odoo-bs.com/n8n-odoo-integration) (Accessed 2026-05-25).
 [^22]: AWS Dev.to. *5 Techniques to Stop AI Agent Hallucinations in Production*. [dev.to/aws](https://dev.to/aws/5-techniques-to-stop-ai-agent-hallucinations-in-production-oik) (Accessed 2026-05-25).
 [^23]: Atlan. *AI Agent Risks & Guardrails: 2026 Enterprise Security Guide*. [atlan.com/know/ai-agent-risks-guardrails](https://atlan.com/know/ai-agent-risks-guardrails/) (Accessed 2026-05-25).
 [^24]: Agno. *Guardrails for AI Agents*. [agno.com/blog/guardrails-for-ai-agents](https://www.agno.com/blog/guardrails-for-ai-agents) (Accessed 2026-05-25).

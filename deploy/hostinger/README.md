@@ -7,7 +7,7 @@ Target spec (matches `system_architecture.md` §5 v1 baseline):
 | KVM 2 | 2    | 8 GB | 100 GB NVMe | ~$14.99/mo           |
 | **KVM 4 (recommended)** | **4** | **16 GB** | **200 GB NVMe** | **~$28.99/mo** |
 
-KVM 4 has enough headroom for Postgres + Redis + LiteLLM + Langfuse + n8n + workbench. KVM 2 works for Phase 0/1 only.
+KVM 4 has enough headroom for Postgres + Redis + LiteLLM + Langfuse + workbench. KVM 2 works for Phase 0/1 only.
 
 ## One-time: provision the server
 
@@ -97,7 +97,6 @@ Hostinger takes weekly backups of the whole VPS automatically (included in plan)
 Once deployed (and DNS pointed):
 - **Gateway:** `https://brain.your-domain.tld`
 - **Langfuse:** `https://langfuse.your-domain.tld`
-- **n8n** (Phase 0.5+): `https://n8n.your-domain.tld`
 - **Workbench** (Phase 0.5+): `https://workbench.your-domain.tld`
 
 LiteLLM stays on the internal Docker network — never exposed publicly.

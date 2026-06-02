@@ -57,7 +57,7 @@ C4Container
         Container(gw, "Interaction Gateway", "FastAPI + WebSocket", "Pull queries, push notifications, approval UI")
         Container(orch, "Orchestrator", "LangGraph + Deep Agents v0.6", "State machines per workflow; sub-agents, HITL, Skills, context mgmt, MCP")
         Container(agents, "Specialist Agents", "Deep Agents sub-agents", "Sales, Delivery, HR/Utilization, Strategy, Triage, Annealer")
-        Container(ingest, "Ingestion Workers", "Python + n8n + MCP servers", "Webhook receivers, Pub/Sub consumers, meeting bot drivers; ClickUp/Zoho/Odoo MCP")
+        Container(ingest, "Ingestion Workers", "Python + MCP servers + LangGraph skills", "Webhook receivers, Pub/Sub consumers, meeting bot drivers; ClickUp/Zoho/Odoo MCP")
         Container(graph, "Entity Graph + Memory", "Postgres + pgvector + Apache AGE + Mem0 + Graphiti", "Entity graph; episodic memory (Mem0); bi-temporal entity KG (Graphiti)")
         Container(skills, "Skill Registry", "Deep Agents Skills API + DB", "Annealed skills (executable Python + metadata); gated rollout tracking")
         Container(actions, "Action Broker", "Python", "Approval queue, audit log, write-back to source systems")
@@ -70,8 +70,7 @@ C4Container
         Container(scache, "Semantic Cache", "GPTCache (MIT)", "30-70% cost saving on repeated triage queries; vector-similarity keyed; 1h TTL")
         Container(compress, "Token Compressor", "LLMLingua-2 (MIT, CPU)", "50-60% compression of long tool outputs before model context")
         Container(obs, "Observability", "Langfuse (MIT, self-hosted) + OpenTelemetry", "LLM traces, cost per tier, eval scores; OTel via openllmetry SDK")
-        Container(n8n, "Workflow Automation", "n8n (BSL, self-hosted)", "Visual workflow editor; cron + event triggers; 850+ integrations; n8n UI exposed as Workflow Editor pane in Control Plane")
-        Container(wb, "Skill Workbench (Control Plane)", "Next.js + CopilotKit + AG-UI + Agent Inbox", "Four-pane online UI: (1) Chat / Agent Inbox · (2) Skill Studio (Monaco + OpenHands embed + Promptfoo runner) · (3) Observability (Langfuse embed) · (4) Workflow Editor (n8n embed). Pervasive AI chat assistant in every pane via CopilotKit useCopilotReadable.")
+        Container(wb, "Skill Workbench (Control Plane)", "Next.js + CopilotKit + AG-UI + Agent Inbox", "Three-pane online UI: (1) Chat / Agent Inbox · (2) Skill Studio (Monaco + OpenHands embed + Promptfoo runner) · (3) Observability (Langfuse embed). Pervasive AI chat assistant in every pane via CopilotKit useCopilotReadable.")
         Container(oh, "OpenHands (Skill IDE backend)", "OpenHands (Apache-2.0, self-hosted)", "Sandboxed editor + terminal + filesystem + LLM-assisted code drafting; scoped to the skills repo")
         Container(e2b, "Sandbox Runner", "E2B (Firecracker microVMs, self-hosted)", "Code execution sandbox for 'Try it' runs in Workbench and CI eval pipelines")
         Container(evals, "Eval Harness", "Promptfoo + Inspect AI", "Per-skill golden cases + scenario tests; CI gate on skill PRs")
@@ -111,9 +110,6 @@ C4Container
     Rel(skills, gh, "Pull latest merged skills")
     Rel(gh, orch, "CI deploys merged config")
     Rel(wb, obs, "Embed traces panel")
-    Rel(wb, n8n, "Embed Workflow Editor pane (iframe)")
-    Rel(ingest, n8n, "n8n drives webhook pipelines + cron triggers")
-    Rel(n8n, orch, "Trigger agent via webhook on schedule/event")
 ```
 
 ## 4. Logical Data Model — Entity Graph
@@ -201,7 +197,7 @@ erDiagram
 | Token compression | LLMLingua-2 (CPU, same VM) | Same |
 | Observability | Langfuse (MIT, self-hosted, Postgres + ClickHouse) | Same |
 | Event bus | Redis Streams | Kafka |
-| Workflow automation | n8n (BSL, self-hosted) + MCP servers for ClickUp/Zoho/Odoo | Same |
+| Workflow automation | LangGraph (built-in) + MCP servers for ClickUp/Zoho/Odoo | Same |
 | Object store | S3-compatible (audio, attachments) | Same |
 
 **Infrastructure cost estimate (v1):** ~€25/month for 2 Hetzner VMs; ~€0.05–0.15/meeting for Vexa compute; 1K WhatsApp conv/mo free; LLM API spend estimated at 10–20% of naïve deployment after caching optimisations.
@@ -378,7 +374,7 @@ A self-hosted Next.js app, **four panes**, each with a context-aware AI chat ass
 | **1 · Chat / Agent Inbox** | CopilotKit + AG-UI Protocol + LangGraph Agent Inbox | Full session context; HITL queue state | Standalone conversation with the agent; review + approve/reject HITL queue items; review Annealer-drafted skill PRs. The primary pane — usable entirely on its own. |
 | **2 · Skill Studio** | Embedded OpenHands (sandboxed editor + terminal + LLM-assisted drafting) + Monaco + Promptfoo runner | Current `SKILL.md` content + last eval result + open PR diff | Browse skill catalogue, edit `SKILL.md` and scripts in-browser, ask the AI "improve this skill" or "explain this eval failure", run evals, "Try it" in E2B sandbox, open PR |
 | **3 · Observability** | Langfuse embed | Currently visible trace (span tree, cost, scores) | Inspect LLM traces; ask the AI "why did this call cost so much?" or "what went wrong in this trace?"; view per-skill success rate, latency, drift |
-| **4 · Workflow Editor** | n8n embed (iframe, same self-hosted instance) | Currently open n8n workflow JSON | Visual drag-and-drop workflow canvas; toggle active/inactive; view execution log; ask the AI "add a step to also send this to ClickUp" — agent drafts the change and opens it in the canvas |
+| **4 · Workflow Editor** | LangGraph workflow engine (React Flow canvas — L3) | Current workflow spec + execution log | Compose workflows from agents/skills on a visual canvas; toggle active/inactive; view run history; ask the AI to improve or debug a workflow |
 
 **Skill lifecycle:**
 
@@ -437,7 +433,7 @@ The Annealer (Phase 4 sub-agent) scans the audit log for recurring human interve
 
 ### ADR-007: WhatsApp via Meta Cloud API + dedicated agent number
 - **Context:** Must integrate with the existing company WhatsApp Community.
-- **Decision:** Provision new business number; onboard via Meta Cloud API; n8n for webhook ingestion; OpenBSP held in reserve.
+- **Decision:** Provision new business number; onboard via Meta Cloud API; LangGraph ingestion skill handles webhook processing; OpenBSP held in reserve.
 - **Consequences:** Per-conversation pricing applies; community message capture requires agent to be a participant in each group.
 
 ### ADR-008: LiteLLM gateway + RouteLLM + prompt caching
@@ -479,7 +475,7 @@ The Annealer (Phase 4 sub-agent) scans the audit log for recurring human interve
 
 ### ADR-015: Git is the source of truth for every editable agent artefact; PR + eval gate for promotion
 - **Context:** The user wants the entire agent editable *and* version-controlled on GitHub. Live-editing running prompts is a recipe for drift and silent regressions.
-- **Decision:** Everything human- or agent-editable lives in GitHub: directives (`directives/`), sub-agent prompts, skills (`ai-company-brain-skills/`), LiteLLM router config, n8n workflow JSON exports, Langfuse dataset definitions, Promptfoo eval cases. **No live edits to running prompts** — every change is a PR; CI runs the Promptfoo + Inspect AI eval suite on the affected skill(s); merge gated. Deployment is automatic on merge via webhook → the Skill Registry pulls the new version and stages it at 10% shadow.
+- **Decision:** Everything human- or agent-editable lives in GitHub: directives (`directives/`), sub-agent prompts, skills (`ai-company-brain-skills/`), LiteLLM router config, Langfuse dataset definitions, Promptfoo eval cases. **No live edits to running prompts** — every change is a PR; CI runs the Promptfoo + Inspect AI eval suite on the affected skill(s); merge gated. Deployment is automatic on merge via webhook → the Skill Registry pulls the new version and stages it at 10% shadow.
 - **Consequences:** Full audit trail; rollback = `git revert`; Annealer-drafted skills are PRs like any other; eliminates "who changed the prompt at 11pm" failure mode; requires the Workbench to use GitHub PR API (built into OpenHands).
 
 ### ADR-016: Self-hosted E2B (Firecracker) as the sandbox runtime
@@ -493,17 +489,11 @@ The Annealer (Phase 4 sub-agent) scans the audit log for recurring human interve
 - **Decision:** Every skill ships with a `evals/` folder. **Promptfoo** runs golden-case input/output assertions (cheap, fast, runs on every commit). **Inspect AI** (UK AISI, MIT) runs richer multi-turn scenario tests with graded scoring (runs on PR open). Both run in E2B sandbox. PR cannot merge unless both suites pass for the changed skills; eval reports posted as PR comments; trend dashboards exposed in the Skill Studio.
 - **Consequences:** ~1.5 ew Phase-1.9 for harness + first 10 golden suites; per-skill maintenance burden (~10 min per skill to author cases); pays for itself on the first prevented regression; aligns with industry SOTA for 2026 agent eval.
 
-### ADR-018: n8n UI embed as Workflow Editor pane (4th pane of Control Plane)
-- **Context:** The user wants to see all active/inactive workflows, edit them visually, and improve them without leaving the Control Plane. n8n is already self-hosted in the stack for ingestion and scheduling (it is not a new component).
-- **Options:** Build a custom workflow dashboard using the n8n REST API; link out to n8n in a separate browser tab; embed n8n's own UI as an iframe in Pane 4.
-- **Decision:** **Iframe embed** of the self-hosted n8n instance as Pane 4 of the Control Plane. n8n's own UI already provides the workflow canvas (drag-and-drop node editor), active/inactive toggle per workflow, execution log with per-run inputs/outputs, and cron/webhook trigger configuration — zero custom code needed for the UI itself. Auth passthrough is a single session-cookie forward (~0.3 ew). Workflow JSON exports are committed to `ai-company-brain` repo on save via n8n's built-in Git sync.
-- **Consequences:** Full workflow CRUD in the browser; same pattern as Langfuse embed (Pane 3) and OpenHands embed (Pane 2); n8n version bumps may require iframe compat testing; ~0.3 ew total; n8n already runs on the main Hetzner VM — no additional infrastructure.
-
 ### ADR-019: Pervasive AI chat via CopilotKit `useCopilotReadable` in every pane
 - **Context:** The user wants AI assistance in the context of whatever they're currently doing — explaining a trace, improving a workflow, fixing a skill — not just in a dedicated chat pane that loses context.
 - **Options:** Separate chat instance per pane (state explosion, hard to maintain); global chat with manual copy-paste of context; CopilotKit `useCopilotReadable` context injection.
 - **Decision:** Use **CopilotKit `useCopilotReadable`** hooks to inject each pane's current state into the shared chat context automatically. Each pane declares its readable context: Skill Studio exposes `{current_skill_yaml, last_eval_result, open_pr_diff}`; Observability exposes `{current_trace_json}`; Workflow Editor exposes `{current_workflow_json, last_execution_log}`; Chat/Inbox pane exposes full session context. A floating chat overlay (persistent button in every pane header) opens the chat pre-seeded with that pane's context. Chat pane (Pane 1) is the standalone entrypoint and is fully usable without any other pane open.
-- **Consequences:** ~1 ew to wire context injection in all four panes; enables contextual slash commands per pane (`/explain`, `/improve`, `/why did this fail`); single CopilotKit provider wraps the whole app so session history is shared across panes; context is read-only from the chat side — actual mutations still go through OpenHands (skills) or n8n canvas (workflows).
+- **Consequences:** ~1 ew to wire context injection in all three panes; enables contextual slash commands per pane (`/explain`, `/improve`, `/why did this fail`); single CopilotKit provider wraps the whole app so session history is shared across panes; context is read-only from the chat side — actual mutations still go through OpenHands (skills) or the LangGraph workflow engine.
 
 ## 13. Open Questions for PDR
 

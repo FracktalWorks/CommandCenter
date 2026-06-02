@@ -2,7 +2,7 @@ import Link from "next/link";
 
 const CARDS = [
   { href: "/skills",        title: "Skill Studio",    body: "Browse, author, and evaluate skills under skills/<domain>/<id>/SKILL.md. Backed by OpenHands." },
-  { href: "/workflows",     title: "Workflow Editor", body: "Edit n8n workflows. Git-synced into ai-company-brain/workflows/." },
+  { href: "/workflows",     title: "Workflow Editor", body: "LangGraph workflow engine with React Flow canvas — coming in L3." },
   { href: "/observability", title: "Observability",   body: "Audit events, escalation queue, LangGraph traces, LiteLLM spend." },
 ];
 

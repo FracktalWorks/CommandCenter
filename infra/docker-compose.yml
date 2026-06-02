@@ -105,43 +105,6 @@ services:
     ports:
       - "3000:3000"
 
-  # --- n8n workflow editor. Opt-in via `--profile workflows`. ---
-  # Operators build cron / webhook flows here; we mirror them into Git via
-  # scripts/n8n_export.py so workflows live alongside the rest of the repo.
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: acb-n8n
-    <<: *restart
-    profiles: ["workflows"]
-    environment:
-      N8N_HOST: ${N8N_HOST:-localhost}
-      N8N_PORT: 5678
-      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
-      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://localhost:5678/}
-      GENERIC_TIMEZONE: ${TZ:-Asia/Kolkata}
-      # n8n v2 uses account-based auth (UI-created owner + API key).
-      # One-time first-run setup:
-      #   1. Open http://localhost:5678, complete the setup wizard.
-      #   2. Settings → n8n API → Create an API key.
-      #   3. Add N8N_API_KEY=<key> to .env.
-      # Allow embedding in our Next.js control plane iframe.
-      N8N_SECURE_COOKIE: "false"
-      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-dev-n8n-key-change-me-32chars-ok}
-      # Keep the login session alive for 1 year in dev so users never re-auth.
-      N8N_USER_MANAGEMENT_JWT_DURATION_HOURS: "8760"
-      # Serve n8n from /n8n/ so it can be proxied through the Next.js control
-      # plane (same-origin iframe) without browser cross-port restrictions.
-      N8N_PATH: /n8n/
-      # Use Server-Sent Events instead of WebSocket for push; SSE is proxiable
-      # by Next.js rewrites (WebSocket upgrades are not).
-      N8N_PUSH_BACKEND: sse
-    ports:
-      - "5678:5678"
-    volumes:
-      - acb-n8n-data:/home/node/.n8n
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
   # --- OpenHands AI coding agent. Opt-in via `--profile sandbox`. ---
   # Runs the full OpenHands GUI at http://localhost:3002.
   # Uses port 3002 to avoid collision with Langfuse (obs profile, port 3000).
@@ -181,5 +144,4 @@ services:
 volumes:
   acb-postgres-data:
   acb-redis-data:
-  acb-n8n-data:
   acb-openhands-data:

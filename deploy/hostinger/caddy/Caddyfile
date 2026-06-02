@@ -23,12 +23,6 @@ langfuse.fracktal.in {
     reverse_proxy 127.0.0.1:3000
 }
 
-# --- n8n (Phase 0.5+, when enabled) ---
-# n8n.fracktal.in {
-#     encode zstd gzip
-#     reverse_proxy 127.0.0.1:5678
-# }
-
 # --- Skill Workbench (Phase 0.5+, when enabled) ---
 # workbench.fracktal.in {
 #     encode zstd gzip

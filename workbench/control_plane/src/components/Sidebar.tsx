@@ -7,7 +7,7 @@ type Pane = { href: string; label: string; emoji: string; note: string };
 
 const PANES: Pane[] = [
   { href: "/skills",        label: "Skill Studio",     emoji: "[S]", note: "Author SKILL.md + evals" },
-  { href: "/workflows",     label: "Workflow Editor",  emoji: "[W]", note: "n8n flows + Git sync"     },
+  { href: "/workflows",     label: "Workflow Editor",  emoji: "[W]", note: "LangGraph (coming L3)"     },
   { href: "/observability", label: "Observability",    emoji: "[O]", note: "Audit log + traces"      },
 ];
 
@@ -17,7 +17,7 @@ export default function Sidebar() {
     <aside className="w-64 shrink-0 border-r border-zinc-800 bg-zinc-900/60 p-4 flex flex-col">
       <div className="px-2 pb-6">
         <Link href="/" className="block">
-          <div className="text-lg font-semibold tracking-tight">Jannet.AI</div>
+          <div className="text-lg font-semibold tracking-tight">CommandCenter</div>
           <div className="text-xs text-zinc-500">Control Plane</div>
         </Link>
       </div>

@@ -75,7 +75,7 @@ See [`Makefile`](Makefile) for the same targets in shell form.
 - **Source of truth = ClickUp/Zoho/Odoo.** Never write back without going through `action_broker` (approval-gated).
 - **Every LLM call** goes through `acb_llm` → LiteLLM proxy → tiered router. No direct provider SDK calls in app code.
 - **Every agent output** must cite graph node IDs; `acb_llm.guardrails` enforces this.
-- **Git is the source of truth** for prompts, skills, n8n workflows, LiteLLM config (ADR-015).
+- **Git is the source of truth** for prompts, skills, LangGraph workflow definitions, LiteLLM config (ADR-015).
 - **Skills** follow the Anthropic `SKILL.md` format (ADR-013); examples in [`skills/examples`](skills/examples).
 
 ## Status

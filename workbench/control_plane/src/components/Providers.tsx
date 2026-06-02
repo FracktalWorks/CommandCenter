@@ -11,7 +11,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
         {children}
         <CopilotSidebar
           defaultOpen={false}
-          labels={{ modalHeaderTitle: "Jannet.AI Copilot", welcomeMessageText: "What would you like to do?" }}
+          labels={{ modalHeaderTitle: "CommandCenter Copilot", welcomeMessageText: "What would you like to do?" }}
         />
       </CopilotKitProvider>
     </SessionProvider>

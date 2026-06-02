@@ -41,16 +41,14 @@ Runs immediately after Phase 0 so that all skills from Phase 1 onward are author
 | 0.5.2 | OpenHands self-host scoped to skills repo | Deploy OpenHands on a dedicated Hetzner VM; mount the skills repo as workspace; LiteLLM-backed LLM access; GitHub PR API integration | (0.5, 1, 2) | 1.1 |
 | 0.5.3 | Control Plane UI shell (Next.js + CopilotKit + AG-UI) | Next.js app with three-pane layout; CopilotKit + AG-UI Protocol for Chat pane wired to LangGraph; LangGraph Agent Inbox for HITL queue; Google SSO restricted to fracktal.in | (1, 1.5, 3) | 1.7 |
 | 0.5.4 | Skill Studio pane | Skill catalogue (table + search + tags); Monaco editor for `SKILL.md`; embedded OpenHands iframe; "Try it" runner (stub → wired to E2B in Phase 2.9); Langfuse traces embed; Git diff + open-PR flow | (0.5, 1, 2) | 1.1 |
-| 0.5.6 | Workflow Editor pane (n8n embed) | Iframe the self-hosted n8n instance as Pane 4; session-cookie auth passthrough; verify active/inactive toggle, execution log, and workflow canvas work in iframe context; n8n Git sync config so saves commit workflow JSON to `ai-company-brain` repo | (0.1, 0.3, 0.5) | 0.3 |
-| 0.5.7 | Pervasive AI chat (CopilotKit `useCopilotReadable`) | Wire `useCopilotReadable` context hooks in each pane: Skill Studio exposes `{current_skill_yaml, last_eval_result, pr_diff}`; Observability exposes `{current_trace_json}`; Workflow Editor exposes `{current_workflow_json, last_execution_log}`; floating chat overlay button in every pane header; single CopilotKit provider wraps the app for shared session history | (0.5, 1, 2) | 1.1 |
-| 0.5.5 | Phase 0.5 review (M1.5: Workbench live) | Demo: hand-author one new skill end-to-end in the UI; chat with the agent about it from within the Skill Studio pane; toggle a workflow on/off from Pane 4 | (0.1, 0.25, 0.5) | 0.25 |
-| **Phase 0.5 total** | | | | **~6.5 ew** (~3.25 cw) |
+| 0.5.7 | Pervasive AI chat (CopilotKit `useCopilotReadable`) | Wire `useCopilotReadable` context hooks in each pane: Skill Studio exposes `{current_skill_yaml, last_eval_result, pr_diff}`; Observability exposes `{current_trace_json}`; floating chat overlay button in every pane header; single CopilotKit provider wraps the app for shared session history | (0.5, 1, 2) | 1.1 |
+| 0.5.5 | Phase 0.5 review (M1.5: Workbench live) | Demo: hand-author one new skill end-to-end in the UI; chat with the agent about it from within the Skill Studio pane; review the HITL queue in the Agent Inbox | (0.1, 0.25, 0.5) | 0.25 |
+| **Phase 0.5 total** | | | | **~6.2 ew** (~3.1 cw) |
 
 **Phase 0.5 exit criteria (M1.5):**
 - A maintainer can open the Workbench in a browser, browse the skill catalogue, edit a `SKILL.md`, see Git diff, and open a PR — without touching the local filesystem.
 - One skill adopted from `anthropics/skills` upstream and one hand-authored skill are both in production.
 - Agent Inbox shows a live HITL queue.
-- The Workflow Editor pane (n8n) is accessible; at least one workflow can be toggled active/inactive and the execution log is visible.
 - The AI chat overlay is present in every pane; asking "explain this" from within the Skill Studio and from within a Langfuse trace both return contextually relevant responses.
 
 ## Phase 1 — Capture Expansion (Zoho + Email)
@@ -110,7 +108,7 @@ Runs in parallel with the tail of Phase 1 so that all Phase-2 skills ship with r
 | 3.3 | Suggest+Apply for Zoho follow-up drafts | (1, 2, 3) | 2.0 |
 | 3.4 | Authority-tier configuration system (per agent × per action) | (1, 2, 3) | 2.0 |
 | 3.5 | WhatsApp Business API provisioning + agent number | (0.5, 1, 2) | 1.1 |
-| 3.6 | WhatsApp community ingestion (n8n webhook) | (1, 2, 4) | 2.2 |
+| 3.6 | WhatsApp community ingestion (LangGraph ingestion skill + Meta webhook) | (1, 2, 4) | 2.2 |
 | 3.7 | WhatsApp triage agent (classify, link to deals/projects, push to graph) | (1, 2, 3) | 2.0 |
 | 3.8 | Phase 3 review | (0.25, 0.5, 1) | 0.5 |
 | **Phase 3 total** | | | **~15 ew** (~7.5 cw) |

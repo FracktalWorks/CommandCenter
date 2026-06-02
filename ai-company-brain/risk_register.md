@@ -49,7 +49,7 @@
 - **Category:** External · **P=3, I=3, Score=9**
 - **Description:** Meta verification can take 2–6 weeks; rejected for unclear use case.
 - **Mitigation:** Start verification process in Phase 1 (parallel to other work); have OpenBSP or Whapi.cloud as fallback gateway; ensure use case is clearly internal-employee tool.
-- **Contingency:** Use n8n with personal WhatsApp account for ingestion-only during pilot; restrict to read-only until verification clears.
+- **Contingency:** Use OpenBSP or Whapi.cloud for ingestion-only during pilot; restrict to read-only until verification clears.
 - **Owner:** Engineer B + Ops · **Strategy:** Mitigate
 
 ### R-06 · Meeting bot fails to join or capture is poor quality

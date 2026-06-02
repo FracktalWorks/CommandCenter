@@ -94,7 +94,7 @@ The plan is delivered iteratively in **six phases over ~12 months** with two eng
 - Internal use only; data stays within company control or named third-party processors (Anthropic, OpenAI, Meta, etc.). All other components (orchestration, inference, memory, observability, meeting bot) are self-hosted OSS.
 - Source systems (ClickUp, Zoho, Odoo) remain authoritative; the brain must not corrupt them.
 - Iterative build; no hard release date; phase gates govern progression.
-- **Git is the single source of truth for every agent-editable artefact** (directives, sub-agent prompts, skills, LiteLLM router config, n8n workflow JSON, Langfuse dataset definitions). All edits flow through PRs with an eval gate. No live-editing of running prompts outside the Skill Workbench (ADR-015).
+- **Git is the single source of truth for every agent-editable artefact** (directives, sub-agent prompts, skills, LiteLLM router config, Langfuse dataset definitions). All edits flow through PRs with an eval gate. No live-editing of running prompts outside the Skill Workbench (ADR-015).
 - **Skill format = Anthropic `SKILL.md`** (ADR-013). Skills are versioned in a dedicated repo (`ai-company-brain-skills`) and may be drafted by humans *or* by the Annealer sub-agent.
 
 ### 3.4 Regulatory & Compliance
@@ -119,14 +119,14 @@ Full detail in `research_summary.md`. Highlights:
 - **Local inference:** vLLM (Apache-2.0) replaces Ollama in production; enables Automatic Prefix Caching (85–95% latency/cost savings on repetitive agent prompts) and 5–10× higher throughput. Qwen3-8B replaces Llama-3-8B as Tier-1 model (BFCL v3 tool-calling score mid-60s% vs high-40s% for Llama-3-8B).
 - **Semantic cache:** GPTCache (MIT, Zilliz) in front of LiteLLM for 30–70% cost savings on repeated/near-duplicate triage queries.
 - **Token compression:** LLMLingua-2 (MIT, CPU-only) post-processes long tool outputs before they enter model context; ~50–60% token reduction at >99% accuracy.
-- **WhatsApp:** Meta Cloud API + n8n webhook ingestion; OpenBSP as fallback.
-- **CRM/ERP integration:** MCP servers where available (ClickUp, Zoho, Odoo all have 2026 MCP servers); n8n for webhook pipelines and transformations.
+- **WhatsApp:** Meta Cloud API + LangGraph ingestion agent; OpenBSP as fallback.
+- **CRM/ERP integration:** MCP servers where available (ClickUp, Zoho, Odoo all have 2026 MCP servers); LangGraph skills handle webhook pipelines and transformations.
 - **Observability:** Langfuse (MIT, self-hosted via docker-compose on Postgres + ClickHouse) + OpenTelemetry via openllmetry SDK. LangSmith removed (ADR-009).
 - **Guardrails:** Schema-validated outputs, citation enforcement, entity-resolution checks, second-pass verification, per-action authority tier.
 - **Cost summary:** With prompt caching + semantic cache + LLMLingua-2 + RouteLLM + Qwen3 expanding Tier-1 share, projected LLM API spend is 10–20% of a naïve single-model deployment.
 - **Skill format & ecosystem:** Anthropic Agent Skills (`SKILL.md` with YAML frontmatter) has emerged as the de-facto standard. Deep Agents reads it natively; the `anthropics/skills` repo and the community `VoltAgent/awesome-agent-skills` collection (1000+ curated skills) are pulled as upstreams (ADR-013).
-- **Skill Workbench:** Self-hosted online control plane backed by **OpenHands** (Apache-2.0, top-ranked OSS coding agent) plus a custom **Next.js** UI using **CopilotKit + AG-UI Protocol** for chat and the **LangGraph Agent Inbox** pattern for HITL queues. **Four panes:** (1) Chat / Agent Inbox · (2) Skill Studio (Monaco + OpenHands + Promptfoo runner) · (3) Observability (Langfuse embed) · (4) **Workflow Editor (n8n embed)** — full visual canvas, active/inactive toggle, execution log (ADR-014, ADR-018).
-- **Pervasive AI chat:** CopilotKit `useCopilotReadable` injects each pane’s current context (open skill YAML, Langfuse trace, n8n workflow JSON) into a floating chat overlay in every pane. Pane 1 (Chat) is fully usable standalone. Slash commands like `/explain`, `/improve`, `/why did this fail` work in-context from any pane (ADR-019).
+- **Skill Workbench:** Self-hosted online control plane backed by **OpenHands** (Apache-2.0, top-ranked OSS coding agent) plus a custom **Next.js** UI using **CopilotKit + AG-UI Protocol** for chat and the **LangGraph Agent Inbox** pattern for HITL queues. **Three panes:** (1) Chat / Agent Inbox · (2) Skill Studio (Monaco + OpenHands + Promptfoo runner) · (3) Observability (Langfuse embed) (ADR-014).
+- **Pervasive AI chat:** CopilotKit `useCopilotReadable` injects each pane's current context (open skill YAML, Langfuse trace) into a floating chat overlay in every pane. Pane 1 (Chat) is fully usable standalone. Slash commands like `/explain`, `/improve`, `/why did this fail` work in-context from any pane (ADR-019).
 - **Sandbox runner:** Self-hosted **E2B** on Firecracker microVMs for code execution in both the workbench ("Try it" runs) and CI eval pipelines. Same runtime everywhere (ADR-016).
 - **Skill regression evals:** **Promptfoo** (golden cases, regression diffs) + **Inspect AI** (UK AISI, graded scenario tests). Required pass to merge a skill PR (ADR-017).
 
@@ -195,7 +195,6 @@ Key architecture decisions (ADRs in `system_architecture.md`):
 - ADR-015 Git is the source of truth for every editable agent artefact; PR + eval gate required for promotion.
 - ADR-016 Self-hosted E2B (Firecracker) as the sandbox runtime for workbench "Try it" and CI evals.
 - ADR-017 Promptfoo + Inspect AI for skill regression evals; CI-gated.
-- ADR-018 n8n UI embed as Workflow Editor (Pane 4 of the Control Plane); iframe of self-hosted n8n; full workflow canvas + active/inactive + execution log in-browser.
 - ADR-019 Pervasive AI chat via CopilotKit `useCopilotReadable`; context-aware floating overlay in every pane; Pane 1 (Chat) usable standalone.
 
 ---

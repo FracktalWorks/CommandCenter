@@ -16,7 +16,7 @@ import Sidebar from "@/components/Sidebar";
 import Providers from "@/components/Providers";
 
 export const metadata: Metadata = {
-  title: "Jannet.AI Control Plane",
+  title: "CommandCenter Control Plane",
   description: "Skill Studio, Workflow Editor, Observability for the Fracktal AI Company Brain.",
 };
 

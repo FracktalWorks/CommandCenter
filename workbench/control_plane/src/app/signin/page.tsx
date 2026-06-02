@@ -6,7 +6,7 @@ export default function SignIn() {
   return (
     <div className="flex min-h-screen items-center justify-center p-10">
       <div className="w-full max-w-sm rounded-lg border border-zinc-800 bg-zinc-900 p-8 text-center">
-        <h1 className="text-xl font-semibold">Jannet.AI Control Plane</h1>
+        <h1 className="text-xl font-semibold">CommandCenter Control Plane</h1>
         <p className="mt-2 text-sm text-zinc-400">Sign in with your Fracktal Google account.</p>
         <button
           onClick={() => signIn("google", { callbackUrl: "/" })}

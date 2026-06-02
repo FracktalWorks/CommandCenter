@@ -86,21 +86,11 @@
 
 [35] dev.to / MongoDB. *WhatsApp Business API + Webhook Integration*. URL: [dev.to/mongodb/whatsapp-business-api-webhook-integration-with-mongodb-3mjc](https://dev.to/mongodb/whatsapp-business-api-webhook-integration-with-mongodb-3mjc). Accessed 2026-05-25.
 
-[36] n8n. *Webhook + WhatsApp Business Cloud*. URL: [n8n.io/integrations/webhook/and/whatsapp-business-cloud](https://n8n.io/integrations/webhook/and/whatsapp-business-cloud/). Accessed 2026-05-25.
-
 [37] Whapi. *WhatsApp API for developers*. URL: [whapi.cloud](https://whapi.cloud/). Accessed 2026-05-25.
 
 ## ClickUp / Zoho / Odoo Integration
 
-[38] n8n. *ClickUp integrations*. URL: [n8n.io/integrations/clickup](https://n8n.io/integrations/clickup/). Accessed 2026-05-25.
-
 [39] Unified.to. *Unified API for ClickUp*. URL: [unified.to/integrations/clickup](https://unified.to/integrations/clickup). Accessed 2026-05-25.
-
-[40] Odoo-BS. *Odoo n8n Integration*. URL: [odoo-bs.com/n8n-odoo-integration](https://www.odoo-bs.com/n8n-odoo-integration). Accessed 2026-05-25.
-
-[41] Solvve. *Odoo n8n: Advanced Workflow Automation*. URL: [solvve.odoo.com/blog/articles-4/odoo-n8n-advanced-workflow-automation-67](https://solvve.odoo.com/blog/articles-4/odoo-n8n-advanced-workflow-automation-67). Accessed 2026-05-25.
-
-[42] Silent InfoTech. *N8N Enterprise Workflow Automation: Connect ERP, CRM*. URL: [silentinfotech.com/blog/ai-9/integrate-n8n-for-enterprise-workflow-automation-286](https://silentinfotech.com/blog/ai-9/integrate-n8n-for-enterprise-workflow-automation-286). Accessed 2026-05-25.
 
 ## Guardrails & Anti-Hallucination
 

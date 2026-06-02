@@ -1,10 +1,10 @@
-# Jannet.AI Control Plane (workbench/control_plane)
+# CommandCenter Control Plane (workbench/control_plane)
 
 Next.js 16 + React 19 + Tailwind v4 shell for the Skill Workbench.
 
 ## Panes
 - `/skills` - Skill Studio (Monaco + OpenHands iframe + PR flow) [Phase 0.5.4]
-- `/workflows` - n8n embedded iframe + Git sync [Phase 0.5.5]
+- `/workflows` - LangGraph Workflow Editor (coming L3) [Phase 0.5.5]
 - `/observability` - Audit / escalations / traces / spend [Phase 0.5.6]
 
 ## Dev

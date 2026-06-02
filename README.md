@@ -1,67 +1,86 @@
-# CommandCenter
+# CommandCenter v2
 
-> **Fracktal Works** — a self-hosted, browser-accessible agent platform for running and augmenting a company. Delivered in four levels: Cloud IDE + Copilot → Multi-Agent Workspace → Automation & Workflows → Company Intelligence layer over ClickUp, Zoho CRM, Odoo ERP, Gmail, WhatsApp, and meetings.
+> **Fracktal Works** — a distributed, self-mutating agent platform. Every specialist agent lives in its own GitHub repository. Every skill is a pip-installable Python package in its own repo. The Core engine dynamically clones agent and skill repos at runtime, executes tasks in ephemeral OpenHands sandboxes, and — when errors occur — opens a GitHub PR against the failing agent's own repo so humans can review and merge the fix.
 
 ---
 
 ## What is CommandCenter?
 
-CommandCenter is the operating system for Fracktal Works. It begins as a cloud IDE that feels like VS Code with AI copilots and grows into a full multi-agent workspace — where you can create specialist agents, wire them together into workflows, and put an agentic intelligence layer over all company data.
+CommandCenter is the operating system for Fracktal Works. It coordinates a fleet of specialist AI agents (sales, triage, delivery, billing, reconciler, strategy) over company data in ClickUp, Zoho CRM, Odoo ERP, Gmail, WhatsApp, and meetings — with full human-in-the-loop approval for all writes.
 
-**Vision:** a system where you talk to specialist agents, wire agents together, run workflows autonomously, and get a co-pilot for organising projects, understanding who's doing what, delegating by role and hierarchy, following up on deadlines, escalating, and acting as a sales/BI assistant for running the company.
+**Architecture in one sentence:** A FastAPI Core server listens for events, dynamically clones the target `agent-<name>` repository and its declared `skill-<name>` dependencies, imports the agent's `graph.py` at runtime via `importlib`, and runs a LangGraph `StateGraph` inside short-lived OpenHands sandboxes.
 
-### Four levels of capability
+**Self-mutation:** when a skill or agent fails, a `Self_Mutation_Node` in the LangGraph clones the failing agent's own repo, reads the error telemetry, proposes a code fix, runs tests, and opens a GitHub PR. `max_mutation_attempts = 1` per failure event. A human must merge the PR before the live system adopts the change.
 
-| Level | Name | What it delivers |
-|---|---|---|
-| **L1** | Cloud IDE + Copilot | Browser IDE (forked Eclipse Theia), AI copilot, code exec/deploy via OpenHands, config plane for keys/MCP/models |
-| **L2** | Multi-Agent Workspace | Agent registry + switcher, skill authoring, long-term memory, self-healing, agent-to-agent handoff |
-| **L3** | Automation & Workflows | LangGraph workflow engine, React Flow visual canvas, webhook/cron triggers, human-in-the-loop over email/WhatsApp |
-| **L4** | Company Intelligence | Entity graph over ClickUp/Zoho/Odoo, cited Q&A, smart delegation, follow-up & escalation, approval-gated writes |
+**No in-app editor:** agents and skills are developed in VS Code (locally or via GitHub Codespaces), committed to their respective repos, and merged through the standard PR flow. The Control Plane is for chat, HITL approvals, and observability — not editing.
 
-**Current status:** L1 IDE shell complete; L4 scaffolding (Phase 0) in progress. See [`ai-company-brain/wbs.md`](ai-company-brain/wbs.md) for the live WBS.
+---
+
+## Distributed Repo Layout
+
+```
+FracktalWorks/CommandCenter-Core        ← This repo: Core engine + infra
+FracktalWorks/agent-task-manager        ← Agent: ClickUp task management
+FracktalWorks/agent-sales               ← Agent: Zoho CRM sales workflows
+FracktalWorks/agent-delivery            ← Agent: project delivery + push
+FracktalWorks/agent-triage              ← Agent: email/WhatsApp/meeting triage
+FracktalWorks/agent-reconciler          ← Agent: nightly source-of-truth diff
+FracktalWorks/agent-strategy            ← Agent: weekly digest + planning
+FracktalWorks/skill-clickup-sync        ← Skill: ClickUp read/write via MCP
+FracktalWorks/skill-zoho-ingest         ← Skill: Zoho CRM webhooks + REST
+FracktalWorks/skill-gmail-capture       ← Skill: Gmail Pub/Sub ingest
+FracktalWorks/skill-whatsapp-send       ← Skill: WhatsApp Meta Cloud API
+FracktalWorks/skill-meeting-transcribe  ← Skill: Vexa + WhisperX + Pyannote
+FracktalWorks/skill-graph-write         ← Skill: entity graph upsert
+FracktalWorks/skill-action-broker       ← Skill: approval queue + audit writes
+```
+
+Each **agent repo** contains: `config.json` (model tier, budget, triggers, required skills), `graph.py` (LangGraph StateGraph), `instructions.md` (persona), `tests/`, `evals/`.
+
+Each **skill repo** is a Python package — pip-installable, single well-typed entry function, `tests/`, `evals/`.
 
 ---
 
 ## Architecture overview
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                  CommandCenter (browser)                 │
-│  Theia IDE shell  +  Control Plane (Next.js :3001)      │
-│  ┌────────────┐  ┌──────────────┐  ┌─────────────────┐ │
-│  │ Skill      │  │ Chat / Agent │  │  Observability  │ │
-│  │ Studio     │  │ Inbox        │  │  (Langfuse)     │ │
-│  └────────────┘  └──────────────┘  └─────────────────┘ │
-└─────────────────────────────┬───────────────────────────┘
-                              │ HTTP / WS
-        ┌─────────────────────▼─────────────────────┐
-        │       Gateway  (FastAPI :8000)             │
-        │  Google SSO · pull queries · approvals     │
-        └──┬──────────────┬──────────────────────────┘
-           │              │
-    ┌──────▼───┐   ┌──────▼──────────────────────────┐
-    │Orchestr- │   │  Ingestion workers               │
-    │ator      │   │  ClickUp · Zoho · Gmail ·        │
-    │(LangGraph│   │  WhatsApp · Meetings             │
-    │+ agents) │   └──────┬───────────────────────────┘
-    └──────────┘          │
-                   ┌──────▼──────────────────────────┐
-                   │  Entity graph (Postgres+pgvector)│
-                   │  + Reconciler + Action Broker    │
-                   └─────────────────────────────────┘
+[ Webhook / Cron Event ]
+         │
+         ▼
+┌─────────────────────────────────────────────────┐
+│  1. Core Engine: FastAPI (CommandCenter-Core)   │
+│  • Listens for events                           │
+│  • Clones agent-<name> + skill repos from GitHub│
+│  • Imports graph.py via importlib at runtime    │
+└────────────────────────┬────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────┐
+│  2. Orchestration: LangGraph + PostgresSaver    │
+│  • Runs agent's StateGraph workflow             │
+│  • Persists state + error telemetry to Postgres │
+│  • Routes to Self_Mutation_Node on failure      │
+└────────────────────────┬────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────┐
+│  3. Runtime: OpenHands SDK (ephemeral sandboxes)│
+│  • Worker containers execute agent skills       │
+│  • Dev sandbox: agent fixes own code → opens PR│
+│  • All containers destroyed after each run      │
+└─────────────────────────────────────────────────┘
 ```
 
 **Key principles:**
-- **Source of truth = ClickUp/Zoho/Odoo.** The brain is a read-mostly mirror; writes are approval-gated through `action_broker`.
-- **One execution model.** LangGraph orchestrates all agents, skills, and workflows — no second runtime.
-- **Anti-drift by construction.** Every source system has a nightly reconciler; zero silent divergence is a hard requirement.
-- **Annealable.** The system mines its own audit log and crystallises repeated human interventions into reviewed, gated skills (Hermes-style annealing).
-- **Git is the source of truth** for every agent-editable artefact — directives, skills, workflow specs, model-routing config. All changes are PRs with an eval gate (ADR-015).
+- **Source of truth = ClickUp/Zoho/Odoo.** The Core is a read-mostly mirror; writes are approval-gated.
+- **Decoupled repositories.** Each agent and skill is an independent GitHub repo, versioned and tested independently.
+- **Dynamic loading.** Core never needs a redeploy to adopt new agent logic — repos are cloned at event time.
+- **Self-mutation with a human gate.** Agents propose their own bug fixes via PRs; `max_mutation_attempts = 1`; humans must merge.
+- **Git is the source of truth** for all agent-editable artefacts (`graph.py`, `instructions.md`, skill packages, model-routing config). All changes are PRs with an eval gate.
 
 ---
 
-## Repo layout
+## This repo layout (CommandCenter-Core)
 
 ```
 ai-company-brain/        # Planning docs — start here
@@ -73,11 +92,35 @@ ai-company-brain/        # Planning docs — start here
   research_summary.md
 
 apps/                    # Deployable services (one container each)
-  gateway/               # FastAPI + Google SSO — pull queries, push, approvals
-  orchestrator/          # LangGraph + Deep Agents harness, tiered LLM router
-  ingestion/             # ClickUp / Zoho / Gmail / WhatsApp / meeting workers
+  gateway/               # FastAPI + Google SSO — event routing, pull queries, approvals
+  orchestrator/          # LangGraph executor, Dynamic Agent Loader (importlib), PostgresSaver
+  ingestion/             # ClickUp / Zoho / Gmail / WhatsApp / meeting ingest workers
   reconciler/            # Nightly diff + escalation queue
   action_broker/         # Approval queue + audit + source-of-truth write executor
+  escalation_ui/         # Lightweight escalation surface
+
+packages/                # Shared Python libs (uv workspace members)
+  acb_common/            # Settings, logging, OTel bootstrap
+  acb_schemas/           # Pydantic models for the entity graph
+  acb_graph/             # Postgres + pgvector access layer
+  acb_llm/               # LiteLLM client + tiered routing + Langfuse hooks + guardrails
+  acb_audit/             # Append-only audit log
+  acb_skills/            # Skill repo cloning + dynamic import helpers
+  acb_auth/              # Auth helpers (Google SSO)
+
+infra/                   # docker-compose, Postgres init SQL, LiteLLM config, Langfuse
+workbench/               # Next.js Control Plane (chat, observability, HITL approvals)
+  control_plane/         # Next.js 16 + CopilotKit + AG-UI (port 3001)
+ide/                     # Forked Eclipse Theia (L1 IDE shell)
+evals/                   # Promptfoo + Inspect AI evaluation harness
+deploy/                  # Hostinger VPS + Caddy deploy scripts
+scripts/                 # One-off ops / migration helpers
+tests/                   # Cross-cutting integration + unit tests
+```
+
+---
+
+## Running locally
   escalation_ui/         # Lightweight escalation surface
 
 packages/                # Shared Python libs (uv workspace members)
@@ -153,7 +196,7 @@ uv run uvicorn gateway.main:app --reload --host 0.0.0.0 --port 8000 --app-dir ap
 
 `GET http://localhost:8000/health` → `{"status":"ok","env":"dev"}`
 
-### 5. Start the Control Plane (Phase 0.5+)
+### 5. Start the Control Plane
 
 ```powershell
 Set-Location workbench/control_plane
@@ -164,10 +207,9 @@ Control Plane panes:
 
 | Pane | Path | Description |
 |---|---|---|
-| Chat / Agent Inbox | `/` | CopilotKit + AG-UI + LangGraph Agent Inbox |
-| Skill Studio | `/skills` | Monaco editor + OpenHands embed + PR flow |
-| Observability | `/observability` | Langfuse traces, audit log, spend |
-| Workflow Editor | `/workflows` | LangGraph + React Flow canvas (coming L3) |
+| Chat / Agent Inbox | `/` | CopilotKit + AG-UI + LangGraph Agent Inbox; HITL queue |
+| Observability | `/observability` | Langfuse traces, audit log, spend, mutation PR history |
+| Workflows | `/workflows` | LangGraph workflow view (coming L3) |
 
 ---
 
@@ -194,21 +236,29 @@ See [`Makefile`](Makefile) for convenience targets.
 |---|---|
 | IDE shell | Eclipse Theia (forked, browser target) |
 | Control plane | Next.js 16, React 19, Tailwind v4, CopilotKit, AG-UI |
-| Orchestration | LangGraph + Deep Agents (tiered sub-agent harness) |
-| LLM routing | LiteLLM proxy (Gemini 2.5 Pro/Flash, Anthropic Claude, local Qwen3) |
+| Orchestration | LangGraph + PostgresSaver (durable state) |
+| Dynamic loading | Python `importlib` + `sys.path.append()` (per-run agent clone) |
+| Sandboxes | OpenHands SDK (Apache-2.0) — worker + dev mutation containers |
+| LLM routing | LiteLLM proxy + vLLM (Qwen3-8B Tier-1) + Anthropic/OpenAI |
 | Observability | Langfuse (self-hosted), OpenTelemetry |
-| Database | Postgres 16 + pgvector |
+| Database | Postgres 16 + pgvector + Apache AGE |
 | Cache / queue | Redis Stack |
-| Code sandbox | OpenHands (self-hosted) |
-| Skills format | Anthropic `SKILL.md` (ADR-013) |
 | Evals | Promptfoo + Inspect AI |
 | Deploy | Docker Compose, Caddy reverse proxy, Hostinger KVM 4 VPS |
 
 ---
 
-## Skills
+## Agent + Skill Development
 
-Skills follow the [Anthropic `SKILL.md` format](https://github.com/anthropics/anthropic-quickstarts). Production skills live in `skills/`; examples in [`skills/examples/`](skills/examples/). The Annealer sub-agent can draft new skills from the audit log — they are gated by PR + eval before promotion.
+**Authoring environment:** VS Code (locally or GitHub Codespaces). No in-app editor.
+
+1. Create a new repo from the agent or skill template.
+2. Edit `graph.py` / `instructions.md` / skill `impl.py` in VS Code.
+3. Add evals in `evals/` (Promptfoo golden cases + Inspect AI scenarios).
+4. Open a PR — CI runs `pytest` + evals; merge when green.
+5. Core picks up the new version on the next event (no redeploy needed).
+
+**Self-mutation:** if the live system encounters an error, the `Self_Mutation_Node` opens a PR on the failing agent's own repo automatically. You review the diff and merge. Core picks it up on the next run.
 
 ---
 

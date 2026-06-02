@@ -1,118 +1,231 @@
-﻿# System Architecture — AI Company Brain
+﻿# System Architecture — CommandCenter v2 (Distributed, Self-Mutating Agent Network)
 
-> Project: AI Company Brain · Org: Fracktal Works · Date: 2026-05-25
-> Status: v0.4 architecture (Workflow Editor pane + pervasive AI chat in every pane added). Will be revised at PDR.
+> Project: CommandCenter v2 · Org: Fracktal Works · Date: 2026-06-02
+> Status: v2.0 — Decoupled per-agent and per-skill GitHub repos, dynamic runtime loading, self-mutation loop.
 
 ---
 
 ## 1. Architectural Drivers
 
-From requirements:
-- **Source of truth lives in ClickUp, Zoho, Odoo.** The brain is a *read-mostly mirror* with approval-gated writes.
+- **Source of truth lives in ClickUp, Zoho, Odoo.** CommandCenter is a read-mostly mirror with approval-gated writes.
 - **Pull + Push + Ambient** interaction modes must all be supported.
-- **Suggest+Apply** by default; per-action authority tier configurable up to autonomous.
-- **Anti-hallucination guardrails** are first-class, not bolt-on.
-- **Periodic reconciliation** with escalation on drift is mandatory.
+- **Decoupled agent and skill repositories.** Every agent and every skill lives in its own GitHub repository. The Core engine contains no agent logic or skill files.
+- **Dynamic runtime loading.** Agent and skill repos are cloned and imported at event time, not at server startup. A running Core server never needs a redeploy to pick up new agent logic.
+- **Ephemeral sandboxed execution.** All agent task execution runs inside short-lived OpenHands containers, destroyed after each run.
+- **Self-mutation with a human gate.** Agents fix their own source code in isolated dev sandboxes and open PRs. `max_mutation_attempts = 1` prevents loops. Humans must merge before the live system consumes any self-authored change.
+- **No in-app skill/workflow authoring.** All development happens in VS Code + Git. The Control Plane is for chat, observability, and HITL approval — not editing.
 - **Tiered LLM routing** (cheap classifier → expensive reasoner) for cost.
-- **Self-improving / annealable** per Hermes-pattern (skill creation loop, persistent memory).
-- **MVP-first iterative build** with ~2 engineers + AI assistance, no hard deadline.
-- **Internal-only scope** (employee email, internal WhatsApp community); executive-level RBAC sufficient at v1.
+- **MVP-first iterative build** with ~2 engineers + AI assistance.
+- **Internal-only scope.**
+
+---
 
 ## 2. C4 — Level 1: System Context
 
 ```mermaid
 C4Context
-    title AI Company Brain — System Context
+    title CommandCenter v2 — System Context
     Person(exec, "Executives", "Leadership, founders")
     Person(emp, "Employees (~20)", "Sales, delivery, engineering, ops")
-    System(brain, "AI Company Brain", "Mirror + reasoning + action layer")
+    System(core, "CommandCenter Core", "Event router + dynamic agent orchestration + self-mutation")
 
-    System_Ext(clickup, "ClickUp", "Source of truth: tasks, projects, kanban stages")
-    System_Ext(zoho, "Zoho CRM", "Source of truth: deals, contacts, sales activity")
+    System_Ext(gh, "GitHub", "Per-agent repos + per-skill repos + PR review for self-mutation")
+    System_Ext(clickup, "ClickUp", "Source of truth: tasks, projects, stages")
+    System_Ext(zoho, "Zoho CRM", "Source of truth: deals, contacts, activity")
     System_Ext(odoo, "Odoo ERP", "Source of truth: MO, PO, inventory, finance")
     System_Ext(gmail, "Google Workspace", "Internal email")
     System_Ext(wa, "WhatsApp Business Cloud API", "Company community/groups")
-    System_Ext(meet, "Google Meet / Zoom / Teams", "Meetings (via bot)")
-    System_Ext(llm, "LLM Providers", "OpenAI / Anthropic / local")
+    System_Ext(meet, "Google Meet / Zoom / Teams", "Meetings via bot")
+    System_Ext(llm, "LLM Providers", "OpenAI / Anthropic / local vLLM")
 
-    Rel(exec, brain, "Asks questions, reviews suggestions, sets policy")
-    Rel(emp, brain, "Receives nudges, approves actions, asks Qs")
-    Rel(brain, clickup, "Webhook in / REST out (approval-gated)")
-    Rel(brain, zoho, "Webhook in / REST out (approval-gated)")
-    Rel(brain, odoo, "Webhook + RPC in / RPC out (read-only v1)")
-    Rel(brain, gmail, "Domain-wide Gmail API + Pub/Sub")
-    Rel(brain, wa, "Webhook in / Cloud API send")
-    Rel(brain, meet, "Bot joins on invite, streams audio")
-    Rel(brain, llm, "Tiered routing: classify / extract / reason")
+    Rel(exec, core, "Asks questions, reviews HITL approvals, reviews self-mutation PRs")
+    Rel(emp, core, "Receives nudges, approves actions, asks Qs")
+    Rel(core, gh, "Clones agent/skill repos at runtime; opens self-mutation PRs")
+    Rel(core, clickup, "Webhook in / REST out (approval-gated)")
+    Rel(core, zoho, "Webhook in / REST out (approval-gated)")
+    Rel(core, odoo, "Webhook + RPC in / RPC out (read-only v2)")
+    Rel(core, gmail, "Domain-wide Gmail API + Pub/Sub")
+    Rel(core, wa, "Webhook in / Cloud API send")
+    Rel(core, meet, "Bot joins on invite, streams audio")
+    Rel(core, llm, "Tiered routing: classify / extract / reason")
 ```
+
+---
 
 ## 3. C4 — Level 2: Container View
 
 ```mermaid
 C4Container
-    title AI Company Brain — Containers
+    title CommandCenter v2 — Containers
     Person(user, "User", "Executive / Employee")
 
-    Container_Boundary(brain, "AI Company Brain") {
-        Container(gw, "Interaction Gateway", "FastAPI + WebSocket", "Pull queries, push notifications, approval UI")
-        Container(orch, "Orchestrator", "LangGraph + Deep Agents v0.6", "State machines per workflow; sub-agents, HITL, Skills, context mgmt, MCP")
-        Container(agents, "Specialist Agents", "Deep Agents sub-agents", "Sales, Delivery, HR/Utilization, Strategy, Triage, Annealer")
+    Container_Boundary(core, "CommandCenter Core") {
+        Container(gw, "Interaction Gateway", "FastAPI + WebSocket", "Listens for webhook/cron events; pull queries; push notifications; approval UI")
+        Container(dal, "Dynamic Agent Loader", "Python (importlib + sys.path)", "On event: clones target agent repo + declared skill repos; imports graph.py at runtime; hands StateGraph to LangGraph executor")
+        Container(orch, "Orchestrator", "LangGraph + PostgresSaver", "Executes the agent's StateGraph workflow; durable state via Postgres; routes to Self_Mutation_Node on error")
+        Container(workers, "OpenHands Worker Containers", "OpenHands SDK (Apache-2.0)", "Ephemeral execution sandboxes per task; each destroyed after run; skills execute here")
+        Container(mutator, "Self_Mutation_Node", "OpenHands SDK dev sandbox", "Checks out failing agent's own repo; reads telemetry; fixes code; runs tests; opens GitHub PR; max_mutation_attempts=1; self-destroys")
         Container(ingest, "Ingestion Workers", "Python + MCP servers + LangGraph skills", "Webhook receivers, Pub/Sub consumers, meeting bot drivers; ClickUp/Zoho/Odoo MCP")
         Container(graph, "Entity Graph + Memory", "Postgres + pgvector + Apache AGE + Mem0 + Graphiti", "Entity graph; episodic memory (Mem0); bi-temporal entity KG (Graphiti)")
-        Container(skills, "Skill Registry", "Deep Agents Skills API + DB", "Annealed skills (executable Python + metadata); gated rollout tracking")
         Container(actions, "Action Broker", "Python", "Approval queue, audit log, write-back to source systems")
-        Container(recon, "Reconciler", "Python (cron)", "Nightly diff; escalation queue")
-        Container(bot, "Meeting Bot Fleet", "Vexa (Apache-2.0, self-hosted)", "Joins Meet/Teams/Zoom on invite; streams audio for transcription")
-        Container(stt, "Transcription", "Whisper-large (self-hosted) + Pyannote diarization", "STT + speaker diarization via WhisperX")
-        Container(bus, "Event Bus", "Redis Streams (v1) / Kafka (v3)", "Decouples ingestion from processing")
-        Container(gw_llm, "LLM Gateway", "LiteLLM proxy (MIT)", "Unified API; prompt caching config; RouteLLM tier routing; cost metering")
-        Container(infer, "Local Inference", "vLLM + Qwen3-8B (Tier 1)", "Automatic Prefix Caching; 5-10x Ollama throughput; OpenAI-compatible API")
-        Container(scache, "Semantic Cache", "GPTCache (MIT)", "30-70% cost saving on repeated triage queries; vector-similarity keyed; 1h TTL")
-        Container(compress, "Token Compressor", "LLMLingua-2 (MIT, CPU)", "50-60% compression of long tool outputs before model context")
-        Container(obs, "Observability", "Langfuse (MIT, self-hosted) + OpenTelemetry", "LLM traces, cost per tier, eval scores; OTel via openllmetry SDK")
-        Container(wb, "Skill Workbench (Control Plane)", "Next.js + CopilotKit + AG-UI + Agent Inbox", "Three-pane online UI: (1) Chat / Agent Inbox · (2) Skill Studio (Monaco + OpenHands embed + Promptfoo runner) · (3) Observability (Langfuse embed). Pervasive AI chat assistant in every pane via CopilotKit useCopilotReadable.")
-        Container(oh, "OpenHands (Skill IDE backend)", "OpenHands (Apache-2.0, self-hosted)", "Sandboxed editor + terminal + filesystem + LLM-assisted code drafting; scoped to the skills repo")
-        Container(e2b, "Sandbox Runner", "E2B (Firecracker microVMs, self-hosted)", "Code execution sandbox for 'Try it' runs in Workbench and CI eval pipelines")
-        Container(evals, "Eval Harness", "Promptfoo + Inspect AI", "Per-skill golden cases + scenario tests; CI gate on skill PRs")
+        Container(recon, "Reconciler Agent", "agent-reconciler (cloned at runtime)", "Nightly diff; escalation queue")
+        Container(bot, "Meeting Bot Fleet", "Vexa (Apache-2.0, self-hosted)", "Joins Meet/Teams/Zoom; streams audio for transcription")
+        Container(stt, "Transcription", "WhisperX + Pyannote", "STT + speaker diarization")
+        Container(bus, "Event Bus", "Redis Streams", "Decouples ingestion from orchestration")
+        Container(gw_llm, "LLM Gateway", "LiteLLM proxy (MIT)", "Unified API; prompt caching; RouteLLM tier routing; cost metering")
+        Container(infer, "Local Inference", "vLLM + Qwen3-8B (Tier 1)", "Automatic Prefix Caching; OpenAI-compatible API")
+        Container(scache, "Semantic Cache", "GPTCache (MIT)", "30-70% cost saving on repeated triage queries; 1h TTL")
+        Container(compress, "Token Compressor", "LLMLingua-2 (MIT, CPU)", "50-60% compression of long tool outputs")
+        Container(obs, "Observability", "Langfuse (MIT, self-hosted) + OpenTelemetry", "LLM traces, cost per tier, eval scores; failure telemetry consumed by Self_Mutation_Node")
+        Container(cp, "Control Plane (Workbench)", "Next.js + CopilotKit + AG-UI", "Three panes: (1) Chat / Agent Inbox · (2) Observability (Langfuse embed) · (3) HITL Approval Queue. No skill/workflow editor — authoring is done in VS Code + Git.")
     }
 
-    System_Ext(gh, "GitHub (single source of truth)", "Two repos: ai-company-brain (infra/prompts/configs) · ai-company-brain-skills (Anthropic SKILL.md format). Weekly upstream sync from anthropics/skills and VoltAgent/awesome-agent-skills.")
-
+    System_Ext(gh, "GitHub", "Agent repos (agent-*) and skill repos (skill-*). PR review for self-mutation PRs.")
     System_Ext(src, "ClickUp / Zoho / Odoo / Gmail / WhatsApp / Meet", "Sources of truth + capture surfaces")
-    System_Ext(llms, "LLM tier 1/2/3", "Haiku / Sonnet / Opus class")
+    System_Ext(llms, "LLM Providers", "Haiku / Sonnet / Opus class")
 
     Rel(user, gw, "HTTPS / WS")
-    Rel(gw, orch, "Invoke workflow")
-    Rel(orch, agents, "Delegate specialist tasks")
-    Rel(orch, graph, "Query / write")
-    Rel(orch, skills, "Lookup + invoke skill")
+    Rel(user, cp, "HTTPS / WS")
+    Rel(gw, dal, "Route event to agent")
+    Rel(dal, gh, "Clone agent repo + skill repos")
+    Rel(dal, orch, "Initialise StateGraph from cloned graph.py")
+    Rel(orch, workers, "Spawn ephemeral worker containers")
+    Rel(orch, mutator, "Route on error (max 1 attempt)")
+    Rel(mutator, gh, "Checkout agent repo; open PR with fix")
+    Rel(orch, graph, "Query / write entity graph")
     Rel(orch, actions, "Submit action for approval")
-    Rel(agents, gw_llm, "All LLM calls via gateway")
+    Rel(workers, gw_llm, "All LLM calls via gateway")
     Rel(gw_llm, scache, "Check cache first")
-    Rel(gw_llm, infer, "Tier-1 (local, Qwen3-8B via vLLM)")
-    Rel(gw_llm, llms, "Tier-2/3 (Haiku / Sonnet via API)")
+    Rel(gw_llm, infer, "Tier-1 local (Qwen3-8B via vLLM)")
+    Rel(gw_llm, llms, "Tier-2/3 via API")
     Rel(compress, gw_llm, "Compressed tool outputs")
     Rel(ingest, src, "Webhooks / API / MCP")
     Rel(ingest, bus, "Publish events")
-    Rel(bus, orch, "Trigger ambient workflows")
+    Rel(bus, gw, "Trigger ambient workflows")
     Rel(bot, stt, "Audio")
     Rel(stt, ingest, "Transcript")
     Rel(recon, src, "Full pull diff")
     Rel(recon, graph, "Compare + escalate")
     Rel(actions, src, "Approved writes")
-    Rel(orch, obs, "OTel spans")
-    Rel(user, wb, "Chat + edit skills + review HITL queue (HTTPS/WS)")
-    Rel(wb, oh, "Embed IDE pane")
-    Rel(wb, evals, "Run skill evals")
-    Rel(wb, gh, "Read/write skill PRs")
-    Rel(oh, e2b, "Sandbox exec")
-    Rel(evals, e2b, "Sandbox exec")
-    Rel(skills, gh, "Pull latest merged skills")
-    Rel(gh, orch, "CI deploys merged config")
-    Rel(wb, obs, "Embed traces panel")
+    Rel(orch, obs, "OTel spans + failure telemetry")
+    Rel(cp, obs, "Embed traces panel")
+    Rel(cp, gw, "Chat queries / HITL approvals")
 ```
 
-## 4. Logical Data Model — Entity Graph
+---
+
+## 4. Distributed Repository Layout
+
+```
+FracktalWorks/CommandCenter-Core           ← Core engine (this repo). FastAPI, Docker infra, LangGraph harness, Postgres state, LiteLLM, Langfuse, Action Broker.
+FracktalWorks/agent-task-manager           ← Agent: ClickUp task management + stale-task escalation
+FracktalWorks/agent-billing                ← Agent: billing & invoice workflows
+FracktalWorks/agent-sales                  ← Agent: Zoho CRM sales pipeline + deal follow-ups
+FracktalWorks/agent-delivery               ← Agent: project delivery monitoring + push notifications
+FracktalWorks/agent-triage                 ← Agent: email / WhatsApp / meeting triage + routing
+FracktalWorks/agent-reconciler             ← Agent: nightly source-of-truth diff + escalation
+FracktalWorks/agent-strategy               ← Agent: weekly digest + planning synthesis
+FracktalWorks/skill-clickup-sync           ← Skill: ClickUp read/write via MCP
+FracktalWorks/skill-zoho-ingest            ← Skill: Zoho CRM webhooks + REST pull
+FracktalWorks/skill-gmail-capture          ← Skill: Gmail Pub/Sub ingest + thread parsing
+FracktalWorks/skill-whatsapp-send          ← Skill: WhatsApp Meta Cloud API send
+FracktalWorks/skill-meeting-transcribe     ← Skill: Vexa bot + WhisperX + Pyannote
+FracktalWorks/skill-graph-write            ← Skill: entity graph upsert (Postgres + pgvector)
+FracktalWorks/skill-action-broker          ← Skill: approval queue write + audit logging
+```
+
+**Agent repo layout:**
+```
+agent-<name>/
+  config.json        # model tier, execution budget, cron/trigger, required skill repos (by GitHub URL)
+  graph.py           # LangGraph StateGraph definition — the agent's business logic
+  instructions.md    # Agent persona, operating context, decision guidelines
+  tests/             # pytest suite; must pass in CI before any PR can merge
+  evals/             # Promptfoo golden cases + Inspect AI scenario tests
+  CHANGELOG.md
+```
+
+**Skill repo layout:**
+```
+skill-<name>/
+  pyproject.toml     # pip-installable Python package
+  src/<skill>/
+    __init__.py      # Exports the entry function (well-typed, single function)
+    impl.py          # Business logic
+  tests/
+  evals/
+  CHANGELOG.md
+```
+
+---
+
+## 5. Operational Lifecycle
+
+### Step 1 — Event Routing
+Webhook/cron → Core FastAPI `gw` container → identifies target agent from payload → calls `Dynamic Agent Loader`.
+
+### Step 2 — Dynamic Cloning + Import
+Dynamic Agent Loader:
+1. Reads agent name from event metadata.
+2. `git clone https://github.com/FracktalWorks/agent-<name>` into `/tmp/agents/<run_id>/agent`.
+3. Reads `config.json`; clones each listed skill repo into `/tmp/agents/<run_id>/skills/<skill>`.
+4. `sys.path.append('/tmp/agents/<run_id>/agent')` + `sys.path.append('/tmp/agents/<run_id>/skills/<skill>')` for each skill.
+5. `importlib.import_module('graph')` → obtains `build_graph()` function.
+6. Calls `build_graph()` → returns a compiled LangGraph `StateGraph`.
+
+### Step 3 — Stateful Orchestration
+LangGraph initialises the `StateGraph` from the returned graph object. `PostgresSaver` connects to persistent Postgres — all state transitions, tool outputs, and error logs are persisted to DB. The graph routes Actions to OpenHands worker containers.
+
+### Step 4 — Sandboxed Execution
+OpenHands SDK spins ephemeral worker container. Agent executes its skill functions inside the container. Outputs and errors are piped back to LangGraph state via the SDK. Container is destroyed when the action node completes.
+
+### Step 5 — Self-Mutation (on error)
+```
+Error in worker container
+        │
+        ▼
+LangGraph routes to Self_Mutation_Node
+        │
+        ▼
+Check: mutation_attempts_this_run >= 1?
+   YES → Skip mutation; log; exit.
+   NO  → Continue ↓
+        │
+        ▼
+Provision new OpenHands dev sandbox
+        │
+        ▼
+Clone agent's own repo (agent-<name>) into sandbox
+        │
+        ▼
+Read failure telemetry from Langfuse (error trace, inputs, stack)
+        │
+        ▼
+Agent proposes code fix → implements in cloned repo → runs pytest
+        │
+        ▼
+Tests pass? → commit fix to new branch → GitHub API opens PR:
+             Title: "Auto-fix: <error description>"
+             Body:  failure telemetry + diff + test results
+        │
+        ▼
+mutation_attempts_this_run = 1 (max reached)
+        │
+        ▼
+Destroy all sandbox containers → log PR URL in audit
+        │
+        ▼
+Human reviews + merges PR (required before live system adopts change)
+        │
+        ▼
+CI runs evals on PR branch → on pass, Core picks up new agent code on next event
+```
+
+**Human gate is non-negotiable.** The live system will not execute any self-authored code change until a human clicks Merge on the PR.
+
+---
+
+## 6. Logical Data Model — Entity Graph
 
 ```mermaid
 erDiagram
@@ -127,378 +240,223 @@ erDiagram
     MEETING ||--o{ ACTIONITEM : produces
     ACTIONITEM }o--|| TASK : "becomes (on approval)"
     MESSAGE }o--|| THREAD : "in"
-    MOORDER ||--o{ COMPONENT : "consumes"
     GOAL ||--o{ PROJECT : "rolled up to"
-
-    PERSON {
-        uuid id
-        string canonical_name
-        string[] aliases
-        string clickup_id
-        string zoho_id
-        string odoo_id
-        string email
-        string whatsapp_e164
-        string role
-    }
-    TASK {
-        uuid id
-        string clickup_id
-        uuid owner
-        string stage
-        timestamp stage_entered_at
-        int days_in_stage
-        uuid project_id
-    }
-    DEAL {
-        uuid id
-        string zoho_id
-        uuid customer
-        uuid owner
-        string stage
-        timestamp last_activity_at
-        decimal value_inr
-        string deal_type "product|service|software"
-    }
-    MEETING {
-        uuid id
-        string platform
-        timestamp start
-        uuid[] attendees
-        text transcript
-        string transcript_source
-    }
-    ACTIONITEM {
-        uuid id
-        uuid meeting_id
-        uuid assignee
-        text description
-        string confidence
-        string status "draft|approved|created|rejected"
-    }
 ```
 
 **Canonical keys policy:** ClickUp/Zoho/Odoo IDs are authoritative; the graph's own UUID is for cross-system join only. Entity resolution merges duplicates nightly using rules → LLM fallback.
 
-## 5. Hardware / Hosting Partitioning
+---
 
-| Component | v1 | v3 |
+## 7. Hardware / Hosting
+
+| Component | v2 | v3 |
 |---|---|---|
-| Orchestrator + Agents | Single Linux VM (8 vCPU / 32 GB), Docker Compose | K8s cluster (3 nodes) |
-| Graph DB | Self-hosted Postgres (Hetzner CPX31, ~€12/mo) | Self-hosted with HA |
+| Core engine + agent runtime | Single Linux VM (8 vCPU / 32 GB), Docker Compose | K8s cluster (3 nodes) |
+| Postgres (state + entity graph) | Hetzner CPX31 (~€12/mo) | Dedicated HA |
 | Memory layer | Mem0 + Graphiti on same Postgres | Dedicated memory VM |
-| Meeting bot | Vexa (Apache-2.0) on dedicated 4 vCPU VM (Day 1) | Vexa cluster |
-| Transcription | WhisperX (Whisper-large-v3 + Pyannote 3.1, self-hosted) | Same |
-| LLM tier 0 | Rule-based, no LLM | Same |
-| LLM tier 1 | **vLLM** serving **Qwen3-8B** on main VM (with Automatic Prefix Caching) | Dedicated GPU VM |
-| LLM tier 2/3 | Haiku / Sonnet via LiteLLM gateway (prompt caching enabled) | Same |
-| LLM gateway | LiteLLM proxy + RouteLLM classifier (same VM) | Same |
-| Semantic cache | GPTCache (MIT) on Redis, in front of LiteLLM | Same |
+| Meeting bot | Vexa on dedicated 4 vCPU VM | Vexa cluster |
+| Transcription | WhisperX + Pyannote, self-hosted | Same |
+| LLM Tier-1 | vLLM serving Qwen3-8B (Automatic Prefix Caching) | Dedicated GPU VM |
+| LLM Tier-2/3 | Haiku / Sonnet via LiteLLM (prompt caching) | Same |
+| LLM gateway | LiteLLM proxy + RouteLLM classifier | Same |
+| Semantic cache | GPTCache on Redis | Same |
 | Token compression | LLMLingua-2 (CPU, same VM) | Same |
 | Observability | Langfuse (MIT, self-hosted, Postgres + ClickHouse) | Same |
 | Event bus | Redis Streams | Kafka |
-| Workflow automation | LangGraph (built-in) + MCP servers for ClickUp/Zoho/Odoo | Same |
+| OpenHands worker/dev sandboxes | Docker-in-Docker via host `/var/run/docker.sock` | Same |
 | Object store | S3-compatible (audio, attachments) | Same |
 
-**Infrastructure cost estimate (v1):** ~€25/month for 2 Hetzner VMs; ~€0.05–0.15/meeting for Vexa compute; 1K WhatsApp conv/mo free; LLM API spend estimated at 10–20% of naïve deployment after caching optimisations.
+**DinD security note:** Core container maps `/var/run/docker.sock` from the host. OpenHands commands child sandbox containers through the host Docker daemon. All sandbox containers are network-isolated from each other and from the Core network.
 
-**No on-prem mandate** (user did not require self-hosted-everything), but the architecture allows progressive in-housing as data sensitivity grows.
+---
 
-## 6. Sequence — Pull: "Status of Customer X?"
+## 8. Sequence — Pull: "Status of Customer X?"
 
 ```mermaid
 sequenceDiagram
     actor User
+    participant CP as Control Plane
     participant GW as Gateway
-    participant Orch as Orchestrator
+    participant DAL as Dynamic Agent Loader
+    participant Orch as LangGraph Orchestrator
     participant Graph
-    participant Sales as Sales Agent
-    participant LLM3 as LLM Tier 3
+    participant Worker as OpenHands Worker
 
-    User->>GW: "Status of Customer X?"
-    GW->>Orch: Pull(query, user_ctx)
+    User->>CP: "Status of Customer X?"
+    CP->>GW: Pull(query, user_ctx)
+    GW->>DAL: Route to agent-sales
+    DAL->>DAL: Clone agent-sales + skill-zoho-ingest + skill-graph-write
+    DAL->>Orch: Build and run StateGraph
     Orch->>Graph: Resolve "Customer X" → customer_id
-    Graph-->>Orch: customer_id (+ ambiguity score)
-    alt ambiguous
-        Orch->>User: "Did you mean A or B?"
-    end
-    Orch->>Sales: Build customer dossier (id)
-    Sales->>Graph: Pull deals, projects, recent msgs, MO/PO
-    Graph-->>Sales: Structured context
-    Sales->>LLM3: Summarise (with citations to node IDs)
-    LLM3-->>Sales: Draft answer
-    Sales->>Sales: Guardrail: verify every claim cites a node
-    Sales-->>Orch: Answer + citations
-    Orch-->>GW: Response
-    GW-->>User: Rendered answer with clickable citations
+    Graph-->>Orch: customer_id
+    Orch->>Worker: Spawn worker; run skill-zoho-ingest + skill-graph-write
+    Worker-->>Orch: Structured context (deals, projects, messages)
+    Orch->>Orch: Synthesise answer with citations via LLM
+    Orch-->>GW: Answer + citations
+    GW-->>CP: Rendered answer
 ```
 
-## 7. Sequence — Ambient: Stale ClickUp Task
+---
+
+## 9. Sequence — Self-Mutation Flow
 
 ```mermaid
 sequenceDiagram
-    participant CU as ClickUp
-    participant Ing as Ingestion
-    participant Bus
-    participant Trig as Trigger Evaluator (rules + Tier-1 LLM)
-    participant Del as Delivery Agent
-    participant Act as Action Broker
-    participant Owner as Task Owner
+    participant Orch as LangGraph Orchestrator
+    participant Mut as Self_Mutation_Node
+    participant OH as OpenHands Dev Sandbox
+    participant GH as GitHub API
+    participant Human as Human Reviewer
 
-    CU->>Ing: webhook (status change OR nightly poll)
-    Ing->>Bus: TaskStageChanged / TaskStaleTick
-    Bus->>Trig: event
-    Trig->>Trig: Is days_in_stage > threshold(stage)?
-    alt yes
-        Trig->>Del: Investigate(task_id)
-        Del->>Del: Pull task, owner workload, related deps
-        Del->>Act: Suggest action (ping/escalate/reassign) + reason
-        Act->>Owner: WhatsApp/email notification (suggest+apply tier)
-        Owner->>Act: Approve / dismiss / "I'll handle"
-        Act->>CU: Optional write-back (comment, reassign)
-        Act->>Bus: ActionResolved (audit)
-    end
+    Orch->>Mut: Error in worker (mutation_attempts=0)
+    Mut->>OH: Provision dev sandbox
+    Mut->>OH: git clone agent-<name>
+    Mut->>OH: Inject failure telemetry (stack, inputs, trace)
+    OH->>OH: Propose code fix + run pytest
+    OH->>GH: Open PR "Auto-fix: <error description>"
+    Mut->>Orch: mutation_attempts=1; PR URL logged
+    Mut->>OH: Destroy dev sandbox
+    Note over Human: Async review
+    Human->>GH: Review diff + test results
+    Human->>GH: Click Merge
+    GH->>GH: CI evals pass
+    Note over Orch: Next event for this agent
+    Orch->>Orch: Dynamic Agent Loader pulls updated repo
 ```
 
-## 8. Sequence — Meeting Capture to Task
+---
 
-```mermaid
-sequenceDiagram
-    participant Cal as Calendar
-    participant Bot as Meeting Bot
-    participant STT as Transcription
-    participant Trans as Triage Agent
-    participant Graph
-    participant Act as Action Broker
-    participant ClickUp
-
-    Cal->>Bot: Invite includes agent@fracktal.in
-    Bot->>Cal: Auto-accept (per policy)
-    Bot->>Bot: Join meeting at start time
-    Bot->>STT: Stream audio
-    STT-->>Trans: Diarised transcript chunks (live)
-    Trans->>Graph: Store transcript, link attendees
-    Note over Trans: Post-meeting:
-    Trans->>Trans: Extract action items (Tier-2 LLM)
-    Trans->>Trans: Resolve assignees against PERSON graph
-    Trans->>Act: Draft ClickUp tasks (suggest+apply)
-    Act->>Assignee: Notify with diff preview
-    Assignee->>Act: Approve
-    Act->>ClickUp: Create task
-    ClickUp-->>Act: task_id
-    Act->>Graph: Link ACTIONITEM → TASK
-```
-
-## 9. Reconciliation (Anti-Drift)
+## 10. Reconciliation (Anti-Drift)
 
 ```mermaid
 flowchart LR
-    A[Nightly cron 02:00 IST] --> B[Full pull: ClickUp / Zoho / Odoo]
-    B --> C[Diff against Graph]
-    C --> D{Divergence?}
-    D -- none --> E[Log OK]
-    D -- minor --> F[Auto-heal: update Graph from source]
-    D -- ambiguous --> G[Escalation Queue]
-    G --> H[Morning review by ops]
-    H --> I[Resolve + record rule for future]
-    I --> J[Annealing: add rule to entity-resolution skill]
+    A[Nightly cron 02:00 IST] --> B[Agent-reconciler cloned + run]
+    B --> C[Full pull: ClickUp / Zoho / Odoo]
+    C --> D[Diff against Entity Graph]
+    D --> E{Divergence?}
+    E -- none --> F[Log OK]
+    E -- minor --> G[Auto-heal: update Graph from source]
+    E -- ambiguous --> H[Escalation Queue → HITL in Control Plane]
+    H --> I[Human resolves + approves]
+    I --> J[Resolution pattern → agent-reconciler PR for future automation]
 ```
 
-The annealing arrow (I → J) is critical: every escalation that gets resolved by a human becomes a *new skill or rule* in the registry, so the same class of divergence does not re-escalate.
+Resolved escalations produce a new skill or rule proposed as a PR to `agent-reconciler`, following the same self-mutation flow (human must merge before the agent uses it).
 
-## 10. Tiered LLM Routing
+---
+
+## 11. Tiered LLM Routing
 
 ```mermaid
 flowchart TD
-    EV[Incoming event/query] --> T0{Rule match?}
+    EV[Incoming event / query] --> T0{Rule match?}
     T0 -- yes --> ACT[Direct action]
-    T0 -- no --> T1[Tier-1 Classifier<br/>Haiku / 4o-mini]
+    T0 -- no --> T1[Tier-1 Classifier<br/>Qwen3-8B via vLLM / Haiku]
     T1 --> CL{Class?}
     CL -- noise --> DROP[Drop + log]
     CL -- structured --> T2[Tier-2 Extractor<br/>Sonnet / 4o]
     CL -- needs reasoning --> T3[Tier-3 Reasoner<br/>Opus / GPT-5-class]
     T2 --> ACT
     T3 --> ACT
-    ACT --> AUD[Audit + telemetry]
-    AUD --> METRIC[Cost/quality metrics → tier policy tuner]
+    ACT --> AUD[Audit + Langfuse telemetry]
+    AUD --> METRIC[Cost/quality metrics → RouteLLM training (Phase 5)]
 ```
 
-Routing thresholds are themselves tuned by the annealing loop: if Tier-2 keeps producing answers that get rejected, the router learns to promote that class to Tier-3.
-
-## 11. Skill Registry (Anthropic `SKILL.md` format) + Skill Workbench
-
-Skills are versioned in a dedicated GitHub repo (`ai-company-brain-skills`). The format follows the **Anthropic Agent Skills standard** — the same format Deep Agents reads natively and that `anthropics/skills` and `VoltAgent/awesome-agent-skills` (1000+ community skills) use as upstreams.
-
-**On-disk layout:**
-
-```
-skills/<domain>/<skill_id>/
-  SKILL.md          # YAML frontmatter (id, name, description, when_to_use, allowed_tools, authority, cost_tier, version) + Markdown instructions
-  scripts/          # Python scripts the skill calls (executed in E2B sandbox)
-  tests/            # Unit tests
-  evals/            # Promptfoo golden cases + Inspect AI scenarios (CI-gated)
-  CHANGELOG.md
-```
-
-**Example `SKILL.md` (Anthropic format, extended with our governance fields):**
-
-```yaml
 ---
-name: stale_deal_followup
-description: Draft a follow-up email for a Zoho deal stalled in Proposal/Negotiation for >14 days.
-when_to_use: "User asks 'what should I do about stalled deals?' OR ambient trigger fires on deal.last_activity_at > 14d."
-allowed_tools: [zoho.read_deal, zoho.read_contact, graphiti.search, gmail.draft]
-authority: suggest+apply
-cost_tier: 2
-version: 0.3.1
-provenance: "annealed from 5 manual escalations 2026-04-{03,07,11,18,25}"
-rollout_stage: canary    # shadow | canary | full
-success_rate_30d: 0.83
-cases_seen_30d: 47
----
-
-# Stale Deal Follow-up
-
-## Steps
-1. Read deal and primary contact from Zoho.
-2. Search Graphiti for last 30 days of related signals (email replies, meetings, slack mentions).
-...
-```
-
-**Skill Workbench (Control Plane UI):**
-
-A self-hosted Next.js app, **four panes**, each with a context-aware AI chat assistant accessible via a floating overlay (CopilotKit `useCopilotReadable`):
-
-| Pane | Backed by | AI chat context injected | What you can do |
-|---|---|---|---|
-| **1 · Chat / Agent Inbox** | CopilotKit + AG-UI Protocol + LangGraph Agent Inbox | Full session context; HITL queue state | Standalone conversation with the agent; review + approve/reject HITL queue items; review Annealer-drafted skill PRs. The primary pane — usable entirely on its own. |
-| **2 · Skill Studio** | Embedded OpenHands (sandboxed editor + terminal + LLM-assisted drafting) + Monaco + Promptfoo runner | Current `SKILL.md` content + last eval result + open PR diff | Browse skill catalogue, edit `SKILL.md` and scripts in-browser, ask the AI "improve this skill" or "explain this eval failure", run evals, "Try it" in E2B sandbox, open PR |
-| **3 · Observability** | Langfuse embed | Currently visible trace (span tree, cost, scores) | Inspect LLM traces; ask the AI "why did this call cost so much?" or "what went wrong in this trace?"; view per-skill success rate, latency, drift |
-| **4 · Workflow Editor** | LangGraph workflow engine (React Flow canvas — L3) | Current workflow spec + execution log | Compose workflows from agents/skills on a visual canvas; toggle active/inactive; view run history; ask the AI to improve or debug a workflow |
-
-**Skill lifecycle:**
-
-```mermaid
-flowchart LR
-    A[Discover: pull from anthropics/skills + awesome-agent-skills weekly] --> B[Draft: human OR Annealer sub-agent]
-    B --> C[Iterate in Skill Studio<br/>edit → Try it in E2B → see Langfuse trace]
-    C --> D[Gate: Promptfoo + Inspect AI evals pass]
-    D --> E[PR review by maintainer]
-    E --> F[Merge → auto-deploy]
-    F --> G[Shadow 10%: runs but doesn't return]
-    G --> H[Canary 50%]
-    H --> I[Full 100%]
-    I --> J{Success rate ok?}
-    J -- no --> B
-    J -- yes --> K[Stable in production]
-```
-
-The Annealer (Phase 4 sub-agent) scans the audit log for recurring human interventions, drafts a candidate skill *as a Pull Request in the workbench*, and submits it to the Agent Inbox. A maintainer reviews/edits in the Skill Studio, then approves. Rollout is gated 10% → 50% → 100% with success-rate tracking; auto-deprecate if rate drops.
-
-**Why this design:** we don't rebuild an IDE — OpenHands is the SWE-bench-leading OSS coding agent and gives us editor + terminal + sandbox + LLM-assisted drafting essentially for free. We don't rebuild a chat UI — CopilotKit + AG-UI is the canonical OSS pattern with the LangGraph Agent Inbox built in. Our custom code is the *integration shell* and the skill-specific scaffolding/lifecycle. See ADR-013, ADR-014.
 
 ## 12. Architecture Decision Records
 
-### ADR-001: LangGraph + Deep Agents as orchestration substrate
-- **Context:** Need durable, inspectable workflows with HITL gates, sub-agent management, and a self-improving skills loop.
-- **Options:** LangGraph alone, LangGraph + Deep Agents, CrewAI, AutoGen v0.4, Pydantic AI, custom.
-- **Decision:** LangGraph as the graph runtime (ADR held); Deep Agents v0.6.3 (langchain-ai/deepagents, MIT) as batteries-included harness on top — provides sub-agents, HITL, Skills registry, context management, and MCP tool support out of the box. Specialist agents (Sales, Delivery, HR, Strategy, Triage, Annealer) become Deep Agents sub-agents.
-- **Consequences:** Team learns Deep Agents patterns (1–2 day ramp); gains built-in skills/HITL/MCP; reduces Phase-4 Annealer build from 10 ew to ~5 ew; observability via Langfuse (ADR-009), not LangSmith.
+### ADR-001: LangGraph + PostgresSaver as orchestration substrate
+- **Context:** Need durable, inspectable workflows with HITL gates and state persistence.
+- **Decision:** LangGraph as the graph runtime; `PostgresSaver` for durable state storage.
+- **Consequences:** Durable workflow state survives container restarts; all state transitions auditable in Postgres.
 
-### ADR-002: Postgres + pgvector + Apache AGE for graph + vectors
-- **Context:** Need entity graph + vector search; team of 2 cannot run Neo4j + Pinecone + Postgres.
-- **Decision:** Single Postgres with `pgvector` for embeddings and Apache AGE for property-graph queries. Re-evaluate at 1M+ nodes.
-- **Consequences:** One DB to back up; AGE less mature than Neo4j but sufficient for v1.
+### ADR-002: Postgres + pgvector + Apache AGE for entity graph + vectors
+- **Context:** Team of 2 cannot run Neo4j + Pinecone + Postgres separately.
+- **Decision:** Single Postgres with `pgvector` for embeddings and Apache AGE for property-graph queries.
+- **Consequences:** One DB to back up; AGE sufficient for v2 scale.
 
-### ADR-003: Source-of-truth = external systems; brain is read-mostly mirror
+### ADR-003: Source-of-truth = external systems; Core = read-mostly mirror with approval-gated writes
 - **Context:** Risk of agent corrupting CRM / ERP is unacceptable.
-- **Decision:** Writes only via Action Broker with explicit per-action authority tier; nightly reconciliation; no autonomous tier in v1.
-- **Consequences:** Slightly slower for write-heavy workflows; eliminates a class of catastrophic failure.
+- **Decision:** Writes only via Action Broker with explicit per-action authority tier; nightly reconciliation.
+- **Consequences:** Safe; slightly slower for write-heavy workflows.
 
 ### ADR-004: Vexa (Apache-2.0) as meeting bot from Day 1
-- **Context:** Build-vs-buy. Recall.ai (managed SaaS, ~$0.50/hr) was the original v1 choice. SOTA review confirmed Vexa (github.com/Vexa-ai/vexa) is the only mature OSS self-hosted alternative for Meet/Teams/Zoom in 2026 and explicitly positions itself as a Recall.ai replacement.
-- **Options:** Recall.ai (managed), Vexa (self-hosted), WhisperX headless (audio only, no bot), custom Playwright.
-- **Decision:** Vexa from Day 1 on a dedicated 4 vCPU Hetzner VM (~€6/mo + ~€0.05–0.15/meeting in compute). Chromium is heavy but a dedicated VM isolates the load. WhisperX (Whisper-large-v3 + Pyannote 3.1) handles transcription + diarization, self-hosted.
-- **Consequences:** Zero per-hour SaaS cost; data never leaves own infra (important for NDA meetings from Day 1); 1–2 day setup overhead vs Recall.ai API key; requires ops attention if Vexa bot breaks after platform updates.
+- **Decision:** Vexa on a dedicated 4 vCPU Hetzner VM. WhisperX + Pyannote for transcription + diarization.
+- **Consequences:** Zero per-hour SaaS cost; data stays in own infra.
 
 ### ADR-005: Tiered LLM routing from day one
-- **Context:** Naive single-model routing will be 5–10× more expensive.
-- **Decision:** Three tiers, deterministic Tier-0 first; router publishes cost/quality metrics; thresholds auto-tuned by annealer.
-- **Consequences:** More upfront prompt engineering; significant ongoing cost savings.
+- **Decision:** Three tiers + deterministic Tier-0; RouteLLM classifier trained on logged traffic in Phase 5.
+- **Consequences:** Significant ongoing cost savings.
 
-### ADR-006: Skill annealing requires human approval gate
-- **Context:** Hermes pattern enables autonomous skill creation, which is powerful but unsafe.
-- **Decision:** Annealer drafts; maintainer approves; gated rollout (10% → 50% → 100%) with success metric.
-- **Consequences:** Slower learning than fully-autonomous; eliminates "agent invented a wrong rule" failure mode.
+### ADR-006: Self-mutation requires human PR merge gate; max_mutation_attempts = 1
+- **Context:** Agents that can fix their own code could enter an infinite mutation loop if unconstrained.
+- **Decision:** `max_mutation_attempts = 1` per failure event. No further mutation PRs until a human merges and the agent verifies the fix on the next live run.
+- **Consequences:** Prevents runaway self-modification; preserves human oversight; slower improvement than fully-autonomous but safe.
 
 ### ADR-007: WhatsApp via Meta Cloud API + dedicated agent number
-- **Context:** Must integrate with the existing company WhatsApp Community.
-- **Decision:** Provision new business number; onboard via Meta Cloud API; LangGraph ingestion skill handles webhook processing; OpenBSP held in reserve.
-- **Consequences:** Per-conversation pricing applies; community message capture requires agent to be a participant in each group.
+- **Decision:** Provision new business number; LangGraph skill (`skill-whatsapp-send`) handles webhook processing.
 
-### ADR-008: LiteLLM gateway + RouteLLM + prompt caching
-- **Context:** All LLM calls need unified routing, cost metering, and provider-switching without code changes.
-- **Decision:** LiteLLM proxy (MIT) as the single gateway for all model calls. Anthropic `cache_control` and OpenAI automatic prompt caching enabled on all stable prefixes (system prompts, tool schemas) — 50–90% input-token cost reduction. RouteLLM (Apache-2.0, lmsys) trained on logged traffic (Phase 3.5) replaces hand-coded tier rules with a learned binary classifier.
-- **Consequences:** Zero code changes to swap model providers; compound cost saving with semantic cache and LLMLingua-2; ~1 ew for RouteLLM training pass.
+### ADR-008: LiteLLM gateway + RouteLLM + Anthropic/OpenAI prompt caching
+- **Decision:** LiteLLM proxy for unified routing; Anthropic `cache_control` + OpenAI automatic caching on stable prefixes (50–90% cost reduction); RouteLLM in Phase 5.
 
 ### ADR-009: Langfuse (MIT, self-hosted) for LLM observability
-- **Context:** LangSmith (original plan) is cloud-only and costs $20–50/seat/month. Need equivalent observability at zero incremental cost.
-- **Decision:** Langfuse (MIT) self-hosted via docker-compose on Postgres + ClickHouse. Framework-agnostic via OpenTelemetry; openllmetry SDK instruments Deep Agents automatically. Equivalent features to LangSmith: traces, evals, datasets, annotation.
-- **Consequences:** LangSmith removed from plan; Langfuse requires ClickHouse container (~1 GB RAM extra); zero seat cost.
+- **Decision:** Langfuse via docker-compose on Postgres + ClickHouse. Failure telemetry from Langfuse is the primary input to the Self_Mutation_Node.
 
 ### ADR-010: vLLM + Qwen3-8B as Tier-1 local inference
-- **Context:** Ollama (original Tier-1 runtime) is developer-focused and lacks production throughput or prefix caching. BFCL v3 shows Llama-3-8B at high-40s% tool-calling accuracy; Qwen3-8B in mid-60s%.
-- **Decision:** Replace Ollama in production with vLLM (Apache-2.0) serving Qwen3-8B-Instruct. vLLM Automatic Prefix Caching (APC) gives 85–95% latency/cost savings on repeated prefixes. 5–10× Ollama throughput enables running Qwen3-14B at same latency if needed. Ollama retained for dev laptops only.
-- **Consequences:** vLLM requires 1 Docker container; same OpenAI-compatible API so LiteLLM config unchanged; Qwen3-8B GGUF available via Ollama for local dev testing.
+- **Decision:** vLLM with Automatic Prefix Caching; Qwen3-8B-Instruct (BFCL v3 mid-60s% tool-calling).
 
 ### ADR-011: Mem0 + Graphiti for agent memory layers
-- **Context:** Rolling custom episodic memory on pgvector would cost ~2 ew and re-implement what Mem0/Graphiti already provide.
-- **Decision:** Mem0 (Apache-2.0, ~55k stars, 67% LOCOMO score, p95 search 200ms) for episodic/per-user memory. Graphiti (Apache-2.0, Zep, 71% LOCOMO score) for bi-temporal entity relationship KG. Both sit on top of the existing Postgres + pgvector — no new database. Deep Agents tools call `mem0.add()` / `mem0.search()` and `graphiti.add_episode()` / `graphiti.search()`.
-- **Consequences:** ~1.5 ew integration (Phase 2); eliminates ~2 ew of custom memory CRUD; Graphiti provides temporal-aware queries Postgres/AGE alone would not.
+- **Decision:** Mem0 for episodic/per-user memory; Graphiti for bi-temporal entity KG; both on existing Postgres.
 
 ### ADR-012: GPTCache + LLMLingua-2 for token efficiency
-- **Context:** Triage loop handles hundreds of near-identical events per day ("is this email a lead?", "is this task stale?"). Long tool outputs from ClickUp/Zoho/Odoo JSON bloat context.
-- **Decision:** GPTCache (MIT, Zilliz) in front of LiteLLM as semantic cache (vector-similarity keyed, 1h TTL for triage decisions). LLMLingua-2 (MIT, CPU-only) post-processes tool outputs >1k tokens before they enter model context (50–60% token reduction at >99% accuracy).
-- **Consequences:** 30–70% additional cost saving on triage traffic; compound with prompt caching (ADR-008) and vLLM prefix caching (ADR-010); GPTCache adds ~0.5 ew setup; LLMLingua-2 adds ~0.5 ew; both Phase-1 deliverables.
+- **Decision:** GPTCache (MIT) semantic cache in front of LiteLLM (1h TTL); LLMLingua-2 (MIT, CPU) post-processes tool outputs >1k tokens.
 
-### ADR-013: Anthropic Agent Skills (`SKILL.md`) as the skill format
-- **Context:** We need a portable, future-proof skill format the team can hand-author and the Annealer can auto-draft. Reinventing the format would orphan us from the rapidly-growing skills ecosystem.
-- **Options:** Custom YAML schema; LangChain Skills (langchain-skills.com); Anthropic `SKILL.md`.
-- **Decision:** Adopt **Anthropic `SKILL.md`** (YAML frontmatter + Markdown body + `scripts/` siblings). It is the de-facto standard, Deep Agents reads it natively (no adapter), `anthropics/skills` is the canonical reference, and the community `VoltAgent/awesome-agent-skills` repo curates 1000+ ready-to-adapt skills. We extend the frontmatter with our governance fields (`authority`, `cost_tier`, `rollout_stage`, `success_rate_30d`, `provenance`).
-- **Consequences:** Zero adapter code; can pull from upstream weekly; portable across Claude Code, Codex, Gemini CLI, Cursor; team learns one format that's the industry direction.
+### ADR-013: Per-agent and per-skill GitHub repos; dynamic cloning at runtime
+- **Context:** Monorepo approach couples agent logic to Core deployments and prevents per-agent independent versioning, CI, and self-mutation.
+- **Decision:** Every agent lives in its own `agent-<name>` GitHub repo. Every skill lives in its own `skill-<name>` GitHub repo (pip-installable Python package). The Core engine (`CommandCenter-Core`) contains no agent logic or skill files. Dynamic Agent Loader clones repos into a transient volume at event time.
+- **Consequences:** Any agent or skill can be updated, versioned, tested, and deployed independently. Self-mutation PRs only touch the relevant agent's own repo — not Core. The running Core server never needs redeploy to adopt new agent logic. Dynamic cloning adds ~2–5s to cold-start latency (acceptable vs the 30s NFR-01 target).
 
-### ADR-014: Skill Workbench = OpenHands + Next.js Control Plane (CopilotKit + AG-UI + Agent Inbox)
-- **Context:** The user wants an *online UI* where they can iteratively work on skills — generate code, run it, access the filesystem, hone the skill, and have the agent pick up the new version. Building this from scratch is multi-month work.
-- **Options:** Build custom IDE; use VS Code in browser (code-server); use OpenHands.
-- **Decision:** Self-host **OpenHands** (Apache-2.0, top OSS coding agent on SWE-bench) as the Skill Studio backend — it already provides sandboxed editor + terminal + filesystem + LLM-assisted code drafting. Wrap it in a custom **Next.js** control plane that adds three panes (Chat, Skill Studio, Observability) using **CopilotKit + AG-UI Protocol** for the chat surface and the **LangGraph Agent Inbox** pattern for the HITL approval queue. Skills repo is mounted into the OpenHands workspace. "Try it" runs in **E2B** sandbox (ADR-016) so the same runtime is used by CI evals.
-- **Consequences:** No bespoke IDE to maintain; ~5 ew Phase-0.5 to ship MVP; the Workbench *is* how skills are authored from M1.5 onward — humans, founder, and (later) the Annealer all use the same UI; OpenHands version pinned and updated on a quarterly cadence.
+### ADR-014: No in-app skill/workflow editor; VS Code + Git is the authoring environment
+- **Context:** Previously planned OpenHands-backed Skill Studio pane inside the Control Plane.
+- **Decision:** Removed. All agent and skill development happens in VS Code (locally or via GitHub Codespaces), committed to the respective agent/skill repo, merged through the standard PR flow. The Control Plane contains Chat, Observability, and HITL approval — not an IDE. Agents themselves open PRs via the Self_Mutation_Node.
+- **Consequences:** Simpler Control Plane; no OpenHands + Monaco integration required in the UI; authoring tools (GitHub Copilot, Claude Code, Cursor) available for free in the dev environment; agents use OpenHands SDK directly for self-mutation, not via a UI wrapper.
 
-### ADR-015: Git is the source of truth for every editable agent artefact; PR + eval gate for promotion
-- **Context:** The user wants the entire agent editable *and* version-controlled on GitHub. Live-editing running prompts is a recipe for drift and silent regressions.
-- **Decision:** Everything human- or agent-editable lives in GitHub: directives (`directives/`), sub-agent prompts, skills (`ai-company-brain-skills/`), LiteLLM router config, Langfuse dataset definitions, Promptfoo eval cases. **No live edits to running prompts** — every change is a PR; CI runs the Promptfoo + Inspect AI eval suite on the affected skill(s); merge gated. Deployment is automatic on merge via webhook → the Skill Registry pulls the new version and stages it at 10% shadow.
-- **Consequences:** Full audit trail; rollback = `git revert`; Annealer-drafted skills are PRs like any other; eliminates "who changed the prompt at 11pm" failure mode; requires the Workbench to use GitHub PR API (built into OpenHands).
+### ADR-015: Git is the single source of truth for all agent-editable artefacts; PR + CI gate required for promotion
+- **Decision:** Everything editable (agent `graph.py`, `instructions.md`, `config.json`, skill packages, LiteLLM config, Langfuse dataset definitions) lives in GitHub. All changes via PRs. CI runs evals on the agent's `evals/` folder on every PR. Merge is gated on eval pass.
 
-### ADR-016: Self-hosted E2B (Firecracker) as the sandbox runtime
-- **Context:** Skills execute Python (and shell). We need an isolated, fast-spinup sandbox for both "Try it" runs in the Workbench *and* CI eval runs — ideally the same runtime so behaviour is consistent.
-- **Options:** E2B (open-source, Firecracker microVMs), Daytona (gVisor), Modal (managed), Docker-in-Docker (insecure), homegrown Firecracker.
-- **Decision:** Self-host **E2B** on Firecracker microVMs on a dedicated Hetzner CX31 VM. OSS, ~94% Fortune-100 production use, well-documented Firecracker self-host story. Same SDK is invoked by the Workbench (interactive) and the CI eval runner (batched).
-- **Consequences:** ~1 ew Phase-2.9 to set up; eliminates Docker-in-Docker security smell; gives strong isolation for any skill running arbitrary code; Hetzner CX31 adds ~€10/mo.
+### ADR-016: OpenHands SDK (Apache-2.0) for both worker execution and self-mutation dev sandboxes
+- **Context:** Previously planned E2B (Firecracker) for sandbox execution. OpenHands SDK provides a higher-level ephemeral container API that covers both use cases.
+- **Decision:** OpenHands SDK for both: (a) worker containers that execute agent skills, and (b) dev sandbox containers for Self_Mutation_Node. Docker-in-Docker via host `/var/run/docker.sock`. E2B removed.
+- **Consequences:** Consistent runtime for both execution and mutation; one SDK to learn; OpenHands containers are ephemeral and network-isolated; eliminates separate Firecracker VM.
 
-### ADR-017: Promptfoo + Inspect AI for skill regression evals; CI-gated
-- **Context:** Skills will be edited often. Without regression gates we will silently break behaviour.
-- **Decision:** Every skill ships with a `evals/` folder. **Promptfoo** runs golden-case input/output assertions (cheap, fast, runs on every commit). **Inspect AI** (UK AISI, MIT) runs richer multi-turn scenario tests with graded scoring (runs on PR open). Both run in E2B sandbox. PR cannot merge unless both suites pass for the changed skills; eval reports posted as PR comments; trend dashboards exposed in the Skill Studio.
-- **Consequences:** ~1.5 ew Phase-1.9 for harness + first 10 golden suites; per-skill maintenance burden (~10 min per skill to author cases); pays for itself on the first prevented regression; aligns with industry SOTA for 2026 agent eval.
+### ADR-017: Promptfoo + Inspect AI for skill/agent regression evals; CI-gated
+- **Decision:** Every agent and skill repo ships an `evals/` folder. Promptfoo (golden-case assertions) + Inspect AI (graded scenario tests). PR cannot merge unless both suites pass.
 
-### ADR-019: Pervasive AI chat via CopilotKit `useCopilotReadable` in every pane
-- **Context:** The user wants AI assistance in the context of whatever they're currently doing — explaining a trace, improving a workflow, fixing a skill — not just in a dedicated chat pane that loses context.
-- **Options:** Separate chat instance per pane (state explosion, hard to maintain); global chat with manual copy-paste of context; CopilotKit `useCopilotReadable` context injection.
-- **Decision:** Use **CopilotKit `useCopilotReadable`** hooks to inject each pane's current state into the shared chat context automatically. Each pane declares its readable context: Skill Studio exposes `{current_skill_yaml, last_eval_result, open_pr_diff}`; Observability exposes `{current_trace_json}`; Workflow Editor exposes `{current_workflow_json, last_execution_log}`; Chat/Inbox pane exposes full session context. A floating chat overlay (persistent button in every pane header) opens the chat pre-seeded with that pane's context. Chat pane (Pane 1) is the standalone entrypoint and is fully usable without any other pane open.
-- **Consequences:** ~1 ew to wire context injection in all three panes; enables contextual slash commands per pane (`/explain`, `/improve`, `/why did this fail`); single CopilotKit provider wraps the whole app so session history is shared across panes; context is read-only from the chat side — actual mutations still go through OpenHands (skills) or the LangGraph workflow engine.
+### ADR-018: importlib + sys.path.append() for safe dynamic agent loading inside FastAPI
+- **Context:** Need to load agent repos at runtime without restarting the server; standard Python import system does not support runtime path injection cleanly.
+- **Decision:** FastAPI route controllers use `sys.path.append(cloned_agent_path)` and `importlib.import_module('graph')` to load each agent's `graph.py`. Transient paths are cleaned up after each run.
+- **Consequences:** Server stays up during agent updates; no monkey-patching of global modules; each run gets a fresh import of the cloned code.
+
+### ADR-019: DinD via host /var/run/docker.sock mapping
+- **Decision:** Core container maps `/var/run/docker.sock` from host into the container. OpenHands SDK commands child worker/dev sandbox containers through the host Docker daemon.
+- **Consequences:** Enables ephemeral container lifecycle management from within the Core container; standard DinD pattern; containers are isolated at the Docker network level.
+
+### ADR-020: Decoupled per-agent and per-skill GitHub repos
+- **See ADR-013.** This is the primary structural decision of v2. Each agent repo is independently deployable, testable, and self-improvable. Each skill repo is a versioned Python package. The Core engine is a pure runtime host.
+
+### ADR-021: Self-mutation loop with max_mutation_attempts = 1 and mandatory human PR gate
+- **See ADR-006.** This is the primary safety constraint of v2. `Self_Mutation_Node` may open exactly one PR per failure event. The live system cannot consume the fix until a human merges. PR has no self-merge permission; CI must pass; same eval gate as any human-authored PR.
+
+---
 
 ## 13. Open Questions for PDR
 
-1. **Confidence thresholds** — what success rate per agent justifies promotion from suggest+apply to autonomous?
+1. **Confidence thresholds** — what success rate per agent justifies promotion to autonomous write authority?
 2. **Retention** — how long do raw transcripts and message bodies live? (Legal/HR review needed.)
-3. **RBAC v2** — when do we add per-team scoping? (Trigger: first non-executive user request, or 6 months, whichever first.)
-4. **Odoo writes** — when do we open up write authority to Odoo? (High-risk; v1 read-only is safe.)
+3. **RBAC v2** — when do we add per-team scoping?
+4. **Odoo writes** — when do we open write authority to Odoo? (High-risk; v2 read-only is safe.)
 5. **WhatsApp community ingestion** — confirm Meta's policy on the agent reading group messages as a participant.
+6. **Self-mutation PR auto-close** — should unmerged self-mutation PRs expire after N days, or stay open indefinitely?
+7. **Multiple failing agents** — if three agents fail simultaneously, do all three open PRs concurrently? (Currently: yes, one PR each, each limited to 1 attempt. Confirm acceptable.)
+- **Source of truth lives in ClickUp, Zoho, Odoo.** The brain is a *read-mostly mirror* with approval-gated writes.

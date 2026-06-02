@@ -66,9 +66,27 @@ class Settings(BaseSettings):
     gmail_pubsub_token: str = ""         # bearer token expected on /webhooks/gmail
 
     # Dynamic Agent Loader (v2 — ADR-013)
-    github_token: str = ""                        # PAT for private agent/skill repos (optional)
-    github_org: str = "FracktalWorks"             # org that owns agent-* and skill-* repos
-    agents_clone_dir: str = "/tmp/acb_agents"     # transient clone root; cleaned up after each run
+    # Repos are cloned ONCE into agents_clone_dir/repos/ and refreshed with
+    # git pull on each event (no full re-clone per run).
+
+    # -- Auth: PAT (simple, use for dev / small teams) --
+    github_token: str = ""                    # PAT with `repo` scope; used in clone URL + remote set-url
+
+    # -- Auth: GitHub App (recommended for production) --
+    # When set, _get_auth_token() should exchange app credentials for a
+    # short-lived installation token.  Leave blank to fall back to github_token.
+    github_app_id: str = ""                   # e.g. "123456"
+    github_app_private_key_path: str = ""     # path to .pem file; never commit the key itself
+    github_installation_id: str = ""          # org installation ID (visible in GitHub App settings)
+
+    github_org: str = "FracktalWorks"         # org that owns agent-* and skill-* repos
+    agents_clone_dir: str = "/tmp/acb_agents" # persistent clone root (survives between events)
+
+    # -- Bot git identity (written into every local clone via git config) --
+    # Commits and PRs opened by Self_Mutation_Node carry this identity.
+    # Create a dedicated GitHub machine user (or use the GitHub App's identity).
+    github_bot_name: str = "jannet-bot"
+    github_bot_email: str = ""                # default: {github_bot_name}@users.noreply.github.com
 
     # OpenHands Self-Mutation Sandbox (v2 — ADR-021)
     openhands_api_url: str = ""   # e.g. http://openhands:3000; leave blank to disable mutation

@@ -60,6 +60,7 @@ async def attempt_self_mutation(
     error: Exception,
     *,
     mutation_attempts: int = 0,
+    agent_dir: str | None = None,
 ) -> MutationResult:
     """Attempt to fix a failing agent by provisioning an OpenHands dev sandbox.
 
@@ -69,6 +70,11 @@ async def attempt_self_mutation(
         error:              The exception that caused the failure.
         mutation_attempts:  How many times mutation has already been attempted
                             in this run (caller tracks this; executor passes 0).
+        agent_dir:          Absolute path to the persistent local clone of the
+                            agent repo (from :attr:`LoadedAgent.agent_dir`).
+                            When provided, the sandbox works from this clone
+                            (already authenticated + bot identity configured)
+                            rather than doing a fresh ``git clone``.
 
     Returns:
         A :class:`MutationResult` describing what happened.
@@ -111,7 +117,7 @@ async def attempt_self_mutation(
         )
     )
 
-    telemetry = _build_telemetry(agent_name, run_id, short_run, error_text, settings)
+    telemetry = _build_telemetry(agent_name, run_id, short_run, error_text, settings, agent_dir=agent_dir)
     pr_url, conversation_id = await _run_mutation_sandbox(
         agent_name, run_id, short_run, telemetry, settings
     )
@@ -148,10 +154,14 @@ def _build_telemetry(
     short_run: str,
     error_text: str,
     settings: Any,
+    *,
+    agent_dir: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the failure context that is injected into the OpenHands sandbox."""
     org = getattr(settings, "github_org", "FracktalWorks")
     langfuse_host = getattr(settings, "langfuse_host", "")
+    bot_name = getattr(settings, "github_bot_name", "jannet-bot")
+    bot_email = getattr(settings, "github_bot_email", "") or f"{bot_name}@users.noreply.github.com"
 
     return {
         "agent_name": agent_name,
@@ -164,6 +174,10 @@ def _build_telemetry(
         "langfuse_trace_url": (
             f"{langfuse_host}/traces?search={run_id}" if langfuse_host else None
         ),
+        # Persistent local clone — already authenticated + bot identity set
+        "local_clone_dir": agent_dir,
+        "bot_name": bot_name,
+        "bot_email": bot_email,
     }
 
 
@@ -174,22 +188,45 @@ def _build_mutation_prompt(telemetry: dict[str, Any]) -> str:
         if telemetry.get("langfuse_trace_url")
         else "No trace URL available."
     )
+
+    if telemetry.get("local_clone_dir"):
+        repo_section = (
+            f"## Repository (local clone — already authenticated)\n"
+            f"Path: `{telemetry['local_clone_dir']}`\n"
+            f"Remote: {telemetry['repo_url']}\n\n"
+            f"The repository is already cloned at the path above.  The remote URL\n"
+            f"already contains valid auth credentials.  Git user identity is already\n"
+            f"configured (`{telemetry['bot_name']}` <`{telemetry['bot_email']}`>).\n\n"
+            f"**Do NOT re-clone.** Work directly from the local clone.\n"
+        )
+        clone_step = f"1. `cd {telemetry['local_clone_dir']}` and `git pull --ff-only` to ensure you are on latest main."
+    else:
+        repo_section = (
+            f"## Repository\n{telemetry['repo_url']}\n\n"
+            f"Configure git identity before committing:\n"
+            f"```\ngit config user.name \"{telemetry['bot_name']}\"\n"
+            f"git config user.email \"{telemetry['bot_email']}\"\n```\n"
+        )
+        clone_step = f"1. Clone the repository from `{telemetry['repo_url']}` and configure bot identity as shown above."
+
     return (
         f"You are a senior Python engineer tasked with fixing a bug in the "
         f"agent repository below.\n\n"
-        f"## Repository\n{telemetry['repo_url']}\n\n"
+        f"{repo_section}\n"
         f"## Error\n```\n{telemetry['error']}\n```\n\n"
         f"## Trace\n{trace_line}\n\n"
         f"## Your task\n"
-        f"1. Clone the repository.\n"
+        f"{clone_step}\n"
         f"2. Identify the root cause of the error above.\n"
         f"3. Write a **minimal, correct fix**.\n"
         f"4. Run `pytest` — all tests must pass.\n"
         f"5. Commit the fix to a new branch named `{telemetry['branch_name']}`.\n"
-        f"6. Open a GitHub Pull Request titled:\n"
+        f"6. `git push origin {telemetry['branch_name']}` (the remote URL already has auth).\n"
+        f"7. Open a GitHub Pull Request titled:\n"
         f"   `{telemetry['pr_title']}`\n"
-        f"7. Include the full error, your root-cause analysis, and the diff in "
+        f"8. Include the full error, your root-cause analysis, and the diff in "
         f"the PR body.\n\n"
+        f"**Commit author must be:** `{telemetry['bot_name']}` <`{telemetry['bot_email']}`>\n"
         f"**Do NOT merge the PR.** A human must review and merge it.\n"
         f"**Do NOT open more than one PR.**\n"
     )

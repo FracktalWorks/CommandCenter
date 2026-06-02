@@ -83,7 +83,9 @@ async def run_agent(
     )
 
     try:
+        _agent_dir: str | None = None
         with load_agent(agent_name, run_id=run_id) as loaded:
+            _agent_dir = str(loaded.agent_dir)
             graph = loaded.build_graph()
             final_state = await _execute_graph(
                 graph,
@@ -134,6 +136,7 @@ async def run_agent(
             agent_name=agent_name,
             run_id=run_id,
             error=exc,
+            agent_dir=_agent_dir,  # pass persistent clone path for authenticated push
         )
         pr_url = mutation_result.pr_url if mutation_result else None
 

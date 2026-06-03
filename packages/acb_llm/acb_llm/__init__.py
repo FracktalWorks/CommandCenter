@@ -2,6 +2,6 @@
 
 All app code MUST go through this module — never call provider SDKs directly.
 """
-from acb_llm.client import LLMTier, complete
+from acb_llm.client import LLMTier, complete, complete_with_tools
 
-__all__ = ["LLMTier", "complete"]
+__all__ = ["LLMTier", "complete", "complete_with_tools"]

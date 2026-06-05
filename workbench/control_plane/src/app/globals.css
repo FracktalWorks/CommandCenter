@@ -24,3 +24,49 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Chat "thinking" UX — mirrors VS Code Copilot's shimmer/working language.
+   The shimmer is a flowing gradient sweep across text (NOT a spinner) and is
+   the core "something is happening" visual. See ai-company-brain/spec_chat_ux.md
+   ───────────────────────────────────────────────────────────────────────── */
+
+@keyframes chat-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Animated sweeping highlight on title/working text while the agent is active. */
+.chat-shimmer-text {
+  background: linear-gradient(
+    90deg,
+    rgb(113 113 122) 0%,    /* zinc-500 */
+    rgb(228 228 231) 45%,   /* zinc-200 */
+    rgb(113 113 122) 90%    /* zinc-500 */
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: chat-shimmer 2.2s linear infinite;
+}
+
+/* Soft pulse on the active status dot / filled-circle indicator. */
+@keyframes chat-pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.82); }
+}
+.chat-pulse-dot {
+  animation: chat-pulse-dot 1.4s ease-in-out infinite;
+}
+
+/* Smooth expand/collapse for the thinking container body. */
+@keyframes chat-fade-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.chat-fade-in {
+  animation: chat-fade-in 0.15s ease-out;
+}
+

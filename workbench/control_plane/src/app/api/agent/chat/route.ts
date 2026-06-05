@@ -27,6 +27,7 @@
  *
  * SSE event types:
  *   {"type":"delta",      "content":"…"}
+ *   {"type":"progress",   "name":"…"}                  — tool about to run (live status)
  *   {"type":"tool_start", "id":"…","name":"…","args":{}}
  *   {"type":"tool_end",   "id":"…","name":"…","result":"…","success":bool}
  *   {"type":"done",       "run_id":"…"}
@@ -180,6 +181,13 @@ export async function POST(req: NextRequest): Promise<Response> {
               } else if (t === "TOOL_CALL_START") {
                 const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
                 toolNames[String(ev.toolCallId ?? "")] = name;
+                // Emit a live progress line first so the ThinkingContainer shows
+                // activity immediately (before the tool result arrives).
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    `data: ${JSON.stringify({ type: "progress", name })}\n\n`
+                  )
+                );
                 out = { type: "tool_start", id: ev.toolCallId, name, args: {} };
               } else if (t === "TOOL_CALL_END") {
                 out = {

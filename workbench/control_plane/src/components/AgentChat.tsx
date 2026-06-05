@@ -16,6 +16,8 @@ import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { UnifiedModel } from "@/app/api/models/all/route";
 import MarkdownMessage from "@/components/MarkdownMessage";
+import AgentStatusBar from "@/components/AgentStatusBar";
+import MessageActionBar from "@/components/MessageActionBar";
 
 // Unified model fallback — overridden at runtime from /api/models/all.
 const MODELS_FALLBACK: UnifiedModel[] = [
@@ -272,6 +274,13 @@ export default function AgentChat({
         </div>
       </div>
 
+      {/* Agent status bar — identity + integration reachability */}
+      <AgentStatusBar
+        agentName={currentAgentName}
+        integrations={statuses}
+        isActive={isLoading}
+      />
+
       {/* Missing integrations banner */}
       {!bannerDismissed && missingMandatory.length > 0 && (
         <div className="shrink-0 border-b border-amber-900/40 bg-amber-950/30 px-5 py-3">
@@ -337,19 +346,6 @@ export default function AgentChat({
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} onChoice={handleChoice} />
         ))}
-
-        {isLoading && (
-          <div className="flex items-start gap-3">
-            <div className="w-7 h-7 rounded-full bg-zinc-700 flex items-center justify-center shrink-0 text-xs text-zinc-400">
-              A
-            </div>
-            <div className="flex items-center gap-1.5 px-4 py-3 bg-zinc-800/70 rounded-2xl rounded-tl-sm">
-              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:0ms]" />
-              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:150ms]" />
-              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:300ms]" />
-            </div>
-          </div>
-        )}
 
         {error && !isLoading && (
           <div className="text-xs text-red-400 bg-red-950/40 border border-red-900/60 rounded-lg px-4 py-2">
@@ -601,7 +597,7 @@ function MessageBubble({
 
   // Assistant message — full rich markdown rendering
   return (
-    <div className="flex items-start gap-3">
+    <div className="flex items-start gap-3 group">
       <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-xs font-semibold bg-zinc-700 text-zinc-300">
         A
       </div>
@@ -610,10 +606,17 @@ function MessageBubble({
           content={message.content}
           streaming={message.streaming}
           toolEvents={message.toolEvents}
+          progressLines={message.progressLines}
+          isThinkingActive={message.isThinkingActive}
           onChoice={onChoice}
         />
         {!message.streaming && (
-          <div className="mt-2 text-[10px] text-zinc-600">{timestamp}</div>
+          <>
+            <div className="mt-2 text-[10px] text-zinc-600">{timestamp}</div>
+            {message.content.trim() && (
+              <MessageActionBar content={message.content} messageId={message.id} />
+            )}
+          </>
         )}
       </div>
     </div>

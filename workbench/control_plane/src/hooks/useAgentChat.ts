@@ -8,6 +8,7 @@
  *
  * SSE event types emitted by /api/agent/chat:
  *   {"type":"delta",      "content":"..."}          — partial token
+ *   {"type":"progress",   "name":"…"}               — tool about to run (live status)
  *   {"type":"tool_start", "id":"…", "name":"…", "args":{}}
  *   {"type":"tool_end",   "id":"…", "name":"…", "result":"…", "success":bool}
  *   {"type":"done",       "run_id":"…"}
@@ -28,6 +29,10 @@ export interface ChatMessage {
   streaming?: boolean;
   /** Tool-call events that happened while producing this message. */
   toolEvents?: ToolEvent[];
+  /** Ordered live status lines (tool names) shown in the ThinkingContainer. */
+  progressLines?: string[];
+  /** True while the agent is mid-run (drives the shimmer/working indicator). */
+  isThinkingActive?: boolean;
 }
 
 interface UseAgentChatOptions {
@@ -101,6 +106,8 @@ export function useAgentChat({
         timestamp: Date.now(),
         streaming: true,
         toolEvents: [],
+        progressLines: [],
+        isThinkingActive: true,
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
@@ -167,6 +174,22 @@ export function useAgentChat({
                 );
                 break;
 
+              case "progress":
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantId
+                      ? {
+                          ...m,
+                          progressLines: [
+                            ...(m.progressLines ?? []),
+                            String(evt.name ?? "Working"),
+                          ],
+                        }
+                      : m
+                  )
+                );
+                break;
+
               case "tool_start":
                 setMessages((prev) =>
                   prev.map((m) => {
@@ -207,7 +230,9 @@ export function useAgentChat({
               case "done":
                 setMessages((prev) =>
                   prev.map((m) =>
-                    m.id === assistantId ? { ...m, streaming: false } : m
+                    m.id === assistantId
+                      ? { ...m, streaming: false, isThinkingActive: false }
+                      : m
                   )
                 );
                 break;
@@ -221,7 +246,9 @@ export function useAgentChat({
         // Ensure streaming flag is cleared even if "done" event was missing
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantId ? { ...m, streaming: false } : m
+            m.id === assistantId
+              ? { ...m, streaming: false, isThinkingActive: false }
+              : m
           )
         );
       } catch (err) {
@@ -230,7 +257,9 @@ export function useAgentChat({
         if (isAbort) {
           setMessages((prev) =>
             prev.map((m) =>
-              m.id === assistantId ? { ...m, streaming: false } : m
+              m.id === assistantId
+                ? { ...m, streaming: false, isThinkingActive: false }
+                : m
             )
           );
           return;

@@ -18,6 +18,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
+import ThinkingContainer from "@/components/ThinkingContainer";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,10 @@ interface MarkdownMessageProps {
   content: string;
   streaming?: boolean;
   toolEvents?: ToolEvent[];
+  /** Live tool-name status lines for the ThinkingContainer. */
+  progressLines?: string[];
+  /** True while the agent run is in progress (drives shimmer/working state). */
+  isThinkingActive?: boolean;
   /** Invoked when the user clicks an MCQ choice button (```choices block). */
   onChoice?: (choice: string) => void;
 }
@@ -113,85 +118,6 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   );
 }
 
-// ─── Tool-call accordion ─────────────────────────────────────────────────────
-
-function formatToolName(name: string): string {
-  return name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function formatToolArgs(args: Record<string, unknown>): string {
-  const keys = Object.keys(args);
-  if (keys.length === 0) return "";
-  const first = args[keys[0]];
-  const val = typeof first === "string" ? first : JSON.stringify(first);
-  return val.length > 70 ? val.slice(0, 70) + "…" : val;
-}
-
-function ToolCallBlock({ event }: { event: ToolEvent }) {
-  const [open, setOpen] = useState(false);
-  const durationMs =
-    event.endedAt && event.startedAt ? event.endedAt - event.startedAt : null;
-
-  const statusIcon =
-    event.status === "running" ? (
-      <span className="w-3 h-3 rounded-full border-2 border-zinc-500 border-t-zinc-300 animate-spin inline-block" />
-    ) : event.status === "done" ? (
-      <span className="text-emerald-500 text-xs">✓</span>
-    ) : (
-      <span className="text-red-400 text-xs">✗</span>
-    );
-
-  return (
-    <div className="my-1.5 rounded-lg border border-zinc-700/50 bg-zinc-900/60 overflow-hidden text-xs">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-zinc-800/60 transition-colors text-left"
-      >
-        <span className="shrink-0 flex items-center justify-center w-4">{statusIcon}</span>
-        <span className="text-zinc-300 font-medium shrink-0">
-          {formatToolName(event.name)}
-        </span>
-        {event.args && Object.keys(event.args).length > 0 && (
-          <span className="text-zinc-500 truncate min-w-0">
-            {formatToolArgs(event.args)}
-          </span>
-        )}
-        {durationMs !== null && (
-          <span className="ml-auto shrink-0 text-zinc-600">{durationMs}ms</span>
-        )}
-        <span className="text-zinc-600 shrink-0 ml-1 text-[10px]">
-          {open ? "▲" : "▼"}
-        </span>
-      </button>
-
-      {open && (event.args || event.result) && (
-        <div className="border-t border-zinc-700/50 px-3 py-2.5 space-y-2.5">
-          {event.args && Object.keys(event.args).length > 0 && (
-            <div>
-              <div className="text-[10px] text-zinc-500 uppercase tracking-widest mb-1.5 font-medium">
-                Input
-              </div>
-              <pre className="text-zinc-300 whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed">
-                {JSON.stringify(event.args, null, 2)}
-              </pre>
-            </div>
-          )}
-          {event.result && (
-            <div>
-              <div className="text-[10px] text-zinc-500 uppercase tracking-widest mb-1.5 font-medium">
-                Output
-              </div>
-              <pre className="text-zinc-300 whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed max-h-48 overflow-y-auto">
-                {event.result}
-              </pre>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── MCQ choice block ───────────────────────────────────────────────────────
 // Renders a ```choices fenced block as clickable buttons. The first non-list
 // line (if any) is treated as the question; lines beginning with - or * are
@@ -264,16 +190,28 @@ export default function MarkdownMessage({
   content,
   streaming,
   toolEvents,
+  progressLines,
+  isThinkingActive,
   onChoice,
 }: MarkdownMessageProps) {
+  const hasTools =
+    (toolEvents && toolEvents.length > 0) ||
+    (progressLines && progressLines.length > 0);
+  // Show the container when there are tool calls, OR briefly as a "Thinking…"
+  // placeholder before the first token arrives. Plain LLM replies (no tools)
+  // hide it as soon as text streams in — no redundant shimmer over the answer.
+  const showThinking = hasTools || (isThinkingActive && content.trim() === "");
+
   return (
     <div className="text-sm text-zinc-200 leading-relaxed min-w-0">
-      {/* Tool-call events — shown before the text response */}
-      {toolEvents && toolEvents.length > 0 && (
+      {/* Thinking container — groups the whole working phase (tool calls + status) */}
+      {showThinking && (
         <div className="mb-3">
-          {toolEvents.map((e) => (
-            <ToolCallBlock key={e.id} event={e} />
-          ))}
+          <ThinkingContainer
+            toolEvents={toolEvents ?? []}
+            progressLines={progressLines ?? []}
+            isActive={!!isThinkingActive}
+          />
         </div>
       )}
 

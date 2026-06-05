@@ -238,8 +238,16 @@ export async function POST(req: NextRequest): Promise<Response> {
                   result: ev.content ?? "",
                   success: true,
                 };
+              } else if (t === "STATE_SNAPSHOT") {
+                // AG-UI generative UI: full agent-state object (M2.6).
+                out = { type: "state", snapshot: ev.snapshot ?? {} };
+              } else if (t === "STATE_DELTA") {
+                out = { type: "state_delta", delta: ev.delta ?? [] };
+              } else if (t === "CUSTOM") {
+                out = { type: "custom", name: ev.name ?? "", value: ev.value ?? null };
               } else if (t === "RUN_FINISHED") {
                 out = { type: "done", run_id: ev.runId };
+
               } else if (t === "RUN_ERROR") {
                 out = { type: "error", content: String(ev.message ?? "Agent run error") };
               }
@@ -347,7 +355,17 @@ export async function POST(req: NextRequest): Promise<Response> {
                   result: ev.result ?? ev.content ?? "",
                   success: true,
                 };
+              } else if (t === "STATE_SNAPSHOT") {
+                // AG-UI generative UI: full agent-state object (M2.6).
+                out = { type: "state", snapshot: ev.snapshot ?? {} };
+              } else if (t === "STATE_DELTA") {
+                // JSON Patch (RFC 6902) incremental state update.
+                out = { type: "state_delta", delta: ev.delta ?? [] };
+              } else if (t === "CUSTOM") {
+                // Application-defined rich widget event (name + value payload).
+                out = { type: "custom", name: ev.name ?? "", value: ev.value ?? null };
               } else if (t === "RUN_FINISHED") {
+
                 out = { type: "done", run_id: ev.runId };
               } else if (t === "RUN_ERROR") {
                 out = { type: "error", content: String(ev.message ?? "Agent run error") };

@@ -18,6 +18,7 @@ import type { UnifiedModel } from "@/app/api/models/all/route";
 import MarkdownMessage from "@/components/MarkdownMessage";
 import AgentStatusBar from "@/components/AgentStatusBar";
 import MessageActionBar from "@/components/MessageActionBar";
+import GenerativeUIPanel from "@/components/GenerativeUIPanel";
 
 // Unified model fallback — overridden at runtime from /api/models/all.
 const MODELS_FALLBACK: UnifiedModel[] = [
@@ -53,6 +54,15 @@ interface AgentChatProps {
   memories?: string[];
   /** When set, the conversation is saved to Mem0 on unmount under this userId. */
   memoryUserId?: string;
+  /**
+   * Reports conversation activity to the parent so it can enrich the session
+   * list (auto-title from the first user message + last-turn preview).
+   */
+  onActivity?: (info: {
+    firstUserMessage?: string;
+    lastPreview?: string;
+    messageCount: number;
+  }) => void;
 }
 
 export default function AgentChat({
@@ -64,6 +74,7 @@ export default function AgentChat({
   persona,
   memories,
   memoryUserId,
+  onActivity,
 }: AgentChatProps) {
   // Active agent / model can change mid-chat (VS Code Copilot style).
   const [currentAgentName, setCurrentAgentName] = useState(agentName);
@@ -137,6 +148,28 @@ export default function AgentChat({
   const messagesRef = useRef<ChatMessage[]>(messages);
   useEffect(() => {
     messagesRef.current = messages;
+  }, [messages]);
+
+  // Report activity to the parent for session-list enrichment (title + preview).
+  const onActivityRef = useRef(onActivity);
+  useEffect(() => {
+    onActivityRef.current = onActivity;
+  }, [onActivity]);
+  useEffect(() => {
+    if (!onActivityRef.current) return;
+    const firstUser = messages.find((m) => m.role === "user" && m.content.trim());
+    const lastAssistant = [...messages]
+      .reverse()
+      .find((m) => m.role === "assistant" && m.content.trim());
+    const counted = messages.filter(
+      (m) => (m.role === "user" || m.role === "assistant") && m.content.trim(),
+    ).length;
+    if (counted === 0) return;
+    onActivityRef.current({
+      firstUserMessage: firstUser?.content,
+      lastPreview: lastAssistant?.content,
+      messageCount: counted,
+    });
   }, [messages]);
 
   // Drain the queue when a generation finishes (Queue / Steer send modes).
@@ -689,6 +722,10 @@ function MessageBubble({
           isThinkingActive={message.isThinkingActive}
           reasoning={message.reasoning}
           onChoice={onChoice}
+        />
+        <GenerativeUIPanel
+          agentState={message.agentState}
+          customEvents={message.customEvents}
         />
         {!message.streaming && (
           <>

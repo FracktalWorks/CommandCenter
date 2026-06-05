@@ -7,6 +7,7 @@ import {
   upsertSession,
   deleteSession,
   createSession,
+  enrichSession,
   type ChatSession,
 } from "@/lib/sessions";
 import type { Mem0Memory } from "@/lib/memory";
@@ -260,7 +261,10 @@ function SessionList({
           onClick={() => onSelect(s.id)}
         >
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium">{s.name}</div>
+            <div className="truncate text-sm font-medium">{s.title ?? s.name}</div>
+            {s.lastPreview ? (
+              <div className="truncate text-xs text-zinc-500">{s.lastPreview}</div>
+            ) : null}
             <div className="text-xs text-zinc-600">
               {s.messageCount > 0 ? `${s.messageCount} msgs · ` : ""}
               {s.agentName}
@@ -388,6 +392,18 @@ function ChatPageInner() {
     setMemories((prev) => prev.filter((m) => m.id !== memoryId));
   }, []);
 
+  // Enrich the active session (auto-title + last-turn preview) as the chat runs.
+  const handleActivity = useCallback(
+    (
+      id: string,
+      info: { firstUserMessage?: string; lastPreview?: string; messageCount: number },
+    ) => {
+      enrichSession(id, info);
+      setSessions(getSessions());
+    },
+    [],
+  );
+
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
   return (
@@ -448,6 +464,7 @@ function ChatPageInner() {
               memories={memories.map((m) => m.memory)}
               memoryUserId={DEFAULT_USER_ID}
               availableAgents={agentList.length > 0 ? agentList : undefined}
+              onActivity={(info) => handleActivity(activeSession.id, info)}
             />
           ) : (
             /*
@@ -459,6 +476,7 @@ function ChatPageInner() {
               agentName={activeSession.agentName}
               sessionId={activeSession.id}
               availableAgents={agentList.length > 0 ? agentList : undefined}
+              onActivity={(info) => handleActivity(activeSession.id, info)}
             />
           )
         ) : (

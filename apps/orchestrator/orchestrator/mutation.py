@@ -31,7 +31,7 @@ Typical call site (orchestrator.executor)::
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from acb_audit import AuditEvent, record
@@ -134,9 +134,15 @@ async def attempt_self_mutation(
     )
 
     telemetry = _build_telemetry(agent_name, run_id, short_run, error_text, settings, agent_dir=agent_dir, incompatibility=incompatibility)
-    pr_url, conversation_id = await _run_mutation_sandbox(
+    branch_pushed, test_summary, conversation_id = await _run_mutation_sandbox(
         agent_name, run_id, short_run, telemetry, settings
     )
+
+    # Open a GitHub PR from the pushed fix branch (WBS 1.3). The live system
+    # does not adopt the change until a human merges — no auto-merge permission.
+    pr_url: str | None = None
+    if branch_pushed and getattr(settings, "mutation_auto_pr", True):
+        pr_url = await _open_pull_request(agent_name, telemetry, settings, test_summary)
 
     record(
         AuditEvent(
@@ -146,6 +152,10 @@ async def attempt_self_mutation(
             payload={
                 "run_id": run_id,
                 "pr_url": pr_url,
+                "branch": telemetry["branch_name"],
+                "branch_pushed": branch_pushed,
+                "test_summary": test_summary,
+                "error_type": type(error).__name__,
                 "conversation_id": conversation_id,
             },
         )
@@ -182,7 +192,7 @@ def _build_telemetry(
     # Locate the agent_repo_compatibility.md guide to embed in incompatibility prompts
     compat_guide: str = ""
     if incompatibility:
-        from pathlib import Path  # noqa: PLC0415
+        from pathlib import Path
         for candidate in Path(__file__).parents:
             guide = candidate / "ai-company-brain" / "agent_repo_compatibility.md"
             if guide.exists():
@@ -244,12 +254,12 @@ def _build_incompatibility_prompt(telemetry: dict[str, Any]) -> str:
         f"5. Run `python -c \"from agents import build_agents; agents = build_agents(); "
         f"assert agents\"` to verify.\n"
         f"6. Run `pytest` if a `tests/` directory exists.\n"
-        f"7. `git add agents.py` and commit directly to the current branch:\n"
+        f"7. Create the fix branch: `git checkout -b {telemetry['branch_name']}`\n"
+        f"8. `git add agents.py` and commit:\n"
         f"   `git commit -m 'fix: generate compliant agents.py for CommandCenter'`\n"
-        f"8. `git push origin HEAD` to push directly — **do NOT create a PR**.\n"
-        f"   The commit goes live immediately; there is no review gate.\n\n"
+        f"9. `git push origin {telemetry['branch_name']}` to push the fix branch.\n\n"
         f"**Commit author:** `{telemetry['bot_name']}` <`{telemetry['bot_email']}`>\n"
-        f"**Do NOT create a pull request. Push directly to the current branch.**\n"
+        f"**Push the branch `{telemetry['branch_name']}`. The orchestrator opens the PR — do NOT create one yourself.**\n"
         f"{guide_section}"
     )
 
@@ -290,14 +300,16 @@ def _build_runtime_fix_prompt(telemetry: dict[str, Any]) -> str:
         f"### Phase 2 — Editor (minimal write)\n"
         f"Execute ONLY the fix plan from Phase 1:\n"
         f"  a. Make minimal, correct changes\n"
-        f"  b. Run `pytest` — all tests must pass\n"
-        f"  c. `git add -A` and commit: `git commit -m 'fix: <short description>'`\n"
-        f"  d. `git push origin HEAD` — **do NOT create a PR**\n\n"
+        f"  b. Run `pytest` — all tests must pass. Capture the summary line.\n"
+        f"  c. Create the fix branch: `git checkout -b {telemetry['branch_name']}`\n"
+        f"  d. `git add -A` and commit: `git commit -m 'fix: <short description>'`\n"
+        f"  e. `git push origin {telemetry['branch_name']}` — push the branch.\n"
+        f"  f. Print a final line `TEST_SUMMARY: <pytest summary>` so the orchestrator can record it.\n\n"
         f"**Safety rules:**\n"
         f"- Never write without first completing Phase 1 analysis\n"
         f"- Minimal fix only — do not refactor unrelated code\n"
         f"- Commit author: `{telemetry['bot_name']}` <`{telemetry['bot_email']}`>\n"
-        f"- Do NOT create a pull request. Push directly to the current branch.\n"
+        f"- Push the fix branch `{telemetry['branch_name']}`. The orchestrator opens the PR — do NOT create one yourself.\n"
     )
 
 
@@ -307,21 +319,26 @@ async def _run_mutation_sandbox(
     short_run: str,
     telemetry: dict[str, Any],
     settings: Any,
-) -> tuple[str | None, str | None]:
-    """Spawn an isolated Copilot SDK container and return (proxy_url, container_id).
+) -> tuple[bool, str, str | None]:
+    """Spawn an isolated Copilot SDK container and wait for it to finish.
 
-    The container runs detached (``docker run -d``).  The PR URL is extracted
-    from container stdout by a Phase-2 log observer (``docker logs <id>``).
-    Returns ``(None, None)`` and logs the prompt if Docker/credentials are
+    The container makes the fix, runs pytest, and pushes the fix branch
+    ``auto-fix/{short_run}``.  It prints a JSON result line
+    (``{"pr_url": ..., "success": bool}``) and, on success, a
+    ``TEST_SUMMARY: ...`` line to stdout.
+
+    Returns ``(branch_pushed, test_summary, container_id)``.  Returns
+    ``(False, "", None)`` and logs the prompt if Docker/credentials are
     unavailable so the system degrades gracefully in dev.
     """
-    import asyncio  # noqa: PLC0415
+    import asyncio
 
     github_token: str | None = getattr(settings, "github_token", None) or None
     litellm_key: str | None = getattr(settings, "litellm_master_key", None) or None
     litellm_url: str = getattr(settings, "litellm_base_url", "http://host.docker.internal:4000")
     mutation_model: str = getattr(settings, "mutation_model", "openai/tier3-opus")
     sandbox_image: str = getattr(settings, "mutation_sandbox_image", "acb-mutation-runner:latest")
+    timeout_s: int = int(getattr(settings, "mutation_timeout_seconds", 600))
     agent_dir: str | None = telemetry.get("local_clone_dir")
 
     if not github_token and not litellm_key:
@@ -337,14 +354,15 @@ async def _run_mutation_sandbox(
             run_id=run_id,
             prompt=_build_mutation_prompt(telemetry),
         )
-        return None, None
+        return False, "", None
 
     prompt = _build_mutation_prompt(telemetry)
 
+    # Run in the foreground (no -d) so we can capture stdout and learn whether
+    # the fix branch was pushed.  --rm cleans the container up on exit.
     docker_cmd = [
         "docker", "run",
         "--rm",
-        "-d",
         "--name", f"acb-mutation-{short_run}",
         "-e", f"MUTATION_PROMPT={prompt}",
         "-e", f"MUTATION_TELEMETRY_JSON={json.dumps(telemetry)}",
@@ -366,34 +384,170 @@ async def _run_mutation_sandbox(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout_bytes, stderr_bytes = await proc.communicate()
-        container_id = stdout_bytes.decode().strip()
-
-        if proc.returncode != 0 or not container_id:
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout_s
+            )
+        except TimeoutError:
+            proc.kill()
+            await _docker_kill(short_run)
             _log.error(
-                "mutation.docker_launch_failed",
+                "mutation.sandbox_timeout",
                 agent=agent_name,
                 run_id=run_id,
-                error=stderr_bytes.decode().strip()[:500],
+                timeout_s=timeout_s,
             )
-            return None, None
+            return False, "", None
 
-        short_id = container_id[:12]
+        stdout = stdout_bytes.decode(errors="replace").strip()
+        stderr = stderr_bytes.decode(errors="replace").strip()
+
+        # The runner prints a JSON result line; success means the fix ran and
+        # the branch was pushed.
+        success = False
+        for line in reversed(stdout.splitlines()):
+            line = line.strip()
+            if line.startswith("{") and line.endswith("}"):
+                try:
+                    parsed = json.loads(line)
+                    success = bool(parsed.get("success"))
+                    break
+                except json.JSONDecodeError:
+                    continue
+
+        test_summary = ""
+        for line in stdout.splitlines():
+            if line.startswith("TEST_SUMMARY:"):
+                test_summary = line.split("TEST_SUMMARY:", 1)[1].strip()
+                break
+
+        if proc.returncode != 0 and not success:
+            _log.error(
+                "mutation.sandbox_failed",
+                agent=agent_name,
+                run_id=run_id,
+                returncode=proc.returncode,
+                stderr=stderr[:500],
+            )
+            return False, test_summary, None
+
         _log.info(
-            "mutation.container_started",
+            "mutation.sandbox_done",
             agent=agent_name,
             run_id=run_id,
-            container_id=short_id,
+            branch=telemetry["branch_name"],
+            test_summary=test_summary[:200],
         )
-        # PR URL is captured from container stdout by the Phase-2 log observer.
-        # Return a proxy URL so the audit log has a stable identifier.
-        return f"container:{short_id}", short_id
+        return success, test_summary, f"acb-mutation-{short_run}"
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.error(
             "mutation.docker_error",
             agent=agent_name,
             run_id=run_id,
             error=str(exc),
         )
-        return None, None
+        return False, "", None
+
+
+async def _docker_kill(short_run: str) -> None:
+    """Best-effort kill of a hung mutation container."""
+    import asyncio
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "kill", f"acb-mutation-{short_run}",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.communicate()
+    except Exception:
+        pass
+
+
+async def _open_pull_request(
+    agent_name: str,
+    telemetry: dict[str, Any],
+    settings: Any,
+    test_summary: str,
+) -> str | None:
+    """Open a GitHub PR from the pushed fix branch via the REST API.
+
+    The branch ``auto-fix/{short_run}`` is pushed by the sandbox container.
+    This opens a PR ``auto-fix/{short_run}`` → ``main`` with the failure
+    telemetry, the error, and the pytest summary as the body.  No auto-merge
+    permission is requested — a human must click **Merge** (PR-05).
+
+    Returns the PR URL, or ``None`` if the API call fails (e.g. no token).
+    """
+    import httpx
+
+    github_token: str = getattr(settings, "github_token", "") or ""
+    org: str = getattr(settings, "github_org", "FracktalWorks")
+    if not github_token:
+        _log.warning("mutation.pr_no_token", agent=agent_name)
+        return None
+
+    repo = f"agent-{agent_name}"
+    branch = telemetry["branch_name"]
+    title = telemetry["pr_title"]
+    body = (
+        f"## Auto-fix proposed by `Self_Mutation_Node`\n\n"
+        f"**Agent:** `{agent_name}`  ·  **Run:** `{telemetry['run_id']}`\n\n"
+        f"### Failure\n```\n{telemetry['error']}\n```\n\n"
+        f"### Test results\n```\n{test_summary or 'see CI eval gate'}\n```\n\n"
+        f"---\n"
+        f"This PR was opened automatically as an audit record. "
+        f"`max_mutation_attempts = 1` — no second PR will be opened for this failure. "
+        f"A human must review and **Merge** before the fix is adopted.\n"
+    )
+
+    url = f"https://api.github.com/repos/{org}/{repo}/pulls"
+    headers = {
+        "Authorization": f"Bearer {github_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    payload = {"title": title, "head": branch, "base": "main", "body": body}
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+        if resp.status_code in (200, 201):
+            pr_url = resp.json().get("html_url")
+            _log.info("mutation.pr_opened", agent=agent_name, pr_url=pr_url)
+            return pr_url
+        # 422 commonly means a PR already exists for this branch — surface it.
+        if resp.status_code == 422:
+            existing = await _find_existing_pr(client_org=org, repo=repo, branch=branch, headers=headers)
+            if existing:
+                return existing
+        _log.error(
+            "mutation.pr_failed",
+            agent=agent_name,
+            status=resp.status_code,
+            detail=resp.text[:300],
+        )
+        return None
+    except Exception as exc:
+        _log.error("mutation.pr_error", agent=agent_name, error=str(exc))
+        return None
+
+
+async def _find_existing_pr(
+    *, client_org: str, repo: str, branch: str, headers: dict[str, str]
+) -> str | None:
+    """Return the URL of an open PR for ``branch`` if one already exists."""
+    import httpx
+
+    url = f"https://api.github.com/repos/{client_org}/{repo}/pulls"
+    params = {"head": f"{client_org}:{branch}", "state": "open"}
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(url, headers=headers, params=params)
+        if resp.status_code == 200 and resp.json():
+            return resp.json()[0].get("html_url")
+    except Exception:
+        pass
+    return None
+

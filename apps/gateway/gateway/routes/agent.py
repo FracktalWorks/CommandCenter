@@ -662,6 +662,56 @@ async def get_run_status(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.get("/mutations")
+async def list_mutations(
+    limit: int = 50,
+    user: UserContext = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    """Return recent self-mutation events for the Control Plane HITL queue (WBS 1.5).
+
+    Surfaces ``system:mutation`` audit events (PR opened / sandbox failed /
+    started) so operators can review and merge auto-fix PRs from one view.
+    """
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+
+        with get_session() as sess:
+            result = sess.execute(
+                text(
+                    "SELECT action, target, at, payload FROM audit_event "
+                    "WHERE actor = 'system:mutation' "
+                    "ORDER BY at DESC LIMIT :limit"
+                ),
+                {"limit": max(1, min(limit, 200))},
+            )
+            rows = []
+            for r in result:
+                payload = r.payload if isinstance(r.payload, dict) else {}
+                rows.append(
+                    {
+                        "action": r.action,
+                        "agent": str(r.target).removeprefix("agent:"),
+                        "at": str(r.at),
+                        "run_id": payload.get("run_id"),
+                        "pr_url": payload.get("pr_url"),
+                        "branch": payload.get("branch"),
+                        "error_type": payload.get("error_type"),
+                        "test_summary": payload.get("test_summary"),
+                        "status": (
+                            "pr_open"
+                            if r.action == "mutation_pr_opened"
+                            else "failed"
+                            if r.action == "mutation_sandbox_failed"
+                            else "started"
+                        ),
+                    }
+                )
+        return rows
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.post("/webhook/{source}", status_code=status.HTTP_202_ACCEPTED)
 async def receive_webhook(
     source: str,

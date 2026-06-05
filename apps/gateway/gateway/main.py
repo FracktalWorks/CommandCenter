@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from acb_auth import UserContext, UserRole, get_current_user, require_role
 from acb_common import configure_logging, get_logger, get_settings
@@ -17,10 +17,8 @@ _log = get_logger("gateway")
 # running asyncio event loop.  Importing here (module level, before uvicorn
 # starts the loop) avoids the deadlock entirely.
 try:
-    from agent_framework.ag_ui import \
-        add_agent_framework_fastapi_endpoint as _add_ag_ui_endpoint
-    from orchestrator.agents import \
-        build_orchestrator_agent as _build_orchestrator_agent
+    from agent_framework.ag_ui import add_agent_framework_fastapi_endpoint as _add_ag_ui_endpoint
+    from orchestrator.agents import build_orchestrator_agent as _build_orchestrator_agent
     _HAS_MAF = True
 except ImportError:
     _HAS_MAF = False
@@ -42,6 +40,18 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     if _HAS_MAF:
         _log.info("gateway.ag_ui_registered", path="/copilot/chat")
+
+    # Tier 1.5 runtime self-check (M2.6). Surfaces a broken github-copilot
+    # sandbox at startup instead of failing silently on the first agent run.
+    try:
+        checks = _runtime_checks()
+        ok = all(c["ok"] for c in checks.values())
+        _log.info("gateway.runtime_check", ok=ok, **{k: v["ok"] for k, v in checks.items()})
+        for name, c in checks.items():
+            if not c["ok"]:
+                _log.warning("gateway.runtime_degraded", check=name, detail=c["detail"])
+    except Exception as exc:  # pragma: no cover
+        _log.warning("gateway.runtime_check_failed", error=str(exc))
 
     yield
     _log.info("gateway.shutdown")
@@ -104,6 +114,13 @@ except Exception:  # pragma: no cover
     pass
 
 try:
+    from gateway.routes.oauth import router as _oauth_router
+
+    app.include_router(_oauth_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
     from gateway.routes.settings import router as _settings_router
 
     app.include_router(_settings_router)
@@ -117,9 +134,59 @@ class Health(BaseModel):
     env: str
 
 
+def _runtime_checks() -> dict[str, dict]:
+    """Validate the GitHub Copilot SDK (Tier 1.5) sandbox prerequisites.
+
+    Checks (M2.6 cloud-sandbox requirements):
+      - copilot SDK importable (bundled copilot.exe present)
+      - pwsh on PATH (copilot.exe shell tool backend)
+      - GITHUB_TOKEN configured (Copilot auth)
+
+    Returns ``{check_name: {"ok": bool, "detail": str}}``. Never raises.
+    """
+    import shutil
+
+    settings = get_settings()
+    checks: dict[str, dict] = {}
+
+    # copilot SDK importable
+    try:
+        import copilot  # noqa: F401
+
+        checks["copilot_sdk"] = {"ok": True, "detail": "importable"}
+    except Exception as exc:
+        checks["copilot_sdk"] = {"ok": False, "detail": f"import failed: {exc}"}
+
+    # pwsh on PATH
+    pwsh = shutil.which("pwsh") or shutil.which("powershell")
+    checks["pwsh"] = (
+        {"ok": True, "detail": pwsh}
+        if pwsh
+        else {"ok": False, "detail": "pwsh not found on PATH — shell tool will fail on Linux"}
+    )
+
+    # GITHUB_TOKEN configured
+    token = getattr(settings, "github_token", "") or os.environ.get("GITHUB_TOKEN", "")
+    checks["github_token"] = (
+        {"ok": True, "detail": "configured"}
+        if token
+        else {"ok": False, "detail": "GITHUB_TOKEN not set — github-copilot agents will fail"}
+    )
+
+    return checks
+
+
 @app.get("/health", response_model=Health, tags=["meta"])
 async def health() -> Health:
     return Health(status="ok", env=get_settings().acb_env)
+
+
+@app.get("/health/runtime", tags=["meta"])
+async def health_runtime() -> dict:
+    """Report Tier 1.5 sandbox readiness (copilot SDK, pwsh, GITHUB_TOKEN)."""
+    checks = _runtime_checks()
+    return {"ok": all(c["ok"] for c in checks.values()), "checks": checks}
+
 
 
 # ---------- Copilot models ----------
@@ -153,7 +220,7 @@ async def copilot_models() -> dict:
 
     if github_token:
         try:
-            import httpx  # noqa: PLC0415
+            import httpx
             async with httpx.AsyncClient(timeout=5) as client:
                 resp = await client.get(
                     "https://api.githubcopilot.com/models",
@@ -180,7 +247,7 @@ async def copilot_models() -> dict:
                             ],
                             "source": "live",
                         }
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass  # Fall through to static list
 
     return {"models": _COPILOT_MODELS_STATIC, "source": "static"}
@@ -204,14 +271,12 @@ async def pull(req: PullRequest, _user: UserContext = Depends(get_current_user))
     """Phase-0 pull Q&A: routes through the MAF orchestrator agent."""
     import uuid
 
-    from acb_llm.guardrails import \
-        CITATION_RE  # local import to avoid cold-start cost
+    from acb_llm.guardrails import CITATION_RE  # local import to avoid cold-start cost
 
     trace_id = uuid.uuid4().hex
     _log.info("pull.received", query=req.query, user=req.user_email, trace_id=trace_id)
     try:
-        from orchestrator.agents import \
-            build_orchestrator_agent  # noqa: PLC0415
+        from orchestrator.agents import build_orchestrator_agent
         agent = build_orchestrator_agent(with_history=False)
         async with agent:
             response = await agent.run(req.query)
@@ -238,8 +303,7 @@ async def pull_sales(req: PullRequest) -> PullResponse:
     trace_id = uuid.uuid4().hex
     _log.info("pull.sales.received", query=req.query, user=req.user_email, trace_id=trace_id)
     try:
-        from orchestrator.agents import \
-            build_orchestrator_agent  # noqa: PLC0415
+        from orchestrator.agents import build_orchestrator_agent
         agent = build_orchestrator_agent(with_history=False)
         async with agent:
             response = await agent.run(req.query)

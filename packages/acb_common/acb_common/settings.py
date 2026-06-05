@@ -96,16 +96,42 @@ class Settings(BaseSettings):
     # OpenHands Self-Mutation Sandbox (v2 — ADR-021)
     openhands_api_url: str = ""   # e.g. http://openhands:3000; leave blank to disable mutation
 
+    # Copilot SDK Self-Mutation Sandbox (acb-mutation-runner) — WBS 1.2/1.3
+    mutation_model: str = "openai/tier3-opus"       # model the sandbox agent uses
+    mutation_sandbox_image: str = "acb-mutation-runner:latest"
+    mutation_timeout_seconds: int = 600              # hard cap on a single mutation run
+    mutation_auto_pr: bool = True                    # open a GitHub PR after a successful fix
+
     # Copilot SDK chat (coworker sessions via /copilot/chat)
     # Auth order: LITELLM_MASTER_KEY → LiteLLM proxy  |  GITHUB_TOKEN → api.githubcopilot.com
     # Model must be available in whichever provider is active.
     copilot_chat_model: str = "claude-sonnet-4.5"  # e.g. gpt-5.5, claude-sonnet-4.6
 
     # ---------------------------------------------------------------------------
-    # Integration credentials — injected into state["integrations"] at run time
-    # via acb_skills.integrations.build_integrations().
-    # Add the corresponding values to .env / docker-compose secrets.
+    # OAuth 2.0 authorization-code flow (M2.6) — Integration token exchange.
+    # The Control Plane Integration page redirects to each provider's consent
+    # screen; the callback exchanges the code for access + refresh tokens, which
+    # are persisted to .env and injected into agents at run time.
     # ---------------------------------------------------------------------------
+    # Public base URL the provider redirects back to (no trailing slash).
+    oauth_redirect_base: str = "http://localhost:8000"
+
+    # ClickUp OAuth app (app.clickup.com/settings/apps)
+    clickup_client_id: str = ""
+    clickup_client_secret: str = ""
+    clickup_access_token: str = ""        # set by the OAuth callback
+
+    # Google OAuth app (console.cloud.google.com — Gmail scopes)
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_access_token: str = ""         # set by the OAuth callback
+    google_refresh_token: str = ""
+    google_token_expiry: str = ""         # ISO-8601 expiry of the access token
+
+    # Zoho access token cache (refresh_token already above)
+    zoho_access_token: str = ""
+    zoho_token_expiry: str = ""
+
 
     # Apollo.io (prospecting, contact enrichment)
     apollo_api_key: str = ""

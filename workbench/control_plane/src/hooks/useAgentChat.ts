@@ -36,6 +36,10 @@ export interface ChatMessage {
   isThinkingActive?: boolean;
   /** Streamed model reasoning / chain-of-thought (reasoning models only). */
   reasoning?: string;
+  /** AG-UI agent state (STATE_SNAPSHOT / STATE_DELTA) for generative UI. */
+  agentState?: Record<string, unknown>;
+  /** AG-UI CUSTOM events (named rich widgets) emitted during the run. */
+  customEvents?: { name: string; value: unknown }[];
 }
 
 interface UseAgentChatOptions {
@@ -251,6 +255,35 @@ export function useAgentChat({
                   prev.map((m) =>
                     m.id === assistantId
                       ? { ...m, streaming: false, isThinkingActive: false }
+                      : m
+                  )
+                );
+                break;
+
+              case "state":
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantId
+                      ? {
+                          ...m,
+                          agentState: (evt.snapshot as Record<string, unknown>) ?? {},
+                        }
+                      : m
+                  )
+                );
+                break;
+
+              case "custom":
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantId
+                      ? {
+                          ...m,
+                          customEvents: [
+                            ...(m.customEvents ?? []),
+                            { name: String(evt.name ?? ""), value: evt.value },
+                          ],
+                        }
                       : m
                   )
                 );

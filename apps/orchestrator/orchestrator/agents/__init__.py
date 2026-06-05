@@ -17,5 +17,6 @@ build_orchestrator_agent = _mod.build_orchestrator_agent
 build_agents = _mod.build_agents
 retrieve_entity_context = _mod.retrieve_entity_context
 retrieve_sales_context = _mod.retrieve_sales_context
+spawn_copilot_agent = _mod.spawn_copilot_agent
 
-__all__ = ["build_orchestrator_agent", "build_agents", "retrieve_entity_context", "retrieve_sales_context"]
+__all__ = ["build_orchestrator_agent", "build_agents", "retrieve_entity_context", "retrieve_sales_context", "spawn_copilot_agent"]

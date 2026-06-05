@@ -33,8 +33,9 @@ _log = get_logger("orchestrator.agents")
 # ---------------------------------------------------------------------------
 
 _PULL_INSTRUCTIONS = """\
-You are the AI Company Brain Pull agent for Fracktal Works.
-Your job is to answer questions about internal company data: projects, tasks, deals, and people.
+You are the AI Company Brain orchestrator for Fracktal Works.
+Your job is to answer questions about internal company data AND to create or improve
+capabilities in the system when asked.
 
 Rules:
 1. Call retrieve_entity_context to search for relevant context BEFORE answering general questions.
@@ -48,6 +49,10 @@ Rules:
 5. If retrieval returns "(no matching entities found)", answer from general knowledge and say so.
 6. Keep answers concise. Use bullet points for lists of items.
 7. Never expose raw SQL, internal UUIDs outside of citations, or stack traces to the user.
+8. When the user asks to CREATE, BUILD, ADD, IMPROVE, or FIX any skill, script, capability,
+   or automation in the system — call spawn_copilot_agent with a precise task description.
+   The Copilot SDK agent will write the code, run tests, commit, and push autonomously.
+   Tell the user what was started and that the change will be live on the next run.
 """
 
 # ---------------------------------------------------------------------------
@@ -70,6 +75,82 @@ async def retrieve_sales_context(query: str) -> str:
             hits = _sales_context_fn(s, query)
         return format_context(hits) if hits else "(no matching sales data found)"
     return await asyncio.to_thread(_sync)
+
+
+async def spawn_copilot_agent(
+    task: str,
+    agent_name: str = "orchestrator",
+    agent_dir: str | None = None,
+) -> str:
+    """Spawn a GitHub Copilot SDK agent to create or modify code, skills, or scripts.
+
+    Use this tool when the user asks to:
+    - Create a new skill or script in an agent repo
+    - Add a new capability / automation to an existing agent
+    - Fix a bug or improve an existing script
+    - Write tests, add documentation, or refactor code
+    - Self-improve any part of the system
+
+    The Copilot SDK agent runs in an isolated container with full access to the
+    agent's repository, executes the task autonomously (write code, run tests,
+    commit, push), and returns a summary of what was done.
+
+    Args:
+        task: Natural language description of what to build or fix.
+              Be specific: include file paths, function names, inputs/outputs.
+        agent_name: Which agent repo to work in (default: current agent).
+        agent_dir: Absolute path to the local clone (auto-resolved if omitted).
+
+    Returns:
+        Summary of actions taken and files changed.
+    """
+    import uuid as _uuid  # noqa: PLC0415
+    from orchestrator.mutation import _build_telemetry, _run_mutation_sandbox  # noqa: PLC0415
+
+    run_id = str(_uuid.uuid4())
+    settings = get_settings()
+
+    # Build a "task" telemetry block — reuse the mutation infrastructure
+    # but with a custom prompt describing the desired new capability.
+    class _FakeError(Exception):
+        pass
+
+    telemetry = _build_telemetry(
+        agent_name, run_id, run_id[:8],
+        f"ProactiveTask: {task}",
+        settings,
+        agent_dir=agent_dir,
+        incompatibility=False,
+    )
+    # Override the prompt with a creation-oriented instruction
+    telemetry["_task_override"] = task
+
+    # Use a creation prompt instead of a fix prompt
+    from orchestrator.mutation import _build_mutation_prompt  # noqa: PLC0415
+    original_error = telemetry["error"]
+    telemetry["error"] = (
+        f"PROACTIVE TASK (not an error):\n{task}\n\n"
+        f"Create or modify the code as described. Commit and push when done."
+    )
+
+    pr_url, container_id = await _run_mutation_sandbox(
+        agent_name, run_id, run_id[:8], telemetry, settings
+    )
+
+    telemetry["error"] = original_error  # restore for audit
+
+    if container_id:
+        return (
+            f"Copilot SDK agent started (container {container_id}). "
+            f"Task: {task!r}. "
+            f"It will commit and push on completion. "
+            f"The next agent run will pick up the changes automatically."
+        )
+    return (
+        f"Could not start Copilot SDK container. "
+        f"Task was: {task!r}. "
+        f"Check that Docker is running and GITHUB_TOKEN is configured."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +193,7 @@ def build_orchestrator_agent(*, with_history: bool = True) -> Agent:
         client=_make_openai_client(),
         name="orchestrator",
         instructions=_PULL_INSTRUCTIONS,
-        tools=[retrieve_entity_context, retrieve_sales_context],
+        tools=[retrieve_entity_context, retrieve_sales_context, spawn_copilot_agent],
         context_providers=context_providers or None,
     )
 
@@ -123,4 +204,4 @@ def build_agents() -> list[Agent]:
     return [build_orchestrator_agent(with_history=False)]
 
 
-__all__ = ["build_agents", "build_orchestrator_agent", "retrieve_entity_context", "retrieve_sales_context"]
+__all__ = ["build_agents", "build_orchestrator_agent", "retrieve_entity_context", "retrieve_sales_context", "spawn_copilot_agent"]

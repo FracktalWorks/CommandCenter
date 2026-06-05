@@ -55,7 +55,8 @@ A **headless, self-mutating agent orchestration platform** for running a company
 |---|---|---|---|
 | **M1** | Core Engine live — ClickUp Q&A with citations | 2026-05-25 | ✅ PASSED |
 | **M2** | Self-Mutation live — agents fix own code, open PRs | ~2026-07-01 | 🔄 In progress — mutation sandbox ✅ (2026-06-03); GitHub PR automation (WBS 1.3) + eval CI gate (WBS 1.4) remaining |
-| **M2.5** | Interactive runtime unified under MAF AG-UI (deprecate raw Copilot SDK chat path) | ~2026-06-20 | 🔄 In progress — unified chat UX is live, but legacy `copilot` runtime dispatch and `/copilot/chat` path still exist for compatibility; migration completion requires MAF-only routing |
+| **M2.5** | Interactive runtime unified — Tier 1.5 SDK streaming live; CopilotKit removed | ~2026-06-20 | ✅ PASSED — GitHub Copilot SDK Tier 1.5 streaming live: tool name / args / result visible in UI via `agent.run(stream=True)`; CopilotKit dependency dropped; badge routing (`agent_runtime`) correct from first render; `effectiveRuntime` forces SDK mode for all github-registered agents regardless of model picker. Remaining cleanup: legacy `/copilot/chat` route removal; MAF-only enforcement verified end-to-end. |
+| **M2.6** | Foundation hardening — chat history, cloud sandbox, integration OAuth, AG-UI events | ~2026-07-15 | 🔲 Planned — (1) Chat session list: auto-title from first message + last-turn preview, not just timestamp. (2) Cloud sandbox: pwsh + Python + GitHub auth bootstrap on VPS deploy with gateway startup health-check. (3) Integration OAuth: token exchange + refresh + injection framework for both MAF and Tier 1.5 agents. (4) AG-UI `STATE_SNAPSHOT` / `STATE_DELTA` / `CUSTOM` events wired — foundation for generative UI rendered inline in chat. |
 | **M3** | Full Agent Ecosystem — Sales + Email + Reconciler | ~2026-08-26 | Not started |
 | **M4** | Capture live — meetings + WhatsApp + ambient triggers | ~2026-10-14 | Not started |
 | **M5** | Suggest+Apply live — approval-gated writes to ClickUp/Zoho | ~2026-12-09 | Not started |
@@ -196,6 +197,78 @@ No long-lived process. Postgres survives restarts. No DTS infrastructure needed.
 
 ---
 
+### Chat Session History Enrichment
+
+The session list in the Control Plane currently shows only timestamp. A richer history allows operators to resume context without re-reading the full thread.
+
+- **Auto-title:** after the first assistant turn, the gateway derives a session title from the first user message (first 60 chars, truncated at a word boundary). No LLM call required — this is pure string truncation.
+- **Last-turn preview:** the last 200 chars of the last assistant response are stored alongside the session record and displayed as a subtitle in the session list.
+- **Implementation:** add `title TEXT` and `last_preview TEXT` columns to the `chat_sessions` Postgres table. The gateway updates them via `PATCH /thread/{id}/title` after each `RUN_FINISHED` event. The Control Plane `/api/agent/list-sessions` response includes these fields; the session list component renders them.
+- **Cost:** zero — no additional LLM calls; relies on already-stored content.
+
+---
+
+### Cloud Deployment Sandbox — GitHub Copilot SDK Agent Runtime
+
+For VPS/Hetzner cloud deployment every Tier 1.5 `copilot.exe` subprocess must find the following in the orchestrator process environment before the gateway starts. Missing any item causes silent runtime degradation.
+
+| Requirement | How to satisfy | Startup health-check |
+|---|---|---|
+| `GITHUB_TOKEN` (Copilot-enabled PAT or App installation token) | Injected from Integration Registry at container start; never baked into image | `gh auth status` → `isAuthenticated: true` |
+| `pwsh` 7.x on `$PATH` | `apt-get install powershell` from Microsoft `.deb` feed; required by `copilot.exe` shell tool on Linux | `pwsh --version` |
+| Python 3.11+ and `uv` | Installed system-wide; `uv` manages per-agent-repo venvs in the persistent clone cache | `uv --version` |
+| `github-copilot-sdk` + bundled `copilot.exe` | Installed into the orchestrator venv at Docker image build time | `python -c "import copilot"` |
+| Per-agent-repo Python deps | `uv sync` run by the Dynamic Agent Loader on first clone and after any `pyproject.toml`-changing `git pull` | loader logs `deps_synced=true` |
+| Writable workspace directory | Persistent volume at `/data/agent-clones`; `copilot.exe` writes scripts here | `os.access(CLONE_DIR, os.W_OK)` |
+| Egress to GitHub API and Copilot proxy | Open outbound HTTPS; no MITM proxy for `github.com`, `api.github.com`, `copilot-proxy.githubusercontent.com` | HTTP 200 from `https://api.github.com` |
+
+**Action:** `deploy/hostinger/bootstrap.sh` must be extended to install `pwsh`, validate `GITHUB_TOKEN`, and run a smoke-test `copilot.exe` call before the gateway starts. Health-check failure must abort the container start (`exit 1`) rather than silently degrading to a broken Tier 1.5 path. The orchestrator's `Dockerfile` should install `pwsh` at build time so it is already present on VPS pull.
+
+---
+
+### AG-UI Generative UI — State Sync and Custom Events
+
+The AG-UI protocol includes event types beyond text and tool calls that enable agents to push structured, interactive UI to the frontend without per-agent frontend code.
+
+| AG-UI event | Purpose | CommandCenter use case |
+|---|---|---|
+| `STATE_SNAPSHOT` | Full agent-state object sent to frontend; rendered as a table, form, or widget | Live deal pipeline table from agent-sales; approval form for HITL writes |
+| `STATE_DELTA` (JSON Patch RFC 6902) | Incremental state updates without re-sending the full snapshot | Row-by-row deal updates during a reconciliation run |
+| `CUSTOM` | Application-defined events with `name` + `value` payload | Agent-specific rich widgets: `clickup_task_card`, `zoho_deal_chip`, `approval_request` |
+| `ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA` | Structured plan/search activity panels (already rendered in ThinkingContainer) | Real-time search plan while agent queries Zoho |
+
+**Implementation plan:**
+1. **M2.6:** Wire `STATE_SNAPSHOT` and `CUSTOM` pass-through in `/api/agent/chat` Next.js route. `useAgentChat.ts` accumulates state into an `agentState` field. `AgentChat.tsx` renders `agentState` as a generic prettified-JSON panel until typed renderers exist.
+2. **M3:** Agent repos emit typed `CUSTOM` events (`clickup_task_card`, `zoho_deal_chip`); Control Plane registers a renderer map keyed by `name` — zero per-agent UI code in the Control Plane repo.
+3. **M4+:** HITL approval flows use `STATE_SNAPSHOT` + a `CUSTOM` `approval_request` event; the operator approves/rejects inline in the chat panel without navigating to a separate HITL queue page.
+
+Reference: [AG-UI Events spec](https://docs.ag-ui.com/sdk/python/core/events) — `STATE_SNAPSHOT`, `STATE_DELTA`, `CUSTOM`, `ACTIVITY_SNAPSHOT`, `ACTIVITY_DELTA`.
+
+---
+
+### Integration OAuth Token Exchange Framework
+
+All integrations (ClickUp, Zoho CRM, Gmail, WhatsApp, GitHub) require credentials at agent runtime. The framework must be fully implemented before any real agent can query live company data.
+
+**Credential storage (already partially exists):** Postgres `integrations` table, columns: `service`, `credential_type` (api_key | oauth2_access | oauth2_refresh | webhook_secret), `encrypted_value`, `expires_at`, `scopes`.
+
+**OAuth flow:**
+1. Control Plane Integration page shows "Connect" button per service.
+2. Click redirects to the provider's OAuth consent screen (ClickUp OAuth 2.0, Zoho OAuth 2.0, Google OAuth 2.0, etc.).
+3. Callback endpoint `POST /api/integrations/oauth/callback/{service}` receives the auth code, exchanges it for access + refresh tokens, encrypts and stores both in the Integration Registry.
+4. Background task in the gateway (`/apps/gateway`) checks `expires_at < now() + 5min` before each agent run and refreshes automatically using the stored refresh token. The fresh access token replaces the stored one atomically.
+
+**Injection — two paths, same registry:**
+- **MAF agents** (`agent_runtime = "maf"`)**: credentials resolved from registry → passed as `mcp_servers=` bearer tokens in `GitHubCopilotAgent` config at `build_agents()` time. Agent code never reads the registry.
+- **GitHub Copilot SDK agents (Tier 1.5)** (`agent_runtime = "github-copilot"`): credentials resolved from registry → written as environment variables into `_build_agent_env()` before `agent.start()`. The agent's `config.json["integrations"]` declares which services it needs; the loader injects only declared ones (principle of least privilege).
+
+**Security constraints (non-negotiable):**
+- No credential in agent/skill repos, `config.json`, logs, or LLM context at any time.
+- Credential values exist only in memory between registry read and agent start, and inside the subprocess environment.
+- The Control Plane Integration page is admin-only (RBAC gate).
+
+---
+
 
 ## Resource Plan
 
@@ -238,3 +311,5 @@ No long-lived process. Postgres survives restarts. No DTS infrastructure needed.
 4. **WhatsApp community read posture** — confirm Meta TOS for agent reading group messages as a participant
 5. **Meeting policy** — which meetings does the bot join? Default-in or default-out? Consent UI?
 6. **DurableTask hosting (Phase 2)** — when agents need to genuinely wait hours/days mid-workflow, choose between (a) DTS emulator (dev/MVP) or (b) Azure Durable Task Scheduler cloud service. Postgres is NOT the DTS backend — DTS is a separate store. Decision deferred until Phase 2 scope is locked.
+7. **OAuth provider registration** — ClickUp, Zoho, and Google OAuth apps must be registered with `redirect_uri` pointing to the VPS hostname. Decide: one shared OAuth app per service (org-level) or per-operator? Affects credential scope and token isolation.
+8. **Cloud sandbox GitHub token model** — use a single org-level GitHub App installation token (rotated every hour automatically) or per-operator fine-grained PAT? The former is simpler operationally; the latter gives per-user audit trails for agent actions.

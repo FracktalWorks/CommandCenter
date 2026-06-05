@@ -81,14 +81,15 @@ The product delivers value in **four levels**, each independently deployable:
 | L1-03 | MAF workflow engine executes the agents returned by `build_agents()` from the cloned `agents.py`. **Phase 0:** in-process asyncio (no DTS emulator). HITL uses the Action Broker pattern (Postgres `approval_queue`). **Phase 2:** add `agent-framework-durabletask` + DTS emulator for multi-day HITL pauses. | Must |
 | L1-04 | MAF orchestrator executes agent skills as workflow steps (via `GitHubCopilotAgent` tool calls or MCP server calls); outputs and error logs flow through the MAF workflow context. For self-mutation, a separate Copilot SDK container (`acb-mutation-runner`) is spawned; see L2-01. | Must |
 | L1-05 | **Integration Registry:** Core stores all integration credentials (API keys, OAuth tokens, webhook secrets) encrypted in Postgres. Control Plane admin UI allows registration and rotation without code changes. | Must |
-| L1-06 | **Credential injection:** Dynamic Agent Loader reads `config.json["integrations"]` and resolves only declared integration credentials from the Integration Registry; injects them into `GitHubCopilotAgent` `mcp_servers=` config so skills receive the correct tokens via MCP protocol. No credentials ever appear in agent or skill repos. | Must |
+| L1-06 | **Credential injection:** Dynamic Agent Loader reads `config.json["integrations"]` and resolves only declared integration credentials from the Integration Registry; injects them into `GitHubCopilotAgent` `mcp_servers=` config so skills receive the correct tokens via MCP protocol (MAF agents) or as environment variables via `_build_agent_env()` (GitHub Copilot SDK Tier 1.5 agents). No credentials ever appear in agent or skill repos, `config.json`, LLM context, or logs. | Must |
 | L1-07 | **First agent: `agent-task-manager` + `skill-clickup-sync`** — cited Q&A over ClickUp projects, tasks, and people. Validates the end-to-end clone → import → execute → cite flow. | Must |
 | L1-08 | **Reconciler v0:** nightly diff of entity graph vs ClickUp; escalates drift to an audit queue. Zero silent divergence over 7 days is the target. | Must |
 | L1-09 | **Guardrails v0:** schema-validated outputs, citation enforcement (every claim cites a graph node), unresolved-entity abort before any answer is returned. | Must |
 | L1-10 | **Observability:** all LLM calls routed through the LiteLLM gateway with tiered routing; cost per tier tracked; eval scores published. MAF native OpenTelemetry is OTLP-ready; a self-hosted trace backend is deferred (Langfuse removed from the Phase-0 stack). | Must |
-| L1-11 | **Control Plane shell:** Next.js browser UI with (a) unified chat interface to the gateway (MAF AG-UI) for CommandCenter and named agents, (b) LiteLLM model picker, (c) VS Code-style send / queue / steer controls, (d) MCQ / choice-button rendering, (e) observability pane (audit log + spend), (f) Google SSO restricted to org domain. No skill or agent editing. | Must |
+| L1-11 | **Control Plane shell:** Next.js browser UI with (a) unified chat interface to the gateway (MAF AG-UI + GitHub Copilot SDK Tier 1.5 streaming) for CommandCenter and named agents, (b) LiteLLM model picker, (c) VS Code-style send / queue / steer controls, (d) MCQ / choice-button rendering, (e) observability pane (audit log + spend), (f) Google SSO restricted to org domain. No skill or agent editing. | Must |
 | L1-12 | **Infrastructure:** Docker Compose with Postgres+pgvector, Redis, LiteLLM gateway; self-hosted on a single Linux VM; reproducible and documented. | Must |
 | L1-13 | **Local Tier-1 inference:** vLLM serving Qwen3-8B (Automatic Prefix Caching) behind LiteLLM. | Deferred to Phase 2 |
+| L1-14 | **Integration OAuth exchange:** Control Plane Integration page hosts the OAuth redirect flow for each service (ClickUp, Zoho, Gmail, GitHub). Callback endpoint stores access + refresh tokens encrypted in the Integration Registry. A background refresh task renews tokens before expiry (5-minute pre-expiry window). Both MAF agents (via `mcp_servers=` bearer-token injection) and GitHub Copilot SDK agents (via `_build_agent_env()` env-var injection) receive credentials at run time; neither path ever exposes credentials in LLM context, logs, or agent/skill repos. | Must |
 
 **L1 acceptance:** An executive asks "where are we on Project X?" via the Control Plane chat and receives a cited answer sourced from live ClickUp data, with all LLM calls routed through the tier router and cost visible in the Control Plane.
 
@@ -200,12 +201,12 @@ The Control Plane is a thin Next.js browser UI. It grows with each level but is 
 
 | Level | Capability added to Control Plane |
 |---|---|
-| L1 | Chat interface to gateway (MAF AG-UI); observability pane (audit log + spend); Google SSO auth (org domain restricted); **rich chat** (streaming, markdown + syntax highlight rendering, collapsible tool-call blocks, copy buttons) |
-| L2 | HITL Agent Inbox (self-mutation PRs + pending approvals in one queue) |
-| L3 | Full Action Broker approval UI; push notification config; authority tier management |
+| L1 | Chat interface to gateway (MAF AG-UI + GitHub Copilot SDK Tier 1.5); observability pane (audit log + spend); Google SSO auth (org domain restricted); **rich chat** (streaming, markdown + syntax highlight rendering, collapsible tool-call blocks with args + result, copy buttons, reasoning/thinking block); **chat session list** with auto-generated title (from first user message) and last-turn preview — not just timestamp |
+| L2 | HITL Agent Inbox (self-mutation PRs + pending approvals in one queue); **AG-UI generative UI** — `STATE_SNAPSHOT` and `CUSTOM` events rendered inline in chat: agent state displayed as a structured table; custom event renderers keyed by `name` (e.g. `clickup_task_card`, `zoho_deal_chip`) |
+| L3 | Full Action Broker approval UI; push notification config; authority tier management; **inline HITL approvals** — `CUSTOM` `approval_request` events render approve/reject directly in the chat panel (no navigation to separate queue page); Integration page with OAuth connect flow per service |
 | L4 | Strategy dashboard; goal roll-up view; BI panels; per-skill success metrics |
 
-> **Current state (2026-06-05):** L1 Control Plane live at `workbench/control_plane/` (Next.js 16, SSO, 11 routes). Chat interface is fully unified across CommandCenter and named agents: token streaming, GFM markdown rendering, syntax-highlighted code blocks, collapsible tool-call accordion, LiteLLM model picker, send / queue / steer controls, clickable MCQ choice buttons, streaming cursor, and clickable links. The chat UX is protected by a passing Playwright regression suite covering default-session render, named-agent render, model runtime switching, queue / steer behaviors, tool blocks, markdown code rendering, and MCQ answer flows. Operator chat is served by the MAF AG-UI endpoint (`POST /copilot/chat`) via `add_agent_framework_fastapi_endpoint`; the prior Copilot SDK SSE path has been removed.
+> **Current state (2026-06-05):** L1 Control Plane live at `workbench/control_plane/` (Next.js 15, SSO, routing complete). Chat interface fully unified across CommandCenter and named agents: token streaming, GFM markdown rendering, syntax-highlighted code blocks, collapsible tool-call accordion (tool name + full args + result visible), LiteLLM model picker, send / queue / steer controls, MCQ choice buttons, reasoning/thinking block, streaming cursor. GitHub-registered agents run via the **GitHub Copilot SDK Tier 1.5 path** (`agent.run(stream=True)`) — Copilot CLI is the orchestrator; tool calls including file writes and shell execution stream live with args and results. Built-in agents run via **MAF AG-UI**. `@copilotkit/react-*` has been removed (586 packages); the chat runs on a custom SSE stack (`AgentChat.tsx` + `/api/agent/chat`). Chat session list currently shows timestamp only — title and preview enrichment is planned for M2.6.
 
 ---
 
@@ -277,7 +278,9 @@ The Control Plane is a thin Next.js browser UI. It grows with each level but is 
 | Anthropic `SKILL.md` + `skills/` registry | Skill format and monorepo | L1–L4 |
 | OTLP observability backend (TBD) | LLM traces via MAF native OTel; Langfuse removed from Phase-0 stack | L2–L4 (deferred) |
 | GitHub (agent repos + skill repos) | Distributed repo layout; PR audit gate for self-mutation | L1–L4 |
-| Next.js + CopilotKit (`@copilotkit/react-*`) (Control Plane) | Browser UI: chat (AG-UI streaming), HITL, observability | L1–L4 |
+| Next.js (Control Plane) | Browser UI: chat (AG-UI + Tier 1.5 SSE streaming), HITL, observability; `@copilotkit/react-*` removed | L1–L4 |
+| `ag-ui-protocol` (Python + JS) | AG-UI event types, streaming protocol, `STATE_SNAPSHOT` / `CUSTOM` events for generative UI | L1–L4 |
+| `pwsh` 7.x (PowerShell Core) | Required by `copilot.exe` shell tool on Linux/Windows for Tier 1.5 sandbox execution | L1–L4 |
 | Redis (vanilla redis:7-alpine, Phase 0) | Event bus (Redis Streams), RedisHistoryProvider | L1–L4 |
 | Promptfoo + Inspect AI | Eval CI gate on every agent/skill PR | L2–L4 |
 | Mem0 | Episodic + semantic memory (via agent-framework-mem0) | L1–L4 |
@@ -296,5 +299,5 @@ The Control Plane is a thin Next.js browser UI. It grows with each level but is 
 2. **Retention policy specifics** — exact retention windows for raw transcripts, message bodies, derived facts; need legal sign-off.
 3. **Confidence threshold for autonomous promotion** — what success rate per agent justifies suggest+apply → autonomous?
 4. **WhatsApp community read posture** — confirm Meta TOS interpretation for the agent reading group messages as a participant.
-5. **Meeting policy** — which meetings does the bot join? Default-in or default-out? Consent UI required?
-6. **Killer use case for L1 demo** — the one thing that proves value to executives at the first internal show. (Recommended: customer-360 query with deal + project + open tasks from a live account.)
+7. **OAuth provider registration** — ClickUp, Zoho, and Google OAuth apps must be registered with `redirect_uri` pointing to the production VPS hostname. Decide: one shared OAuth app per service (org-level) or per-operator fine-grained tokens? Affects credential scope, token isolation, and audit granularity.
+8. **Cloud sandbox GitHub token model** — use a single org-level GitHub App installation token (auto-rotated every hour) or per-operator fine-grained PAT? The former is simpler operationally; the latter gives per-user audit trails for every agent action taken.

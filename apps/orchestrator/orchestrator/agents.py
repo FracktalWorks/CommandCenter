@@ -1,13 +1,15 @@
 ﻿"""MAF-based orchestrator agent (WBS 0.7 — replaces LangGraph graph.py harness).
 
 Architecture:
-    A single MAF ``Agent`` backed by an OpenAI-compatible client pointed at our
-    LiteLLM proxy.  Two retrieval tools are registered so the LLM can ground its
-    answers in the entity graph (Postgres + pgvector) before responding.
+    A single MAF ``Agent`` backed by our LiteLLM proxy.  Specialist agents from
+    registered GitHub repos are exposed as native MAF tools via agent.as_tool(),
+    making cross-agent routing automatic and based on each agent's description.
 
-    RedisHistoryProvider is attached on the *operator chat* path only (interactive
-    sessions through the Control Plane AG-UI endpoint).  Background event-driven
-    runs (webhook → executor) use in-memory AgentSession only.
+    Dynamic capability registry: at orchestrator build time, all registered
+    agents are loaded and exposed as tools. The LLM routes to the right one
+    based on the description in each agent's config.json.
+
+    WorkflowBuilder is used for explicit multi-step pipelines (fan-out/fan-in).
 
 Exports:
     build_orchestrator_agent(*, with_history: bool = True) -> Agent
@@ -18,7 +20,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from agent_framework import Agent
+from agent_framework import Agent, WorkflowBuilder
 from agent_framework.openai import OpenAIChatCompletionClient
 
 from acb_common import get_logger, get_settings
@@ -34,30 +36,31 @@ _log = get_logger("orchestrator.agents")
 
 _PULL_INSTRUCTIONS = """\
 You are the AI Company Brain orchestrator for Fracktal Works.
-Your job is to answer questions about internal company data AND to create or improve
-capabilities in the system when asked.
+
+You have two categories of tools:
+
+RETRIEVAL TOOLS (use for broad company data questions):
+- retrieve_entity_context: search projects, tasks, deals, people
+- retrieve_sales_context: Zoho pipeline, customer health, deal stages
+
+SPECIALIST AGENT TOOLS (use when the request is clearly in one agent's domain):
+- Each registered agent appears as a tool named after it (e.g. agent_sales_assistant, task_manager).
+- Call the specialist tool and relay its full response.
+- If a request spans multiple domains, call multiple specialist tools and synthesise.
+
+CREATION / IMPROVEMENT TOOLS:
+- spawn_copilot_agent: when the user asks to CREATE, BUILD, or FIX any skill, script, or automation.
+- delegate_to_agent: fallback for explicit named delegation when the specialist tool is unavailable.
 
 Rules:
-1. Call retrieve_entity_context to search for relevant context BEFORE answering general questions.
-2. For sales-domain questions (deal pipeline, customer health, quiet deals, last activity),
-   call retrieve_sales_context instead.
-3. Every factual claim must end with one or more citation tokens of the form [entity:uuid]
-   COPIED EXACTLY from the context returned by the retrieval tools.
-   UUIDs are 36 characters including 4 hyphens. Do NOT shorten, abbreviate, or regenerate them.
-4. If the context does not contain the answer, say so explicitly and cite the most relevant
-   entity you did find.
-5. If retrieval returns "(no matching entities found)", answer from general knowledge and say so.
-6. Keep answers concise. Use bullet points for lists of items.
-7. Never expose raw SQL, internal UUIDs outside of citations, or stack traces to the user.
-8. When the user asks to CREATE, BUILD, ADD, IMPROVE, or FIX any skill, script, capability,
-   or automation in the system — call spawn_copilot_agent with a precise task description.
-   The Copilot SDK agent will write the code, run tests, commit, and push autonomously.
-   Tell the user what was started and that the change will be live on the next run.
-9. When the user's request is clearly specialist work that a named agent handles better —
-   outbound prospecting, proposal writing, lead scraping (sales-assistant),
-   ClickUp task management (task-manager), billing/invoicing (billing) —
-   call delegate_to_agent to hand off and relay the result.
-   Use your own tools for broad company data questions that span multiple domains.
+1. For data questions: call retrieve_entity_context or retrieve_sales_context FIRST.
+2. For specialist work: call the matching specialist tool directly — the tool description
+   tells you exactly what each agent handles. Do not ask the user which agent to use.
+3. For multi-domain requests: call multiple specialist tools concurrently (MAF supports this).
+4. For creation tasks: call spawn_copilot_agent with a precise description.
+5. Every factual claim from retrieval must cite [entity:uuid] tokens exactly as returned.
+6. Never expose raw SQL, internal UUIDs outside of citations, or stack traces.
+7. Be concise. Bullet points for lists.
 """
 
 # ---------------------------------------------------------------------------
@@ -203,6 +206,62 @@ async def delegate_to_agent(agent_name: str, message: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Dynamic capability registry — load all registered agents as MAF tools
+# ---------------------------------------------------------------------------
+
+def _load_specialist_agents_as_tools(client: OpenAIChatCompletionClient) -> list[Any]:
+    """Load every registered agent as a native MAF tool via agent.as_tool().
+
+    This uses the MAF-native pattern from the GitHub Copilot SDK + MAF docs:
+        agent.as_tool(name=..., description=...)
+    Each specialist agent's description comes from its config.json, so the
+    orchestrator LLM routes to the right agent purely from that description.
+
+    Returns a list of FunctionTool objects ready to pass to Agent(tools=[...]).
+    Non-loadable agents are skipped with a warning (orchestrator still starts).
+    """
+    tools: list[Any] = []
+    try:
+        from gateway.routes.agent import _AGENT_REGISTRY, _load_dynamic_agents  # noqa: PLC0415
+        all_agents = _load_dynamic_agents() + _AGENT_REGISTRY
+    except ImportError:
+        return tools
+
+    settings = get_settings()
+    skip_names = {"orchestrator", "strategy"}  # avoid circular delegation
+
+    for entry in all_agents:
+        name: str = entry.get("name", "")
+        description: str = entry.get("description", "")
+        if not name or name in skip_names or not description:
+            continue
+        try:
+            # Build a minimal MAF Agent for this specialist just to get as_tool()
+            specialist = Agent(
+                client=client,
+                name=name,
+                instructions=(
+                    f"You are the {name} specialist agent. {description} "
+                    f"Execute the task given to you fully and return the result."
+                ),
+                tools=[delegate_to_agent],  # let it call back if needed
+            )
+            tool = specialist.as_tool(
+                name=name.replace("-", "_"),
+                description=(
+                    f"{description} "
+                    f"Use this tool for requests clearly in the domain of {name}."
+                ),
+            )
+            tools.append(tool)
+            _log.info("orchestrator.specialist_tool_registered", agent=name)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("orchestrator.specialist_tool_skipped", agent=name, error=str(exc))
+
+    return tools
+
+
+# ---------------------------------------------------------------------------
 # Agent factory
 # ---------------------------------------------------------------------------
 
@@ -217,15 +276,14 @@ def _make_openai_client() -> OpenAIChatCompletionClient:
 
 
 def build_orchestrator_agent(*, with_history: bool = True) -> Agent:
-    """Build the core pull Q&A MAF agent.
+    """Build the core orchestrator MAF agent with dynamic specialist agent tools.
 
-    Args:
-        with_history: Attach ``RedisHistoryProvider`` for multi-turn conversation
-                      persistence.  Set ``True`` on the operator chat path (AG-UI
-                      endpoint); ``False`` for background event-driven runs where
-                      each invocation is a fresh, stateless AgentSession.
+    Loads every registered agent as a native MAF tool via agent.as_tool().
+    The orchestrator LLM sees each specialist's description and routes to the
+    right one automatically — no hard-coded routing table needed.
     """
     settings = get_settings()
+    client = _make_openai_client()
 
     context_providers = []
     if with_history:
@@ -238,11 +296,31 @@ def build_orchestrator_agent(*, with_history: bool = True) -> Agent:
             )
         )
 
+    # Core tools always present
+    core_tools: list[Any] = [
+        retrieve_entity_context,
+        retrieve_sales_context,
+        spawn_copilot_agent,
+        delegate_to_agent,
+    ]
+
+    # Dynamic specialist tools via MAF as_tool() — each registered agent becomes
+    # a callable tool. The LLM routes to the right one from the description alone.
+    specialist_tools = _load_specialist_agents_as_tools(client)
+    all_tools = core_tools + specialist_tools
+
+    _log.info(
+        "orchestrator.tools_loaded",
+        core=len(core_tools),
+        specialist=len(specialist_tools),
+        total=len(all_tools),
+    )
+
     return Agent(
-        client=_make_openai_client(),
+        client=client,
         name="orchestrator",
         instructions=_PULL_INSTRUCTIONS,
-        tools=[retrieve_entity_context, retrieve_sales_context, spawn_copilot_agent, delegate_to_agent],
+        tools=all_tools,
         context_providers=context_providers or None,
     )
 

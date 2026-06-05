@@ -17,12 +17,12 @@ const INTERNAL_TOKEN =
 // Static fallback — mirrors _AGENT_REGISTRY in gateway/routes/agent.py.
 // Shown when the gateway is down so the picker still renders.
 const FALLBACK_AGENTS = [
-  { name: "task-manager",     description: "ClickUp task management",                 tags: ["tasks"],       status: "live" },
-  { name: "sales",            description: "Zoho CRM sales pipeline",                 tags: ["sales"],       status: "live" },
-  { name: "triage",           description: "Email / WhatsApp triage + routing",        tags: ["triage"],      status: "live" },
-  { name: "delivery",         description: "Project delivery monitoring",              tags: ["delivery"],    status: "live" },
-  { name: "reconciler",       description: "Nightly source-of-truth diff",            tags: ["ops"],         status: "live" },
-  { name: "strategy",         description: "Weekly digest + planning synthesis",       tags: ["strategy"],    status: "live" },
+  { name: "task-manager",  description: "ClickUp task management",              tags: ["tasks"],    status: "live", agent_runtime: "maf" },
+  { name: "sales",         description: "Zoho CRM sales pipeline",              tags: ["sales"],    status: "live", agent_runtime: "maf" },
+  { name: "triage",        description: "Email / WhatsApp triage + routing",    tags: ["triage"],   status: "live", agent_runtime: "maf" },
+  { name: "delivery",      description: "Project delivery monitoring",          tags: ["delivery"], status: "live", agent_runtime: "maf" },
+  { name: "reconciler",    description: "Nightly source-of-truth diff",         tags: ["ops"],      status: "live", agent_runtime: "maf" },
+  { name: "strategy",      description: "Weekly digest + planning synthesis",   tags: ["strategy"], status: "live", agent_runtime: "maf" },
 ];
 
 export interface AgentEntry {
@@ -30,6 +30,8 @@ export interface AgentEntry {
   description: string;
   tags: string[];
   status: string;
+  /** How the agent is executed: "github-copilot" | "maf" | "langgraph" */
+  agent_runtime?: string;
   integrations?: string[];
   optional_integrations?: string[];
   repo_name?: string;

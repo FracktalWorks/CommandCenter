@@ -2,7 +2,6 @@ import Link from "next/link";
 
 const CARDS = [
   { href: "/chat",          title: "Chat",          body: "Talk to CommandCenter. Sessions are isolated by threadId; persistent memory via Mem0 feeds back into agents over time." },
-  { href: "/observability", title: "Observability", body: "Audit events, escalation queue, agent traces, LiteLLM spend, and self-mutation PR queue." },
 ];
 
 export default function Home() {

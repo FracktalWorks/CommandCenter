@@ -8,6 +8,7 @@
       "prospecting"
     ],
     "status": "live",
+    "agent_runtime": "github-copilot",
     "repo_url": "https://github.com/FracktalWorks/agent-sales-assistant",
     "repo_name": "FracktalWorks/agent-sales-assistant",
     "local_path": null,

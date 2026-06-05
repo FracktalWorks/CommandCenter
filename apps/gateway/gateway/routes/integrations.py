@@ -382,8 +382,11 @@ async def integration_status(
 
     # Determine which services to check
     if agent:
-        from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
+        from gateway.routes.agent import _AGENT_REGISTRY, _load_dynamic_agents  # noqa: PLC0415
+        # Search static registry first, then dynamic agents from agents.json
         entry = next((e for e in _AGENT_REGISTRY if e["name"] == agent), None)
+        if entry is None:
+            entry = next((e for e in _load_dynamic_agents() if e["name"] == agent), None)
         if entry is None:
             raise HTTPException(
                 status_code=404,

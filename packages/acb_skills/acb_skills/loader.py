@@ -82,12 +82,17 @@ def _build_github_url(org: str, repo: str, token: str | None) -> str:
 # Environment passed to every git subprocess: suppresses credential popups and
 # GUI password prompts (GIT_TERMINAL_PROMPT=0, GCM_INTERACTIVE=never) so the
 # process fails fast rather than hanging waiting for user input.
+# PYTHONUTF8=1 + PYTHONIOENCODING=utf-8: ensure child Python processes use
+# UTF-8 on Windows (avoids cp1252 UnicodeEncodeError for scripts with emoji/
+# non-ASCII output — e.g. zoho_crm.py's pipeline summary headers).
 _GIT_ENV: dict[str, str] = {
     **os.environ,
     "GIT_TERMINAL_PROMPT": "0",
     "GIT_ASKPASS": "echo",
     "GCM_INTERACTIVE": "never",
     "GCM_CREDENTIAL_STORE": "plaintext",
+    "PYTHONUTF8": "1",
+    "PYTHONIOENCODING": "utf-8",
 }
 
 
@@ -216,7 +221,9 @@ def _sync_new_skills(agent_dir: Path, settings: Any) -> None:
         new=[s.stem for s in new_scripts],
     )
 
-    # Build async tool wrappers (subprocess pattern — safe for scripts with own deps)
+    # Build async tool wrappers (subprocess pattern — safe for scripts with own deps).
+    # PYTHONUTF8=1 + PYTHONIOENCODING=utf-8 force UTF-8 on Windows (avoids cp1252
+    # UnicodeEncodeError when scripts print emoji or non-ASCII characters).
     tool_defs: list[str] = []
     tool_names: list[str] = []
     for script in new_scripts:
@@ -226,11 +233,15 @@ def _sync_new_skills(agent_dir: Path, settings: Any) -> None:
         tool_defs.append(
             f"\nasync def {fn}(*args: str) -> str:\n"
             f'    """Run {script.stem} ({skill_name}). Pass CLI args as strings."""\n'
-            f"    import asyncio as _a, subprocess as _s, sys as _sys\n"
+            f"    import asyncio as _a, os as _os, subprocess as _s, sys as _sys\n"
             f"    from pathlib import Path as _P\n"
             f"    _d = _P(__file__).parent.resolve()\n"
-            f'    _cmd = [_sys.executable, str(_d / "{rel}")] + list(args)\n'
-            f"    _r = await _a.to_thread(_s.run, _cmd, capture_output=True, text=True, cwd=str(_d))\n"
+            f'    _cmd = [_sys.executable, "-X", "utf8", str(_d / "{rel}")] + list(args)\n'
+            f"    _env = {{**_os.environ, \"PYTHONUTF8\": \"1\", \"PYTHONIOENCODING\": \"utf-8\"}}\n"
+            f"    _r = await _a.to_thread(\n"
+            f"        _s.run, _cmd, capture_output=True, encoding=\"utf-8\", errors=\"replace\",\n"
+            f"        cwd=str(_d), env=_env,\n"
+            f"    )\n"
             f"    if _r.returncode != 0:\n"
             f"        raise RuntimeError(_r.stderr[:500] or \"Script exited non-zero\")\n"
             f"    return _r.stdout or \"(no output)\"\n"

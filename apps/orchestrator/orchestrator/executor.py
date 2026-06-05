@@ -13,16 +13,22 @@ Flow (ADR-013, ADR-016, ADR-018, WBS 0.7):
 
 Usage::
 
-    from orchestrator.executor import run_agent
+    from orchestrator.executor import run_agent, run_agent_stream
 
+    # Batch (existing):
     result = await run_agent("task-manager", {"clickup_event": {...}})
+
+    # Streaming SSE (new — for /agent/run/stream endpoint):
+    async for line in run_agent_stream("task-manager", payload, run_id=..., thread_id=...):
+        yield line  # each line is a complete "data: {...}\\n\\n" SSE frame
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 from acb_audit import AuditEvent, record
 from acb_common import get_logger, get_settings
@@ -241,6 +247,411 @@ async def run_agent(
             original=exc,
             mutation_pr=pr_url,
         ) from exc
+
+
+# ---------------------------------------------------------------------------
+# Streaming executor — yields AG-UI SSE events for /agent/run/stream
+# ---------------------------------------------------------------------------
+
+def _sse(payload: dict[str, Any]) -> str:
+    """Return a single SSE frame as a string."""
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+async def run_agent_stream(
+    agent_name: str,
+    event_payload: dict[str, Any],
+    *,
+    run_id: str | None = None,
+    thread_id: str | None = None,
+) -> AsyncIterator[str]:
+    """Load a named agent and yield AG-UI SSE events while it runs.
+
+    Strategy (two-tier with automatic fallback):
+
+    Tier 1 — MAF AG-UI streaming (preferred)
+        If ``agent_framework.ag_ui`` exposes a ``stream_agent_response`` helper,
+        delegate to it.  This forwards native TOOL_CALL_START / TOOL_CALL_ARGS /
+        TOOL_CALL_END / TEXT_MESSAGE_CONTENT / RUN_FINISHED events — exactly what
+        the Next.js translation layer already handles.
+
+    Tier 2 — Instrumented batch fallback
+        Wraps each tool function on the agent with a thin shim that pushes
+        TOOL_CALL_START / TOOL_CALL_END events onto an asyncio.Queue while the
+        main run executes in a background task.  The final text result is then
+        word-streamed as TEXT_MESSAGE_CONTENT deltas so the UI renders the
+        response progressively rather than all-at-once.
+
+    Either way the caller (FastAPI StreamingResponse or the Next.js route) sees
+    a standards-compliant AG-UI event stream.
+    """
+    run_id = run_id or str(uuid.uuid4())
+    thread_id = thread_id or f"{agent_name}:{run_id}"
+
+    settings = get_settings()
+
+    # ── Resolve agent metadata ──────────────────────────────────────────────
+    _registry_repo_name: str | None = None
+    _registry_local_path: str | None = None
+    _agent_runtime: str = "maf"
+    try:
+        from gateway.routes.agent import (_AGENT_REGISTRY,  # noqa: PLC0415
+                                          _load_dynamic_agents)
+        _all = _load_dynamic_agents() + _AGENT_REGISTRY
+        entry = next((e for e in _all if e["name"] == agent_name), None)
+        if entry:
+            raw = entry.get("repo_name") or ""
+            _registry_repo_name = raw.split("/")[-1] if raw else None
+            _registry_local_path = entry.get("local_path")
+            _agent_runtime = entry.get("agent_runtime", "maf")
+    except ImportError:
+        pass
+
+    # Emit RUN_STARTED immediately so the UI can show ThinkingContainer at once.
+    yield _sse({"type": "RUN_STARTED", "runId": run_id, "threadId": thread_id})
+
+    try:
+        with load_agent(
+            agent_name,
+            run_id=run_id,
+            repo_name=_registry_repo_name,
+            local_path=_registry_local_path,
+        ) as loaded:
+            mandatory = loaded.config.get("integrations", [])
+            optional = loaded.config.get("optional_integrations", [])
+            integrations, integration_warnings = build_integrations(
+                mandatory, optional, settings
+            )
+            _inject_integrations_to_env(integrations)
+            agents = loaded.build_agents()
+
+            if not agents:
+                raise ValueError(f"Agent {agent_name!r}: build_agents() returned empty list.")
+
+            agent = agents[0]
+
+            # Ensure permission handler is set for GitHubCopilotAgent before ANY
+            # execution path — repos often omit it from default_options.
+            try:
+                from copilot import PermissionHandler as _PH  # noqa: PLC0415
+                for _a in agents:
+                    if hasattr(_a, "_permission_handler") and _a._permission_handler is None:
+                        _a._permission_handler = _PH.approve_all
+            except Exception:  # noqa: BLE001
+                pass
+
+            # ── Tier 1: try native MAF AG-UI streaming ──────────────────────
+            try:
+                from agent_framework.ag_ui import (  # noqa: PLC0415
+                    stream_agent_response,
+                )
+                message = _build_event_message(agent_name, run_id, event_payload, integrations)
+                async for line in stream_agent_response(agent, message, run_id=run_id):
+                    yield line
+                return
+            except (ImportError, AttributeError):
+                pass  # MAF AG-UI streaming not available → fall through
+
+            # ── Tier 1.5: GitHubCopilotAgent native streaming ───────────────
+            # agent.run(stream=True) uses _stream_updates() which subscribes to
+            # the Copilot session event bus — no 60s timeout, genuine token-by-
+            # token streaming, live tool events.  This is the correct path for
+            # any GitHub-sourced agent.
+            if _agent_runtime == "github-copilot" and hasattr(agent, "run"):
+                try:
+                    message = _build_event_message(agent_name, run_id, event_payload, integrations)
+                    async with agent:
+                        response_stream = agent.run(message, stream=True)
+                        async for update in response_stream:
+                            # update is AgentResponseUpdate; contents is list[Content]
+                            for content in (update.contents or []):
+                                ct = getattr(content, "type", "")
+                                if ct == "text":
+                                    yield _sse({
+                                        "type": "TEXT_MESSAGE_CONTENT",
+                                        "messageId": run_id,
+                                        "delta": content.text or "",
+                                    })
+                                elif ct == "function_call":
+                                    call_id = getattr(content, "call_id", run_id)
+                                    tool_name = getattr(content, "name", "tool")
+                                    args = getattr(content, "arguments", None)
+                                    yield _sse({
+                                        "type": "TOOL_CALL_START",
+                                        "toolCallId": call_id,
+                                        "toolCallName": tool_name,
+                                    })
+                                    if args is not None:
+                                        try:
+                                            args_str = json.dumps(args) if not isinstance(args, str) else args
+                                        except Exception:  # noqa: BLE001
+                                            args_str = str(args)
+                                        yield _sse({
+                                            "type": "TOOL_CALL_ARGS",
+                                            "toolCallId": call_id,
+                                            "delta": args_str,
+                                        })
+                                elif ct == "function_result":
+                                    call_id = getattr(content, "call_id", run_id)
+                                    result = getattr(content, "result", "") or ""
+                                    exc = getattr(content, "exception", None)
+                                    yield _sse({
+                                        "type": "TOOL_CALL_RESULT",
+                                        "toolCallId": call_id,
+                                        "content": str(exc) if exc else str(result),
+                                        "success": exc is None,
+                                    })
+                    yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
+                    return
+                except Exception as _sdk_exc:  # noqa: BLE001
+                    _log.warning("executor.sdk_stream_failed", agent=agent_name, error=str(_sdk_exc))
+                    yield _sse({"type": "RUN_ERROR", "runId": run_id, "message": str(_sdk_exc)})
+                    return
+
+            # ── Tier 2: instrumented batch fallback ─────────────────────────
+            # Wrap every callable tool on the agent so it pushes tool events
+            # onto a queue that we drain while the run executes in a task.
+            queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+            _tool_counter: list[int] = [0]
+
+            def _make_tool_shim(original_fn: Any, tool_name: str) -> Any:
+                """Return an async wrapper that emits TOOL_CALL_* events."""
+                import functools  # noqa: PLC0415
+                import inspect  # noqa: PLC0415
+
+                @functools.wraps(original_fn)
+                async def _shim(*args: Any, **kwargs: Any) -> Any:
+                    _tool_counter[0] += 1
+                    tool_call_id = f"{run_id}:{_tool_counter[0]}"
+
+                    # Serialise the arguments for the UI
+                    try:
+                        call_args: dict[str, Any] = {}
+                        sig = inspect.signature(original_fn)
+                        bound = sig.bind(*args, **kwargs)
+                        bound.apply_defaults()
+                        for k, v in bound.arguments.items():
+                            try:
+                                json.dumps(v)  # only include JSON-serialisable values
+                                call_args[k] = v
+                            except (TypeError, ValueError):
+                                call_args[k] = str(v)
+                    except Exception:  # noqa: BLE001
+                        call_args = {}
+
+                    await queue.put({
+                        "type": "TOOL_CALL_START",
+                        "toolCallId": tool_call_id,
+                        "toolCallName": tool_name,
+                    })
+                    # Emit args as a single TOOL_CALL_ARGS frame
+                    if call_args:
+                        await queue.put({
+                            "type": "TOOL_CALL_ARGS",
+                            "toolCallId": tool_call_id,
+                            "delta": json.dumps(call_args),
+                        })
+
+                    try:
+                        if inspect.iscoroutinefunction(original_fn):
+                            result = await original_fn(*args, **kwargs)
+                        else:
+                            result = original_fn(*args, **kwargs)
+                    except Exception as exc:
+                        await queue.put({
+                            "type": "TOOL_CALL_RESULT",
+                            "toolCallId": tool_call_id,
+                            "content": f"Error: {exc}",
+                            "success": False,
+                        })
+                        raise
+                    else:
+                        result_str = str(result) if result is not None else ""
+                        await queue.put({
+                            "type": "TOOL_CALL_RESULT",
+                            "toolCallId": tool_call_id,
+                            "content": result_str[:2000],  # truncate for SSE safety
+                            "success": True,
+                        })
+                        return result
+
+                return _shim
+
+            # Discover and patch tools on the agent.
+            # MAF agents expose tools as `agent.tools` (list) or as annotated
+            # methods decorated with @tool.  Try both patterns.
+            import inspect  # noqa: PLC0415
+            patched: list[tuple[str, str, Any]] = []  # (attr, name, original)
+
+            _tool_attrs: list[str] = []
+            if hasattr(agent, "tools") and isinstance(agent.tools, (list, tuple)):
+                for t in agent.tools:
+                    fn = getattr(t, "func", t) if not callable(t) else t
+                    attr = getattr(fn, "__name__", None)
+                    if attr and hasattr(agent, attr):
+                        _tool_attrs.append(attr)
+            # Also look for methods marked with @tool decorator (common MAF pattern)
+            for name in dir(agent):
+                if name.startswith("_"):
+                    continue
+                val = getattr(type(agent), name, None)
+                if val and (
+                    getattr(val, "_is_tool", False)
+                    or getattr(val, "is_tool", False)
+                    or getattr(val, "__tool__", False)
+                ):
+                    _tool_attrs.append(name)
+
+            for attr in set(_tool_attrs):
+                original = getattr(agent, attr, None)
+                if original and callable(original):
+                    shim = _make_tool_shim(original, attr)
+                    try:
+                        object.__setattr__(agent, attr, shim)
+                        patched.append((attr, attr, original))
+                    except (AttributeError, TypeError):
+                        pass  # some agents use __slots__ or properties — skip
+
+            # Run the agent in a background task.
+            message = _build_event_message(agent_name, run_id, event_payload, integrations)
+
+            import contextlib  # noqa: PLC0415
+
+            async def _run_task() -> str:
+                async with contextlib.AsyncExitStack() as stack:
+                    # Pre-configure CopilotClient to deny the built-in shell tool.
+                    # On Windows the shell tool requires pwsh.exe (PowerShell 7+) which
+                    # may not be installed.  Our Python tools (e.g. zoho_crm) work fine
+                    # without it, and we don't want the LLM to fall back to shell execution.
+                    try:
+                        from copilot import CopilotClient as _CopilotClient  # noqa: PLC0415
+                        if hasattr(agent, "_client") and agent._client is None:
+                            _agent_settings = getattr(agent, "_settings", {}) or {}
+                            _cli_opts: dict[str, Any] = {}
+                            # For GitHub Copilot agents (repo-sourced), allow all tools
+                            # including shell — pwsh 7.6.2 is installed. For local/built-in
+                            # MAF agents with Python tools, deny shell to prevent the LLM
+                            # from bypassing structured Python tools with raw shell calls.
+                            if _agent_runtime != "github-copilot":
+                                _cli_opts["cli_args"] = ["--deny-tool", "shell"]
+                            _cli_path = _agent_settings.get("cli_path")
+                            if _cli_path:
+                                _cli_opts["cli_path"] = _cli_path
+                            _log_level = _agent_settings.get("log_level")
+                            if _log_level:
+                                _cli_opts["log_level"] = _log_level
+                            agent._client = _CopilotClient(_cli_opts if _cli_opts else None)
+                            agent._owns_client = True
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                    if hasattr(type(agent), "__aenter__"):
+                        await stack.enter_async_context(agent)
+                    # Apply approve_all permission handler if needed (GitHubCopilotAgent)
+                    try:
+                        from copilot import PermissionHandler as _PH  # noqa: PLC0415
+                        if hasattr(agent, "_permission_handler") and agent._permission_handler is None:
+                            agent._permission_handler = _PH.approve_all
+                    except Exception:  # noqa: BLE001
+                        pass
+                    response = await agent.run(message)
+                return getattr(response, "text", "") or ""
+
+            run_task = asyncio.create_task(_run_task())
+
+            # Drain the queue until the task finishes.
+            while True:
+                try:
+                    ev = await asyncio.wait_for(queue.get(), timeout=0.1)
+                    if ev is None:
+                        break
+                    yield _sse(ev)
+                except asyncio.TimeoutError:
+                    if run_task.done():
+                        # Drain any remaining events
+                        while not queue.empty():
+                            ev = queue.get_nowait()
+                            if ev:
+                                yield _sse(ev)
+                        break
+
+            # Restore patched tools
+            for attr, _, original in patched:
+                try:
+                    object.__setattr__(agent, attr, original)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            # Get the final text result
+            try:
+                text = await run_task
+            except AgentRunError:
+                raise
+            except Exception as exc:
+                raise exc
+
+            # Strip integration setup tokens (same as batch path)
+            setup_token_re = __import__("re").compile(r"<<<SETUP:[^>]+>>>")
+            raw_matches = __import__("re").findall(
+                r"<<<SETUP:([^:]+):([A-Z0-9_]+)=([^>]+)>>>", text
+            )
+            if raw_matches:
+                text = setup_token_re.sub("", text).strip()
+                vars_to_save = [{"key": k, "value": v.strip()} for _, k, v in raw_matches if v.strip()]
+                if vars_to_save:
+                    _GATEWAY_URL = settings.gateway_base_url if hasattr(settings, "gateway_base_url") else "http://127.0.0.1:8000"
+                    _token = getattr(settings, "gateway_internal_token", "") or getattr(settings, "litellm_master_key", "")
+                    try:
+                        import httpx  # noqa: PLC0415
+                        async with httpx.AsyncClient(timeout=5) as c:
+                            await c.post(
+                                f"{_GATEWAY_URL}/integrations/configure",
+                                json={"vars": vars_to_save},
+                                headers={"Authorization": f"Bearer {_token}"},
+                            )
+                    except Exception:  # noqa: BLE001
+                        pass
+
+            # Emit the final text as TOKEN-STREAMED TEXT_MESSAGE_CONTENT deltas
+            # (word-by-word so the UI renders progressively instead of all at once).
+            words = text.split(" ")
+            msg_id = str(uuid.uuid4())
+            yield _sse({
+                "type": "TEXT_MESSAGE_START",
+                "messageId": msg_id,
+                "role": "assistant",
+            })
+            chunk: list[str] = []
+            for word in words:
+                chunk.append(word)
+                if len(chunk) >= 3:
+                    yield _sse({
+                        "type": "TEXT_MESSAGE_CONTENT",
+                        "messageId": msg_id,
+                        "delta": " ".join(chunk) + " ",
+                    })
+                    chunk = []
+                    await asyncio.sleep(0)  # yield event loop so SSE flushes
+            if chunk:
+                yield _sse({
+                    "type": "TEXT_MESSAGE_CONTENT",
+                    "messageId": msg_id,
+                    "delta": " ".join(chunk),
+                })
+            yield _sse({"type": "TEXT_MESSAGE_END", "messageId": msg_id})
+
+    except AgentRunError:
+        raise
+    except Exception as exc:
+        yield _sse({
+            "type": "RUN_ERROR",
+            "message": str(exc),
+            "code": type(exc).__name__,
+        })
+        return
+
+    yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
 
 
 # ---------------------------------------------------------------------------

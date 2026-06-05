@@ -1,6 +1,7 @@
 """FastAPI entry point. Run with: uv run uvicorn gateway.main:app --reload"""
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -29,6 +30,12 @@ except ImportError:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Force UTF-8 for all child processes spawned by the gateway (scripts, git, etc.).
+    # On Windows the default is cp1252 which breaks any script that prints emoji or
+    # non-ASCII characters (e.g. zoho_crm.py's pipeline summary headers).
+    os.environ.setdefault("PYTHONUTF8", "1")
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
     settings = get_settings()
     configure_logging(settings.log_level)
     _log.info("gateway.startup", env=settings.acb_env)
@@ -113,6 +120,70 @@ class Health(BaseModel):
 @app.get("/health", response_model=Health, tags=["meta"])
 async def health() -> Health:
     return Health(status="ok", env=get_settings().acb_env)
+
+
+# ---------- Copilot models ----------
+# Returns the list of models available via the GitHub Copilot SDK.
+# The UI at /api/models/all calls this to populate the Copilot SDK model group.
+# If GITHUB_TOKEN is not set, returns the static fallback list so the UI still
+# works without blocking.
+
+_COPILOT_MODELS_STATIC = [
+    {"id": "claude-sonnet-4.5",           "label": "Claude Sonnet 4.5"},
+    {"id": "claude-haiku-4.5",            "label": "Claude Haiku 4.5"},
+    {"id": "claude-opus-4-5",             "label": "Claude Opus 4.5"},
+    {"id": "gpt-4o",                      "label": "GPT-4o"},
+    {"id": "gpt-4.1",                     "label": "GPT-4.1"},
+    {"id": "o3-mini",                     "label": "o3-mini (reasoning)"},
+    {"id": "gemini-2.5-pro",              "label": "Gemini 2.5 Pro"},
+    {"id": "gemini-2.5-flash",            "label": "Gemini 2.5 Flash"},
+]
+
+
+@app.get("/copilot/models", tags=["copilot"])
+async def copilot_models() -> dict:
+    """Return the list of models available through the GitHub Copilot SDK.
+
+    Attempts to query the Copilot SDK for the live model list (requires
+    GITHUB_TOKEN to be set and the ``gh`` CLI to be authenticated).  Falls back
+    to a curated static list so the UI never fails.
+    """
+    settings = get_settings()
+    github_token: str = getattr(settings, "github_token", "") or os.environ.get("GITHUB_TOKEN", "")
+
+    if github_token:
+        try:
+            import httpx  # noqa: PLC0415
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.get(
+                    "https://api.githubcopilot.com/models",
+                    headers={
+                        "Authorization": f"Bearer {github_token}",
+                        "Copilot-Integration-Id": "vscode-chat",
+                    },
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # Copilot API returns {"data": [{"id": "...", "name": "...", ...}]}
+                    raw = data.get("data", [])
+                    # Filter to chat-capable models only
+                    chat_models = [
+                        m for m in raw
+                        if m.get("capabilities", {}).get("type") in ("chat", None)
+                        and not m.get("id", "").startswith("text-embedding")
+                    ]
+                    if chat_models:
+                        return {
+                            "models": [
+                                {"id": m["id"], "label": m.get("name", m["id"])}
+                                for m in chat_models
+                            ],
+                            "source": "live",
+                        }
+        except Exception:  # noqa: BLE001
+            pass  # Fall through to static list
+
+    return {"models": _COPILOT_MODELS_STATIC, "source": "static"}
 
 
 # ---------- Pull mode (Phase 0 stub) ----------

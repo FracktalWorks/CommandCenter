@@ -201,11 +201,11 @@ export default function MarkdownMessage({
     (toolEvents && toolEvents.length > 0) ||
     (progressLines && progressLines.length > 0);
   const hasReasoning = !!reasoning && reasoning.trim().length > 0;
-  // Show the container when there are tool calls or reasoning, OR briefly as a
-  // "Thinking…" placeholder before the first token arrives. Plain LLM replies
-  // (no tools, no reasoning) hide it as soon as text streams in.
-  const showThinking =
-    hasTools || hasReasoning || (isThinkingActive && content.trim() === "");
+  // Show the ThinkingContainer for the ENTIRE active phase (not just until the
+  // first token). The container disappears mid-stream if we gate on content===""
+  // — the user sees "Thinking…" flash then nothing while text is still arriving.
+  // After completion: keep it only if there are tools or reasoning to show.
+  const showThinking = isThinkingActive || hasTools || hasReasoning;
 
   return (
     <div className="text-sm text-zinc-200 leading-relaxed min-w-0">

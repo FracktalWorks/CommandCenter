@@ -261,10 +261,116 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
 
   // ── Executor path: named agents (copilot mode) + langgraph mode ──────────
-  // Routes through /agent/run which clones the agent repo, imports agents.py,
-  // resolves integrations, and runs the MAF agent. Works for all named agents
-  // (task-manager, agent-sales-assistant, any GitHub-registered agent) as well
-  // as the legacy langgraph mode. Returns a single delta+done SSE pair.
+  // Named agents (copilot mode): route through /agent/run/stream which returns
+  // a real AG-UI SSE stream so the UI sees tool events live.
+  // Legacy langgraph mode: falls back to batch /agent/run (no streaming).
+  if (mode === "copilot" && !isOrchestrator) {
+    // /agent/run/stream returns the same AG-UI event format as /copilot/chat.
+    // Re-use the exact same translation block already implemented above.
+    let streamRes: Response;
+    try {
+      streamRes = await fetch(`${GATEWAY_URL}/agent/run/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${INTERNAL_TOKEN}`,
+        },
+        body: JSON.stringify({
+          agent: agentName,
+          payload: { mode: "chat", message, messages: messages ?? [] },
+          thread_id: threadId ?? undefined,
+        }),
+        signal: AbortSignal.timeout(310_000),
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return new Response(
+        `data: ${JSON.stringify({ type: "error", content: `Gateway unreachable: ${msg}` })}\n\n`,
+        { status: 502, headers: sseHeaders() }
+      );
+    }
+    if (!streamRes.ok || !streamRes.body) {
+      const text = await streamRes.text().catch(() => `status ${streamRes.status}`);
+      return new Response(
+        `data: ${JSON.stringify({ type: "error", content: text })}\n\n`,
+        { status: streamRes.status, headers: sseHeaders() }
+      );
+    }
+    // Translate AG-UI → frontend SSE (same logic as /copilot/chat above).
+    const agUiBody2 = streamRes.body;
+    const translated2 = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const reader = agUiBody2.getReader();
+        const decoder = new TextDecoder();
+        const toolNames2: Record<string, string> = {};
+        const toolArgs2: Record<string, string> = {};
+        let buf = "";
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split("\n");
+            buf = lines.pop() ?? "";
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const raw = line.slice(6).trim();
+              if (!raw) continue;
+              let ev: Record<string, unknown>;
+              try { ev = JSON.parse(raw); } catch { continue; }
+              const t = ev.type as string;
+              let out: Record<string, unknown> | null = null;
+              if (t === "TEXT_MESSAGE_CONTENT") {
+                out = { type: "delta", content: ev.delta ?? "" };
+              } else if (t === "REASONING_MESSAGE_CONTENT" || t === "THINKING_TEXT_MESSAGE_CONTENT") {
+                out = { type: "reasoning", content: ev.delta ?? "" };
+              } else if (t === "TOOL_CALL_START") {
+                const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
+                toolNames2[String(ev.toolCallId ?? "")] = name;
+                toolArgs2[String(ev.toolCallId ?? "")] = "";
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    `data: ${JSON.stringify({ type: "progress", name })}\n\n`
+                  )
+                );
+                out = { type: "tool_start", id: ev.toolCallId, name, args: {} };
+              } else if (t === "TOOL_CALL_ARGS") {
+                const id2 = String(ev.toolCallId ?? "");
+                toolArgs2[id2] = (toolArgs2[id2] ?? "") + String(ev.delta ?? "");
+              } else if (t === "TOOL_CALL_END" || t === "TOOL_CALL_RESULT") {
+                const id2 = String(ev.toolCallId ?? "");
+                out = {
+                  type: "tool_end",
+                  id: ev.toolCallId,
+                  name: toolNames2[id2] ?? "tool",
+                  args: parseToolArgs(toolArgs2[id2]),
+                  result: ev.result ?? ev.content ?? "",
+                  success: true,
+                };
+              } else if (t === "RUN_FINISHED") {
+                out = { type: "done", run_id: ev.runId };
+              } else if (t === "RUN_ERROR") {
+                out = { type: "error", content: String(ev.message ?? "Agent run error") };
+              }
+              if (out) {
+                controller.enqueue(
+                  new TextEncoder().encode(`data: ${JSON.stringify(out)}\n\n`)
+                );
+              }
+            }
+          }
+        } catch {
+          // stream ended early
+        } finally {
+          controller.close();
+        }
+      },
+    });
+    return new Response(translated2, { headers: sseHeaders() });
+  }
+
+  // ── Legacy executor path: batch /agent/run (langgraph mode + fallback) ─
+  // Used for langgraph mode. Returns a single delta+done SSE pair.
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
@@ -422,10 +528,30 @@ function streamLiteLLM({
             if (!raw || raw === "[DONE]") continue;
             try {
               const json = JSON.parse(raw) as {
-                choices?: { delta?: { content?: string } }[];
+                choices?: {
+                  delta?: {
+                    content?: string;
+                    // Reasoning / chain-of-thought fields used by thinking models:
+                    //   • Gemini 2.5 thinking — "reasoning_content"
+                    //   • Claude extended thinking (via LiteLLM) — "thinking_content"
+                    //   • Some providers use "thinking"
+                    reasoning_content?: string;
+                    thinking_content?: string;
+                    thinking?: string;
+                  };
+                }[];
               };
-              const delta = json.choices?.[0]?.delta?.content;
-              if (delta) controller.enqueue(sseEvent({ type: "delta", content: delta }));
+              const delta = json.choices?.[0]?.delta;
+              if (!delta) continue;
+              if (delta.content) {
+                controller.enqueue(sseEvent({ type: "delta", content: delta.content }));
+              }
+              // Emit reasoning tokens so ThinkingContainer can show chain-of-thought.
+              const reasoningDelta =
+                delta.reasoning_content ?? delta.thinking_content ?? delta.thinking;
+              if (reasoningDelta) {
+                controller.enqueue(sseEvent({ type: "reasoning", content: reasoningDelta }));
+              }
             } catch {
               // ignore non-JSON keep-alive lines
             }

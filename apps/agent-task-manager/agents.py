@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_framework_github_copilot import GitHubCopilotAgent
+from copilot.types import PermissionHandler
 
 _INSTRUCTIONS_FILE = Path(__file__).parent / "instructions.md"
 INSTRUCTIONS = _INSTRUCTIONS_FILE.read_text(encoding="utf-8") if _INSTRUCTIONS_FILE.exists() else (
@@ -52,6 +53,7 @@ def build_agent() -> GitHubCopilotAgent:
             "model": "tier2-sonnet",
             "provider": _litellm_provider(),
             "mcp_servers": {},
+            "on_permission_request": PermissionHandler.approve_all,
         },
     )
 

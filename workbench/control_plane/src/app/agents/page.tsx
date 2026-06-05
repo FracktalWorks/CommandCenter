@@ -424,11 +424,21 @@ function AddAgentModal({
             <div className="flex flex-col gap-4 py-2">
               {/* Mini agent card preview — same style as AgentCard */}
               <div className="rounded-xl border border-zinc-700 bg-zinc-800/60 p-4">
-                <div className="flex items-center gap-2 mb-1">
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
                   <span className="text-sm font-semibold text-zinc-100">{addedAgent.name}</span>
                   <span className="shrink-0 rounded-full bg-blue-500/15 px-2 py-0.5 text-xs text-blue-400">custom</span>
                   {addedAgent.local_path && (
                     <span className="shrink-0 rounded-full bg-violet-500/15 px-2 py-0.5 text-xs text-violet-400">local</span>
+                  )}
+                  {/* Runtime badge in the success preview */}
+                  {addedAgent.agent_runtime === "github-copilot" ? (
+                    <span className="shrink-0 rounded-full border border-sky-700/50 bg-sky-900/30 px-2 py-0.5 text-xs text-sky-300" title="Runs via GitHub Copilot SDK">
+                      GitHub Copilot SDK
+                    </span>
+                  ) : (
+                    <span className="shrink-0 rounded-full border border-amber-700/50 bg-amber-900/30 px-2 py-0.5 text-xs text-amber-300">
+                      MAF
+                    </span>
                   )}
                   <span className="shrink-0 rounded-full bg-green-500/15 px-2 py-0.5 text-xs text-green-400">live</span>
                 </div>
@@ -737,7 +747,7 @@ function AgentCard({
     <div className="group relative rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 hover:border-zinc-700 transition-colors">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-semibold text-zinc-100 truncate">{agent.name}</span>
             {agent.dynamic && (
               <span className="shrink-0 rounded-full bg-blue-500/15 px-2 py-0.5 text-xs text-blue-400">
@@ -747,6 +757,22 @@ function AgentCard({
             {localPath && (
               <span className="shrink-0 rounded-full bg-violet-500/15 px-2 py-0.5 text-xs text-violet-400" title={localPath}>
                 local
+              </span>
+            )}
+            {/* Agent runtime badge */}
+            {agent.agent_runtime === "github-copilot" ? (
+              <span
+                className="shrink-0 rounded-full border border-sky-700/50 bg-sky-900/30 px-2 py-0.5 text-xs text-sky-300"
+                title="This agent runs via the GitHub Copilot SDK (GitHubCopilotAgent — MAF wraps the Copilot SDK)"
+              >
+                GitHub Copilot SDK
+              </span>
+            ) : (
+              <span
+                className="shrink-0 rounded-full border border-amber-700/50 bg-amber-900/30 px-2 py-0.5 text-xs text-amber-300"
+                title="Microsoft Agent Framework agent"
+              >
+                MAF
               </span>
             )}
             <span
@@ -898,6 +924,18 @@ function AgentCard({
           })()}
         </div>
 
+        {/* Action buttons */}
+        <div className="shrink-0 flex flex-col items-end gap-2">
+          {/* Chat shortcut — navigate to chat page */}
+          <Link
+            href={`/chat?agent=${encodeURIComponent(agent.name)}`}
+            className="inline-flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1 text-xs text-zinc-300 hover:border-zinc-500 hover:bg-zinc-700 transition-colors"
+            title={`Open a chat with ${agent.name}`}
+          >
+            Chat →
+          </Link>
+        </div>
+
         {/* Remove button — only for user-added (dynamic) agents */}
         {agent.dynamic && (
           <div className="shrink-0">
@@ -921,7 +959,7 @@ function AgentCard({
             ) : (
               <button
                 onClick={() => setConfirming(true)}
-                className="rounded p-1.5 text-zinc-500 hover:bg-red-900/30 hover:text-red-400 transition-colors"
+                className="rounded p-1.5 text-zinc-500 hover:bg-red-900/30 hover:text-red-400 transition-colors mt-1"
                 title="Remove agent"
               >
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

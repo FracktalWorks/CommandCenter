@@ -89,6 +89,18 @@ export default function AgentChat({
   const selectedModel = models.find((m) => m.id === currentModel);
   const currentRuntime = selectedModel?.runtime ?? "copilot";
 
+  // Resolve the active agent's metadata (runtime classification, repo link, etc.)
+  // NOTE: computed here (before useAgentChat) so we can override the routing mode.
+  const currentAgentEntry = agents.find((a) => a.name === currentAgentName);
+  const agentRuntime: string = currentAgentEntry?.agent_runtime ?? "maf";
+
+  // GitHub Copilot SDK agents (repo-sourced) ALWAYS route through the SDK executor,
+  // regardless of which model is selected in the picker. The model is forwarded as
+  // a hint but the execution path must be "copilot" to reach /agent/run/stream.
+  // If we allow "litellm" here the message goes direct to LiteLLM — no tools, no
+  // script execution, no SDK.
+  const effectiveRuntime = agentRuntime === "github-copilot" ? "copilot" : currentRuntime;
+
   // System context = persona + persistent memories (sent as system message).
   const systemContext = useMemo(() => {
     const parts: string[] = [];
@@ -106,7 +118,7 @@ export default function AgentChat({
     agentName: currentAgentName,
     threadId: sessionId,
     model: currentModel,
-    mode: currentRuntime,
+    mode: effectiveRuntime,
     systemContext,
   });
 
@@ -258,13 +270,58 @@ export default function AgentChat({
     models.find((m) => m.id === currentModel)?.label ?? currentModel;
   const modelGroups = Array.from(new Set(models.map((m) => m.group)));
 
+  /** Display label + styling for an agent_runtime value. */
+  function agentRuntimeMeta(rt: string): { label: string; title: string; cls: string } {
+    if (rt === "github-copilot") {
+      return {
+        label: "GitHub Copilot SDK",
+        title: "This agent runs via GitHubCopilotAgent (Microsoft Agent Framework wrapping the GitHub Copilot SDK)",
+        cls: "border-sky-700/50 bg-sky-900/30 text-sky-300",
+      };
+    }
+    if (rt === "langgraph") {
+      return {
+        label: "LangGraph",
+        title: "Legacy LangGraph agent runner",
+        cls: "border-violet-700/50 bg-violet-900/30 text-violet-300",
+      };
+    }
+    // maf or unknown
+    return {
+      label: "MAF",
+      title: "Microsoft Agent Framework agent (pure MAF, no Copilot SDK)",
+      cls: "border-amber-700/50 bg-amber-900/30 text-amber-300",
+    };
+  }
+
   return (
     <div className="flex flex-col h-full">
       {/* Agent header */}
       <div className="flex items-center gap-3 px-5 py-3 border-b border-zinc-800 bg-zinc-900/60 shrink-0">
         <div className="w-2 h-2 rounded-full bg-emerald-500" />
         <div>
-          <div className="text-sm font-semibold text-zinc-100">{currentAgentName}</div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-zinc-100">{currentAgentName}</span>
+            {/* Agent runtime badge — shows MAF / GitHub Copilot SDK / LangGraph */}
+            <span
+              className={`text-[9px] px-1.5 py-0.5 rounded-full border ${agentRuntimeMeta(agentRuntime).cls}`}
+              title={agentRuntimeMeta(agentRuntime).title}
+            >
+              {agentRuntimeMeta(agentRuntime).label}
+            </span>
+            {/* GitHub repo link for GitHub Copilot SDK agents */}
+            {agentRuntime === "github-copilot" && currentAgentEntry?.repo_url && (
+              <a
+                href={currentAgentEntry.repo_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[9px] text-zinc-500 hover:text-zinc-300 transition-colors"
+                title={`Source: ${currentAgentEntry.repo_name ?? currentAgentEntry.repo_url}`}
+              >
+                ↗ {currentAgentEntry.repo_name ?? "repo"}
+              </a>
+            )}
+          </div>
           {agentDescription && currentAgentName === agentName && (
             <div className="text-xs text-zinc-500">{agentDescription}</div>
           )}
@@ -404,6 +461,13 @@ export default function AgentChat({
             {currentAgentName}
             <span className="text-zinc-500 ml-0.5">▾</span>
           </button>
+          {/* Agent runtime badge in toolbar */}
+          <span
+            className={`text-[9px] px-1.5 py-0.5 rounded-full border ${agentRuntimeMeta(agentRuntime).cls}`}
+            title={agentRuntimeMeta(agentRuntime).title}
+          >
+            {agentRuntimeMeta(agentRuntime).label}
+          </span>
 
           {/* Agent dropdown */}
           {showAgentMenu && (
@@ -422,11 +486,26 @@ export default function AgentChat({
                       a.name === currentAgentName ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"
                     }`}
                   >
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-1">
                       <span className="font-medium">{a.name}</span>
-                      {a.name === currentAgentName && (
-                        <span className="text-emerald-500 text-[10px]">✓ active</span>
-                      )}
+                      <div className="flex items-center gap-1.5 ml-auto shrink-0">
+                        {/* Per-agent runtime badge in the dropdown */}
+                        {(() => {
+                          const rt = a.agent_runtime ?? "maf";
+                          const m = agentRuntimeMeta(rt);
+                          return (
+                            <span
+                              className={`text-[8px] px-1 py-0.5 rounded-full border ${m.cls}`}
+                              title={m.title}
+                            >
+                              {m.label}
+                            </span>
+                          );
+                        })()}
+                        {a.name === currentAgentName && (
+                          <span className="text-emerald-500 text-[10px]">✓</span>
+                        )}
+                      </div>
                     </div>
                     {a.description && (
                       <div className="text-zinc-600 mt-0.5 truncate">{a.description}</div>

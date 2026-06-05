@@ -26,7 +26,8 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger, get_settings
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 _log = get_logger("gateway.agent")
@@ -85,7 +86,9 @@ _AGENT_REGISTRY: list[dict] = [
         "description": "ClickUp task management — status, progress, and workload questions with citations.",
         "tags": ["tasks", "clickup", "project-management"],
         "status": "live",
-        "runtime": "maf",
+        # Local monorepo agent — MAF runner (uses GitHubCopilotAgent internally, but
+        # is NOT registered from an external GitHub repo, so agent_runtime = "maf").
+        "agent_runtime": "maf",
         "local_path": "apps/agent-task-manager",
         "integrations": ["clickup"],
         "optional_integrations": [],
@@ -100,6 +103,7 @@ _AGENT_REGISTRY: list[dict] = [
         "description": "Zoho CRM sales pipeline + deal follow-ups",
         "tags": ["sales", "zoho"],
         "status": "live",
+        "agent_runtime": "maf",
         "integrations": ["zoho-crm"],
         "optional_integrations": ["gmail-send"],
     },
@@ -108,6 +112,7 @@ _AGENT_REGISTRY: list[dict] = [
         "description": "Project delivery monitoring + push notifications",
         "tags": ["delivery"],
         "status": "live",
+        "agent_runtime": "maf",
         "integrations": ["clickup"],
         "optional_integrations": [],
     },
@@ -116,6 +121,7 @@ _AGENT_REGISTRY: list[dict] = [
         "description": "Email / WhatsApp / meeting triage + routing",
         "tags": ["triage", "email"],
         "status": "live",
+        "agent_runtime": "maf",
         "integrations": ["gmail", "zoho-crm"],
         "optional_integrations": ["clickup"],
     },
@@ -124,6 +130,7 @@ _AGENT_REGISTRY: list[dict] = [
         "description": "Nightly source-of-truth diff + escalation",
         "tags": ["ops"],
         "status": "live",
+        "agent_runtime": "maf",
         "integrations": ["clickup", "zoho-crm"],
         "optional_integrations": [],
     },
@@ -132,6 +139,7 @@ _AGENT_REGISTRY: list[dict] = [
         "description": "Billing & invoice workflows",
         "tags": ["billing"],
         "status": "live",
+        "agent_runtime": "maf",
         "integrations": ["zoho-crm"],
         "optional_integrations": ["smtp"],
     },
@@ -140,6 +148,7 @@ _AGENT_REGISTRY: list[dict] = [
         "description": "Weekly digest + planning synthesis",
         "tags": ["strategy"],
         "status": "live",
+        "agent_runtime": "maf",
         "integrations": [],
         "optional_integrations": [],
     },
@@ -300,6 +309,16 @@ async def list_agents(
     dynamic_names = {a["name"] for a in dynamic}
     # Static agents not overridden by dynamic entries come first
     static = [a for a in _AGENT_REGISTRY if a["name"] not in dynamic_names]
+    # Back-fill agent_runtime for legacy dynamic entries that predate the field.
+    # Rule: only entries registered FROM a GitHub repo URL are "github-copilot";
+    # everything else (local path, unknown) is plain MAF.
+    for a in dynamic:
+        if "agent_runtime" not in a:
+            a["agent_runtime"] = (
+                "github-copilot"
+                if (a.get("repo_name") or a.get("repo_url")) and not a.get("local_path")
+                else "maf"
+            )
     return static + dynamic
 
 
@@ -396,11 +415,16 @@ async def register_agent(
             except Exception as exc:  # noqa: BLE001
                 _log.warning("agent.config_fetch_failed", name=req.name, error=str(exc))
 
+    # agent_runtime: only agents registered FROM a GitHub repo URL run via the
+    # GitHub Copilot SDK (GitHubCopilotAgent). Local-path agents are plain MAF.
+    agent_runtime = "github-copilot" if (repo_name and not local_path) else "maf"
+
     entry: dict = {
         "name": req.name,
         "description": description,
         "tags": tags,
         "status": "live",
+        "agent_runtime": agent_runtime,
         "repo_url": repo_url or None,
         "repo_name": repo_name or None,
         "local_path": local_path,
@@ -486,6 +510,48 @@ async def patch_agent(
     _save_dynamic_agents(dynamic)
     _log.info("agent.patched", name=name, actor=user.email)
     return entry
+
+
+@router.post("/run/stream", summary="Stream a named agent run as AG-UI SSE events")
+async def run_agent_stream_endpoint(
+    req: AgentRunRequest,
+    _request: Request,
+    user: UserContext = Depends(get_current_user),
+) -> StreamingResponse:
+    """Stream a named-agent run as AG-UI Server-Sent Events.
+
+    Returns an ``text/event-stream`` response emitting AG-UI protocol events:
+    ``RUN_STARTED``, ``TOOL_CALL_START``, ``TOOL_CALL_ARGS``, ``TOOL_CALL_RESULT``,
+    ``TEXT_MESSAGE_CONTENT``, ``RUN_FINISHED`` / ``RUN_ERROR``.
+
+    The Next.js ``/api/agent/chat`` route already knows how to translate this
+    stream to the frontend SSE format — it is the same translation layer used
+    for the orchestrator's ``/copilot/chat`` endpoint.
+
+    Use this instead of ``POST /agent/run`` whenever the caller wants live
+    tool-call visibility (e.g. the control-plane chat UI).
+    """
+    from orchestrator.executor import run_agent_stream  # noqa: PLC0415
+
+    agent = _validate_agent_name(req.agent)
+    run_id = req.run_id or str(uuid.uuid4())
+
+    _log.info("agent.stream_run_start", agent=agent, run_id=run_id, actor=user.email)
+
+    return StreamingResponse(
+        run_agent_stream(
+            agent,
+            req.payload,
+            run_id=run_id,
+            thread_id=req.thread_id,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.post("/run", response_model=AgentRunResponse)
@@ -625,7 +691,7 @@ async def receive_webhook(
             for route in dyn.get("webhook_routes", []):
                 if route.get("source") == source and route.get("event_type") == event.event_type:
                     agent_name = dyn["name"]
-                    agent_runtime = dyn.get("runtime", "maf")
+                    agent_runtime = dyn.get("agent_runtime", "maf")
                     break
             if agent_name:
                 break

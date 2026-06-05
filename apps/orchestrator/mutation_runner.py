@@ -37,50 +37,56 @@ async def main() -> None:
         _die("No auth configured: set LITELLM_API_KEY+LITELLM_BASE_URL or COPILOT_GITHUB_TOKEN")
 
     from copilot import CopilotClient  # noqa: PLC0415
-    from copilot.session import PermissionHandler  # noqa: PLC0415
-    from copilot.session_events import AssistantMessageData, SessionIdleData  # noqa: PLC0415
+    from copilot.client import SessionConfig  # noqa: PLC0415
+    from copilot.types import CopilotClientOptions, PermissionHandler  # noqa: PLC0415
+    from copilot.generated.session_events import SessionEventType  # noqa: PLC0415
 
-    client_kwargs: dict = {}
-    session_kwargs: dict = {
+    client_options: CopilotClientOptions = {}
+    session_config_kwargs: dict = {
         "on_permission_request": PermissionHandler.approve_all,
         "model": litellm_model,
     }
 
     repo_dir = "/workspace/repo"
     if os.path.isdir(repo_dir):
-        client_kwargs["working_directory"] = repo_dir
+        client_options["cwd"] = repo_dir
 
     if litellm_key and litellm_url:
-        session_kwargs["provider"] = {
+        session_config_kwargs["provider"] = {
             "type": "openai",
             "base_url": litellm_url,
             "api_key": litellm_key,
         }
     else:
-        client_kwargs["github_token"] = github_token
+        client_options["github_token"] = github_token
 
     messages: list[str] = []
     pr_url: str | None = None
     done = asyncio.Event()
 
-    async with CopilotClient(**client_kwargs) as client:
-        async with await client.create_session(**session_kwargs) as session:
+    client = CopilotClient(client_options if client_options else None)
+    await client.start()
+    try:
+        session_cfg = SessionConfig(**session_config_kwargs)
+        session = await client.create_session(session_cfg)
 
-            def on_event(event) -> None:  # noqa: ANN001
-                nonlocal pr_url
-                match event.data:
-                    case AssistantMessageData() as data:
-                        messages.append(data.content)
-                        if not pr_url:
-                            m = _GITHUB_PR_RE.search(data.content)
-                            if m:
-                                pr_url = m.group(0)
-                    case SessionIdleData():
-                        done.set()
+        def on_event(event) -> None:  # noqa: ANN001
+            nonlocal pr_url
+            if event.type == SessionEventType.ASSISTANT_MESSAGE:
+                content = event.data.content or ""
+                messages.append(content)
+                if not pr_url:
+                    m = _GITHUB_PR_RE.search(content)
+                    if m:
+                        pr_url = m.group(0)
+            elif event.type == SessionEventType.SESSION_IDLE:
+                done.set()
 
-            session.on(on_event)
-            await session.send(prompt)
-            await done.wait()
+        session.on(on_event)
+        await session.send({"prompt": prompt})
+        await done.wait()
+    finally:
+        await client.stop()
 
     # Final scan across all captured messages in case PR URL appeared mid-conversation.
     if not pr_url:

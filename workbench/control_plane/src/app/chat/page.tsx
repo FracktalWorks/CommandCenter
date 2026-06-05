@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   getSessions,
   upsertSession,
@@ -125,6 +126,16 @@ function AgentPickerModal({
                     <div className="flex items-center justify-between">
                       <div className="text-sm font-medium text-zinc-100">{a.name}</div>
                       <div className="flex items-center gap-1.5">
+                        {/* Agent runtime badge in picker */}
+                        {a.agent_runtime === "github-copilot" ? (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-sky-700/50 bg-sky-900/30 text-sky-300">
+                            Copilot SDK
+                          </span>
+                        ) : (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-amber-700/40 bg-amber-900/20 text-amber-400">
+                            MAF
+                          </span>
+                        )}
                         {needsSetupBadge(a) && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-900/40 text-orange-400 border border-orange-700/50">
                             ⚙ Setup needed
@@ -277,17 +288,41 @@ function SessionList({
 
 const DEFAULT_USER_ID = "default"; // Replace with session.user.id once SSO is wired
 
-export default function ChatPage() {
+function ChatPageInner() {
+  const searchParams = useSearchParams();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>("");
   const [memories, setMemories] = useState<Mem0Memory[]>([]);
   const [memoriesLoaded, setMemoriesLoaded] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
+  // Fetch agents once at page level so AgentChat knows agent_runtime before first render.
+  const [agentList, setAgentList] = useState<AgentEntry[]>([]);
+  useEffect(() => {
+    fetch("/api/agent/list")
+      .then((r) => r.json())
+      .then((data: AgentEntry[]) => { if (Array.isArray(data)) setAgentList(data); })
+      .catch(() => {});
+  }, []);
 
   // Load sessions from localStorage on mount.
+  // If ?agent=<name> is in the URL, immediately open a new session for that agent.
   useEffect(() => {
+    const agentParam = searchParams?.get("agent");
     const existing = getSessions();
-    if (existing.length === 0) {
+    if (agentParam) {
+      // Find an existing session for this agent or create a fresh one.
+      const existing2 = getSessions();
+      const match = existing2.find((s) => s.agentName === agentParam);
+      if (match) {
+        setSessions(getSessions());
+        setActiveSessionId(match.id);
+      } else {
+        const fresh = createSession(agentParam);
+        upsertSession(fresh);
+        setSessions(getSessions());
+        setActiveSessionId(fresh.id);
+      }
+    } else if (existing.length === 0) {
       const fresh = createSession();
       upsertSession(fresh);
       setSessions([fresh]);
@@ -296,6 +331,7 @@ export default function ChatPage() {
       setSessions(existing);
       setActiveSessionId(existing[0].id);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Fetch memories from Mem0 (or return [] gracefully).
@@ -411,6 +447,7 @@ export default function ChatPage() {
               persona={COMMANDCENTER_PERSONA}
               memories={memories.map((m) => m.memory)}
               memoryUserId={DEFAULT_USER_ID}
+              availableAgents={agentList.length > 0 ? agentList : undefined}
             />
           ) : (
             /*
@@ -421,6 +458,7 @@ export default function ChatPage() {
               key={activeSession.id}
               agentName={activeSession.agentName}
               sessionId={activeSession.id}
+              availableAgents={agentList.length > 0 ? agentList : undefined}
             />
           )
         ) : (
@@ -430,5 +468,13 @@ export default function ChatPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function ChatPage() {
+  return (
+    <Suspense fallback={null}>
+      <ChatPageInner />
+    </Suspense>
   );
 }

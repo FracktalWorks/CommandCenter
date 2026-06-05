@@ -10,9 +10,6 @@
     "test:e2e": "npm run build && playwright test"
   },
   "dependencies": {
-    "@copilotkit/react-core": "^1.57.4",
-    "@copilotkit/react-ui": "^1.57.4",
-    "@copilotkit/runtime": "^1.57.4",
     "@monaco-editor/react": "^4.7.0",
     "@types/react-syntax-highlighter": "^15.5.13",
     "gray-matter": "^4.0.3",

@@ -1,8 +1,8 @@
 import Link from "next/link";
 
 const CARDS = [
-  { href: "/chat",          title: "Chat",          body: "Talk to Jannet. Sessions are isolated by threadId; persistent memory via Mem0 feeds back into agents over time." },
-  { href: "/observability", title: "Observability", body: "Audit events, escalation queue, LangGraph traces, LiteLLM spend, and self-mutation PR queue." },
+  { href: "/chat",          title: "Chat",          body: "Talk to CommandCenter. Sessions are isolated by threadId; persistent memory via Mem0 feeds back into agents over time." },
+  { href: "/observability", title: "Observability", body: "Audit events, escalation queue, agent traces, LiteLLM spend, and self-mutation PR queue." },
 ];
 
 export default function Home() {
@@ -10,7 +10,7 @@ export default function Home() {
     <div className="p-10 max-w-5xl">
       <h1 className="text-3xl font-semibold tracking-tight">Welcome back</h1>
       <p className="mt-2 text-zinc-400">
-        Chat with Jannet or observe what the agents are doing.
+        Chat with CommandCenter or observe what the agents are doing.
       </p>
       <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {CARDS.map((c) => (

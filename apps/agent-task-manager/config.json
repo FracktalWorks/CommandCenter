@@ -1,0 +1,12 @@
+{
+  "name": "task-manager",
+  "description": "ClickUp task management — answers status, progress, and workload questions with citations.",
+  "version": "0.1.0",
+  "runtime": "maf",
+  "skill_repos": ["skill-clickup-sync"],
+  "mcp_servers": {},
+  "max_mutation_attempts": 1,
+  "tags": ["tasks", "clickup", "project-management"],
+  "integrations": ["clickup"],
+  "optional_integrations": []
+}

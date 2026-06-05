@@ -13,26 +13,30 @@ Effort uses **engineer-weeks (ew)** with PERT triple-point estimates: (O, M, P) 
 
 | WBS | Work Package | Activities | (O, M, P) ew | PERT ew |
 |---|---|---|---|---|
-| 0.1 | Infrastructure baseline | Provision VM, Docker Compose, Postgres+pgvector+AGE, Redis Streams, secrets vault, CI | (1, 1.5, 3) | 1.7 |
+| 0.1 | Infrastructure baseline | Provision VM, Docker Compose, Postgres+pgvector (no AGE — Phase 2), **redis:7-alpine** Streams, secrets vault, CI | (1, 1.5, 3) | 1.7 |
 | 0.2 | Graph schema v0 | DDL for PERSON, TASK, PROJECT, CUSTOMER, DEAL, MESSAGE, MEETING, ACTIONITEM, GOAL | (0.5, 1, 2) | 1.1 |
 | 0.3 | ClickUp ingestor | Webhook receiver + REST poller + entity normaliser + canonical-key resolver | (1, 2, 4) | 2.2 |
-| 0.4 | Agent repo scaffold (template) | GitHub repo template for `agent-<name>` with `config.json`, `graph.py`, `instructions.md`, `tests/`, `evals/`; CI workflow that runs pytest + Promptfoo evals on every PR | (0.5, 1, 2) | 1.1 |
+| 0.4 | Agent repo scaffold (template) | GitHub repo template for `agent-<name>` with `config.json`, `agents.py`, `instructions.md`, `tests/`, `evals/`; `agents.py` exports `build_agents() → list[Agent]` (MAF agents, each backed by `GitHubCopilotAgent` with MCP server config); CI workflow that runs pytest + Promptfoo evals on every PR | (0.5, 1, 2) | 1.1 |
 | 0.5 | Skill repo scaffold (template) | GitHub repo template for `skill-<name>` as a pip-installable Python package; entry function interface contract; CI workflow | (0.25, 0.5, 1) | 0.5 |
-| 0.6 | Dynamic Agent Loader | FastAPI route controller: git clone agent + skill repos into transient volume; `sys.path.append` + `importlib.import_module('graph')`; lifecycle cleanup | (1, 2, 3) | 2.0 |
-| 0.7 | LangGraph harness + PostgresSaver | State machine executor; `PostgresSaver` for durable state; audit log writer | (1, 2, 4) | 2.2 |
+| 0.6 | Dynamic Agent Loader + AG-UI endpoint | FastAPI route controller: git clone agent + skill repos into persistent cache; `sys.path.append` + `importlib.import_module('agents')`; calls `build_agents()` → runs via MAF native workflow engine; lifecycle cleanup after run. **Also**: `add_agent_framework_fastapi_endpoint(app, agent, "/copilot/chat")` — replaces `copilot_chat.py` SSE path; Control Plane chat now uses AG-UI protocol over the same MAF agent. Remove `copilot_chat.py`. | (1, 2, 3) | 2.0 |
+| 0.7 | MAF harness (⇐ replaces LangGraph + PostgresSaver; no DTS emulator) | Rewrite `apps/orchestrator/`: (a) remove `langgraph`, `langgraph-checkpoint-postgres`, `deepagents`, `langchain-core`; (b) add `agent-framework`, `agent-framework-github-copilot --pre`, `agent-framework-ag-ui`, `agent-framework-redis --pre` (**`agent-framework-mem0` deferred to Phase 2** — Postgres entity graph covers business memory for Phase 0); (c) rewrite `graph.py` → `agents.py` using `HandoffBuilder`/`ConcurrentBuilder`; (d) wire `RedisHistoryProvider` (conversation history, operator chat path only) in agent startup; background event-driven agents use in-memory `AgentSession` only; (e) call `configure_otel_providers()` with a generic `OTEL_EXPORTER_OTLP_ENDPOINT` — replaces all direct Langfuse SDK calls (Langfuse itself removed from the Phase-0 stack; OTLP backend TBD); (f) **no DTS emulator** — HITL uses Action Broker pattern (Postgres `approval_queue`); (g) update Dynamic Agent Loader to import `build_agents()` instead of `build_graph()`; audit log writer unchanged. **DurableTask + Mem0 both deferred to Phase 2** (WBS 2.x). | (1, 2, 4) | 2.2 |
 | 0.8 | Gateway + auth | FastAPI + Google SSO restricted to fracktal.in domain | (0.5, 1, 2) | 1.1 |
 | 0.9 | First agent: `agent-task-manager` + `skill-clickup-sync` | Single agent answering "status of project / person / task" with citations; deployed as decoupled repos; validates end-to-end clone → import → execute flow | (1, 2, 3) | 2.0 |
 | 0.10 | Guardrails v0 | Schema-validated outputs, citation enforcement, unresolved-entity abort | (0.5, 1, 2) | 1.1 |
-| 0.11 | Observability (Langfuse + OTel) | Self-hosted Langfuse (docker-compose, Postgres+ClickHouse); openllmetry OTel SDK; cost meter per tier | (0.5, 1, 1.5) | 1.0 |
-| 0.12 | Local inference stack | vLLM serving Qwen3-8B-Instruct (APC); LiteLLM gateway; Anthropic/OpenAI prompt caching config | (0.5, 1, 2) | 1.1 |
+| 0.11 | Observability (MAF native OTel) | Configure MAF's built-in OTel via `configure_otel_providers(OTEL_EXPORTER_OTLP_ENDPOINT=...)` in orchestrator startup — **no separate openllmetry SDK or Langfuse Python SDK in agent code**; cost meter per tier (LiteLLM spend tracking); MCP trace propagation included in MAF OTel by default. **Self-hosted trace backend (e.g. Langfuse) removed from Phase-0 stack — wire an OTLP backend later if needed.** | (0.5, 1, 1.5) | 1.0 |
+| 0.12 | LiteLLM gateway config | Cloud-only for Phase 0: LiteLLM model aliases (tier-1 = claude-haiku / gpt-4o-mini, tier-2 = claude-sonnet, tier-3 = claude-opus); prompt caching config; cost metering per alias. **vLLM + Qwen3-8B deferred to Phase 2** (requires GPU VM). No RouteLLM — simple alias-based tier selection. | (0.25, 0.5, 1) | 0.5 |
 | 0.13 | Phase 0 review (mini-PDR) | Demo end-to-end clone → execute flow; retro; write Phase-1 backlog | (0.25, 0.5, 1) | 0.5 |
+| 0.14 | Copilot SDK interactive chat runtime | `POST /copilot/chat` SSE endpoint; hook fixes; credential injection; `autopilot` mode; model picker UI; `GET /copilot/models`; `agent-sales-assistant` Copilot-native workspace | ✅ **Done** 2026-06-03 | — |
 | **Phase 0 total** | | | | **~17.6 ew** (~9 calendar weeks with 2 engineers) |
 
 **Phase 0 exit criteria:**
 - Executive can ask "where are we on Project X?" and receive a cited answer.
-- `agent-task-manager` + `skill-clickup-sync` are two separate GitHub repos; Core clones both at runtime, executes, and destroys containers.
+- `agent-task-manager` + `skill-clickup-sync` are two separate GitHub repos; Core clones both at runtime, executes via MAF workflow engine, and cleans up.
 - Reconciler flags drift between graph and ClickUp; zero silent divergence over 7 days.
-- All LLM calls routed through the tier router; cost dashboard live in Langfuse.
+- All LLM calls routed through LiteLLM tier aliases; per-tier cost tracked via LiteLLM spend metering.
+- MAF native OTel instrumentation active (OTLP-ready; no per-agent Langfuse SDK).
+- Interactive chat (Control Plane → AG-UI endpoint → MAF agent) responds correctly.
+- HITL action submitted by agent appears in `approval_queue` table; gateway endpoint processes approval callback.
 
 ---
 
@@ -40,19 +44,22 @@ Effort uses **engineer-weeks (ew)** with PERT triple-point estimates: (O, M, P) 
 
 | WBS | Work Package | Activities | (O, M, P) ew | PERT ew |
 |---|---|---|---|---|
-| 1.1 | `Self_Mutation_Node` (LangGraph node) | Node that: checks `mutation_attempts_this_run < 1`; provisions OpenHands dev sandbox via SDK; injects failure telemetry from Langfuse; enforces max_mutation_attempts=1 | (1, 2, 3) | 2.0 |
-| 1.2 | OpenHands dev sandbox integration | DinD via `/var/run/docker.sock`; OpenHands SDK container lifecycle (provision, inject, destroy); workspace = cloned agent repo | (1, 2, 3) | 2.0 |
+| 1.1 | `Self_Mutation_Node` (MAF workflow step) | ✅ **Done** 2026-06-03 — Node spawns Copilot SDK mutation container (`acb-mutation-runner`); checks `mutation_attempts_this_run < 1`; injects failure telemetry; enforces max_mutation_attempts=1. **Pending**: refactor from LangGraph node → MAF workflow step in Phase 1 migration | (1, 2, 3) | 2.0 |
+| 1.2 | Copilot SDK mutation sandbox | ✅ **Done** 2026-06-03 — `Dockerfile.mutation` + `mutation_runner.py`; host Docker socket mapped; no DinD required | (1, 2, 3) | 2.0 |
 | 1.3 | GitHub PR automation | GitHub API: create branch → commit fix → open PR with failure telemetry summary + diff + test results; PR template; no self-merge permission | (0.5, 1, 2) | 1.1 |
 | 1.4 | Eval CI gate on agent/skill PRs | Promptfoo (golden cases) + Inspect AI (scenario tests) run on every PR in any `agent-*` or `skill-*` repo; PR comment with results; merge blocked on fail | (0.5, 1, 2) | 1.1 |
 | 1.5 | Mutation audit logging | Log mutation PRs to Postgres (agent, error_type, pr_url, timestamp, outcome); expose in Control Plane HITL queue | (0.25, 0.5, 1) | 0.5 |
-| 1.6 | Phase 1 review (M1: Self-Mutation live) | Demo: force a skill error → confirm Self_Mutation_Node opens PR → confirm max_mutation_attempts respected; review audit log | (0.1, 0.25, 0.5) | 0.25 |
-| **Phase 1 total** | | | | **~7 ew** (~3.5 calendar weeks with 2 engineers) |
+| 1.6 | Webhook → MAF dispatch | ~~Copilot SDK `runtime: copilot` dispatch arm~~ **Superseded** — all webhook routes now dispatch to the MAF executor (`orchestrator.executor.run_agent`). The Copilot SDK is mutation-container only; the `runtime: copilot` chat/background path and `agent-sales-assistant` entry were removed. | (0.25, 0.5, 1) | 0.5 |
+| 1.7 | LiteLLM BYOK forced for all sessions (cost metering) | Route all sessions through LiteLLM tier aliases regardless of GITHUB_TOKEN presence — enables consistent cost metering for interactive sessions | (0.1, 0.25, 0.5) | 0.25 |
+| 1.8 | Phase 1 review (M2: Self-Mutation live) | Demo: force a skill error → confirm Self_Mutation_Node opens PR → confirm max_mutation_attempts respected; review audit log | (0.1, 0.25, 0.5) | 0.25 |
+| **Phase 1 total** | | | | **~5 ew remaining** (WBS 1.1–1.2 done; WBS 1.3–1.8 remaining ~4.7 ew) |
 
-**Phase 1 exit criteria (M1 — Self-Mutation live):**
+**Phase 1 exit criteria (M2 — Self-Mutation live):**
 - A deliberate error injected into `skill-clickup-sync` causes `Self_Mutation_Node` to open a GitHub PR with a plausible fix within 5 minutes.
 - A second deliberate error in the same run does NOT open a second PR (max_mutation_attempts enforced).
 - Human merges the PR → CI evals pass → Core uses updated skill on next event.
 - Mutation PRs visible in Control Plane HITL queue.
+- All sessions routed through LiteLLM tier aliases produce per-tier cost metering (WBS 1.7 done).
 
 ---
 
@@ -104,7 +111,7 @@ Effort uses **engineer-weeks (ew)** with PERT triple-point estimates: (O, M, P) 
 |---|---|---|---|---|
 | 5.1 | `agent-strategy` | Weekly digest + hiring/firing signals; LightRAG over internal docs/SOPs | (2, 3, 4) | 3.0 |
 | 5.2 | Odoo RPC ingestor | MO, PO, inventory, finance (read-only); delivery-risk model | (1, 2, 4) | 2.2 |
-| 5.3 | RouteLLM training pass | Export labelled call log from Langfuse; fine-tune RouteLLM binary classifier | (0.5, 1, 2) | 1.1 |
+| 5.3 | RouteLLM training pass | Export labelled call log from the LiteLLM gateway / OTLP traces; fine-tune RouteLLM binary classifier | (0.5, 1, 2) | 1.1 |
 | 5.4 | Self-mutation quality review | Review all self-authored PRs to date; catalogue error patterns; seed golden evals from resolved mutations | (0.5, 1, 2) | 1.1 |
 | 5.5 | Hardening pass | Cost optimisation, latency, retry/idempotency, security audit | (1, 2, 3) | 2.0 |
 | 5.6 | v2.0 release review | Demo full lifecycle; retro; publish runbook | (0.5, 1, 2) | 1.1 |
@@ -138,7 +145,7 @@ Effort uses **engineer-weeks (ew)** with PERT triple-point estimates: (O, M, P) 
 
 **Total: ~66 engineer-weeks ≈ 33 calendar weeks ≈ ~8 months** with 2 engineers at ~80% utilization. Buffer of +20% recommended → **~10 months to v2.0**.
 
-MVP (end of Phase 0) lands at ~2 months. **Self-Mutation live (M1)** at ~3 months. First domain-wide agent coverage (Phase 2) at ~4.5 months.
+MVP (end of Phase 0) lands at ~2 months. **Self-Mutation live (M2)** at ~3 months. First domain-wide agent coverage (Phase 2) at ~4.5 months.
 
 > **Note on authoring:** No WBS phase exists for "Skill Workbench" or "in-app editor" — agents and skills are authored in VS Code + Git. The Control Plane (Next.js workbench) covers chat, observability, and HITL approvals only. This is a deliberate reduction in scope vs v0.4 and removes ~6.5 ew of UI build effort while improving authoring quality (VS Code + GitHub Copilot > Monaco + iframe).
 

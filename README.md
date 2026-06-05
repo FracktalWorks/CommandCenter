@@ -1,6 +1,6 @@
 # CommandCenter v2
 
-> **Fracktal Works** — a distributed, self-mutating agent platform. Every specialist agent lives in its own GitHub repository. Every skill is a pip-installable Python package in its own repo. The Core engine dynamically clones agent and skill repos at runtime, executes tasks in ephemeral OpenHands sandboxes, and — when errors occur — opens a GitHub PR against the failing agent's own repo so humans can review and merge the fix.
+> **Fracktal Works** — a distributed, self-mutating agent platform. Every specialist agent lives in its own GitHub repository. Every skill is a pip-installable Python package in its own repo. The Core engine dynamically clones agent and skill repos at runtime, executes tasks via the Microsoft Agent Framework (MAF) runtime, and — when errors occur — spawns a GitHub Copilot SDK mutation container that opens a GitHub PR against the failing agent's own repo so humans can review and merge the fix.
 
 ---
 
@@ -8,7 +8,7 @@
 
 CommandCenter is the operating system for Fracktal Works. It coordinates a fleet of specialist AI agents (sales, triage, delivery, billing, reconciler, strategy) over company data in ClickUp, Zoho CRM, Odoo ERP, Gmail, WhatsApp, and meetings — with full human-in-the-loop approval for all writes.
 
-**Architecture in one sentence:** A FastAPI Core server listens for events, dynamically clones the target `agent-<name>` repository and its declared `skill-<name>` dependencies, imports the agent's `graph.py` at runtime via `importlib`, and runs a LangGraph `StateGraph` inside short-lived OpenHands sandboxes.
+**Architecture in one sentence:** A FastAPI Core server listens for events, dynamically clones the target `agent-<name>` repository and its declared `skill-<name>` dependencies, imports the agent's `agents.py` at runtime via `importlib`, and runs the agents on the Microsoft Agent Framework (MAF) runtime.
 
 **Self-mutation:** when a skill or agent fails, a `Self_Mutation_Node` in the LangGraph clones the failing agent's own repo, reads the error telemetry, proposes a code fix, runs tests, and opens a GitHub PR. `max_mutation_attempts = 1` per failure event. A human must merge the PR before the live system adopts the change.
 
@@ -51,23 +51,22 @@ Each **skill repo** is a Python package — pip-installable, single well-typed e
 │  1. Core Engine: FastAPI (CommandCenter-Core)   │
 │  • Listens for events                           │
 │  • Clones agent-<name> + skill repos from GitHub│
-│  • Imports graph.py via importlib at runtime    │
+│  • Imports agents.py via importlib at runtime   │
 └────────────────────────┬────────────────────────┘
                          │
                          ▼
-┌─────────────────────────────────────────────────┐
-│  2. Orchestration: LangGraph + PostgresSaver    │
-│  • Runs agent's StateGraph workflow             │
+┌────────────────────────────────────────────┐
+│  2. Orchestration: MAF workflow engine          │
+│  • Runs the agent's MAF workflow                 │
 │  • Persists state + error telemetry to Postgres │
 │  • Routes to Self_Mutation_Node on failure      │
 └────────────────────────┬────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────┐
-│  3. Runtime: OpenHands SDK (ephemeral sandboxes)│
-│  • Worker containers execute agent skills       │
-│  • Dev sandbox: agent fixes own code → opens PR│
-│  • All containers destroyed after each run      │
+│  3. Self-mutation: Copilot SDK container         │
+│  • Dev sandbox: agent fixes own code → opens PR │
+│  • acb-mutation-runner, destroyed after each run│
 └─────────────────────────────────────────────────┘
 ```
 
@@ -103,12 +102,12 @@ packages/                # Shared Python libs (uv workspace members)
   acb_common/            # Settings, logging, OTel bootstrap
   acb_schemas/           # Pydantic models for the entity graph
   acb_graph/             # Postgres + pgvector access layer
-  acb_llm/               # LiteLLM client + tiered routing + Langfuse hooks + guardrails
+  acb_llm/               # LiteLLM client + tiered routing + guardrails
   acb_audit/             # Append-only audit log
   acb_skills/            # Skill repo cloning + dynamic import helpers
   acb_auth/              # Auth helpers (Google SSO)
 
-infra/                   # docker-compose, Postgres init SQL, LiteLLM config, Langfuse
+infra/                   # docker-compose, Postgres init SQL, LiteLLM config
 workbench/               # Next.js Control Plane (chat, observability, HITL approvals)
   control_plane/         # Next.js 16 + CopilotKit + AG-UI (port 3001)
 ide/                     # Forked Eclipse Theia (L1 IDE shell)
@@ -127,12 +126,12 @@ packages/                # Shared Python libs (uv workspace members)
   acb_common/            # Settings, logging, OTel bootstrap
   acb_schemas/           # Pydantic models for the entity graph
   acb_graph/             # Postgres + pgvector access layer
-  acb_llm/               # LiteLLM client + tiered routing + Langfuse hooks + guardrails
+  acb_llm/               # LiteLLM client + tiered routing + guardrails
   acb_audit/             # Append-only audit log (input for the Annealer)
   acb_skills/            # Skills runtime loader
   acb_auth/              # Auth helpers (Google SSO)
 
-infra/                   # docker-compose, Postgres init SQL, LiteLLM config, Langfuse
+infra/                   # docker-compose, Postgres init SQL, LiteLLM config
 skills/                  # Anthropic SKILL.md registry
 workbench/               # Next.js Control Plane (Phase 0.5+)
   control_plane/         # Next.js 16 + CopilotKit + AG-UI (port 3001)
@@ -166,7 +165,7 @@ uv sync
 
 ```powershell
 Copy-Item .env.example .env
-# Edit .env — fill in LiteLLM keys, Langfuse secrets, etc.
+# Edit .env — fill in LiteLLM keys, model provider secrets, etc.
 ```
 
 ### 3. Start the infra stack
@@ -174,9 +173,6 @@ Copy-Item .env.example .env
 ```powershell
 # Core (Postgres, Redis, LiteLLM)
 docker compose -f infra/docker-compose.yml --profile core up -d
-
-# Add Langfuse observability
-docker compose -f infra/docker-compose.yml --profile core --profile obs up -d
 ```
 
 Services once running:
@@ -186,7 +182,6 @@ Services once running:
 | Postgres (pgvector) | `localhost:5432` |
 | Redis | `localhost:6379` |
 | LiteLLM proxy | `http://localhost:4000` |
-| Langfuse | `http://localhost:3000` |
 
 ### 4. Start the gateway
 
@@ -207,9 +202,9 @@ Control Plane panes:
 
 | Pane | Path | Description |
 |---|---|---|
-| Chat / Agent Inbox | `/` | CopilotKit + AG-UI + LangGraph Agent Inbox; HITL queue |
-| Observability | `/observability` | Langfuse traces, audit log, spend, mutation PR history |
-| Workflows | `/workflows` | LangGraph workflow view (coming L3) |
+| Chat / Agent Inbox | `/` | CopilotKit + AG-UI (MAF agents); HITL queue |
+| Observability | `/observability` | Audit log, spend, mutation PR history |
+| Workflows | `/workflows` | MAF workflow view (coming L3) |
 
 ---
 
@@ -236,13 +231,12 @@ See [`Makefile`](Makefile) for convenience targets.
 |---|---|
 | IDE shell | Eclipse Theia (forked, browser target) |
 | Control plane | Next.js 16, React 19, Tailwind v4, CopilotKit, AG-UI |
-| Orchestration | LangGraph + PostgresSaver (durable state) |
+| Orchestration | Microsoft Agent Framework (MAF) |
 | Dynamic loading | Python `importlib` + `sys.path.append()` (per-run agent clone) |
-| Sandboxes | OpenHands SDK (Apache-2.0) — worker + dev mutation containers |
-| LLM routing | LiteLLM proxy + vLLM (Qwen3-8B Tier-1) + Anthropic/OpenAI |
-| Observability | Langfuse (self-hosted), OpenTelemetry |
-| Database | Postgres 16 + pgvector + Apache AGE |
-| Cache / queue | Redis Stack |
+| Self-mutation | GitHub Copilot SDK (mutation container only) |
+| LLM routing | LiteLLM proxy + Anthropic/OpenAI/Copilot models |
+| Database | Postgres 16 + pgvector |
+| Cache / queue | Redis 7 |
 | Evals | Promptfoo + Inspect AI |
 | Deploy | Docker Compose, Caddy reverse proxy, Hostinger KVM 4 VPS |
 

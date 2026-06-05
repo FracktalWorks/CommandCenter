@@ -14,15 +14,18 @@ model_list:
   # TEMP (Phase 0 testing): Gemini key only. Swap back to Anthropic / vLLM
   # once those keys land — the tier *names* (tier1-local-qwen3, tier2-sonnet,
   # tier3-opus) must stay identical because acb_llm.client._TIER_MODEL pins them.
-  - model_name: tier1-local-qwen3
-    litellm_params:
-      model: gemini/gemini-2.5-flash-lite
-      api_key: os.environ/GEMINI_API_KEY
-  # Original Anthropic route (re-enable when ANTHROPIC_API_KEY is set):
+  # Gemini route (re-enable when credits are topped up):
   # - model_name: tier1-local-qwen3
   #   litellm_params:
-  #     model: anthropic/claude-3-5-haiku-latest
-  #     api_key: os.environ/ANTHROPIC_API_KEY
+  #     model: gemini/gemini-2.5-flash-lite
+  #     api_key: os.environ/GEMINI_API_KEY
+  - model_name: tier1-local-qwen3
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_base: https://api.githubcopilot.com
+      api_key: os.environ/GITHUB_TOKEN
+      extra_headers:
+        Copilot-Integration-Id: vscode-chat
   # When vLLM is available, swap the above for:
   # - model_name: tier1-local-qwen3
   #   litellm_params:
@@ -31,24 +34,32 @@ model_list:
   #     api_key: "EMPTY"
 
   # ---- Tier 2: structured extraction / drafting ----
-  - model_name: tier2-sonnet
-    litellm_params:
-      model: gemini/gemini-2.5-flash
-      api_key: os.environ/GEMINI_API_KEY
+  # Gemini route (re-enable when credits are topped up):
   # - model_name: tier2-sonnet
   #   litellm_params:
-  #     model: anthropic/claude-3-5-sonnet-latest
-  #     api_key: os.environ/ANTHROPIC_API_KEY
+  #     model: gemini/gemini-2.5-flash
+  #     api_key: os.environ/GEMINI_API_KEY
+  - model_name: tier2-sonnet
+    litellm_params:
+      model: openai/gpt-4o
+      api_base: https://api.githubcopilot.com
+      api_key: os.environ/GITHUB_TOKEN
+      extra_headers:
+        Copilot-Integration-Id: vscode-chat
 
   # ---- Tier 3: multi-hop reasoning / strategy ----
-  - model_name: tier3-opus
-    litellm_params:
-      model: gemini/gemini-2.5-pro
-      api_key: os.environ/GEMINI_API_KEY
+  # Gemini route (re-enable when credits are topped up):
   # - model_name: tier3-opus
   #   litellm_params:
-  #     model: anthropic/claude-3-opus-latest
-  #     api_key: os.environ/ANTHROPIC_API_KEY
+  #     model: gemini/gemini-2.5-flash
+  #     api_key: os.environ/GEMINI_API_KEY
+  - model_name: tier3-opus
+    litellm_params:
+      model: openai/gpt-4o
+      api_base: https://api.githubcopilot.com
+      api_key: os.environ/GITHUB_TOKEN
+      extra_headers:
+        Copilot-Integration-Id: vscode-chat
 
   # ---- Embeddings (used by the redis-semantic cache, WBS 1.8) ----
   - model_name: text-embedding-3-small
@@ -56,22 +67,69 @@ model_list:
       model: gemini/text-embedding-004
       api_key: os.environ/GEMINI_API_KEY
 
+  # ---- GitHub Copilot Models (when GITHUB_TOKEN has copilot scope) ----
+  # The Copilot API is OpenAI-compatible. MAF agents call these via
+  # acb_llm the same way as any other tier — no special Copilot SDK node needed.
+  # Available models: gpt-4o, claude-sonnet-4-5, claude-3.7-sonnet, o1, o3-mini, etc.
+  # Full list: https://docs.github.com/en/copilot/using-github-copilot/ai-models
+  - model_name: copilot/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_base: https://api.githubcopilot.com
+      api_key: os.environ/GITHUB_TOKEN
+      extra_headers:
+        Copilot-Integration-Id: vscode-chat
+
+  - model_name: copilot/claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_base: https://api.githubcopilot.com
+      api_key: os.environ/GITHUB_TOKEN
+      extra_headers:
+        Copilot-Integration-Id: vscode-chat
+
+  - model_name: copilot/o3-mini
+    litellm_params:
+      model: openai/o3-mini
+      api_base: https://api.githubcopilot.com
+      api_key: os.environ/GITHUB_TOKEN
+      extra_headers:
+        Copilot-Integration-Id: vscode-chat
+
+  # Optional: route existing tiers through Copilot when GITHUB_TOKEN is set.
+  # Uncomment the block for the tier you want to back by Copilot, comment out
+  # the current Gemini entry above it.
+  # - model_name: tier2-sonnet
+  #   litellm_params:
+  #     model: anthropic/claude-sonnet-4-5
+  #     api_base: https://api.githubcopilot.com
+  #     api_key: os.environ/GITHUB_TOKEN
+  #     extra_headers:
+  #       Copilot-Integration-Id: vscode-chat
+  # - model_name: tier3-opus
+  #   litellm_params:
+  #     model: openai/gpt-4o
+  #     api_base: https://api.githubcopilot.com
+  #     api_key: os.environ/GITHUB_TOKEN
+  #     extra_headers:
+  #       Copilot-Integration-Id: vscode-chat
+
 litellm_settings:
   drop_params: true
   set_verbose: false
   cache: true
-  # Phase 1 (WBS 1.8): semantic cache. Equivalent prompts hit the cache even
-  # if punctuation / casing / wording differs slightly. Requires Redis Stack
-  # (already configured in docker-compose.yml) and an embedding model defined
-  # in the model_list above.
+  # Simple Redis cache for exact-match prompt deduplication.
+  # Phase 2: upgrade to redis-semantic (requires redisvl embedding validation
+  # to work against a live LiteLLM endpoint — not possible at cold-start).
   cache_params:
-    type: redis-semantic
-    host: redis
-    port: 6379
-    similarity_threshold: 0.85    # 0.0 = always hit, 1.0 = exact match only
-    redis_semantic_cache_embedding_model: text-embedding-3-small
+    type: redis
+    url: redis://redis:6379
   # Anthropic + OpenAI prompt caching is on by default per ADR-008.
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
-  # database_url intentionally omitted — pure-proxy mode (see docker-compose.yml).
+  # UI credentials — hardcoded defaults for local dev (override via infra/.env).
+  ui_username: os.environ/UI_USERNAME
+  ui_password: os.environ/UI_PASSWORD
+  # database_url is injected via DATABASE_URL env var in docker-compose.
+  # This enables the management UI at http://localhost:4000/ui

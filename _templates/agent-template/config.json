@@ -2,7 +2,11 @@
   "name": "{{ agent_name }}",
   "description": "One-line description of what this agent does.",
   "version": "0.1.0",
+  "runtime": "maf",
   "skill_repos": [],
+  "mcp_servers": {},
   "max_mutation_attempts": 1,
-  "tags": []
+  "tags": [],
+  "integrations": [],
+  "optional_integrations": []
 }

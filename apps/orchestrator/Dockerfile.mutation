@@ -1,0 +1,13 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install the Copilot SDK (CLI bundled automatically — no separate install needed).
+RUN pip install --no-cache-dir github-copilot-sdk
+
+COPY mutation_runner.py .
+
+# Agent repo will be mounted here at runtime (-v {agent_dir}:/workspace/repo).
+VOLUME ["/workspace"]
+
+ENTRYPOINT ["python", "mutation_runner.py"]

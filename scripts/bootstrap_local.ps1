@@ -3,11 +3,9 @@
 # run smoke tests, print next steps.
 #
 #   pwsh -ExecutionPolicy Bypass -File scripts/bootstrap_local.ps1
-#   pwsh -ExecutionPolicy Bypass -File scripts/bootstrap_local.ps1 -WithObs   # also start Langfuse
 #
 [CmdletBinding()]
 param(
-    [switch]$WithObs,
     [switch]$SkipDocker,
     [switch]$SkipTests
 )
@@ -72,7 +70,6 @@ Ok "Python workspace synced"
 if ($dockerOk) {
     Step "Boot infra (Docker Compose)"
     $profiles = @("--profile","core")
-    if ($WithObs) { $profiles += @("--profile","obs") }
     docker compose --env-file .env -f infra/docker-compose.yml @profiles up -d
     if ($LASTEXITCODE -ne 0) { Die "docker compose up failed" }
     Ok "compose up issued; waiting for health..."
@@ -110,7 +107,4 @@ Write-Host "Done. Next steps:" -ForegroundColor Green
 Write-Host "  - Edit .env (set ANTHROPIC_API_KEY at minimum)"
 Write-Host "  - Run the gateway:   uv run uvicorn gateway.main:app --reload --port 8080"
 Write-Host "  - Health check:      curl http://localhost:8080/health"
-if ($WithObs) {
-    Write-Host "  - Langfuse UI:       http://localhost:3000  (sign up the first user)"
-}
 Write-Host "  - LiteLLM proxy:     http://localhost:4000  (master key in .env)"

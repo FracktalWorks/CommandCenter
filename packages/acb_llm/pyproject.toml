@@ -1,11 +1,10 @@
 [project]
 name = "acb-llm"
 version = "0.0.1"
-description = "LiteLLM client + tiered routing helper + Langfuse hooks + guardrails."
+description = "LiteLLM client + tiered routing helper + guardrails."
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "litellm>=1.52",
-    "langfuse>=2.50",
     "tenacity>=9.0",
     "acb-common",
 ]

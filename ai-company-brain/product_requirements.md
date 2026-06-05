@@ -1,6 +1,6 @@
 ﻿# Product Requirements Document — CommandCenter
 
-> **Organisation:** Fracktal Works · **Product:** CommandCenter · **Date:** 2026-06-02 · **Version:** 2.0
+> **Organisation:** Fracktal Works · **Product:** CommandCenter · **Date:** 2026-06-04 · **Version:** 2.2
 > Companion to [`project_plan.md`](project_plan.md). This PRD defines *what* the product must do; the plan defines *how/when* it is built.
 > **For AI agents:** Read [`AGENTS.md`](AGENTS.md) first for current build status and navigation.
 
@@ -10,19 +10,19 @@
 
 CommandCenter is a **headless, self-mutating agent orchestration platform** for running a company.
 
-When a company event fires — a webhook from ClickUp, Zoho, or Odoo; a cron schedule; or an ambient signal from email, WhatsApp, or a meeting — CommandCenter resolves the correct specialist agent, pulls its latest code from a persistent local clone, injects credentials from the Integration Registry, and executes the task inside an ephemeral OpenHands sandbox. If the agent fails, it reads its own telemetry, tests a code fix, applies it to the live clone immediately, and opens a GitHub PR as an audit record. A human can merge (to canonicalise the fix) or close (to trigger an automatic rollback).
+When a company event fires — a webhook from ClickUp, Zoho, or Odoo; a cron schedule; or an ambient signal from email, WhatsApp, or a meeting — CommandCenter resolves the correct specialist agent, pulls its latest code from a persistent local clone, injects credentials from the Integration Registry, and executes the task inside an ephemeral sandbox. If the agent fails, it reads its own telemetry, tests a code fix inside an isolated Copilot SDK mutation container, applies the fix to the live clone immediately, and opens a GitHub PR as an audit record. A human can merge (to canonicalise the fix) or close (to trigger an automatic rollback).
 
 Operators interact via a thin **Control Plane** (browser UI) that provides:
 - Chat Q&A over company data (cited, guardrailed answers).
 - HITL approval queue for agent-proposed writes.
-- Observability (Langfuse traces, cost, eval scores).
+- Observability (cost, eval scores; LLM traces via MAF native OTel, backend TBD).
 - Agent Inbox (self-mutation PR queue for human review).
 
 **What CommandCenter is NOT:**
 - A browser IDE or code editor. All agent/skill authoring is done in VS Code + Git.
 - A platform for creating or editing agents or skills in-app.
 - A replacement for ClickUp, Zoho, or Odoo. Those remain authoritative; CommandCenter mirrors and acts on them.
-- An n8n-style workflow canvas. Orchestration is agent-native LangGraph only.
+- An n8n-style workflow canvas. Orchestration is agent-native MAF only.
 
 The product delivers value in **four levels**, each independently deployable and providing operator value on its own:
 
@@ -53,10 +53,10 @@ The product delivers value in **four levels**, each independently deployable and
 | PR-01 | **No in-app agent/skill authoring.** All development happens in VS Code + Git. The Control Plane is for operation (chat, HITL, observability), not editing. |
 | PR-02 | **Decoupled repositories.** Each agent and each skill lives in its own GitHub repo. The Core engine contains no agent logic or skill files. |
 | PR-03 | **Persistent runtime loading.** Agent/skill repos are cloned once into a persistent local cache; each event does `git pull --ff-only` (~0.5 s). No server redeploy to pick up new agent logic. |
-| PR-04 | **Ephemeral sandboxed execution.** All agent task execution runs inside short-lived OpenHands containers, destroyed after every run. |
+| PR-04 | **Ephemeral sandboxed execution.** Self-mutation code fixes run inside short-lived Copilot SDK containers (`acb-mutation-runner`), destroyed after every mutation attempt. The MAF orchestrator itself is not sandboxed — it is the runtime host. |
 | PR-05 | **Hot-patch self-mutation with an audit gate.** When an agent fails, `Self_Mutation_Node` applies a tested code fix to the live clone immediately (recovery in minutes) and opens a GitHub PR as the audit record. Closing the PR triggers automatic rollback. `max_mutation_attempts = 1` prevents feedback loops. |
 | PR-06 | **Git is the source of truth** for every agent-editable artefact (agent definitions, skills, model-routing config). All persistent edits flow through PRs with eval gates. |
-| PR-07 | **Platform-owned credentials; agent-declared dependencies.** All integration credentials are stored encrypted in the Core Integration Registry. Agent `config.json` declares integration names only — never credentials. Core injects credentials as typed `IntegrationContext` into LangGraph state at runtime. |
+| PR-07 | **Platform-owned credentials; agent-declared dependencies.** All integration credentials are stored encrypted in the Core Integration Registry. Agent `config.json` declares integration names only — never credentials. The Dynamic Agent Loader resolves credentials from the registry and injects them into `GitHubCopilotAgent` `mcp_servers=` config at runtime (MAF agents) or via `_build_agent_env()` (Copilot-native agents, interim). |
 | PR-08 | **Approval-gated writes.** The Action Broker is the only write path to source systems. Per-action authority tiers (read / suggest / suggest+apply / autonomous) are enforced. No autonomous writes in v1. |
 | PR-09 | **Reuse core packages.** `acb_llm`/LiteLLM model routing, `acb_common`, `acb_schemas`, `acb_audit`, and `evals/` are reused, not rebuilt. |
 | PR-10 | **Standards-first.** Obey `AGENTS.md` and Anthropic Agent Skills (`SKILL.md`); integrate external systems via MCP before bespoke connectors. |
@@ -72,20 +72,20 @@ The product delivers value in **four levels**, each independently deployable and
 | ID | Requirement | Priority |
 |---|---|---|
 | L1-01 | Core FastAPI server listens for webhook and cron events; routes to the correct agent repo by name from event metadata. | Must |
-| L1-02 | **Dynamic Agent Loader:** on each event, `git pull --ff-only` on the persistent local clone (~0.5 s warm path). First-ever event for an agent triggers a full `git clone` (one-time). Reads `config.json`; dynamically imports `graph.py` via `importlib`. Per-repo threading lock prevents clone/pull races. | Must |
-| L1-03 | LangGraph initialises a `StateGraph` from the cloned `graph.py`; persists all state transitions and error logs via `PostgresSaver`. | Must |
-| L1-04 | OpenHands SDK spawns an ephemeral worker container; agent executes its skills; outputs and error logs are piped back to LangGraph state; container destroyed after run. | Must |
+| L1-02 | **Dynamic Agent Loader:** on each event, `git pull --ff-only` on the persistent local clone (~0.5 s warm path). First-ever event for an agent triggers a full `git clone` (one-time). Reads `config.json`; dynamically imports `agents.py` via `importlib` and calls `build_agents()`. Per-repo threading lock prevents clone/pull races. | Must |
+| L1-03 | MAF workflow engine executes the agents returned by `build_agents()` from the cloned `agents.py`. **Phase 0:** in-process asyncio (no DTS emulator). HITL uses the Action Broker pattern (Postgres `approval_queue`). **Phase 2:** add `agent-framework-durabletask` + DTS emulator for multi-day HITL pauses. | Must |
+| L1-04 | MAF orchestrator executes agent skills as workflow steps (via `GitHubCopilotAgent` tool calls or MCP server calls); outputs and error logs flow through the MAF workflow context. For self-mutation, a separate Copilot SDK container (`acb-mutation-runner`) is spawned; see L2-01. | Must |
 | L1-05 | **Integration Registry:** Core stores all integration credentials (API keys, OAuth tokens, webhook secrets) encrypted in Postgres. Control Plane admin UI allows registration and rotation without code changes. | Must |
-| L1-06 | **Credential injection:** Dynamic Agent Loader reads `config.json["integrations"]` and injects only declared `IntegrationContext` objects into initial LangGraph state. No credentials ever appear in agent or skill repos. | Must |
+| L1-06 | **Credential injection:** Dynamic Agent Loader reads `config.json["integrations"]` and resolves only declared integration credentials from the Integration Registry; injects them into `GitHubCopilotAgent` `mcp_servers=` config so skills receive the correct tokens via MCP protocol. No credentials ever appear in agent or skill repos. | Must |
 | L1-07 | **First agent: `agent-task-manager` + `skill-clickup-sync`** — cited Q&A over ClickUp projects, tasks, and people. Validates the end-to-end clone → import → execute → cite flow. | Must |
 | L1-08 | **Reconciler v0:** nightly diff of entity graph vs ClickUp; escalates drift to an audit queue. Zero silent divergence over 7 days is the target. | Must |
 | L1-09 | **Guardrails v0:** schema-validated outputs, citation enforcement (every claim cites a graph node), unresolved-entity abort before any answer is returned. | Must |
-| L1-10 | **Observability:** self-hosted Langfuse; all LLM calls routed through LiteLLM gateway with tiered routing; cost per tier tracked; eval scores published. | Must |
-| L1-11 | **Control Plane shell:** Next.js browser UI with (a) chat interface to the gateway, (b) Langfuse observability embed, (c) Google SSO restricted to org domain. No skill or agent editing. | Must |
-| L1-12 | **Infrastructure:** Docker Compose with Postgres+pgvector, Redis Streams, LiteLLM gateway, Langfuse; self-hosted on a single Linux VM; reproducible and documented. | Must |
-| L1-13 | **Local Tier-1 inference:** vLLM serving Qwen3-8B (Automatic Prefix Caching) behind LiteLLM. | Should |
+| L1-10 | **Observability:** all LLM calls routed through the LiteLLM gateway with tiered routing; cost per tier tracked; eval scores published. MAF native OpenTelemetry is OTLP-ready; a self-hosted trace backend is deferred (Langfuse removed from the Phase-0 stack). | Must |
+| L1-11 | **Control Plane shell:** Next.js browser UI with (a) unified chat interface to the gateway (MAF AG-UI) for CommandCenter and named agents, (b) LiteLLM model picker, (c) VS Code-style send / queue / steer controls, (d) MCQ / choice-button rendering, (e) observability pane (audit log + spend), (f) Google SSO restricted to org domain. No skill or agent editing. | Must |
+| L1-12 | **Infrastructure:** Docker Compose with Postgres+pgvector, Redis, LiteLLM gateway; self-hosted on a single Linux VM; reproducible and documented. | Must |
+| L1-13 | **Local Tier-1 inference:** vLLM serving Qwen3-8B (Automatic Prefix Caching) behind LiteLLM. | Deferred to Phase 2 |
 
-**L1 acceptance:** An executive asks "where are we on Project X?" via the Control Plane chat and receives a cited answer sourced from live ClickUp data, with all LLM calls routed through the tier router and cost visible in Langfuse.
+**L1 acceptance:** An executive asks "where are we on Project X?" via the Control Plane chat and receives a cited answer sourced from live ClickUp data, with all LLM calls routed through the tier router and cost visible in the Control Plane.
 
 ---
 
@@ -93,17 +93,17 @@ The product delivers value in **four levels**, each independently deployable and
 
 **Goal:** Agents fix their own code on failure (opening GitHub PRs as audit records); the full company domain is covered by specialist agents for sales, delivery, triage, and reconciliation.
 
-> **Status: IN PROGRESS.** Persistent clone cache and bot git identity done (2026-06-02). GitHub PR automation and eval CI gate are the immediate next steps.
+> **Status: IN PROGRESS.** Mutation sandbox implementation complete (2026-06-03) — Copilot SDK container replaces OpenHands for the fix-and-test loop. GitHub PR automation wiring and eval CI gate are the immediate next steps.
 
 ### Self-Mutation Loop
 
 | ID | Requirement | Priority |
 |---|---|---|
-| L2-01 | **`Self_Mutation_Node`** in LangGraph: on agent error, checks `mutation_attempts_this_run < 1`, provisions an OpenHands dev sandbox, injects failure telemetry from Langfuse, operates against the existing persistent local clone. | Must |
+| L2-01 | **`Self_Mutation_Node`** in MAF: on agent error, checks `mutation_attempts_this_run < 1`, spawns an isolated Copilot SDK container (`acb-mutation-runner`) via `docker run --rm -d`, injects failure telemetry and the mutation prompt as env vars, mounts the persistent local clone at `/workspace/repo`. BYOK via LiteLLM proxy; `max_mutation_attempts = 1` enforced per run. | Must |
 | L2-02 | If tests pass: commits fix to local clone main branch (fix is live immediately); pushes branch `auto-fix/{run_id}` to origin; opens GitHub PR with telemetry, diff, and test results. `max_mutation_attempts = 1` enforced per run. | Must |
 | L2-03 | If tests fail: discards all changes (`git reset --hard HEAD`); destroys dev sandbox; logs failure. | Must |
 | L2-04 | Core listens for `pull_request.closed` (unmerged) GitHub webhooks from agent repos. On unmerged close of an `auto-fix` PR: Core issues `git reset --hard origin/main` on the affected local clone (automatic rollback). | Must |
-| L2-05 | **Eval CI gate** on all agent/skill PRs: Promptfoo golden cases + Inspect AI scenario tests run on every PR in any `agent-*` or `skill-*` repo; PR comment with results; merge blocked on regression. No `SKILL.md` or `graph.py` merges without at least one passing golden case. | Must |
+| L2-05 | **Eval CI gate** on all agent/skill PRs: Promptfoo golden cases + Inspect AI scenario tests run on every PR in any `agent-*` or `skill-*` repo; PR comment with results; merge blocked on regression. No `SKILL.md` or `agents.py` merges without at least one passing golden case. | Must |
 | L2-06 | **Mutation audit log:** each self-mutation event (agent, error_type, pr_url, timestamp, outcome) logged to Postgres; surfaced in Control Plane HITL queue (Agent Inbox). | Must |
 
 ### Multi-Agent Ecosystem
@@ -178,7 +178,7 @@ The product delivers value in **four levels**, each independently deployable and
 | L4-04 | **Sales intelligence & BI:** pipeline health, deal velocity, segment insights; surfaced on demand via chat Q&A or dashboard. | Must |
 | L4-05 | **Personal prioritisation:** "what should I focus on today?" — hierarchy-aware, deadline-weighted, role-aware answer with citations. | Must |
 | L4-06 | **Smart delegation:** assign tasks by company hierarchy, roles, and current load; understood from entity graph. | Must |
-| L4-07 | **RouteLLM training pass:** export labelled call log from Langfuse; fine-tune binary classifier for tier routing. | Should |
+| L4-07 | **RouteLLM training pass:** export labelled call log from the LiteLLM gateway / OTLP traces; fine-tune binary classifier for tier routing. | Should |
 | L4-08 | **Annealing loop:** Annealer sub-agent mines successful run patterns; proposes new reusable skills as `skill-<name>` PRs; humans review and merge; shadow (10%) → canary (50%) → full rollout pipeline with auto-deprecation below success threshold. | Should |
 | L4-09 | Per-skill success rate tracking; skills below threshold auto-flagged for Annealer review; maintainer review log retained. | Should |
 | L4-10 | **Memory feedback loop:** facts extracted by L2-11/L2-12 feed the org entity graph; every agent queries accumulated knowledge at run-start; measurably improves cited-answer quality over time. | Must |
@@ -195,12 +195,12 @@ The Control Plane is a thin Next.js browser UI. It grows with each level but is 
 
 | Level | Capability added to Control Plane |
 |---|---|
-| L1 | Chat interface to gateway; Langfuse observability embed; Google SSO auth (org domain restricted) |
+| L1 | Chat interface to gateway (MAF AG-UI); observability pane (audit log + spend); Google SSO auth (org domain restricted); **rich chat** (streaming, markdown + syntax highlight rendering, collapsible tool-call blocks, copy buttons) |
 | L2 | HITL Agent Inbox (self-mutation PRs + pending approvals in one queue) |
 | L3 | Full Action Broker approval UI; push notification config; authority tier management |
 | L4 | Strategy dashboard; goal roll-up view; BI panels; per-skill success metrics |
 
-> **Current state:** L1 Control Plane is live at `workbench/control_plane/` (Next.js 16, chat, SSO, Langfuse embed, 11 routes, all HTTP 200).
+> **Current state (2026-06-05):** L1 Control Plane live at `workbench/control_plane/` (Next.js 16, SSO, 11 routes). Chat interface is fully unified across CommandCenter and named agents: token streaming, GFM markdown rendering, syntax-highlighted code blocks, collapsible tool-call accordion, LiteLLM model picker, send / queue / steer controls, clickable MCQ choice buttons, streaming cursor, and clickable links. The chat UX is protected by a passing Playwright regression suite covering default-session render, named-agent render, model runtime switching, queue / steer behaviors, tool blocks, markdown code rendering, and MCQ answer flows. Operator chat is served by the MAF AG-UI endpoint (`POST /copilot/chat`) via `add_agent_framework_fastapi_endpoint`; the prior Copilot SDK SSE path has been removed.
 
 ---
 
@@ -233,7 +233,7 @@ The Control Plane is a thin Next.js browser UI. It grows with each level but is 
 ## 10. Security, Privacy & Compliance
 
 - **Self-hosted.** Company data stays under company control or named third-party processors (LLM providers, Meta for WhatsApp).
-- **Integration Registry is the single credential store.** No credentials in agent or skill repos. `config.json` declares integration names only; Core injects typed `IntegrationContext` objects at runtime.
+- **Integration Registry is the single credential store.** No credentials in agent or skill repos. `config.json` declares integration names only; the Dynamic Agent Loader resolves credentials at runtime and injects them via MAF `mcp_servers=` config (MAF agents) or `_build_agent_env()` (Copilot-native agents, interim).
 - **Self-mutation hot-patch model:** auto-fix PRs tagged `auto-fix`; PR Event Handler reverts the live clone on unmerged-close. Human oversight preserved through audit + rollback, not a pre-merge gate.
 - **RBAC:** admin vs operator vs contributor at minimum; finer per-action authority tiers for L3/L4 writes.
 - **Indian DPDP Act 2023** compliance for employee data at L3/L4; written consent required before ingesting email/WhatsApp messages.
@@ -246,8 +246,8 @@ The Control Plane is a thin Next.js browser UI. It grows with each level but is 
 
 - Building or maintaining a browser IDE (Theia, VS Code fork, or any equivalent). All code authoring is in VS Code + Git locally or via Codespaces.
 - In-app creation or editing of agents, skills, or workflow specifications.
-- Running n8n or any second workflow runtime. Orchestration is LangGraph only.
-- A visual drag-and-drop workflow canvas. Workflows are `graph.py` files authored in VS Code.
+- Running n8n or any second workflow runtime. Orchestration is MAF (Microsoft Agent Framework) only.
+- A visual drag-and-drop workflow canvas. Workflows are `agents.py` files authored in VS Code.
 - Customer-facing or external-party access in v1.
 - Autonomous writes to systems of record before the Action Broker and authority tiers are in place (L3).
 - Full RBAC beyond admin / operator / contributor (deferred past v1).
@@ -260,19 +260,24 @@ The Control Plane is a thin Next.js browser UI. It grows with each level but is 
 | Dependency | Used for | Level |
 |---|---|---|
 | FastAPI | Event gateway, webhook router | L1–L4 |
-| LangGraph + `PostgresSaver` | State orchestration, durable execution | L1–L4 |
-| OpenHands SDK (Apache-2.0) | Worker sandboxes + self-mutation dev sandboxes | L1–L4 |
-| Postgres + pgvector + Apache AGE | Entity graph, state storage, memory | L1–L4 |
-| `acb_llm` + LiteLLM + RouteLLM | Model routing, caching, cost metering | L1–L4 |
-| vLLM + Qwen3-8B | Tier-1 local inference | L1–L4 |
+| MAF (`agent-framework` + `agent-framework-ag-ui`) | Agent execution runtime (background + interactive), multi-agent orchestration, AG-UI streaming | L1–L4 |
+| `agent-framework-github-copilot` (pre-release) | `GitHubCopilotAgent` — Copilot SDK as first-class MAF agent | L1–L4 |
+| `agent-framework-mem0` (pre-release) | `Mem0ContextProvider` — episodic memory context | L1–L4 |
+| `agent-framework-redis` (pre-release) | `RedisHistoryProvider` — conversation history persistence | L1–L4 |
+| `github-copilot-sdk` (Python) | Self-mutation container (`acb-mutation-runner`) only | L2–L4 |
+| Postgres + pgvector | Entity graph, Integration Registry, Action Broker queue, audit log, Mem0 | L1–L4 |
+| Apache AGE | Graph DB extensions | L3–L4 (Phase 2) |
+| `acb_llm` + LiteLLM | Model gateway, cost metering, model aliases (tier-1/2/3) | L1–L4 |
+| vLLM + Qwen3-8B | Tier-1 local inference | L2–L4 (Phase 2) |
 | Anthropic `SKILL.md` + `skills/` registry | Skill format and monorepo | L1–L4 |
-| Langfuse (MIT, self-hosted) | LLM observability; failure telemetry for self-mutation | L1–L4 |
+| OTLP observability backend (TBD) | LLM traces via MAF native OTel; Langfuse removed from Phase-0 stack | L2–L4 (deferred) |
 | GitHub (agent repos + skill repos) | Distributed repo layout; PR audit gate for self-mutation | L1–L4 |
-| Next.js (Control Plane) | Browser UI: chat, HITL, observability | L1–L4 |
-| Redis Streams | Event bus | L1–L4 |
+| Next.js + CopilotKit (`@copilotkit/react-*`) (Control Plane) | Browser UI: chat (AG-UI streaming), HITL, observability | L1–L4 |
+| Redis (vanilla redis:7-alpine, Phase 0) | Event bus (Redis Streams), RedisHistoryProvider | L1–L4 |
 | Promptfoo + Inspect AI | Eval CI gate on every agent/skill PR | L2–L4 |
-| Mem0 + Graphiti | Long-term memory + bi-temporal entity knowledge graph | L2–L4 |
-| GPTCache + LLMLingua-2 | Semantic cache + token compression | L2–L4 |
+| Mem0 | Episodic + semantic memory (via agent-framework-mem0) | L1–L4 |
+| Graphiti | Bi-temporal entity knowledge graph | L3–L4 (Phase 2) |
+| GPTCache + LLMLingua-2 | Semantic cache + token compression | L2–L4 (Phase 2) |
 | MCP servers (ClickUp/Zoho/Odoo/...) | Company system integrations | L1–L4 |
 | `apps/reconciler`, `apps/action_broker` | Reconciliation, approval-gated writes | L2–L4 |
 | Vexa (Apache-2.0, self-hosted) | Meeting bot | L3–L4 |

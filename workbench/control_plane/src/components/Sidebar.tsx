@@ -6,8 +6,11 @@ import { usePathname } from "next/navigation";
 type Pane = { href: string; label: string; emoji: string; note: string };
 
 const PANES: Pane[] = [
-  { href: "/chat",          label: "Chat",          emoji: "[C]", note: "Jannet · sessions · memory" },
-  { href: "/observability", label: "Observability", emoji: "[O]", note: "Audit log · escalations · traces" },
+  { href: "/chat",             label: "Chat",          emoji: "[C]", note: "CommandCenter · sessions · memory" },
+  { href: "/agents",           label: "Agents",        emoji: "[A]", note: "Register · manage · remove" },
+  { href: "/integrations",     label: "Integrations",  emoji: "[I]", note: "Connected services · credentials" },
+  { href: "/observability",    label: "Observability", emoji: "[O]", note: "Audit log · escalations · traces" },
+  { href: "/settings/models",  label: "Models",        emoji: "[M]", note: "LLMs · tiers · providers" },
 ];
 
 export default function Sidebar() {

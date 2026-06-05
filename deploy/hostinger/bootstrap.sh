@@ -81,7 +81,7 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=$APP_DIR
 EnvironmentFile=$APP_DIR/.env
-ExecStart=/usr/bin/docker compose -f infra/docker-compose.yml --profile core --profile obs up -d --remove-orphans
+ExecStart=/usr/bin/docker compose -f infra/docker-compose.yml --profile core up -d --remove-orphans
 ExecStop=/usr/bin/docker compose -f infra/docker-compose.yml down
 
 [Install]

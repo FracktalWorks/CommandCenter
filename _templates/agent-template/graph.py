@@ -1,65 +1,29 @@
-"""{{ agent_name }} — LangGraph StateGraph definition.
+"""DEPRECATED — backward-compatibility shim.
 
-Every agent repo MUST export a zero-argument ``build_graph()`` function that
-returns a ``StateGraph`` (not yet compiled).  The Core executor compiles it
-with a ``PostgresSaver`` checkpointer so do not call ``.compile()`` here.
+This file is kept only for repos that have not yet migrated to ``agents.py``.
+New agent repos should use ``agents.py`` exclusively.
 
-Quickstart
-----------
-1. Replace the placeholder nodes with your real logic.
-2. Add any ``skill_repos`` your nodes depend on to ``config.json``.
-3. Keep ``build_graph()`` free of side-effects (it may be called multiple
-   times during a single execution in retry scenarios).
+The Core executor now calls ``build_agents()`` from ``agents.py`` (MAF).  If
+your repo still exports ``build_graph()`` the executor will raise an
+``AgentLoadError`` and ask you to migrate.
 """
 from __future__ import annotations
 
-from typing import Any, TypedDict
+import warnings
 
-from langgraph.graph import END, START, StateGraph
+from agents import build_agent, build_agents  # noqa: F401  re-export
 
-
-# ---------------------------------------------------------------------------
-# State definition
-# ---------------------------------------------------------------------------
-
-class AgentState(TypedDict):
-    """Shared mutable state threaded through every node."""
-    agent_name: str
-    run_id: str
-    event_payload: dict[str, Any]
-    mutation_attempts: int
-    error: str | None
-    result: Any | None
+__all__ = ["build_agents", "build_agent"]
 
 
-# ---------------------------------------------------------------------------
-# Nodes
-# ---------------------------------------------------------------------------
-
-async def process_node(state: AgentState) -> dict[str, Any]:
-    """Main processing node — replace with real business logic."""
-    payload = state["event_payload"]
-
-    # TODO: implement agent logic here
-    result = {"message": "Agent ran successfully", "echo": payload}
-
-    return {"result": result}
-
-
-# ---------------------------------------------------------------------------
-# Graph factory
-# ---------------------------------------------------------------------------
-
-def build_graph() -> StateGraph:
-    """Build and return the agent's StateGraph.
-
-    Called by the Core executor at event time.  Do NOT call .compile() here.
-    """
-    g = StateGraph(AgentState)
-
-    g.add_node("process", process_node)
-
-    g.add_edge(START, "process")
-    g.add_edge("process", END)
-
-    return g
+def build_graph() -> None:  # type: ignore[return]
+    """Deprecated — use agents.py / build_agents() instead."""
+    warnings.warn(
+        "build_graph() is removed. Migrate to agents.py and export build_agents().",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    raise NotImplementedError(
+        "LangGraph StateGraph is no longer supported. "
+        "Export build_agents() -> list[Agent] from agents.py instead."
+    )

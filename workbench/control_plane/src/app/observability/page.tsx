@@ -3,7 +3,7 @@ export default function Observability() {
     <div className="p-10 max-w-6xl">
       <h1 className="text-3xl font-semibold tracking-tight">Observability</h1>
       <p className="mt-2 text-zinc-400">
-        Audit events, escalation queue, LangGraph traces, LiteLLM spend (Phase 0.5.6+).
+        Audit events, escalation queue, agent traces (OTel), LiteLLM spend (Phase 0.5.6+).
       </p>
       <div className="mt-8 grid gap-4 sm:grid-cols-3">
         {["Open escalations", "Skills used today", "LiteLLM spend (USD)"].map((label) => (

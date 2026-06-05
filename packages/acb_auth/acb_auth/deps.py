@@ -18,27 +18,86 @@ Headers (set by Next.js SSO proxy):
     X-User-Email   -- the Google-verified email (fracktal.in domain)
     X-User-Role    -- one of: executive | employee | agent
                      Falls back to "employee" if missing/unrecognised.
+
+Service-to-service (internal):
+    Authorization: Bearer <GATEWAY_INTERNAL_TOKEN>
+    Sets role = "agent" so internal callers can access all non-executive routes.
+    The token must match the GATEWAY_INTERNAL_TOKEN env var (falls back to
+    LITELLM_MASTER_KEY in dev).  Empty string disables Bearer auth (never
+    accept all callers — use SSO headers instead).
 """
 from __future__ import annotations
 
+import os
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException
 
 from acb_auth.roles import UserContext, UserRole, _coerce_role
 
+# ---------------------------------------------------------------------------
+# Internal service token (server → gateway calls, e.g. Next.js proxy route)
+# ---------------------------------------------------------------------------
+
+def _get_internal_token() -> str:
+    """Resolve the expected Bearer token for server-to-server calls.
+
+    Precedence: GATEWAY_INTERNAL_TOKEN → LITELLM_MASTER_KEY (via Settings) → "".
+    An empty string means Bearer auth is disabled.
+    """
+    tok = os.getenv("GATEWAY_INTERNAL_TOKEN", "").strip()
+    if not tok:
+        # Try Settings (pydantic-settings loads .env; os.getenv may miss it)
+        try:
+            from acb_common import get_settings  # noqa: PLC0415
+            tok = (get_settings().litellm_master_key or "").strip()
+        except Exception:  # noqa: BLE001
+            pass
+    if not tok:
+        # Hard fallback to raw env (Docker / CI where vars are injected directly)
+        tok = os.getenv("LITELLM_MASTER_KEY", "").strip()
+    return tok
+
+
 
 async def get_current_user(
     x_user_email: Annotated[str | None, Header(alias="X-User-Email")] = None,
     x_user_role: Annotated[str | None, Header(alias="X-User-Role")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> UserContext:
-    """Resolve identity from SSO-injected headers.
+    """Resolve identity from SSO-injected headers or an internal Bearer token.
 
-    Never raises -- missing header produces UserContext(email=None, role=EMPLOYEE)
-    so dev endpoints remain accessible. Enforcement is done by require_role().
+    Priority:
+    1. If ``Authorization: Bearer <token>`` matches the internal token →
+       synthetic ``UserContext(email="system:internal", role=AGENT)``.
+    2. If ``X-User-Email`` is set → resolve from SSO headers (normal user flow).
+    3. Otherwise → anonymous ``UserContext(email=None, role=EMPLOYEE)``.
+
+    Never raises — missing/wrong headers resolve to the lowest-privilege role.
+    Enforcement is done by require_role().
     """
+    # 1. Internal Bearer token (Next.js proxy, cron jobs, CI)
+    if authorization and authorization.startswith("Bearer "):
+        submitted = authorization.removeprefix("Bearer ").strip()
+        expected = _get_internal_token()
+        # Only accept if expected is non-empty AND tokens match.
+        # A timing-safe compare would be ideal, but these are local dev tokens.
+        if expected and submitted == expected:
+            return UserContext(email="system:internal", role=UserRole.AGENT)
+
+    # 2. SSO headers (browser sessions proxied by Next.js SSO middleware)
+    email = x_user_email
+    if email:
+        # Domain enforcement: reject emails not from the allowed domain.
+        # This is a defence-in-depth check — the Next.js middleware and Google SSO
+        # should already have blocked non-fracktal.in users before this point.
+        allowed_domain = os.getenv("ALLOWED_EMAIL_DOMAIN", "fracktal.in").lower().lstrip("@")
+        if not email.lower().endswith("@" + allowed_domain):
+            # Treat as anonymous rather than raising — callers use require_role() to enforce.
+            email = None
+
     return UserContext(
-        email=x_user_email,
+        email=email,
         role=_coerce_role(x_user_role),
     )
 

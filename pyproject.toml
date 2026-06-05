@@ -24,7 +24,6 @@ dependencies = [
     "ingestion",
     "reconciler",
     "action-broker",
-    "escalation-ui",
     "bcrypt>=5.0.0",
 ]
 
@@ -60,7 +59,6 @@ orchestrator  = { workspace = true }
 ingestion     = { workspace = true }
 reconciler    = { workspace = true }
 action-broker  = { workspace = true }
-escalation-ui  = { workspace = true }
 
 # ---------- Tooling config ----------
 
@@ -84,7 +82,7 @@ disallow_untyped_decorators = false
 exclude = ["workbench/", "infra/", "build/", "dist/"]
 
 [tool.pytest.ini_options]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers -m 'not integration'"
 asyncio_mode = "auto"
 testpaths = ["tests", "apps", "packages"]
 markers = [

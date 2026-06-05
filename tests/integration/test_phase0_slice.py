@@ -33,11 +33,10 @@ def test_retrieval_returns_cited_block() -> None:
 
 
 def test_audit_event_persists_to_db() -> None:
-    from sqlalchemy import select
-
     from acb_audit import AuditEvent, record
     from acb_graph import get_session
     from acb_graph.models import AuditEvent as AuditRow
+    from sqlalchemy import select
 
     evt = AuditEvent(actor="test:pytest", action="ping", target="test:target", payload={"k": 1})
     record(evt)
@@ -49,11 +48,10 @@ def test_audit_event_persists_to_db() -> None:
 
 
 def test_clickup_normaliser_upserts() -> None:
-    from sqlalchemy import select
-
     from acb_graph import get_session
     from acb_graph.models import Task
     from ingestion.sources.clickup.normaliser import normalise_tasks
+    from sqlalchemy import select
 
     sample = [
         {
@@ -77,17 +75,3 @@ def test_clickup_normaliser_upserts() -> None:
         row = s.execute(select(Task).where(Task.clickup_id == "test-task-9001")).scalar_one()
     assert row.title == "Calibrate end-effector"
     assert row.stage == "in_progress"
-
-
-@pytest.mark.asyncio
-async def test_langgraph_pipeline_runs() -> None:
-    """Compile the graph and run it end-to-end (requires LiteLLM container)."""
-    from orchestrator.graph import build_graph
-
-    g = build_graph()
-    state = await g.ainvoke({"user_query": "what's the status of Project Julian?"})
-    assert "answer" in state
-    assert isinstance(state["answer"], str) and state["answer"]
-    # With seed data present, hits should be non-empty and citations should land.
-    assert state.get("hits"), state
-    assert state.get("citations"), state

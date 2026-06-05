@@ -17,12 +17,6 @@ brain.fracktal.in {
     }
 }
 
-# --- Langfuse (self-hosted observability) ---
-langfuse.fracktal.in {
-    encode zstd gzip
-    reverse_proxy 127.0.0.1:3000
-}
-
 # --- Skill Workbench (Phase 0.5+, when enabled) ---
 # workbench.fracktal.in {
 #     encode zstd gzip

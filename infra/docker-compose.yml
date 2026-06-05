@@ -1,10 +1,8 @@
 # AI Company Brain — Docker Compose stack.
 # Same file works for local dev (Windows / Mac via Docker Desktop) and the
-# Hostinger KVM 4 VPS (Ubuntu 24.04 + Docker). Compose profiles let you start
-# lean and add Langfuse later:
+# Hostinger KVM 4 VPS (Ubuntu 24.04 + Docker).
 #
-#   Lean (Phase 0 minimum):  docker compose --profile core up -d
-#   Full  (with observability): docker compose --profile core --profile obs up -d
+#   Start: docker compose --profile core up -d
 #
 # AGE (Apache property-graph) is deferred to Phase 2 — Phase 0 only needs
 # pgvector + relational tables. See ai-company-brain/system_architecture.md §4.
@@ -19,7 +17,9 @@ services:
     image: pgvector/pgvector:pg16
     container_name: acb-postgres
     <<: *restart
-    profiles: ["core", "obs"]
+    profiles: ["core"]
+    mem_limit: 512m
+    memswap_limit: 512m
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-acb}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-acb_dev_change_me}
@@ -28,6 +28,7 @@ services:
       - "5432:5432"
     volumes:
       - acb-postgres-data:/var/lib/postgresql/data
+      - ./postgres/00_create_databases.sql:/docker-entrypoint-initdb.d/00_create_databases.sql:ro
       - ./postgres/01_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-acb} -d $${POSTGRES_DB:-acb}"]
@@ -36,14 +37,18 @@ services:
       retries: 20
 
   redis:
-    # Phase 1 (WBS 1.8): upgraded from redis:7-alpine to redis-stack-server so
-    # we get RediSearch + RedisJSON, which LiteLLM's `redis-semantic` cache
-    # backend depends on. The vanilla Redis command set (used by everything
-    # else: queues, rate-limits, locks) is unchanged.
-    image: redis/redis-stack-server:7.4.0-v0
+    # Vanilla Redis 7 is sufficient for Phase 0:
+    #   - Redis Streams (event bus / webhook deduplication)
+    #   - agent-framework-redis RedisHistoryProvider (conversation history per thread)
+    #   - agent-framework-redis RedisContextProvider (persistent agent context)
+    # Redis Stack (RediSearch + RedisJSON) is only needed if/when we enable
+    # LiteLLM's redis-semantic cache backend — deferred to Phase 2 (WBS 1.8).
+    image: redis:7-alpine
     container_name: acb-redis
     <<: *restart
-    profiles: ["core", "obs"]
+    profiles: ["core"]
+    mem_limit: 256m
+    memswap_limit: 256m
     ports:
       - "6379:6379"
     volumes:
@@ -58,20 +63,30 @@ services:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: acb-litellm
     <<: *restart
-    profiles: ["core", "obs"]
+    profiles: ["core"]
+    mem_limit: 2g
+    memswap_limit: 2g
     depends_on:
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-change-me}
+      # LiteLLM UI credentials — set a static user/pass so the UI opens without
+      # a login prompt in local dev. Change these in prod via infra/.env.
+      UI_USERNAME: ${LITELLM_UI_USERNAME:-admin}
+      UI_PASSWORD: ${LITELLM_UI_PASSWORD:-admin}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY:    ${OPENAI_API_KEY:-}
       GEMINI_API_KEY:    ${GEMINI_API_KEY:-}
-      # NOTE: intentionally no DATABASE_URL. Pointing LiteLLM at Postgres
-      # triggers ~110 Prisma migrations on first boot (~9 minutes) and is only
-      # needed for virtual-keys / built-in spend-logs. We rely on Langfuse for
-      # observability, so pure-proxy mode is the right tradeoff for Phase 0.
+      GITHUB_TOKEN:      ${GITHUB_TOKEN:-}
       VLLM_BASE_URL: ${VLLM_BASE_URL:-http://host.docker.internal:8001/v1}
+      # DATABASE_URL enables the LiteLLM management UI at http://localhost:4000/ui
+      # (virtual keys, spend tracking, model management). Prisma runs ~110 migrations
+      # on first boot — expect ~5 min cold-start. Subsequent boots are fast.
+      # Uses a DEDICATED litellm database to keep its Prisma schema isolated.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-acb}:${POSTGRES_PASSWORD:-acb_dev_change_me}@postgres:5432/litellm
     ports:
       - "4000:4000"
     volumes:
@@ -87,61 +102,28 @@ services:
       retries: 10
       start_period: 20s
 
-  # --- Langfuse (self-hosted observability). Opt-in via `--profile obs`. ---
-  langfuse:
-    image: langfuse/langfuse:2
-    container_name: acb-langfuse
-    <<: *restart
-    profiles: ["obs"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-acb}:${POSTGRES_PASSWORD:-acb_dev_change_me}@postgres:5432/${POSTGRES_DB:-acb}
-      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-dev-langfuse-secret-change-me}
-      SALT:            ${LANGFUSE_SALT:-dev-langfuse-salt}
-      NEXTAUTH_URL:    ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3000}
-      TELEMETRY_ENABLED: "false"
-    ports:
-      - "3000:3000"
-
-  # --- OpenHands AI coding agent. Opt-in via `--profile sandbox`. ---
-  # Runs the full OpenHands GUI at http://localhost:3002.
-  # Uses port 3002 to avoid collision with Langfuse (obs profile, port 3000).
+  # --- Copilot SDK mutation sandbox image. Build via `--profile sandbox`. ---
+  # Not a long-running service — the image is built here so
+  # `docker compose --profile sandbox build` produces acb-mutation-runner:latest.
+  # The orchestrator spawns short-lived `docker run --rm -d` containers from
+  # this image on demand; no persistent container is kept running.
   #
-  # Windows (Docker Desktop): /var/run/docker.sock is proxied transparently.
-  # First run pulls ~2 GB (openhands image + runtime image); be patient.
+  # Auth (pass at least one):
+  #   LITELLM_MASTER_KEY  — BYOK via local LiteLLM proxy (preferred)
+  #   GITHUB_TOKEN        — standard Copilot subscription auth
   #
-  # Configure your LLM via the OpenHands Settings UI on first launch.
-  # To use the local LiteLLM proxy: set base_url = http://host.docker.internal:4000
-  openhands:
-    image: ghcr.io/all-hands-ai/openhands:0.59
-    container_name: acb-openhands
-    <<: *restart
+  # Build only: docker compose --profile sandbox build mutation
+  mutation:
+    build:
+      context: ../apps/orchestrator
+      dockerfile: Dockerfile.mutation
+    image: acb-mutation-runner:latest
     profiles: ["sandbox"]
-    environment:
-      # Image used for per-conversation sandboxes (Docker-in-Docker).
-      # Must match the openhands image version — runtime:latest was Aug 2024
-      # (miniforge3) but 0.59 expects micromamba; use the pinned runtime tag.
-      SANDBOX_RUNTIME_CONTAINER_IMAGE: ghcr.io/all-hands-ai/runtime:0.59-nikolaik
-      # Tell OpenHands which host port it's exposed on so sandbox webhook
-      # callbacks (http://host.docker.internal:{port}/api/v1/webhooks) work.
-      OH_SANDBOX_HOST_PORT: "3002"
-      LOG_ALL_EVENTS: "true"
-      # Pre-wire LLM to the local LiteLLM proxy (Gemini 2.5 Pro via tier3-opus).
-      # Must use "openai/" prefix so OpenHands' internal litellm routes to the proxy.
-      LLM_MODEL: "openai/tier3-opus"
-      LLM_BASE_URL: "http://host.docker.internal:4000"
-      LLM_API_KEY: ${LITELLM_MASTER_KEY:-sk-local-dev-change-me}
-    ports:
-      - "3002:3000"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - acb-openhands-data:/.openhands
+    # Override entrypoint so `docker compose up` is a no-op for this service.
+    entrypoint: ["true"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
 volumes:
   acb-postgres-data:
   acb-redis-data:
-  acb-openhands-data:

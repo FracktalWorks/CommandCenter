@@ -1,0 +1,411 @@
+"use client";
+
+/**
+ * MarkdownMessage — VS Code Copilot-style rich message renderer.
+ *
+ * Features:
+ *  • Full GitHub-flavoured Markdown (GFM): tables, strikethrough, task lists
+ *  • Syntax-highlighted code blocks (VS Code dark+ theme via react-syntax-highlighter)
+ *  • Terminal blocks with macOS-style chrome (red/yellow/green dots)
+ *  • One-click copy button on every code block
+ *  • Clickable links (open in new tab)
+ *  • Collapsible tool-call accordion blocks (mirrors VS Code's "Used tool: …")
+ *  • Streaming cursor (blinking ▌) while the response is in-flight
+ */
+
+import { useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+export interface ToolEvent {
+  id: string;
+  name: string;
+  args?: Record<string, unknown>;
+  result?: string;
+  status: "running" | "done" | "error";
+  startedAt: number;
+  endedAt?: number;
+}
+
+interface MarkdownMessageProps {
+  content: string;
+  streaming?: boolean;
+  toolEvents?: ToolEvent[];
+  /** Invoked when the user clicks an MCQ choice button (```choices block). */
+  onChoice?: (choice: string) => void;
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const TERMINAL_LANGS = new Set([
+  "bash", "sh", "shell", "terminal", "console",
+  "zsh", "powershell", "cmd", "fish",
+]);
+
+// ─── Copy button ─────────────────────────────────────────────────────────────
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() =>
+        navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        })
+      }
+      className="text-[11px] text-zinc-400 hover:text-zinc-100 transition-colors px-2 py-0.5 rounded hover:bg-zinc-600/60 font-mono"
+    >
+      {copied ? "✓ Copied" : "Copy"}
+    </button>
+  );
+}
+
+// ─── Code block ──────────────────────────────────────────────────────────────
+
+function CodeBlock({ lang, code }: { lang: string; code: string }) {
+  const isTerminal = TERMINAL_LANGS.has(lang);
+
+  return (
+    <div className="my-4 rounded-xl overflow-hidden border border-zinc-700/60 bg-zinc-950">
+      {/* Header bar */}
+      <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-800/80 border-b border-zinc-700/60">
+        {isTerminal ? (
+          <div className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-red-500/70" />
+            <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/70" />
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/70" />
+            <span className="ml-2 text-[11px] text-zinc-500 font-mono">{lang}</span>
+          </div>
+        ) : (
+          <span className="text-[11px] text-zinc-500 font-mono">{lang || "code"}</span>
+        )}
+        <CopyButton text={code} />
+      </div>
+
+      {/* Syntax-highlighted code (VS Code dark+ theme) */}
+      <SyntaxHighlighter
+        style={vscDarkPlus}
+        language={lang || "text"}
+        PreTag="div"
+        customStyle={{
+          margin: 0,
+          borderRadius: 0,
+          background: "transparent",
+          fontSize: "0.785rem",
+          padding: "1rem",
+          lineHeight: "1.6",
+        }}
+        codeTagProps={{
+          style: {
+            fontFamily:
+              "ui-monospace, SFMono-Regular, 'SF Mono', Consolas, 'Courier New', monospace",
+          },
+        }}
+      >
+        {code}
+      </SyntaxHighlighter>
+    </div>
+  );
+}
+
+// ─── Tool-call accordion ─────────────────────────────────────────────────────
+
+function formatToolName(name: string): string {
+  return name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatToolArgs(args: Record<string, unknown>): string {
+  const keys = Object.keys(args);
+  if (keys.length === 0) return "";
+  const first = args[keys[0]];
+  const val = typeof first === "string" ? first : JSON.stringify(first);
+  return val.length > 70 ? val.slice(0, 70) + "…" : val;
+}
+
+function ToolCallBlock({ event }: { event: ToolEvent }) {
+  const [open, setOpen] = useState(false);
+  const durationMs =
+    event.endedAt && event.startedAt ? event.endedAt - event.startedAt : null;
+
+  const statusIcon =
+    event.status === "running" ? (
+      <span className="w-3 h-3 rounded-full border-2 border-zinc-500 border-t-zinc-300 animate-spin inline-block" />
+    ) : event.status === "done" ? (
+      <span className="text-emerald-500 text-xs">✓</span>
+    ) : (
+      <span className="text-red-400 text-xs">✗</span>
+    );
+
+  return (
+    <div className="my-1.5 rounded-lg border border-zinc-700/50 bg-zinc-900/60 overflow-hidden text-xs">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-zinc-800/60 transition-colors text-left"
+      >
+        <span className="shrink-0 flex items-center justify-center w-4">{statusIcon}</span>
+        <span className="text-zinc-300 font-medium shrink-0">
+          {formatToolName(event.name)}
+        </span>
+        {event.args && Object.keys(event.args).length > 0 && (
+          <span className="text-zinc-500 truncate min-w-0">
+            {formatToolArgs(event.args)}
+          </span>
+        )}
+        {durationMs !== null && (
+          <span className="ml-auto shrink-0 text-zinc-600">{durationMs}ms</span>
+        )}
+        <span className="text-zinc-600 shrink-0 ml-1 text-[10px]">
+          {open ? "▲" : "▼"}
+        </span>
+      </button>
+
+      {open && (event.args || event.result) && (
+        <div className="border-t border-zinc-700/50 px-3 py-2.5 space-y-2.5">
+          {event.args && Object.keys(event.args).length > 0 && (
+            <div>
+              <div className="text-[10px] text-zinc-500 uppercase tracking-widest mb-1.5 font-medium">
+                Input
+              </div>
+              <pre className="text-zinc-300 whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed">
+                {JSON.stringify(event.args, null, 2)}
+              </pre>
+            </div>
+          )}
+          {event.result && (
+            <div>
+              <div className="text-[10px] text-zinc-500 uppercase tracking-widest mb-1.5 font-medium">
+                Output
+              </div>
+              <pre className="text-zinc-300 whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed max-h-48 overflow-y-auto">
+                {event.result}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── MCQ choice block ───────────────────────────────────────────────────────
+// Renders a ```choices fenced block as clickable buttons. The first non-list
+// line (if any) is treated as the question; lines beginning with - or * are
+// the selectable options.
+
+function parseChoices(raw: string): { question: string | null; options: string[] } {
+  const lines = raw
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const dashed = lines.filter((l) => /^[-*]\s+/.test(l));
+  if (dashed.length > 0) {
+    const firstDashIdx = lines.findIndex((l) => /^[-*]\s+/.test(l));
+    const question = firstDashIdx > 0 ? lines.slice(0, firstDashIdx).join(" ") : null;
+    const options = dashed.map((l) => l.replace(/^[-*]\s+/, "").trim()).filter(Boolean);
+    return { question, options };
+  }
+  // No dashes — every line is an option.
+  return { question: null, options: lines };
+}
+
+function ChoiceBlock({
+  raw,
+  onChoice,
+}: {
+  raw: string;
+  onChoice?: (choice: string) => void;
+}) {
+  const [picked, setPicked] = useState<string | null>(null);
+  const { question, options } = parseChoices(raw);
+  if (options.length === 0) return null;
+
+  return (
+    <div className="my-3 rounded-xl border border-zinc-700/60 bg-zinc-900/50 p-3">
+      {question && (
+        <div className="text-sm font-medium text-zinc-200 mb-2.5">{question}</div>
+      )}
+      <div className="flex flex-wrap gap-2">
+        {options.map((opt) => {
+          const isPicked = picked === opt;
+          return (
+            <button
+              key={opt}
+              disabled={picked !== null}
+              onClick={() => {
+                setPicked(opt);
+                onChoice?.(opt);
+              }}
+              className={`text-left text-xs rounded-lg border px-3 py-2 transition-colors ${
+                isPicked
+                  ? "border-emerald-600/70 bg-emerald-900/40 text-emerald-200"
+                  : picked !== null
+                  ? "border-zinc-800 bg-zinc-900/40 text-zinc-600 cursor-not-allowed"
+                  : "border-zinc-700 bg-zinc-800/70 text-zinc-200 hover:border-emerald-600/60 hover:bg-zinc-800"
+              }`}
+            >
+              {isPicked && <span className="mr-1.5 text-emerald-400">✓</span>}
+              {opt}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Main component ───────────────────────────────────────────────────────
+
+export default function MarkdownMessage({
+  content,
+  streaming,
+  toolEvents,
+  onChoice,
+}: MarkdownMessageProps) {
+  return (
+    <div className="text-sm text-zinc-200 leading-relaxed min-w-0">
+      {/* Tool-call events — shown before the text response */}
+      {toolEvents && toolEvents.length > 0 && (
+        <div className="mb-3">
+          {toolEvents.map((e) => (
+            <ToolCallBlock key={e.id} event={e} />
+          ))}
+        </div>
+      )}
+
+      {/* Markdown body */}
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          // ── Headings ──
+          h1: ({ children }) => (
+            <h1 className="text-[1.1rem] font-bold text-zinc-100 mt-5 mb-3 pb-1 border-b border-zinc-700">
+              {children}
+            </h1>
+          ),
+          h2: ({ children }) => (
+            <h2 className="text-[1rem] font-semibold text-zinc-100 mt-4 mb-2">
+              {children}
+            </h2>
+          ),
+          h3: ({ children }) => (
+            <h3 className="text-[0.9rem] font-semibold text-zinc-200 mt-3 mb-1.5">
+              {children}
+            </h3>
+          ),
+          h4: ({ children }) => (
+            <h4 className="text-sm font-semibold text-zinc-300 mt-2 mb-1">
+              {children}
+            </h4>
+          ),
+
+          // ── Paragraphs & text ──
+          p: ({ children }) => (
+            <p className="mb-3 last:mb-0 text-zinc-200">{children}</p>
+          ),
+          strong: ({ children }) => (
+            <strong className="font-semibold text-zinc-100">{children}</strong>
+          ),
+          em: ({ children }) => (
+            <em className="italic text-zinc-300">{children}</em>
+          ),
+          del: ({ children }) => (
+            <del className="line-through text-zinc-500">{children}</del>
+          ),
+
+          // ── Lists ──
+          ul: ({ children }) => (
+            <ul className="mb-3 ml-5 space-y-1 list-disc list-outside marker:text-zinc-500">
+              {children}
+            </ul>
+          ),
+          ol: ({ children }) => (
+            <ol className="mb-3 ml-5 space-y-1 list-decimal list-outside marker:text-zinc-500">
+              {children}
+            </ol>
+          ),
+          li: ({ children }) => (
+            <li className="text-zinc-300 pl-0.5">{children}</li>
+          ),
+
+          // ── Links ──
+          a: ({ href, children }) => (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-400 underline underline-offset-2 hover:text-blue-300 transition-colors break-all"
+            >
+              {children}
+            </a>
+          ),
+
+          // ── Blockquote ──
+          blockquote: ({ children }) => (
+            <blockquote className="border-l-2 border-zinc-600 pl-4 my-3 text-zinc-400 italic">
+              {children}
+            </blockquote>
+          ),
+
+          // ── Tables (GFM) ──
+          table: ({ children }) => (
+            <div className="overflow-x-auto my-4 rounded-lg border border-zinc-700/60">
+              <table className="w-full text-sm border-collapse">{children}</table>
+            </div>
+          ),
+          thead: ({ children }) => (
+            <thead className="bg-zinc-800/60">{children}</thead>
+          ),
+          th: ({ children }) => (
+            <th className="px-4 py-2 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wide border-b border-zinc-700/60">
+              {children}
+            </th>
+          ),
+          td: ({ children }) => (
+            <td className="px-4 py-2 text-zinc-300 border-b border-zinc-800/60 last:border-b-0">
+              {children}
+            </td>
+          ),
+
+          // ── HR ──
+          hr: () => <hr className="my-5 border-zinc-700" />,
+
+          // ── Code (inline + block) ──
+          pre: ({ children }) => <>{children}</>,
+          code({ className, children }) {
+            const match = /language-(\w+)/.exec(className || "");
+            const lang = match ? match[1].toLowerCase() : "";
+            const codeString = String(children).replace(/\n$/, "");
+
+            // Block code (has a language class)
+            if (match) {
+              // MCQ choices block — render interactive buttons instead of code.
+              if (lang === "choices") {
+                return <ChoiceBlock raw={codeString} onChoice={onChoice} />;
+              }
+              return <CodeBlock lang={lang} code={codeString} />;
+            }
+
+            // Inline code
+            return (
+              <code className="bg-zinc-800 text-zinc-200 rounded px-1.5 py-0.5 font-mono text-[0.82em] border border-zinc-700/50">
+                {children}
+              </code>
+            );
+          },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+
+      {/* Streaming cursor */}
+      {streaming && (
+        <span className="inline-block w-[2px] h-[1em] bg-zinc-300 animate-pulse ml-0.5 align-middle rounded-full" />
+      )}
+    </div>
+  );
+}

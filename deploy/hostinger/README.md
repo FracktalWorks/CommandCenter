@@ -7,7 +7,7 @@ Target spec (matches `system_architecture.md` §5 v1 baseline):
 | KVM 2 | 2    | 8 GB | 100 GB NVMe | ~$14.99/mo           |
 | **KVM 4 (recommended)** | **4** | **16 GB** | **200 GB NVMe** | **~$28.99/mo** |
 
-KVM 4 has enough headroom for Postgres + Redis + LiteLLM + Langfuse + workbench. KVM 2 works for Phase 0/1 only.
+KVM 4 has enough headroom for Postgres + Redis + LiteLLM + workbench. KVM 2 works for Phase 0/1 only.
 
 ## One-time: provision the server
 
@@ -57,8 +57,6 @@ Set at minimum:
 - `ANTHROPIC_API_KEY` (Tier 1/2/3)
 - `POSTGRES_PASSWORD` (any long random string)
 - `LITELLM_MASTER_KEY` (any long random string)
-- `LANGFUSE_NEXTAUTH_SECRET` + `LANGFUSE_SALT` (random)
-- `LANGFUSE_NEXTAUTH_URL=https://langfuse.your-domain.tld` (if exposing)
 - `GATEWAY_SESSION_SECRET` (random)
 - ClickUp / Zoho / WhatsApp tokens as each phase needs them.
 
@@ -70,7 +68,7 @@ Then edit `deploy/hostinger/caddy/Caddyfile` and replace the placeholder hostnam
 bash deploy/hostinger/deploy.sh
 ```
 
-This runs `docker compose --profile core --profile obs up -d`, waits for healthchecks, and runs `scripts/check_infra.py`.
+This runs `docker compose --profile core up -d`, waits for healthchecks, and runs `scripts/check_infra.py`.
 
 ## Redeploy after a code change
 
@@ -96,7 +94,6 @@ Hostinger takes weekly backups of the whole VPS automatically (included in plan)
 
 Once deployed (and DNS pointed):
 - **Gateway:** `https://brain.your-domain.tld`
-- **Langfuse:** `https://langfuse.your-domain.tld`
 - **Workbench** (Phase 0.5+): `https://workbench.your-domain.tld`
 
 LiteLLM stays on the internal Docker network — never exposed publicly.
@@ -105,6 +102,6 @@ LiteLLM stays on the internal Docker network — never exposed publicly.
 
 - VPS (KVM 4): ~$29/mo
 - Vexa compute (when Phase 2 lands): ~€0.05–0.15/meeting
-- LLM API (Anthropic): tracked in Langfuse; tuned per ADR-008 caching strategy
+- LLM API (Anthropic): cost metered via LiteLLM; tuned per ADR-008 caching strategy
 
 Stay well under the per-month budget by keeping Tier 1 on a cheap model (Haiku, then Qwen3 once a GPU host is added) and enforcing prompt caching in `litellm/config.yaml`.

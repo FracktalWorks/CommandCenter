@@ -30,14 +30,26 @@ The agent writes its final result to `state["result"]`.
 
 ## Error Handling
 If the agent raises an unhandled exception, the Core executor will invoke
-`attempt_self_mutation` (max 1 attempt).  The failing run is flagged in
-Langfuse and a PR is opened against this repo for human review.
+`Self_Mutation_Node` (max 1 attempt per run).  The failing run is traced in
+Langfuse via MAF's built-in OTel exporter and a PR is opened against this
+repo for human review.
 
 ## Development
 ```bash
-# Run tests
-pytest tests/
+# Install dependencies
+uv sync
 
-# Run evals
+# Run tests
+uv run pytest tests/ -v
+
+# Run evals (requires LITELLM_BASE_URL + LITELLM_API_KEY)
 promptfoo eval -c evals/promptfoo.yaml
 ```
+
+## Runtime Contract
+- **Entry point:** `agents.py::build_agents() -> list[Agent]` (MAF)
+- **Inference:** All LLM calls route through LiteLLM (`tier2-sonnet` alias)
+- **MCP servers:** Declared in `config.json::mcp_servers`; credentials injected
+  at runtime from the secrets vault
+- **History:** `RedisHistoryProvider` attached only on interactive (AG-UI) path;
+  background event-driven runs use in-memory `AgentSession`

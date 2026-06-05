@@ -11,8 +11,8 @@ say()  { printf "\n==> %s\n" "$*"; }
 say "Pulling images"
 docker compose -f infra/docker-compose.yml pull
 
-say "Booting stack (core + obs)"
-docker compose -f infra/docker-compose.yml --profile core --profile obs up -d --remove-orphans
+say "Booting stack (core)"
+docker compose -f infra/docker-compose.yml --profile core up -d --remove-orphans
 
 say "Waiting for healthchecks (up to 90s)"
 deadline=$(( $(date +%s) + 90 ))

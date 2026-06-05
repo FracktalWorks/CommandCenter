@@ -11,6 +11,7 @@ build/
 .env
 .env.*
 !.env.example
+infra/.env
 *.pem
 *.key
 secrets/
@@ -42,5 +43,5 @@ tmp/
 # Docker volumes (if mounted locally)
 infra/volumes/
 
-# Theia IDE (old PRD — ADR-014 removed)
+# Theia IDE (old PRD - ADR-014 removed)
 ide/

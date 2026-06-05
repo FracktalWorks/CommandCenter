@@ -54,6 +54,16 @@ async def list_lists_in_folder(folder_id: str, *, archived: bool = False) -> lis
         )
 
 
+async def get_task(task_id: str) -> dict[str, Any]:
+    """Fetch a single task by its ClickUp task ID.
+
+    Used by the webhook receiver to materialise the full task object from a
+    webhook notification that only carries the task_id.
+    """
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        return await _get(http, f"/task/{task_id}")
+
+
 async def list_tasks(
     list_id: str,
     *,

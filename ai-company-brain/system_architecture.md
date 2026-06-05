@@ -1,7 +1,8 @@
 ﻿# System Architecture — CommandCenter v2 (Distributed, Self-Mutating Agent Network)
 
-> Project: CommandCenter v2 · Org: Fracktal Works · Date: 2026-06-02
-> Status: v2.0 — Decoupled per-agent and per-skill GitHub repos, dynamic runtime loading, self-mutation loop.
+> Project: CommandCenter v2 · Org: Fracktal Works · Date: 2026-06-02  
+> Updated: 2026-06-04 — (v2.3) LangGraph replaced by MAF + DurableTask. (v2.4) MAF overlap analysis: DTS deferred; AG-UI unifies interactive + background; OTel replaces Langfuse SDK; redis-stack reverted to alpine.
+> Status: v2.4 — Streamlined Phase 0 stack. Single unified MAF runtime. DurableTask deferred to Phase 2.
 
 ---
 
@@ -11,9 +12,9 @@
 - **Pull + Push + Ambient** interaction modes must all be supported.
 - **Decoupled agent and skill repositories.** Every agent and every skill lives in its own GitHub repository. The Core engine contains no agent logic or skill files.
 - **Persistent runtime loading.** Agent and skill repos are cloned once into a persistent local cache and refreshed via `git pull` on each event (~0.5 s). No full re-clone per run; no server redeploy to pick up new agent logic.
-- **Ephemeral sandboxed execution.** All agent task execution runs inside short-lived OpenHands containers, destroyed after each run.
+- **One unified agent runtime — MAF — for both background and interactive execution.** (1) **MAF** (`agent-framework` + `agent-framework-ag-ui`) is the *sole agent execution runtime*: `HandoffBuilder`/`ConcurrentBuilder`/`MagenticBuilder` for background event-driven agents; `add_agent_framework_fastapi_endpoint(app, agent, "/copilot/chat")` for interactive operator chat (AG-UI protocol). CopilotKit frontend speaks AG-UI natively. No separate SSE path needed. (2) **GitHub Copilot SDK** is used *only* for the `acb-mutation-runner` container subprocess (Self_Mutation_Node). Not a runtime for agent logic or chat. (3) **CopilotKit** (`@copilotkit/react-*`) is a *React UI library* — the rendering layer for the chat window. AG-UI is CopilotKit's own streaming protocol. The Control Plane chat connects to MAF agents via AG-UI. (4) **DurableTask (DTS) is deferred to Phase 2.** Phase 0-1 agents are short-running (seconds to minutes); HITL uses the Action Broker pattern (Postgres `approval_queue`). See ADR-026. **No LangGraph. No deepagents. No n8n. No raw Copilot SDK chat path.**
 - **Hot-patch self-mutation with an audit gate.** When an agent fails, the Self_Mutation_Node applies a tested code fix directly to the persistent local clone (the fix is live immediately) and opens a GitHub PR as an audit record. A human can **merge** (canonicalise the fix in the remote repo) or **reject/close** (Core reverts the local clone to `origin/main`). `max_mutation_attempts = 1` prevents loops.
-- **Platform-owned credentials; agent-declared dependencies.** All integration credentials (API keys, OAuth tokens, webhook secrets) are stored encrypted in Core's Integration Registry. Agent `config.json` declares which integrations it needs by name; the Dynamic Agent Loader injects only those credentials into LangGraph state. No credential ever lives in an agent or skill repo.
+- **Platform-owned credentials; agent-declared dependencies.** All integration credentials (API keys, OAuth tokens, webhook secrets) are stored encrypted in Core's Integration Registry. Agent `config.json` declares which integrations it needs by name; the Dynamic Agent Loader injects only those credentials into the MAF orchestration context (via `mcp_servers=` config in `GitHubCopilotAgent`). Copilot-native agents: currently via `_build_agent_env()` (interim — to be wired to Integration Registry in Phase 2). No credential ever lives in an agent or skill repo.
 - **No in-app skill/workflow authoring.** All development happens in VS Code + Git. The Control Plane is for chat, observability, and HITL approval — not editing.
 - **Tiered LLM routing** (cheap classifier → expensive reasoner) for cost.
 - **MVP-first iterative build** with ~2 engineers + AI assistance.
@@ -61,41 +62,42 @@ C4Container
     Person(user, "User", "Executive / Employee")
 
     Container_Boundary(core, "CommandCenter Core") {
-        Container(gw, "Interaction Gateway", "FastAPI + WebSocket", "Listens for webhook/cron events; pull queries; push notifications; approval UI")
-        Container(dal, "Dynamic Agent Loader", "Python (importlib + sys.path)", "On event: clones target agent repo + declared skill repos; imports graph.py at runtime; hands StateGraph to LangGraph executor")
-        Container(orch, "Orchestrator", "LangGraph + PostgresSaver", "Executes the agent's StateGraph workflow; durable state via Postgres; routes to Self_Mutation_Node on error")
-        Container(workers, "OpenHands Worker Containers", "OpenHands SDK (Apache-2.0)", "Ephemeral execution sandboxes per task; each destroyed after run; skills execute here")
-        Container(mutator, "Self_Mutation_Node", "OpenHands SDK dev sandbox", "Checks out failing agent's own repo; reads telemetry; fixes code; runs tests; opens GitHub PR; max_mutation_attempts=1; self-destroys")
-        Container(ingest, "Ingestion Workers", "Python + MCP servers + LangGraph skills", "Webhook receivers, Pub/Sub consumers, meeting bot drivers; ClickUp/Zoho/Odoo MCP")
-        Container(graph, "Entity Graph + Memory", "Postgres + pgvector + Apache AGE + Mem0 + Graphiti", "Entity graph; episodic memory (Mem0); bi-temporal entity KG (Graphiti)")
+        Container(gw, "Interaction Gateway", "FastAPI + WebSocket", "Listens for webhook/cron events; pull queries; push notifications; approval UI. Hosts both MAF agent dispatch and Copilot SDK SSE endpoints.")
+        Container(dal, "Dynamic Agent Loader", "Python (importlib + sys.path)", "On event: clones target agent repo + declared skill repos; imports agents.py at runtime; calls build_agents() and runs via MAF native workflow engine (no DTS in Phase 0).")
+        Container(orch, "Orchestrator", "MAF HandoffBuilder + native workflow engine", "Executes agent workflows via MAF HandoffBuilder/ConcurrentBuilder/MagenticBuilder. HITL via Action Broker pattern (Postgres approval_queue). Routes to Self_Mutation_Node on error. DurableTask deferred to Phase 2.")
+        Container(ag_ui, "MAF AG-UI Endpoint", "agent-framework-ag-ui (FastAPI)", "add_agent_framework_fastapi_endpoint wraps the same MAF agents for interactive operator chat. AG-UI streaming protocol — CopilotKit frontend speaks AG-UI natively. Replaces copilot_chat.py SSE path.")
+        Container(mutator, "Self_Mutation_Node + Copilot Mutation Container", "GitHub Copilot SDK (acb-mutation-runner Docker image)", "Spawned on MAF orchestration error; receives failure telemetry + BYOK credentials via env; checks out live clone; applies fix; runs tests; opens GitHub PR. max_mutation_attempts=1; container self-destroys.")
+        Container(ingest, "Ingestion Workers", "Python + MCP servers + MAF skills", "Webhook receivers, Pub/Sub consumers, meeting bot drivers; ClickUp/Zoho/Odoo MCP")
+        Container(graph, "Entity Graph + Memory", "Postgres + pgvector + Mem0", "Entity graph; episodic memory via Mem0ContextProvider (agent-framework-mem0). Apache AGE and Graphiti deferred to Phase 2.")
         Container(actions, "Action Broker", "Python", "Approval queue, audit log, write-back to source systems")
         Container(recon, "Reconciler Agent", "agent-reconciler (cloned at runtime)", "Nightly diff; escalation queue")
         Container(bot, "Meeting Bot Fleet", "Vexa (Apache-2.0, self-hosted)", "Joins Meet/Teams/Zoom; streams audio for transcription")
         Container(stt, "Transcription", "WhisperX + Pyannote", "STT + speaker diarization")
         Container(bus, "Event Bus", "Redis Streams", "Decouples ingestion from orchestration")
-        Container(gw_llm, "LLM Gateway", "LiteLLM proxy (MIT)", "Unified API; prompt caching; RouteLLM tier routing; cost metering")
-        Container(infer, "Local Inference", "vLLM + Qwen3-8B (Tier 1)", "Automatic Prefix Caching; OpenAI-compatible API")
-        Container(scache, "Semantic Cache", "GPTCache (MIT)", "30-70% cost saving on repeated triage queries; 1h TTL")
-        Container(compress, "Token Compressor", "LLMLingua-2 (MIT, CPU)", "50-60% compression of long tool outputs")
-        Container(obs, "Observability", "Langfuse (MIT, self-hosted) + OpenTelemetry", "LLM traces, cost per tier, eval scores; failure telemetry consumed by Self_Mutation_Node")
-        Container(cp, "Control Plane (Workbench)", "Next.js + CopilotKit + AG-UI", "Three panes: (1) Chat / Agent Inbox · (2) Observability (Langfuse embed) · (3) HITL Approval Queue. No skill/workflow editor — authoring is done in VS Code + Git.")
+        Container(gw_llm, "LLM Gateway", "LiteLLM proxy (MIT)", "Unified API; prompt caching; model aliases (tier-1/2/3); cost metering. No RouteLLM — simple alias-based tier selection. All MAF agent calls route here.")
+        Container(infer, "Local Inference [Phase 2]", "vLLM + Qwen3-8B", "Deferred: requires GPU VM. Phase 0 uses cloud Tier-1 (Haiku / GPT-4o-mini via LiteLLM).")
+        Container(scache, "Semantic Cache [Phase 2]", "LiteLLM redis-semantic", "Deferred: redis-stack-server upgrade deferred until LiteLLM semantic cache is actually configured.")
+        Container(compress, "Token Compressor [Phase 2]", "LLMLingua-2 (MIT, CPU)", "Deferred: 50-60% compression. Add when context costs become a problem.")
+        Container(obs, "Observability", "MAF native OTel [backend TBD]", "MAF emits OpenTelemetry spans automatically via configure_otel_providers() — no Langfuse Python SDK in agent code. OTLP-ready; a self-hosted trace backend (e.g. Langfuse) is deferred and removed from the Phase-0 stack. MCP trace propagation included. Cost per tier via LiteLLM spend tracking.")
+        Container(cp, "Control Plane (Workbench)", "Next.js", "Three panes: (1) Chat / Agent Inbox with model picker + agent switcher · (2) Observability (audit log + spend) · (3) HITL Approval Queue. No skill/workflow editor — authoring is done in VS Code + Git.")
     }
 
     System_Ext(gh, "GitHub", "Agent repos (agent-*) and skill repos (skill-*). PR review for self-mutation PRs.")
     System_Ext(src, "ClickUp / Zoho / Odoo / Gmail / WhatsApp / Meet", "Sources of truth + capture surfaces")
     System_Ext(llms, "LLM Providers", "Haiku / Sonnet / Opus class")
+    System_Ext(copilot_api, "GitHub Copilot API", "https://api.githubcopilot.com — model provider for Copilot SDK sessions and copilot/* LiteLLM aliases")
 
     Rel(user, gw, "HTTPS / WS")
     Rel(user, cp, "HTTPS / WS")
-    Rel(gw, dal, "Route event to agent")
+    Rel(gw, dal, "Route webhook/cron event to MAF agent")
+    Rel(gw, ag_ui, "Route interactive chat (AG-UI protocol)")
     Rel(dal, gh, "Clone agent repo + skill repos")
-    Rel(dal, orch, "Initialise StateGraph from cloned graph.py")
-    Rel(orch, workers, "Spawn ephemeral worker containers")
+    Rel(dal, orch, "Initialise MAF agents from cloned agents.py")
     Rel(orch, mutator, "Route on error (max 1 attempt)")
     Rel(mutator, gh, "Checkout agent repo; open PR with fix")
+    Rel(ag_ui, orch, "Same MAF agents; AG-UI streaming wrapper")
     Rel(orch, graph, "Query / write entity graph")
     Rel(orch, actions, "Submit action for approval")
-    Rel(workers, gw_llm, "All LLM calls via gateway")
     Rel(gw_llm, scache, "Check cache first")
     Rel(gw_llm, infer, "Tier-1 local (Qwen3-8B via vLLM)")
     Rel(gw_llm, llms, "Tier-2/3 via API")
@@ -118,7 +120,7 @@ C4Container
 ## 4. Distributed Repository Layout
 
 ```
-FracktalWorks/CommandCenter-Core           ← Core engine (this repo). FastAPI, Docker infra, LangGraph harness, Postgres state, LiteLLM, Langfuse, Action Broker.
+FracktalWorks/CommandCenter-Core           ← Core engine (this repo). FastAPI, Docker infra, MAF orchestration harness, Postgres entity/memory/audit, LiteLLM, Action Broker.
 FracktalWorks/agent-task-manager           ← Agent: ClickUp task management + stale-task escalation
 FracktalWorks/agent-billing                ← Agent: billing & invoice workflows
 FracktalWorks/agent-sales                  ← Agent: Zoho CRM sales pipeline + deal follow-ups
@@ -147,14 +149,17 @@ agent-<name>/
                      #     "model_tier": "tier-2",
                      #     "max_mutation_attempts": 1
                      #   }
-  graph.py           # LangGraph StateGraph definition — the agent's business logic
+  agents.py          # MAF Agent definitions — exports build_agents() → list[Agent]
+                     #   Each Agent wraps a GitHubCopilotAgent (Copilot SDK backend)
+                     #   or another MAF-compatible provider (OpenAI, Anthropic, LiteLLM)
+                     #   Agents declare tools, MCP servers, and instructions here.
   instructions.md    # Agent persona, operating context, decision guidelines
   tests/             # pytest suite; must pass in CI before any PR can merge
   evals/             # Promptfoo golden cases + Inspect AI scenario tests
   CHANGELOG.md
 ```
 
-**SECURITY: No credentials in agent repos.** `config.json` lists integration *names*; the Core Integration Registry holds the actual keys. Skills receive credentials via LangGraph `state["integrations"]` — never from environment variables directly.
+**SECURITY: No credentials in agent repos.** `config.json` lists integration *names*; the Core Integration Registry holds the actual keys. Skills receive credentials via MAF `AgentContext` / MCP server config — never from environment variables directly.
 
 **Skill repo layout:**
 ```
@@ -183,22 +188,24 @@ Dynamic Agent Loader:
 3. Reads `config.json` → `skill_repos` list and `integrations` list.
 4. Ensures each skill repo is present and up-to-date via the same clone-once / pull-on-demand strategy.
 5. `sys.path.insert(0, clone_dir)` for agent + each skill (cleaned up after each run; clone itself persists).
-6. `importlib.import_module('graph')` with a unique per-run module name → `build_graph()`.
-7. **Credential injection:** queries Core Integration Registry for each name in `config.json["integrations"]`; injects a typed `IntegrationContext` dict into the initial LangGraph state. Skills read credentials from `state["integrations"]["<name>"]` — never from environment directly.
-8. Calls `build_graph()` → returns a `StateGraph` (to be compiled with PostgresSaver checkpointer by executor).
+6. `importlib.import_module('agents')` with a unique per-run module name → `build_agents()`.
+7. **Credential injection:** queries Core Integration Registry for each name in `config.json["integrations"]`; resolves credentials and injects them into `GitHubCopilotAgent` `mcp_servers=` config so skills receive the correct tokens at runtime — never via environment variables directly.
+8. Calls `build_agents()` → returns `list[Agent]` (MAF agents ready for orchestration by the DurableTask worker).
 
-### Step 3 — Stateful Orchestration
-LangGraph initialises the `StateGraph` from the returned graph object. `PostgresSaver` connects to persistent Postgres — all state transitions, tool outputs, and error logs are persisted to DB. The graph routes Actions to OpenHands worker containers.
+### Step 3 — MAF Workflow Execution (Phase 0: no DTS)
+The Dynamic Agent Loader calls `build_agents()` from the cloned repo and runs the returned agents via MAF's native workflow engine (in-process asyncio — no external DTS service in Phase 0). Multi-agent handoffs use `HandoffBuilder`/`ConcurrentBuilder`. For workflows requiring **HITL** (human approval before a write-back): the agent calls the `submit_for_approval(action_type, data)` tool → stores the pending action in the Postgres `approval_queue` table (Action Broker) → the workflow step completes normally. The Control Plane shows pending actions in the HITL queue. When the operator approves, the gateway receives the approval callback and triggers a fresh MAF workflow run that reads the approved action from Postgres and executes the write-back. No long-lived process is held; Postgres survives server restarts.
 
-### Step 4 — Sandboxed Execution
-OpenHands SDK spins ephemeral worker container. Agent executes its skill functions inside the container. Outputs and errors are piped back to LangGraph state via the SDK. Container is destroyed when the action node completes.
+**DurableTask deferred to Phase 2** — when workflows need genuine multi-day HITL pauses (e.g. "send quote, wait 48 h, follow up"), the DTS emulator service (`mcr.microsoft.com/dts/dts-emulator:latest`) will be added to docker-compose and `agent-framework-durabletask` added to orchestrator dependencies.
+
+### Step 4 — Sandboxed Skill Execution
+MAF invokes each skill/tool call inside the agent's toolchain. Skills that require isolation (shell access, file r/w) are invoked via `GitHubCopilotAgent` which spawns the GitHub Copilot SDK subprocess internally. Outputs and errors are captured by the MAF workflow context. Workflow proceeds to the next step once the current one completes or times out.
 
 ### Step 5 — Hot-Patch Self-Mutation (on error)
 ```
 Error in worker container
         │
         ▼
-LangGraph routes to Self_Mutation_Node
+MAF Orchestrator routes to Self_Mutation_Node
         │
         ▼
 Check: mutation_attempts_this_run >= 1?
@@ -211,10 +218,10 @@ Work from persistent local clone of agent-<name>
  bot git identity already configured)
         │
         ▼
-Read failure telemetry from Langfuse (error trace, inputs, stack)
+Read failure telemetry from Postgres (error trace, inputs, stack)
         │
         ▼
-OpenHands dev sandbox: propose fix in local clone → run pytest
+Copilot SDK mutation container: propose fix in local clone → run pytest
         │
         ▼
      Tests pass?
@@ -294,12 +301,12 @@ erDiagram
 | LLM gateway | LiteLLM proxy + RouteLLM classifier | Same |
 | Semantic cache | GPTCache on Redis | Same |
 | Token compression | LLMLingua-2 (CPU, same VM) | Same |
-| Observability | Langfuse (MIT, self-hosted, Postgres + ClickHouse) | Same |
+| Observability | MAF native OTel (OTLP backend TBD; Langfuse removed from Phase-0 stack) | OTLP backend self-hosted |
 | Event bus | Redis Streams | Kafka |
-| OpenHands worker/dev sandboxes | Docker-in-Docker via host `/var/run/docker.sock` | Same |
+| GitHub Copilot SDK mutation containers | `acb-mutation-runner` Docker image spawned via host `/var/run/docker.sock` | Same |
 | Object store | S3-compatible (audio, attachments) | Same |
 
-**DinD security note:** Core container maps `/var/run/docker.sock` from the host. OpenHands commands child sandbox containers through the host Docker daemon. All sandbox containers are network-isolated from each other and from the Core network.
+**DinD security note:** Core container maps `/var/run/docker.sock` from the host. The Copilot SDK mutation container is spawned through the host Docker daemon. All sandbox containers are network-isolated from each other and from the Core network.
 
 ---
 
@@ -311,20 +318,20 @@ sequenceDiagram
     participant CP as Control Plane
     participant GW as Gateway
     participant DAL as Dynamic Agent Loader
-    participant Orch as LangGraph Orchestrator
+    participant Orch as MAF Orchestrator
     participant Graph
-    participant Worker as OpenHands Worker
+    participant Worker as MAF DurableTask Worker
 
     User->>CP: "Status of Customer X?"
     CP->>GW: Pull(query, user_ctx)
     GW->>DAL: Route to agent-sales
     DAL->>DAL: Clone agent-sales + skill-zoho-ingest + skill-graph-write
-    DAL->>Orch: Build and run StateGraph
+    DAL->>Orch: Load agents via build_agents()
     Orch->>Graph: Resolve "Customer X" → customer_id
     Graph-->>Orch: customer_id
-    Orch->>Worker: Spawn worker; run skill-zoho-ingest + skill-graph-write
+    Orch->>Worker: Execute skill-zoho-ingest + skill-graph-write as DurableTask activities
     Worker-->>Orch: Structured context (deals, projects, messages)
-    Orch->>Orch: Synthesise answer with citations via LLM
+    Orch->>Orch: Synthesise answer with citations via GitHubCopilotAgent
     Orch-->>GW: Answer + citations
     GW-->>CP: Rendered answer
 ```
@@ -335,17 +342,17 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Orch as LangGraph Orchestrator
+    participant Orch as MAF Orchestrator
     participant Mut as Self_Mutation_Node
     participant Clone as Persistent Local Clone
-    participant OH as OpenHands Dev Sandbox
+    participant OH as Copilot SDK Mutation Container
     participant GH as GitHub (Remote)
     participant PRH as PR Event Handler (Core)
     participant Human as Human Reviewer
 
     Orch->>Mut: Error in worker (mutation_attempts=0)
-    Mut->>OH: Provision dev sandbox (mounts local clone)
-    Mut->>OH: Inject failure telemetry from Langfuse
+    Mut->>OH: Provision Copilot SDK mutation container (mounts local clone)
+    Mut->>OH: Inject failure telemetry from Postgres
     OH->>Clone: Implement fix in local clone + run pytest
     alt Tests pass
         OH->>Clone: git commit fix (local main branch)
@@ -406,7 +413,7 @@ flowchart TD
     CL -- needs reasoning --> T3[Tier-3 Reasoner<br/>Opus / GPT-5-class]
     T2 --> ACT
     T3 --> ACT
-    ACT --> AUD[Audit + Langfuse telemetry]
+    ACT --> AUD[Audit + OTel telemetry]
     AUD --> METRIC[Cost/quality metrics → RouteLLM training (Phase 5)]
 ```
 
@@ -414,10 +421,11 @@ flowchart TD
 
 ## 12. Architecture Decision Records
 
-### ADR-001: LangGraph + PostgresSaver as orchestration substrate
+### ADR-001: ~~LangGraph + PostgresSaver as orchestration substrate~~ **Superseded by ADR-026** (2026-06-04)
 - **Context:** Need durable, inspectable workflows with HITL gates and state persistence.
-- **Decision:** LangGraph as the graph runtime; `PostgresSaver` for durable state storage.
-- **Consequences:** Durable workflow state survives container restarts; all state transitions auditable in Postgres.
+- **Original Decision:** LangGraph as the graph runtime; `PostgresSaver` for durable state storage.
+- **Superseded by:** ADR-026 (MAF + DurableTask). PostgresSaver was never wired in code. The migration is a pre-load-bearing swap.
+- **Kept:** Postgres for entity graph, memory, audit, Integration Registry. Only workflow checkpoint responsibility moves to DTS.
 
 ### ADR-002: Postgres + pgvector + Apache AGE for entity graph + vectors
 - **Context:** Team of 2 cannot run Neo4j + Pinecone + Postgres separately.
@@ -443,13 +451,14 @@ flowchart TD
 - **Consequences:** Prevents runaway self-modification; preserves human oversight; slower improvement than fully-autonomous but safe.
 
 ### ADR-007: WhatsApp via Meta Cloud API + dedicated agent number
-- **Decision:** Provision new business number; LangGraph skill (`skill-whatsapp-send`) handles webhook processing.
+- **Decision:** Provision new business number; MAF skill (`skill-whatsapp-send`) handles webhook processing.
 
 ### ADR-008: LiteLLM gateway + RouteLLM + Anthropic/OpenAI prompt caching
 - **Decision:** LiteLLM proxy for unified routing; Anthropic `cache_control` + OpenAI automatic caching on stable prefixes (50–90% cost reduction); RouteLLM in Phase 5.
 
-### ADR-009: Langfuse (MIT, self-hosted) for LLM observability
-- **Decision:** Langfuse via docker-compose on Postgres + ClickHouse. Failure telemetry from Langfuse is the primary input to the Self_Mutation_Node.
+### ADR-009: ~~Langfuse (MIT, self-hosted) for LLM observability~~ **Superseded** (2026-06-05)
+- **Original decision:** Langfuse via docker-compose on Postgres + ClickHouse as the OTLP backend.
+- **Superseded by:** Langfuse removed from the Phase-0 stack (RAM savings). MAF native OpenTelemetry remains (OTLP-ready); a self-hosted trace backend is deferred. Self_Mutation_Node reads failure telemetry from Postgres.
 
 ### ADR-010: vLLM + Qwen3-8B as Tier-1 local inference
 - **Decision:** vLLM with Automatic Prefix Caching; Qwen3-8B-Instruct (BFCL v3 mid-60s% tool-calling).
@@ -468,27 +477,27 @@ flowchart TD
 ### ADR-014: No in-app skill/workflow editor; VS Code + Git is the authoring environment
 - **Context:** Previously planned OpenHands-backed Skill Studio pane inside the Control Plane.
 - **Decision:** Removed. All agent and skill development happens in VS Code (locally or via GitHub Codespaces), committed to the respective agent/skill repo, merged through the standard PR flow. The Control Plane contains Chat, Observability, and HITL approval — not an IDE. Agents themselves open PRs via the Self_Mutation_Node.
-- **Consequences:** Simpler Control Plane; no OpenHands + Monaco integration required in the UI; authoring tools (GitHub Copilot, Claude Code, Cursor) available for free in the dev environment; agents use OpenHands SDK directly for self-mutation, not via a UI wrapper.
+- **Consequences:** Simpler Control Plane; no Monaco integration required in the UI; authoring tools (GitHub Copilot, Claude Code, Cursor) available for free in the dev environment; agents use the Copilot SDK mutation container (`acb-mutation-runner`) directly for self-mutation, not via a UI wrapper.
 
 ### ADR-015: Git is the single source of truth for all agent-editable artefacts; PR + CI gate required for promotion
-- **Decision:** Everything editable (agent `graph.py`, `instructions.md`, `config.json`, skill packages, LiteLLM config, Langfuse dataset definitions) lives in GitHub. All changes via PRs. CI runs evals on the agent's `evals/` folder on every PR. Merge is gated on eval pass.
+- **Decision:** Everything editable (agent `agents.py`, `instructions.md`, `config.json`, skill packages, LiteLLM config, eval dataset definitions) lives in GitHub. All changes via PRs. CI runs evals on the agent's `evals/` folder on every PR. Merge is gated on eval pass.
 
-### ADR-016: OpenHands SDK (Apache-2.0) for both worker execution and self-mutation dev sandboxes
-- **Context:** Previously planned E2B (Firecracker) for sandbox execution. OpenHands SDK provides a higher-level ephemeral container API that covers both use cases.
-- **Decision:** OpenHands SDK for both: (a) worker containers that execute agent skills, and (b) dev sandbox containers for Self_Mutation_Node. Docker-in-Docker via host `/var/run/docker.sock`. E2B removed.
-- **Consequences:** Consistent runtime for both execution and mutation; one SDK to learn; OpenHands containers are ephemeral and network-isolated; eliminates separate Firecracker VM.
+### ADR-016: ~~OpenHands SDK for worker execution~~ **Superseded** (2026-06-04)
+- **Context:** Previously planned E2B (Firecracker) for sandbox execution. OpenHands SDK was adopted as an intermediate choice.
+- **Superseded by:** (a) MAF workflow engine + `GitHubCopilotAgent` for all production agent skill execution; (b) GitHub Copilot SDK mutation container (`acb-mutation-runner` Docker image) for self-mutation dev sandboxes. Docker-in-Docker via host `/var/run/docker.sock`. E2B and OpenHands SDK both removed.
+- **Consequences:** Consistent runtime under MAF; GitHubCopilotAgent provides autopilot mode with native shell/file/script tool-calling; mutation container is ephemeral and network-isolated.
 
 ### ADR-017: Promptfoo + Inspect AI for skill/agent regression evals; CI-gated
 - **Decision:** Every agent and skill repo ships an `evals/` folder. Promptfoo (golden-case assertions) + Inspect AI (graded scenario tests). PR cannot merge unless both suites pass.
 
 ### ADR-018: importlib + sys.path.append() for safe dynamic agent loading inside FastAPI
 - **Context:** Need to load agent repos at runtime without restarting the server; standard Python import system does not support runtime path injection cleanly.
-- **Decision:** FastAPI route controllers use `sys.path.append(cloned_agent_path)` and `importlib.import_module('graph')` to load each agent's `graph.py`. Transient paths are cleaned up after each run.
+- **Decision:** FastAPI route controllers use `sys.path.append(cloned_agent_path)` and `importlib.import_module('agents')` to load each agent's `agents.py`. The loaded module is called via `build_agents()` which returns `list[Agent]` handed to the MAF workflow engine. Paths are cleaned up after each run; clone persists.
 - **Consequences:** Server stays up during agent updates; no monkey-patching of global modules; each run gets a fresh import of the cloned code.
 
 ### ADR-019: DinD via host /var/run/docker.sock mapping
-- **Decision:** Core container maps `/var/run/docker.sock` from host into the container. OpenHands SDK commands child worker/dev sandbox containers through the host Docker daemon.
-- **Consequences:** Enables ephemeral container lifecycle management from within the Core container; standard DinD pattern; containers are isolated at the Docker network level.
+- **Decision:** Core container maps `/var/run/docker.sock` from host into the container. The GitHub Copilot SDK mutation container (`acb-mutation-runner`) is launched through the host Docker daemon by `Self_Mutation_Node`. Normal agent execution uses MAF's in-process workflow engine — no Docker required.
+- **Consequences:** Enables ephemeral mutation container lifecycle management from within the Core container; standard DinD pattern; containers are isolated at the Docker network level.
 
 ### ADR-020: Decoupled per-agent and per-skill GitHub repos
 - **See ADR-013.** This is the primary structural decision of v2. Each agent repo is independently deployable, testable, and self-improvable. Each skill repo is a versioned Python package. The Core engine is a pure runtime host.
@@ -508,20 +517,25 @@ flowchart TD
 - **Decision (industry-standard pattern):**
   1. **Core owns the Integration Registry** — all credentials stored encrypted in Postgres (`integrations` table), managed via the Control Plane admin UI and `.env`. Follows the pattern used by n8n, Prefect, Temporal, and GitHub Actions.
   2. **Agent `config.json` declares dependencies** by integration *name* only: `"integrations": ["clickup", "zoho-crm"]`. No credential values ever appear in agent repos.
-  3. **Dynamic Agent Loader injects** only the declared integrations as a typed `IntegrationContext` dict in the initial LangGraph state (`state["integrations"]`). An agent that doesn't declare an integration cannot access it.
-  4. **Skills read from state**, not from environment variables: `ctx = state["integrations"]["clickup"]` → `ctx.api_token`, `ctx.webhook_secret`, etc.
+  3. **Dynamic Agent Loader resolves credentials** from the Integration Registry for each name in `config.json["integrations"]` and injects them into `GitHubCopilotAgent` `mcp_servers=` config so skills receive the correct tokens via the MCP protocol.
+  4. **Skills read credentials via MCP** — the MCP server process receives credentials as env vars injected by the loader. Skills call `os.getenv(...)` or use the MCP client — never `state["integrations"]` or raw env vars outside the MCP process.
   5. **OAuth lifecycle** (token refresh, PKCE flows) is managed by Core, not by individual skills. Skills call a `Core.ensure_token("zoho-crm")` helper that handles refresh transparently.
-- **Consequences:** Credentials never in agent repos (no GitHub secret leak risk). Least-privilege enforced at load time. Adding a new integration to an agent is a one-line `config.json` change + admin UI registration. OAuth rotation happens once in Core and propagates to all agents automatically. Skills remain stateless and testable without real credentials (mock `IntegrationContext` in tests).
+- **Consequences:** Credentials never in agent repos (no GitHub secret leak risk). Least-privilege enforced at load time. Adding a new integration to an agent is a one-line `config.json` change + admin UI registration. OAuth rotation happens once in Core and propagates to all agents automatically. Skills remain stateless and testable without real credentials (mock env vars in tests).
 
----
+### ADR-026: MAF replaces LangGraph + deepagents; DurableTask deferred; AG-UI unifies chat paths (2026-06-04, updated v2.4)
+- **Context:** LangGraph + deepagents required hand-written sub-graph boilerplate. PostgresSaver was never wired. MAF provides native multi-agent patterns and a rich package ecosystem. Overlap analysis (2026-06-04 v2.4) found that DurableTask, the separate Copilot SDK SSE path, the Langfuse Python SDK, and the redis-stack-server upgrade were all unnecessary for Phase 0.
+- **Decision (MAF adoption):** Replace `langgraph`, `langgraph-checkpoint-postgres`, `deepagents`, `langchain-core` with `agent-framework`, `agent-framework-github-copilot --pre`, `agent-framework-ag-ui`, `agent-framework-mem0 --pre`, `agent-framework-redis --pre`. Agent repos export `build_agents() → list[Agent]`.
+- **Decision (DTS deferred):** Do NOT add DTS emulator to `infra/docker-compose.yml` for Phase 0-1. HITL uses the Action Broker pattern (Postgres `approval_queue`). Short-running agent workflows (< 5 min) do not need distributed checkpoint storage. Add `agent-framework-durabletask` + DTS Docker service in Phase 2 when multi-day wait patterns are needed.
+- **Decision (AG-UI unification):** `add_agent_framework_fastapi_endpoint(app, agent, "/copilot/chat")` replaces the separate `copilot_chat.py` Copilot SDK SSE path. CopilotKit frontend natively speaks AG-UI. Interactive and background agents are the same MAF agents — one runtime.
+- **Decision (observability):** Call `configure_otel_providers(OTEL_EXPORTER_OTLP_ENDPOINT=..., OTEL_EXPORTER_OTLP_HEADERS=...)` at orchestrator startup. MAF emits OTel spans automatically. Remove Langfuse Python SDK from agent code entirely.
+- **Decision (redis image):** Revert `infra/docker-compose.yml` Redis from `redis/redis-stack-server:7.4.0-v0` to `redis:7-alpine`. RediSearch/RedisJSON only needed for LiteLLM semantic cache, which is Phase 2.
+- **Consequences:** Single unified MAF runtime. No DTS Docker service in Phase 0-1. No separate `copilot_chat.py`. No `langfuse` SDK in agent code. Simpler docker-compose (4 services vs 6). Phase 2 additions clearly delineated.
 
-## 13. Chat Interface, Session Management & Memory Architecture
-
-### 13.1 Chat surface — Control Plane
+--- — Control Plane
 
 The Control Plane (`workbench/control_plane`) exposes a dedicated **`/chat` page** as the primary human-facing interface to Jannet. This is a full-page chat (not just the floating CopilotSidebar overlay) with session management.
 
-**Technology:** CopilotKit v1.57 (`@copilotkit/react-core`, `@copilotkit/react-ui`, `@copilotkit/runtime`). CopilotKit also developed the **AG-UI Protocol** — the emerging standard for bi-directional agent↔UI streaming — which is used as the upgrade path to full LangGraph backend.
+**Technology:** CopilotKit v1.57 (`@copilotkit/react-core`, `@copilotkit/react-ui`, `@copilotkit/runtime`). CopilotKit also developed the **AG-UI Protocol** — the emerging standard for bi-directional agent↔UI streaming — which is used as the upgrade path to a full MAF streaming backend.
 
 **Chat page layout:**
 ```
@@ -534,7 +548,7 @@ The Control Plane (`workbench/control_plane`) exposes a dedicated **`/chat` page
 +-----------------------------+--------------------------+
 ```
 
-**Session isolation:** Each `ChatSession` is assigned a UUID stored in localStorage. `CopilotKitProvider` receives this UUID as `threadId`, isolating message history per session. When upgrading to LangGraph backend, this UUID becomes the LangGraph `thread_id` checkpointer key — maintaining continuity.
+**Session isolation:** Each `ChatSession` is assigned a UUID stored in localStorage. `CopilotKitProvider` receives this UUID as `threadId`, isolating message history per session. For the MAF AG-UI endpoint, this UUID is passed as the `thread_id` parameter — MAF uses the `RedisHistoryProvider` (agent-framework-redis) to persist conversation history across page refreshes.
 
 ### 13.2 Memory stack (how memory improves over time)
 
@@ -573,35 +587,164 @@ Next orchestrator run: executor.py queries Mem0 for user context ↑
 
 **Improvement loop:** Every conversation enriches Mem0. The orchestrator and agents query Mem0 at run-start so accumulated knowledge improves *all* interactions — not just the chat UI. A delivery agent scheduling a push notification, for example, will know the user prefers WhatsApp over email because that preference was captured in a past chat session.
 
-### 13.3 CopilotKit ↔ LangGraph ↔ OpenHands integration
+### 13.3 Runtime Taxonomy — MAF (unified runtime) vs GitHub Copilot SDK vs CopilotKit
 
-The three layers are cleanly separated and compose vertically:
+These three systems are distinct. **MAF is the only agent execution runtime** — for both background and interactive use cases. The GitHub Copilot SDK is a subprocess tool within mutation containers only.
 
-| Layer | Component | Role |
-|---|---|---|
-| **UI** | CopilotKit `CopilotChat` + `useCopilotReadable` | Renders chat, streams responses, injects memory context |
-| **Bridge** | CopilotKit `LangGraphAgent` → `POST /api/copilot` | Connects frontend to backend via AG-UI/streaming protocol |
-| **Orchestrator** | LangGraph `StateGraph` + `PostgresSaver` | Stateful workflow; routes to skill nodes, mutation node |
-| **Execution** | OpenHands SDK worker container | Executes individual skill functions in an ephemeral sandbox |
-| **Memory** | Mem0 + Graphiti on Postgres | Episodic + entity memory; read by both chat UI and orchestrator |
+---
 
-**Current backend:** `BuiltInAgent` (LiteLLM proxy) — fast, no orchestrator dependency, suitable for conversational Q&A.
+#### GitHub Copilot SDK (`github-copilot-sdk` Python package)
 
-**Upgrade path (when orchestrator is stable):**
+**What it is:** A Python library that wraps the `gh copilot` CLI binary. When `CopilotClient` is instantiated, it launches a subprocess running the GitHub Copilot agent runtime. This runtime is a full autonomous execution orchestrator with native tool-calling.
+
+**What it can do:**
+- Native tool execution: shell commands, file read/write, Python script execution — no special plugin registration needed
+- Config discovery: reads `AGENTS.md`, `.mcp.json`, `.github/copilot-instructions.md` from `working_directory` to configure agent behaviour
+- `agent_mode="autopilot"`: the SDK decides which tools to invoke, in what order, with no per-tool user approval loop
+- Streaming SSE via `on_pre_tool_use` / `on_post_tool_use` hooks (these produce the `tool_start` / `tool_end` events you see in the chat UI)
+- Session-level system message injection via `session_kwargs["system_message"]`
+
+**Auth and model selection:**
+```
+Mode A — GitHub Copilot subscription (GITHUB_TOKEN):
+  CopilotClient(github_token=...) → GitHub Copilot API (api.githubcopilot.com)
+  Available models: claude-sonnet-4.5, gpt-4o, o3-mini, etc.
+  Model picked by SDK unless overridden by session_kwargs["model"]
+
+Mode B — BYOK via LiteLLM (LITELLM_MASTER_KEY + LITELLM_BASE_URL):
+  CopilotClient → session_kwargs["provider"] = {type:"openai", base_url:LiteLLM}
+  Model = any LiteLLM alias (tier1/2/3 or copilot/*)
+  Same cost metering and Langfuse tracing as LangGraph calls
+```
+
+**Where it lives in this repo:**
+- `apps/orchestrator/Dockerfile.mutation` — `acb-mutation-runner` Docker image (spawned on demand by Self_Mutation_Node)
+- `apps/orchestrator/mutation_runner.py` — mutation runner script inside the container
+- **NOT** in `apps/gateway/` — the `copilot_chat.py` SSE path has been replaced by the MAF AG-UI endpoint (see below).
+
+**Used for:**
+- Self-mutation sandboxes ONLY (`Self_Mutation_Node` spawns this container for code-fix autopilot)
+- **No longer used** for interactive operator chat — that path now goes through MAF + AG-UI
+
+**NOT related to:** CopilotKit, LangChain, LangGraph, MAF orchestrator, or any JavaScript library.
+
+---
+
+#### MAF — Microsoft Agent Framework (`agent-framework`, `agent-framework-github-copilot`, `agent-framework-ag-ui`, `agent-framework-mem0`, `agent-framework-redis` pip packages)
+
+**What it is:** The **single unified agent execution runtime** — for both background event-driven workflows and interactive operator chat. Agent repos define `build_agents() → list[Agent]` (each backed by `GitHubCopilotAgent`). The MAF native workflow engine runs orchestrations in-process (asyncio). DurableTask is deferred to Phase 2.
+
+**How it calls models:**
+```python
+# MAF agents call models via GitHubCopilotAgent (autopilot mode)
+# All LLM routing flows: GitHubCopilotAgent → LiteLLM proxy → configured backend
+# Or: GitHubCopilotAgent → GitHub Copilot API (GITHUB_TOKEN mode)
+from agent_framework_github_copilot import GitHubCopilotAgent
+
+agent = GitHubCopilotAgent(
+    name="my-agent",
+    instructions=_build_system_prompt(),
+    mcp_servers={"clickup": {"type": "stdio", "command": "uvx", "args": ["skill-clickup"]}},
+)
+```
+
+**Where it lives in this repo:**
+- `apps/orchestrator/orchestrator/executor.py` — `configure_otel_providers()` + MAF agent runner (no DurableTask in Phase 0)
+- `apps/orchestrator/orchestrator/loader.py` — dynamic import of each agent repo's `agents.py`; calls `build_agents()`
+- `apps/gateway/gateway/routes/copilot_chat.py` — **replaced** by `add_agent_framework_fastapi_endpoint(app, agent, "/copilot/chat")` call in gateway startup
+- Each `agent-<name>/agents.py` (external repos) — per-agent `build_agents()` definitions
+- Context providers wired at startup: `Mem0ContextProvider` (episodic memory) + `RedisHistoryProvider` (conversation history)
+
+**Multi-agent patterns:**
+```python
+from agent_framework import HandoffBuilder, ConcurrentBuilder
+
+# Sequential handoff
+workflow = HandoffBuilder(source=triage_agent, targets=[sales_agent, ops_agent]).build()
+
+# Concurrent fan-out
+workflow = ConcurrentBuilder(agents=[research_agent, crm_agent]).build()
+```
+
+**Used for:** All agent execution — background event-driven agents (webhook triggers, cron jobs, reconciler, nightly diffs, self-mutation orchestration) AND interactive operator chat (via AG-UI endpoint). GitHub Copilot SDK is used only inside the mutation container subprocess.
+
+**NOT related to:** LangGraph, deepagents, langchain-core. CopilotKit is the React UI layer; AG-UI is the streaming protocol between CopilotKit frontend and MAF backend.
+
+---
+
+#### CopilotKit (`@copilotkit/react-*` npm packages)
+
+**What it is:** A React/TypeScript UI library. It provides the chat window component and context injection hooks. It is **not an LLM**, **not an orchestrator**, and has **no connection to GitHub Copilot**.
+
+**What it does in this codebase:**
+- `CopilotChat` — renders the chat message thread UI
+- `useCopilotReadable` — injects Mem0 memories and session context as readable background for the LLM
+- `CopilotKitProvider` — wraps the page; manages `threadId` (session isolation)
+- `CopilotRuntime` (Next.js backend, `apps/api/copilot/route.ts`) — receives the frontend request and forwards it to an AI backend
+
+**Current backend (BuiltInAgent):**
+```
+CopilotKit UI → /api/copilot (Next.js) → CopilotRuntime → BuiltInAgent
+                                                            ↓
+                                                    LiteLLM (OpenAI-compat)
+                                                            ↓
+                                                    Text response only (no tool calling)
+```
+`BuiltInAgent` is a simple text-only LLM call. **No tool calling. No orchestration.** The model picker in the UI selects which LiteLLM tier or Copilot SDK model handles the next message — CopilotKit's `BuiltInAgent` is not involved when the Copilot SDK path is chosen.
+
+**Current backend for interactive chat (AG-UI, WBS 0.6):**
 ```typescript
-// In /api/copilot/route.ts — replace BuiltInAgent with:
-import { LangGraphAgent } from "@copilotkit/runtime";
-const agent = new LangGraphAgent({
-  name: "orchestrator",
-  deploymentUrl: process.env.GATEWAY_URL + "/agent/langgraph",
-  // threadId forwarded from CopilotKitProvider.threadId → LangGraph checkpointer
-});
+// Control Plane: configure CopilotKitProvider to point to the MAF AG-UI endpoint
+// The gateway's /copilot/chat now serves AG-UI protocol via add_agent_framework_fastapi_endpoint
+const copilotKitUrl = process.env.GATEWAY_URL + "/copilot/chat";
 ```
-This routes every chat message through the full LangGraph orchestrator, giving the chat UI access to all agents, skills, and OpenHands execution. The `threadId` becomes the LangGraph checkpoint key so conversation state persists across page reloads.
+The MAF orchestrator serves as the AG-UI backend. CopilotKit frontend sends chat messages via AG-UI to the MAF agent — full tool-calling, skill execution, streaming, and HITL all supported. Session history persisted via `RedisHistoryProvider` (keyed by `thread_id`).
 
-**OpenHands is NOT directly connected to CopilotKit.** It is the execution layer *under* LangGraph. The dependency is:
+---
+
+#### How Chat Model Selection Routes Traffic
+
+The model picker in the Control Plane chat UI determines which execution path handles each message:
+
+| User selects | Route | Orchestrator | Tool calling | Model source |
+|---|---|---|---|---|
+| **MAF agent** (all chat) | CopilotKit → AG-UI → `/copilot/chat` → MAF | **MAF** (`HandoffBuilder`/`ConcurrentBuilder`; `GitHubCopilotAgent`) | ✅ MCP tools, skill calls, HITL | LiteLLM aliases (tier-1/2/3) |
+| **LiteLLM Tier** (simple Q&A) | `/api/agent/chat mode=litellm` | **None** — raw LLM call only | ❌ No tool calling | LiteLLM proxy → Gemini/Claude/GPT |
+| ~~GitHub Copilot SDK~~ | ~~`copilot_chat.py`~~ | ~~Copilot SDK (`CopilotClient`)~~ | ~~Shell, file r/w~~ | ~~Removed — use MAF AG-UI~~ |
+
+**Note:** The MAF AG-UI endpoint at `/copilot/chat` replaces the previous `copilot_chat.py` SSE path and is the primary chat backend for interactive sessions. CopilotKit frontend connects via AG-UI protocol.
+
+---
+
+#### Vertical Stack Summary
+
 ```
-CopilotKit → LangGraph → OpenHands (one-way, orchestrator pulls execution results)
+┌─────────────────────────────────────────────────────────┐
+│  Control Plane Chat UI  (Next.js / React / CopilotKit)  │
+│  CopilotChat component — session mgmt, model picker     │
+└──────────┬──────────────────────┬───────────────────────┘
+           │ AG-UI protocol        │ mode=litellm (simple Q&A)
+           ▼                      ▼
+┌──────────────────────────────┐   ┌────────────────────────┐
+│ MAF AG-UI Endpoint           │   │ LiteLLM Proxy          │
+│ /copilot/chat                │   │ (raw LLM, no tools)    │
+│ ──────────────────           │   │ tier-1 → Haiku/4o-mini │
+│ add_agent_framework_         │   │ tier-2 → Sonnet        │
+│   fastapi_endpoint(...)      │   │ tier-3 → Opus          │
+│                              │   └────────────────────────┘
+│ Same MAF agents as           │
+│ background event runs:       │
+│  HandoffBuilder / Concurrent │
+│  GitHubCopilotAgent          │
+│  Mem0ContextProvider         │
+│  RedisHistoryProvider        │
+│                              │
+│ HITL: Action Broker          │
+│  (Postgres approval_queue)   │
+└──────────────────────────────┘
+
+[CopilotKit = React rendering layer + AG-UI client; not the orchestrator]
+[GitHub Copilot SDK = mutation container only; not on this call path]
 ```
 
 ### 13.4 Memory API
@@ -614,27 +757,32 @@ CopilotKit → LangGraph → OpenHands (one-way, orchestrator pulls execution re
 
 Memory is **best-effort** — if `MEM0_API_URL` is not set, all endpoints return empty / no-op. The chat UI degrades gracefully. Orchestrator still runs without memory context.
 
-### ADR-023: CopilotKit as the chat UI layer; Mem0 as the cross-surface memory store
+### ADR-023: CopilotKit as the React chat UI layer; Mem0 as the cross-surface memory store
 
-- **Context:** Chat UI needs to maintain session state and improve over time. Memory accumulated in chat should benefit background agent runs, not just the chat session that created it.
+- **Context:** Chat UI needs to maintain session state and improve over time. Memory accumulated in chat should benefit background agent runs, not just the chat session that created it. Critically: CopilotKit is a *React UI library*, not an orchestrator. It must not be conflated with the GitHub Copilot SDK (execution runtime) or LangGraph (workflow orchestrator).
 - **Decision:**
-  1. CopilotKit (`/chat` page, `useCopilotReadable`, `CopilotChat`) is the Control Plane chat surface.
-  2. Each chat session is isolated by UUID `threadId` in `CopilotKitProvider`. The same UUID becomes the LangGraph checkpoint key when upgraded.
+  1. CopilotKit (`@copilotkit/react-*`) provides the chat window rendering (`CopilotChat`), context injection (`useCopilotReadable`), and session isolation (`CopilotKitProvider.threadId`). It has no relationship to the GitHub Copilot SDK.
+  2. Interactive chat sessions go via the MAF AG-UI endpoint (`/copilot/chat`) — the same MAF agents used for background runs serve the chat UI via AG-UI streaming protocol. The previous `AgentChat.tsx` / `copilot_chat.py` dual-path is replaced by a single endpoint.
   3. After every chat session, Mem0 is called to extract and persist semantic facts (async, fire-and-forget — not on the critical path).
-  4. At run-start, the LangGraph executor queries Mem0 for user-relevant memories and injects them into the initial agent state alongside the `IntegrationContext` (ADR-022).
-  5. Backend is `BuiltInAgent` until the LangGraph gateway exposes an AG-UI-compatible endpoint, then upgraded to `LangGraphAgent` via a config flag.
-- **Consequences:** Memory improves continuously with use. Chat context, agent execution context, and entity graph (Graphiti/ADR-011) are all enriched from the same Mem0 store. No separate memory stack needed for chat vs agents.
+  4. **At run-start, the MAF orchestrator queries Mem0** for user-relevant memories and injects them into agent instructions as additional context (ADR-022/ADR-026).
+  5. The CopilotKit `BuiltInAgent` path (`/api/copilot`) is kept as a dev/test fallback only. All production chat dispatches go through the MAF AG-UI endpoint.
+- **Consequences:** Memory improves continuously with use. Chat context, agent execution context, and entity graph are all enriched from the same Mem0 store. No separate memory stack needed for chat vs agents. The single MAF AG-UI endpoint handles both tool-calling chat and background agent runs.
+
+### ADR-025: ~~GitHub Copilot SDK as interactive chat runtime~~ Superseded by AG-UI unification (ADR-026 v2.4)
+
+- **Superseded:** The interactive chat runtime is now the MAF AG-UI endpoint (`add_agent_framework_fastapi_endpoint`). The GitHub Copilot SDK is used **only** for `acb-mutation-runner` containers (Self_Mutation_Node). `apps/gateway/gateway/routes/copilot_chat.py` is removed.
+- **Rationale:** `agent-framework-ag-ui` provides the same tool-calling, streaming, and HITL capabilities as the raw Copilot SDK path, with the added benefit that the same MAF agents serve both interactive and background runs. No dual execution path to maintain.
 
 ---
 
-### ADR-024: Dispatch & supervision plane between the Gateway and ephemeral OpenHands runs
+### ADR-024: Dispatch & supervision plane between the Gateway and the MAF workflow engine
 
-- **Context:** The base model is event-driven and ephemeral: a webhook/cron event hits the Interaction Gateway, the agent is loaded, runs, and is torn down. This cleanly covers *externally triggered* work, but leaves several automatic / long-running use cases unhandled — internally generated work, burst protection, redelivered (at-least-once) webhooks, hung or non-converging runs, and runaway budget. Mission Control (MIT, builderz-labs/mission-control) solves these with a durable task queue plus per-agent supervision; we adopt the same shape without abandoning our ephemeral-execution model.
-- **Decision:** Insert a thin **Dispatch & Supervision plane** between the Gateway and the OpenHands executor. It has two halves:
+- **Context:** The base model is event-driven and ephemeral: a webhook/cron event hits the Interaction Gateway, the agent is loaded, runs, and is torn down. This cleanly covers *externally triggered* work, but leaves several automatic / long-running use cases unhandled — internally generated work, burst protection, redelivered (at-least-once) webhooks, hung or non-converging runs, and runaway budget.
+- **Decision:** Insert a thin **Dispatch & Supervision plane** between the Gateway and the MAF workflow engine. It has two halves:
   1. **Durable dispatch queue.** Triggers (webhook, cron, *and agent-to-agent / human-created tasks*) enqueue a durable `Task` row in Postgres rather than invoking the loader directly. A dispatcher drains the queue with **bounded worker concurrency**, **retry with backoff**, a **dead-letter sink** for runs that crash before `Self_Mutation_Node`, and an **idempotency key** per trigger so a redelivered webhook never double-spawns an agent.
   2. **Long-run supervisor.** Each in-flight run reports a **heartbeat**; a watchdog enforces a **max-runtime** ceiling and reaps/escalates hung runs, a **loop / non-convergence detector** (no state progress over N steps) kills spinning agents, and the agent's declared `execution_budget` is enforced as a **hard mid-run abort** (not just an advisory config value).
   3. **Recurring = template + dated child runs.** A recurring (cron/NL) schedule is stored as an immutable template; each fire spawns a dated child `Task`, keeping the schedule definition unmutated and giving clean per-run history.
-- **Consequences:** Long-running and autonomous agents gain liveness, bounded resource use, and idempotent triggering. Self_Mutation_Node still owns *error* recovery; the supervisor owns *liveness/cost* failures that have no code fix (hang, loop, budget). Adds one Postgres-backed queue and a supervisor loop to Core — no new external dependency (reuses Postgres + LangGraph). The dispatch queue is also the natural home for the future internal "agent inbox" / task board (L2-13 operator surface).
+- **Consequences:** Long-running and autonomous agents gain liveness, bounded resource use, and idempotent triggering. Self_Mutation_Node still owns *error* recovery; the supervisor owns *liveness/cost* failures that have no code fix (hang, loop, budget). Adds one Postgres-backed queue and a supervisor loop to Core — no new external dependency (reuses existing Postgres).
 
 ---
 

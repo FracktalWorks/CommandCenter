@@ -20,7 +20,7 @@ cov:
 uv run pytest --cov=apps --cov=packages --cov-report=term-missing
 
 gateway:
-uv run uvicorn gateway.main:app --reload --host 0.0.0.0 --port 8080
+	uv run --no-sync python -m uvicorn gateway.main:app --reload --host 0.0.0.0 --port 8080
 
 infra-up:
 docker compose -f infra/docker-compose.yml up -d

@@ -1,0 +1,1059 @@
+"use client";
+
+/**
+ * /agents — Agent Management
+ *
+ * Lists all registered agents (built-in + user-added from GitHub repos).
+ * Lets users add a new agent via GitHub repo URL and remove user-added ones.
+ *
+ * Flow for adding a new agent:
+ *   1. Enter repo URL + metadata
+ *   2. GitHub OAuth (device flow) — only shown if GitHub not yet connected
+ *   3. Register → agent appears in picker on the Chat page
+ */
+
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import type { AgentEntry } from "@/app/api/agent/list/route";
+import type { IntegrationStatus } from "@/app/api/integrations/status/route";
+import type { ModelsStatus, ProviderInfo } from "@/app/api/models/route";
+import GitHubDeviceConnect from "@/components/GitHubDeviceConnect";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type ModalStep = "form" | "github" | "registering" | "done" | "error";
+
+interface AgentConfig {
+  name?: string;
+  description?: string;
+  tags?: string[];
+  integrations?: string[];
+  optional_integrations?: string[];
+}
+
+interface FormValues {
+  repoUrl: string;
+  name: string;
+  description: string;
+  tags: string;
+  integrations: string;
+  optionalIntegrations: string;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function slugFromRepo(url: string): string {
+  const raw = url.trim().replace(/\/$/, "");
+  // Local path: use the last folder segment
+  if (/^([A-Za-z]:[\\/]|\/)/.test(raw)) {
+    const segments = raw.replace(/\\/g, "/").split("/").filter(Boolean);
+    const folder = segments[segments.length - 1] ?? "";
+    return folder.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  }
+  // Extract the repo name part from "owner/repo" or full URL
+  const parts = raw.replace("https://github.com/", "").replace("http://github.com/", "").split("/");
+  const repo = parts[parts.length - 1] ?? "";
+  return repo.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+}
+
+function parseCsv(s: string): string[] {
+  return s.split(",").map((t) => t.trim()).filter(Boolean);
+}
+
+// ---------------------------------------------------------------------------
+// Add-Agent Modal
+// ---------------------------------------------------------------------------
+
+function AddAgentModal({
+  onClose,
+  onAdded,
+}: {
+  onClose: () => void;
+  onAdded: (agent: AgentEntry) => void;
+}) {
+  const [step, setStep] = useState<ModalStep>("form");
+  const [githubStatus, setGithubStatus] = useState<IntegrationStatus | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [addedAgent, setAddedAgent] = useState<AgentEntry | null>(null);
+  const [configLoading, setConfigLoading] = useState(false);
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [registerPhase, setRegisterPhase] = useState<"saving" | "cloning">("saving");
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [form, setForm] = useState<FormValues>({
+    repoUrl: "",
+    name: "",
+    description: "",
+    tags: "",
+    integrations: "",
+    optionalIntegrations: "",
+  });
+
+  // ---------------------------------------------------------------------------
+  // Fetch config.json from GitHub and auto-fill form
+  // ---------------------------------------------------------------------------
+
+  const fetchConfig = useCallback(async (repoUrl: string) => {
+    const raw = repoUrl.trim().replace(/\/$/, "");
+    if (!raw) return;
+
+    // Local path: pass raw path directly as repo= param (no GitHub slug extraction)
+    const isLocal = /^([A-Za-z]:[\\/]|\/)/.test(raw);
+    const paramValue = isLocal
+      ? raw
+      : raw.replace("https://github.com/", "").replace("http://github.com/", "");
+
+    // For GitHub slugs, need at least owner/repo (two slash-separated parts)
+    if (!isLocal && paramValue.split("/").filter(Boolean).length < 2) return;
+
+    setConfigLoading(true);
+    setConfigLoaded(false);
+    try {
+      const res = await fetch(`/api/agent/config?repo=${encodeURIComponent(paramValue)}`);
+      if (!res.ok) return; // 404 = no config.json, just leave fields editable
+      const cfg: AgentConfig = await res.json();
+      setForm((f) => ({
+        ...f,
+        // Only fill name if user hasn't manually changed it from the slug default
+        name:
+          f.name === "" || f.name === slugFromRepo(f.repoUrl)
+            ? (cfg.name ? slugFromRepo(cfg.name) : slugFromRepo(repoUrl))
+            : f.name,
+        description: cfg.description ?? f.description,
+        tags: cfg.tags?.join(", ") ?? f.tags,
+        integrations: cfg.integrations?.join(", ") ?? f.integrations,
+        optionalIntegrations: cfg.optional_integrations?.join(", ") ?? f.optionalIntegrations,
+      }));
+      setConfigLoaded(true);
+    } catch {
+      // Silent — user can fill manually
+    } finally {
+      setConfigLoading(false);
+    }
+  }, []);
+
+  // Debounced repo URL handler: update name immediately, fetch config after 600ms pause
+  const handleRepoUrlChange = (val: string) => {
+    const slug = slugFromRepo(val);
+    setForm((f) => ({
+      ...f,
+      repoUrl: val,
+      name: f.name === "" || f.name === slugFromRepo(f.repoUrl) ? slug : f.name,
+    }));
+    setConfigLoaded(false);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => fetchConfig(val), 600);
+  };
+
+  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
+
+  const handleField = (key: keyof FormValues, val: string) =>
+    setForm((f) => ({ ...f, [key]: val }));
+
+  // ---------------------------------------------------------------------------
+  // Step 1 → submit: check GitHub, then register
+  // ---------------------------------------------------------------------------
+
+  const handleFormSubmit = async () => {
+    if (!form.repoUrl.trim() || !form.name.trim()) return;
+
+    // Check GitHub connection status
+    try {
+      const res = await fetch("/api/integrations/status");
+      if (res.ok) {
+        const statuses: IntegrationStatus[] = await res.json();
+        const gh = statuses.find((s) => s.service === "github");
+        if (gh && !gh.configured) {
+          setGithubStatus(gh);
+          setStep("github");
+          return;
+        }
+      }
+    } catch {
+      // If status check fails, proceed to register without blocking
+    }
+
+    await doRegister();
+  };
+
+  // ---------------------------------------------------------------------------
+  // Register the agent
+  // ---------------------------------------------------------------------------
+
+  const doRegister = useCallback(async () => {
+    setStep("registering");
+    setRegisterPhase("saving");
+    const cloneTimer = setTimeout(() => setRegisterPhase("cloning"), 800);
+    try {
+      const rawInput = form.repoUrl.trim();
+      const isLocal = /^([A-Za-z]:[\\/]|\/)/.test(rawInput);
+      const body: Record<string, unknown> = {
+        name: form.name.trim(),
+        description: form.description.trim(),
+        tags: parseCsv(form.tags),
+        integrations: parseCsv(form.integrations),
+        optional_integrations: parseCsv(form.optionalIntegrations),
+      };
+      if (isLocal) {
+        body.local_path = rawInput;
+      } else {
+        body.repo_url = rawInput;
+      }
+      const res = await fetch("/api/agent/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      clearTimeout(cloneTimer);
+      const data = await res.json();
+      if (res.ok) {
+        setAddedAgent(data as AgentEntry);
+        setStep("done");
+      } else {
+        setErrorMsg(String(data?.detail ?? data?.error ?? `Error ${res.status}`));
+        setStep("error");
+      }
+    } catch (err) {
+      clearTimeout(cloneTimer);
+      setErrorMsg(err instanceof Error ? err.message : "Network error");
+      setStep("error");
+    }
+  }, [form]);
+
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-lg rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+          <div>
+            <div className="text-sm font-semibold text-zinc-100">Add Agent</div>
+            <div className="text-xs text-zinc-500 mt-0.5">
+              {step === "form" && "Enter a GitHub repo or a local directory path"}
+              {step === "github" && "Connect GitHub to access private repos"}
+              {step === "registering" && "Registering agent…"}
+              {step === "done" && "Agent registered successfully"}
+              {step === "error" && "Registration failed"}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="p-5">
+          {/* ── Step: Form ── */}
+          {step === "form" && (
+            <div className="flex flex-col gap-4">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-zinc-400">
+                  GitHub Repo or Local Path <span className="text-red-400">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="owner/repo  ·  https://github.com/owner/repo  ·  C:\path\to\agent"
+                    value={form.repoUrl}
+                    onChange={(e) => handleRepoUrlChange(e.target.value)}
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none pr-8"
+                  />
+                  {configLoading && (
+                    <div className="absolute right-2.5 top-2.5 h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+                  )}
+                  {configLoaded && !configLoading && (
+                    <div className="absolute right-2.5 top-2 text-green-400 text-xs" title="config.json loaded">✓</div>
+                  )}
+                </div>
+                {configLoaded && (
+                  <p className="mt-1 text-xs text-green-500">config.json found — fields auto-filled</p>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-zinc-400">
+                    Agent name <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="my-agent"
+                    value={form.name}
+                    onChange={(e) => handleField("name", e.target.value)}
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+                  />
+                  <p className="mt-1 text-xs text-zinc-600">lowercase, hyphens only</p>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-zinc-400">Tags</label>
+                  <input
+                    type="text"
+                    placeholder="sales, outbound"
+                    value={form.tags}
+                    onChange={(e) => handleField("tags", e.target.value)}
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+                  />
+                  <p className="mt-1 text-xs text-zinc-600">comma-separated</p>
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-zinc-400">Description</label>
+                <input
+                  type="text"
+                  placeholder="What does this agent do?"
+                  value={form.description}
+                  onChange={(e) => handleField("description", e.target.value)}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-zinc-400">
+                    Mandatory integrations
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="zoho-crm, apollo"
+                    value={form.integrations}
+                    onChange={(e) => handleField("integrations", e.target.value)}
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-zinc-400">
+                    Optional integrations
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="instantly, smtp"
+                    value={form.optionalIntegrations}
+                    onChange={(e) => handleField("optionalIntegrations", e.target.value)}
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  onClick={onClose}
+                  className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={!form.repoUrl.trim() || !form.name.trim() || configLoading}
+                  onClick={handleFormSubmit}
+                  title={configLoading ? "Fetching config.json…" : undefined}
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
+                >
+                  {configLoading ? "Fetching…" : "Next →"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Step: GitHub OAuth ── */}
+          {step === "github" && githubStatus && (
+            <div>
+              <p className="mb-4 text-sm text-zinc-400">
+                Connect GitHub so CommandCenter can clone{" "}
+                <span className="font-mono text-zinc-200">{form.repoUrl}</span> and access
+                private repositories.
+              </p>
+              <GitHubDeviceConnect
+                integration={githubStatus}
+                onConfigured={() => doRegister()}
+              />
+              <button
+                onClick={() => doRegister()}
+                className="mt-3 text-xs text-zinc-600 hover:text-zinc-400 underline"
+              >
+                Skip — repository is public
+              </button>
+            </div>
+          )}
+
+          {/* ── Step: Registering ── */}
+          {step === "registering" && (
+            <div className="flex flex-col items-center gap-4 py-8">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+              <div className="text-center">
+                <p className="text-sm text-zinc-300 font-medium">
+                  {registerPhase === "saving" ? "Saving agent…" : "Cloning repository…"}
+                </p>
+                <p className="text-xs text-zinc-500 mt-1">
+                  {registerPhase === "saving"
+                    ? "Writing to the agent registry"
+                    : /^([A-Za-z]:[\\/]|\/)/.test(form.repoUrl.trim())
+                      ? "Verifying local path"
+                      : `Pulling ${form.repoUrl.trim().split("/").slice(-2).join("/")} in the background`}
+                </p>
+              </div>
+              <div className="flex items-center gap-3 text-xs text-zinc-600">
+                <span className={registerPhase === "saving" ? "text-blue-400" : "text-emerald-500"}>
+                  {registerPhase === "saving" ? "● saving" : "✓ saved"}
+                </span>
+                <span className="text-zinc-700">→</span>
+                <span className={registerPhase === "cloning" ? "text-blue-400" : "text-zinc-600"}>
+                  {registerPhase === "cloning" ? "● cloning" : "○ clone"}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* ── Step: Done ── */}
+          {step === "done" && addedAgent && (
+            <div className="flex flex-col gap-4 py-2">
+              {/* Mini agent card preview — same style as AgentCard */}
+              <div className="rounded-xl border border-zinc-700 bg-zinc-800/60 p-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-sm font-semibold text-zinc-100">{addedAgent.name}</span>
+                  <span className="shrink-0 rounded-full bg-blue-500/15 px-2 py-0.5 text-xs text-blue-400">custom</span>
+                  {addedAgent.local_path && (
+                    <span className="shrink-0 rounded-full bg-violet-500/15 px-2 py-0.5 text-xs text-violet-400">local</span>
+                  )}
+                  <span className="shrink-0 rounded-full bg-green-500/15 px-2 py-0.5 text-xs text-green-400">live</span>
+                </div>
+                {addedAgent.description && (
+                  <p className="text-xs text-zinc-400 mb-2">{addedAgent.description}</p>
+                )}
+                {(addedAgent.tags?.length ?? 0) > 0 && (
+                  <div className="flex flex-wrap gap-1 mb-2">
+                    {addedAgent.tags!.map((t) => (
+                      <span key={t} className="rounded-full bg-zinc-700 px-2 py-0.5 text-xs text-zinc-400">{t}</span>
+                    ))}
+                  </div>
+                )}
+                {((addedAgent.integrations?.length ?? 0) > 0 || (addedAgent.optional_integrations?.length ?? 0) > 0) && (
+                  <div className="flex flex-wrap gap-1">
+                    {addedAgent.integrations?.map((i) => (
+                      <span key={i} className="inline-flex items-center gap-1 rounded-full border border-zinc-600 px-2 py-0.5 text-xs text-zinc-400">
+                        · {i}
+                      </span>
+                    ))}
+                    {addedAgent.optional_integrations?.map((i) => (
+                      <span key={i} className="inline-flex items-center gap-1 rounded-full border border-dashed border-zinc-700 px-2 py-0.5 text-xs text-zinc-500">
+                        {i}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {addedAgent.local_path ? (
+                  <div className="mt-2 flex items-center gap-1 text-xs text-zinc-600" title={addedAgent.local_path}>
+                    <svg className="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+                      <path d="M1 3.5A1.5 1.5 0 012.5 2h3.257c.466 0 .917.18 1.25.503l.69.69A.5.5 0 008.05 3.5H13.5A1.5 1.5 0 0115 5v7.5A1.5 1.5 0 0113.5 14h-11A1.5 1.5 0 011 12.5V3.5z"/>
+                    </svg>
+                    <span className="truncate">{addedAgent.local_path}</span>
+                  </div>
+                ) : addedAgent.repo_url ? (
+                  <div className="mt-2">
+                    <a href={addedAgent.repo_url} target="_blank" rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-zinc-600 hover:text-zinc-400">
+                      <svg className="h-3 w-3" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+                      </svg>
+                      {addedAgent.repo_name ?? addedAgent.repo_url}
+                    </a>
+                  </div>
+                ) : null}
+              </div>
+              <p className="text-xs text-zinc-500 text-center">
+                {addedAgent.local_path
+                  ? "Agent registered from local path — no cloning needed."
+                  : "Repository is being cloned in the background — the agent will be ready shortly."}
+              </p>
+              <button
+                onClick={() => {
+                  onAdded(addedAgent);
+                  onClose();
+                }}
+                className="w-full rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          )}
+
+          {/* ── Step: Error ── */}
+          {step === "error" && (
+            <div className="flex flex-col gap-4 py-4">
+              <div className="rounded-lg border border-red-800 bg-red-900/20 px-4 py-3 text-sm text-red-300">
+                {errorMsg}
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setStep("form")}
+                  className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 transition-colors"
+                >
+                  Back
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ModelAccess panel
+// ---------------------------------------------------------------------------
+
+const PROVIDER_ICON: Record<string, string> = {
+  gemini: "G",
+  anthropic: "A",
+  openai: "⊕",
+  vllm: "⚡",
+  "github-copilot": "",
+};
+
+function ProviderRow({ p }: { p: ProviderInfo }) {
+  return (
+    <div className="flex items-center gap-3 py-2 border-b border-zinc-800 last:border-0">
+      {/* Icon */}
+      <span className={`w-7 h-7 rounded-md flex items-center justify-center text-xs font-bold shrink-0 ${
+        p.available ? "bg-zinc-700 text-zinc-200" : "bg-zinc-800/60 text-zinc-600"
+      }`}>
+        {p.id === "github-copilot" ? (
+          <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+          </svg>
+        ) : (
+          PROVIDER_ICON[p.id] ?? p.label[0]
+        )}
+      </span>
+
+      {/* Label + note */}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className={`text-sm font-medium ${
+            p.available ? "text-zinc-100" : "text-zinc-500"
+          }`}>{p.label}</span>
+          {p.available ? (
+            <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              Active
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-500 border border-zinc-700">
+              <span className="w-1.5 h-1.5 rounded-full bg-zinc-600" />
+              Not configured
+            </span>
+          )}
+          {p.type === "copilot" && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-400 border border-violet-500/20">
+              via Copilot
+            </span>
+          )}
+          {p.type === "local" && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
+              local
+            </span>
+          )}
+        </div>
+        <p className="text-[11px] text-zinc-600 mt-0.5 truncate">{p.note}</p>
+      </div>
+
+      {/* Tiers */}
+      <div className="flex gap-1 shrink-0">
+        {p.tiers.map((t) => (
+          <span key={t} className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
+            p.available
+              ? "bg-zinc-800 text-zinc-400 border-zinc-700"
+              : "bg-zinc-900 text-zinc-700 border-zinc-800"
+          }`}>
+            {t}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ModelAccess({ models }: { models: ModelsStatus | null }) {
+  const [open, setOpen] = useState(false);
+
+  if (!models) return null;
+
+  const copilot = models.providers.find((p) => p.id === "github-copilot");
+  const direct = models.providers.filter((p) => p.id !== "github-copilot");
+  const activeCount = models.providers.filter((p) => p.available).length;
+
+  return (
+    <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/40">
+      {/* Header — always visible */}
+      <button
+        className="w-full flex items-center justify-between px-4 py-3 text-left"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-zinc-400">LLM Model Access</span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+            activeCount > 0
+              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+              : "bg-zinc-800 text-zinc-500 border-zinc-700"
+          }`}>
+            {activeCount}/{models.providers.length} providers active
+          </span>
+          {copilot && (
+            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+              copilot.available
+                ? "bg-violet-500/10 text-violet-400 border-violet-500/20"
+                : "bg-zinc-800 text-zinc-600 border-zinc-700"
+            }`}>
+              Copilot models: {copilot.available ? "✓ active" : "⚠ needs GITHUB_TOKEN"}
+            </span>
+          )}
+        </div>
+        <span className="text-zinc-600 text-xs">{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 border-t border-zinc-800">
+          {/* Direct providers */}
+          <p className="text-[10px] uppercase tracking-wider text-zinc-600 mt-3 mb-1">Direct API keys (tier router)</p>
+          <div>
+            {direct.map((p) => <ProviderRow key={p.id} p={p} />)}
+          </div>
+
+          {/* Copilot section */}
+          {copilot && (
+            <>
+              <div className="flex items-center justify-between mt-4 mb-1">
+                <p className="text-[10px] uppercase tracking-wider text-zinc-600">GitHub Copilot models (included in Copilot subscription)</p>
+                {!copilot.available && (
+                  <Link href="/integrations" className="text-[10px] text-violet-400 hover:text-violet-300 underline shrink-0 ml-2">
+                    Configure in Integrations →
+                  </Link>
+                )}
+              </div>
+              {/* Copilot provider row */}
+              <ProviderRow p={copilot} />
+              {/* Individual Copilot model rows */}
+              <div className="mt-2 space-y-1">
+                {models.copilot_models.map((m) => (
+                  <div key={m.alias} className={`flex items-center gap-3 rounded-lg px-3 py-2 ${
+                    copilot.available ? "bg-zinc-800/50" : "bg-zinc-900/40"
+                  }`}>
+                    <span className={`font-mono text-xs ${
+                      copilot.available ? "text-violet-300" : "text-zinc-600"
+                    }`}>
+                      {m.alias}
+                    </span>
+                    <span className={`text-xs flex-1 ${
+                      copilot.available ? "text-zinc-300" : "text-zinc-600"
+                    }`}>
+                      {m.label}
+                    </span>
+                    <span className="text-[11px] text-zinc-500">{m.description}</span>
+                    {m.suggested_tier && (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
+                        copilot.available
+                          ? "bg-zinc-800 text-zinc-400 border-zinc-700"
+                          : "bg-zinc-900 text-zinc-700 border-zinc-800"
+                      }`}>
+                        → {m.suggested_tier}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {!copilot.available && (
+                <p className="mt-2 text-[11px] text-zinc-600">
+                  Set <code className="text-zinc-500">GITHUB_TOKEN</code> (PAT with{" "}
+                  <code className="text-zinc-500">copilot</code> scope) in the{" "}
+                  <Link href="/integrations" className="text-violet-400 hover:text-violet-300 underline">Integrations</Link>{" "}
+                  panel to unlock GPT-4o, Claude Sonnet, and o3-mini at no extra per-token cost.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Agent card
+// ---------------------------------------------------------------------------
+
+function AgentCard({
+  agent,
+  onRemove,
+  integrationStatuses,
+}: {
+  agent: AgentEntry;
+  onRemove: (name: string) => void;
+  integrationStatuses: IntegrationStatus[];
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [removing, setRemoving] = useState(false);
+
+  const handleRemove = async () => {
+    setRemoving(true);
+    try {
+      const res = await fetch(`/api/agent/${encodeURIComponent(agent.name)}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        onRemove(agent.name);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(String(data?.detail ?? data?.error ?? "Failed to remove agent"));
+      }
+    } catch {
+      alert("Network error while removing agent");
+    } finally {
+      setRemoving(false);
+      setConfirming(false);
+    }
+  };
+
+  const repoUrl = agent.repo_url;
+  const repoName = agent.repo_name;
+  const localPath = agent.local_path;
+
+  return (
+    <div className="group relative rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 hover:border-zinc-700 transition-colors">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-zinc-100 truncate">{agent.name}</span>
+            {agent.dynamic && (
+              <span className="shrink-0 rounded-full bg-blue-500/15 px-2 py-0.5 text-xs text-blue-400">
+                custom
+              </span>
+            )}
+            {localPath && (
+              <span className="shrink-0 rounded-full bg-violet-500/15 px-2 py-0.5 text-xs text-violet-400" title={localPath}>
+                local
+              </span>
+            )}
+            <span
+              className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${
+                agent.status === "live"
+                  ? "bg-green-500/15 text-green-400"
+                  : "bg-zinc-700 text-zinc-500"
+              }`}
+            >
+              {agent.status}
+            </span>
+          </div>
+
+          {agent.description && (
+            <p className="mt-1 text-xs text-zinc-400 line-clamp-2">{agent.description}</p>
+          )}
+
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {agent.tags?.map((t) => (
+              <span
+                key={t}
+                className="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-500"
+              >
+                {t}
+              </span>
+            ))}
+          </div>
+
+          {localPath ? (
+            <div className="mt-2 flex items-center gap-1 text-xs text-zinc-600" title={localPath}>
+              <svg className="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M1 3.5A1.5 1.5 0 012.5 2h3.257c.466 0 .917.18 1.25.503l.69.69A.5.5 0 008.05 3.5H13.5A1.5 1.5 0 0115 5v7.5A1.5 1.5 0 0113.5 14h-11A1.5 1.5 0 011 12.5V3.5z"/>
+              </svg>
+              <span className="truncate">{localPath}</span>
+            </div>
+          ) : (repoName || repoUrl) ? (
+            <div className="mt-2">
+              <a
+                href={
+                  repoUrl ??
+                  (repoName?.includes("/")
+                    ? `https://github.com/${repoName}`
+                    : `https://github.com/FracktalWorks/${repoName}`)
+                }
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+              >
+                <svg className="h-3 w-3" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+                </svg>
+                {repoName ?? repoUrl}
+              </a>
+            </div>
+          ) : null}
+
+          {/* Integration badges with live status */}
+          {((agent.integrations?.length ?? 0) > 0 || (agent.optional_integrations?.length ?? 0) > 0) && (
+            <div className="mt-2.5 space-y-1">
+              {/* Mandatory */}
+              {(agent.integrations?.length ?? 0) > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {agent.integrations!.map((i) => {
+                    const intg = integrationStatuses.find((s) => s.service === i);
+                    const configured = intg?.configured;
+                    // null = gateway unreachable / unknown
+                    const state = configured === true ? "ok" : configured === false ? "missing" : "unknown";
+                    return (
+                      <Link
+                        key={i}
+                        href="/integrations"
+                        title={
+                          state === "ok"
+                            ? `${intg?.label ?? i}: connected`
+                            : state === "missing"
+                            ? `${intg?.label ?? i}: not configured — click to set up`
+                            : i
+                        }
+                      >
+                        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium cursor-pointer transition-colors ${
+                          state === "ok"
+                            ? "border-emerald-700/50 text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20"
+                            : state === "missing"
+                            ? "border-red-700/50 text-red-400 bg-red-500/10 hover:bg-red-500/20"
+                            : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
+                        }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                            state === "ok" ? "bg-emerald-400" : state === "missing" ? "bg-red-400" : "bg-zinc-600"
+                          }`} />
+                          {intg?.label ?? i}
+                          {state === "ok" && <span className="text-emerald-600 text-[10px]">✓</span>}
+                          {state === "missing" && <span className="text-red-500 text-[10px]">!</span>}
+                        </span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+              {/* Optional */}
+              {(agent.optional_integrations?.length ?? 0) > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {agent.optional_integrations!.map((i) => {
+                    const intg = integrationStatuses.find((s) => s.service === i);
+                    const configured = intg?.configured;
+                    const state = configured === true ? "ok" : configured === false ? "missing" : "unknown";
+                    return (
+                      <Link
+                        key={i}
+                        href="/integrations"
+                        title={`${intg?.label ?? i}: optional${state === "missing" ? " — not configured" : state === "ok" ? " — connected" : ""}`}
+                      >
+                        <span className={`inline-flex items-center gap-1.5 rounded-full border border-dashed px-2 py-0.5 text-xs cursor-pointer transition-colors ${
+                          state === "ok"
+                            ? "border-emerald-700/40 text-emerald-600 hover:bg-emerald-500/10"
+                            : "border-zinc-700 text-zinc-600 hover:border-zinc-600"
+                        }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                            state === "ok" ? "bg-emerald-600" : "bg-zinc-700"
+                          }`} />
+                          {intg?.label ?? i}
+                        </span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Blocked warning: any mandatory integration not configured */}
+          {(() => {
+            const missing = (agent.integrations ?? []).filter((i) => {
+              const s = integrationStatuses.find((x) => x.service === i);
+              return s !== undefined && !s.configured;
+            });
+            if (missing.length === 0) return null;
+            const labels = missing.map((i) => integrationStatuses.find((s) => s.service === i)?.label ?? i);
+            return (
+              <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-amber-800/40 bg-amber-950/30 px-2.5 py-1.5">
+                <span className="text-amber-400 text-xs">⚠</span>
+                <span className="text-xs text-amber-300">
+                  Agent is blocked — needs:{" "}
+                  <Link href="/integrations" className="underline hover:text-amber-200">
+                    {labels.join(", ")}
+                  </Link>
+                </span>
+              </div>
+            );
+          })()}
+        </div>
+
+        {/* Remove button — only for user-added (dynamic) agents */}
+        {agent.dynamic && (
+          <div className="shrink-0">
+            {confirming ? (
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-zinc-500">Remove?</span>
+                <button
+                  disabled={removing}
+                  onClick={handleRemove}
+                  className="rounded px-2 py-1 text-xs bg-red-700 hover:bg-red-600 text-white transition-colors disabled:opacity-50"
+                >
+                  {removing ? "…" : "Yes"}
+                </button>
+                <button
+                  onClick={() => setConfirming(false)}
+                  className="rounded px-2 py-1 text-xs border border-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
+                >
+                  No
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirming(true)}
+                className="rounded p-1.5 text-zinc-500 hover:bg-red-900/30 hover:text-red-400 transition-colors"
+                title="Remove agent"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+
+export default function AgentsPage() {
+  const [agents, setAgents] = useState<AgentEntry[]>([]);
+  const [integrationStatuses, setIntegrationStatuses] = useState<IntegrationStatus[]>([]);
+  const [modelsStatus, setModelsStatus] = useState<ModelsStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [showAddModal, setShowAddModal] = useState(false);
+
+  const loadAgents = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [agentRes, intgRes, modelsRes] = await Promise.all([
+        fetch("/api/agent/list"),
+        fetch("/api/integrations/status"),
+        fetch("/api/models"),
+      ]);
+      if (agentRes.ok) setAgents(await agentRes.json());
+      if (intgRes.ok) {
+        const data = await intgRes.json();
+        if (Array.isArray(data)) setIntegrationStatuses(data);
+      }
+      if (modelsRes.ok) setModelsStatus(await modelsRes.json());
+    } catch {
+      /* ignore */
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAgents();
+  }, [loadAgents]);
+
+  const handleRemove = (name: string) =>
+    setAgents((prev) => prev.filter((a) => a.name !== name));
+
+  const handleAdded = (agent: AgentEntry) =>
+    setAgents((prev) => [...prev, { ...agent, dynamic: true }]);
+
+  const builtIn = agents.filter((a) => !a.dynamic);
+  const custom = agents.filter((a) => a.dynamic);
+
+  return (
+    <div className="mx-auto max-w-3xl px-6 py-8">
+      {/* Page header */}
+      <div className="mb-8 flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-zinc-100">Agents</h1>
+          <p className="mt-1 text-sm text-zinc-500">
+            Manage MAF agents connected to this CommandCenter instance.
+          </p>
+        </div>
+        <button
+          onClick={() => setShowAddModal(true)}
+          className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
+        >
+          <span className="text-base leading-none">+</span>
+          Add Agent
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-16 text-zinc-600 text-sm">
+          Loading agents…
+        </div>
+      ) : (
+        <>
+          {/* Model access panel */}
+          <ModelAccess models={modelsStatus} />
+          {/* Built-in agents */}
+          {builtIn.length > 0 && (
+            <section className="mb-6">
+              <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-600">
+                Built-in ({builtIn.length})
+              </h2>
+              <div className="flex flex-col gap-3">
+                {builtIn.map((a) => (
+                  <AgentCard key={a.name} agent={a} onRemove={handleRemove} integrationStatuses={integrationStatuses} />
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Custom agents */}
+          <section>
+            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-600">
+              Custom — from GitHub {custom.length > 0 && `(${custom.length})`}
+            </h2>
+            {custom.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-zinc-800 p-8 text-center">
+                <p className="text-sm text-zinc-500">No custom agents yet.</p>
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="mt-3 text-sm text-blue-500 hover:text-blue-400 underline"
+                >
+                  Add your first agent →
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {custom.map((a) => (
+                  <AgentCard key={a.name} agent={a} onRemove={handleRemove} integrationStatuses={integrationStatuses} />
+                ))}
+              </div>
+            )}
+          </section>
+        </>
+      )}
+
+      {showAddModal && (
+        <AddAgentModal
+          onClose={() => setShowAddModal(false)}
+          onAdded={handleAdded}
+        />
+      )}
+    </div>
+  );
+}

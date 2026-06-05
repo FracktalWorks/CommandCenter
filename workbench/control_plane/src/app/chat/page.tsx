@@ -2,93 +2,153 @@
 
 import { useState, useEffect, useCallback } from "react";
 import {
-  CopilotKitProvider,
-  useCopilotReadable,
-  useCopilotChat,
-} from "@copilotkit/react-core/v2";
-import { CopilotChat } from "@copilotkit/react-ui";
-import "@copilotkit/react-ui/styles.css";
-import {
   getSessions,
   upsertSession,
   deleteSession,
   createSession,
-  touchSession,
   type ChatSession,
 } from "@/lib/sessions";
 import type { Mem0Memory } from "@/lib/memory";
+import AgentChat from "@/components/AgentChat";
+import type { AgentEntry } from "@/app/api/agent/list/route";
+import type { IntegrationStatus } from "@/app/api/integrations/status/route";
+
+// Default agent names that carry persistent Mem0 memory + the CommandCenter persona.
+const MEMORY_AGENTS = new Set(["orchestrator", "default"]);
+
+// CommandCenter persona injected as system context for the default agent.
+const COMMANDCENTER_PERSONA =
+  "You are CommandCenter, the AI operations brain for Fracktal Works. You help the team " +
+  "with tasks, project tracking, the sales pipeline, and company intelligence. You have " +
+  "access to memories from past conversations — use them for continuity. When you take " +
+  "actions that modify company data, confirm before proceeding. Be concise and direct.";
 
 // ---------------------------------------------------------------------------
-// Inner component — must live inside CopilotKitProvider to use hooks
+// Agent picker modal — shown on "+ New session"
 // ---------------------------------------------------------------------------
 
-function ChatWithMemory({
-  session,
-  memories,
-  userId,
+function AgentPickerModal({
+  onSelect,
+  onClose,
 }: {
-  session: ChatSession;
-  memories: Mem0Memory[];
-  userId: string;
+  onSelect: (agentName: string, description?: string, agentEntry?: AgentEntry) => void;
+  onClose: () => void;
 }) {
-  const { messages } = useCopilotChat();
+  const [agents, setAgents] = useState<AgentEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  // Integration statuses fetched in background to show "needs setup" badges
+  const [allStatuses, setAllStatuses] = useState<IntegrationStatus[]>([]);
 
-  // Inject memories into the AI's readable context so it uses them.
-  useCopilotReadable({
-    description:
-      "Persistent memories from past conversations with this user. Use them to provide continuity and personalise responses.",
-    value:
-      memories.length > 0
-        ? memories.map((m) => `• ${m.memory}`).join("\n")
-        : "No memories stored yet for this user.",
-  });
-
-  // Inject current session metadata.
-  useCopilotReadable({
-    description: "Current chat session context",
-    value: `Session name: ${session.name} | Agent: ${session.agentName} | Started: ${new Date(session.createdAt).toLocaleString()}`,
-  });
-
-  // Keep session message count in sync with localStorage.
   useEffect(() => {
-    if (messages.length > 0) {
-      touchSession(session.id, messages.length);
-    }
-  }, [messages.length, session.id]);
+    fetch("/api/agent/list")
+      .then((r) => r.json())
+      .then((data: AgentEntry[]) => setAgents(data))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+    // Fetch integration statuses in background for badges
+    fetch("/api/integrations/status")
+      .then((r) => r.json())
+      .then((data: IntegrationStatus[]) => setAllStatuses(data))
+      .catch(() => {});
+  }, []);
 
-  // Save conversation to Mem0 when component unmounts (session switch / navigate).
-  useEffect(() => {
-    return () => {
-      if (messages.length === 0) return;
-      const payload = messages
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => ({
-          role: m.role as "user" | "assistant",
-          content: typeof m.content === "string" ? m.content : "",
-        }))
-        .filter((m) => m.content.length > 0);
-      if (payload.length === 0) return;
-      // Fire-and-forget — failure is non-critical.
-      fetch("/api/chat/memories", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, messages: payload }),
-        keepalive: true,
-      }).catch(() => {});
-    };
-  }, [messages, userId]);
+  /** True when all mandatory integrations for this agent are already configured. */
+  function isReady(agent: AgentEntry): boolean {
+    if (!agent.integrations?.length) return true;
+    if (!allStatuses.length) return true; // not loaded yet — optimistic
+    return agent.integrations.every((svc) => {
+      const s = allStatuses.find((st) => st.service === svc);
+      return !s || s.configured;
+    });
+  }
+
+  const handleAgentClick = (agent: AgentEntry) => {
+    // Always allow — missing integrations are surfaced as a banner inside the
+    // chat window so users can configure them conversationally.
+    onSelect(agent.name, agent.description, agent);
+  };
+
+  const needsSetupBadge = (agent: AgentEntry) =>
+    allStatuses.length > 0 && !isReady(agent);
 
   return (
-    <CopilotChat
-      instructions={`You are Jannet, the AI operations brain for Fracktal Works. You help the team with tasks, project tracking, sales pipeline, and company intelligence. You have access to memories from past conversations — use them to provide continuity. When you take actions that modify company data, confirm before proceeding. Be concise and direct.`}
-      labels={{
-        title: "Jannet",
-        initial:
-          "Hello! I'm Jannet, your AI company brain. Ask me about projects, tasks, sales, or anything else.",
-        placeholder: "Ask about tasks, projects, customers…",
-      }}
-      className="h-full"
-    />
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <div className="text-base font-semibold text-zinc-100">New session</div>
+            <div className="text-xs text-zinc-500 mt-0.5">Choose an agent to chat with</div>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-zinc-500 hover:text-zinc-300 text-sm transition-colors"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Default — CommandCenter */}
+        <div className="mb-2">
+          <div className="text-xs font-medium uppercase tracking-wide text-zinc-600 mb-1.5">
+            Default
+          </div>
+          <button
+            onClick={() => onSelect("orchestrator", "CommandCenter — AI company brain")}
+            className="w-full text-left rounded-lg border border-zinc-700 bg-zinc-800/60 px-4 py-3 hover:border-zinc-500 hover:bg-zinc-800 transition-colors"
+          >
+            <div className="text-sm font-medium text-zinc-100">CommandCenter</div>
+            <div className="text-xs text-zinc-500 mt-0.5">General-purpose AI company brain</div>
+          </button>
+        </div>
+
+        {/* MAF Agents */}
+        <div className="mt-4">
+          <div className="text-xs font-medium uppercase tracking-wide text-zinc-600 mb-1.5">
+            MAF agents
+          </div>
+          {loading ? (
+            <div className="text-xs text-zinc-600 py-2 text-center">Loading agents…</div>
+          ) : (
+            <div className="flex flex-col gap-1.5 max-h-72 overflow-y-auto">
+              {agents.map((a) => (
+                <div key={a.name}>
+                  <button
+                    onClick={() => handleAgentClick(a)}
+                    className="w-full text-left rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-4 py-3 hover:border-zinc-500 hover:bg-zinc-800 transition-colors"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-medium text-zinc-100">{a.name}</div>
+                      <div className="flex items-center gap-1.5">
+                        {needsSetupBadge(a) && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-900/40 text-orange-400 border border-orange-700/50">
+                            ⚙ Setup needed
+                          </span>
+                        )}
+                        {a.tags.slice(0, 2).map((t) => (
+                          <span
+                            key={t}
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-400"
+                          >
+                            {t}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="text-xs text-zinc-500 mt-0.5">{a.description}</div>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -115,7 +175,7 @@ function MemoryPanel({
         </div>
         <p className="mt-1.5 text-xs text-zinc-600">
           {configured
-            ? "No memories yet. Jannet will learn from your conversations."
+            ? "No memories yet. CommandCenter will learn from your conversations."
             : "Mem0 not configured. Set MEM0_API_URL to enable persistent memory."}
         </p>
       </div>
@@ -222,6 +282,7 @@ export default function ChatPage() {
   const [activeSessionId, setActiveSessionId] = useState<string>("");
   const [memories, setMemories] = useState<Mem0Memory[]>([]);
   const [memoriesLoaded, setMemoriesLoaded] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
 
   // Load sessions from localStorage on mount.
   useEffect(() => {
@@ -249,11 +310,19 @@ export default function ChatPage() {
   }, []);
 
   const handleNewSession = useCallback(() => {
-    const s = createSession();
-    upsertSession(s);
-    setSessions(getSessions());
-    setActiveSessionId(s.id);
+    setShowPicker(true);
   }, []);
+
+  const handleSelectAgent = useCallback(
+    (agentName: string, _description?: string, _agentEntry?: AgentEntry) => {
+      setShowPicker(false);
+      const s = createSession(agentName);
+      upsertSession(s);
+      setSessions(getSessions());
+      setActiveSessionId(s.id);
+    },
+    []
+  );
 
   const handleSelectSession = useCallback((id: string) => {
     setActiveSessionId(id);
@@ -287,12 +356,20 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full min-h-screen">
+      {/* Agent picker modal */}
+      {showPicker && (
+        <AgentPickerModal
+          onSelect={handleSelectAgent}
+          onClose={() => setShowPicker(false)}
+        />
+      )}
+
       {/* Left panel — sessions + memory */}
       <aside className="w-72 shrink-0 border-r border-zinc-800 bg-zinc-900/40 flex flex-col p-4 overflow-y-auto">
         <div className="mb-4">
           <div className="text-sm font-semibold text-zinc-200">Conversations</div>
           <div className="text-xs text-zinc-500 mt-0.5">
-            Powered by CopilotKit + LangGraph
+            Unified chat · Copilot SDK + LiteLLM
           </div>
         </div>
 
@@ -317,52 +394,35 @@ export default function ChatPage() {
         </div>
       </aside>
 
-      {/* Right panel — chat */}
+      {/* Right panel — chat (unified AgentChat for every session) */}
       <div className="flex flex-1 flex-col overflow-hidden">
         {activeSession ? (
-          /*
-           * Each session gets its own CopilotKitProvider with a unique threadId.
-           * This isolates the message history per session so switching sessions
-           * loads the correct conversation thread.
-           *
-           * Upgrade path: replace `threadId` with a LangGraph checkpointer thread_id
-           * when CopilotRuntime is upgraded from BuiltInAgent to LangGraphAgent.
-           */
-          <CopilotKitProvider
-            key={activeSession.id}
-            runtimeUrl="/api/copilot"
-            threadId={activeSession.id}
-          >
-            <div className="flex flex-col h-full">
-              {/* Session header */}
-              <div className="shrink-0 border-b border-zinc-800 px-6 py-3 flex items-center justify-between bg-zinc-950">
-                <div>
-                  <div className="text-sm font-medium text-zinc-200">
-                    {activeSession.name}
-                  </div>
-                  <div className="text-xs text-zinc-500">
-                    Agent: {activeSession.agentName}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {memories.length > 0 && (
-                    <span className="rounded-full bg-violet-900/40 px-2 py-0.5 text-xs text-violet-400">
-                      {memories.length} memories
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Chat component */}
-              <div className="flex-1 overflow-hidden">
-                <ChatWithMemory
-                  session={activeSession}
-                  memories={memories}
-                  userId={DEFAULT_USER_ID}
-                />
-              </div>
-            </div>
-          </CopilotKitProvider>
+          MEMORY_AGENTS.has(activeSession.agentName) ? (
+            /*
+             * Default CommandCenter session — same unified AgentChat UI, with the
+             * CommandCenter persona + persistent Mem0 memory injected as context
+             * and the conversation saved back to Mem0 on unmount.
+             */
+            <AgentChat
+              key={activeSession.id}
+              agentName={activeSession.agentName}
+              sessionId={activeSession.id}
+              agentDescription="General-purpose AI company brain"
+              persona={COMMANDCENTER_PERSONA}
+              memories={memories.map((m) => m.memory)}
+              memoryUserId={DEFAULT_USER_ID}
+            />
+          ) : (
+            /*
+             * Named agent session — identical AgentChat UI without memory injection.
+             * Messages route: AgentChat → /api/agent/chat → gateway (Copilot SDK / LiteLLM).
+             */
+            <AgentChat
+              key={activeSession.id}
+              agentName={activeSession.agentName}
+              sessionId={activeSession.id}
+            />
+          )
         ) : (
           <div className="flex flex-1 items-center justify-center text-zinc-600 text-sm">
             Select or create a session to start chatting.

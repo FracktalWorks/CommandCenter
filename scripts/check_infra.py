@@ -8,12 +8,10 @@ from __future__ import annotations
 
 import sys
 import time
-from urllib.error import URLError
 from urllib.request import urlopen
 
 import psycopg
 import redis
-
 from acb_common import get_settings
 
 OK = "  OK   "
@@ -84,17 +82,6 @@ def check_litellm(base_url: str) -> bool:
     return False
 
 
-def check_langfuse(host: str) -> bool:
-    try:
-        with urlopen(f"{host.rstrip('/')}/api/public/health", timeout=3) as r:
-            if r.status == 200:
-                print(f"{OK}langfuse @ {host}")
-                return True
-    except URLError as e:
-        print(f"  WARN  langfuse @ {host}: {e} (skip if you did not start the obs profile)")
-    return True  # langfuse is optional
-
-
 def main() -> int:
     s = get_settings()
     print(f"env: {s.acb_env}")
@@ -102,9 +89,8 @@ def main() -> int:
         check_postgres(s.database_url),
         check_redis(s.redis_url),
         check_litellm(s.litellm_base_url),
-        check_langfuse(s.langfuse_host),
     ]
-    return 0 if all(results[:3]) else 1
+    return 0 if all(results) else 1
 
 
 if __name__ == "__main__":

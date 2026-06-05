@@ -27,17 +27,17 @@ class Settings(BaseSettings):
         default="postgresql+psycopg://acb:acb_dev_change_me@localhost:5432/acb"
     )
 
-    # Redis (event bus + GPTCache)
+    # Redis (event bus)
     redis_url: str = "redis://localhost:6379/0"
 
     # LiteLLM gateway
     litellm_base_url: str = "http://localhost:4000"
     litellm_master_key: str = "sk-local-dev-change-me"
 
-    # Langfuse
-    langfuse_host: str = "http://localhost:3000"
-    langfuse_public_key: str = ""
-    langfuse_secret_key: str = ""
+    # LLM provider keys (used by LiteLLM config and settings UI)
+    gemini_api_key: str = ""
+    openai_api_key: str = ""
+    anthropic_api_key: str = ""
 
     # Gateway
     gateway_host: str = "0.0.0.0"
@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     # -- Auth: PAT (simple, use for dev / small teams) --
     github_token: str = ""                    # PAT with `repo` scope; used in clone URL + remote set-url
 
+    # -- OAuth App (used by Control Plane Device Flow UI only) --
+    # Register at: github.com/settings/applications/new  (Callback URL: http://localhost)
+    # The client_id is NOT sensitive — it is a public identifier.
+    github_client_id: str = ""               # OAuth App Client ID; never the secret
+
     # -- Auth: GitHub App (recommended for production) --
     # When set, _get_auth_token() should exchange app credentials for a
     # short-lived installation token.  Leave blank to fall back to github_token.
@@ -85,11 +90,40 @@ class Settings(BaseSettings):
     # -- Bot git identity (written into every local clone via git config) --
     # Commits and PRs opened by Self_Mutation_Node carry this identity.
     # Create a dedicated GitHub machine user (or use the GitHub App's identity).
-    github_bot_name: str = "jannet-bot"
+    github_bot_name: str = "commandcenter-bot"
     github_bot_email: str = ""                # default: {github_bot_name}@users.noreply.github.com
 
     # OpenHands Self-Mutation Sandbox (v2 — ADR-021)
     openhands_api_url: str = ""   # e.g. http://openhands:3000; leave blank to disable mutation
+
+    # Copilot SDK chat (coworker sessions via /copilot/chat)
+    # Auth order: LITELLM_MASTER_KEY → LiteLLM proxy  |  GITHUB_TOKEN → api.githubcopilot.com
+    # Model must be available in whichever provider is active.
+    copilot_chat_model: str = "claude-sonnet-4.5"  # e.g. gpt-5.5, claude-sonnet-4.6
+
+    # ---------------------------------------------------------------------------
+    # Integration credentials — injected into state["integrations"] at run time
+    # via acb_skills.integrations.build_integrations().
+    # Add the corresponding values to .env / docker-compose secrets.
+    # ---------------------------------------------------------------------------
+
+    # Apollo.io (prospecting, contact enrichment)
+    apollo_api_key: str = ""
+    apollo_base_url: str = "https://api.apollo.io/v1"
+
+    # Google Maps Platform (Places API — used by sales-prospector Step 1)
+    google_maps_api_key: str = ""
+
+    # Instantly.ai (email sequencing — used by sales-prospector Step 7)
+    instantly_api_key: str = ""
+    instantly_base_url: str = "https://api.instantly.ai/api/v1"
+
+    # SMTP outbound (generic email send fallback)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
 
 
 @lru_cache(maxsize=1)

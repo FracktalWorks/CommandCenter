@@ -4,15 +4,27 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
+from acb_auth import UserContext, UserRole, get_current_user, require_role
+from acb_common import configure_logging, get_logger, get_settings
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel
 
-from acb_auth import UserContext, get_current_user, require_role, UserRole
-from acb_common import configure_logging, get_logger, get_settings
-from orchestrator.agents.pull_agent import answer as pull_answer
-from orchestrator.agents.sales_pull_agent import answer as sales_pull_answer
-
 _log = get_logger("gateway")
+
+# ── Pre-import heavy modules before event loop starts ──────────────────────
+# SQLAlchemy / psycopg deadlocks when imported for the first time inside a
+# running asyncio event loop.  Importing here (module level, before uvicorn
+# starts the loop) avoids the deadlock entirely.
+try:
+    from agent_framework.ag_ui import \
+        add_agent_framework_fastapi_endpoint as _add_ag_ui_endpoint
+    from orchestrator.agents import \
+        build_orchestrator_agent as _build_orchestrator_agent
+    _HAS_MAF = True
+except ImportError:
+    _HAS_MAF = False
+    _add_ag_ui_endpoint = None
+    _build_orchestrator_agent = None
 
 
 @asynccontextmanager
@@ -20,6 +32,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     configure_logging(settings.log_level)
     _log.info("gateway.startup", env=settings.acb_env)
+
+    if _HAS_MAF:
+        _log.info("gateway.ag_ui_registered", path="/copilot/chat")
+
     yield
     _log.info("gateway.shutdown")
 
@@ -30,6 +46,19 @@ app = FastAPI(
     description="Pull queries, push notifications, approvals. See ai-company-brain/system_architecture.md §3.",
     lifespan=lifespan,
 )
+
+# ── Wire AG-UI endpoint (module level so imports happen before event loop) ──
+if _HAS_MAF:
+    try:
+        _maf_agent = _build_orchestrator_agent(with_history=False)
+        _add_ag_ui_endpoint(
+            app,
+            _maf_agent,
+            "/copilot/chat",
+            dependencies=[Depends(get_current_user)],
+        )
+    except Exception as _exc:
+        _log.warning("gateway.ag_ui_failed", error=str(_exc))
 
 # Webhook routers (Phase 1 ingestion entry points)
 try:
@@ -60,6 +89,19 @@ try:
 except Exception:  # pragma: no cover - keep gateway bootable if orchestrator not installed
     pass
 
+try:
+    from gateway.routes.integrations import router as _integrations_router
+
+    app.include_router(_integrations_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
+    from gateway.routes.settings import router as _settings_router
+
+    app.include_router(_settings_router)
+except Exception:  # pragma: no cover
+    pass
 
 # ---------- Health ----------
 
@@ -88,15 +130,22 @@ class PullResponse(BaseModel):
 
 @app.post("/pull", response_model=PullResponse, tags=["pull"])
 async def pull(req: PullRequest, _user: UserContext = Depends(get_current_user)) -> PullResponse:
-    """Phase-0 wire: gateway -> pull_agent -> retrieval+LLM+guardrails."""
-    from acb_llm.guardrails import CITATION_RE  # local import to avoid cold-start cost
+    """Phase-0 pull Q&A: routes through the MAF orchestrator agent."""
     import uuid
+
+    from acb_llm.guardrails import \
+        CITATION_RE  # local import to avoid cold-start cost
 
     trace_id = uuid.uuid4().hex
     _log.info("pull.received", query=req.query, user=req.user_email, trace_id=trace_id)
     try:
-        text = await pull_answer(req.query, user_email=req.user_email, trace_id=trace_id)
-    except Exception as exc:  # surface upstream errors as 200 with diagnostic text
+        from orchestrator.agents import \
+            build_orchestrator_agent  # noqa: PLC0415
+        agent = build_orchestrator_agent(with_history=False)
+        async with agent:
+            response = await agent.run(req.query)
+        text = response.text or ""
+    except Exception as exc:
         _log.exception("pull.failed", trace_id=trace_id)
         return PullResponse(
             answer=f"[agent error] {type(exc).__name__}: {exc}", citations=[], trace_id=trace_id
@@ -110,14 +159,20 @@ async def pull(req: PullRequest, _user: UserContext = Depends(get_current_user))
 @app.post("/pull/sales", response_model=PullResponse, tags=["pull"],
           dependencies=[require_role(UserRole.EXECUTIVE)])
 async def pull_sales(req: PullRequest) -> PullResponse:
-    """Sales-flavoured pull: uses customer-360 / quiet-deal context blocks."""
-    from acb_llm.guardrails import CITATION_RE
+    """Sales-flavoured pull Q&A: uses customer-360 / quiet-deal context blocks."""
     import uuid
+
+    from acb_llm.guardrails import CITATION_RE
 
     trace_id = uuid.uuid4().hex
     _log.info("pull.sales.received", query=req.query, user=req.user_email, trace_id=trace_id)
     try:
-        text = await sales_pull_answer(req.query, user_email=req.user_email, trace_id=trace_id)
+        from orchestrator.agents import \
+            build_orchestrator_agent  # noqa: PLC0415
+        agent = build_orchestrator_agent(with_history=False)
+        async with agent:
+            response = await agent.run(req.query)
+        text = response.text or ""
     except Exception as exc:
         _log.exception("pull.sales.failed", trace_id=trace_id)
         return PullResponse(

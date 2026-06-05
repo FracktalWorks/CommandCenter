@@ -508,6 +508,19 @@ async def _run_with_maf_agent(
         raise ValueError(f"Agent {agent_name!r}: build_agents() returned an empty list.")
 
     agent = agents[0]
+
+    # GitHubCopilotAgent requires on_permission_request to approve tool calls.
+    # Agent repos often omit it; patch _permission_handler directly so sessions
+    # are created without raising AgentException.
+    # PermissionHandler lives in the underlying `copilot` SDK package.
+    try:
+        from copilot import PermissionHandler as _PH  # noqa: PLC0415
+        for _a in agents:
+            if hasattr(_a, "_permission_handler") and _a._permission_handler is None:
+                _a._permission_handler = _PH.approve_all
+    except Exception:  # noqa: BLE001
+        pass
+
     message = _build_event_message(agent_name, run_id, event_payload, integrations)
 
     async with contextlib.AsyncExitStack() as stack:

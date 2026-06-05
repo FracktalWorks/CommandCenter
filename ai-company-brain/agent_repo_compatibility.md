@@ -363,6 +363,7 @@ def build_agents():
 - On failure in a tool, **raise** — do not swallow. The MAF orchestrator routes to `Self_Mutation_Node`.
 - Credentials arrive via `os.environ` — the executor injects them from the Integration Registry for every key declared in `config.json["integrations"]`. Scripts that call `os.getenv("ZOHO_CLIENT_ID")` work unchanged in both CommandCenter and local VS Code mode.
 - Do not instantiate agents at module level — the factory function `build_agents()` is the single entry point.
+- **`on_permission_request` is set automatically by CommandCenter** — do not add it to `build_agents()`. The executor patches `PermissionHandler.approve_all` before starting any `GitHubCopilotAgent`, so tool calls are approved without agent code needing to configure this.
 - **`agents.py` is auto-maintained by CommandCenter.** After every `git pull`, CommandCenter scans `skills/*/scripts/*.py` for scripts not yet referenced in `agents.py` and adds async subprocess wrappers automatically, committing directly to the repo. You do not need to manually wire every new script — just add the script file and CommandCenter will detect it on the next run.
 
 ---

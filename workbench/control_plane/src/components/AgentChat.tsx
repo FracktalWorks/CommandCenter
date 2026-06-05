@@ -608,6 +608,7 @@ function MessageBubble({
           toolEvents={message.toolEvents}
           progressLines={message.progressLines}
           isThinkingActive={message.isThinkingActive}
+          reasoning={message.reasoning}
           onChoice={onChoice}
         />
         {!message.streaming && (

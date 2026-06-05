@@ -22,6 +22,8 @@ interface ThinkingContainerProps {
   toolEvents: ToolEvent[];
   /** Live tool-name lines emitted before each tool result (progress events). */
   progressLines: string[];
+  /** Streamed model reasoning / chain-of-thought (reasoning models only). */
+  reasoning?: string;
   /** True while the agent run is in progress. */
   isActive: boolean;
 }
@@ -75,11 +77,22 @@ function pickWorkingMessage(): string {
 export default function ThinkingContainer({
   toolEvents,
   progressLines,
+  reasoning,
   isActive,
 }: ThinkingContainerProps) {
   const [expanded, setExpanded] = useState(false);
   const [workingMsg, setWorkingMsg] = useState<string>(() => pickWorkingMessage());
   const userToggledRef = useRef(false);
+
+  const hasReasoning = !!reasoning && reasoning.trim().length > 0;
+
+  // Auto-expand while reasoning is actively streaming so the user sees the
+  // chain-of-thought as it arrives (mirrors Claude Code / Copilot behaviour).
+  useEffect(() => {
+    if (hasReasoning && isActive && !userToggledRef.current) {
+      setExpanded(true);
+    }
+  }, [hasReasoning, isActive]);
 
   // Rotate the working message every few seconds while active.
   useEffect(() => {
@@ -109,22 +122,26 @@ export default function ThinkingContainer({
 
   // Final summary title once complete.
   const summaryTitle = useMemo(() => {
-    if (toolEvents.length === 0) return "Finished thinking";
+    if (toolEvents.length === 0) {
+      return hasReasoning ? "Thought it through" : "Finished thinking";
+    }
     if (toolEvents.length === 1) {
       return `Used ${formatToolName(toolEvents[0].name)}`;
     }
     const names = Array.from(new Set(toolEvents.map((t) => formatToolName(t.name))));
     if (names.length === 1) return `Used ${names[0]} ×${toolEvents.length}`;
     return `Used ${toolEvents.length} tools`;
-  }, [toolEvents]);
+  }, [toolEvents, hasReasoning]);
 
   const hasError = toolEvents.some((t) => t.status === "error");
-  const hasContent = toolEvents.length > 0;
+  const hasContent = toolEvents.length > 0 || hasReasoning;
 
   // Title shown in the header.
   const title = isActive
     ? lastLabel
       ? `Working: ${lastLabel}`
+      : hasReasoning
+      ? "Reasoning…"
       : "Thinking…"
     : summaryTitle;
 
@@ -189,9 +206,24 @@ export default function ThinkingContainer({
         )}
       </button>
 
-      {/* Body — tool rows */}
+      {/* Body — reasoning + tool rows */}
       {expanded && hasContent && (
         <div className="border-t border-zinc-700/40 px-2 py-2 space-y-1 chat-fade-in">
+          {/* Model chain-of-thought (reasoning models only) */}
+          {hasReasoning && (
+            <div className="rounded-md bg-zinc-900/60 px-3 py-2 border-l-2 border-violet-700/50">
+              <div className="text-[9px] text-violet-400/80 uppercase tracking-widest mb-1 font-medium">
+                Reasoning
+              </div>
+              <div className="text-[11px] text-zinc-400 whitespace-pre-wrap leading-relaxed font-mono">
+                {reasoning}
+                {isActive && (
+                  <span className="inline-block w-[2px] h-[1em] bg-zinc-500 animate-pulse ml-0.5 align-middle rounded-full" />
+                )}
+              </div>
+            </div>
+          )}
+
           {toolEvents.map((e) => (
             <ToolRow key={e.id} event={e} />
           ))}

@@ -27,6 +27,7 @@
  *
  * SSE event types:
  *   {"type":"delta",      "content":"…"}
+ *   {"type":"reasoning",  "content":"…"}              — model chain-of-thought (reasoning models only)
  *   {"type":"progress",   "name":"…"}                  — tool about to run (live status)
  *   {"type":"tool_start", "id":"…","name":"…","args":{}}
  *   {"type":"tool_end",   "id":"…","name":"…","result":"…","success":bool}
@@ -77,6 +78,20 @@ function sseHeaders(): HeadersInit {
 
 function sseEvent(payload: Record<string, unknown>): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+/** Parse an accumulated AG-UI tool-args JSON string into an object for the UI. */
+function parseToolArgs(raw: string | undefined): Record<string, unknown> {
+  if (!raw || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : { value: parsed };
+  } catch {
+    // Streamed args may be incomplete/non-JSON — surface the raw text.
+    return { _raw: raw };
+  }
 }
 
 // ─── Route handler ────────────────────────────────────────────────────────────
@@ -160,6 +175,8 @@ export async function POST(req: NextRequest): Promise<Response> {
         const decoder = new TextDecoder();
         // tool name lookup: toolCallId → name (needed for tool_end)
         const toolNames: Record<string, string> = {};
+        // tool args accumulator: toolCallId → streamed argument JSON string
+        const toolArgs: Record<string, string> = {};
         let buf = "";
         try {
           while (true) {
@@ -178,9 +195,18 @@ export async function POST(req: NextRequest): Promise<Response> {
               let out: Record<string, unknown> | null = null;
               if (t === "TEXT_MESSAGE_CONTENT") {
                 out = { type: "delta", content: ev.delta ?? "" };
+              } else if (
+                t === "REASONING_MESSAGE_CONTENT" ||
+                t === "THINKING_TEXT_MESSAGE_CONTENT"
+              ) {
+                // Model reasoning / chain-of-thought stream (only emitted by
+                // reasoning-capable models — o-series, Claude extended-thinking,
+                // Gemini 2.5 thinking). Surfaced live inside the ThinkingContainer.
+                out = { type: "reasoning", content: ev.delta ?? "" };
               } else if (t === "TOOL_CALL_START") {
                 const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
                 toolNames[String(ev.toolCallId ?? "")] = name;
+                toolArgs[String(ev.toolCallId ?? "")] = "";
                 // Emit a live progress line first so the ThinkingContainer shows
                 // activity immediately (before the tool result arrives).
                 controller.enqueue(
@@ -189,11 +215,17 @@ export async function POST(req: NextRequest): Promise<Response> {
                   )
                 );
                 out = { type: "tool_start", id: ev.toolCallId, name, args: {} };
+              } else if (t === "TOOL_CALL_ARGS") {
+                // Accumulate the streamed argument deltas so the tool input is
+                // visible in the UI (previously dropped — args showed as empty).
+                const id = String(ev.toolCallId ?? "");
+                toolArgs[id] = (toolArgs[id] ?? "") + String(ev.delta ?? "");
               } else if (t === "TOOL_CALL_END") {
                 out = {
                   type: "tool_end",
                   id: ev.toolCallId,
                   name: toolNames[String(ev.toolCallId ?? "")] ?? "tool",
+                  args: parseToolArgs(toolArgs[String(ev.toolCallId ?? "")]),
                   result: ev.result ?? "",
                   success: true,
                 };
@@ -202,6 +234,7 @@ export async function POST(req: NextRequest): Promise<Response> {
                   type: "tool_end",
                   id: ev.toolCallId,
                   name: toolNames[String(ev.toolCallId ?? "")] ?? "tool",
+                  args: parseToolArgs(toolArgs[String(ev.toolCallId ?? "")]),
                   result: ev.content ?? "",
                   success: true,
                 };

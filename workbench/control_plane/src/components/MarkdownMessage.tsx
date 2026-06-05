@@ -40,6 +40,8 @@ interface MarkdownMessageProps {
   progressLines?: string[];
   /** True while the agent run is in progress (drives shimmer/working state). */
   isThinkingActive?: boolean;
+  /** Streamed model reasoning / chain-of-thought (reasoning models only). */
+  reasoning?: string;
   /** Invoked when the user clicks an MCQ choice button (```choices block). */
   onChoice?: (choice: string) => void;
 }
@@ -192,24 +194,28 @@ export default function MarkdownMessage({
   toolEvents,
   progressLines,
   isThinkingActive,
+  reasoning,
   onChoice,
 }: MarkdownMessageProps) {
   const hasTools =
     (toolEvents && toolEvents.length > 0) ||
     (progressLines && progressLines.length > 0);
-  // Show the container when there are tool calls, OR briefly as a "Thinking…"
-  // placeholder before the first token arrives. Plain LLM replies (no tools)
-  // hide it as soon as text streams in — no redundant shimmer over the answer.
-  const showThinking = hasTools || (isThinkingActive && content.trim() === "");
+  const hasReasoning = !!reasoning && reasoning.trim().length > 0;
+  // Show the container when there are tool calls or reasoning, OR briefly as a
+  // "Thinking…" placeholder before the first token arrives. Plain LLM replies
+  // (no tools, no reasoning) hide it as soon as text streams in.
+  const showThinking =
+    hasTools || hasReasoning || (isThinkingActive && content.trim() === "");
 
   return (
     <div className="text-sm text-zinc-200 leading-relaxed min-w-0">
-      {/* Thinking container — groups the whole working phase (tool calls + status) */}
+      {/* Thinking container — groups the whole working phase (reasoning + tool calls + status) */}
       {showThinking && (
         <div className="mb-3">
           <ThinkingContainer
             toolEvents={toolEvents ?? []}
             progressLines={progressLines ?? []}
+            reasoning={reasoning}
             isActive={!!isThinkingActive}
           />
         </div>

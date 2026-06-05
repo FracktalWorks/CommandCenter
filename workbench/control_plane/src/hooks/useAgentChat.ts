@@ -8,6 +8,7 @@
  *
  * SSE event types emitted by /api/agent/chat:
  *   {"type":"delta",      "content":"..."}          — partial token
+ *   {"type":"reasoning",  "content":"…"}            — model chain-of-thought (reasoning models)
  *   {"type":"progress",   "name":"…"}               — tool about to run (live status)
  *   {"type":"tool_start", "id":"…", "name":"…", "args":{}}
  *   {"type":"tool_end",   "id":"…", "name":"…", "result":"…", "success":bool}
@@ -33,6 +34,8 @@ export interface ChatMessage {
   progressLines?: string[];
   /** True while the agent is mid-run (drives the shimmer/working indicator). */
   isThinkingActive?: boolean;
+  /** Streamed model reasoning / chain-of-thought (reasoning models only). */
+  reasoning?: string;
 }
 
 interface UseAgentChatOptions {
@@ -190,6 +193,16 @@ export function useAgentChat({
                 );
                 break;
 
+              case "reasoning":
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantId
+                      ? { ...m, reasoning: (m.reasoning ?? "") + String(evt.content ?? "") }
+                      : m
+                  )
+                );
+                break;
+
               case "tool_start":
                 setMessages((prev) =>
                   prev.map((m) => {
@@ -216,6 +229,12 @@ export function useAgentChat({
                         t.id === String(evt.id)
                           ? {
                               ...t,
+                              // Merge streamed args (the orchestrator path fills
+                              // these in on tool_end, not tool_start).
+                              args:
+                                evt.args && Object.keys(evt.args as object).length > 0
+                                  ? (evt.args as Record<string, unknown>)
+                                  : t.args,
                               result: String(evt.result ?? ""),
                               status: evt.success ? "done" : "error",
                               endedAt: Date.now(),

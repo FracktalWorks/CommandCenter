@@ -229,13 +229,14 @@ Full (all fields CommandCenter reads):
 
 > **Critical:** `tools=[]` being empty or commented out means the agent is text-only — it will apologise instead of acting. Every capability in your `skills/*/scripts/` must be wired as a tool function or the LLM cannot call it.
 
-### Complete template (new agent)
+### Complete template (tools-only agent — recommended)
 
 ```python
 """my-agent — MAF Agent definitions."""
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -246,7 +247,6 @@ PROMPTS_DIR = AGENT_DIR / "prompts"
 SKILLS_DIR  = AGENT_DIR / "skills"
 SCRIPTS_DIR = AGENT_DIR / "scripts"
 
-# Make shared utilities importable from skill scripts at runtime
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
@@ -317,16 +317,19 @@ def _build_system_prompt() -> str:
 #     for every integration declared in config.json["integrations"]. Scripts that call
 #     os.getenv("ZOHO_CLIENT_ID") etc. work unchanged.
 
-async def example_tool(query: str) -> str:
-    """Replace this with your real tool. Shows Pattern A."""
+async def example_tool(action: str, extra_args: list[str] | None = None) -> str:
+    """Run the example script. action: one of 'search', 'list', 'summary'.
+
+    Use this tool when the user asks about X. Always prefer it over answering from memory.
+    """
+    cmd = ["python", str(AGENT_DIR / "skills/my-skill/scripts/main.py"), action]
+    cmd += extra_args or []
     result = await asyncio.to_thread(
-        subprocess.run,
-        ["python", str(AGENT_DIR / "skills/my-skill/scripts/main.py"), "--query", query],
-        capture_output=True, text=True, cwd=str(AGENT_DIR)
+        subprocess.run, cmd, capture_output=True, text=True, cwd=str(AGENT_DIR)
     )
     if result.returncode != 0:
-        raise RuntimeError(f"Script failed: {result.stderr}")
-    return result.stdout
+        raise RuntimeError(result.stderr[:500] or "Script exited non-zero")
+    return result.stdout or "(no output)"
 
 
 # ── Agent factory ─────────────────────────────────────────────────────────
@@ -337,34 +340,53 @@ def build_agents():
     Called by the Dynamic Agent Loader at runtime. Must be synchronous,
     zero-argument, and pure — no I/O at module import time.
     """
-    from agent_framework_github_copilot import GitHubCopilotAgent
+    from agent_framework import Agent
+    from agent_framework.openai import OpenAIChatCompletionClient
 
-    agent = GitHubCopilotAgent(
+    # LiteLLM proxy — credentials injected by the executor from Integration Registry.
+    client = OpenAIChatCompletionClient(
+        base_url=os.environ.get("LITELLM_BASE_URL", "http://litellm:4000") + "/v1",
+        api_key=os.environ.get("LITELLM_API_KEY", ""),
+        model="tier2-sonnet",
+    )
+    return [Agent(
         name="my-agent",
-        description="One-line description shown in the Control Plane picker.",
         instructions=_build_system_prompt(),
         tools=[
             example_tool,
             # Add every skill script here as an async tool function.
-            # An empty tools=[] means the agent is text-only and cannot act.
+            # CommandCenter auto-detects new scripts and adds them on the next pull.
         ],
-    )
-    return [agent]
+        model_client=client,
+    )]
 ```
+
+> **Using `GitHubCopilotAgent` instead?** If you need Copilot-specific models, replace the `Agent` block with `GitHubCopilotAgent(name=..., instructions=..., tools=[...])`. CommandCenter automatically sets `on_permission_request = PermissionHandler.approve_all` — you do not need to configure it.
+
+### How MAF maps tools and the system prompt to the LLM
+
+On every `agent.run(message)` call, MAF automatically:
+
+1. Builds tool schemas from each `async def` function: **function name** → tool name, **docstring** → description the LLM reads to decide when to call it, **type hints** → parameter schema.
+2. Sends `instructions` (system prompt + all SKILL.md blocks) + all tool schemas in a single API request to LiteLLM.
+3. When the LLM returns a tool call, MAF executes the Python function and feeds the result back.
+
+**The docstring is the routing signal.** Write it as: "Use this tool when the user asks about X / wants to do Y." The LLM reads nothing else when choosing which tool to invoke.
 
 ### Hard rules
 
 - `build_agents()` is synchronous, zero-argument, pure. No I/O at import time.
-- Must return `list[BaseAgent]` containing at least one `GitHubCopilotAgent` (or compatible MAF provider).
+- Must return `list[BaseAgent]` containing at least one MAF agent (`Agent` or `GitHubCopilotAgent`).
+- **Use `Agent` + `OpenAIChatCompletionClient` for tools-only agents** — no permission gate, any LiteLLM-routed model. Use `GitHubCopilotAgent` only when Copilot-specific models are required.
 - **`agents.py` is required. `graph.py` is not supported** — the CommandCenter executor only calls `build_agents()`. LangGraph (`graph.py` / `build_graph()`) has been removed from the stack.
-- **`tools=[...]` must not be empty** if the agent is supposed to act. An agent with no tools is text-only — the LLM will describe what it would do but cannot execute anything.
-- Tool functions must be `async def` with a descriptive docstring. The docstring is what the LLM sees when deciding which tool to call.
+- **`tools=[...]` must not be empty** if the agent is supposed to act. The LLM routes to tools based on their docstrings; an empty list means text-only.
+- Tool functions must be `async def`. The **docstring is the routing signal** — the LLM reads it to decide when to call the tool. Make it describe what the tool does AND when to use it.
 - Tool functions must return a `str`. Return stdout, a JSON dump, or a human-readable summary.
 - On failure in a tool, **raise** — do not swallow. The MAF orchestrator routes to `Self_Mutation_Node`.
-- Credentials arrive via `os.environ` — the executor injects them from the Integration Registry for every key declared in `config.json["integrations"]`. Scripts that call `os.getenv("ZOHO_CLIENT_ID")` work unchanged in both CommandCenter and local VS Code mode.
-- Do not instantiate agents at module level — the factory function `build_agents()` is the single entry point.
-- **`on_permission_request` is set automatically by CommandCenter** — do not add it to `build_agents()`. The executor patches `PermissionHandler.approve_all` before starting any `GitHubCopilotAgent`, so tool calls are approved without agent code needing to configure this.
-- **`agents.py` is auto-maintained by CommandCenter.** After every `git pull`, CommandCenter scans `skills/*/scripts/*.py` for scripts not yet referenced in `agents.py` and adds async subprocess wrappers automatically, committing directly to the repo. You do not need to manually wire every new script — just add the script file and CommandCenter will detect it on the next run.
+- Credentials arrive via `os.environ` — the executor injects them from the Integration Registry for every key in `config.json["integrations"]`. Scripts that call `os.getenv(...)` work unchanged.
+- Do not instantiate agents at module level — `build_agents()` is the single entry point.
+- **`on_permission_request` is set automatically by CommandCenter** — do not configure it. Applies to `GitHubCopilotAgent` only.
+- **`agents.py` is auto-maintained by CommandCenter.** After every `git pull`, new scripts in `skills/*/scripts/` are auto-wired as tools and committed directly to the repo.
 
 ---
 

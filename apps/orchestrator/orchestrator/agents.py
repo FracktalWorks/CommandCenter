@@ -53,6 +53,11 @@ Rules:
    or automation in the system — call spawn_copilot_agent with a precise task description.
    The Copilot SDK agent will write the code, run tests, commit, and push autonomously.
    Tell the user what was started and that the change will be live on the next run.
+9. When the user's request is clearly specialist work that a named agent handles better —
+   outbound prospecting, proposal writing, lead scraping (sales-assistant),
+   ClickUp task management (task-manager), billing/invoicing (billing) —
+   call delegate_to_agent to hand off and relay the result.
+   Use your own tools for broad company data questions that span multiple domains.
 """
 
 # ---------------------------------------------------------------------------
@@ -77,8 +82,7 @@ async def retrieve_sales_context(query: str) -> str:
     return await asyncio.to_thread(_sync)
 
 
-async def spawn_copilot_agent(
-    task: str,
+async def spawn_copilot_agent(    task: str,
     agent_name: str = "orchestrator",
     agent_dir: str | None = None,
 ) -> str:
@@ -153,6 +157,51 @@ async def spawn_copilot_agent(
     )
 
 
+async def delegate_to_agent(agent_name: str, message: str) -> str:
+    """Delegate a task to a specialist agent and return its response.
+
+    Use this tool when the user's request is clearly in the domain of a specialist agent.
+    The specialist agent loads its own system prompt, skills, and tools from its GitHub repo
+    and handles the request fully — its response is returned here verbatim.
+
+    When to delegate (examples):
+    - Outbound prospecting, lead scraping, Apollo/Google Maps search → "agent-sales-assistant"
+    - ClickUp task management, sprint status, workload queries → "task-manager"
+    - Billing / invoice queries → "billing"
+    - Email / WhatsApp triage → "triage"
+    - Nightly reconciliation queries → "reconciler"
+
+    Do NOT delegate:
+    - Broad company data questions that span multiple agents (use your own retrieval tools)
+    - Questions you can already answer from the entity graph
+
+    Args:
+        agent_name: Exact registered name, e.g. "agent-sales-assistant", "task-manager".
+        message:    The user's full request, reworded if needed to be self-contained.
+
+    Returns:
+        The specialist agent's full response text.
+    """
+    from orchestrator.executor import AgentRunError, run_agent  # noqa: PLC0415
+    import uuid as _uuid  # noqa: PLC0415
+
+    run_id = str(_uuid.uuid4())
+    try:
+        result = await run_agent(
+            agent_name,
+            {"message": message, "mode": "chat"},
+            run_id=run_id,
+        )
+        text = result.get("result") or result.get("answer") or ""
+        if isinstance(text, dict):
+            text = text.get("content", str(text))
+        return str(text) if text else "(agent returned empty response)"
+    except AgentRunError as exc:
+        return f"Agent {agent_name!r} failed: {exc.original}"
+    except Exception as exc:  # noqa: BLE001
+        return f"Could not reach agent {agent_name!r}: {exc}"
+
+
 # ---------------------------------------------------------------------------
 # Agent factory
 # ---------------------------------------------------------------------------
@@ -193,7 +242,7 @@ def build_orchestrator_agent(*, with_history: bool = True) -> Agent:
         client=_make_openai_client(),
         name="orchestrator",
         instructions=_PULL_INSTRUCTIONS,
-        tools=[retrieve_entity_context, retrieve_sales_context, spawn_copilot_agent],
+        tools=[retrieve_entity_context, retrieve_sales_context, spawn_copilot_agent, delegate_to_agent],
         context_providers=context_providers or None,
     )
 
@@ -204,4 +253,4 @@ def build_agents() -> list[Agent]:
     return [build_orchestrator_agent(with_history=False)]
 
 
-__all__ = ["build_agents", "build_orchestrator_agent", "retrieve_entity_context", "retrieve_sales_context", "spawn_copilot_agent"]
+__all__ = ["build_agents", "build_orchestrator_agent", "retrieve_entity_context", "retrieve_sales_context", "spawn_copilot_agent", "delegate_to_agent"]

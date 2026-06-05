@@ -63,7 +63,31 @@ Effort uses **engineer-weeks (ew)** with PERT triple-point estimates: (O, M, P) 
 
 ---
 
-## Phase 2 — Agent & Skill Ecosystem (Capability: full domain coverage with specialist agents)
+## Phase 1.5 — Dynamic Multi-Agent Orchestration ✅ Done 2026-06-05
+
+> **Goal:** MAF orchestrator discovers and routes to all specialist agents automatically; operator can create new capabilities from chat; Copilot SDK used as nested execution units under MAF.
+
+| WBS | Work Package | Activities | Status |
+|---|---|---|---|
+| 1.5.1 | Dynamic capability registry (`as_tool()`) | Every registered agent loaded at gateway startup and exposed as a `FunctionTool` via `agent.as_tool()`. Description from `config.json` is the routing signal — LLM routes to the right specialist with zero hard-coded rules. New agents registered in UI appear as tools on next restart. | ✅ Done |
+| 1.5.2 | `delegate_to_agent` fallback tool | Explicit delegation tool for when `as_tool()` specialist isn't matched by the LLM. Calls `run_agent()` for any named agent and relays its full response. | ✅ Done |
+| 1.5.3 | `spawn_copilot_agent` tool | Orchestrator tool that spins up a Copilot SDK mutation container for any creation/build/fix task requested in chat. Commits + pushes directly; next run picks up the change. | ✅ Done |
+| 1.5.4 | Agent auto-repair on `AgentLoadError` | `AgentLoadError` (missing `agents.py`, incompatible structure) triggers Copilot SDK sandbox with researcher+editor two-phase prompt. Generates compliant `agents.py`, commits directly. | ✅ Done |
+| 1.5.5 | Proactive skill sync | After every `git pull`, loader scans `skills/*/scripts/` for new scripts not yet in `agents.py`. Injects async subprocess wrappers, commits+pushes. Agent repos self-update as new skills are added. | ✅ Done |
+| 1.5.6 | Control Plane agent management UI | `/agents` page: add GitHub repo (auto-fetches `config.json`), remove dynamic agents, integration status badges, config.json preview. | ✅ Done |
+| 1.5.7 | Control Plane integration UI | `/integrations` page: per-service configure/test/status with live API verification; writes to root `.env`; hot-reload. | ✅ Done |
+| 1.5.8 | LLM settings UI | `/settings/models` page: per-tier model picker, provider key save (Gemini, OpenAI, Anthropic), LiteLLM health status. | ✅ Done |
+| 1.5.9 | AG-UI → SSE translation fix | Chat route correctly translates AG-UI protocol events (`TEXT_MESSAGE_CONTENT`, `TOOL_CALL_START`, `RUN_FINISHED`) to delta/tool_start/tool_end SSE events the frontend hook understands. Named agent chat works end-to-end. | ✅ Done |
+| 1.5.10 | WorkflowBuilder integration (Phase 2 ready) | `WorkflowBuilder` imported in orchestrator. Infrastructure ready for sequential/fan-out/fan-in explicit pipelines via `add_chain()`, `add_fan_out_edges()`, `add_fan_in_edges()`. | ✅ Done (infra) |
+
+**Phase 1.5 exit criteria (all met):**
+- Orchestrator auto-discovers all registered agents as MAF tools at startup; LLM routes by description.
+- Operator can ask a cross-domain question (tasks + deals) in one chat message; orchestrator fans out and synthesises.
+- Operator can say "build a LinkedIn scraper skill" → Copilot SDK container creates code, commits, live on next run.
+- Any incompatible agent repo auto-generates `agents.py` using researcher+editor pattern on first run.
+- All Control Plane pages (agents, integrations, settings) wired end-to-end with working backend API.
+
+--- (Capability: full domain coverage with specialist agents)
 
 | WBS | Work Package | Activities | (O, M, P) ew | PERT ew |
 |---|---|---|---|---|

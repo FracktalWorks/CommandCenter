@@ -1,6 +1,6 @@
 ﻿# Product Requirements Document — CommandCenter
 
-> **Organisation:** Fracktal Works · **Product:** CommandCenter · **Date:** 2026-06-04 · **Version:** 2.2
+> **Organisation:** Fracktal Works · **Product:** CommandCenter · **Date:** 2026-06-05 · **Version:** 2.3
 > Companion to [`project_plan.md`](project_plan.md). This PRD defines *what* the product must do; the plan defines *how/when* it is built.
 > **For AI agents:** Read [`AGENTS.md`](AGENTS.md) first for current build status and navigation.
 
@@ -8,15 +8,19 @@
 
 ## 1. Product Vision
 
-CommandCenter is a **headless, self-mutating agent orchestration platform** for running a company.
+CommandCenter is a **headless, self-mutating, multi-agent orchestration platform** for running a company.
 
-When a company event fires — a webhook from ClickUp, Zoho, or Odoo; a cron schedule; or an ambient signal from email, WhatsApp, or a meeting — CommandCenter resolves the correct specialist agent, pulls its latest code from a persistent local clone, injects credentials from the Integration Registry, and executes the task inside an ephemeral sandbox. If the agent fails, it reads its own telemetry, tests a code fix inside an isolated Copilot SDK mutation container, applies the fix to the live clone immediately, and opens a GitHub PR as an audit record. A human can merge (to canonicalise the fix) or close (to trigger an automatic rollback).
+When a company event fires — a webhook from ClickUp, Zoho, or Odoo; a cron schedule; or an ambient signal from email, WhatsApp, or a meeting — CommandCenter resolves the correct specialist agent (or composes multiple agents in parallel), pulls the latest code from a persistent local clone, injects credentials from the Integration Registry, and executes via the Microsoft Agent Framework. If the agent fails, it uses a researcher+editor Copilot SDK mutation container to diagnose and fix the code, commits directly, and the next run picks up the fix automatically.
+
+The orchestrator is the single entry point for all operator interaction. It dynamically discovers every registered specialist agent — loaded from individual GitHub repositories — and exposes each as a callable tool. The LLM routes to the right specialist (or calls multiple in parallel) based on each agent's description. Operators can ask cross-domain questions (“show stale deals and overdue tasks”), create new capabilities (“build a GeM tender monitor skill”), or fix broken agents — all from one chat interface.
 
 Operators interact via a thin **Control Plane** (browser UI) that provides:
-- Chat Q&A over company data (cited, guardrailed answers).
+- Unified chat over all agents (multi-agent fan-out, streaming tool-call display).
+- Agent management (add/remove GitHub repo agents with live status badges).
+- Integration configuration (per-service credentials, live API test).
+- LLM model/tier settings (provider key management, tier picker).
 - HITL approval queue for agent-proposed writes.
 - Observability (cost, eval scores; LLM traces via MAF native OTel, backend TBD).
-- Agent Inbox (self-mutation PR queue for human review).
 
 **What CommandCenter is NOT:**
 - A browser IDE or code editor. All agent/skill authoring is done in VS Code + Git.
@@ -24,14 +28,15 @@ Operators interact via a thin **Control Plane** (browser UI) that provides:
 - A replacement for ClickUp, Zoho, or Odoo. Those remain authoritative; CommandCenter mirrors and acts on them.
 - An n8n-style workflow canvas. Orchestration is agent-native MAF only.
 
-The product delivers value in **four levels**, each independently deployable and providing operator value on its own:
+The product delivers value in **four levels**, each independently deployable:
 
-| Level | Name | Core value delivered |
-|---|---|---|
-| **L1** | Core Engine | Any agent event runs end-to-end; ClickUp Q&A works with citations |
-| **L2** | Self-Mutation + Multi-Agent Ecosystem | Agents fix their own errors; full domain coverage (Sales, Triage, Reconciler) |
-| **L3** | Capture + Write Authority | All ingest channels active; approval-gated writes to ClickUp/Zoho |
-| **L4** | Company Intelligence | Strategy, goals, Odoo ERP, full BI; system demonstrably self-improves |
+| Level | Name | Core value delivered | Status |
+|---|---|---|---|
+| **L1** | Core Engine | Cited Q&A over live company data; any agent event runs end-to-end | ✅ Done |
+| **L1.5** | Control Plane + Multi-Agent | Unified chat; dynamic specialist routing; agent add/remove; integrations UI; LLM settings | ✅ Done |
+| **L2** | Self-Mutation + Agent Ecosystem | Agents auto-repair on failure; new capabilities created from chat; full domain coverage | 🔄 In progress |
+| **L3** | Capture + Write Authority | All ingest channels; approval-gated writes to ClickUp/Zoho | 🔲 Planned |
+| **L4** | Company Intelligence | Strategy, goals, Odoo ERP, full BI; system self-improves autonomously | 🔲 Planned |
 
 ---
 

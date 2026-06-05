@@ -1,6 +1,6 @@
 ﻿# Project Plan — CommandCenter v2
 
-> **Organisation:** Fracktal Works · **Date:** 2026-06-05 · **Version:** 2.4 — runtime ownership clarified (MAF vs Copilot SDK)
+> **Organisation:** Fracktal Works · **Date:** 2026-06-05 · **Version:** 2.5 — Dynamic multi-agent orchestration complete
 > **For AI agents:** Read [`AGENTS.md`](AGENTS.md) first — it has current build status, file index, and glossary.
 > This file covers: scope boundaries, milestones, resource allocation, constraints, and open questions.
 > **Full detail lives in:** `wbs.md` (tasks + estimates) · `product_requirements.md` (what to build) · `system_architecture.md` (how it works)
@@ -14,7 +14,7 @@
 
 ## What We Are Building
 
-A **headless, self-mutating agent orchestration platform** for running a company. Events (webhooks, cron, ambient) trigger specialist agents that are dynamically loaded from their own GitHub repos, executed inline by the **MAF (Microsoft Agent Framework) HandoffBuilder orchestrator** with DurableTask-backed durable state, and self-heal on failure by spawning an isolated Copilot SDK mutation container, applying a tested fix to the live clone, and opening a GitHub PR. Operators interact via a thin Control Plane browser UI with a unified VS Code Copilot-style chat window (CommandCenter + named agents on the same surface, grouped Copilot SDK + LiteLLM model picker, send / queue / steer controls, markdown/tool rendering, MCQ choices), HITL approvals, and observability. No in-app agent or skill editing — for now.
+A **headless, self-mutating, multi-agent orchestration platform** for running a company. Events (webhooks, cron, ambient) trigger the MAF orchestrator which dynamically discovers all registered specialist agents (each living in its own GitHub repo) as callable MAF tools via `agent.as_tool()`, and routes to the right one based on the agent's description. Operators interact with a single chat surface; the orchestrator fans out across multiple agents and synthesises results. When an agent fails, a Copilot SDK mutation container with a researcher+editor pattern diagnoses and fixes the code, commits directly, and the next run picks up the fix. When an operator asks to build a new capability, the orchestrator spawns a Copilot SDK container which writes the code, adds it to the agent's skill directory, and it's live on the next pull. Control Plane provides unified chat, agent management, integrations, LLM settings, HITL approvals, and observability.
 
 ---
 
@@ -59,8 +59,8 @@ A **headless, self-mutating agent orchestration platform** for running a company
 | ID | Name | Target | Status |
 |---|---|---|---|
 | **M1** | Core Engine live — ClickUp Q&A with citations | 2026-05-25 | ✅ PASSED |
-| **M2** | Self-Mutation live — agents fix own code, open PRs | ~2026-07-01 | 🔄 In progress — mutation sandbox ✅ (2026-06-03); GitHub PR automation (WBS 1.3) + eval CI gate (WBS 1.4) remaining |
-| **M2.5** | Interactive runtime unified under MAF AG-UI (deprecate raw Copilot SDK chat path) | ~2026-06-20 | 🔄 In progress — unified chat UX is live, but legacy `copilot` runtime dispatch and `/copilot/chat` path still exist for compatibility; migration completion requires MAF-only routing |
+| **M1.5** | Control Plane + Dynamic Multi-Agent + Auto-Repair | 2026-06-05 | ✅ PASSED — See WBS Phase 1.5 for full details |
+| **M2** | Self-Mutation live — agents fix own code, PR opened and merged | ~2026-07-01 | 🔄 In progress — mutation sandbox ✅, auto-repair ✅; eval CI gate (WBS 1.4) remaining |
 | **M3** | Full Agent Ecosystem — Sales + Email + Reconciler | ~2026-08-26 | Not started |
 | **M4** | Capture live — meetings + WhatsApp + ambient triggers | ~2026-10-14 | Not started |
 | **M5** | Suggest+Apply live — approval-gated writes to ClickUp/Zoho | ~2026-12-09 | Not started |

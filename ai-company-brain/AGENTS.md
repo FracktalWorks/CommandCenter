@@ -40,6 +40,14 @@ Operators interact via a thin **Control Plane** (Next.js browser UI) with chat Q
 | Skills monorepo + loader | ✅ Done | `skills/`, `packages/acb_skills/` |
 | Self-mutation GitHub PR automation | 🔲 Next | Phase 1 (WBS 1.3) |
 | Eval CI gate on agent/skill PRs | 🔲 Next | Phase 1 (WBS 1.4) |
+| **Dynamic multi-agent orchestration (MAF `as_tool()` registry)** | ✅ Done | `apps/orchestrator/orchestrator/agents.py` — every registered agent auto-exposed as a MAF tool at startup; LLM routes by description alone; zero hard-coded routing tables |
+| **`delegate_to_agent` + `spawn_copilot_agent` tools** | ✅ Done | Orchestrator tools: delegate to any named specialist; spawn Copilot SDK container for creation/mutation tasks from chat |
+| **Agent auto-repair (incompatibility → direct commit)** | ✅ Done | `AgentLoadError` triggers Copilot SDK sandbox with researcher+editor pattern; generates `agents.py` and commits directly — no PR |
+| **Proactive skill sync (auto-wire new scripts)** | ✅ Done | `packages/acb_skills/acb_skills/loader.py` — after every pull, scans `skills/*/scripts/` for new scripts, injects tool wrappers, commits+pushes |
+| **Agent add/remove via Control Plane UI** | ✅ Done | `workbench/control_plane/src/app/agents/` — paste GitHub URL, auto-fetches `config.json`, registers; dynamic agents persisted in `agents.json` |
+| **Integration configure/test UI** | ✅ Done | `workbench/control_plane/src/app/integrations/` — live test against real APIs; writes to root `.env`; hot-reload |
+| **LLM settings UI (tier picker, Gemini/OpenAI key save)** | ✅ Done | `workbench/control_plane/src/app/settings/models/` — per-tier model assignment; provider key save; LiteLLM health |
+| **AG-UI → SSE translation (chat properly streams tool calls)** | ✅ Done | `workbench/control_plane/src/app/api/agent/chat/route.ts` — translates AG-UI events to delta/tool_start/tool_end for the UI hook |
 | `agent-sales` + `skill-zoho-ingest` | 🔲 Phase 2 | Phase 2 (WBS 2.2) |
 | `agent-triage` + `skill-gmail-capture` | 🔲 Phase 2 | Phase 2 (WBS 2.3) |
 | Meeting bot (Vexa + WhisperX) | 🔲 Phase 3 | Phase 3 (WBS 3.1) |
@@ -50,11 +58,11 @@ Operators interact via a thin **Control Plane** (Next.js browser UI) with chat Q
 **M1 milestone (Core Engine live) — PASSED 2026-05-25.**
 Real cross-system cited Q&A over live Fracktal data confirmed. 22/22 tests green.
 
-**M2 milestone (Self-Mutation) — IN PROGRESS as of 2026-06-03.**
-`Self_Mutation_Node` + Copilot SDK mutation container sandbox ✅ done. GitHub PR automation (WBS 1.3) and eval CI gate (WBS 1.4) remaining. Est. completion: ~2026-07-01.
+**M2 milestone (Self-Mutation + Multi-Agent) — IN PROGRESS as of 2026-06-05.**
+`Self_Mutation_Node` + Copilot SDK mutation container ✅ done. Dynamic multi-agent (`as_tool()` registry) ✅ done. `spawn_copilot_agent` + `delegate_to_agent` tools ✅ done. Agent auto-repair (researcher+editor pattern) ✅ done. GitHub PR automation (WBS 1.3) and eval CI gate (WBS 1.4) remaining.
 
-**Interactive runtime — MAF AG-UI (done).**
-Operator interactive chat → `POST /copilot/chat` → **MAF AG-UI endpoint** (AG-UI protocol, full tool-calling, streaming), wired in `apps/gateway/gateway/main.py`. Same MAF agents used for background event runs. The old `copilot_chat.py` SSE path has been removed. `agent-sales-assistant` was removed and will be re-cloned later as a MAF `agents.py` agent.
+**Dynamic multi-agent orchestration — DONE.**
+Every registered agent (static + GitHub-registered) is exposed as a MAF `FunctionTool` via `agent.as_tool()` at gateway startup. LLM routes to the right specialist by description alone — no hard-coded routing table. WorkflowBuilder available for explicit sequential/fan-out pipelines.
 
 ---
 

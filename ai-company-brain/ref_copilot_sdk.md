@@ -221,3 +221,144 @@ In CommandCenter: mutation containers use pprove_all (isolated sandbox). Backgr
 | GitHub Copilot CLI | https://docs.github.com/en/copilot/github-copilot-in-the-cli |
 | GitHubCopilotAgent source | https://github.com/microsoft/agent-framework/blob/main/python/packages/github_copilot/agent_framework_github_copilot/_agent.py |
 | MAF GitHub Copilot package | https://github.com/microsoft/agent-framework/tree/main/python/packages/github_copilot |
+| MAF multi-agent workflows | https://docs.github.com/en/copilot/how-tos/copilot-sdk/integrations/microsoft-agent-framework#multi-agent-workflows |
+| Getting started | https://docs.github.com/en/copilot/how-tos/copilot-sdk/getting-started |
+| Custom agents / sub-agents | https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/custom-agents |
+| Custom skills | https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/skills |
+
+---
+
+## 11. Multi-Agent Orchestration Patterns (from official docs)
+
+> Source: https://docs.github.com/en/copilot/how-tos/copilot-sdk/integrations/microsoft-agent-framework
+
+### The canonical pattern: `agent.as_tool()`
+
+Every MAF agent (including GitHubCopilotAgent) can expose itself as a callable tool for any other agent:
+
+```python
+from agent_framework import Agent
+from agent_framework.openai import OpenAIChatCompletionClient
+
+specialist = Agent(
+    client=client,
+    name="sales-specialist",
+    instructions="You handle outbound prospecting using the available tools.",
+    tools=[zoho_search, prospect_finder, ...],
+)
+
+# Expose as a FunctionTool — the description is what the orchestrator LLM reads
+tool = specialist.as_tool(
+    name="sales_specialist",
+    description="7-step B2B outbound prospecting, lead scraping, Zoho CRM. Use for sales tasks.",
+)
+
+# Orchestrator uses it just like any other tool
+orchestrator = Agent(
+    client=client,
+    name="orchestrator",
+    instructions="Route to specialist tools based on user request.",
+    tools=[retrieve_entity_context, sales_specialist_tool, task_manager_tool, ...],
+)
+```
+
+**This is how CommandCenter's dynamic capability registry works** — every registered agent becomes a tool via `as_tool()` at gateway startup.
+
+### Sequential workflow (WorkflowBuilder)
+
+Use `WorkflowBuilder` with `add_chain()` for multi-step pipelines where each agent feeds the next:
+
+```python
+from agent_framework import WorkflowBuilder
+
+wf = WorkflowBuilder(
+    start_executor=research_agent,
+    output_from="all",
+)
+wf.add_chain([research_agent, writer_agent, reviewer_agent])
+workflow = wf.build()
+result = await workflow.run("Analyze and document the auth module")
+```
+
+### Parallel (fan-out / fan-in)
+
+```python
+wf = WorkflowBuilder(start_executor=coordinator)
+wf.add_fan_out_edges(coordinator, [security_agent, performance_agent])
+wf.add_fan_in_edges([security_agent, performance_agent], synthesiser)
+workflow = wf.build()
+```
+
+### MAF primitives available in this install
+
+| Primitive | Use for |
+|---|---|
+| `Agent.as_tool()` | Expose any agent as a callable tool (zero-code routing) |
+| `WorkflowBuilder.add_chain()` | Sequential pipeline A→B→C |
+| `WorkflowBuilder.add_fan_out_edges()` | Parallel execution (scatter) |
+| `WorkflowBuilder.add_fan_in_edges()` | Aggregate parallel results (gather) |
+| `WorkflowBuilder.add_switch_case_edge_group()` | Conditional branching |
+| `FunctionalWorkflow` | Fully code-driven workflow DAG |
+
+Note: `HandoffBuilder` and `ConcurrentBuilder` shown in older MAF docs are NOT present in this install — use `WorkflowBuilder` directly.
+
+---
+
+## 12. Custom Agents (sub-agent delegation inside a single SDK session)
+
+> Source: https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/custom-agents
+
+This is a **Copilot SDK feature** (not MAF-level) — define lightweight agents within a single `CopilotClient` session. Each sub-agent has its own `prompt`, `tools` allowlist, and optional `mcpServers`. The runtime auto-delegates based on the `description`.
+
+```python
+session = await client.create_session(
+    custom_agents=[
+        {
+            "name": "researcher",
+            "description": "Explores codebases and answers questions using read-only tools",
+            "tools": ["grep", "glob", "view"],
+            "prompt": "You are a research assistant. Analyze code, never modify files.",
+            "infer": True,  # runtime auto-selects based on user intent
+        },
+        {
+            "name": "editor",
+            "description": "Makes targeted code changes",
+            "tools": ["view", "edit", "bash"],
+            "prompt": "You make minimal, surgical changes.",
+        },
+    ],
+    on_permission_request=PermissionHandler.approve_all,
+)
+```
+
+**Key facts:**
+- `description` is the routing signal — the runtime matches user intent to agent description
+- `infer: False` disables auto-selection (user must explicitly invoke)
+- Sub-agent lifecycle events: `subagent.started`, `subagent.completed`, `subagent.failed`, `subagent.selected`
+- Use `defaultAgent.excludedTools` to force the main agent to delegate heavy tools to sub-agents
+
+**CommandCenter usage:** custom agents inside a single `GitHubCopilotAgent` session are useful for self-contained specialisation within the mutation container (e.g., a researcher sub-agent reads code, an editor sub-agent writes fixes). For cross-repo agent routing, use MAF `as_tool()` instead.
+
+---
+
+## 13. Custom Skills (SKILL.md in the Copilot SDK sense)
+
+> Source: https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/skills
+
+The Copilot SDK has its own skills concept: a directory of `SKILL.md` files loaded via `skill_directories`. When loaded, the skill content is injected into the session context.
+
+```python
+session = await client.create_session(
+    skill_directories=["./skills/security", "./skills/testing"],
+    custom_agents=[{
+        "name": "security-auditor",
+        "skills": ["security-scan"],  # eagerly preloaded into this sub-agent
+        "prompt": "Focus on OWASP Top 10",
+    }],
+)
+```
+
+**Relationship to CommandCenter's `skills/*/SKILL.md`:**
+- CommandCenter's `_build_system_prompt()` already does the same thing manually — reads all `skills/*/SKILL.md` files and appends them to the system prompt
+- If using `GitHubCopilotAgent` directly, you could instead pass `skill_directories=["skills"]` to the underlying SDK session and let the CLI load them natively
+- Current CommandCenter approach (manual concatenation) is equivalent and more explicit; either works

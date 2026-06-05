@@ -4,6 +4,11 @@
 > **For AI agents:** Read [`AGENTS.md`](AGENTS.md) first — it has current build status, file index, and glossary.
 > This file covers: scope boundaries, milestones, resource allocation, constraints, and open questions.
 > **Full detail lives in:** `wbs.md` (tasks + estimates) · `product_requirements.md` (what to build) · `system_architecture.md` (how it works)
+>
+> **SDK reference docs (read before touching orchestration code):**
+> - [`ref_copilot_sdk.md`](ref_copilot_sdk.md) — Copilot SDK API, multi-agent patterns, `as_tool()`, `WorkflowBuilder`, custom agents, skills
+> - [`ref_maf.md`](ref_maf.md) — MAF Agent, WorkflowBuilder, context providers, AG-UI
+> - Official: https://docs.github.com/en/copilot/how-tos/copilot-sdk/integrations/microsoft-agent-framework
 
 ---
 

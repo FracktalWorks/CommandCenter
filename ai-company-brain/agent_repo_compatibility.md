@@ -212,7 +212,7 @@ Full (all fields CommandCenter reads):
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `name` | str | Yes | Bare agent name, must match `agent-<name>` repo. |
-| `description` | str | Yes | One line; shown in the Control Plane picker. |
+| `description` | str | Yes | One line; shown in the Control Plane picker **and used as the routing signal for cross-agent orchestration** — the orchestrator LLM routes to the right specialist agent based on this field alone. Be specific: include trigger keywords, domain name, key integrations. Vague descriptions cause routing failures. |
 | `version` | semver str | Yes | Bump on every breaking change. |
 | `skill_repos` | `list[str]` | Yes (may be `[]`) | External pip-installable skill packages to inject. |
 | `integrations` | `list[str]` | Yes (may be `[]`) | Credential keys from the Integration Registry. |

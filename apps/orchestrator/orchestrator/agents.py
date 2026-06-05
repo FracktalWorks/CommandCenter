@@ -246,11 +246,22 @@ def _load_specialist_agents_as_tools(client: OpenAIChatCompletionClient) -> list
                 ),
                 tools=[delegate_to_agent],  # let it call back if needed
             )
+            # Enrich the tool description with tags and integrations from config
+            # so the orchestrator LLM can route reliably (per SDK best practices:
+            # specific descriptions = better intent matching)
+            tags = entry.get("tags", [])
+            integrations = entry.get("integrations", [])
+            extra = ""
+            if tags:
+                extra += f" Tags: {', '.join(tags)}."
+            if integrations:
+                extra += f" Requires: {', '.join(integrations)}."
             tool = specialist.as_tool(
                 name=name.replace("-", "_"),
                 description=(
-                    f"{description} "
-                    f"Use this tool for requests clearly in the domain of {name}."
+                    f"{description}{extra} "
+                    f"Use this tool for requests clearly in the domain of {name}. "
+                    f"Do not use for broad company-data questions that span multiple agents."
                 ),
             )
             tools.append(tool)

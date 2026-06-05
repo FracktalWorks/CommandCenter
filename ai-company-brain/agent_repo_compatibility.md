@@ -313,6 +313,8 @@ def _build_system_prompt() -> str:
 #   - async def + descriptive docstring (the docstring IS the tool description shown to the LLM)
 #   - Return a string — stdout, JSON dump, or a human-readable summary
 #   - Raise on failure — do not swallow exceptions; the executor routes failures to Self_Mutation_Node
+#   - Use sys.executable instead of "python" in subprocess calls — bare "python" may not be on PATH
+#     in the subprocess environment; sys.executable is always the correct interpreter
 #   - Credentials arrive via os.environ — the executor injects them from the Integration Registry
 #     for every integration declared in config.json["integrations"]. Scripts that call
 #     os.getenv("ZOHO_CLIENT_ID") etc. work unchanged.
@@ -322,7 +324,7 @@ async def example_tool(action: str, extra_args: list[str] | None = None) -> str:
 
     Use this tool when the user asks about X. Always prefer it over answering from memory.
     """
-    cmd = ["python", str(AGENT_DIR / "skills/my-skill/scripts/main.py"), action]
+    cmd = [sys.executable, str(AGENT_DIR / "skills/my-skill/scripts/main.py"), action]
     cmd += extra_args or []
     result = await asyncio.to_thread(
         subprocess.run, cmd, capture_output=True, text=True, cwd=str(AGENT_DIR)

@@ -488,6 +488,57 @@ async def _llm_recovery(
 # Internal: run a MAF agent list (replaces LangGraph _execute_graph)
 # ---------------------------------------------------------------------------
 
+def _inject_integrations_to_env(integrations: dict[str, Any]) -> None:
+    """Export resolved integration credentials into os.environ.
+
+    Skill scripts call os.getenv("ZOHO_CLIENT_ID") etc. directly.  The executor
+    resolves credentials into a structured dict but never writes them to the
+    process environment — so subprocesses spawned by agent tool functions can't
+    find them.  This function closes that gap by mapping the structured dict
+    fields back to the canonical env var names.
+
+    Only sets vars that are not already in os.environ (gateway .env takes
+    precedence; this fills in anything that pydantic-settings loaded but didn't
+    export).
+    """
+    import os  # noqa: PLC0415
+
+    _FIELD_TO_ENV: dict[str, list[tuple[str, str]]] = {
+        # (integration_name): [(field_in_dict, ENV_VAR_NAME), ...]
+        "zoho-crm": [
+            ("client_id",     "ZOHO_CLIENT_ID"),
+            ("client_secret", "ZOHO_CLIENT_SECRET"),
+            ("refresh_token", "ZOHO_REFRESH_TOKEN"),
+            ("api_domain",    "ZOHO_API_DOMAIN"),
+            ("accounts_url",  "ZOHO_ACCOUNTS_URL"),
+            ("region",        "ZOHO_REGION"),
+        ],
+        "clickup": [
+            ("api_token",   "CLICKUP_API_TOKEN"),
+            ("workspace_id", "CLICKUP_WORKSPACE_ID"),
+        ],
+        "anthropic":     [("api_key", "ANTHROPIC_API_KEY")],
+        "apollo":        [("api_key", "APOLLO_API_KEY")],
+        "serpapi":       [("api_key", "SERPAPI_API_KEY")],
+        "apify":         [("api_token", "APIFY_API_TOKEN")],
+        "anymailfinder": [("api_key", "ANYMAILFINDER_API_KEY")],
+        "instantly":     [("api_key", "INSTANTLY_API_KEY")],
+        "gmail":         [("sa_json_path", "GMAIL_SA_JSON_PATH"), ("default_user", "GMAIL_DEFAULT_USER")],
+        "gmail-send":    [("sa_json_path", "GMAIL_SA_JSON_PATH"), ("default_user", "GMAIL_DEFAULT_USER")],
+        "smtp":          [("host", "SMTP_HOST"), ("username", "SMTP_USERNAME"), ("password", "SMTP_PASSWORD")],
+        "google-sheets": [("sa_json_path", "GOOGLE_SHEETS_SA_JSON_PATH")],
+        "litellm":       [("base_url", "LITELLM_BASE_URL"), ("api_key", "LITELLM_API_KEY")],
+    }
+
+    for service, creds in integrations.items():
+        if not isinstance(creds, dict):
+            continue
+        for field, env_var in _FIELD_TO_ENV.get(service, []):
+            val = creds.get(field, "")
+            if val and not os.environ.get(env_var):
+                os.environ[env_var] = str(val)
+
+
 async def _run_with_maf_agent(
     agents: list[Any],
     *,
@@ -522,6 +573,12 @@ async def _run_with_maf_agent(
         pass
 
     message = _build_event_message(agent_name, run_id, event_payload, integrations)
+
+    # Inject resolved integration credentials into os.environ so that tool
+    # subprocesses (e.g. zoho_crm.py calling os.getenv("ZOHO_CLIENT_ID")) can
+    # read them. This bridges the gap between the structured integrations dict
+    # and the env-var-based credential reading in skill scripts.
+    _inject_integrations_to_env(integrations)
 
     async with contextlib.AsyncExitStack() as stack:
         # GitHubCopilotAgent (and any agent with lifecycle) requires start/stop.

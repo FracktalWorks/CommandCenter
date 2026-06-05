@@ -226,10 +226,10 @@ def _sync_new_skills(agent_dir: Path, settings: Any) -> None:
         tool_defs.append(
             f"\nasync def {fn}(*args: str) -> str:\n"
             f'    """Run {script.stem} ({skill_name}). Pass CLI args as strings."""\n'
-            f"    import asyncio as _a, subprocess as _s\n"
+            f"    import asyncio as _a, subprocess as _s, sys as _sys\n"
             f"    from pathlib import Path as _P\n"
             f"    _d = _P(__file__).parent.resolve()\n"
-            f'    _cmd = ["python", str(_d / "{rel}")] + list(args)\n'
+            f'    _cmd = [_sys.executable, str(_d / "{rel}")] + list(args)\n'
             f"    _r = await _a.to_thread(_s.run, _cmd, capture_output=True, text=True, cwd=str(_d))\n"
             f"    if _r.returncode != 0:\n"
             f"        raise RuntimeError(_r.stderr[:500] or \"Script exited non-zero\")\n"

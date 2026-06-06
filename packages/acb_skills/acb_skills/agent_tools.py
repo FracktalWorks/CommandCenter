@@ -7,13 +7,18 @@ repo itself. The tools are injected by the executor at load time.
 Agent repos can also import them explicitly if they want to declare them in
 their build_agents() signature for type-checking or documentation:
 
-    from acb_skills.agent_tools import call_agent, call_agent_background
+    from acb_skills.agent_tools import call_agent, call_agents_parallel, call_agent_background
 
 Tools
 -----
 call_agent(agent_name, message) -> str
     Delegate a sub-task to another agent; awaits the full response (sequential).
     Use this when you need the result before continuing.
+
+call_agents_parallel(tasks) -> str
+    Run multiple agents concurrently and return all results (parallel fan-out).
+    All sub-agents stream live into the parent ThinkingContainer simultaneously.
+    tasks is a JSON array of {"agent": "name", "message": "..."} objects.
 
 call_agent_background(agent_name, message) -> str
     Fire-and-forget delegation; returns immediately with the run_id.
@@ -22,6 +27,7 @@ call_agent_background(agent_name, message) -> str
 from __future__ import annotations
 
 import asyncio
+import json as _json
 import uuid as _uuid
 
 
@@ -94,6 +100,97 @@ async def call_agent(agent_name: str, message: str) -> str:
         return str(text) if text else f"({agent_name!r} returned an empty response)"
     except Exception as exc:  # noqa: BLE001
         return f"Sub-task to {agent_name!r} failed: {exc}"
+
+
+async def call_agents_parallel(tasks: str) -> str:
+    """Run multiple agents concurrently and return all results once every agent finishes.
+
+    All sub-agents start at the same time (true fan-out). Each agent streams its tokens
+    and tool calls live into the parent ThinkingContainer simultaneously — you will see
+    multiple sub-agent panels updating in parallel.
+
+    Use this when you need results from several independent agents before you can
+    synthesise a final answer. For example:
+      - Fetch deal pipeline from sales agent + overdue tasks from task agent at the same time
+      - Gather customer health, reconciliation status, and billing simultaneously
+
+    Args:
+        tasks: JSON array of objects, each with "agent" and "message" keys.
+               Example:
+               [
+                 {"agent": "agent-sales-assistant", "message": "Find all deals in Awaiting PO"},
+                 {"agent": "task-manager", "message": "List overdue tasks this sprint"}
+               ]
+
+    Returns:
+        A combined result block with each agent's name and response:
+            [agent-sales-assistant]
+            <response>
+
+            [task-manager]
+            <response>
+
+    Notes:
+        - Each agent runs in its own async task; they don't share state.
+        - If one agent fails, its error is included in the output and the others continue.
+        - Maximum 5 agents per call to avoid overloading the system.
+    """
+    try:
+        task_list = _json.loads(tasks) if isinstance(tasks, str) else tasks
+    except Exception:  # noqa: BLE001
+        return "Error: tasks must be a JSON array like [{\"agent\": \"name\", \"message\": \"...\"}]"
+
+    if not isinstance(task_list, list) or len(task_list) == 0:
+        return "Error: tasks must be a non-empty JSON array"
+
+    task_list = task_list[:5]  # hard cap
+
+    event_queue = None
+    _run_sub_agent_streaming = None
+    try:
+        from orchestrator.executor import _active_run_queue, _run_sub_agent_streaming as _rss  # noqa: PLC0415
+        event_queue = _active_run_queue.get(None)
+        _run_sub_agent_streaming = _rss
+    except (ImportError, Exception):  # noqa: BLE001
+        pass
+
+    async def _run_one(agent_name: str, message: str) -> tuple[str, str]:
+        run_id = str(_uuid.uuid4())
+        if event_queue is not None and _run_sub_agent_streaming is not None:
+            try:
+                result = await _run_sub_agent_streaming(agent_name, message, run_id, event_queue)
+                return agent_name, result
+            except Exception as exc:  # noqa: BLE001
+                return agent_name, f"Sub-task failed: {exc}"
+        # Fallback: no parent stream
+        try:
+            from orchestrator.executor import run_agent  # noqa: PLC0415
+            result = await run_agent(
+                agent_name,
+                {"message": message, "mode": "sub_task"},
+                run_id=run_id,
+            )
+            text = result.get("result") or result.get("answer") or ""
+            if isinstance(text, dict):
+                text = text.get("content", str(text))
+            return agent_name, str(text) if text else f"({agent_name!r} returned empty)"
+        except Exception as exc:  # noqa: BLE001
+            return agent_name, f"Sub-task failed: {exc}"
+
+    coros = [
+        _run_one(str(t.get("agent", "")), str(t.get("message", "")))
+        for t in task_list
+        if t.get("agent") and t.get("message")
+    ]
+    if not coros:
+        return "Error: each task must have 'agent' and 'message' fields"
+
+    results = await asyncio.gather(*coros, return_exceptions=False)
+
+    parts = []
+    for agent_name, response in results:
+        parts.append(f"[{agent_name}]\n{response}")
+    return "\n\n".join(parts)
 
 
 async def call_agent_background(agent_name: str, message: str) -> str:

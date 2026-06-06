@@ -185,11 +185,22 @@ async def delegate_to_agent(agent_name: str, message: str) -> str:
     Returns:
         The specialist agent's full response text.
     """
-    from orchestrator.executor import AgentRunError, run_agent  # noqa: PLC0415
     import uuid as _uuid  # noqa: PLC0415
+    from orchestrator.executor import AgentRunError, _active_run_queue  # noqa: PLC0415
 
     run_id = str(_uuid.uuid4())
+
+    # Use streaming path if a parent SSE queue is active (gives live UI progress).
+    event_queue = _active_run_queue.get(None)
+    if event_queue is not None:
+        try:
+            from orchestrator.executor import _run_sub_agent_streaming  # noqa: PLC0415
+            return await _run_sub_agent_streaming(agent_name, message, run_id, event_queue)
+        except Exception as exc:  # noqa: BLE001
+            return f"Agent {agent_name!r} failed: {exc}"
+
     try:
+        from orchestrator.executor import run_agent  # noqa: PLC0415
         result = await run_agent(
             agent_name,
             {"message": message, "mode": "chat"},
@@ -209,13 +220,13 @@ async def delegate_to_agent(agent_name: str, message: str) -> str:
 # Dynamic capability registry — load all registered agents as MAF tools
 # ---------------------------------------------------------------------------
 
-def _load_specialist_agents_as_tools(client: OpenAIChatCompletionClient) -> list[Any]:
-    """Load every registered agent as a native MAF tool via agent.as_tool().
+def _load_specialist_agents_as_tools() -> list[Any]:
+    """Load every registered agent as a streaming-capable FunctionTool.
 
-    This uses the MAF-native pattern from the GitHub Copilot SDK + MAF docs:
-        agent.as_tool(name=..., description=...)
-    Each specialist agent's description comes from its config.json, so the
-    orchestrator LLM routes to the right agent purely from that description.
+    Each specialist is exposed as a direct async closure that calls
+    _run_sub_agent_streaming when a parent SSE queue is active (so the
+    orchestrator LLM gets live sub-agent progress in the ThinkingContainer)
+    or falls back to the batch delegate_to_agent path otherwise.
 
     Returns a list of FunctionTool objects ready to pass to Agent(tools=[...]).
     Non-loadable agents are skipped with a warning (orchestrator still starts).
@@ -236,16 +247,6 @@ def _load_specialist_agents_as_tools(client: OpenAIChatCompletionClient) -> list
         if not name or name in skip_names or not description:
             continue
         try:
-            # Build a minimal MAF Agent for this specialist just to get as_tool()
-            specialist = Agent(
-                client=client,
-                name=name,
-                instructions=(
-                    f"You are the {name} specialist agent. {description} "
-                    f"Execute the task given to you fully and return the result."
-                ),
-                tools=[delegate_to_agent],  # let it call back if needed
-            )
             # Enrich the tool description with tags and integrations from config
             # so the orchestrator LLM can route reliably (per SDK best practices:
             # specific descriptions = better intent matching)
@@ -256,13 +257,48 @@ def _load_specialist_agents_as_tools(client: OpenAIChatCompletionClient) -> list
                 extra += f" Tags: {', '.join(tags)}."
             if integrations:
                 extra += f" Requires: {', '.join(integrations)}."
-            tool = specialist.as_tool(
-                name=name.replace("-", "_"),
-                description=(
-                    f"{description}{extra} "
-                    f"Use this tool for requests clearly in the domain of {name}. "
-                    f"Do not use for broad company-data questions that span multiple agents."
-                ),
+
+            # Build the tool as a direct async closure that calls the real specialist
+            # via _run_sub_agent_streaming (live-streams into parent SSE queue) or
+            # falls back to the batch run_agent path.  This gives the orchestrator
+            # the same streaming sub-agent visibility that call_agent provides.
+            _tool_name = name.replace("-", "_")
+            _agent_name = name  # capture for closure
+            _description = (
+                f"{description}{extra} "
+                f"Use this tool for requests clearly in the domain of {name}. "
+                f"Do not use for broad company-data questions that span multiple agents."
+            )
+
+            async def _specialist_fn(task: str, _n: str = _agent_name) -> str:
+                import uuid as _uuid  # noqa: PLC0415
+                run_id = str(_uuid.uuid4())
+                from orchestrator.executor import _active_run_queue  # noqa: PLC0415
+                eq = _active_run_queue.get(None)
+                if eq is not None:
+                    try:
+                        from orchestrator.executor import _run_sub_agent_streaming  # noqa: PLC0415
+                        return await _run_sub_agent_streaming(_n, task, run_id, eq)
+                    except Exception as exc:  # noqa: BLE001
+                        return f"Agent {_n!r} failed: {exc}"
+                return await delegate_to_agent(_n, task)
+
+            _specialist_fn.__name__ = _tool_name
+            _specialist_fn.__doc__ = _description
+
+            from agent_framework import FunctionTool  # noqa: PLC0415
+            tool = FunctionTool(
+                name=_tool_name,
+                description=_description,
+                func=_specialist_fn,
+                input_model={
+                    "type": "object",
+                    "properties": {
+                        "task": {"type": "string", "description": f"Task for {name}. Include all context needed — this agent has no memory of the current conversation."}
+                    },
+                    "required": ["task"],
+                    "additionalProperties": False,
+                },
             )
             tools.append(tool)
             _log.info("orchestrator.specialist_tool_registered", agent=name)
@@ -315,9 +351,9 @@ def build_orchestrator_agent(*, with_history: bool = True) -> Agent:
         delegate_to_agent,
     ]
 
-    # Dynamic specialist tools via MAF as_tool() — each registered agent becomes
-    # a callable tool. The LLM routes to the right one from the description alone.
-    specialist_tools = _load_specialist_agents_as_tools(client)
+    # Dynamic specialist tools — each registered agent becomes a callable FunctionTool.
+    # The LLM routes to the right one from the description alone.
+    specialist_tools = _load_specialist_agents_as_tools()
     all_tools = core_tools + specialist_tools
 
     _log.info(

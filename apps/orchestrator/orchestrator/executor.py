@@ -70,8 +70,9 @@ def _inject_agent_tools(agents: list[Any]) -> None:
         from acb_skills.agent_tools import (  # noqa: PLC0415
             call_agent,
             call_agent_background,
+            call_agents_parallel,
         )
-        _extra_tools = [call_agent, call_agent_background]
+        _extra_tools = [call_agent, call_agents_parallel, call_agent_background]
     except ImportError:
         return  # acb_skills not installed in this env — skip silently
 

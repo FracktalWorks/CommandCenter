@@ -127,6 +127,13 @@ try:
 except Exception:  # pragma: no cover
     pass
 
+try:
+    from gateway.routes.chat import router as _chat_router
+
+    app.include_router(_chat_router)
+except Exception:  # pragma: no cover
+    pass
+
 # ---------- Health ----------
 
 class Health(BaseModel):

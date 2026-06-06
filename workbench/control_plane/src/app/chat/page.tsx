@@ -8,6 +8,7 @@ import {
   deleteSession,
   createSession,
   enrichSession,
+  fetchAndMergeSessionsFromDb,
   type ChatSession,
 } from "@/lib/sessions";
 import type { Mem0Memory } from "@/lib/memory";
@@ -335,6 +336,15 @@ function ChatPageInner() {
       setSessions(existing);
       setActiveSessionId(existing[0].id);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // After initial localStorage render, fetch from Postgres and merge any sessions
+  // that exist there but not in the browser (e.g. after cache clear or new device).
+  useEffect(() => {
+    fetchAndMergeSessionsFromDb().then((merged) => {
+      setSessions(merged);
+    }).catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

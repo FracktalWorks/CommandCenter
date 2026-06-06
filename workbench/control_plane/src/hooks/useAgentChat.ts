@@ -17,6 +17,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import type { ToolEvent } from "@/components/MarkdownMessage";
 
 export type { ToolEvent };
@@ -61,6 +62,8 @@ interface UseAgentChatReturn {
   sendMessage: (content: string) => Promise<void>;
   clearMessages: () => void;
   stopGeneration: () => void;
+  /** Replace the messages array (used to hydrate from Postgres on mount). */
+  setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
 }
 
 function nanoid(): string {
@@ -348,5 +351,5 @@ export function useAgentChat({
     abortRef.current?.abort();
   }, []);
 
-  return { messages, isLoading, error, sendMessage, clearMessages, stopGeneration };
+  return { messages, isLoading, error, sendMessage, clearMessages, stopGeneration, setMessages };
 }

@@ -19,6 +19,7 @@ import MarkdownMessage from "@/components/MarkdownMessage";
 import AgentStatusBar from "@/components/AgentStatusBar";
 import MessageActionBar from "@/components/MessageActionBar";
 import GenerativeUIPanel from "@/components/GenerativeUIPanel";
+import { getMessages, saveMessages, fetchMessagesFromDb, type PersistedMessage } from "@/lib/sessions";
 
 // Unified model fallback — overridden at runtime from /api/models/all.
 const MODELS_FALLBACK: UnifiedModel[] = [
@@ -125,13 +126,51 @@ export default function AgentChat({
     return parts.length > 0 ? parts.join("\n\n") : undefined;
   }, [persona, memories]);
 
-  const { messages, isLoading, error, sendMessage, stopGeneration } = useAgentChat({
+  const { messages, isLoading, error, sendMessage, stopGeneration, setMessages } = useAgentChat({
     agentName: currentAgentName,
     threadId: sessionId,
     model: currentModel,
     mode: effectiveRuntime,
     systemContext,
+    // Load persisted messages so switching sessions restores history instantly (localStorage cache).
+    initialMessages: getMessages(sessionId) as ChatMessage[],
   });
+
+  // On mount, fetch the authoritative message history from Postgres and sync
+  // the local state if Postgres has more/newer messages (e.g. after cache clear).
+  useEffect(() => {
+    let cancelled = false;
+    fetchMessagesFromDb(sessionId).then((remote) => {
+      if (cancelled || remote.length === 0) return;
+      // Only update if Postgres has data that the local cache doesn't.
+      const localCount = getMessages(sessionId).length;
+      if (remote.length > localCount) {
+        setMessages(remote as ChatMessage[]);
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  // Persist messages to localStorage + Postgres whenever they change.
+  // We skip mid-stream placeholder messages (streaming=true, content empty)
+  // to avoid saving incomplete assistant turns.
+  useEffect(() => {
+    const settled = messages.filter((m) => !m.streaming || m.content.trim().length > 0);
+    if (settled.length === 0) return;
+    const toSave: PersistedMessage[] = settled.map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      timestamp: m.timestamp,
+      toolEvents: m.toolEvents,
+      progressLines: m.progressLines,
+      reasoning: m.reasoning,
+      agentState: m.agentState,
+      customEvents: m.customEvents,
+    }));
+    saveMessages(sessionId, toSave);
+  }, [messages, sessionId]);
 
   const [input, setInput] = useState("");
   const [sendMode, setSendMode] = useState<SendMode>("send");

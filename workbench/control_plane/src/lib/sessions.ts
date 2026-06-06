@@ -1,7 +1,12 @@
 /**
- * Client-side chat session management backed by localStorage.
- * Migration path: swap getSessions/upsertSession/deleteSession to call
- * a /api/chat/sessions Postgres-backed route when persistence is needed.
+ * Client-side chat session management.
+ *
+ * localStorage is the synchronous source-of-truth for the sidebar list (instant reads).
+ * Every mutating operation also fires an async Postgres sync in the background so history
+ * survives browser cache clears and is accessible from any device.
+ *
+ * Message persistence: `getMessages` / `saveMessages` use the Postgres API as primary
+ * store and write-through to localStorage for instant reads on mount.
  */
 
 export interface ChatSession {
@@ -37,11 +42,17 @@ export function upsertSession(session: ChatSession): void {
     sessions.unshift(session);
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+  // Background sync to Postgres — never blocks the UI.
+  _syncSessionToDb(session).catch(() => {});
 }
 
 export function deleteSession(id: string): void {
   const sessions = getSessions().filter((s) => s.id !== id);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+  // Also remove the persisted messages for this session.
+  deleteMessages(id);
+  // Background delete from Postgres.
+  fetch(`/api/chat/sessions/${id}`, { method: "DELETE" }).catch(() => {});
 }
 
 export function createSession(agentName = "orchestrator"): ChatSession {
@@ -100,4 +111,203 @@ export function enrichSession(
   if (info.messageCount !== undefined) s.messageCount = info.messageCount;
   s.updatedAt = new Date().toISOString();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+  // Sync enriched metadata to Postgres in background.
+  _patchSessionInDb(id, {
+    title: s.title,
+    lastPreview: s.lastPreview,
+    messageCount: s.messageCount,
+  }).catch(() => {});
+}
+
+// ---------------------------------------------------------------------------
+// Postgres API helpers (all async, all fire-and-forget safe)
+// ---------------------------------------------------------------------------
+
+/** Push a full session record to Postgres (create or update). */
+async function _syncSessionToDb(s: ChatSession): Promise<void> {
+  await fetch("/api/chat/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: s.id,
+      agent_name: s.agentName,
+      title: s.title ?? null,
+      last_preview: s.lastPreview ?? null,
+      message_count: s.messageCount,
+    }),
+  });
+}
+
+/** Partially update session metadata in Postgres. */
+async function _patchSessionInDb(
+  id: string,
+  patch: { title?: string; lastPreview?: string; messageCount?: number },
+): Promise<void> {
+  await fetch(`/api/chat/sessions/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: patch.title ?? null,
+      last_preview: patch.lastPreview ?? null,
+      message_count: patch.messageCount ?? null,
+    }),
+  });
+}
+
+/**
+ * Fetch sessions from Postgres and merge into localStorage.
+ * Called once on app mount by chat/page.tsx to restore sessions on a fresh browser.
+ * localStorage wins for ordering (user-local reordering), Postgres wins for content.
+ */
+export async function fetchAndMergeSessionsFromDb(): Promise<ChatSession[]> {
+  try {
+    const res = await fetch("/api/chat/sessions", { signal: AbortSignal.timeout(5_000) });
+    if (!res.ok) return getSessions();
+    const remote = (await res.json()) as Array<{
+      id: string;
+      agentName: string;
+      title?: string;
+      lastPreview?: string;
+      messageCount: number;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+
+    const local = getSessions();
+    const localIds = new Set(local.map((s) => s.id));
+
+    // Add any sessions from Postgres that aren't in localStorage.
+    for (const r of remote) {
+      if (!localIds.has(r.id)) {
+        local.push({
+          id: r.id,
+          name: r.title ?? r.id,
+          agentName: r.agentName,
+          createdAt: r.createdAt,
+          updatedAt: r.updatedAt,
+          messageCount: r.messageCount,
+          title: r.title,
+          lastPreview: r.lastPreview,
+        });
+      }
+    }
+
+    // Sort by updatedAt descending.
+    local.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(local));
+    return local;
+  } catch {
+    return getSessions();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Message persistence — localStorage write-through cache + Postgres primary store
+//
+// localStorage:  instant reads on mount (no loading flash)
+// Postgres:      durable store, survives browser cache clears / new devices
+//
+// Ephemeral fields (streaming, isThinkingActive) are never saved.
+// ---------------------------------------------------------------------------
+
+/** Minimal persisted shape — no streaming/ephemeral fields. */
+export interface PersistedMessage {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  timestamp: number;
+  toolEvents?: unknown[];
+  progressLines?: string[];
+  reasoning?: string;
+  agentState?: Record<string, unknown>;
+  customEvents?: { name: string; value: unknown }[];
+}
+
+const MESSAGES_PREFIX = "cc-msgs-";
+/** Maximum messages kept per session to avoid storage bloat. */
+const MAX_MESSAGES_PER_SESSION = 200;
+
+/** Read from localStorage cache (synchronous, instant). */
+export function getMessages(sessionId: string): PersistedMessage[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(MESSAGES_PREFIX + sessionId);
+    return raw ? (JSON.parse(raw) as PersistedMessage[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Save messages to localStorage immediately, then POST to Postgres in background.
+ * Skips empty/mid-stream placeholder messages.
+ */
+export function saveMessages(sessionId: string, messages: PersistedMessage[]): void {
+  if (typeof window === "undefined") return;
+  const settled = messages
+    .filter((m) => m.role === "user" || m.content.trim().length > 0)
+    .slice(-MAX_MESSAGES_PER_SESSION);
+
+  // 1. Write-through cache (sync, instant)
+  try {
+    localStorage.setItem(MESSAGES_PREFIX + sessionId, JSON.stringify(settled));
+  } catch {
+    // Storage quota exceeded — continue to Postgres anyway
+  }
+
+  // 2. Persist to Postgres (async, background)
+  if (settled.length === 0) return;
+  const payload = settled.map((m) => ({
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    timestamp: m.timestamp,
+    tool_events: m.toolEvents ?? [],
+    progress_lines: m.progressLines ?? [],
+    reasoning: m.reasoning ?? null,
+    agent_state: m.agentState ?? null,
+    custom_events: m.customEvents ?? [],
+  }));
+  fetch(`/api/chat/sessions/${sessionId}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
+
+/**
+ * Load messages from Postgres and update the localStorage cache.
+ * Returns the fetched list, or falls back to the localStorage cache on error.
+ */
+export async function fetchMessagesFromDb(sessionId: string): Promise<PersistedMessage[]> {
+  try {
+    const res = await fetch(`/api/chat/sessions/${sessionId}/messages`, {
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) return getMessages(sessionId);
+    const remote = (await res.json()) as Array<{
+      id: string;
+      role: "user" | "assistant" | "system";
+      content: string;
+      timestamp: number;
+      toolEvents?: unknown[];
+      progressLines?: string[];
+      reasoning?: string;
+      agentState?: Record<string, unknown>;
+      customEvents?: { name: string; value: unknown }[];
+    }>;
+    // Update localStorage cache with authoritative Postgres data.
+    try {
+      localStorage.setItem(MESSAGES_PREFIX + sessionId, JSON.stringify(remote));
+    } catch { /* quota */ }
+    return remote;
+  } catch {
+    return getMessages(sessionId);
+  }
+}
+
+export function deleteMessages(sessionId: string): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(MESSAGES_PREFIX + sessionId);
+  // Postgres messages are CASCADE-deleted when the session is deleted via the API.
 }

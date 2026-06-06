@@ -214,8 +214,8 @@ def _upsert_messages(session_id: str, messages: list[MessageRecord]) -> None:
                          tool_events, progress_lines, reasoning, agent_state, custom_events)
                     VALUES
                         (:id, :sid, :role, :content, :ts,
-                         :tool_events::jsonb, :progress_lines::jsonb,
-                         :reasoning, :agent_state::jsonb, :custom_events::jsonb)
+                         CAST(:tool_events AS jsonb), CAST(:progress_lines AS jsonb),
+                         :reasoning, CAST(:agent_state AS jsonb), CAST(:custom_events AS jsonb))
                     ON CONFLICT (session_id, id) DO UPDATE SET
                         content        = EXCLUDED.content,
                         tool_events    = EXCLUDED.tool_events,
@@ -248,7 +248,7 @@ def _upsert_messages(session_id: str, messages: list[MessageRecord]) -> None:
 async def list_sessions(
     user: UserContext = Depends(get_current_user),
 ) -> list[dict]:
-    return await asyncio.to_thread(_get_sessions, user.user_id)
+    return await asyncio.to_thread(_get_sessions, user.email or "default")
 
 
 @router.post("/sessions", status_code=status.HTTP_200_OK, summary="Upsert a chat session")
@@ -256,7 +256,7 @@ async def upsert_session(
     req: SessionUpsertRequest,
     user: UserContext = Depends(get_current_user),
 ) -> dict:
-    await asyncio.to_thread(_upsert_session, user.user_id, req)
+    await asyncio.to_thread(_upsert_session, user.email or "default", req)
     return {"ok": True, "id": req.id}
 
 
@@ -266,7 +266,7 @@ async def patch_session(
     req: SessionPatchRequest,
     user: UserContext = Depends(get_current_user),
 ) -> dict:
-    found = await asyncio.to_thread(_patch_session, session_id, user.user_id, req)
+    found = await asyncio.to_thread(_patch_session, session_id, user.email or "default", req)
     if not found:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"ok": True}
@@ -277,7 +277,7 @@ async def delete_session(
     session_id: str,
     user: UserContext = Depends(get_current_user),
 ) -> None:
-    found = await asyncio.to_thread(_delete_session, session_id, user.user_id)
+    found = await asyncio.to_thread(_delete_session, session_id, user.email or "default")
     if not found:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -287,7 +287,7 @@ async def get_messages(
     session_id: str,
     user: UserContext = Depends(get_current_user),
 ) -> list[dict]:
-    return await asyncio.to_thread(_get_messages, session_id, user.user_id)
+    return await asyncio.to_thread(_get_messages, session_id, user.email or "default")
 
 
 @router.post(

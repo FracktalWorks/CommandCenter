@@ -1057,7 +1057,58 @@ async def _run_with_maf_agent(
     except Exception:  # noqa: BLE001
         pass
 
-    message = _build_event_message(agent_name, run_id, event_payload, integrations)
+    # Build the input for agent.run().
+    # For chat events that carry a prior message history (payload["messages"]),
+    # pass the full conversation as a Sequence[Message] so the LLM has proper
+    # multi-turn context. For webhook / event-driven payloads (no "messages" key),
+    # fall back to the single-string path which serialises the event payload.
+    run_input: Any
+    prior_msgs: list[dict[str, str]] = event_payload.get("messages") or []
+    current_msg: str = event_payload.get("message") or event_payload.get("user_query") or ""
+
+    if prior_msgs and current_msg:
+        # Chat path: reconstruct proper Message sequence so the LLM sees the
+        # full conversation window, not just the latest turn.
+        try:
+            from agent_framework._types import Message as _Message  # noqa: PLC0415
+
+            # Build the preamble (integrations / warnings) as a system message.
+            system_parts: list[str] = []
+            integration_warnings: dict[str, str] = event_payload.get("integration_warnings", {})
+            if integrations:
+                system_parts.append(
+                    "Connected integrations: " + ", ".join(sorted(integrations.keys())) + "."
+                )
+            if integration_warnings:
+                missing = ", ".join(sorted(integration_warnings.keys()))
+                system_parts.append(
+                    f"Missing integrations (not yet configured): {missing}. "
+                    "If the user task requires one of these, ask them to provide the credential. "
+                    "When they do, output: <<<SETUP:service_name:ENV_VAR_NAME=value>>>"
+                )
+
+            messages_for_run: list[Any] = []
+            if system_parts:
+                messages_for_run.append(_Message("system", ["\n".join(system_parts)]))
+
+            # Prior turns — cap at last 50 to stay within context windows.
+            for m in prior_msgs[-50:]:
+                role = m.get("role", "user")
+                content = m.get("content", "")
+                if content.strip() and role in ("user", "assistant", "system"):
+                    messages_for_run.append(_Message(role, [content]))
+
+            # Append current user message (may already be the last item in
+            # prior_msgs, but prior_msgs is sent BEFORE the new message is added).
+            messages_for_run.append(_Message("user", [current_msg]))
+
+            run_input = messages_for_run
+        except Exception:  # noqa: BLE001
+            # Fallback: MAF version mismatch — use plain string
+            run_input = _build_event_message(agent_name, run_id, event_payload, integrations)
+    else:
+        # Webhook / event path: single string prompt.
+        run_input = _build_event_message(agent_name, run_id, event_payload, integrations)
 
     # Inject resolved integration credentials into os.environ so that tool
     # subprocesses (e.g. zoho_crm.py calling os.getenv("ZOHO_CLIENT_ID")) can
@@ -1070,7 +1121,7 @@ async def _run_with_maf_agent(
         # Standard Agent has a no-op __aenter__/__aexit__ — both are safe here.
         if hasattr(type(agent), "__aenter__"):
             await stack.enter_async_context(agent)
-        response = await agent.run(message)
+        response = await agent.run(run_input)
 
     text: str = getattr(response, "text", "") or ""
     return {"answer": text, "run_id": run_id, "agent": agent_name, "result": text}

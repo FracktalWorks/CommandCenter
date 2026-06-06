@@ -52,8 +52,10 @@ def _inject_agent_tools(agents: list[Any]) -> None:
     block the main agent execution path.
 
     Injection targets:
-        MAF Agent          — appends to ``agent.tools`` list
-        GitHub Copilot SDK — appends to ``agent._default_options.tools`` list
+        MAF Agent                — appends to ``agent.tools`` (list)
+        GitHubCopilotAgent       — appends to ``agent._tools`` (list built at init;
+                                   merged into SessionConfig.tools at session creation)
+        Legacy Copilot SDK path  — appends to ``agent._default_options.tools`` (list)
     """
     try:
         from acb_skills.agent_tools import (  # noqa: PLC0415
@@ -65,6 +67,29 @@ def _inject_agent_tools(agents: list[Any]) -> None:
         return  # acb_skills not installed in this env — skip silently
 
     for agent in agents:
+        injected = False
+
+        # ── GitHubCopilotAgent (agent-framework-ag-ui) ──────────────────────
+        # Stores tools in self._tools (a list); fed into SessionConfig at run time.
+        # Must be patched BEFORE the MAF path because GitHubCopilotAgent also
+        # sets self.tools = [] (empty) via its base class — we don't want to
+        # append to that empty list and skip the real _tools.
+        try:
+            if hasattr(agent, "_tools") and isinstance(agent._tools, list):
+                existing_names = {
+                    getattr(getattr(t, "func", t), "__name__", None)
+                    for t in agent._tools
+                }
+                for fn in _extra_tools:
+                    if fn.__name__ not in existing_names:
+                        agent._tools.append(fn)
+                injected = True
+        except Exception:  # noqa: BLE001
+            pass
+
+        if injected:
+            continue
+
         # ── MAF Agent (agent-framework) ─────────────────────────────────────
         # agent.tools is a list[FunctionTool | callable].  MAF accepts plain
         # async functions directly, so we can append without wrapping.
@@ -81,8 +106,7 @@ def _inject_agent_tools(agents: list[Any]) -> None:
         except Exception:  # noqa: BLE001
             pass
 
-        # ── GitHub Copilot SDK (copilot.Agent / GitHubCopilotAgent) ─────────
-        # default_options.tools is a list of callables.
+        # ── Legacy: _default_options.tools (older Copilot SDK wrapper) ──────
         try:
             opts = getattr(agent, "_default_options", None)
             if opts is not None:

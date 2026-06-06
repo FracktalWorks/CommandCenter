@@ -359,6 +359,19 @@ async def run_agent_stream(
             # any GitHub-sourced agent.
             if _agent_runtime == "github-copilot" and hasattr(agent, "run"):
                 try:
+                    # Inject model override from settings (copilot_chat_model).
+                    # This allows the operator to pick any Copilot-API-compatible
+                    # model (gpt-4o, claude-sonnet-4-5, o3-mini…) from the
+                    # Settings → Models page without touching agent repos.
+                    _configured_model = (getattr(settings, "copilot_chat_model", "") or "").strip()
+                    if _configured_model:
+                        for _a in agents:
+                            try:
+                                if hasattr(_a, "_default_options") and _a._default_options is not None:
+                                    _a._default_options.model = _configured_model
+                            except Exception:  # noqa: BLE001
+                                pass
+
                     message = _build_event_message(agent_name, run_id, event_payload, integrations)
                     async with agent:
                         response_stream = agent.run(message, stream=True)

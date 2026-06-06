@@ -1,77 +1,60 @@
 # LiteLLM proxy config — ADR-008. Master key from $LITELLM_MASTER_KEY.
 # Tier names MUST match acb_llm.client._TIER_MODEL.
+#
+# Multi-provider routing strategy:
+#   Primary:  Google Gemini (GEMINI_API_KEY) — cheapest per-token cost.
+#   Fallback: GitHub Copilot (GITHUB_TOKEN) — used automatically if Gemini
+#             fails (rate-limit, quota, transient error).
+#   Direct:   copilot/* named routes — always available for explicit use.
+#
+# Change a tier's model via the Control Plane Settings → Models page. The page
+# patches this file and restarts the container. Tier name constants in
+# acb_llm.client._TIER_MODEL must stay in sync.
 
-# Tier names MUST match acb_llm.client._TIER_MODEL.
-#
-# Phase 0 default routing — uses ONLY hosted models, no GPU required. This
-# works identically on the Windows dev box and on a Hostinger KVM-4 VPS.
-#
-# When a GPU host is added later, point `tier1-local-qwen3` at the vLLM URL
-# (uncomment the second block and remove the Haiku fallback). The acb_llm
-# client stays unchanged.
 model_list:
   # ---- Tier 1: cheap, fast classifier / triage ----
-  # TEMP (Phase 0 testing): Gemini key only. Swap back to Anthropic / vLLM
-  # once those keys land — the tier *names* (tier1-local-qwen3, tier2-sonnet,
-  # tier3-opus) must stay identical because acb_llm.client._TIER_MODEL pins them.
-  # Gemini route (re-enable when credits are topped up):
+  - model_name: tier1-local-qwen3
+    litellm_params:
+      model: gemini/gemini-2.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY
+  # Fallback for tier1 when Gemini is unavailable:
+  # (LiteLLM router_settings.fallbacks below activates this automatically)
+  # When vLLM is available, add:
   # - model_name: tier1-local-qwen3
   #   litellm_params:
-  #     model: gemini/gemini-2.5-flash-lite
-  #     api_key: os.environ/GEMINI_API_KEY
-  - model_name: tier1-local-qwen3
+  #     model: openai/Qwen/Qwen3-8B-Instruct
+  #     api_base: os.environ/VLLM_BASE_URL
+  #     api_key: "EMPTY"
+
+  # ---- Tier 2: structured extraction / drafting ----
+  - model_name: tier2-sonnet
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+  # ---- Tier 3: multi-hop reasoning / strategy ----
+  - model_name: tier3-opus
+    litellm_params:
+      model: gemini/gemini-2.5-pro
+      api_key: os.environ/GEMINI_API_KEY
+
+  # ---- Embeddings ----
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: gemini/text-embedding-004
+      api_key: os.environ/GEMINI_API_KEY
+
+  # ---- GitHub Copilot named routes (direct access + tier fallbacks) ----
+  # The Copilot API is OpenAI-compatible. Requires GITHUB_TOKEN with copilot scope.
+  # Full model list: https://docs.github.com/en/copilot/using-github-copilot/ai-models
+  - model_name: copilot/gpt-4o-mini
     litellm_params:
       model: openai/gpt-4o-mini
       api_base: https://api.githubcopilot.com
       api_key: os.environ/GITHUB_TOKEN
       extra_headers:
         Copilot-Integration-Id: vscode-chat
-  # When vLLM is available, swap the above for:
-  # - model_name: tier1-local-qwen3
-  #   litellm_params:
-  #     model: openai/Qwen/Qwen3-8B-Instruct
-  #     api_base: os.environ/VLLM_BASE_URL          # http://host.docker.internal:8001/v1
-  #     api_key: "EMPTY"
 
-  # ---- Tier 2: structured extraction / drafting ----
-  # Gemini route (re-enable when credits are topped up):
-  # - model_name: tier2-sonnet
-  #   litellm_params:
-  #     model: gemini/gemini-2.5-flash
-  #     api_key: os.environ/GEMINI_API_KEY
-  - model_name: tier2-sonnet
-    litellm_params:
-      model: openai/gpt-4o
-      api_base: https://api.githubcopilot.com
-      api_key: os.environ/GITHUB_TOKEN
-      extra_headers:
-        Copilot-Integration-Id: vscode-chat
-
-  # ---- Tier 3: multi-hop reasoning / strategy ----
-  # Gemini route (re-enable when credits are topped up):
-  # - model_name: tier3-opus
-  #   litellm_params:
-  #     model: gemini/gemini-2.5-flash
-  #     api_key: os.environ/GEMINI_API_KEY
-  - model_name: tier3-opus
-    litellm_params:
-      model: openai/gpt-4o
-      api_base: https://api.githubcopilot.com
-      api_key: os.environ/GITHUB_TOKEN
-      extra_headers:
-        Copilot-Integration-Id: vscode-chat
-
-  # ---- Embeddings (used by the redis-semantic cache, WBS 1.8) ----
-  - model_name: text-embedding-3-small
-    litellm_params:
-      model: gemini/text-embedding-004
-      api_key: os.environ/GEMINI_API_KEY
-
-  # ---- GitHub Copilot Models (when GITHUB_TOKEN has copilot scope) ----
-  # The Copilot API is OpenAI-compatible. MAF agents call these via
-  # acb_llm the same way as any other tier — no special Copilot SDK node needed.
-  # Available models: gpt-4o, claude-sonnet-4-5, claude-3.7-sonnet, o1, o3-mini, etc.
-  # Full list: https://docs.github.com/en/copilot/using-github-copilot/ai-models
   - model_name: copilot/gpt-4o
     litellm_params:
       model: openai/gpt-4o
@@ -96,23 +79,13 @@ model_list:
       extra_headers:
         Copilot-Integration-Id: vscode-chat
 
-  # Optional: route existing tiers through Copilot when GITHUB_TOKEN is set.
-  # Uncomment the block for the tier you want to back by Copilot, comment out
-  # the current Gemini entry above it.
-  # - model_name: tier2-sonnet
-  #   litellm_params:
-  #     model: anthropic/claude-sonnet-4-5
-  #     api_base: https://api.githubcopilot.com
-  #     api_key: os.environ/GITHUB_TOKEN
-  #     extra_headers:
-  #       Copilot-Integration-Id: vscode-chat
-  # - model_name: tier3-opus
-  #   litellm_params:
-  #     model: openai/gpt-4o
-  #     api_base: https://api.githubcopilot.com
-  #     api_key: os.environ/GITHUB_TOKEN
-  #     extra_headers:
-  #       Copilot-Integration-Id: vscode-chat
+router_settings:
+  # If a Gemini tier fails (quota/rate-limit/transient), automatically fall
+  # back to the equivalent GitHub Copilot model. No code changes needed.
+  fallbacks:
+    - tier1-local-qwen3: ["copilot/gpt-4o-mini"]
+    - tier2-sonnet: ["copilot/gpt-4o"]
+    - tier3-opus: ["copilot/o3-mini"]
 
 litellm_settings:
   drop_params: true

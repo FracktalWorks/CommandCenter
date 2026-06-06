@@ -105,7 +105,9 @@ class Settings(BaseSettings):
     # Copilot SDK chat (coworker sessions via /copilot/chat)
     # Auth order: LITELLM_MASTER_KEY → LiteLLM proxy  |  GITHUB_TOKEN → api.githubcopilot.com
     # Model must be available in whichever provider is active.
-    copilot_chat_model: str = "claude-sonnet-4.5"  # e.g. gpt-5.5, claude-sonnet-4.6
+    # Also controls the model injected into GitHubCopilotAgent Tier-1.5 runs.
+    # Valid values (Copilot API): gpt-4o, gpt-4o-mini, claude-sonnet-4-5, o3-mini, o1
+    copilot_chat_model: str = "claude-sonnet-4-5"  # e.g. gpt-4o, claude-sonnet-4-5, o3-mini
 
     # ---------------------------------------------------------------------------
     # OAuth 2.0 authorization-code flow (M2.6) — Integration token exchange.

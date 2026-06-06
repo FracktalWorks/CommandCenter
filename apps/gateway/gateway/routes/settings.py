@@ -117,6 +117,7 @@ _PROVIDER_ENV_MAP: dict[str, str] = {
     "gemini":    "GEMINI_API_KEY",
     "openai":    "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
+    "github":    "GITHUB_TOKEN",    # GitHub Copilot subscription
     "ollama":    "",        # local — always "configured" if URL reachable
     "vllm":      "VLLM_BASE_URL",
 }
@@ -125,9 +126,24 @@ _PROVIDER_LABELS: dict[str, str] = {
     "gemini":    "Google Gemini",
     "openai":    "OpenAI",
     "anthropic": "Anthropic",
+    "github":    "GitHub Copilot",
     "ollama":    "Ollama (local)",
     "vllm":      "vLLM (local)",
 }
+
+# GitHub Copilot proxy constants
+_COPILOT_API_BASE = "https://api.githubcopilot.com"
+_COPILOT_EXTRA_HEADERS = {"Copilot-Integration-Id": "vscode-chat"}
+# Maps the display model name (github/…) → actual upstream model string.
+_GITHUB_MODEL_MAP: dict[str, str] = {
+    "github/gpt-4o-mini":    "openai/gpt-4o-mini",
+    "github/gpt-4o":         "openai/gpt-4o",
+    "github/claude-sonnet":  "anthropic/claude-sonnet-4-5",
+    "github/o3-mini":        "openai/o3-mini",
+    "github/o1":             "openai/o1",
+}
+# Reverse: upstream model string → display name (for get_llm_config response)
+_GITHUB_MODEL_MAP_REV: dict[str, str] = {v: k for k, v in _GITHUB_MODEL_MAP.items()}
 
 _PROVIDER_MODELS: dict[str, list[str]] = {
     "gemini": [
@@ -150,6 +166,15 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "anthropic/claude-3-5-sonnet-latest",
         "anthropic/claude-3-7-sonnet-latest",
         "anthropic/claude-opus-4-5",
+    ],
+    # GitHub Copilot models — use the `github/` prefix so update_tier can detect
+    # them and set the correct api_base + auth headers automatically.
+    "github": [
+        "github/gpt-4o-mini",
+        "github/gpt-4o",
+        "github/claude-sonnet",
+        "github/o3-mini",
+        "github/o1",
     ],
     "ollama": [
         "ollama/llama3.2",
@@ -174,19 +199,36 @@ _TIER_LABELS: dict[str, dict[str, str]] = {
 
 
 def _provider_from_model(model: str) -> str:
-    """Infer provider slug from litellm model string."""
+    """Infer provider slug from litellm model string (model field only)."""
     if model.startswith("gemini/"):
         return "gemini"
     if model.startswith("anthropic/"):
         return "anthropic"
+    if model.startswith("github/"):
+        return "github"
     if model.startswith("openai/"):
-        # check if it looks like a vLLM path
+        # check if it looks like a vLLM path (has an extra / after openai/)
         if "/" in model.removeprefix("openai/"):
             return "vllm"
         return "openai"
     if model.startswith("ollama/"):
         return "ollama"
     return "unknown"
+
+
+def _provider_from_entry(entry: dict[str, Any]) -> str:
+    """Infer provider slug from a full LiteLLM model_list entry.
+
+    Checks both model string and api_base so GitHub Copilot entries
+    (which use openai/* model strings routed through api.githubcopilot.com)
+    are correctly identified as 'github' rather than 'openai'.
+    """
+    params = entry.get("litellm_params", {})
+    model = params.get("model", "")
+    api_base = params.get("api_base", "")
+    if _COPILOT_API_BASE in str(api_base):
+        return "github"
+    return _provider_from_model(model)
 
 
 def _is_provider_configured(provider: str) -> bool:
@@ -261,7 +303,11 @@ async def get_llm_config(_user: UserContext = Depends(get_current_user)) -> LLMC
             continue  # skip embeddings etc.
         meta = _TIER_LABELS[tier_name]
         model = entry.get("litellm_params", {}).get("model", "")
-        provider = _provider_from_model(model)
+        provider = _provider_from_entry(entry)  # use entry-aware detection (catches Copilot)
+        # For GitHub Copilot entries, normalise the display model name to `github/…`
+        # so the Settings UI shows the human-readable name that matches _PROVIDER_MODELS.
+        if provider == "github":
+            model = _GITHUB_MODEL_MAP_REV.get(model, f"github/{model.split('/')[-1]}")
         tiers.append(TierInfo(
             tier_name=tier_name,
             tier_id=meta["id"],
@@ -314,18 +360,29 @@ async def update_tier(
     for entry in model_list:
         if entry.get("model_name") == req.tier_name:
             params = entry.setdefault("litellm_params", {})
-            params["model"] = req.model
-            # Remove or set api_base for local models
-            if req.api_base:
+
+            # Detect GitHub Copilot model (github/… prefix used in Settings UI)
+            if req.model.startswith("github/"):
+                # Translate display name → upstream model + inject Copilot routing
+                upstream = _GITHUB_MODEL_MAP.get(req.model, req.model.replace("github/", "openai/"))
+                params["model"] = upstream
+                params["api_base"] = _COPILOT_API_BASE
+                params["api_key"] = "os.environ/GITHUB_TOKEN"
+                params["extra_headers"] = dict(_COPILOT_EXTRA_HEADERS)
+            elif req.api_base:
+                # Local model (Ollama / vLLM)
+                params["model"] = req.model
                 params["api_base"] = req.api_base
                 params["api_key"] = "EMPTY"
+                params.pop("extra_headers", None)  # clear any stale provider headers
             else:
-                params.pop("api_base", None)
-                params.pop("api_key", None)
+                # Hosted provider (Gemini, OpenAI, Anthropic)
+                params["model"] = req.model
+                params.pop("api_base", None)       # Gemini/OpenAI don't need custom base
+                params.pop("extra_headers", None)  # remove stale Copilot headers
                 provider = _provider_from_model(req.model)
                 env_var = _PROVIDER_ENV_MAP.get(provider, "")
-                if env_var:
-                    params["api_key"] = f"os.environ/{env_var}"
+                params["api_key"] = f"os.environ/{env_var}" if env_var else "EMPTY"
             updated = True
             break
 
@@ -335,26 +392,20 @@ async def update_tier(
     _save_config(cfg)
     _log.info("settings.llm.tier_updated", tier=req.tier_name, model=req.model, actor=_user.email)
 
-    # Ask LiteLLM to hot-reload its config (best-effort — fails if not running)
-    settings = get_settings()
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            await client.post(
-                f"{settings.litellm_base_url}/config/update",
-                headers={"Authorization": f"Bearer {settings.litellm_master_key}"},
-                json={},
-            )
-    except Exception:
-        pass  # LiteLLM may not be running; user will need to restart it
+    # Restart LiteLLM so the new config takes effect immediately
+    _restart_litellm_bg()
 
     meta = _TIER_LABELS[req.tier_name]
-    provider = _provider_from_model(req.model)
+    # For GitHub Copilot models, return the `github/…` display name the UI sent;
+    # for all others, return the actual litellm model string.
+    display_model = req.model
+    provider = "github" if req.model.startswith("github/") else _provider_from_model(req.model)
     return TierInfo(
         tier_name=req.tier_name,
         tier_id=meta["id"],
         label=meta["label"],
         description=meta["description"],
-        model=req.model,
+        model=display_model,
         provider=provider,
         provider_configured=_is_provider_configured(provider),
     )
@@ -448,3 +499,27 @@ async def set_provider_key(
     _log.info("settings.llm.key_updated", provider=req.provider, actor=_user.email)
     _restart_litellm_bg()
     return {"ok": "true", "env_var": env_var, "provider": req.provider}
+
+
+# ---------------------------------------------------------------------------
+# POST /settings/llm/copilot-model  — set copilot_chat_model in .env
+# ---------------------------------------------------------------------------
+
+class CopilotModelRequest(BaseModel):
+    model: str   # e.g. "claude-sonnet-4-5", "gpt-4o", "o3-mini"
+
+
+@router.post("/llm/copilot-model")
+async def set_copilot_model(
+    req: CopilotModelRequest,
+    _user: UserContext = Depends(get_current_user),
+) -> dict[str, str]:
+    """Update the model used by GitHub Copilot SDK agents (Tier 1.5 path)."""
+    if not req.model.strip():
+        raise HTTPException(status_code=400, detail="model cannot be empty")
+    try:
+        _write_env_key("COPILOT_CHAT_MODEL", req.model.strip())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to write env: {exc}") from exc
+    _log.info("settings.llm.copilot_model_updated", model=req.model, actor=_user.email)
+    return {"ok": "true", "model": req.model.strip()}

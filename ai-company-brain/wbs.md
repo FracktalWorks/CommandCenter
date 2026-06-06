@@ -89,31 +89,33 @@ Effort uses **engineer-weeks (ew)** with PERT triple-point estimates: (O, M, P) 
 
 --- (Capability: full domain coverage with specialist agents)
 
+> **Agent repo convention (2026-06-06):** All `agent-*` repos are built and maintained as **independent GitHub repositories**, outside this monorepo. They are added to CommandCenter through the Control Plane `/agents` UI (already live). CommandCenter provides the platform — ingestion pipelines, entity graph, Action Broker, Integration Registry — that those agents query. No agent repo scaffolding happens here.
+
 | WBS | Work Package | Activities | (O, M, P) ew | PERT ew |
 |---|---|---|---|---|
-| 2.1 | `agent-reconciler` + `skill-graph-write` | Nightly diff agent as independent repo; reconciler escalation queue wired to Control Plane | (1, 1.5, 3) | 1.7 |
-| 2.2 | `agent-sales` + `skill-zoho-ingest` | Zoho CRM webhooks + REST + MCP; deal status, pipeline, customer 360 | (1, 2, 3) | 2.0 |
-| 2.3 | `agent-triage` + `skill-gmail-capture` | Gmail Pub/Sub; email triage classifier; link to deals/projects | (1, 2, 3) | 2.0 |
-| 2.4 | Customer/Person entity resolution | Deterministic + LLM fallback; cross-source canonical key deduplication | (1, 2, 4) | 2.2 |
-| 2.5 | `skill-action-broker` | Approval queue write + audit logging; RBAC scaffold (exec / employee roles) | (0.5, 1, 2) | 1.1 |
-| 2.6 | Semantic cache + token compression | GPTCache in front of LiteLLM (1h TTL); LLMLingua-2 on tool outputs >1k tokens | (0.5, 1, 2) | 1.1 |
-| 2.7 | Mem0 + Graphiti memory integration | Episodic memory per user/account; bi-temporal entity KG; both on existing Postgres | (1, 1.5, 3) | 1.7 |
-| 2.8 | Phase 2 review | (0.25, 0.5, 1) | 0.5 |
-| **Phase 2 total** | | | | **~12.3 ew** (~6 calendar weeks with 2 engineers) |
+| 2.1 | Zoho CRM ingestion pipeline | Zoho webhooks + REST poller in `apps/ingestion/`; entity normaliser; canonical-key resolver for DEAL, CUSTOMER, CONTACT; writes to Postgres graph. Prerequisite for any sales/reconciler agent to have live data. | (1, 1.5, 3) | 1.7 |
+| 2.2 | Gmail ingestion pipeline | Gmail Pub/Sub push subscription; email normaliser; thread → MESSAGE entity; link to CUSTOMER/DEAL via entity resolution. | (1, 2, 3) | 2.0 |
+| 2.3 | Customer/Person entity resolution | Deterministic + LLM fallback; cross-source canonical key deduplication across ClickUp, Zoho, Gmail | (1, 2, 4) | 2.2 |
+| 2.4 | Action Broker hardening | Approval queue schema + write API; approval UI in Control Plane; per-action authority tier config; audit log with rollback; kill switch. Prerequisite for any agent to propose writes. | (0.5, 1, 2) | 1.1 |
+| 2.5 | Mem0 + Graphiti memory integration | Episodic memory per user/account; bi-temporal entity KG; both on existing Postgres | (1, 1.5, 3) | 1.7 |
+| 2.6 | Semantic cache + token compression | LiteLLM semantic cache (1h TTL); LLMLingua-2 on tool outputs >1k tokens | (0.5, 1, 2) | 1.1 |
+| 2.7 | Phase 2 review | Verify data flows: Zoho deal updated → graph updated → agent registered via UI answers correctly | (0.25, 0.5, 1) | 0.5 |
+| **Phase 2 total** | | | | **~10.3 ew** (~5 calendar weeks with 2 engineers) |
 
 ---
 
 ## Phase 3 — Capture Expansion (Capability: WhatsApp + meetings + ambient triggers + push)
 
+> **Agent repos** for this phase (e.g. `agent-delivery`) are also independent GitHub repos registered via the UI.
+
 | WBS | Work Package | Activities | (O, M, P) ew | PERT ew |
 |---|---|---|---|---|
-| 3.1 | Meeting bot (`skill-meeting-transcribe`) | Vexa self-hosted on dedicated VM; `skill-meeting-transcribe` wraps WhisperX + Pyannote; calendar auto-accept | (1, 2, 3) | 2.0 |
+| 3.1 | Meeting bot infrastructure (`skill-meeting-transcribe`) | Vexa self-hosted on dedicated VM; `skill-meeting-transcribe` wraps WhisperX + Pyannote; calendar auto-accept | (1, 2, 3) | 2.0 |
 | 3.2 | Transcript pipeline → graph | Diarised transcript → entity graph; action-item extraction (Tier-2) | (1, 2, 3) | 2.0 |
-| 3.3 | `skill-whatsapp-send` + WhatsApp ingest agent | WhatsApp Business API provisioning; `agent-triage` extension for WA community; Meta webhook | (1, 2, 4) | 2.2 |
-| 3.4 | Ambient trigger engine | Event bus → rule evaluator → agent dispatch | (1, 2, 4) | 2.2 |
-| 3.5 | `agent-delivery` (push + stale-task detection) | Stale-task detection, ping, escalate; WhatsApp/email push channel | (1, 2, 3) | 2.0 |
-| 3.6 | Phase 3 review | (0.25, 0.5, 1) | 0.5 |
-| **Phase 3 total** | | | | **~11 ew** (~5.5 calendar weeks with 2 engineers) |
+| 3.3 | WhatsApp ingestion + send infrastructure | WhatsApp Business API provisioning; Meta webhook → ingestion; `skill-whatsapp-send` | (1, 2, 4) | 2.2 |
+| 3.4 | Ambient trigger engine | Redis Streams event bus → rule evaluator → agent dispatch; natural-language schedule parser | (1, 2, 4) | 2.2 |
+| 3.5 | Phase 3 review | (0.25, 0.5, 1) | 0.5 |
+| **Phase 3 total** | | | | **~9 ew** (~4.5 calendar weeks with 2 engineers) |
 
 ---
 

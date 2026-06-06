@@ -81,6 +81,9 @@ services:
       OPENAI_API_KEY:    ${OPENAI_API_KEY:-}
       GEMINI_API_KEY:    ${GEMINI_API_KEY:-}
       GITHUB_TOKEN:      ${GITHUB_TOKEN:-}
+      GROQ_API_KEY:      ${GROQ_API_KEY:-}
+      MISTRAL_API_KEY:   ${MISTRAL_API_KEY:-}
+      TOGETHER_API_KEY:  ${TOGETHER_API_KEY:-}
       VLLM_BASE_URL: ${VLLM_BASE_URL:-http://host.docker.internal:8001/v1}
       # DATABASE_URL enables the LiteLLM management UI at http://localhost:4000/ui
       # (virtual keys, spend tracking, model management). Prisma runs ~110 migrations

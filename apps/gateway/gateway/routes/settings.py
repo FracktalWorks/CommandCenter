@@ -118,6 +118,9 @@ _PROVIDER_ENV_MAP: dict[str, str] = {
     "openai":    "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "github":    "GITHUB_TOKEN",    # GitHub Copilot subscription
+    "groq":      "GROQ_API_KEY",
+    "mistral":   "MISTRAL_API_KEY",
+    "together":  "TOGETHER_API_KEY",
     "ollama":    "",        # local — always "configured" if URL reachable
     "vllm":      "VLLM_BASE_URL",
 }
@@ -127,6 +130,9 @@ _PROVIDER_LABELS: dict[str, str] = {
     "openai":    "OpenAI",
     "anthropic": "Anthropic",
     "github":    "GitHub Copilot",
+    "groq":      "Groq",
+    "mistral":   "Mistral AI",
+    "together":  "Together AI",
     "ollama":    "Ollama (local)",
     "vllm":      "vLLM (local)",
 }
@@ -184,6 +190,27 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "ollama/phi4",
         "ollama/gemma3:4b",
     ],
+    "groq": [
+        "groq/llama-3.3-70b-versatile",
+        "groq/llama-3.1-8b-instant",
+        "groq/llama-3.1-70b-versatile",
+        "groq/mixtral-8x7b-32768",
+        "groq/gemma2-9b-it",
+        "groq/moonshotai/kimi-k2-instruct",
+    ],
+    "mistral": [
+        "mistral/mistral-small-latest",
+        "mistral/mistral-medium-latest",
+        "mistral/mistral-large-latest",
+        "mistral/codestral-latest",
+    ],
+    "together": [
+        "together_ai/meta-llama/Llama-3-70b-chat-hf",
+        "together_ai/meta-llama/Llama-3-8b-chat-hf",
+        "together_ai/Qwen/Qwen2.5-72B-Instruct-Turbo",
+        "together_ai/mistralai/Mistral-7B-Instruct-v0.3",
+        "together_ai/deepseek-ai/DeepSeek-R1",
+    ],
     "vllm": [
         "openai/Qwen/Qwen3-8B-Instruct",
         "openai/meta-llama/Llama-3.1-8B-Instruct",
@@ -206,13 +233,19 @@ def _provider_from_model(model: str) -> str:
         return "anthropic"
     if model.startswith("github/"):
         return "github"
+    if model.startswith("groq/"):
+        return "groq"
+    if model.startswith("mistral/"):
+        return "mistral"
+    if model.startswith("together_ai/"):
+        return "together"
+    if model.startswith("ollama/"):
+        return "ollama"
     if model.startswith("openai/"):
         # check if it looks like a vLLM path (has an extra / after openai/)
         if "/" in model.removeprefix("openai/"):
             return "vllm"
         return "openai"
-    if model.startswith("ollama/"):
-        return "ollama"
     return "unknown"
 
 

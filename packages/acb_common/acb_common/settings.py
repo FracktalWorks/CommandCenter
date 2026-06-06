@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+    groq_api_key: str = ""          # console.groq.com — free tier, very fast inference
+    mistral_api_key: str = ""       # console.mistral.ai
+    together_api_key: str = ""      # api.together.ai — 100+ open-source models
 
     # Gateway
     gateway_host: str = "0.0.0.0"

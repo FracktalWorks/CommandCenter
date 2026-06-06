@@ -41,6 +41,63 @@ _MAX_ANNEAL_ATTEMPTS = 2
 _log = get_logger("orchestrator.executor")
 
 
+def _inject_agent_tools(agents: list[Any]) -> None:
+    """Inject cross-agent delegation tools into every loaded agent.
+
+    Adds ``call_agent`` and ``call_agent_background`` from ``acb_skills.agent_tools``
+    so that any agent — MAF or GitHub Copilot SDK — can delegate sub-tasks to
+    other registered agents without any changes to the external agent repo.
+
+    Injection is best-effort: failures are silently swallowed so they never
+    block the main agent execution path.
+
+    Injection targets:
+        MAF Agent          — appends to ``agent.tools`` list
+        GitHub Copilot SDK — appends to ``agent._default_options.tools`` list
+    """
+    try:
+        from acb_skills.agent_tools import (  # noqa: PLC0415
+            call_agent,
+            call_agent_background,
+        )
+        _extra_tools = [call_agent, call_agent_background]
+    except ImportError:
+        return  # acb_skills not installed in this env — skip silently
+
+    for agent in agents:
+        # ── MAF Agent (agent-framework) ─────────────────────────────────────
+        # agent.tools is a list[FunctionTool | callable].  MAF accepts plain
+        # async functions directly, so we can append without wrapping.
+        try:
+            if hasattr(agent, "tools") and isinstance(agent.tools, list):
+                existing_names = {
+                    getattr(getattr(t, "func", t), "__name__", None)
+                    for t in agent.tools
+                }
+                for fn in _extra_tools:
+                    if fn.__name__ not in existing_names:
+                        agent.tools.append(fn)
+                continue
+        except Exception:  # noqa: BLE001
+            pass
+
+        # ── GitHub Copilot SDK (copilot.Agent / GitHubCopilotAgent) ─────────
+        # default_options.tools is a list of callables.
+        try:
+            opts = getattr(agent, "_default_options", None)
+            if opts is not None:
+                existing = list(getattr(opts, "tools", []) or [])
+                existing_names = {
+                    getattr(fn, "__name__", None) for fn in existing
+                }
+                for fn in _extra_tools:
+                    if fn.__name__ not in existing_names:
+                        existing.append(fn)
+                opts.tools = existing
+        except Exception:  # noqa: BLE001
+            pass
+
+
 class AgentRunError(Exception):
     """Raised after an agent run fails (mutation already attempted if applicable)."""
 
@@ -144,6 +201,7 @@ async def run_agent(
                 )
 
             agents = loaded.build_agents()
+            _inject_agent_tools(agents)  # inject call_agent / call_agent_background
             final_state = await _run_with_maf_agent(
                 agents,
                 agent_name=agent_name,
@@ -324,6 +382,7 @@ async def run_agent_stream(
             )
             _inject_integrations_to_env(integrations)
             agents = loaded.build_agents()
+            _inject_agent_tools(agents)  # inject call_agent / call_agent_background
 
             if not agents:
                 raise ValueError(f"Agent {agent_name!r}: build_agents() returned empty list.")
@@ -770,6 +829,7 @@ async def _self_anneal(
                             settings,
                         )
                         agents = loaded.build_agents()
+                        _inject_agent_tools(agents)
                         result = await _run_with_maf_agent(
                             agents,
                             agent_name=agent_name,
@@ -809,6 +869,7 @@ async def _self_anneal(
                         settings,
                     )
                     agents = loaded.build_agents()
+                    _inject_agent_tools(agents)
                     result = await _run_with_maf_agent(
                         agents,
                         agent_name=agent_name,

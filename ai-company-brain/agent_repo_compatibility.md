@@ -365,6 +365,49 @@ def build_agents():
 
 > **Using `GitHubCopilotAgent` instead?** If you need Copilot-specific models, replace the `Agent` block with `GitHubCopilotAgent(name=..., instructions=..., tools=[...])`. CommandCenter automatically sets `on_permission_request = PermissionHandler.approve_all` — you do not need to configure it.
 
+### Calling another agent as a sub-task
+
+Every agent automatically gets two extra tools injected at run time — no imports needed in `agents.py`:
+
+| Tool | Behaviour |
+|---|---|
+| `call_agent(agent_name, message)` | Delegates to another registered agent and **awaits the full result** (sequential). Use when you need the response before continuing. |
+| `call_agent_background(agent_name, message)` | Dispatches to another agent and **returns immediately** (fire-and-forget). Use for parallel work you don't need to wait on. |
+
+Both tools are in `acb_skills.agent_tools` and can also be imported explicitly if you want them to appear in IDE auto-complete:
+
+```python
+# Optional explicit import — CommandCenter injects them even without this.
+from acb_skills.agent_tools import call_agent, call_agent_background
+```
+
+**Example — `agent-sales` delegating a ClickUp query to `task-manager`:**
+
+```python
+async def get_deal_tasks(deal_name: str) -> str:
+    """Find all ClickUp tasks linked to a deal and return their status."""
+    return await call_agent(
+        "task-manager",
+        f"List all tasks tagged with or mentioning the deal '{deal_name}'. "
+        f"Include assignee, due date, and current status."
+    )
+```
+
+**Example — triggering a background reconciliation without blocking:**
+
+```python
+async def trigger_nightly_reconcile(team: str) -> str:
+    """Trigger a nightly reconciliation run for a team in the background."""
+    return await call_agent_background(
+        "agent-reconciler",
+        f"Run the nightly diff for the {team} team and escalate any blockers."
+    )
+```
+
+The target agent is loaded, run, and its final response is returned as a plain string. The `agent_name` must match a name registered in the Control Plane `/agents` UI. Calling an agent that does not exist returns an error string (never raises) so your agent can handle it gracefully.
+
+> **Avoid infinite loops:** do not call an agent back to itself (`call_agent("my-own-name", ...)`). CommandCenter does not prevent this — it is the agent author's responsibility.
+
 ### How MAF maps tools and the system prompt to the LLM
 
 On every `agent.run(message)` call, MAF automatically:

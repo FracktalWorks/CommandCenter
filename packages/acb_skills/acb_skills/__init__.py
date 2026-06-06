@@ -1,4 +1,5 @@
 """Skill registry (v1) + Dynamic Agent Loader (v2) + Integration Registry."""
+from acb_skills.agent_tools import call_agent, call_agent_background
 from acb_skills.integrations import (
     IntegrationMisconfiguredError,
     IntegrationNotFoundError,
@@ -23,4 +24,7 @@ __all__ = [
     "list_registered",
     "IntegrationNotFoundError",
     "IntegrationMisconfiguredError",
+    # Agent delegation tools (auto-injected; also importable explicitly)
+    "call_agent",
+    "call_agent_background",
 ]

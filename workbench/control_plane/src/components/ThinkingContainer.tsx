@@ -257,8 +257,17 @@ function ToolRow({ event }: { event: ToolEvent }) {
       <span className="text-red-400 text-[11px]">✗</span>
     );
 
+  // Sub-agent section: shown when this is a call_agent delegation.
+  const hasSubAgent = !!event.subAgentName;
   const hasDetails =
-    (event.args && Object.keys(event.args).length > 0) || !!event.result;
+    (event.args && Object.keys(event.args).length > 0) ||
+    !!event.result ||
+    hasSubAgent;
+
+  // Auto-expand when a sub-agent is actively streaming.
+  useEffect(() => {
+    if (event.subAgentActive && !open) setOpen(true);
+  }, [event.subAgentActive, open]);
 
   return (
     <div className="rounded-md bg-zinc-900/60 overflow-hidden">
@@ -273,11 +282,15 @@ function ToolRow({ event }: { event: ToolEvent }) {
         <span className="text-zinc-300 font-medium shrink-0">
           {formatToolName(event.name)}
         </span>
-        {event.args && Object.keys(event.args).length > 0 && (
+        {event.subAgentName ? (
+          <span className="text-sky-400/70 truncate min-w-0 font-mono">
+            → {event.subAgentName}
+          </span>
+        ) : event.args && Object.keys(event.args).length > 0 ? (
           <span className="text-zinc-500 truncate min-w-0">
             {formatArgs(event.args)}
           </span>
-        )}
+        ) : null}
         {durationMs !== null && (
           <span className="ml-auto shrink-0 text-zinc-600 font-mono">
             {durationMs}ms
@@ -292,6 +305,50 @@ function ToolRow({ event }: { event: ToolEvent }) {
 
       {open && hasDetails && (
         <div className="border-t border-zinc-800 px-3 py-2 space-y-2 chat-fade-in">
+          {/* Sub-agent live stream panel */}
+          {hasSubAgent && (
+            <div className="rounded-md border border-sky-900/40 bg-zinc-950/60 overflow-hidden">
+              {/* Sub-agent header */}
+              <div className="flex items-center gap-2 px-2 py-1.5 border-b border-sky-900/30">
+                <span className="text-sky-400 text-[10px]">🤝</span>
+                <span className="text-[10px] text-sky-400 font-medium">{event.subAgentName}</span>
+                {event.subAgentActive && (
+                  <span className="ml-1 w-1.5 h-1.5 rounded-full bg-sky-400 chat-pulse-dot shrink-0" />
+                )}
+              </div>
+              {/* Sub-agent tool calls */}
+              {event.subAgentTools && event.subAgentTools.length > 0 && (
+                <div className="px-2 pt-1.5 pb-0.5 space-y-0.5">
+                  {event.subAgentTools.map((st) => (
+                    <div key={st.id} className="flex items-center gap-1.5 text-[10px] text-zinc-500 px-1">
+                      {st.status === "running" ? (
+                        <span className="w-2 h-2 rounded-full border border-sky-700 border-t-sky-400 animate-spin shrink-0" />
+                      ) : st.status === "done" ? (
+                        <span className="text-emerald-500">✓</span>
+                      ) : (
+                        <span className="text-red-400">✗</span>
+                      )}
+                      <span>{getToolIcon(st.name)}</span>
+                      <span className="text-zinc-400">{formatToolName(st.name)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* Sub-agent streaming text */}
+              {event.subAgentText && (
+                <div className="px-3 py-2">
+                  <pre className="text-zinc-400 whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed max-h-48 overflow-y-auto">
+                    {event.subAgentText}
+                    {event.subAgentActive && (
+                      <span className="inline-block w-[2px] h-[1em] bg-sky-500 animate-pulse ml-0.5 align-middle rounded-full" />
+                    )}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Standard args/result section */}
           {event.args && Object.keys(event.args).length > 0 && (
             <div>
               <div className="text-[9px] text-zinc-600 uppercase tracking-widest mb-1 font-medium">

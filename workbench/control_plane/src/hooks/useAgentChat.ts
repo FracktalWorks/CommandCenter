@@ -210,21 +210,27 @@ export function useAgentChat({
                 );
                 break;
 
-              case "tool_start":
+              case "tool_start": {
+                const toolId = String(evt.id ?? nanoid());
+                // Detect call_agent delegation: attach subAgentName so ToolRow
+                // can render the nested sub-agent section.
+                const isDelegate = String(evt.name ?? "").toLowerCase().includes("call_agent");
+                const newEvent: ToolEvent = {
+                  id: toolId,
+                  name: String(evt.name ?? "tool"),
+                  args: (evt.args as Record<string, unknown>) ?? {},
+                  status: "running",
+                  startedAt: Date.now(),
+                  ...(isDelegate ? { subAgentActive: true } : {}),
+                };
                 setMessages((prev) =>
                   prev.map((m) => {
                     if (m.id !== assistantId) return m;
-                    const newEvent: ToolEvent = {
-                      id: String(evt.id ?? nanoid()),
-                      name: String(evt.name ?? "tool"),
-                      args: (evt.args as Record<string, unknown>) ?? {},
-                      status: "running",
-                      startedAt: Date.now(),
-                    };
                     return { ...m, toolEvents: [...(m.toolEvents ?? []), newEvent] };
                   })
                 );
                 break;
+              }
 
               case "tool_end":
                 setMessages((prev) =>
@@ -245,6 +251,7 @@ export function useAgentChat({
                               result: String(evt.result ?? ""),
                               status: evt.success ? "done" : "error",
                               endedAt: Date.now(),
+                              subAgentActive: false,
                             }
                           : t
                       ),
@@ -252,6 +259,105 @@ export function useAgentChat({
                   })
                 );
                 break;
+
+              // ── Sub-agent streaming events (call_agent delegation) ───────
+              case "sub_agent_delta": {
+                // Append streaming text to the most recent call_agent tool event.
+                const targetAgent = String(evt.agentName ?? "");
+                setMessages((prev) =>
+                  prev.map((m) => {
+                    if (m.id !== assistantId) return m;
+                    const events = m.toolEvents ?? [];
+                    // Find the last call_agent-like event that is still running.
+                    const idx = [...events].reverse().findIndex(
+                      (t) => t.subAgentActive && (t.name.toLowerCase().includes("call_agent") || t.subAgentName)
+                    );
+                    if (idx === -1) return m;
+                    const realIdx = events.length - 1 - idx;
+                    const updated = events.map((t, i) =>
+                      i === realIdx
+                        ? {
+                            ...t,
+                            subAgentName: t.subAgentName ?? targetAgent,
+                            subAgentText: (t.subAgentText ?? "") + String(evt.delta ?? ""),
+                          }
+                        : t
+                    );
+                    return { ...m, toolEvents: updated };
+                  })
+                );
+                break;
+              }
+
+              case "sub_agent_tool_start": {
+                const targetAgent2 = String(evt.agentName ?? "");
+                const subToolId = String(evt.id ?? nanoid());
+                setMessages((prev) =>
+                  prev.map((m) => {
+                    if (m.id !== assistantId) return m;
+                    const events = m.toolEvents ?? [];
+                    const idx = [...events].reverse().findIndex(
+                      (t) => t.subAgentActive && (t.name.toLowerCase().includes("call_agent") || t.subAgentName)
+                    );
+                    if (idx === -1) return m;
+                    const realIdx = events.length - 1 - idx;
+                    const newSubTool = { id: subToolId, name: String(evt.name ?? "tool"), status: "running" as const };
+                    const updated = events.map((t, i) =>
+                      i === realIdx
+                        ? {
+                            ...t,
+                            subAgentName: t.subAgentName ?? targetAgent2,
+                            subAgentTools: [...(t.subAgentTools ?? []), newSubTool],
+                          }
+                        : t
+                    );
+                    return { ...m, toolEvents: updated };
+                  })
+                );
+                break;
+              }
+
+              case "sub_agent_tool_end": {
+                const subToolId2 = String(evt.id ?? "");
+                setMessages((prev) =>
+                  prev.map((m) => {
+                    if (m.id !== assistantId) return m;
+                    const events = (m.toolEvents ?? []).map((t) => {
+                      if (!t.subAgentTools) return t;
+                      return {
+                        ...t,
+                        subAgentTools: t.subAgentTools.map((st) =>
+                          st.id === subToolId2
+                            ? { ...st, result: String(evt.result ?? ""), status: evt.success ? "done" as const : "error" as const }
+                            : st
+                        ),
+                      };
+                    });
+                    return { ...m, toolEvents: events };
+                  })
+                );
+                break;
+              }
+
+              case "sub_agent_error": {
+                // Mark the active call_agent event with error status.
+                setMessages((prev) =>
+                  prev.map((m) => {
+                    if (m.id !== assistantId) return m;
+                    const events = m.toolEvents ?? [];
+                    const idx = [...events].reverse().findIndex((t) => t.subAgentActive);
+                    if (idx === -1) return m;
+                    const realIdx = events.length - 1 - idx;
+                    const updated = events.map((t, i) =>
+                      i === realIdx
+                        ? { ...t, subAgentActive: false, status: "error" as const, result: String(evt.error ?? "Sub-agent error") }
+                        : t
+                    );
+                    return { ...m, toolEvents: updated };
+                  })
+                );
+                break;
+              }
 
               case "done":
                 setMessages((prev) =>

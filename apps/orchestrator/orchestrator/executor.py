@@ -25,6 +25,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import uuid
 from pathlib import Path
@@ -39,6 +40,14 @@ from acb_skills.loader import AgentLoadError, load_agent
 _MAX_ANNEAL_ATTEMPTS = 2
 
 _log = get_logger("orchestrator.executor")
+
+# ContextVar that holds the active SSE queue for the current agent run.
+# Set by run_agent_stream so that call_agent (injected as a tool) can push
+# SUB_AGENT_* events into the parent stream, making sub-agent progress visible
+# in the UI in real time.
+_active_run_queue: contextvars.ContextVar["asyncio.Queue[dict[str, Any] | None] | None"] = (
+    contextvars.ContextVar("_active_run_queue", default=None)
+)
 
 
 def _inject_agent_tools(agents: list[Any]) -> None:
@@ -139,6 +148,149 @@ class AgentRunError(Exception):
         self.run_id = run_id
         self.original = original
         self.mutation_pr = mutation_pr
+
+
+async def _run_sub_agent_streaming(
+    agent_name: str,
+    message_str: str,
+    run_id: str,
+    event_queue: "asyncio.Queue[dict[str, Any] | None]",
+) -> str:
+    """Run a sub-agent and forward its streaming events to *event_queue*.
+
+    Called by ``call_agent`` when there is an active parent SSE queue so that
+    the sub-agent's progress is visible in the UI in real time.
+
+    Supports GitHub Copilot SDK agents (native stream) and MAF agents (batch
+    run with a single result delta at the end).
+
+    Returns the final text response.
+    """
+    settings = get_settings()
+    _repo_name: str | None = None
+    _local_path: str | None = None
+    _runtime: str = "maf"
+    try:
+        from gateway.routes.agent import (  # noqa: PLC0415
+            _AGENT_REGISTRY,
+            _load_dynamic_agents,
+        )
+        _all = _load_dynamic_agents() + _AGENT_REGISTRY
+        entry = next((e for e in _all if e["name"] == agent_name), None)
+        if entry:
+            raw = entry.get("repo_name") or ""
+            _repo_name = raw.split("/")[-1] if raw else None
+            _local_path = entry.get("local_path")
+            _runtime = entry.get("agent_runtime", "maf")
+    except (ImportError, Exception):  # noqa: BLE001
+        pass
+
+    try:
+        with load_agent(agent_name, run_id=run_id, repo_name=_repo_name, local_path=_local_path) as loaded:
+            mandatory = loaded.config.get("integrations", [])
+            optional = loaded.config.get("optional_integrations", [])
+            integrations, _ = build_integrations(mandatory, optional, settings)
+            _inject_integrations_to_env(integrations)
+            agents = loaded.build_agents()
+            _inject_agent_tools(agents)
+            if not agents:
+                return f"({agent_name!r} returned empty agent list)"
+            agent = agents[0]
+
+            # Apply permission handler for GitHub Copilot SDK agents.
+            try:
+                from copilot import PermissionHandler as _PH  # noqa: PLC0415
+                for _a in agents:
+                    if hasattr(_a, "_permission_handler") and _a._permission_handler is None:
+                        _a._permission_handler = _PH.approve_all
+            except Exception:  # noqa: BLE001
+                pass
+
+            text_parts: list[str] = []
+
+            if _runtime == "github-copilot" and hasattr(agent, "run"):
+                # Apply model override.
+                _model = (getattr(settings, "copilot_chat_model", "") or "").strip()
+                if _model:
+                    try:
+                        if hasattr(agent, "_default_options") and agent._default_options is not None:
+                            agent._default_options.model = _model
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                async with agent:
+                    stream = agent.run(message_str, stream=True)
+                    async for update in stream:
+                        for content in (update.contents or []):
+                            ct = getattr(content, "type", "")
+                            if ct == "text":
+                                delta = content.text or ""
+                                if delta:
+                                    text_parts.append(delta)
+                                    await event_queue.put({
+                                        "type": "SUB_AGENT_TEXT_DELTA",
+                                        "agentName": agent_name,
+                                        "runId": run_id,
+                                        "delta": delta,
+                                    })
+                            elif ct == "function_call":
+                                call_id = getattr(content, "call_id", run_id)
+                                tname = getattr(content, "name", "tool")
+                                args_val = getattr(content, "arguments", None)
+                                args_str = ""
+                                if args_val is not None:
+                                    try:
+                                        args_str = json.dumps(args_val) if not isinstance(args_val, str) else args_val
+                                    except Exception:  # noqa: BLE001
+                                        args_str = str(args_val)
+                                await event_queue.put({
+                                    "type": "SUB_AGENT_TOOL_CALL_START",
+                                    "agentName": agent_name,
+                                    "toolCallId": call_id,
+                                    "toolCallName": tname,
+                                    "args": args_str,
+                                })
+                            elif ct == "function_result":
+                                call_id = getattr(content, "call_id", run_id)
+                                exc_val = getattr(content, "exception", None)
+                                result_val = getattr(content, "result", "") or ""
+                                await event_queue.put({
+                                    "type": "SUB_AGENT_TOOL_CALL_RESULT",
+                                    "agentName": agent_name,
+                                    "toolCallId": call_id,
+                                    "content": str(exc_val) if exc_val else str(result_val),
+                                    "success": exc_val is None,
+                                })
+            else:
+                # MAF or unknown runtime: batch run, emit one result delta.
+                result = await run_agent(
+                    agent_name,
+                    {"message": message_str, "mode": "sub_task"},
+                    run_id=run_id,
+                )
+                text = result.get("result") or result.get("answer") or ""
+                if isinstance(text, dict):
+                    text = text.get("content", str(text))
+                final_text = str(text) if text else ""
+                if final_text:
+                    text_parts.append(final_text)
+                    await event_queue.put({
+                        "type": "SUB_AGENT_TEXT_DELTA",
+                        "agentName": agent_name,
+                        "runId": run_id,
+                        "delta": final_text,
+                    })
+
+            return "".join(text_parts) or f"({agent_name!r} returned an empty response)"
+
+    except Exception as exc:  # noqa: BLE001
+        await event_queue.put({
+            "type": "SUB_AGENT_ERROR",
+            "agentName": agent_name,
+            "runId": run_id,
+            "error": str(exc),
+        })
+        return f"Sub-task to {agent_name!r} failed: {exc}"
 
 
 async def run_agent(
@@ -440,12 +592,16 @@ async def run_agent_stream(
             # the Copilot session event bus — no 60s timeout, genuine token-by-
             # token streaming, live tool events.  This is the correct path for
             # any GitHub-sourced agent.
+            #
+            # Queue-based approach (not direct yield): the agent runs in a
+            # background task that pushes events to a queue.  The main loop
+            # drains the queue and yields SSE.  This allows tool calls
+            # (including call_agent sub-delegation) to push SUB_AGENT_* events
+            # into the same queue while the main loop is waiting — giving
+            # real-time visibility of sub-agent progress in the UI.
             if _agent_runtime == "github-copilot" and hasattr(agent, "run"):
                 try:
                     # Inject model override from settings (copilot_chat_model).
-                    # This allows the operator to pick any Copilot-API-compatible
-                    # model (gpt-4o, claude-sonnet-4-5, o3-mini…) from the
-                    # Settings → Models page without touching agent repos.
                     _configured_model = (getattr(settings, "copilot_chat_model", "") or "").strip()
                     if _configured_model:
                         for _a in agents:
@@ -456,47 +612,78 @@ async def run_agent_stream(
                                 pass
 
                     message = _build_event_message(agent_name, run_id, event_payload, integrations)
-                    async with agent:
-                        response_stream = agent.run(message, stream=True)
-                        async for update in response_stream:
-                            # update is AgentResponseUpdate; contents is list[Content]
-                            for content in (update.contents or []):
-                                ct = getattr(content, "type", "")
-                                if ct == "text":
-                                    yield _sse({
-                                        "type": "TEXT_MESSAGE_CONTENT",
-                                        "messageId": run_id,
-                                        "delta": content.text or "",
-                                    })
-                                elif ct == "function_call":
-                                    call_id = getattr(content, "call_id", run_id)
-                                    tool_name = getattr(content, "name", "tool")
-                                    args = getattr(content, "arguments", None)
-                                    yield _sse({
-                                        "type": "TOOL_CALL_START",
-                                        "toolCallId": call_id,
-                                        "toolCallName": tool_name,
-                                    })
-                                    if args is not None:
-                                        try:
-                                            args_str = json.dumps(args) if not isinstance(args, str) else args
-                                        except Exception:  # noqa: BLE001
-                                            args_str = str(args)
-                                        yield _sse({
-                                            "type": "TOOL_CALL_ARGS",
-                                            "toolCallId": call_id,
-                                            "delta": args_str,
-                                        })
-                                elif ct == "function_result":
-                                    call_id = getattr(content, "call_id", run_id)
-                                    result = getattr(content, "result", "") or ""
-                                    exc = getattr(content, "exception", None)
-                                    yield _sse({
-                                        "type": "TOOL_CALL_RESULT",
-                                        "toolCallId": call_id,
-                                        "content": str(exc) if exc else str(result),
-                                        "success": exc is None,
-                                    })
+
+                    _sdk_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+                    _sdk_token = _active_run_queue.set(_sdk_queue)
+
+                    async def _run_copilot_stream() -> None:  # noqa: PLR0912
+                        try:
+                            async with agent:
+                                response_stream = agent.run(message, stream=True)
+                                async for update in response_stream:
+                                    for content in (update.contents or []):
+                                        ct = getattr(content, "type", "")
+                                        if ct == "text":
+                                            await _sdk_queue.put({
+                                                "type": "TEXT_MESSAGE_CONTENT",
+                                                "messageId": run_id,
+                                                "delta": content.text or "",
+                                            })
+                                        elif ct == "function_call":
+                                            call_id = getattr(content, "call_id", run_id)
+                                            tool_name_fc = getattr(content, "name", "tool")
+                                            args_fc = getattr(content, "arguments", None)
+                                            await _sdk_queue.put({
+                                                "type": "TOOL_CALL_START",
+                                                "toolCallId": call_id,
+                                                "toolCallName": tool_name_fc,
+                                            })
+                                            if args_fc is not None:
+                                                try:
+                                                    args_str_fc = json.dumps(args_fc) if not isinstance(args_fc, str) else args_fc
+                                                except Exception:  # noqa: BLE001
+                                                    args_str_fc = str(args_fc)
+                                                await _sdk_queue.put({
+                                                    "type": "TOOL_CALL_ARGS",
+                                                    "toolCallId": call_id,
+                                                    "delta": args_str_fc,
+                                                })
+                                        elif ct == "function_result":
+                                            call_id = getattr(content, "call_id", run_id)
+                                            result_fr = getattr(content, "result", "") or ""
+                                            exc_fr = getattr(content, "exception", None)
+                                            await _sdk_queue.put({
+                                                "type": "TOOL_CALL_RESULT",
+                                                "toolCallId": call_id,
+                                                "content": str(exc_fr) if exc_fr else str(result_fr),
+                                                "success": exc_fr is None,
+                                            })
+                        except Exception as _e:  # noqa: BLE001
+                            await _sdk_queue.put({
+                                "type": "RUN_ERROR",
+                                "runId": run_id,
+                                "message": str(_e),
+                            })
+                        finally:
+                            await _sdk_queue.put(None)  # sentinel
+
+                    _sdk_task = asyncio.create_task(_run_copilot_stream())
+                    try:
+                        while True:
+                            try:
+                                ev = await asyncio.wait_for(_sdk_queue.get(), timeout=0.1)
+                                if ev is None:
+                                    break
+                                yield _sse(ev)
+                            except asyncio.TimeoutError:
+                                if _sdk_task.done():
+                                    while not _sdk_queue.empty():
+                                        ev = _sdk_queue.get_nowait()
+                                        if ev:
+                                            yield _sse(ev)
+                                    break
+                    finally:
+                        _active_run_queue.reset(_sdk_token)
                     yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
                     return
                 except Exception as _sdk_exc:  # noqa: BLE001
@@ -508,6 +695,7 @@ async def run_agent_stream(
             # Wrap every callable tool on the agent so it pushes tool events
             # onto a queue that we drain while the run executes in a task.
             queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+            _t2_token = _active_run_queue.set(queue)  # expose to call_agent for sub-streaming
 
             _tool_counter: list[int] = [0]
 
@@ -671,6 +859,8 @@ async def run_agent_stream(
                             if ev:
                                 yield _sse(ev)
                         break
+
+            _active_run_queue.reset(_t2_token)  # restore after drain
 
             # Restore patched tools
             for attr, _, original in patched:

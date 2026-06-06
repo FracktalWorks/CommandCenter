@@ -245,6 +245,15 @@ export async function POST(req: NextRequest): Promise<Response> {
                 out = { type: "state_delta", delta: ev.delta ?? [] };
               } else if (t === "CUSTOM") {
                 out = { type: "custom", name: ev.name ?? "", value: ev.value ?? null };
+              } else if (t === "SUB_AGENT_TEXT_DELTA") {
+                // Sub-agent live text stream (call_agent tool delegation).
+                out = { type: "sub_agent_delta", agentName: String(ev.agentName ?? ""), runId: String(ev.runId ?? ""), delta: String(ev.delta ?? "") };
+              } else if (t === "SUB_AGENT_TOOL_CALL_START") {
+                out = { type: "sub_agent_tool_start", agentName: String(ev.agentName ?? ""), id: String(ev.toolCallId ?? ""), name: String(ev.toolCallName ?? "") };
+              } else if (t === "SUB_AGENT_TOOL_CALL_RESULT") {
+                out = { type: "sub_agent_tool_end", agentName: String(ev.agentName ?? ""), id: String(ev.toolCallId ?? ""), result: String(ev.content ?? ""), success: ev.success !== false };
+              } else if (t === "SUB_AGENT_ERROR") {
+                out = { type: "sub_agent_error", agentName: String(ev.agentName ?? ""), error: String(ev.error ?? "Sub-agent error") };
               } else if (t === "RUN_FINISHED") {
                 out = { type: "done", run_id: ev.runId };
 
@@ -364,6 +373,14 @@ export async function POST(req: NextRequest): Promise<Response> {
               } else if (t === "CUSTOM") {
                 // Application-defined rich widget event (name + value payload).
                 out = { type: "custom", name: ev.name ?? "", value: ev.value ?? null };
+              } else if (t === "SUB_AGENT_TEXT_DELTA") {
+                out = { type: "sub_agent_delta", agentName: String(ev.agentName ?? ""), runId: String(ev.runId ?? ""), delta: String(ev.delta ?? "") };
+              } else if (t === "SUB_AGENT_TOOL_CALL_START") {
+                out = { type: "sub_agent_tool_start", agentName: String(ev.agentName ?? ""), id: String(ev.toolCallId ?? ""), name: String(ev.toolCallName ?? "") };
+              } else if (t === "SUB_AGENT_TOOL_CALL_RESULT") {
+                out = { type: "sub_agent_tool_end", agentName: String(ev.agentName ?? ""), id: String(ev.toolCallId ?? ""), result: String(ev.content ?? ""), success: ev.success !== false };
+              } else if (t === "SUB_AGENT_ERROR") {
+                out = { type: "sub_agent_error", agentName: String(ev.agentName ?? ""), error: String(ev.error ?? "Sub-agent error") };
               } else if (t === "RUN_FINISHED") {
 
                 out = { type: "done", run_id: ev.runId };

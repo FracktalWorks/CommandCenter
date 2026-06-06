@@ -30,6 +30,14 @@ export interface ToolEvent {
   status: "running" | "done" | "error";
   startedAt: number;
   endedAt?: number;
+  /** Set when this tool is a call_agent delegation — the target agent name. */
+  subAgentName?: string;
+  /** Live streaming text from the sub-agent (appended as it streams). */
+  subAgentText?: string;
+  /** Tool calls made by the sub-agent. */
+  subAgentTools?: Array<{id: string; name: string; result?: string; status: "running" | "done" | "error"}>;
+  /** True while the sub-agent is actively streaming. */
+  subAgentActive?: boolean;
 }
 
 interface MarkdownMessageProps {

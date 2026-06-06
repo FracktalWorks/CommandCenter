@@ -31,6 +31,11 @@ async def call_agent(agent_name: str, message: str) -> str:
     Runs the target agent synchronously and awaits the full result. Use this
     when your current task depends on the sub-agent's output before continuing.
 
+    When an active parent SSE stream exists (i.e. called from within a tool
+    dispatch during run_agent_stream), the sub-agent's tokens, tool calls, and
+    tool results are forwarded to the parent stream as SUB_AGENT_* events so
+    the UI shows the sub-agent working in real time.
+
     Available agents are registered in CommandCenter via the /agents UI page.
     Common agents: "task-manager", "agent-sales-assistant", "agent-triage",
     "agent-reconciler", "agent-delivery", or any custom agent you have added.
@@ -58,6 +63,24 @@ async def call_agent(agent_name: str, message: str) -> str:
         )
     """
     run_id = str(_uuid.uuid4())
+
+    # If there is an active parent SSE queue (set by run_agent_stream via ContextVar),
+    # stream sub-agent events through it so the UI shows progress in real time.
+    event_queue = None
+    try:
+        from orchestrator.executor import _active_run_queue  # noqa: PLC0415
+        event_queue = _active_run_queue.get(None)
+    except (ImportError, Exception):  # noqa: BLE001
+        pass
+
+    if event_queue is not None:
+        try:
+            from orchestrator.executor import _run_sub_agent_streaming  # noqa: PLC0415
+            return await _run_sub_agent_streaming(agent_name, message, run_id, event_queue)
+        except Exception as exc:  # noqa: BLE001
+            return f"Sub-task to {agent_name!r} failed: {exc}"
+
+    # Fallback: no active stream — batch path (background runs, webhooks, etc.)
     try:
         from orchestrator.executor import run_agent  # noqa: PLC0415
         result = await run_agent(

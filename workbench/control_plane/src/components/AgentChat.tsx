@@ -352,6 +352,12 @@ export default function AgentChat({
     models.find((m) => m.id === currentModel)?.label ?? currentModel;
   const modelGroups = Array.from(new Set(models.map((m) => m.group)));
 
+  // GitHub Copilot SDK agents can only use Copilot SDK models — selecting a
+  // LiteLLM model has no effect because the executor always routes through
+  // GitHubCopilotAgent.run() which uses the model baked in agents.py.
+  // We still show all models in the picker but dim + disable LiteLLM entries.
+  const isCopilotSdkAgent = agentRuntime === "github-copilot";
+
   // Searchable model picker state
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
@@ -551,6 +557,17 @@ export default function AgentChat({
                     className="w-full rounded bg-zinc-800 border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
                   />
                 </div>
+                {/* GitHub Copilot agent constraint notice */}
+                {isCopilotSdkAgent && (
+                  <div className="px-3 py-2 border-b border-zinc-800 bg-sky-950/30 text-[10px] text-sky-400/80 leading-relaxed">
+                    This agent runs on GitHub Copilot SDK — LiteLLM models are disabled.
+                    Change the model in{" "}
+                    <a href="/settings/models" className="underline hover:text-sky-300 transition-colors">
+                      Settings → Models → Copilot SDK Agent Model
+                    </a>
+                    .
+                  </div>
+                )}
                 {/* Grouped list */}
                 <div className="max-h-72 overflow-y-auto py-1">
                   {filteredGroups.length === 0 && (
@@ -563,31 +580,41 @@ export default function AgentChat({
                       </div>
                       {filteredModels
                         .filter((m) => m.group === group)
-                        .map((m) => (
-                          <button
-                            key={m.id}
-                            onClick={() => {
-                              setCurrentModel(m.id);
-                              setShowModelMenu(false);
-                              setModelSearch("");
-                            }}
-                            className={`w-full text-left px-3 py-1.5 text-xs hover:bg-zinc-800 transition-colors flex items-center justify-between gap-2 ${
-                              m.id === currentModel ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"
-                            }`}
-                          >
-                            <span className="truncate">{m.label}</span>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <span className={`text-[8px] px-1 py-0.5 rounded border ${
-                                m.runtime === "litellm"
-                                  ? "border-violet-700/40 text-violet-400"
-                                  : "border-sky-700/40 text-sky-400"
-                              }`}>
-                                {m.runtime === "litellm" ? "LiteLLM" : "SDK"}
-                              </span>
-                              {m.id === currentModel && <span className="text-emerald-500 text-[10px]">✓</span>}
-                            </div>
-                          </button>
-                        ))}
+                        .map((m) => {
+                          // LiteLLM models are not usable with Copilot SDK agents
+                          const isDisabled = isCopilotSdkAgent && m.runtime === "litellm";
+                          return (
+                            <button
+                              key={m.id}
+                              onClick={() => {
+                                if (isDisabled) return;
+                                setCurrentModel(m.id);
+                                setShowModelMenu(false);
+                                setModelSearch("");
+                              }}
+                              className={`w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center justify-between gap-2 ${
+                                isDisabled
+                                  ? "opacity-30 cursor-not-allowed"
+                                  : m.id === currentModel
+                                  ? "text-zinc-100 bg-zinc-800/60 hover:bg-zinc-800"
+                                  : "text-zinc-400 hover:bg-zinc-800"
+                              }`}
+                              title={isDisabled ? "Not available for GitHub Copilot SDK agents" : undefined}
+                            >
+                              <span className="truncate">{m.label}</span>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <span className={`text-[8px] px-1 py-0.5 rounded border ${
+                                  m.runtime === "litellm"
+                                    ? "border-violet-700/40 text-violet-400"
+                                    : "border-sky-700/40 text-sky-400"
+                                }`}>
+                                  {m.runtime === "litellm" ? "LiteLLM" : "SDK"}
+                                </span>
+                                {m.id === currentModel && !isDisabled && <span className="text-emerald-500 text-[10px]">✓</span>}
+                              </div>
+                            </button>
+                          );
+                        })}
                     </div>
                   ))}
                 </div>

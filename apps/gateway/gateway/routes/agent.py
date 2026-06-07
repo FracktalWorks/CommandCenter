@@ -898,8 +898,19 @@ async def approve_pending_commit(
                 detail=f"commit {commit_sha[:8]} not found in local clone at {clone_dir}",
             )
 
-        # Ensure HEAD points at the commit (in case the sandbox left on a detached state)
-        await _git_exec(clone_dir, ["checkout", commit_sha, "--detach"])
+        # Find the local branch that contains the commit and check it out.
+        # This avoids a detached HEAD state which breaks `git push origin HEAD`.
+        branch_proc = await asyncio.create_subprocess_exec(
+            "git", "branch", "--contains", commit_sha, "--format=%(refname:short)",
+            cwd=clone_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        branch_out, _ = await branch_proc.communicate()
+        local_branch = branch_out.decode(errors="replace").strip().splitlines()[0].strip() if branch_out else "main"
+        if not local_branch:
+            local_branch = "main"
+        await _git_exec(clone_dir, ["checkout", local_branch])
 
         # Push.  If the fast-forward fails, rebase on top of origin/HEAD and retry.
         push_ok = await _git_push_with_rebase(clone_dir)
@@ -1215,15 +1226,35 @@ async def _git_exec(cwd: str, args: list[str]) -> int:
 
 
 async def _git_push_with_rebase(clone_dir: str) -> bool:
-    """Push HEAD.  If rejected (non-fast-forward), rebase on origin/HEAD and retry.
+    """Push HEAD to the remote default branch.  If rejected, rebase and retry.
 
     Returns True on success, False on unrecoverable failure.
     """
     import asyncio  # noqa: PLC0415
 
-    # First attempt — simple push
+    # Discover the remote's default branch (HEAD branch from `git remote show origin`).
+    # Falls back to "master" then "main" if detection fails.
+    remote_branch = "master"
+    try:
+        rb_proc = await asyncio.create_subprocess_exec(
+            "git", "remote", "show", "origin",
+            cwd=clone_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        rb_out, _ = await asyncio.wait_for(rb_proc.communicate(), timeout=15)
+        for line in rb_out.decode(errors="replace").splitlines():
+            line = line.strip()
+            if line.startswith("HEAD branch:"):
+                remote_branch = line.split("HEAD branch:", 1)[1].strip()
+                break
+    except Exception:  # noqa: BLE001
+        pass
+
+    # First attempt — push HEAD to the discovered remote branch
+    push_target = f"HEAD:{remote_branch}"
     proc = await asyncio.create_subprocess_exec(
-        "git", "push", "origin", "HEAD",
+        "git", "push", "origin", push_target,
         cwd=clone_dir,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -1233,16 +1264,15 @@ async def _git_push_with_rebase(clone_dir: str) -> bool:
         return True
 
     stderr = stderr_bytes.decode(errors="replace")
-    _log.warning("mutation.push_rejected", reason=stderr[:300])
+    _log.warning("mutation.push_rejected", remote_branch=remote_branch, reason=stderr[:300])
 
-    # Fetch + rebase on top of the current remote HEAD, preferring our changes
-    # on any conflict (the mutation sandbox authored the change, take it).
+    # Fetch + rebase on top of the remote branch, then retry.
     fetch_rc = await _git_exec(clone_dir, ["fetch", "origin"])
     if fetch_rc != 0:
         return False
 
     rebase_proc = await asyncio.create_subprocess_exec(
-        "git", "rebase", "origin/HEAD",
+        "git", "rebase", f"origin/{remote_branch}",
         cwd=clone_dir,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -1262,7 +1292,7 @@ async def _git_push_with_rebase(clone_dir: str) -> bool:
 
     # Retry push
     retry_proc = await asyncio.create_subprocess_exec(
-        "git", "push", "origin", "HEAD",
+        "git", "push", "origin", push_target,
         cwd=clone_dir,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,

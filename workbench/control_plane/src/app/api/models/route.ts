@@ -44,10 +44,12 @@ export interface ModelsStatus {
 }
 
 export async function GET(): Promise<NextResponse<ModelsStatus>> {
-  const gemini    = !!process.env.GEMINI_API_KEY?.trim();
-  const openai    = !!process.env.OPENAI_API_KEY?.trim();
-  const vllm      = !!process.env.VLLM_BASE_URL?.trim();
-  const github    = !!process.env.GITHUB_TOKEN?.trim();
+  const gemini      = !!process.env.GEMINI_API_KEY?.trim();
+  const openai      = !!process.env.OPENAI_API_KEY?.trim();
+  const anthropic   = !!process.env.ANTHROPIC_API_KEY?.trim();
+  const openrouter  = !!process.env.OPENROUTER_API_KEY?.trim();
+  const vllm        = !!process.env.VLLM_BASE_URL?.trim();
+  const github      = !!process.env.GITHUB_TOKEN?.trim();
 
   const providers: ProviderInfo[] = [
     {
@@ -58,6 +60,24 @@ export async function GET(): Promise<NextResponse<ModelsStatus>> {
       tiers: ["tier1", "tier2", "tier3"],
       env_var: "GEMINI_API_KEY",
       note: "Currently backing all three tiers (2.5-flash family).",
+    },
+    {
+      id: "anthropic",
+      label: "Anthropic",
+      type: "direct",
+      available: anthropic,
+      tiers: [],
+      env_var: "ANTHROPIC_API_KEY",
+      note: "Direct Claude access. Set ANTHROPIC_API_KEY to route a tier to Claude.",
+    },
+    {
+      id: "openrouter",
+      label: "OpenRouter",
+      type: "direct",
+      available: openrouter,
+      tiers: [],
+      env_var: "OPENROUTER_API_KEY",
+      note: "200+ models via one key. Set OPENROUTER_API_KEY to use OpenRouter models.",
     },
     {
       id: "openai",

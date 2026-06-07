@@ -114,25 +114,29 @@ def _restart_litellm_bg() -> None:
 # ---------------------------------------------------------------------------
 
 _PROVIDER_ENV_MAP: dict[str, str] = {
-    "gemini":    "GEMINI_API_KEY",
-    "openai":    "OPENAI_API_KEY",
-    "github":    "GITHUB_TOKEN",    # GitHub Copilot subscription (also routes Claude)
-    "groq":      "GROQ_API_KEY",
-    "mistral":   "MISTRAL_API_KEY",
-    "together":  "TOGETHER_API_KEY",
-    "ollama":    "",        # local — always "configured" if URL reachable
-    "vllm":      "VLLM_BASE_URL",
+    "gemini":      "GEMINI_API_KEY",
+    "openai":      "OPENAI_API_KEY",
+    "anthropic":   "ANTHROPIC_API_KEY",
+    "openrouter":  "OPENROUTER_API_KEY",
+    "github":      "GITHUB_TOKEN",    # GitHub Copilot subscription (also routes Claude)
+    "groq":        "GROQ_API_KEY",
+    "mistral":     "MISTRAL_API_KEY",
+    "together":    "TOGETHER_API_KEY",
+    "ollama":      "",        # local — always "configured" if URL reachable
+    "vllm":        "VLLM_BASE_URL",
 }
 
 _PROVIDER_LABELS: dict[str, str] = {
-    "gemini":    "Google Gemini",
-    "openai":    "OpenAI",
-    "github":    "GitHub Copilot",
-    "groq":      "Groq",
-    "mistral":   "Mistral AI",
-    "together":  "Together AI",
-    "ollama":    "Ollama (local)",
-    "vllm":      "vLLM (local)",
+    "gemini":      "Google Gemini",
+    "openai":      "OpenAI",
+    "anthropic":   "Anthropic",
+    "openrouter":  "OpenRouter",
+    "github":      "GitHub Copilot",
+    "groq":        "Groq",
+    "mistral":     "Mistral AI",
+    "together":    "Together AI",
+    "ollama":      "Ollama (local)",
+    "vllm":        "vLLM (local)",
 }
 
 # GitHub Copilot proxy constants
@@ -164,6 +168,25 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "openai/gpt-4.1-mini",
         "openai/o3-mini",
         "openai/o3",
+    ],
+    "anthropic": [
+        "anthropic/claude-opus-4-5",
+        "anthropic/claude-sonnet-4-5",
+        "anthropic/claude-haiku-4-5",
+        "anthropic/claude-opus-4",
+        "anthropic/claude-sonnet-4",
+        "anthropic/claude-3-7-sonnet-latest",
+    ],
+    "openrouter": [
+        "openrouter/anthropic/claude-opus-4-5",
+        "openrouter/anthropic/claude-sonnet-4-5",
+        "openrouter/openai/gpt-4o",
+        "openrouter/openai/o3-mini",
+        "openrouter/google/gemini-2.5-pro",
+        "openrouter/google/gemini-2.5-flash",
+        "openrouter/meta-llama/llama-4-maverick",
+        "openrouter/deepseek/deepseek-r1",
+        "openrouter/qwen/qwen3-235b-a22b",
     ],
     # GitHub Copilot models — use the `github/` prefix so update_tier can detect
     # them and set the correct api_base + auth headers automatically.
@@ -223,6 +246,8 @@ def _provider_from_model(model: str) -> str:
         return "gemini"
     if model.startswith("anthropic/"):
         return "anthropic"
+    if model.startswith("openrouter/"):
+        return "openrouter"
     if model.startswith("github/"):
         return "github"
     if model.startswith("groq/"):

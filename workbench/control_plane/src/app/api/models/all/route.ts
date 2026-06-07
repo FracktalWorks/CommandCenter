@@ -61,13 +61,35 @@ const COPILOT_FALLBACK: { id: string; label: string }[] = [
 ];
 
 // LiteLLM aliases defined in infra/litellm/config.yaml (chat-capable only).
-// These are tier alternatives selected based on cost/speed/reasoning tradeoff.
-// To avoid confusion, we omit copilot/* from this list since those same models
-// are available directly under "GitHub Copilot SDK" above.
-const LITELLM_MODELS: { id: string; label: string }[] = [
-  { id: "tier1-local-qwen3", label: "Tier 1 — Gemini 2.5 Flash Lite (fast/triage)" },
-  { id: "tier2-sonnet", label: "Tier 2 — Gemini 2.5 Flash (drafting)" },
-  { id: "tier3-opus", label: "Tier 3 — Gemini 2.5 Flash (reasoning)" },
+// Grouped by provider so the picker can show them in sections.
+const LITELLM_MODELS: { id: string; label: string; group: string }[] = [
+  // Tiers — always shown first
+  { id: "tier1-local-qwen3", label: "Tier 1 — Gemini 2.5 Flash Lite (fast/triage)",  group: "LiteLLM — Tiers" },
+  { id: "tier2-sonnet",      label: "Tier 2 — Gemini 2.5 Flash (drafting)",           group: "LiteLLM — Tiers" },
+  { id: "tier3-opus",        label: "Tier 3 — Gemini 2.5 Pro (reasoning)",            group: "LiteLLM — Tiers" },
+  // Google Gemini
+  { id: "gemini/gemini-2.5-pro",        label: "Gemini 2.5 Pro",        group: "LiteLLM — Gemini" },
+  { id: "gemini/gemini-2.5-flash",      label: "Gemini 2.5 Flash",      group: "LiteLLM — Gemini" },
+  { id: "gemini/gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite", group: "LiteLLM — Gemini" },
+  // Anthropic (direct — requires ANTHROPIC_API_KEY)
+  { id: "anthropic/claude-opus-4-5",    label: "Claude Opus 4.5",    group: "LiteLLM — Anthropic" },
+  { id: "anthropic/claude-sonnet-4-5",  label: "Claude Sonnet 4.5",  group: "LiteLLM — Anthropic" },
+  { id: "anthropic/claude-haiku-4-5",   label: "Claude Haiku 4.5",   group: "LiteLLM — Anthropic" },
+  // OpenRouter (requires OPENROUTER_API_KEY — 200+ models via one key)
+  { id: "openrouter/anthropic/claude-sonnet-4-5", label: "Claude Sonnet 4.5 (OR)", group: "LiteLLM — OpenRouter" },
+  { id: "openrouter/openai/gpt-4o",               label: "GPT-4o (OR)",            group: "LiteLLM — OpenRouter" },
+  { id: "openrouter/google/gemini-2.5-pro",        label: "Gemini 2.5 Pro (OR)",    group: "LiteLLM — OpenRouter" },
+  { id: "openrouter/google/gemini-2.5-flash",      label: "Gemini 2.5 Flash (OR)",  group: "LiteLLM — OpenRouter" },
+  { id: "openrouter/meta-llama/llama-4-maverick",  label: "Llama 4 Maverick (OR)",  group: "LiteLLM — OpenRouter" },
+  { id: "openrouter/deepseek/deepseek-r1",         label: "DeepSeek R1 (OR)",       group: "LiteLLM — OpenRouter" },
+  // OpenAI (direct — requires OPENAI_API_KEY)
+  { id: "openai/gpt-4o",    label: "GPT-4o",      group: "LiteLLM — OpenAI" },
+  { id: "openai/gpt-4o-mini", label: "GPT-4o Mini", group: "LiteLLM — OpenAI" },
+  { id: "openai/o3-mini",   label: "o3-mini",     group: "LiteLLM — OpenAI" },
+  // GitHub Copilot via LiteLLM proxy
+  { id: "copilot/gpt-4o",       label: "GPT-4o (Copilot)",       group: "LiteLLM — Copilot" },
+  { id: "copilot/claude-sonnet", label: "Claude Sonnet (Copilot)", group: "LiteLLM — Copilot" },
+  { id: "copilot/o3-mini",      label: "o3-mini (Copilot)",      group: "LiteLLM — Copilot" },
 ];
 
 export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
@@ -106,7 +128,7 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
       id: m.id,
       label: m.label,
       runtime: "litellm" as ModelRuntime,
-      group: "LiteLLM (gateway)",
+      group: m.group,
     })),
   ];
 

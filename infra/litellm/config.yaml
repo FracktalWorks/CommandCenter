@@ -79,6 +79,63 @@ model_list:
       extra_headers:
         Copilot-Integration-Id: vscode-chat
 
+  # ---- Anthropic (direct) ----
+  # Set ANTHROPIC_API_KEY to enable. Claude models are available.
+  # https://docs.anthropic.com/en/api/models
+  - model_name: anthropic/claude-sonnet-4-5
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: anthropic/claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: anthropic/claude-opus-4-5
+    litellm_params:
+      model: anthropic/claude-opus-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # ---- OpenRouter ----
+  # Set OPENROUTER_API_KEY to access 200+ models via a single key.
+  # https://openrouter.ai/keys
+  - model_name: openrouter/anthropic/claude-sonnet-4-5
+    litellm_params:
+      model: openrouter/anthropic/claude-sonnet-4-5
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
+  - model_name: openrouter/openai/gpt-4o
+    litellm_params:
+      model: openrouter/openai/gpt-4o
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
+  - model_name: openrouter/google/gemini-2.5-pro
+    litellm_params:
+      model: openrouter/google/gemini-2.5-pro
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
+  - model_name: openrouter/google/gemini-2.5-flash
+    litellm_params:
+      model: openrouter/google/gemini-2.5-flash
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
+  - model_name: openrouter/meta-llama/llama-4-maverick
+    litellm_params:
+      model: openrouter/meta-llama/llama-4-maverick
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
+  - model_name: openrouter/deepseek/deepseek-r1
+    litellm_params:
+      model: openrouter/deepseek/deepseek-r1
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
 router_settings:
   # If a Gemini tier fails (quota/rate-limit/transient), automatically fall
   # back to the equivalent GitHub Copilot model. No code changes needed.

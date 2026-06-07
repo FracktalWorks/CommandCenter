@@ -56,26 +56,30 @@ interface TestResult {
 // ---------------------------------------------------------------------------
 
 const PROVIDER_COLOURS: Record<string, string> = {
-  gemini:    "bg-blue-500/15 text-blue-400 border-blue-800/40",
-  openai:    "bg-green-500/15 text-green-400 border-green-800/40",
-  github:    "bg-sky-500/15 text-sky-300 border-sky-800/40",
-  groq:      "bg-yellow-500/15 text-yellow-300 border-yellow-800/40",
-  mistral:   "bg-rose-500/15 text-rose-300 border-rose-800/40",
-  together:  "bg-teal-500/15 text-teal-300 border-teal-800/40",
-  ollama:    "bg-violet-500/15 text-violet-400 border-violet-800/40",
-  vllm:      "bg-violet-500/15 text-violet-400 border-violet-800/40",
-  unknown:   "bg-zinc-700 text-zinc-400 border-zinc-700",
+  gemini:     "bg-blue-500/15 text-blue-400 border-blue-800/40",
+  openai:     "bg-green-500/15 text-green-400 border-green-800/40",
+  anthropic:  "bg-orange-500/15 text-orange-300 border-orange-800/40",
+  openrouter: "bg-rose-500/15 text-rose-300 border-rose-800/40",
+  github:     "bg-sky-500/15 text-sky-300 border-sky-800/40",
+  groq:       "bg-yellow-500/15 text-yellow-300 border-yellow-800/40",
+  mistral:    "bg-rose-500/15 text-rose-300 border-rose-800/40",
+  together:   "bg-teal-500/15 text-teal-300 border-teal-800/40",
+  ollama:     "bg-violet-500/15 text-violet-400 border-violet-800/40",
+  vllm:       "bg-violet-500/15 text-violet-400 border-violet-800/40",
+  unknown:    "bg-zinc-700 text-zinc-400 border-zinc-700",
 };
 
 const PROVIDER_ICONS: Record<string, string> = {
-  gemini: "G",
-  openai: "⬡",
-  github: "✦",
-  groq: "⚡",
-  mistral: "M",
-  together: "T",
-  ollama: "🦙",
-  vllm: "⚡",
+  gemini:     "G",
+  openai:     "⬡",
+  anthropic:  "◆",
+  openrouter: "⊕",
+  github:     "✦",
+  groq:       "⚡",
+  mistral:    "M",
+  together:   "T",
+  ollama:     "🦙",
+  vllm:       "⚡",
 };
 
 // ---------------------------------------------------------------------------

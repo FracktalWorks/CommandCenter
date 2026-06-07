@@ -27,10 +27,11 @@ const MODELS_FALLBACK: UnifiedModel[] = [
   { id: "claude-sonnet-4.5",  label: "Claude Sonnet 4.5",  runtime: "copilot", group: "GitHub Copilot SDK" },
   { id: "claude-haiku-4.5",   label: "Claude Haiku 4.5",   runtime: "copilot", group: "GitHub Copilot SDK" },
   { id: "gpt-5.5",            label: "GPT 5.5",            runtime: "copilot", group: "GitHub Copilot SDK" },
-  { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", runtime: "copilot", group: "GitHub Copilot SDK" },
-  { id: "tier1-local-qwen3",  label: "Tier 1 — Gemini 2.5 Flash Lite (fast/triage)",  runtime: "litellm", group: "LiteLLM (tier routing)" },
-  { id: "tier2-sonnet",       label: "Tier 2 — Gemini 2.5 Flash (drafting)",  runtime: "litellm", group: "LiteLLM (tier routing)" },
-  { id: "tier3-opus",         label: "Tier 3 — Gemini 2.5 Flash (reasoning)", runtime: "litellm", group: "LiteLLM (tier routing)" },
+  { id: "tier1-local-qwen3",  label: "Tier 1 — Gemini 2.5 Flash Lite", runtime: "litellm", group: "LiteLLM — Tiers" },
+  { id: "tier2-sonnet",       label: "Tier 2 — Gemini 2.5 Flash",      runtime: "litellm", group: "LiteLLM — Tiers" },
+  { id: "tier3-opus",         label: "Tier 3 — Gemini 2.5 Pro",        runtime: "litellm", group: "LiteLLM — Tiers" },
+  { id: "anthropic/claude-sonnet-4-5", label: "Claude Sonnet 4.5", runtime: "litellm", group: "LiteLLM — Anthropic" },
+  { id: "anthropic/claude-haiku-4-5",  label: "Claude Haiku 4.5",  runtime: "litellm", group: "LiteLLM — Anthropic" },
 ];
 
 type SendMode = "send" | "queue" | "steer";
@@ -352,6 +353,34 @@ export default function AgentChat({
     models.find((m) => m.id === currentModel)?.label ?? currentModel;
   const modelGroups = Array.from(new Set(models.map((m) => m.group)));
 
+  // Searchable model picker state
+  const [showModelMenu, setShowModelMenu] = useState(false);
+  const [modelSearch, setModelSearch] = useState("");
+  const modelMenuRef = useRef<HTMLDivElement>(null);
+
+  const filteredModels = modelSearch.trim()
+    ? models.filter(
+        (m) =>
+          m.label.toLowerCase().includes(modelSearch.toLowerCase()) ||
+          m.id.toLowerCase().includes(modelSearch.toLowerCase()) ||
+          m.group.toLowerCase().includes(modelSearch.toLowerCase())
+      )
+    : models;
+  const filteredGroups = Array.from(new Set(filteredModels.map((m) => m.group)));
+
+  // Close model menu on outside click
+  useEffect(() => {
+    if (!showModelMenu) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (modelMenuRef.current && !modelMenuRef.current.contains(e.target as Node)) {
+        setShowModelMenu(false);
+        setModelSearch("");
+      }
+    };
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [showModelMenu]);
+
   /** Display label + styling for an agent_runtime value. */
   function agentRuntimeMeta(rt: string): { label: string; title: string; cls: string } {
     if (rt === "github-copilot") {
@@ -497,25 +526,75 @@ export default function AgentChat({
 
       {/* VS Code-style toolbar: model picker + agent switcher */}
       <div className="shrink-0 border-t border-zinc-800 bg-zinc-900/60 px-4 py-2 flex items-center gap-2">
-        {/* Model picker */}
-        <div className="flex items-center gap-1.5">
+        {/* Model picker — searchable custom dropdown */}
+        <div className="flex items-center gap-1.5" ref={modelMenuRef}>
           <span className="text-[10px] text-zinc-600 uppercase tracking-wide">Model</span>
-          <select
-            value={currentModel}
-            onChange={(e) => setCurrentModel(e.target.value)}
-            disabled={isLoading}
-            className="text-xs bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1 text-zinc-300 focus:outline-none focus:border-zinc-500 disabled:opacity-50 cursor-pointer max-w-[200px]"
-          >
-            {modelGroups.map((group) => (
-              <optgroup key={group} label={group}>
-                {models
-                  .filter((m) => m.group === group)
-                  .map((m) => (
-                    <option key={m.id} value={m.id}>{m.label}</option>
+          <div className="relative">
+            <button
+              onClick={() => { setShowModelMenu((v) => !v); setModelSearch(""); }}
+              disabled={isLoading}
+              className="flex items-center gap-1.5 text-xs bg-zinc-800 border border-zinc-700 rounded-md px-2.5 py-1 text-zinc-300 hover:border-zinc-500 focus:outline-none disabled:opacity-50 transition-colors max-w-[220px]"
+            >
+              <span className="truncate">{currentModelLabel}</span>
+              <span className="text-zinc-500 ml-0.5 shrink-0">▾</span>
+            </button>
+
+            {showModelMenu && (
+              <div className="absolute bottom-full left-0 mb-1 w-72 rounded-lg border border-zinc-700 bg-zinc-900 shadow-2xl z-50 overflow-hidden">
+                {/* Search */}
+                <div className="p-2 border-b border-zinc-800">
+                  <input
+                    autoFocus
+                    type="text"
+                    placeholder="Search models…"
+                    value={modelSearch}
+                    onChange={(e) => setModelSearch(e.target.value)}
+                    className="w-full rounded bg-zinc-800 border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
+                  />
+                </div>
+                {/* Grouped list */}
+                <div className="max-h-72 overflow-y-auto py-1">
+                  {filteredGroups.length === 0 && (
+                    <div className="px-3 py-2 text-xs text-zinc-600 italic">No models match</div>
+                  )}
+                  {filteredGroups.map((group) => (
+                    <div key={group}>
+                      <div className="px-3 pt-2 pb-1 text-[9px] text-zinc-600 uppercase tracking-wider font-semibold">
+                        {group}
+                      </div>
+                      {filteredModels
+                        .filter((m) => m.group === group)
+                        .map((m) => (
+                          <button
+                            key={m.id}
+                            onClick={() => {
+                              setCurrentModel(m.id);
+                              setShowModelMenu(false);
+                              setModelSearch("");
+                            }}
+                            className={`w-full text-left px-3 py-1.5 text-xs hover:bg-zinc-800 transition-colors flex items-center justify-between gap-2 ${
+                              m.id === currentModel ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"
+                            }`}
+                          >
+                            <span className="truncate">{m.label}</span>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <span className={`text-[8px] px-1 py-0.5 rounded border ${
+                                m.runtime === "litellm"
+                                  ? "border-violet-700/40 text-violet-400"
+                                  : "border-sky-700/40 text-sky-400"
+                              }`}>
+                                {m.runtime === "litellm" ? "LiteLLM" : "SDK"}
+                              </span>
+                              {m.id === currentModel && <span className="text-emerald-500 text-[10px]">✓</span>}
+                            </div>
+                          </button>
+                        ))}
+                    </div>
                   ))}
-              </optgroup>
-            ))}
-          </select>
+                </div>
+              </div>
+            )}
+          </div>
           <span
             className={`text-[9px] px-1.5 py-0.5 rounded-full border ${
               currentRuntime === "litellm"

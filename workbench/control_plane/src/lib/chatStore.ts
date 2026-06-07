@@ -76,14 +76,21 @@ const _store = new Map<string, SessionStreamState>();
 const _listeners = new Map<string, Set<() => void>>();
 
 export function getSessionState(id: string): SessionStreamState {
-  return _store.get(id) ?? _defaultState();
+  // Always return the stored entry — never create a transient object.
+  // useSyncExternalStore requires getSnapshot to return the SAME reference
+  // when the state hasn't changed; a fresh _defaultState() on every call
+  // causes React to see a "new" state on every render → infinite loop.
+  if (!_store.has(id)) {
+    _store.set(id, _defaultState());
+  }
+  return _store.get(id)!;
 }
 
 export function setSessionState(
   id: string,
   updater: (prev: SessionStreamState) => SessionStreamState,
 ): void {
-  const prev = _store.get(id) ?? _defaultState();
+  const prev = getSessionState(id); // uses the cached entry, never a transient object
   const next = updater(prev);
   _store.set(id, next);
   // Notify all subscribers for this session.

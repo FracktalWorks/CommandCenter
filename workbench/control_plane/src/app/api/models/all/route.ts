@@ -95,19 +95,48 @@ const LITELLM_MODELS: { id: string; label: string; group: string; provider: stri
 ];
 
 export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
-  // ── Detect configured providers from env vars ─────────────────────────────
-  // These are read server-side in the Next.js API route so the check is free
-  // (no extra gateway round-trip) and always reflects the current .env state.
+  const INTERNAL_TOKEN =
+    process.env.GATEWAY_INTERNAL_TOKEN ??
+    process.env.LITELLM_MASTER_KEY ??
+    "sk-local-dev-change-me";
+
+  // ── Get live provider status from the gateway ─────────────────────────────
+  // The gateway writes keys to os.environ immediately when saved, so it always
+  // has up-to-date knowledge of which providers are configured.  Next.js
+  // process.env is only populated at startup and goes stale after keys are
+  // added via the Settings page — never use process.env for this check.
   const configured = new Set<string>();
-  if (process.env.GEMINI_API_KEY?.trim())      configured.add("gemini");
-  if (process.env.ANTHROPIC_API_KEY?.trim())   configured.add("anthropic");
-  if (process.env.OPENROUTER_API_KEY?.trim())  configured.add("openrouter");
-  if (process.env.OPENAI_API_KEY?.trim())      configured.add("openai");
-  if (process.env.GITHUB_TOKEN?.trim())        configured.add("github");
-  if (process.env.GROQ_API_KEY?.trim())        configured.add("groq");
-  if (process.env.MISTRAL_API_KEY?.trim())     configured.add("mistral");
-  if (process.env.TOGETHER_API_KEY?.trim())    configured.add("together");
-  if (process.env.VLLM_BASE_URL?.trim())       configured.add("vllm");
+  let gatewayReachable = false;
+  try {
+    const provRes = await fetch(`${GATEWAY_URL}/settings/llm`, {
+      headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+      signal: AbortSignal.timeout(3_000),
+    });
+    if (provRes.ok) {
+      const data = (await provRes.json()) as { providers?: { id: string; configured: boolean }[] };
+      if (Array.isArray(data.providers)) {
+        for (const p of data.providers) {
+          if (p.configured) configured.add(p.id);
+        }
+        gatewayReachable = true;
+      }
+    }
+  } catch {
+    // Gateway unreachable — fall back to process.env so the picker still works
+  }
+
+  // Fallback: read process.env when gateway is unreachable (dev / cold start)
+  if (!gatewayReachable) {
+    if (process.env.GEMINI_API_KEY?.trim())      configured.add("gemini");
+    if (process.env.ANTHROPIC_API_KEY?.trim())   configured.add("anthropic");
+    if (process.env.OPENROUTER_API_KEY?.trim())  configured.add("openrouter");
+    if (process.env.OPENAI_API_KEY?.trim())      configured.add("openai");
+    if (process.env.GITHUB_TOKEN?.trim())        configured.add("github");
+    if (process.env.GROQ_API_KEY?.trim())        configured.add("groq");
+    if (process.env.MISTRAL_API_KEY?.trim())     configured.add("mistral");
+    if (process.env.TOGETHER_API_KEY?.trim())    configured.add("together");
+    if (process.env.VLLM_BASE_URL?.trim())       configured.add("vllm");
+  }
 
   // ── GitHub Copilot SDK model list ─────────────────────────────────────────
   // Fetched live from the gateway when GITHUB_TOKEN is set; fallback otherwise.

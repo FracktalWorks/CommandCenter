@@ -21,14 +21,16 @@ import MessageActionBar from "@/components/MessageActionBar";
 import GenerativeUIPanel from "@/components/GenerativeUIPanel";
 import { getMessages, saveMessages, fetchMessagesFromDb, type PersistedMessage } from "@/lib/sessions";
 
-// Unified model fallback — overridden at runtime from /api/models/all.
-// Only includes always-available models (tiers + auto SDK).
-// Provider-specific models are added dynamically when keys are configured.
+// Unified model fallback — shown while /api/models/all is loading.
+// Always includes the tiers (always accessible) and Gemini models (default provider).
+// Provider-specific models for other providers are added dynamically after fetch.
 const MODELS_FALLBACK: UnifiedModel[] = [
-  { id: "auto",          label: "auto (SDK picks)",       runtime: "copilot", group: "GitHub Copilot SDK" },
-  { id: "tier1-local-qwen3", label: "Tier 1 (fast / cheap)",   runtime: "litellm", group: "LiteLLM — Tiers" },
-  { id: "tier2-sonnet",      label: "Tier 2 (balanced)",        runtime: "litellm", group: "LiteLLM — Tiers" },
-  { id: "tier3-opus",        label: "Tier 3 (powerful)",        runtime: "litellm", group: "LiteLLM — Tiers" },
+  { id: "auto",              label: "auto (SDK picks)",     runtime: "copilot", group: "GitHub Copilot SDK" },
+  { id: "tier1-local-qwen3", label: "Tier 1 (fast / cheap)", runtime: "litellm", group: "LiteLLM — Tiers" },
+  { id: "tier2-sonnet",      label: "Tier 2 (balanced)",     runtime: "litellm", group: "LiteLLM — Tiers" },
+  { id: "tier3-opus",        label: "Tier 3 (powerful)",     runtime: "litellm", group: "LiteLLM — Tiers" },
+  { id: "gemini/gemini-2.5-flash", label: "Gemini 2.5 Flash", runtime: "litellm", group: "LiteLLM — Gemini" },
+  { id: "gemini/gemini-2.5-pro",   label: "Gemini 2.5 Pro",   runtime: "litellm", group: "LiteLLM — Gemini" },
 ];
 
 type SendMode = "send" | "queue" | "steer";

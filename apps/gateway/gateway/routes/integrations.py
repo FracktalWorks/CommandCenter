@@ -282,12 +282,28 @@ def _is_configured(service_name: str, settings: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 # Allowed env var keys — only these may be written via the API.
-# Derived from all env_vars in _SETUP_GUIDES to prevent arbitrary file writes.
+# Derived from all env_vars in _SETUP_GUIDES (business integrations) PLUS
+# the LLM provider keys used by Settings → Models.  This allows the
+# /integrations/configure endpoint to serve as the fallback write path for
+# LLM provider keys when the gateway is running code that predates the
+# /settings/llm/key endpoint's knowledge of those providers.
 _ALLOWED_ENV_KEYS: frozenset[str] = frozenset(
     var["key"]
     for guide in _SETUP_GUIDES.values()
     for var in guide["env_vars"]
-)
+) | frozenset({
+    # LLM provider keys (Settings → Models page)
+    "GEMINI_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GROQ_API_KEY",
+    "MISTRAL_API_KEY",
+    "TOGETHER_API_KEY",
+    "VLLM_BASE_URL",
+    "LITELLM_MASTER_KEY",
+    "COPILOT_CHAT_MODEL",
+})
 
 
 def _find_env_file() -> Path:

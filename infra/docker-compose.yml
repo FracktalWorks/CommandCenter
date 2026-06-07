@@ -77,7 +77,6 @@ services:
       # a login prompt in local dev. Change these in prod via infra/.env.
       UI_USERNAME: ${LITELLM_UI_USERNAME:-admin}
       UI_PASSWORD: ${LITELLM_UI_PASSWORD:-admin}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY:    ${OPENAI_API_KEY:-}
       GEMINI_API_KEY:    ${GEMINI_API_KEY:-}
       GITHUB_TOKEN:      ${GITHUB_TOKEN:-}
@@ -130,3 +129,37 @@ services:
 volumes:
   acb-postgres-data:
   acb-redis-data:
+  acb-neo4j-data:
+  acb-neo4j-logs:
+
+  # ---------------------------------------------------------------------------
+  # Neo4j — Graphiti bi-temporal KG backend (WBS 2.5).
+  # Profile: memory  →  docker compose --profile memory up -d neo4j
+  # Default credentials: neo4j / acb_neo4j_change_me  (override via .env)
+  # Web UI: http://localhost:7474
+  # ---------------------------------------------------------------------------
+neo4j:
+    image: neo4j:5.20-community
+    container_name: acb-neo4j
+    <<: *restart
+    profiles: ["memory"]
+    mem_limit: 1g
+    memswap_limit: 1g
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-acb_neo4j_change_me}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_memory_heap_initial__size: 256m
+      NEO4J_dbms_memory_heap_max__size: 512m
+      NEO4J_dbms_memory_pagecache_size: 128m
+    ports:
+      - "7474:7474"   # HTTP / browser UI
+      - "7687:7687"   # Bolt
+    volumes:
+      - acb-neo4j-data:/data
+      - acb-neo4j-logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s

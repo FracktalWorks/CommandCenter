@@ -54,7 +54,8 @@ nano /opt/acb/app/.env
 ```
 
 Set at minimum:
-- `ANTHROPIC_API_KEY` (Tier 1/2/3)
+- `GEMINI_API_KEY` (Tier 1/2/3 — primary LLM provider)
+- `GITHUB_TOKEN` (Tier fallback + Claude via Copilot; needs `copilot` scope)
 - `POSTGRES_PASSWORD` (any long random string)
 - `LITELLM_MASTER_KEY` (any long random string)
 - `GATEWAY_SESSION_SECRET` (random)
@@ -102,6 +103,6 @@ LiteLLM stays on the internal Docker network — never exposed publicly.
 
 - VPS (KVM 4): ~$29/mo
 - Vexa compute (when Phase 2 lands): ~€0.05–0.15/meeting
-- LLM API (Anthropic): cost metered via LiteLLM; tuned per ADR-008 caching strategy
+- LLM API (Gemini + GitHub Copilot): cost metered via LiteLLM; tuned per ADR-008 caching strategy
 
 Stay well under the per-month budget by keeping Tier 1 on a cheap model (Haiku, then Qwen3 once a GPU host is added) and enforcing prompt caching in `litellm/config.yaml`.

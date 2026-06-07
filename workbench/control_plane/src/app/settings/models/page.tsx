@@ -58,7 +58,6 @@ interface TestResult {
 const PROVIDER_COLOURS: Record<string, string> = {
   gemini:    "bg-blue-500/15 text-blue-400 border-blue-800/40",
   openai:    "bg-green-500/15 text-green-400 border-green-800/40",
-  anthropic: "bg-orange-500/15 text-orange-400 border-orange-800/40",
   github:    "bg-sky-500/15 text-sky-300 border-sky-800/40",
   groq:      "bg-yellow-500/15 text-yellow-300 border-yellow-800/40",
   mistral:   "bg-rose-500/15 text-rose-300 border-rose-800/40",
@@ -71,7 +70,6 @@ const PROVIDER_COLOURS: Record<string, string> = {
 const PROVIDER_ICONS: Record<string, string> = {
   gemini: "G",
   openai: "⬡",
-  anthropic: "A",
   github: "✦",
   groq: "⚡",
   mistral: "M",

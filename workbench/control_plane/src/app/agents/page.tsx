@@ -15,9 +15,279 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { AgentEntry } from "@/app/api/agent/list/route";
+import type { MutationEntry } from "@/app/api/agent/mutations/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 import type { ModelsStatus, ProviderInfo } from "@/app/api/models/route";
 import GitHubDeviceConnect from "@/components/GitHubDeviceConnect";
+
+// ---------------------------------------------------------------------------
+// Pending commits panel (GitHub Copilot agents only)
+// ---------------------------------------------------------------------------
+
+function PendingCommits({ agentName }: { agentName: string }) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<MutationEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [fetched, setFetched] = useState(false);
+  const [busy, setBusy] = useState<Record<string, "approve" | "reject" | "remutate" | "dismiss">>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [expandDiff, setExpandDiff] = useState<Record<string, boolean>>({});
+  const [diffs, setDiffs] = useState<Record<string, string>>({});
+
+  const fetchRows = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/agent/mutations");
+      const all: MutationEntry[] = res.ok ? await res.json() : [];
+      setRows(all.filter((r) => r.agent === agentName));
+    } catch {
+      setRows([]);
+    } finally {
+      setLoading(false);
+      setFetched(true);
+    }
+  }, [agentName]);
+
+  const toggle = () => {
+    if (!open && !fetched) fetchRows();
+    setOpen((v) => !v);
+  };
+
+  const act = async (id: string, action: "approve" | "reject") => {
+    setBusy((b) => ({ ...b, [id]: action }));
+    setErrors((e) => { const c = { ...e }; delete c[id]; return c; });
+    try {
+      const res = await fetch(`/api/agent/mutations/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setErrors((e) => ({ ...e, [id]: body.detail ?? body.error ?? `HTTP ${res.status}` }));
+      } else {
+        await fetchRows();
+      }
+    } catch (err) {
+      setErrors((e) => ({ ...e, [id]: String(err) }));
+    } finally {
+      setBusy((b) => { const c = { ...b }; delete c[id]; return c; });
+    }
+  };
+
+  const remutate = async (id: string) => {
+    setBusy((b) => ({ ...b, [id]: "remutate" }));
+    setErrors((e) => { const c = { ...e }; delete c[id]; return c; });
+    try {
+      const res = await fetch(`/api/agent/mutations/${encodeURIComponent(id)}/remutate`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErrors((e) => ({ ...e, [id]: body.detail ?? body.error ?? `HTTP ${res.status}` }));
+      } else {
+        // Show the gateway's message briefly then refresh
+        setErrors((e) => ({ ...e, [id]: body.message ?? "Commit cleared. Trigger a fresh agent run to re-attempt." }));
+        await fetchRows();
+      }
+    } catch (err) {
+      setErrors((e) => ({ ...e, [id]: String(err) }));
+    } finally {
+      setBusy((b) => { const c = { ...b }; delete c[id]; return c; });
+    }
+  };
+
+  const dismiss = async (runId: string) => {
+    setBusy((b) => ({ ...b, [runId]: "dismiss" }));
+    try {
+      await fetch(`/api/agent/mutations/${encodeURIComponent(runId)}/dismiss`, { method: "DELETE" });
+      await fetchRows();
+    } finally {
+      setBusy((b) => { const c = { ...b }; delete c[runId]; return c; });
+    }
+  };
+
+  const deleteCommit = async (id: string) => {
+    setBusy((b) => ({ ...b, [id]: "dismiss" }));
+    try {
+      await fetch(`/api/agent/mutations/${encodeURIComponent(id)}/delete`, { method: "DELETE" });
+      await fetchRows();
+    } finally {
+      setBusy((b) => { const c = { ...b }; delete c[id]; return c; });
+    }
+  };
+
+  const loadDiff = async (id: string) => {
+    if (diffs[id] !== undefined) { setExpandDiff((d) => ({ ...d, [id]: !d[id] })); return; }
+    try {
+      const res = await fetch(`/api/agent/mutations/${encodeURIComponent(id)}/diff`);
+      const data = await res.json();
+      setDiffs((d) => ({ ...d, [id]: typeof data.diff_text === "string" ? data.diff_text : JSON.stringify(data) }));
+      setExpandDiff((d) => ({ ...d, [id]: true }));
+    } catch {
+      setDiffs((d) => ({ ...d, [id]: "Failed to load diff." }));
+      setExpandDiff((d) => ({ ...d, [id]: true }));
+    }
+  };
+
+  const pending = rows.filter((r) => r.type === "pending_commit" && r.status === "pending");
+  const evalFailed = rows.filter((r) => r.type === "pending_commit" && r.status === "eval_failed");
+  const others = rows.filter((r) => !(r.type === "pending_commit" && (r.status === "pending" || r.status === "eval_failed")));
+  const pendingCount = pending.length + evalFailed.length;
+
+  return (
+    <div className="mt-3 border-t border-zinc-800 pt-3">
+      <button
+        onClick={toggle}
+        className="flex items-center gap-2 text-xs text-zinc-500 hover:text-zinc-300 transition-colors w-full text-left"
+      >
+        <span className="font-medium">Self-mutation commits</span>
+        {pendingCount > 0 && (
+          <span className="rounded-full bg-blue-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+            {pendingCount}
+          </span>
+        )}
+        {loading && <span className="text-[10px] text-zinc-600">loading…</span>}
+        <span className="ml-auto text-zinc-700">{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div className="mt-2 flex flex-col gap-2">
+          {fetched && rows.length === 0 && (
+            <p className="text-xs text-zinc-700 italic">No commits yet.</p>
+          )}
+
+          {[...evalFailed, ...pending, ...others].map((m, i) => {
+            const key = m.id ?? m.run_id ?? String(i);
+            const isPending = m.type === "pending_commit" && m.status === "pending";
+            const isEvalFailed = m.type === "pending_commit" && m.status === "eval_failed";
+            const isAudit = m.type === "audit_event";
+            return (
+              <div
+                key={key}
+                className={`relative rounded-lg border p-3 text-xs ${
+                  isEvalFailed ? "border-amber-800/50 bg-amber-950/20" :
+                  isPending ? "border-blue-800/50 bg-blue-950/20" : "border-zinc-800 bg-zinc-900/40"
+                }`}
+              >
+                {/* X delete button */}
+                <button
+                  onClick={() => isAudit && m.run_id ? dismiss(m.run_id) : m.id ? deleteCommit(m.id) : undefined}
+                  disabled={!!busy[key]}
+                  className="absolute top-2 right-2 rounded p-0.5 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors disabled:opacity-30"
+                  title="Delete"
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+                {/* Status badge + commit message */}
+                <div className="flex items-start gap-2 pr-5">
+                  <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${
+                    isEvalFailed ? "border-amber-600/50 bg-amber-900/30 text-amber-300" :
+                    isPending ? "border-blue-700/50 bg-blue-900/30 text-blue-300" :
+                    m.status === "approved" ? "border-emerald-700/50 bg-emerald-900/30 text-emerald-300" :
+                    m.status === "rejected" ? "border-zinc-700/50 bg-zinc-800 text-zinc-500" :
+                    m.status === "failed" ? "border-red-700/50 bg-red-900/30 text-red-300" :
+                    "border-zinc-700/50 bg-zinc-800 text-zinc-500"
+                  }`}>
+                    {isEvalFailed ? "⚠ Eval failed" :
+                     isPending ? "Awaiting review" :
+                     m.status === "approved" ? "Approved" :
+                     m.status === "rejected" ? "Rejected" :
+                     m.status === "failed" ? "Failed" :
+                     m.status}
+                  </span>
+                  {m.commit_message && (
+                    <span className="font-mono text-zinc-300 line-clamp-1">{m.commit_message}</span>
+                  )}
+                </div>
+
+                {/* SHA + timestamp */}
+                <div className="mt-1 flex items-center gap-3 text-zinc-600">
+                  {m.commit_sha && <span className="font-mono">{m.commit_sha.slice(0, 8)}</span>}
+                  <span>{new Date(m.at).toLocaleString("en-IN")}</span>
+                  {m.reviewed_by && <span>· {m.reviewed_by}</span>}
+                </div>
+
+                {m.test_summary && (
+                  <div className={`mt-1 ${isEvalFailed ? "text-amber-500/80" : "text-zinc-500"}`}>
+                    {m.test_summary}
+                  </div>
+                )}
+
+                {/* Diff toggle */}
+                {m.id && (
+                  <button
+                    onClick={() => loadDiff(m.id!)}
+                    className="mt-1.5 text-zinc-600 hover:text-zinc-400 underline underline-offset-2"
+                  >
+                    {expandDiff[m.id] ? "Hide diff" : "Show diff"}
+                  </button>
+                )}
+                {m.id && expandDiff[m.id] && diffs[m.id] !== undefined && (
+                  <pre className="mt-2 overflow-x-auto max-h-48 rounded bg-zinc-950 p-2 text-[10px] text-zinc-400 border border-zinc-800 whitespace-pre-wrap">
+                    {diffs[m.id] || "(empty diff)"}
+                  </pre>
+                )}
+
+                {errors[key] && (
+                  <p className="mt-1.5 text-red-400">{errors[key]}</p>
+                )}
+
+                {/* Actions — eval_failed: Push Anyway / Reject / Re-mutate */}
+                {isEvalFailed && m.id && (
+                  <div className="mt-2 flex flex-col gap-1.5">
+                    <p className="text-[10px] text-amber-500/70 mb-0.5">
+                      Tests failed. Review the diff before pushing.
+                    </p>
+                    <div className="flex gap-1.5 flex-wrap">
+                      <button
+                        disabled={!!busy[m.id]}
+                        onClick={() => act(m.id!, "approve")}
+                        className="rounded bg-amber-800/50 px-2.5 py-1 text-amber-200 hover:bg-amber-700/60 disabled:opacity-50 transition-colors"
+                      >
+                        {busy[m.id] === "approve" ? "Pushing…" : "Push Anyway"}
+                      </button>
+                      <button
+                        disabled={!!busy[m.id]}
+                        onClick={() => remutate(m.id!)}
+                        className="rounded bg-blue-900/40 px-2.5 py-1 text-blue-300 hover:bg-blue-800/50 disabled:opacity-50 transition-colors"
+                      >
+                        {busy[m.id] === "remutate" ? "Resetting…" : "Re-mutate"}
+                      </button>
+                      <button
+                        disabled={!!busy[m.id]}
+                        onClick={() => act(m.id!, "reject")}
+                        className="rounded bg-red-900/40 px-2.5 py-1 text-red-300 hover:bg-red-800/50 disabled:opacity-50 transition-colors"
+                      >
+                        {busy[m.id] === "reject" ? "Rejecting…" : "Reject"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Actions — pending: Approve & Push / Reject */}
+                {isPending && m.id && (
+                  <div className="mt-2 flex gap-1.5">
+                    <button
+                      disabled={!!busy[m.id]}
+                      onClick={() => act(m.id!, "approve")}
+                      className="rounded bg-emerald-800/60 px-2.5 py-1 text-emerald-200 hover:bg-emerald-700/60 disabled:opacity-50 transition-colors"
+                    >
+                      {busy[m.id] === "approve" ? "Approving…" : "Approve & Push"}
+                    </button>
+                    <button
+                      disabled={!!busy[m.id]}
+                      onClick={() => act(m.id!, "reject")}
+                      className="rounded bg-red-900/40 px-2.5 py-1 text-red-300 hover:bg-red-800/50 disabled:opacity-50 transition-colors"
+                    >
+                      {busy[m.id] === "reject" ? "Rejecting…" : "Reject"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -530,7 +800,6 @@ function AddAgentModal({
 
 const PROVIDER_ICON: Record<string, string> = {
   gemini: "G",
-  anthropic: "A",
   openai: "⊕",
   vllm: "⚡",
   "github-copilot": "",
@@ -922,6 +1191,11 @@ function AgentCard({
               </div>
             );
           })()}
+
+          {/* Pending self-mutation commits — GitHub Copilot agents only */}
+          {agent.agent_runtime === "github-copilot" && (
+            <PendingCommits agentName={agent.name} />
+          )}
         </div>
 
         {/* Action buttons */}

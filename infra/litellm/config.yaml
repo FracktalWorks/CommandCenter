@@ -97,7 +97,7 @@ litellm_settings:
   cache_params:
     type: redis
     url: redis://redis:6379
-  # Anthropic + OpenAI prompt caching is on by default per ADR-008.
+  # OpenAI prompt caching is on by default per ADR-008.
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY

@@ -45,7 +45,6 @@ export interface ModelsStatus {
 
 export async function GET(): Promise<NextResponse<ModelsStatus>> {
   const gemini    = !!process.env.GEMINI_API_KEY?.trim();
-  const anthropic = !!process.env.ANTHROPIC_API_KEY?.trim();
   const openai    = !!process.env.OPENAI_API_KEY?.trim();
   const vllm      = !!process.env.VLLM_BASE_URL?.trim();
   const github    = !!process.env.GITHUB_TOKEN?.trim();
@@ -59,15 +58,6 @@ export async function GET(): Promise<NextResponse<ModelsStatus>> {
       tiers: ["tier1", "tier2", "tier3"],
       env_var: "GEMINI_API_KEY",
       note: "Currently backing all three tiers (2.5-flash family).",
-    },
-    {
-      id: "anthropic",
-      label: "Anthropic (Claude)",
-      type: "direct",
-      available: anthropic,
-      tiers: ["tier2", "tier3"],
-      env_var: "ANTHROPIC_API_KEY",
-      note: "Uncomment in infra/litellm/config.yaml to route tier2/tier3.",
     },
     {
       id: "openai",

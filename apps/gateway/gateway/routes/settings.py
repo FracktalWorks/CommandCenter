@@ -116,8 +116,7 @@ def _restart_litellm_bg() -> None:
 _PROVIDER_ENV_MAP: dict[str, str] = {
     "gemini":    "GEMINI_API_KEY",
     "openai":    "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "github":    "GITHUB_TOKEN",    # GitHub Copilot subscription
+    "github":    "GITHUB_TOKEN",    # GitHub Copilot subscription (also routes Claude)
     "groq":      "GROQ_API_KEY",
     "mistral":   "MISTRAL_API_KEY",
     "together":  "TOGETHER_API_KEY",
@@ -128,7 +127,6 @@ _PROVIDER_ENV_MAP: dict[str, str] = {
 _PROVIDER_LABELS: dict[str, str] = {
     "gemini":    "Google Gemini",
     "openai":    "OpenAI",
-    "anthropic": "Anthropic",
     "github":    "GitHub Copilot",
     "groq":      "Groq",
     "mistral":   "Mistral AI",
@@ -166,12 +164,6 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "openai/gpt-4.1-mini",
         "openai/o3-mini",
         "openai/o3",
-    ],
-    "anthropic": [
-        "anthropic/claude-3-5-haiku-latest",
-        "anthropic/claude-3-5-sonnet-latest",
-        "anthropic/claude-3-7-sonnet-latest",
-        "anthropic/claude-opus-4-5",
     ],
     # GitHub Copilot models — use the `github/` prefix so update_tier can detect
     # them and set the correct api_base + auth headers automatically.
@@ -409,7 +401,7 @@ async def update_tier(
                 params["api_key"] = "EMPTY"
                 params.pop("extra_headers", None)  # clear any stale provider headers
             else:
-                # Hosted provider (Gemini, OpenAI, Anthropic)
+                # Hosted provider (Gemini, OpenAI, Groq, Mistral, Together)
                 params["model"] = req.model
                 params.pop("api_base", None)       # Gemini/OpenAI don't need custom base
                 params.pop("extra_headers", None)  # remove stale Copilot headers
@@ -511,7 +503,7 @@ async def test_tier(
 # ---------------------------------------------------------------------------
 
 class ProviderKeyRequest(BaseModel):
-    provider: str   # "gemini" | "openai" | "anthropic"
+    provider: str   # "gemini" | "openai" | "github" | "groq" | ...
     api_key: str
 
 

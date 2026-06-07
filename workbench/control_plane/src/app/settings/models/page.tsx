@@ -83,6 +83,104 @@ const PROVIDER_ICONS: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
+// Per-provider setup guides (mirrors the Integrations wizard pattern)
+// ---------------------------------------------------------------------------
+
+interface ProviderGuide {
+  description: string;
+  setup_url: string;
+  docs_url: string;
+  instructions: string[];
+}
+
+const PROVIDER_GUIDES: Record<string, ProviderGuide> = {
+  gemini: {
+    description: "Google's Gemini model family — powers all three tiers by default.",
+    setup_url: "https://aistudio.google.com/apikey",
+    docs_url: "https://ai.google.dev/gemini-api/docs/models",
+    instructions: [
+      "Go to Google AI Studio → Get API key.",
+      "Create a new key (free tier available, no credit card required).",
+      "Copy the key — it starts with 'AIza…'.",
+    ],
+  },
+  anthropic: {
+    description: "Direct access to Claude models (Sonnet, Haiku, Opus).",
+    setup_url: "https://console.anthropic.com/settings/keys",
+    docs_url: "https://docs.anthropic.com/en/api/getting-started",
+    instructions: [
+      "Log in to console.anthropic.com.",
+      "Navigate to Settings → API Keys → Create Key.",
+      "Copy the key — it starts with 'sk-ant-…'.",
+    ],
+  },
+  openrouter: {
+    description: "200+ models via one key — Claude, GPT, Gemini, Llama, DeepSeek and more.",
+    setup_url: "https://openrouter.ai/settings/keys",
+    docs_url: "https://openrouter.ai/docs",
+    instructions: [
+      "Create a free account at openrouter.ai.",
+      "Go to Settings → Keys → Create Key.",
+      "Copy the key — it starts with 'sk-or-…'.",
+      "Add credits if you want to use paid models (free tier covers some).",
+    ],
+  },
+  openai: {
+    description: "OpenAI GPT-4o, o3-mini, and other models.",
+    setup_url: "https://platform.openai.com/api-keys",
+    docs_url: "https://platform.openai.com/docs/models",
+    instructions: [
+      "Log in to platform.openai.com.",
+      "Navigate to API Keys → Create new secret key.",
+      "Copy the key — it starts with 'sk-…'.",
+      "Ensure billing is set up in Settings → Billing.",
+    ],
+  },
+  github: {
+    description: "GitHub Copilot models — GPT-4o, Claude Sonnet, o3-mini at no extra cost.",
+    setup_url: "https://github.com/settings/tokens",
+    docs_url: "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens",
+    instructions: [
+      "Go to GitHub Settings → Developer settings → Personal access tokens → Fine-grained tokens.",
+      "Create a new token with no specific repository access.",
+      "Under 'Permissions', enable 'Copilot' (read).",
+      "Copy the token — it starts with 'github_pat_…'.",
+      "Requires an active GitHub Copilot subscription.",
+    ],
+  },
+  groq: {
+    description: "Ultra-fast inference for Llama, Mixtral, and Gemma models.",
+    setup_url: "https://console.groq.com/keys",
+    docs_url: "https://console.groq.com/docs/openai",
+    instructions: [
+      "Create a free account at console.groq.com.",
+      "Navigate to API Keys → Create API Key.",
+      "Copy the key — it starts with 'gsk_…'.",
+    ],
+  },
+  mistral: {
+    description: "Mistral AI models — Mistral Small, Medium, Large, and Codestral.",
+    setup_url: "https://console.mistral.ai/api-keys/",
+    docs_url: "https://docs.mistral.ai/api/",
+    instructions: [
+      "Log in to console.mistral.ai.",
+      "Go to API Keys → Create new key.",
+      "Copy the key.",
+    ],
+  },
+  together: {
+    description: "Together AI — open models at scale (Llama, Qwen, DeepSeek).",
+    setup_url: "https://api.together.ai/settings/api-keys",
+    docs_url: "https://docs.together.ai/docs/introduction",
+    instructions: [
+      "Create an account at api.together.ai.",
+      "Go to Settings → API Keys.",
+      "Copy your key.",
+    ],
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Tier card
 // ---------------------------------------------------------------------------
 
@@ -252,11 +350,23 @@ function TierCard({
             </div>
           )}
 
-          {/* Provider key hint */}
+          {/* Provider key hint — links to setup guide */}
           {currentProvider && !currentProvider.configured && !isLocal && (
             <div className="rounded-lg border border-orange-800/30 bg-orange-950/30 px-3 py-2 text-xs text-orange-300">
-              Set <code className="font-mono">{currentProvider.env_var}</code> in your{" "}
-              <code className="font-mono">.env</code> file and restart the gateway.
+              <span className="font-medium">{currentProvider.label}</span> requires{" "}
+              <code className="font-mono">{currentProvider.env_var}</code>.{" "}
+              {PROVIDER_GUIDES[currentProvider.id] ? (
+                <a
+                  href={PROVIDER_GUIDES[currentProvider.id]!.setup_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline underline-offset-2 hover:text-orange-200 transition-colors"
+                >
+                  Get your API key ↗
+                </a>
+              ) : (
+                <span>Set it in the Providers panel below.</span>
+              )}
             </div>
           )}
 
@@ -315,6 +425,7 @@ function ProviderCard({
 
   const isLocal = provider.id === "ollama" || provider.id === "vllm";
   const colour = PROVIDER_COLOURS[provider.id] ?? PROVIDER_COLOURS.unknown;
+  const guide = PROVIDER_GUIDES[provider.id];
 
   const handleSave = async () => {
     if (!keyVal.trim()) return;
@@ -333,6 +444,7 @@ function ProviderCard({
 
   return (
     <div className={`rounded-xl border px-4 py-3 ${colour}`}>
+      {/* Header row */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <span className="text-lg">{PROVIDER_ICONS[provider.id] ?? "?"}</span>
@@ -362,58 +474,116 @@ function ProviderCard({
             <span className="text-xs text-zinc-500">● Set base URL in tier</span>
           ) : (
             <button
-              onClick={() => setEditing(true)}
+              onClick={() => setEditing((e) => !e)}
               className="rounded border border-orange-700/50 bg-orange-950/40 px-2 py-0.5 text-xs text-orange-300 hover:bg-orange-900/40 transition-colors"
             >
-              Set key →
+              {editing ? "Cancel" : "Set key →"}
             </button>
           )}
         </div>
       </div>
 
-      {editing && !isLocal && (
-        <div className="mt-3 space-y-2">
-          <div className="relative">
-            <input
-              type={show ? "text" : "password"}
-              value={keyVal}
-              onChange={(e) => setKeyVal(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSave()}
-              placeholder={`Paste ${provider.env_var}…`}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 pr-14 text-xs text-zinc-100 placeholder-zinc-600 font-mono focus:border-blue-500 focus:outline-none"
-              autoFocus
-            />
-            <button
-              onClick={() => setShow((s) => !s)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-zinc-500 hover:text-zinc-300"
+      {/* Guide description (always shown for non-local providers) */}
+      {guide && !isLocal && (
+        <p className="mt-1.5 text-xs opacity-70 leading-relaxed">{guide.description}</p>
+      )}
+
+      {/* Setup panel — shown when editing (key entry) or when not configured */}
+      {(editing || (!provider.configured && !isLocal)) && guide && (
+        <div className="mt-3 rounded-lg border border-zinc-700/50 bg-zinc-900/60 p-3 space-y-3">
+          {/* Quick-start links */}
+          <div className="flex items-center gap-3">
+            <a
+              href={guide.setup_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-md border border-blue-700/50 bg-blue-900/30 px-3 py-1.5 text-xs font-medium text-blue-300 hover:bg-blue-800/40 transition-colors"
             >
-              {show ? "hide" : "show"}
-            </button>
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+              </svg>
+              Get API key
+            </a>
+            <a
+              href={guide.docs_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-zinc-500 hover:text-zinc-300 underline underline-offset-2 transition-colors"
+            >
+              View docs ↗
+            </a>
           </div>
-          {keyError && <p className="text-xs text-red-400">{keyError}</p>}
-          <div className="flex gap-2">
+
+          {/* Step-by-step instructions */}
+          <ol className="space-y-1">
+            {guide.instructions.map((step, i) => (
+              <li key={i} className="flex items-start gap-2 text-xs text-zinc-400">
+                <span className="shrink-0 w-4 h-4 rounded-full bg-zinc-700 text-zinc-400 flex items-center justify-center text-[9px] font-semibold mt-0.5">
+                  {i + 1}
+                </span>
+                {step}
+              </li>
+            ))}
+          </ol>
+
+          {/* Key input */}
+          {editing && (
+            <>
+              <div className="relative">
+                <input
+                  type={show ? "text" : "password"}
+                  value={keyVal}
+                  onChange={(e) => setKeyVal(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSave()}
+                  placeholder={`Paste ${provider.env_var}…`}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 pr-14 text-xs text-zinc-100 placeholder-zinc-600 font-mono focus:border-blue-500 focus:outline-none"
+                  autoFocus
+                />
+                <button
+                  onClick={() => setShow((s) => !s)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-zinc-500 hover:text-zinc-300"
+                >
+                  {show ? "hide" : "show"}
+                </button>
+              </div>
+              {keyError && <p className="text-xs text-red-400">{keyError}</p>}
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSave}
+                  disabled={saving || !keyVal.trim()}
+                  className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
+                >
+                  {saving ? "Saving & restarting LiteLLM…" : "Save & apply"}
+                </button>
+                <button
+                  onClick={() => { setEditing(false); setKeyVal(""); setKeyError(null); }}
+                  disabled={saving}
+                  className="rounded-lg border border-zinc-700 px-3 py-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-40 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+              {saving && (
+                <p className="text-[10px] text-zinc-500">
+                  Writing key to <code className="font-mono">infra/.env</code> and restarting LiteLLM (~25s)…
+                </p>
+              )}
+            </>
+          )}
+
+          {/* When not configured and not in edit mode, show a prompt to set the key */}
+          {!editing && !provider.configured && (
             <button
-              onClick={handleSave}
-              disabled={saving || !keyVal.trim()}
-              className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
+              onClick={() => setEditing(true)}
+              className="w-full rounded-lg border border-dashed border-zinc-600 py-1.5 text-xs text-zinc-500 hover:border-zinc-400 hover:text-zinc-300 transition-colors"
             >
-              {saving ? "Saving & restarting LiteLLM…" : "Save & apply"}
+              + Paste {provider.env_var} here
             </button>
-            <button
-              onClick={() => { setEditing(false); setKeyVal(""); setKeyError(null); }}
-              disabled={saving}
-              className="rounded-lg border border-zinc-700 px-3 py-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-40 transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-          {saving && (
-            <p className="text-[10px] text-zinc-500">
-              Writing key to <code className="font-mono">infra/.env</code> and restarting LiteLLM (~25s)…
-            </p>
           )}
         </div>
       )}
+
+      {/* Configured + not editing — no extra content needed */}
     </div>
   );
 }

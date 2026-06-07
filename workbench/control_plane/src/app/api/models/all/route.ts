@@ -83,7 +83,8 @@ const LITELLM_MODELS: { id: string; label: string; group: string; provider: stri
   { id: "openrouter/google/gemini-2.5-pro",        label: "Gemini 2.5 Pro",    group: "LiteLLM — OpenRouter", provider: "openrouter" },
   { id: "openrouter/google/gemini-2.5-flash",      label: "Gemini 2.5 Flash",  group: "LiteLLM — OpenRouter", provider: "openrouter" },
   { id: "openrouter/meta-llama/llama-4-maverick",  label: "Llama 4 Maverick",  group: "LiteLLM — OpenRouter", provider: "openrouter" },
-  { id: "openrouter/deepseek/deepseek-r1",         label: "DeepSeek R1",       group: "LiteLLM — OpenRouter", provider: "openrouter" },
+  { id: "openrouter/deepseek/deepseek-r1",            label: "DeepSeek R1 (reasoning)", group: "LiteLLM — OpenRouter", provider: "openrouter" },
+  { id: "openrouter/deepseek/deepseek-chat-v3-0324",  label: "DeepSeek V3 (latest)",    group: "LiteLLM — OpenRouter", provider: "openrouter" },
   // OpenAI — requires OPENAI_API_KEY
   { id: "openai/gpt-4o",     label: "GPT-4o",      group: "LiteLLM — OpenAI",  provider: "openai" },
   { id: "openai/gpt-4o-mini", label: "GPT-4o Mini", group: "LiteLLM — OpenAI",  provider: "openai" },

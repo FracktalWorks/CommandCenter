@@ -191,6 +191,15 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "openrouter/deepseek/deepseek-chat",
         "openrouter/deepseek/deepseek-v4-pro",
         "openrouter/deepseek/deepseek-v4-flash",
+        # Qwen
+        "openrouter/qwen/qwen3.7-max",
+        "openrouter/qwen/qwen3.7-plus",
+        "openrouter/qwen/qwen3.6-plus",
+        "openrouter/qwen/qwen3.5-flash-02-23",
+        # Kimi
+        "openrouter/moonshotai/kimi-k2.6",
+        "openrouter/moonshotai/kimi-k2-thinking",
+        "openrouter/moonshotai/kimi-k2.5",
         "openrouter/qwen/qwen3-235b-a22b",
     ],
     # GitHub Copilot models — use the `github/` prefix so update_tier can detect

@@ -163,6 +163,50 @@ model_list:
       api_key: os.environ/OPENROUTER_API_KEY
       api_base: https://openrouter.ai/api/v1
 
+  # ---- Qwen (Alibaba) via OpenRouter ----
+  - model_name: openrouter/qwen/qwen3.7-max
+    litellm_params:
+      model: openrouter/qwen/qwen3.7-max
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
+  - model_name: openrouter/qwen/qwen3.7-plus
+    litellm_params:
+      model: openrouter/qwen/qwen3.7-plus
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
+  - model_name: openrouter/qwen/qwen3.6-plus
+    litellm_params:
+      model: openrouter/qwen/qwen3.6-plus
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
+  - model_name: openrouter/qwen/qwen3.5-flash-02-23
+    litellm_params:
+      model: openrouter/qwen/qwen3.5-flash-02-23
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
+  # ---- Kimi (MoonshotAI) via OpenRouter ----
+  - model_name: openrouter/moonshotai/kimi-k2.6
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k2.6
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
+  - model_name: openrouter/moonshotai/kimi-k2-thinking
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k2-thinking
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
+  - model_name: openrouter/moonshotai/kimi-k2.5
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k2.5
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
   - model_name: openrouter/deepseek/deepseek-r1-0528
     litellm_params:
       model: openrouter/deepseek/deepseek-r1-0528

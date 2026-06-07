@@ -89,6 +89,15 @@ const LITELLM_MODELS: { id: string; label: string; group: string; provider: stri
   { id: "openrouter/deepseek/deepseek-chat",           label: "DeepSeek (latest alias)",           group: "LiteLLM — OpenRouter", provider: "openrouter" },
   { id: "openrouter/deepseek/deepseek-v4-pro",         label: "DeepSeek V4 Pro (1M ctx, agentic)", group: "LiteLLM — OpenRouter", provider: "openrouter" },
   { id: "openrouter/deepseek/deepseek-v4-flash",       label: "DeepSeek V4 Flash (fast)",          group: "LiteLLM — OpenRouter", provider: "openrouter" },
+  // Qwen (Alibaba) — latest 2026 models
+  { id: "openrouter/qwen/qwen3.7-max",                 label: "Qwen 3.7 Max (flagship, agentic)",  group: "LiteLLM — OpenRouter", provider: "openrouter" },
+  { id: "openrouter/qwen/qwen3.7-plus",                label: "Qwen 3.7 Plus (cost-effective)",    group: "LiteLLM — OpenRouter", provider: "openrouter" },
+  { id: "openrouter/qwen/qwen3.6-plus",                label: "Qwen 3.6 Plus (coding+agentic)",    group: "LiteLLM — OpenRouter", provider: "openrouter" },
+  { id: "openrouter/qwen/qwen3.5-flash-02-23",         label: "Qwen 3.5 Flash (fast/cheap)",       group: "LiteLLM — OpenRouter", provider: "openrouter" },
+  // Kimi (MoonshotAI)
+  { id: "openrouter/moonshotai/kimi-k2.6",             label: "Kimi K2.6 (multi-agent)",          group: "LiteLLM — OpenRouter", provider: "openrouter" },
+  { id: "openrouter/moonshotai/kimi-k2-thinking",      label: "Kimi K2 Thinking (reasoning)",     group: "LiteLLM — OpenRouter", provider: "openrouter" },
+  { id: "openrouter/moonshotai/kimi-k2.5",             label: "Kimi K2.5 (visual+coding)",        group: "LiteLLM — OpenRouter", provider: "openrouter" },
   // OpenAI — requires OPENAI_API_KEY
   { id: "openai/gpt-4o",     label: "GPT-4o",      group: "LiteLLM — OpenAI",  provider: "openai" },
   { id: "openai/gpt-4o-mini", label: "GPT-4o Mini", group: "LiteLLM — OpenAI",  provider: "openai" },

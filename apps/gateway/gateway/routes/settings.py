@@ -186,7 +186,9 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "openrouter/google/gemini-2.5-flash",
         "openrouter/meta-llama/llama-4-maverick",
         "openrouter/deepseek/deepseek-r1",
+        "openrouter/deepseek/deepseek-r1-0528",
         "openrouter/deepseek/deepseek-chat-v3-0324",
+        "openrouter/deepseek/deepseek-chat",
         "openrouter/qwen/qwen3-235b-a22b",
     ],
     # GitHub Copilot models — use the `github/` prefix so update_tier can detect

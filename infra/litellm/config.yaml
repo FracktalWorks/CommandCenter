@@ -142,6 +142,19 @@ model_list:
       api_key: os.environ/OPENROUTER_API_KEY
       api_base: https://openrouter.ai/api/v1
 
+  # DeepSeek auto-updating alias — always points to the latest DeepSeek chat model
+  - model_name: openrouter/deepseek/deepseek-chat
+    litellm_params:
+      model: openrouter/deepseek/deepseek-chat
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
+  - model_name: openrouter/deepseek/deepseek-r1-0528
+    litellm_params:
+      model: openrouter/deepseek/deepseek-r1-0528
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
 router_settings:
   # If a Gemini tier fails (quota/rate-limit/transient), automatically fall
   # back to the equivalent GitHub Copilot model. No code changes needed.

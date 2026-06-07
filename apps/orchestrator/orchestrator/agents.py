@@ -28,6 +28,26 @@ from acb_graph import get_session
 from orchestrator.retrieval import format_context, retrieve
 from orchestrator.sales_views import sales_context as _sales_context_fn
 
+# Memory layer (WBS 2.5) — imported lazily; graceful if acb_memory not installed.
+try:
+    from acb_memory import (
+        get_memory_context,
+        add_memories_background,
+        search_entity_timeline,
+    )
+    _MEMORY_AVAILABLE = True
+except ImportError:
+    _MEMORY_AVAILABLE = False
+
+    async def get_memory_context(*_a, **_kw) -> str:  # type: ignore[misc]
+        return ""
+
+    async def add_memories_background(*_a, **_kw) -> None:  # type: ignore[misc]
+        pass
+
+    async def search_entity_timeline(*_a, **_kw) -> str:  # type: ignore[misc]
+        return ""
+
 _log = get_logger("orchestrator.agents")
 
 # ---------------------------------------------------------------------------
@@ -83,6 +103,28 @@ async def retrieve_sales_context(query: str) -> str:
             hits = _sales_context_fn(s, query)
         return format_context(hits) if hits else "(no matching sales data found)"
     return await asyncio.to_thread(_sync)
+
+
+async def search_timeline(entity_name: str, query: str) -> str:
+    """Search the bi-temporal knowledge graph for time-stamped facts about an entity.
+
+    Use this tool to answer time-aware questions such as:
+    - "When did deal X change stage?"
+    - "What actions were taken on project Y last month?"
+    - "What is the history of contact Rahul's involvement in deals?"
+
+    Returns a formatted list of timestamped facts extracted from all past
+    events, conversations, and ingestion records involving the entity.
+
+    Args:
+        entity_name: Name of the entity to search (deal name, person, project, company).
+        query:       What aspect of the entity's timeline to focus on.
+
+    Returns:
+        Formatted string with timestamped facts, or empty string if Graphiti
+        is not enabled or no facts found.
+    """
+    return await search_entity_timeline(entity_name, query)
 
 
 async def spawn_copilot_agent(    task: str,
@@ -322,7 +364,10 @@ def _make_openai_client() -> OpenAIChatCompletionClient:
     )
 
 
-def build_orchestrator_agent(*, with_history: bool = True) -> Agent:
+def build_orchestrator_agent(
+    *,
+    with_history: bool = True,
+) -> Agent:
     """Build the core orchestrator MAF agent with dynamic specialist agent tools.
 
     Loads every registered agent as a native MAF tool via agent.as_tool().
@@ -343,10 +388,14 @@ def build_orchestrator_agent(*, with_history: bool = True) -> Agent:
             )
         )
 
+    # Build the instructions; append memory context when present.
+    instructions = _PULL_INSTRUCTIONS
+
     # Core tools always present
     core_tools: list[Any] = [
         retrieve_entity_context,
         retrieve_sales_context,
+        search_timeline,
         spawn_copilot_agent,
         delegate_to_agent,
     ]
@@ -366,10 +415,48 @@ def build_orchestrator_agent(*, with_history: bool = True) -> Agent:
     return Agent(
         client=client,
         name="orchestrator",
-        instructions=_PULL_INSTRUCTIONS,
+        instructions=instructions,
         tools=all_tools,
         context_providers=context_providers or None,
     )
+
+
+async def enrich_instructions_with_memory(
+    base_agent: Agent,
+    user_id: str,
+    user_query: str,
+) -> str:
+    """Return an instructions string with Mem0 + Graphiti context prepended.
+
+    Called by the chat route BEFORE running the agent so per-request memory
+    context is injected without rebuilding the agent on every request.
+
+    Returns the base instructions unchanged when memory is disabled / empty.
+    """
+    parts: list[str] = []
+
+    # Mem0: relevant past facts for this user
+    mem_ctx = await get_memory_context(user_id, user_query)
+    if mem_ctx:
+        parts.append("## Memory from past conversations\n" + mem_ctx)
+
+    # Graphiti: time-aware facts about entities mentioned in the query
+    entity_hint = user_query[:80] if user_query else ""
+    if entity_hint:
+        graph_ctx = await search_entity_timeline(entity_hint, user_query)
+        if graph_ctx:
+            parts.append("## Timeline facts from knowledge graph\n" + graph_ctx)
+
+    if not parts:
+        # MAF Agent stores instructions in default_options dict, not as a plain attr.
+        opts = base_agent.default_options
+        return (opts.get("instructions") if isinstance(opts, dict) else None) or ""  # type: ignore[return-value]
+
+    memory_block = "\n\n".join(parts)
+    # MAF Agent stores instructions in default_options["instructions"] (a dict).
+    opts = base_agent.default_options
+    base_instructions = (opts.get("instructions") if isinstance(opts, dict) else None) or ""
+    return f"{base_instructions}\n\n{memory_block}"
 
 
 def build_agents() -> list[Agent]:
@@ -378,4 +465,13 @@ def build_agents() -> list[Agent]:
     return [build_orchestrator_agent(with_history=False)]
 
 
-__all__ = ["build_agents", "build_orchestrator_agent", "retrieve_entity_context", "retrieve_sales_context", "spawn_copilot_agent", "delegate_to_agent"]
+__all__ = [
+    "build_agents",
+    "build_orchestrator_agent",
+    "enrich_instructions_with_memory",
+    "retrieve_entity_context",
+    "retrieve_sales_context",
+    "search_timeline",
+    "spawn_copilot_agent",
+    "delegate_to_agent",
+]

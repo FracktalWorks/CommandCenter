@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS chat_session (
     title           TEXT,
     last_preview    TEXT,
     message_count   INT  NOT NULL DEFAULT 0,
+    workspace_path  TEXT,                              -- ST-AV-09: agent file workspace root
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );

@@ -19,5 +19,12 @@ retrieve_entity_context = _mod.retrieve_entity_context
 retrieve_sales_context = _mod.retrieve_sales_context
 spawn_copilot_agent = _mod.spawn_copilot_agent
 delegate_to_agent = _mod.delegate_to_agent
+enrich_instructions_with_memory = _mod.enrich_instructions_with_memory
+search_timeline = _mod.search_timeline
 
-__all__ = ["build_orchestrator_agent", "build_agents", "retrieve_entity_context", "retrieve_sales_context", "spawn_copilot_agent", "delegate_to_agent"]
+__all__ = [
+    "build_orchestrator_agent", "build_agents",
+    "retrieve_entity_context", "retrieve_sales_context",
+    "spawn_copilot_agent", "delegate_to_agent",
+    "enrich_instructions_with_memory", "search_timeline",
+]

@@ -159,8 +159,34 @@ def _clone_repo(url: str, dest: Path) -> None:
                     break
 
 
+def _install_push_guard(repo_dir: Path) -> None:
+    """Install a pre-push hook so agents can't push without human approval.
+
+    Written once on first clone.  The executor's post-run commit scan detects
+    any commits the agent made locally and registers them as pending_commit rows
+    for inbox approval.  This hook is the hard stop preventing a direct push.
+    """
+    try:
+        hooks_dir = repo_dir / ".git" / "hooks"
+        if not hooks_dir.is_dir():
+            return
+        hook_file = hooks_dir / "pre-push"
+        if hook_file.exists():
+            return
+        hook_file.write_text(
+            "#!/bin/sh\n"
+            "echo 'Direct push blocked: commits are queued for human approval'\n"
+            "echo 'Approve via the CommandCenter Control Plane inbox.'\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        hook_file.chmod(0o755)
+        _log.info("loader.push_guard_installed", repo=repo_dir.name)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("loader.push_guard_failed", repo=repo_dir.name, error=str(exc))
+
+
 def _configure_bot_identity(repo_dir: Path, settings: Any) -> None:
-    """Set git user.name / user.email in the local clone to the bot identity."""
     bot_name: str = getattr(settings, "github_bot_name", "commandcenter-bot")
     bot_email: str = getattr(settings, "github_bot_email", "") or f"{bot_name}@users.noreply.github.com"
     _run_git(["config", "user.name", bot_name], cwd=repo_dir)
@@ -174,15 +200,65 @@ def _refresh_remote_auth(repo_dir: Path, org: str, repo_name: str, token: str | 
 
 
 def _pull_latest(repo_dir: Path) -> None:
-    """``git pull --ff-only`` — non-fatal on diverged histories (uses local state)."""
+    """Pull the latest commits from origin.
+
+    Strategy (in order):
+    1. Fast-forward only (``git pull --ff-only``) — clean, no conflicts possible.
+    2. If that fails (diverged history or local commits), fetch + reset hard to
+       ``origin/HEAD`` — takes upstream as authoritative.  Local uncommitted
+       changes are stashed first and dropped afterward (they are agent-generated
+       and will be re-applied on the next mutation run).
+
+    The pull is always non-fatal — if all strategies fail, the run proceeds with
+    the cached clone and logs a warning.
+    """
+    # Step 1 — fast-forward
     result = _run_git(["pull", "--ff-only"], cwd=repo_dir, timeout=30)
-    if result.returncode != 0:
+    if result.returncode == 0:
+        return
+
+    _log.info(
+        "loader.pull_ff_failed",
+        repo=repo_dir.name,
+        stderr=result.stderr.strip()[:200],
+        hint="Falling back to fetch+reset strategy.",
+    )
+
+    # Step 2 — stash any local changes so reset --hard is safe
+    stash_result = _run_git(["stash", "--include-untracked", "-m", "commandcenter-auto-stash"], cwd=repo_dir, timeout=15)
+    stashed = stash_result.returncode == 0 and "No local changes" not in stash_result.stdout
+
+    fetch_result = _run_git(["fetch", "origin"], cwd=repo_dir, timeout=30)
+    if fetch_result.returncode != 0:
         _log.warning(
-            "loader.pull_failed",
+            "loader.pull_fetch_failed",
             repo=repo_dir.name,
-            stderr=result.stderr.strip()[:200],
-            hint="Using cached clone; next merge may fix this.",
+            stderr=fetch_result.stderr.strip()[:200],
+            hint="Using cached clone.",
         )
+        if stashed:
+            _run_git(["stash", "pop"], cwd=repo_dir, timeout=15)
+        return
+
+    reset_result = _run_git(["reset", "--hard", "origin/HEAD"], cwd=repo_dir, timeout=15)
+    if reset_result.returncode != 0:
+        _log.warning(
+            "loader.pull_reset_failed",
+            repo=repo_dir.name,
+            stderr=reset_result.stderr.strip()[:200],
+            hint="Using cached clone.",
+        )
+        if stashed:
+            _run_git(["stash", "pop"], cwd=repo_dir, timeout=15)
+        return
+
+    # Stash is intentionally dropped — agent-generated local changes should
+    # be committed (via pending_commit) before pulling; any leftover stash is
+    # an artifact of a rejected commit or failed sandbox run.
+    if stashed:
+        _run_git(["stash", "drop"], cwd=repo_dir, timeout=10)
+
+    _log.info("loader.pull_reset_ok", repo=repo_dir.name)
 
 
 def _sync_new_skills(agent_dir: Path, settings: Any) -> None:
@@ -268,7 +344,7 @@ def _sync_new_skills(agent_dir: Path, settings: Any) -> None:
 
     agents_file.write_text(updated, encoding="utf-8")
 
-    # Commit and push directly to the current branch
+    # Commit locally (no push) — the pending_commit row will appear in the inbox
     bot_name: str = getattr(settings, "github_bot_name", "commandcenter-bot")
     bot_email: str = getattr(settings, "github_bot_email", "") or f"{bot_name}@users.noreply.github.com"
     _run_git(["config", "user.name", bot_name], cwd=agent_dir)
@@ -277,29 +353,91 @@ def _sync_new_skills(agent_dir: Path, settings: Any) -> None:
     names_summary = ", ".join(s.stem for s in new_scripts[:5])
     if len(new_scripts) > 5:
         names_summary += f" (+{len(new_scripts) - 5} more)"
+    commit_msg = (
+        f"auto-sync: add {len(new_scripts)} new tool(s) to agents.py\n\nAdded: {names_summary}"
+    )
     commit_r = _run_git(
-        ["commit", "-m",
-         f"auto-sync: add {len(new_scripts)} new tool(s) to agents.py\n\nAdded: {names_summary}"],
+        ["commit", "-m", commit_msg],
         cwd=agent_dir,
         timeout=30,
     )
     if commit_r.returncode == 0:
-        push_r = _run_git(["push", "origin", "HEAD"], cwd=agent_dir, timeout=30)
-        if push_r.returncode != 0:
-            _log.warning(
-                "loader.auto_sync_push_failed",
-                agent=agent_dir.name,
-                stderr=push_r.stderr.strip()[:200],
-            )
-        else:
-            _log.info(
-                "loader.auto_sync_committed",
-                agent=agent_dir.name,
-                tools=tool_names,
+        # Read the commit SHA so we can register it in the pending_commit table
+        sha_r = _run_git(["rev-parse", "HEAD"], cwd=agent_dir, timeout=10)
+        commit_sha = sha_r.stdout.strip() if sha_r.returncode == 0 else ""
+        _log.info(
+            "loader.auto_sync_committed",
+            agent=agent_dir.name,
+            tools=tool_names,
+            commit_sha=commit_sha,
+            hint="Awaiting approval in inbox before push.",
+        )
+        if commit_sha:
+            _register_sync_commit_async(
+                agent_name=agent_dir.name,
+                local_clone_dir=str(agent_dir),
+                commit_sha=commit_sha,
+                commit_message=commit_msg,
+                tool_names=tool_names,
             )
     else:
         # Nothing staged (e.g. git noticed no effective diff) — restore original
         _run_git(["checkout", "--", "agents.py"], cwd=agent_dir)
+
+
+def _register_sync_commit_async(
+    *,
+    agent_name: str,
+    local_clone_dir: str,
+    commit_sha: str,
+    commit_message: str,
+    tool_names: list[str],
+) -> None:
+    """Fire-and-forget: insert a pending_commit row for this auto-sync commit.
+
+    Uses a background thread so the sync function stays synchronous and
+    non-blocking from the caller's perspective.
+    """
+    import threading  # noqa: PLC0415
+
+    def _do() -> None:
+        try:
+            import uuid  # noqa: PLC0415
+            from acb_graph import get_session  # noqa: PLC0415
+            from sqlalchemy import text  # noqa: PLC0415
+
+            row_id = str(uuid.uuid4())
+            with get_session() as sess:
+                sess.execute(
+                    text(
+                        "INSERT INTO pending_commit "
+                        "(id, agent_name, run_id, local_clone_dir, commit_sha, "
+                        " commit_message, diff_text, test_summary, status) "
+                        "VALUES (:id, :agent_name, :run_id, :local_clone_dir, :commit_sha, "
+                        "        :commit_message, :diff_text, :test_summary, 'pending')"
+                    ),
+                    {
+                        "id": row_id,
+                        "agent_name": agent_name,
+                        "run_id": f"auto-sync-{commit_sha[:8]}",
+                        "local_clone_dir": local_clone_dir,
+                        "commit_sha": commit_sha,
+                        "commit_message": commit_message,
+                        "diff_text": "",  # diff available via git in clone dir
+                        "test_summary": f"auto-sync: {', '.join(tool_names[:5])}",
+                    },
+                )
+                sess.commit()
+            _log.info(
+                "loader.sync_commit_registered",
+                agent=agent_name,
+                pending_commit_id=row_id,
+            )
+        except Exception as exc:
+            # DB write failure is non-fatal — the commit still exists locally
+            _log.warning("loader.sync_register_failed", agent=agent_name, error=str(exc))
+
+    threading.Thread(target=_do, daemon=True).start()
 
 
 def _ensure_repo(
@@ -338,6 +476,7 @@ def _ensure_repo(
             url = _build_github_url(org, repo_name, token)
             _clone_repo(url, clone_dir)
             _configure_bot_identity(clone_dir, settings)
+            _install_push_guard(clone_dir)
         # After every pull/clone, auto-sync any new skill scripts into agents.py
         _sync_new_skills(clone_dir, settings)
         return clone_dir

@@ -1,11 +1,11 @@
 /**
  * Mem0 REST client — server-side utility used by /api/chat/memories.
  *
- * Mem0 is optional. If MEM0_API_URL is not set, all functions return empty
- * results / no-op — the rest of the system degrades gracefully.
- *
- * Self-hosted Mem0 API docs: https://docs.mem0.ai/api-reference
- * Run via Docker:  docker run -p 8765:8000 mem0ai/mem0:latest
+ * Priority:
+ *   1. GATEWAY_BASE_URL → proxies to /memory/* on the FastAPI gateway
+ *      (gateway owns auth + Postgres pgvector backend — recommended).
+ *   2. MEM0_API_URL → legacy self-hosted Mem0 REST container.
+ *   3. Neither set → returns empty / no-op gracefully.
  */
 
 export interface Mem0Memory {
@@ -13,6 +13,8 @@ export interface Mem0Memory {
   memory: string;
   user_id?: string;
   created_at?: string;
+  updated_at?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface Mem0Message {
@@ -20,28 +22,53 @@ export interface Mem0Message {
   content: string;
 }
 
-function headers(): Record<string, string> {
+// ── Internal helpers ──────────────────────────────────────────────────────
+
+function gatewayHeaders(): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${process.env.GATEWAY_INTERNAL_TOKEN ?? process.env.LITELLM_MASTER_KEY ?? "sk-local-dev-change-me"}`,
+  };
+}
+
+function legacyHeaders(): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json" };
-  if (process.env.MEM0_API_KEY) {
-    h["Authorization"] = `Token ${process.env.MEM0_API_KEY}`;
-  }
+  if (process.env.MEM0_API_KEY) h["Authorization"] = `Token ${process.env.MEM0_API_KEY}`;
   return h;
 }
+
+const GATEWAY = () => process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
+const LEGACY = () => process.env.MEM0_API_URL ?? "";
 
 /**
  * Retrieve all stored memories for a user, most-recent first.
  */
 export async function fetchMemories(userId: string): Promise<Mem0Memory[]> {
-  const baseUrl = process.env.MEM0_API_URL;
-  if (!baseUrl) return [];
-
+  // ── Gateway path (preferred) ──────────────────────────────────────────
   try {
     const res = await fetch(
-      `${baseUrl}/v1/memories?user_id=${encodeURIComponent(userId)}&limit=20`,
-      { headers: headers(), next: { revalidate: 60 } }
+      `${GATEWAY()}/memory/${encodeURIComponent(userId)}`,
+      { headers: gatewayHeaders(), next: { revalidate: 0 } }
+    );
+    if (res.ok) {
+      const data = await res.json() as Mem0Memory[] | { results: Mem0Memory[]; memories?: Mem0Memory[] };
+      if (Array.isArray(data)) return data;
+      return (data as { results?: Mem0Memory[] }).results ?? [];
+    }
+  } catch {
+    // fall through to legacy
+  }
+
+  // ── Legacy MEM0_API_URL path ──────────────────────────────────────────
+  const baseUrl = LEGACY();
+  if (!baseUrl) return [];
+  try {
+    const res = await fetch(
+      `${baseUrl}/v1/memories?user_id=${encodeURIComponent(userId)}&limit=50`,
+      { headers: legacyHeaders(), next: { revalidate: 60 } }
     );
     if (!res.ok) return [];
-    const data = (await res.json()) as Mem0Memory[] | { memories: Mem0Memory[] };
+    const data = await res.json() as Mem0Memory[] | { memories: Mem0Memory[] };
     return Array.isArray(data) ? data : (data.memories ?? []);
   } catch {
     return [];
@@ -49,24 +76,42 @@ export async function fetchMemories(userId: string): Promise<Mem0Memory[]> {
 }
 
 /**
- * Search memories by semantic query (used by the orchestrator to retrieve
- * context relevant to the current task before running an agent).
+ * Search memories by semantic query.
  */
 export async function searchMemories(
   userId: string,
   query: string
 ): Promise<Mem0Memory[]> {
-  const baseUrl = process.env.MEM0_API_URL;
-  if (!baseUrl) return [];
+  // ── Gateway path ──────────────────────────────────────────────────────
+  try {
+    const res = await fetch(
+      `${GATEWAY()}/memory/${encodeURIComponent(userId)}/search`,
+      {
+        method: "POST",
+        headers: gatewayHeaders(),
+        body: JSON.stringify({ query, limit: 10 }),
+      }
+    );
+    if (res.ok) {
+      const data = await res.json() as Mem0Memory[] | { results: Mem0Memory[] };
+      if (Array.isArray(data)) return data;
+      return (data as { results?: Mem0Memory[] }).results ?? [];
+    }
+  } catch {
+    // fall through
+  }
 
+  // ── Legacy path ───────────────────────────────────────────────────────
+  const baseUrl = LEGACY();
+  if (!baseUrl) return [];
   try {
     const res = await fetch(`${baseUrl}/v1/memories/search`, {
       method: "POST",
-      headers: headers(),
+      headers: legacyHeaders(),
       body: JSON.stringify({ user_id: userId, query, limit: 10 }),
     });
     if (!res.ok) return [];
-    const data = (await res.json()) as Mem0Memory[] | { memories: Mem0Memory[] };
+    const data = await res.json() as Mem0Memory[] | { memories: Mem0Memory[] };
     return Array.isArray(data) ? data : (data.memories ?? []);
   } catch {
     return [];
@@ -74,42 +119,88 @@ export async function searchMemories(
 }
 
 /**
- * Save a conversation to Mem0. Mem0 extracts semantic facts automatically
- * from the message list (it does not store raw messages verbatim).
- *
- * Called from /api/chat/memories POST after a session ends.
+ * Save a conversation to Mem0 (fire-and-forget — non-critical path).
  */
 export async function saveConversation(
   userId: string,
   messages: Mem0Message[]
 ): Promise<void> {
-  const baseUrl = process.env.MEM0_API_URL;
-  if (!baseUrl || messages.length === 0) return;
+  if (!messages.length) return;
 
+  // ── Gateway path ──────────────────────────────────────────────────────
+  try {
+    const res = await fetch(
+      `${GATEWAY()}/memory/${encodeURIComponent(userId)}/add`,
+      {
+        method: "POST",
+        headers: gatewayHeaders(),
+        body: JSON.stringify({ messages }),
+      }
+    );
+    if (res.ok || res.status === 202) return;
+  } catch {
+    // fall through
+  }
+
+  // ── Legacy path ───────────────────────────────────────────────────────
+  const baseUrl = LEGACY();
+  if (!baseUrl) return;
   try {
     await fetch(`${baseUrl}/v1/memories`, {
       method: "POST",
-      headers: headers(),
+      headers: legacyHeaders(),
       body: JSON.stringify({ user_id: userId, messages }),
     });
   } catch {
-    // Graceful degradation — memory is best-effort, not critical path.
+    /* graceful */
   }
 }
 
 /**
  * Delete a single memory by ID.
  */
-export async function deleteMemory(memoryId: string): Promise<void> {
-  const baseUrl = process.env.MEM0_API_URL;
-  if (!baseUrl) return;
+export async function deleteMemory(userId: string, memoryId: string): Promise<void> {
+  // ── Gateway path ──────────────────────────────────────────────────────
+  try {
+    const res = await fetch(
+      `${GATEWAY()}/memory/${encodeURIComponent(userId)}/${encodeURIComponent(memoryId)}`,
+      { method: "DELETE", headers: gatewayHeaders() }
+    );
+    if (res.ok || res.status === 204) return;
+  } catch {
+    // fall through
+  }
 
+  // ── Legacy path ───────────────────────────────────────────────────────
+  const baseUrl = LEGACY();
+  if (!baseUrl) return;
   try {
     await fetch(`${baseUrl}/v1/memories/${memoryId}`, {
       method: "DELETE",
-      headers: headers(),
+      headers: legacyHeaders(),
     });
   } catch {
     /* graceful */
   }
 }
+
+/**
+ * Check if either Mem0 or Graphiti is enabled on the gateway.
+ */
+export async function fetchMemoryStatus(userId: string): Promise<{
+  mem0_enabled: boolean;
+  graphiti_enabled: boolean;
+  count?: number;
+}> {
+  try {
+    const res = await fetch(
+      `${GATEWAY()}/memory/${encodeURIComponent(userId)}/status`,
+      { headers: gatewayHeaders(), next: { revalidate: 30 } }
+    );
+    if (res.ok) return await res.json();
+  } catch {
+    /* graceful */
+  }
+  return { mem0_enabled: false, graphiti_enabled: false };
+}
+

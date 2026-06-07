@@ -1,6 +1,6 @@
 ﻿# Project Plan — CommandCenter v2
 
-> **Organisation:** Fracktal Works · **Date:** 2026-06-05 · **Version:** 2.4 — runtime ownership clarified (MAF vs Copilot SDK)
+> **Organisation:** Fracktal Works · **Date:** 2026-06-06 · **Version:** 2.5 — web tools + full inter-agent wiring verified
 > **For AI agents:** Read [`AGENTS.md`](AGENTS.md) first — it has current build status, file index, and glossary.
 > This file covers: scope boundaries, milestones, resource allocation, constraints, and open questions.
 > **Full detail lives in:** `wbs.md` (tasks + estimates) · `product_requirements.md` (what to build) · `system_architecture.md` (how it works)
@@ -57,12 +57,13 @@ A **headless, self-mutating agent orchestration platform** for running a company
 | **M2** | Self-Mutation live — agents fix own code, open PRs | ~2026-07-01 | 🔄 In progress — mutation sandbox ✅; GitHub PR automation ✅ (orchestrator opens a PR from the pushed `auto-fix/{run_id}` branch via the REST API; foreground container with timeout + `TEST_SUMMARY` parsing); mutation HITL queue ✅ (`/agent/mutations` + Control Plane `/inbox`); BYOK metering ✅. Remaining: live demo (WBS 1.8) of an injected failure → merged PR; eval CI gate (WBS 1.4). |
 | **M2.5** | Interactive runtime unified — Tier 1.5 SDK streaming live; CopilotKit removed | ~2026-06-20 | ✅ PASSED — GitHub Copilot SDK Tier 1.5 streaming live: tool name / args / result visible in UI via `agent.run(stream=True)`; CopilotKit dependency dropped; badge routing (`agent_runtime`) correct from first render; `effectiveRuntime` forces SDK mode for all github-registered agents regardless of model picker. Remaining cleanup: legacy `/copilot/chat` route removal; MAF-only enforcement verified end-to-end. |
 | **M2.6** | Foundation hardening — chat history, cloud sandbox, integration OAuth, AG-UI events | ~2026-07-15 | ✅ PASSED — (1) Chat session list auto-titles from the first message + shows a last-turn preview. (2) Cloud sandbox: `bootstrap.sh` installs pwsh+uv and validates `GITHUB_TOKEN`; `Dockerfile.mutation` adds git+pwsh; gateway `/health/runtime` + startup self-check (copilot SDK / pwsh / token). (3) Integration OAuth: `routes/oauth.py` authorize→callback→refresh for zoho-crm/clickup/google with HMAC-signed state. (4) AG-UI `STATE_SNAPSHOT`/`STATE_DELTA`/`CUSTOM` wired end-to-end → `GenerativeUIPanel` renders state tables + custom widgets inline. |
+| **M2.7** | Universal tool injection — web search + full inter-agent wiring for MAF + Copilot agents | 2026-06-06 | ✅ PASSED — (1) Zero-credential web tools (`web_search` via `ddgs`/DuckDuckGo, `fetch_page` via Jina Reader) added to `acb_skills.web_tools`; injected alongside `call_agent` into every agent at run time — no API key or config required. (2) **Bug fix:** `_inject_agent_tools` was appending raw async functions to `agent._tools`; `GitHubCopilotAgent._prepare_tools()` silently skipped these. All three injection targets (`_tools`, `agent.tools` list, `_default_options.tools`) now wrap via `normalize_tools()` so functions become proper `FunctionTool` instances visible to the LLM. (3) Tier 2 batch fallback now shims injected list-only tools so `TOOL_CALL_START/END` events emit correctly for `call_agent`/`web_search`/`fetch_page`. (4) `_build_injected_tools_addendum()` appends to `_default_options["system_message"]["content"]` at inject time (correct dict path, not attribute access) — GitHub Copilot agents receive a live agent registry listing + tool guidance in their system prompt automatically, no `instructions.md` changes needed. Verified: 14/14 integration test checks pass; live `web_search` returns real results; `call_agent` enters full delegation pipeline. |
 | **M3** | Full Agent Ecosystem — Sales + Email + Reconciler agents connected via UI | ~2026-08-26 | Not started — agents built as independent GitHub repos and registered through the Control Plane `/agents` UI. CommandCenter platform work: Zoho + Gmail ingestion pipelines, entity resolution, Action Broker hardening. |
 | **M4** | Capture live — meetings + WhatsApp + ambient triggers | ~2026-10-14 | Not started |
 | **M5** | Suggest+Apply live — approval-gated writes to ClickUp/Zoho | ~2026-12-09 | Not started |
 | **M6** | v2.0 Release — Odoo + Strategy + Intelligence layer | ~2027-02-10 | Not started |
 
-**Critical path:** persistent clone cache (done) → `Self_Mutation_Node` + Copilot SDK mutation container (done) → GitHub PR automation (done) → eval CI gate → M2 → Zoho + Gmail ingestion pipelines → entity resolution → Mem0/Graphiti → agent repos registered via UI → M3 → meeting bot + ambient triggers → M4 → Action Broker + Suggest+Apply → M5 → Odoo + strategy + goal model → M6.
+**Critical path:** persistent clone cache (done) → `Self_Mutation_Node` + Copilot SDK mutation container (done) → GitHub PR automation (done) → web tools + inter-agent wiring (done, M2.7) → eval CI gate → M2 → Zoho + Gmail ingestion pipelines → entity resolution → Mem0/Graphiti → agent repos registered via UI → M3 → meeting bot + ambient triggers → M4 → Action Broker + Suggest+Apply → M5 → Odoo + strategy + goal model → M6.
 
 **Estimated total from today: ~36 calendar weeks to M6 (2 engineers at ~80%). With 20% buffer → ~10 months.**
 
@@ -117,11 +118,14 @@ Use this table to decide where new work belongs.
 
 ### Implementation Reality (As Of 2026-06-05)
 
-Target architecture is MAF-only for agent execution, but implementation is still in transition:
+Target architecture is MAF-only for agent execution. Implementation status as of 2026-06-06:
 
-- Legacy compatibility branch remains in gateway webhook dispatch for agents marked `"runtime": "copilot"`.
-- Legacy `/copilot/chat` path still exists and must be treated as transitional.
-- Default and required direction for all new capability work is MAF routing and MAF AG-UI.
+- ✅ GitHub Copilot SDK agents (`agent_runtime=github-copilot`) run through the MAF executor streaming path (Tier 1.5), not a separate runtime.
+- ✅ All injected tools (`call_agent`, `call_agents_parallel`, `call_agent_background`, `web_search`, `fetch_page`) are wrapped as `FunctionTool` and visible to the LLM in both MAF and GitHub Copilot agents.
+- ✅ System message addendum with live agent registry injected into every Copilot agent at run time — agents know what other agents exist without `instructions.md` changes.
+- ✅ CopilotKit removed entirely (M2.5).
+- ⚠️ Legacy `"runtime": "copilot"` compatibility branch still present in gateway webhook dispatch for old agent records — safe to remove once all dynamic agents are re-registered.
+- ⚠️ Eval CI gate (WBS 1.4) not yet built — M2 formal demo blocked on this.
 
 Migration-complete definition for runtime unification:
 
@@ -300,6 +304,196 @@ All integrations (ClickUp, Zoho CRM, Gmail, WhatsApp, GitHub) require credential
 - **Per-phase exit:** Demo against milestone acceptance criteria; reconciler stable ≥ 7 days; cost within budget
 - **Continuous:** citation-coverage and per-tier cost tracked; per-skill success rate monitored
 - **Quarterly:** Security review, secrets rotation, access audit, DPDP compliance check
+
+---
+
+---
+
+## Feature: Artifact Viewer — Agent File Browser + Document Viewer
+
+> **Status:** Planning · **Target milestone:** M2.8 (between current hardening and M3)
+> **Motivation:** Agents that write files (sales docs, PDFs, Markdown reports, skill scripts, self-mutation patches) produce artefacts the operator cannot currently inspect without SSH. The artifact viewer closes this gap with a collapsible file-tree sidebar and an inline document viewer pop-up, all inside the existing chat layout.
+
+---
+
+### Design Overview
+
+```
+┌─────────────┬──────────────────────────────────┬────────────────────┐
+│ CommandCenter│          Chat Panel               │  Artifact Sidebar  │
+│ Nav Sidebar  │  (AgentChat.tsx + messages)       │  (collapsible, ◀▶) │
+│ (collapsible)│                                   │                    │
+│             │                                   │  📁 /workspace     │
+│             │                                   │   ├─ report.md     │
+│             │                                   │   ├─ deal.pdf      │
+│             │                                   │   └─ skill.py      │
+│             │                                   │                    │
+│             │   [Document Viewer Modal]         │  [double-click     │
+│             │   renders file content            │   to open]         │
+└─────────────┴──────────────────────────────────┴────────────────────┘
+```
+
+**Rendering matrix:**
+
+| File type | Renderer |
+|---|---|
+| `.md` | `react-markdown` + `remark-gfm` (already in stack) |
+| `.py` `.ts` `.js` `.sh` `.yaml` `.json` `.toml` `.sql` | `shiki` syntax highlighter (theme: github-dark) |
+| `.pdf` | `react-pdf` (`pdfjs-dist`) |
+| `.png` `.jpg` `.jpeg` `.gif` `.webp` `.svg` | Native `<img>` with zoom |
+| `.csv` | Plain text table (100-row cap, "load more" toggle) |
+| `.txt` `.log` | Plain pre-wrapped text |
+| Other / binary | Hex-dump excerpt + "Download" button |
+
+---
+
+### Subtasks
+
+#### ST-AV-01 · Gateway: agent workspace API  *(backend)*
+
+**Goal:** expose the agent's working directory over HTTP so the frontend can browse and fetch files.
+
+- `GET  /agent/workspace/{session_id}`  → JSON tree of files (path, size, modified_at, mime_type)
+- `GET  /agent/workspace/{session_id}/file?path=<rel_path>` → raw file bytes (streamed, 50 MB cap)
+- The session's workspace root is resolved from the dynamic agent loader's clone cache (`/data/agent-clones/{session_id}/workspace/` or a temp dir created per run). If no workspace exists for the session, return an empty tree (`{files: []}`).
+- Add a `workspace_path` field to the `chat_sessions` Postgres table so the gateway can locate the workspace after the agent exits.
+- Security: path traversal prevention (resolve + assert path starts with workspace root); no symlink escapes; rate-limit file fetch to 10 req/s per session.
+- **Estimate:** 1 day
+
+#### ST-AV-02 · Gateway: push file-tree updates as SSE events  *(backend)*
+
+**Goal:** agents should be able to notify the frontend when they create/modify a file, so the sidebar updates live without polling.
+
+- Emit a new AG-UI `CUSTOM` event type `artifact_created` / `artifact_updated` with payload `{path, size, mime_type}` from any agent that calls `write_artifact(path, content)`.
+- Add `write_artifact` as a new injected tool (alongside `web_search`, `call_agent`) — wraps `pathlib.Path.write_text/write_bytes`, then emits the AG-UI event.
+- The Control Plane `/api/agent/chat` SSE route already forwards `CUSTOM` events; wire `useAgentChat.ts` to append to an `artifacts` list in chat state.
+- **Estimate:** 1 day
+
+#### ST-AV-03 · Frontend: Next.js API proxy for workspace  *(frontend)*
+
+**Goal:** forward workspace requests from browser to gateway without CORS issues, and proxy file bytes through Next.js so the gateway URL never leaks to the browser.
+
+- `GET /api/agent/workspace/[sessionId]` → proxy to `GET {GATEWAY}/agent/workspace/{sessionId}`
+- `GET /api/agent/workspace/[sessionId]/file` → proxy byte stream to `GET {GATEWAY}/agent/workspace/{sessionId}/file`
+- These follow the same pattern as existing `/api/chat/sessions/[sessionId]/messages`.
+- **Estimate:** 0.5 day
+
+#### ST-AV-04 · Frontend: `ArtifactSidebar` component  *(frontend)*
+
+**Goal:** collapsible right sidebar showing a tree of agent-generated files for the active session.
+
+- Sits to the right of the chat panel inside `ChatPageInner` — mirrors the existing left session sidebar (same `w-72` / `w-10` collapsed state pattern already built).
+- Toggle button: `»` / `«` chevron at the top-right of the chat panel header.
+- State: `artifactPanelOpen: boolean` (default `false`; expands automatically when the first artifact is received via SSE).
+- File tree rendered with shadcn `Collapsible` for nested folders; file icons from `lucide-react` keyed by extension.
+- On mount (or when `activeSessionId` changes), fetch `GET /api/agent/workspace/{sessionId}` and populate the tree.
+- Subsequent updates driven by `artifacts` SSE events (ST-AV-02) — merge new/updated entries into the tree without a full refetch.
+- Each file row has: icon + filename + size badge. Double-click → opens `ArtifactViewerModal` (ST-AV-05).
+- Right-click context menu (shadcn `DropdownMenu`): "Open", "Download".
+- Empty state: "No artifacts yet. Artifacts will appear here as the agent creates files."
+- **Dependencies:** shadcn `Collapsible`, `DropdownMenu`, `ScrollArea` (install if not present).
+- **Estimate:** 1.5 days
+
+#### ST-AV-05 · Frontend: `ArtifactViewerModal` component  *(frontend)*
+
+**Goal:** pop-up document viewer that renders agent files with appropriate fidelity by type.
+
+- shadcn `Dialog` (full-screen on mobile, `max-w-4xl` centred on desktop) with a close `×` button.
+- Header: filename + breadcrumb path + "Download" button.
+- Body renders based on MIME / extension:
+  - **Markdown** → `react-markdown` + `remark-gfm` (already used in `MarkdownMessage.tsx`).
+  - **Code** → `shiki` (install `shiki`; auto-detect language from extension; theme `github-dark`); wrap in a `<pre>` with horizontal scroll.
+  - **PDF** → `react-pdf` (install `react-pdf` + `pdfjs-dist`); paginated, page count shown, scroll within modal.
+  - **Image** → `<img>` with `object-contain`, click-to-zoom via CSS transform.
+  - **CSV / plain text / log** → `<pre>` with `whitespace-pre-wrap`, line numbers for code-like files.
+  - **Binary / unknown** → first 256 bytes as hex dump, "Download file" CTA.
+- File content fetched from `GET /api/agent/workspace/{sessionId}/file?path=<path>` on modal open (lazy — never pre-fetched).
+- Loading state: shadcn `Skeleton` placeholder while fetching.
+- Error state: toast via shadcn `Sonner` if fetch fails.
+- **Dependencies:** `shiki`, `react-pdf`, `pdfjs-dist` (install). `react-markdown` + `remark-gfm` already present.
+- **Estimate:** 2 days
+
+#### ST-AV-06 · Frontend: wire artifacts into `AgentChat` + `useAgentChat`  *(frontend)*
+
+**Goal:** connect the SSE pipeline to the sidebar without prop-drilling.
+
+- Add `artifacts: ArtifactEntry[]` and `onArtifact: (a: ArtifactEntry) => void` to `useAgentChat` return type.
+- SSE handler: when event `type === "custom"` and `name === "artifact_created" | "artifact_updated"`, append/merge into the `artifacts` array.
+- `AgentChat.tsx` passes `artifacts` and an `onArtifactOpen` callback down; `ChatPageInner` lifts the open-modal state up.
+- The `ArtifactSidebar` auto-expands (`setArtifactPanelOpen(true)`) on the first received artifact.
+- **Estimate:** 0.5 day
+
+#### ST-AV-07 · Frontend: install shadcn components  *(frontend setup)*
+
+**Goal:** ensure required shadcn components are present before ST-AV-04/05 build work.
+
+Components needed (run `npx shadcn@latest add <component>`):
+- `dialog` — modal shell for the viewer
+- `collapsible` — folder expand/collapse in the file tree
+- `dropdown-menu` — right-click context menu
+- `scroll-area` — scrollable file list and PDF pages
+- `skeleton` — loading placeholder in viewer
+- `sonner` — toast for file-fetch errors (check if already present)
+
+Also install npm packages: `shiki`, `react-pdf`, `pdfjs-dist`.
+- **Estimate:** 0.5 day
+
+#### ST-AV-08 · Agent: `write_artifact` tool in acb_skills  *(backend)*
+
+**Goal:** give all MAF + Copilot SDK agents a first-class, observable way to write files.
+
+- Add `write_artifact(path: str, content: str | bytes, *, encoding: str = "utf-8") -> dict` to `packages/acb_skills/`.
+- Tool registers the file under `session_workspace_root / path`; returns `{path, size, sha256}`.
+- After writing, emits the AG-UI `CUSTOM` event if an event emitter is in context (injected by the gateway at run time).
+- Wire into `_inject_agent_tools` alongside `web_search` and `call_agent`.
+- Unit test: `tests/unit/test_write_artifact.py`.
+- **Estimate:** 1 day
+
+#### ST-AV-09 · Postgres: `workspace_path` column on `chat_sessions`  *(backend)*
+
+**Goal:** persist the workspace directory path so the gateway can serve files after the agent exits.
+
+- Migration: `ALTER TABLE chat_sessions ADD COLUMN workspace_path TEXT;`
+- Add to `infra/postgres/01_schema.sql` and create `05_workspace_path.sql` migration script.
+- Gateway sets `workspace_path` when a session's agent first calls `write_artifact`.
+- **Estimate:** 0.5 day
+
+---
+
+### Sequencing & Dependencies
+
+```
+ST-AV-07 (shadcn + npm install)
+    │
+    ├──▶ ST-AV-04 (ArtifactSidebar)
+    │        └──▶ ST-AV-05 (ArtifactViewerModal)
+    │                └──▶ ST-AV-06 (wire into AgentChat)
+    │
+ST-AV-09 (DB migration)
+    └──▶ ST-AV-01 (Gateway workspace API)
+             └──▶ ST-AV-03 (Next.js proxy)
+                      └──▶ ST-AV-04 (consumes proxy)
+
+ST-AV-02 (push SSE events)
+    └──▶ ST-AV-08 (write_artifact tool)
+             └──▶ ST-AV-06 (consume in useAgentChat)
+```
+
+**Minimum viable slice (can ship independently):**
+ST-AV-09 → ST-AV-01 → ST-AV-03 → ST-AV-07 → ST-AV-04 → ST-AV-05
+
+This gives a working file browser + viewer for files already on disk, without the live SSE push. ST-AV-02 + ST-AV-08 add real-time auto-discovery in a second pass.
+
+**Total estimate:** ~8 days (1 engineer) across ~2 sprints.
+
+---
+
+### Open Questions for Artifact Viewer
+
+1. **Workspace lifetime** — how long do per-session workspaces persist? Tie to session TTL or always-retain? (Affects disk usage on VPS.)
+2. **Size cap** — 50 MB per file fetch seems safe; should there be a total workspace cap per session (e.g. 500 MB)?
+3. **Security boundary** — the workspace API is currently admin-only (same as the rest of the Control Plane). If multiple operators eventually share a Control Plane, should workspace access be scoped per session owner?
+4. **PDF worker path** — `pdfjs-dist` requires a service worker file to be served from `/public`; confirm this is handled in the Next.js `public/` folder during ST-AV-07.
 
 ---
 

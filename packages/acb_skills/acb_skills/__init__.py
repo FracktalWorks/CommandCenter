@@ -1,5 +1,7 @@
 """Skill registry (v1) + Dynamic Agent Loader (v2) + Integration Registry."""
 from acb_skills.agent_tools import call_agent, call_agent_background
+from acb_skills.web_tools import fetch_page, web_search
+from acb_skills.write_artifact import write_artifact, _WRITE_ARTIFACT_CONTEXT
 from acb_skills.integrations import (
     IntegrationMisconfiguredError,
     IntegrationNotFoundError,
@@ -27,4 +29,10 @@ __all__ = [
     # Agent delegation tools (auto-injected; also importable explicitly)
     "call_agent",
     "call_agent_background",
+    # Zero-credential web tools (auto-injected; also importable explicitly)
+    "web_search",
+    "fetch_page",
+    # File-writing tool (auto-injected; also importable explicitly)
+    "write_artifact",
+    "_WRITE_ARTIFACT_CONTEXT",
 ]

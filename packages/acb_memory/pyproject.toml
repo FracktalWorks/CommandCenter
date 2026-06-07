@@ -1,0 +1,21 @@
+[project]
+name = "acb-memory"
+version = "0.0.1"
+description = "Mem0 episodic memory + Graphiti bi-temporal KG for CommandCenter agents."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "mem0ai>=1.0.11",
+    "graphiti-core>=0.29.1",
+    "acb-common",
+]
+
+[project.optional-dependencies]
+# Install these to actually run; omit in test environments without Neo4j
+graphiti = ["graphiti-core>=0.29.1"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["acb_memory"]

@@ -2,25 +2,15 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# System deps the Copilot SDK sandbox needs at runtime:
-#   git   — the mutation agent commits + pushes the fix branch
-#   pwsh  — copilot.exe shell tool backend (consistent with the host runtime)
-#   curl/ca-certificates — Microsoft package feed + HTTPS to GitHub
+# Runtime deps:
+#   git — the mutation agent commits the fix locally (no push from container)
+#   ca-certificates — HTTPS to GitHub / LiteLLM proxy
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        git ca-certificates curl wget apt-transport-https \
+        git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# PowerShell (pwsh) from the Microsoft package feed (Debian 12 / bookworm base).
-RUN wget -q https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb \
-        -O /tmp/packages-microsoft-prod.deb \
-    && dpkg -i /tmp/packages-microsoft-prod.deb \
-    && rm -f /tmp/packages-microsoft-prod.deb \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends powershell \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install the Copilot SDK (CLI bundled automatically — no separate install needed).
+# Install the Copilot SDK (bundles its own copilot CLI binary for Linux).
 RUN pip install --no-cache-dir github-copilot-sdk
 
 COPY mutation_runner.py .

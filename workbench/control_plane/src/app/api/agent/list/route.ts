@@ -7,6 +7,8 @@
  */
 
 import { NextResponse } from "next/server";
+import { readFileSync } from "fs";
+import { resolve } from "path";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +18,7 @@ const INTERNAL_TOKEN =
 
 // Static fallback — mirrors _AGENT_REGISTRY in gateway/routes/agent.py.
 // Shown when the gateway is down so the picker still renders.
-const FALLBACK_AGENTS = [
+const STATIC_FALLBACK: AgentEntry[] = [
   { name: "task-manager",  description: "ClickUp task management",              tags: ["tasks"],    status: "live", agent_runtime: "maf" },
   { name: "sales",         description: "Zoho CRM sales pipeline",              tags: ["sales"],    status: "live", agent_runtime: "maf" },
   { name: "triage",        description: "Email / WhatsApp triage + routing",    tags: ["triage"],   status: "live", agent_runtime: "maf" },
@@ -24,6 +26,19 @@ const FALLBACK_AGENTS = [
   { name: "reconciler",    description: "Nightly source-of-truth diff",         tags: ["ops"],      status: "live", agent_runtime: "maf" },
   { name: "strategy",      description: "Weekly digest + planning synthesis",   tags: ["strategy"], status: "live", agent_runtime: "maf" },
 ];
+
+/** Read agents.json from the repo root so dynamic/Copilot agents survive gateway downtime. */
+function readDynamicAgentsFallback(): AgentEntry[] {
+  try {
+    // workbench/control_plane is 2 levels below the repo root
+    const jsonPath = resolve(process.cwd(), "../../apps/gateway/agents.json");
+    const raw = readFileSync(jsonPath, "utf-8");
+    const parsed = JSON.parse(raw) as AgentEntry[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 export interface AgentEntry {
   name: string;
@@ -51,7 +66,15 @@ export async function GET(): Promise<NextResponse> {
       return NextResponse.json(agents);
     }
   } catch {
-    // Gateway unavailable — return fallback
+    // Gateway unavailable — fall through to filesystem fallback
   }
-  return NextResponse.json(FALLBACK_AGENTS);
+  // Merge static built-ins with whatever is in agents.json so GitHub Copilot
+  // agents survive gateway downtime (they're in agents.json, not the static list).
+  const dynamic = readDynamicAgentsFallback();
+  const dynamicNames = new Set(dynamic.map((a) => a.name));
+  const merged = [
+    ...STATIC_FALLBACK.filter((a) => !dynamicNames.has(a.name)),
+    ...dynamic,
+  ];
+  return NextResponse.json(merged);
 }

@@ -43,6 +43,12 @@ export interface ChatMessage {
   customEvents?: { name: string; value: unknown }[];
 }
 
+export interface ArtifactEntry {
+  path: string;
+  sha256?: string;
+  size?: number;
+}
+
 interface UseAgentChatOptions {
   agentName: string;
   threadId: string;
@@ -53,6 +59,8 @@ interface UseAgentChatOptions {
   mode?: "copilot" | "litellm";
   /** System-level context (persistent memory / persona) injected server-side. */
   systemContext?: string;
+  /** Called whenever the agent writes a file via write_artifact tool. */
+  onArtifact?: (entry: ArtifactEntry) => void;
 }
 
 interface UseAgentChatReturn {
@@ -77,7 +85,10 @@ export function useAgentChat({
   model,
   mode = "litellm",
   systemContext,
+  onArtifact,
 }: UseAgentChatOptions): UseAgentChatReturn {
+  const onArtifactRef = useRef(onArtifact);
+  useEffect(() => { onArtifactRef.current = onArtifact; }, [onArtifact]);
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -382,7 +393,20 @@ export function useAgentChat({
                 );
                 break;
 
-              case "custom":
+              case "custom": {
+                const evtName = String(evt.name ?? "");
+                // Fire onArtifact callback for artifact_created / artifact_updated events
+                if (
+                  (evtName === "artifact_created" || evtName === "artifact_updated") &&
+                  onArtifactRef.current
+                ) {
+                  const data = (evt.value ?? evt.data) as Record<string, unknown> | undefined;
+                  onArtifactRef.current({
+                    path: String(data?.path ?? ""),
+                    sha256: data?.sha256 ? String(data.sha256) : undefined,
+                    size: data?.size != null ? Number(data.size) : undefined,
+                  });
+                }
                 setMessages((prev) =>
                   prev.map((m) =>
                     m.id === assistantId
@@ -390,13 +414,14 @@ export function useAgentChat({
                           ...m,
                           customEvents: [
                             ...(m.customEvents ?? []),
-                            { name: String(evt.name ?? ""), value: evt.value },
+                            { name: evtName, value: evt.value ?? evt.data },
                           ],
                         }
                       : m
                   )
                 );
                 break;
+              }
 
               case "error":
                 throw new Error(String(evt.content ?? "Stream error"));

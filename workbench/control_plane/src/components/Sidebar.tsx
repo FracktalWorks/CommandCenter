@@ -2,52 +2,91 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useState } from "react";
 
-type Pane = { href: string; label: string; emoji: string; note: string };
+type Pane = { href: string; label: string; icon: string; note: string };
 
 const PANES: Pane[] = [
-  { href: "/chat",             label: "Chat",          emoji: "[C]", note: "CommandCenter · sessions · memory" },
-  { href: "/agents",           label: "Agents",        emoji: "[A]", note: "Register · manage · remove" },
-  { href: "/inbox",            label: "Inbox",         emoji: "[H]", note: "Self-mutation PRs · HITL queue" },
-  { href: "/integrations",     label: "Integrations",  emoji: "[I]", note: "Connected services · credentials" },
-  { href: "/settings/models",  label: "Models",        emoji: "[M]", note: "LLMs · tiers · providers" },
+  { href: "/chat",             label: "Chat",          icon: "C", note: "CommandCenter · sessions · memory" },
+  { href: "/agents",           label: "Agents",        icon: "A", note: "Register · manage · commits · remove" },
+  { href: "/memory",           label: "Memory",        icon: "~", note: "Facts · episodic · knowledge graph" },
+  { href: "/integrations",     label: "Integrations",  icon: "I", note: "Connected services · credentials" },
+  { href: "/settings/models",  label: "Models",        icon: "M", note: "LLMs · tiers · providers" },
 ];
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const [collapsed, setCollapsed] = useState(false);
+
   return (
-    <aside className="w-64 shrink-0 border-r border-zinc-800 bg-zinc-900/60 p-4 flex flex-col">
-      <div className="px-2 pb-6">
-        <Link href="/" className="block">
-          <div className="text-lg font-semibold tracking-tight">CommandCenter</div>
-          <div className="text-xs text-zinc-500">Control Plane</div>
-        </Link>
+    <aside
+      className={`shrink-0 border-r border-zinc-800 bg-zinc-900/60 flex flex-col transition-all duration-200 ${
+        collapsed ? "w-14" : "w-64"
+      }`}
+    >
+      {/* Header */}
+      <div className={`flex items-center border-b border-zinc-800 ${collapsed ? "justify-center p-3" : "justify-between px-4 py-4"}`}>
+        {!collapsed && (
+          <Link href="/" className="block min-w-0">
+            <div className="text-lg font-semibold tracking-tight truncate">CommandCenter</div>
+            <div className="text-xs text-zinc-500">Control Plane</div>
+          </Link>
+        )}
+        <button
+          onClick={() => setCollapsed((c) => !c)}
+          className="shrink-0 rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          {collapsed ? (
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M6 3l5 5-5 5" />
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M10 3L5 8l5 5" />
+            </svg>
+          )}
+        </button>
       </div>
-      <nav className="flex flex-col gap-1">
+
+      {/* Nav */}
+      <nav className="flex flex-col gap-1 p-2 flex-1">
         {PANES.map((p) => {
           const active = pathname?.startsWith(p.href);
           return (
             <Link
               key={p.href}
               href={p.href}
-              className={`rounded-md px-3 py-2 text-sm transition-colors ${
+              title={collapsed ? p.label : undefined}
+              className={`rounded-md transition-colors ${
+                collapsed ? "flex items-center justify-center px-2 py-2.5" : "px-3 py-2"
+              } text-sm ${
                 active
                   ? "bg-zinc-800 text-white"
                   : "text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-100"
               }`}
             >
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-xs text-zinc-500">{p.emoji}</span>
-                <span className="font-medium">{p.label}</span>
-              </div>
-              <div className="ml-7 text-xs text-zinc-500">{p.note}</div>
+              {collapsed ? (
+                <span className="font-mono text-sm font-semibold">{p.icon}</span>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs text-zinc-500">[{p.icon}]</span>
+                    <span className="font-medium">{p.label}</span>
+                  </div>
+                  <div className="ml-7 text-xs text-zinc-500">{p.note}</div>
+                </>
+              )}
             </Link>
           );
         })}
       </nav>
-      <div className="mt-auto px-2 pt-6 text-xs text-zinc-600">
-        Phase 1 &middot; Self-Mutation Loop
-      </div>
+
+      {!collapsed && (
+        <div className="px-4 pb-4 text-xs text-zinc-600">
+          Phase 1 &middot; Self-Mutation Loop
+        </div>
+      )}
     </aside>
   );
 }

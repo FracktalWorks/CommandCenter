@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import { useSession } from "next-auth/react";
 import {
   getSessions,
   upsertSession,
@@ -13,6 +14,9 @@ import {
 } from "@/lib/sessions";
 import type { Mem0Memory } from "@/lib/memory";
 import AgentChat from "@/components/AgentChat";
+import type { ArtifactEntry } from "@/hooks/useAgentChat";
+import ArtifactSidebar, { type FileEntry } from "@/components/ArtifactSidebar";
+import ArtifactViewerModal from "@/components/ArtifactViewerModal";
 import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 
@@ -173,13 +177,13 @@ function MemoryPanel({
   memories,
   userId,
   onDelete,
+  onRefresh,
 }: {
   memories: Mem0Memory[];
   userId: string;
   onDelete: (id: string) => void;
+  onRefresh?: () => void;
 }) {
-  const configured = process.env.NEXT_PUBLIC_MEM0_CONFIGURED === "true";
-
   if (memories.length === 0) {
     return (
       <div className="mt-4 rounded-md border border-zinc-800 bg-zinc-900/40 p-3">
@@ -187,9 +191,7 @@ function MemoryPanel({
           Memory
         </div>
         <p className="mt-1.5 text-xs text-zinc-600">
-          {configured
-            ? "No memories yet. CommandCenter will learn from your conversations."
-            : "Mem0 not configured. Set MEM0_API_URL to enable persistent memory."}
+          No memories yet. CommandCenter will learn from your conversations.
         </p>
       </div>
     );
@@ -200,6 +202,27 @@ function MemoryPanel({
       <div className="mb-2 flex items-center justify-between">
         <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
           Memory ({memories.length})
+        </div>
+        <div className="flex items-center gap-1.5">
+          {onRefresh && (
+            <button
+              onClick={onRefresh}
+              className="text-zinc-600 hover:text-zinc-400 transition-colors"
+              title="Refresh memories"
+            >
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M14 8A6 6 0 1 1 8 2" />
+                <path d="M14 2v4h-4" />
+              </svg>
+            </button>
+          )}
+          <a
+            href="/memory"
+            className="text-xs text-zinc-600 hover:text-blue-400 transition-colors"
+            title="Open full memory manager"
+          >
+            →
+          </a>
         </div>
       </div>
       <ul className="flex flex-col gap-1.5 max-h-48 overflow-y-auto">
@@ -276,7 +299,7 @@ function SessionList({
               e.stopPropagation();
               onDelete(s.id);
             }}
-            className="ml-2 shrink-0 text-zinc-700 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity text-xs"
+            className="ml-2 shrink-0 text-zinc-600 hover:text-red-400 transition-colors text-xs"
             title="Delete session"
           >
             ✕
@@ -291,15 +314,20 @@ function SessionList({
 // Page root
 // ---------------------------------------------------------------------------
 
-const DEFAULT_USER_ID = "default"; // Replace with session.user.id once SSO is wired
-
 function ChatPageInner() {
   const searchParams = useSearchParams();
+  const { data: nextAuthSession } = useSession();
+  const userId: string = nextAuthSession?.user?.email ?? "dev@fracktal.in";
+
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>("");
   const [memories, setMemories] = useState<Mem0Memory[]>([]);
   const [memoriesLoaded, setMemoriesLoaded] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
+  const [sessionPanelOpen, setSessionPanelOpen] = useState(true);
+  const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
+  const [viewerEntry, setViewerEntry] = useState<FileEntry | null>(null);
+  const [artifactUpdates, setArtifactUpdates] = useState<FileEntry[]>([]);
   // Fetch agents once at page level so AgentChat knows agent_runtime before first render.
   const [agentList, setAgentList] = useState<AgentEntry[]>([]);
   useEffect(() => {
@@ -349,15 +377,20 @@ function ChatPageInner() {
   }, []);
 
   // Fetch memories from Mem0 (or return [] gracefully).
-  useEffect(() => {
-    fetch(`/api/chat/memories?userId=${DEFAULT_USER_ID}`)
+  const loadMemories = useCallback(() => {
+    fetch(`/api/memory/${encodeURIComponent(userId)}`)
       .then((r) => r.json())
-      .then((data: Mem0Memory[]) => {
-        setMemories(Array.isArray(data) ? data : []);
+      .then((data: Mem0Memory[] | { results?: Mem0Memory[] }) => {
+        const list = Array.isArray(data) ? data : (data.results ?? []);
+        setMemories(list);
         setMemoriesLoaded(true);
       })
       .catch(() => setMemoriesLoaded(true));
-  }, []);
+  }, [userId]);
+
+  useEffect(() => {
+    loadMemories();
+  }, [loadMemories]);
 
   const handleNewSession = useCallback(() => {
     setShowPicker(true);
@@ -398,9 +431,12 @@ function ChatPageInner() {
   );
 
   const handleDeleteMemory = useCallback(async (memoryId: string) => {
-    await fetch(`/api/chat/memories?id=${memoryId}`, { method: "DELETE" });
+    await fetch(
+      `/api/memory/${encodeURIComponent(userId)}/${encodeURIComponent(memoryId)}`,
+      { method: "DELETE" }
+    );
     setMemories((prev) => prev.filter((m) => m.id !== memoryId));
-  }, []);
+  }, [userId]);
 
   // Enrich the active session (auto-title + last-turn preview) as the chat runs.
   const handleActivity = useCallback(
@@ -427,37 +463,65 @@ function ChatPageInner() {
       )}
 
       {/* Left panel — sessions + memory */}
-      <aside className="w-72 shrink-0 border-r border-zinc-800 bg-zinc-900/40 flex flex-col p-4 overflow-y-auto">
-        <div className="mb-4">
-          <div className="text-sm font-semibold text-zinc-200">Conversations</div>
-          <div className="text-xs text-zinc-500 mt-0.5">
-            Unified chat · Copilot SDK + LiteLLM
+      <aside
+        className={`shrink-0 border-r border-zinc-800 bg-zinc-900/40 flex flex-col overflow-hidden transition-all duration-200 ${
+          sessionPanelOpen ? "w-72" : "w-10"
+        }`}
+      >
+        {/* Panel toggle strip */}
+        <div className={`flex items-center border-b border-zinc-800 ${
+          sessionPanelOpen ? "justify-between px-4 py-3" : "justify-center py-3"
+        }`}>
+          {sessionPanelOpen && (
+            <div className="text-sm font-semibold text-zinc-200">Conversations</div>
+          )}
+          <button
+            onClick={() => setSessionPanelOpen((o) => !o)}
+            className="shrink-0 rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
+            title={sessionPanelOpen ? "Collapse conversations" : "Expand conversations"}
+          >
+            {sessionPanelOpen ? (
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M10 3L5 8l5 5" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M6 3l5 5-5 5" />
+              </svg>
+            )}
+          </button>
+        </div>
+
+        {sessionPanelOpen && (
+          <div className="flex flex-col flex-1 p-4 overflow-y-auto">
+            <div className="text-xs text-zinc-500 mb-3">Copilot SDK + LiteLLM</div>
+            <SessionList
+              sessions={sessions}
+              activeId={activeSessionId}
+              onSelect={handleSelectSession}
+              onNew={handleNewSession}
+              onDelete={handleDeleteSession}
+            />
+
+            {memoriesLoaded && (
+              <MemoryPanel
+                memories={memories}
+                userId={userId}
+                onDelete={handleDeleteMemory}
+                onRefresh={loadMemories}
+              />
+            )}
+
+            <div className="mt-auto pt-6 text-xs text-zinc-600">
+              Memory persists to Mem0 · Sessions in localStorage
+            </div>
           </div>
-        </div>
-
-        <SessionList
-          sessions={sessions}
-          activeId={activeSessionId}
-          onSelect={handleSelectSession}
-          onNew={handleNewSession}
-          onDelete={handleDeleteSession}
-        />
-
-        {memoriesLoaded && (
-          <MemoryPanel
-            memories={memories}
-            userId={DEFAULT_USER_ID}
-            onDelete={handleDeleteMemory}
-          />
         )}
-
-        <div className="mt-auto pt-6 text-xs text-zinc-600">
-          Memory persists to Mem0 · Sessions in localStorage
-        </div>
       </aside>
 
       {/* Right panel — chat (unified AgentChat for every session) */}
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex flex-1 overflow-hidden min-w-0">
+      <div className="flex flex-1 flex-col overflow-hidden min-w-0">
         {activeSession ? (
           MEMORY_AGENTS.has(activeSession.agentName) ? (
             /*
@@ -472,9 +536,22 @@ function ChatPageInner() {
               agentDescription="General-purpose AI company brain"
               persona={COMMANDCENTER_PERSONA}
               memories={memories.map((m) => m.memory)}
-              memoryUserId={DEFAULT_USER_ID}
+              memoryUserId={userId}
               availableAgents={agentList.length > 0 ? agentList : undefined}
               onActivity={(info) => handleActivity(activeSession.id, info)}
+              onArtifact={(entry: ArtifactEntry) => {
+                setArtifactUpdates((prev) => [
+                  ...prev,
+                  {
+                    path: entry.path,
+                    name: entry.path.split("/").pop() ?? entry.path,
+                    size: entry.size ?? 0,
+                    modified_at: new Date().toISOString(),
+                    mime_type: "",
+                  } satisfies FileEntry,
+                ]);
+                setArtifactPanelOpen(true);
+              }}
             />
           ) : (
             /*
@@ -487,6 +564,19 @@ function ChatPageInner() {
               sessionId={activeSession.id}
               availableAgents={agentList.length > 0 ? agentList : undefined}
               onActivity={(info) => handleActivity(activeSession.id, info)}
+              onArtifact={(entry: ArtifactEntry) => {
+                setArtifactUpdates((prev) => [
+                  ...prev,
+                  {
+                    path: entry.path,
+                    name: entry.path.split("/").pop() ?? entry.path,
+                    size: entry.size ?? 0,
+                    modified_at: new Date().toISOString(),
+                    mime_type: "",
+                  } satisfies FileEntry,
+                ]);
+                setArtifactPanelOpen(true);
+              }}
             />
           )
         ) : (
@@ -495,6 +585,28 @@ function ChatPageInner() {
           </div>
         )}
       </div>
+
+      {/* Artifact file browser sidebar */}
+      <ArtifactSidebar
+        sessionId={activeSessionId}
+        open={artifactPanelOpen}
+        onToggle={() => setArtifactPanelOpen((o) => !o)}
+        onFileOpen={(entry) => {
+          setViewerEntry(entry);
+          setArtifactPanelOpen(true);
+        }}
+        artifactUpdates={artifactUpdates}
+      />
+      </div>
+
+      {/* File viewer pop-up */}
+      {viewerEntry && (
+        <ArtifactViewerModal
+          sessionId={activeSessionId}
+          entry={viewerEntry}
+          onClose={() => setViewerEntry(null)}
+        />
+      )}
     </div>
   );
 }

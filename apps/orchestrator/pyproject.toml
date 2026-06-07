@@ -22,6 +22,9 @@ dependencies = [
     "acb-llm",
     "acb-audit",
     "acb-skills",
+    "acb-memory",
+    "mem0ai>=2.0.4",
+    "graphiti-core>=0.29.1",
 ]
 
 [build-system]

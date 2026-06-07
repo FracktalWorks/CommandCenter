@@ -11,7 +11,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useAgentChat } from "@/hooks/useAgentChat";
-import type { ChatMessage } from "@/hooks/useAgentChat";
+import type { ArtifactEntry, ChatMessage } from "@/hooks/useAgentChat";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { UnifiedModel } from "@/app/api/models/all/route";
@@ -64,6 +64,8 @@ interface AgentChatProps {
     lastPreview?: string;
     messageCount: number;
   }) => void;
+  /** Called when the agent writes a file via write_artifact tool. */
+  onArtifact?: (entry: ArtifactEntry) => void;
 }
 
 export default function AgentChat({
@@ -76,6 +78,7 @@ export default function AgentChat({
   memories,
   memoryUserId,
   onActivity,
+  onArtifact,
 }: AgentChatProps) {
   // Active agent / model can change mid-chat (VS Code Copilot style).
   const [currentAgentName, setCurrentAgentName] = useState(agentName);
@@ -132,6 +135,7 @@ export default function AgentChat({
     model: currentModel,
     mode: effectiveRuntime,
     systemContext,
+    onArtifact,
     // Load persisted messages so switching sessions restores history instantly (localStorage cache).
     initialMessages: getMessages(sessionId) as ChatMessage[],
   });
@@ -291,13 +295,19 @@ export default function AgentChat({
       }
       // A generation is in flight — branch on send mode.
       if (sendMode === "steer") {
+        // Drop the incomplete assistant message so history is clean when the
+        // steer text is sent — mirrors VS Code Copilot Chat behaviour.
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          return last?.streaming ? prev.slice(0, -1) : prev;
+        });
         stopGeneration();
         enqueue(trimmed, true); // jump the queue, sent as soon as the stream stops
       } else {
         enqueue(trimmed); // queue (also the fallback for "send" while busy)
       }
     },
-    [isLoading, sendMode, sendMessage, stopGeneration, enqueue]
+    [isLoading, sendMode, sendMessage, stopGeneration, enqueue, setMessages]
   );
 
   const handleSubmit = async (e: React.FormEvent) => {

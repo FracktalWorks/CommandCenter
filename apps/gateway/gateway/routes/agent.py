@@ -667,17 +667,54 @@ async def list_mutations(
     limit: int = 50,
     user: UserContext = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    """Return recent self-mutation events for the Control Plane HITL queue (WBS 1.5).
+    """Return recent self-mutation events for the Control Plane HITL queue.
 
-    Surfaces ``system:mutation`` audit events (PR opened / sandbox failed /
-    started) so operators can review and merge auto-fix PRs from one view.
+    Returns a merged view of:
+    - ``pending_commit`` rows (commit-gate flow, M2.7) with full status info
+    - ``audit_event`` rows from legacy sandbox failures (for observability)
+
+    Items are sorted newest-first.
     """
     try:
         from acb_graph import get_session  # noqa: PLC0415
         from sqlalchemy import text  # noqa: PLC0415
 
+        rows: list[dict[str, Any]] = []
+
         with get_session() as sess:
-            result = sess.execute(
+            # 1. Pending commits (primary HITL queue)
+            pc_result = sess.execute(
+                text(
+                    "SELECT id, agent_name, run_id, commit_sha, commit_message, "
+                    "       test_summary, status, reviewed_by, reviewed_at, created_at "
+                    "FROM pending_commit "
+                    "ORDER BY created_at DESC LIMIT :limit"
+                ),
+                {"limit": max(1, min(limit, 200))},
+            )
+            for r in pc_result:
+                rows.append(
+                    {
+                        "type": "pending_commit",
+                        "id": str(r.id),
+                        "agent": r.agent_name,
+                        "run_id": r.run_id,
+                        "commit_sha": r.commit_sha,
+                        "commit_message": r.commit_message,
+                        "test_summary": r.test_summary,
+                        "status": r.status,
+                        "reviewed_by": r.reviewed_by,
+                        "reviewed_at": str(r.reviewed_at) if r.reviewed_at else None,
+                        "at": str(r.created_at),
+                        # approve / reject links for the Control Plane UI
+                        "approve_url": f"/agent/mutations/pending/{r.id}/approve",
+                        "reject_url": f"/agent/mutations/pending/{r.id}/reject",
+                        "diff_url": f"/agent/mutations/pending/{r.id}/diff",
+                    }
+                )
+
+            # 2. Legacy audit events (sandbox failures / older runs)
+            ae_result = sess.execute(
                 text(
                     "SELECT action, target, at, payload FROM audit_event "
                     "WHERE actor = 'system:mutation' "
@@ -685,31 +722,553 @@ async def list_mutations(
                 ),
                 {"limit": max(1, min(limit, 200))},
             )
-            rows = []
-            for r in result:
+            for r in ae_result:
                 payload = r.payload if isinstance(r.payload, dict) else {}
+                # Skip audit events that correspond to a pending_commit row
+                # already in the list above (they share the run_id)
                 rows.append(
                     {
-                        "action": r.action,
+                        "type": "audit_event",
                         "agent": str(r.target).removeprefix("agent:"),
                         "at": str(r.at),
                         "run_id": payload.get("run_id"),
-                        "pr_url": payload.get("pr_url"),
-                        "branch": payload.get("branch"),
-                        "error_type": payload.get("error_type"),
+                        "commit_sha": payload.get("commit_sha"),
+                        "pending_commit_id": payload.get("pending_commit_id"),
                         "test_summary": payload.get("test_summary"),
                         "status": (
-                            "pr_open"
-                            if r.action == "mutation_pr_opened"
+                            "commit_pending"
+                            if r.action == "mutation_commit_pending"
+                            else "commit_pending"
+                            if r.action == "mutation_eval_failed"
                             else "failed"
                             if r.action == "mutation_sandbox_failed"
                             else "started"
+                            if r.action == "mutation_start"
+                            else r.action
                         ),
+                    }
+                )
+
+        # Sort by timestamp descending (pending_commit.created_at, audit_event.at)
+        rows.sort(key=lambda x: x.get("at", ""), reverse=True)
+        return rows[:limit]
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Pending commit HITL endpoints (commit-gate flow — M2.7)
+# ---------------------------------------------------------------------------# ---------------------------------------------------------------------------
+# Pending commit HITL endpoints (commit-gate flow — M2.7)
+# ---------------------------------------------------------------------------
+
+@router.get("/mutations/pending")
+async def list_pending_commits(
+    limit: int = 50,
+    user: UserContext = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    """Return pending commit rows for the inbox (unreviewed agent self-fixes)."""
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+
+        with get_session() as sess:
+            result = sess.execute(
+                text(
+                    "SELECT id, agent_name, run_id, commit_sha, commit_message, "
+                    "       test_summary, status, reviewed_by, reviewed_at, created_at "
+                    "FROM pending_commit "
+                    "ORDER BY created_at DESC LIMIT :limit"
+                ),
+                {"limit": max(1, min(limit, 200))},
+            )
+            rows = []
+            for r in result:
+                rows.append(
+                    {
+                        "id": str(r.id),
+                        "agent_name": r.agent_name,
+                        "run_id": r.run_id,
+                        "commit_sha": r.commit_sha,
+                        "commit_message": r.commit_message,
+                        "test_summary": r.test_summary,
+                        "status": r.status,
+                        "reviewed_by": r.reviewed_by,
+                        "reviewed_at": str(r.reviewed_at) if r.reviewed_at else None,
+                        "created_at": str(r.created_at),
                     }
                 )
         return rows
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/mutations/pending/{commit_id}/diff")
+async def get_pending_commit_diff(
+    commit_id: str,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Return the unified diff stored for a pending commit (for inline review)."""
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+
+        with get_session() as sess:
+            result = sess.execute(
+                text(
+                    "SELECT id, agent_name, commit_sha, commit_message, "
+                    "       diff_text, test_summary, status FROM pending_commit "
+                    "WHERE id = :id"
+                ),
+                {"id": commit_id},
+            )
+            row = result.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="pending commit not found")
+        return {
+            "id": str(row.id),
+            "agent_name": row.agent_name,
+            "commit_sha": row.commit_sha,
+            "commit_message": row.commit_message,
+            "diff_text": row.diff_text,
+            "test_summary": row.test_summary,
+            "status": row.status,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/mutations/pending/{commit_id}/approve", status_code=200)
+async def approve_pending_commit(
+    commit_id: str,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Approve a pending commit: push it to origin/HEAD from the local clone.
+
+    Pushes the commit that the mutation sandbox staged locally.  On success
+    the row status is set to ``approved``.  Merge conflicts are resolved
+    automatically by ``git push --force-with-lease`` from the authenticated
+    clone (the sandbox always commits on top of the current HEAD; conflicts
+    would only arise if another push landed between sandbox commit and approval,
+    in which case we rebase and push).
+    """
+    import asyncio  # noqa: PLC0415
+
+    from acb_audit import AuditEvent, record  # noqa: PLC0415
+
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+
+        # Fetch the row
+        with get_session() as sess:
+            result = sess.execute(
+                text(
+                    "SELECT id, agent_name, run_id, local_clone_dir, commit_sha, "
+                    "       commit_message, status FROM pending_commit WHERE id = :id"
+                ),
+                {"id": commit_id},
+            )
+            row = result.fetchone()
+
+        if row is None:
+            raise HTTPException(status_code=404, detail="pending commit not found")
+        if row.status not in ("pending", "eval_failed"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"commit is already {row.status}",
+            )
+
+        commit_sha: str = row.commit_sha
+        clone_dir: str = row.local_clone_dir
+
+        # Verify the commit exists in the local clone before trying to push.
+        verify = await asyncio.create_subprocess_exec(
+            "git", "cat-file", "-t", commit_sha,
+            cwd=clone_dir,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await verify.communicate()
+        if verify.returncode != 0:
+            raise HTTPException(
+                status_code=422,
+                detail=f"commit {commit_sha[:8]} not found in local clone at {clone_dir}",
+            )
+
+        # Ensure HEAD points at the commit (in case the sandbox left on a detached state)
+        await _git_exec(clone_dir, ["checkout", commit_sha, "--detach"])
+
+        # Push.  If the fast-forward fails, rebase on top of origin/HEAD and retry.
+        push_ok = await _git_push_with_rebase(clone_dir)
+        if not push_ok:
+            raise HTTPException(
+                status_code=500,
+                detail="git push failed after rebase — check gateway logs",
+            )
+
+        reviewer = getattr(user, "sub", None) or getattr(user, "email", "unknown")
+        with get_session() as sess:
+            sess.execute(
+                text(
+                    "UPDATE pending_commit "
+                    "SET status = 'approved', reviewed_by = :by, reviewed_at = now() "
+                    "WHERE id = :id"
+                ),
+                {"id": commit_id, "by": reviewer},
+            )
+            sess.commit()
+
+        record(
+            AuditEvent(
+                actor=f"human:{reviewer}",
+                action="mutation_commit_approved",
+                target=f"agent:{row.agent_name}",
+                payload={
+                    "pending_commit_id": commit_id,
+                    "commit_sha": commit_sha,
+                    "run_id": row.run_id,
+                },
+            )
+        )
+        _log.info(
+            "mutation.commit_approved",
+            agent=row.agent_name,
+            commit_sha=commit_sha,
+            reviewer=reviewer,
+        )
+        return {"status": "approved", "commit_sha": commit_sha}
+
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/mutations/pending/{commit_id}/reject", status_code=200)
+async def reject_pending_commit(
+    commit_id: str,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Reject a pending commit: drop it from the local clone with git reset HEAD~1.
+
+    The commit is undone locally so the clone is clean for the next mutation
+    attempt.  The row status is set to ``rejected``.
+    """
+    import asyncio  # noqa: PLC0415
+
+    from acb_audit import AuditEvent, record  # noqa: PLC0415
+
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+
+        with get_session() as sess:
+            result = sess.execute(
+                text(
+                    "SELECT id, agent_name, run_id, local_clone_dir, commit_sha, status "
+                    "FROM pending_commit WHERE id = :id"
+                ),
+                {"id": commit_id},
+            )
+            row = result.fetchone()
+
+        if row is None:
+            raise HTTPException(status_code=404, detail="pending commit not found")
+        if row.status not in ("pending", "eval_failed"):
+            raise HTTPException(status_code=409, detail=f"commit is already {row.status}")
+
+        clone_dir: str = row.local_clone_dir
+        commit_sha: str = row.commit_sha
+
+        # Reset HEAD~1 only if HEAD is still the mutation commit (safety check)
+        head_proc = await asyncio.create_subprocess_exec(
+            "git", "rev-parse", "HEAD",
+            cwd=clone_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        head_out, _ = await head_proc.communicate()
+        head_sha = head_out.decode().strip()
+        if head_sha == commit_sha:
+            await _git_exec(clone_dir, ["reset", "HEAD~1", "--mixed"])
+
+        reviewer = getattr(user, "sub", None) or getattr(user, "email", "unknown")
+        with get_session() as sess:
+            sess.execute(
+                text(
+                    "UPDATE pending_commit "
+                    "SET status = 'rejected', reviewed_by = :by, reviewed_at = now() "
+                    "WHERE id = :id"
+                ),
+                {"id": commit_id, "by": reviewer},
+            )
+            sess.commit()
+
+        record(
+            AuditEvent(
+                actor=f"human:{reviewer}",
+                action="mutation_commit_rejected",
+                target=f"agent:{row.agent_name}",
+                payload={
+                    "pending_commit_id": commit_id,
+                    "commit_sha": commit_sha,
+                    "run_id": row.run_id,
+                },
+            )
+        )
+        _log.info(
+            "mutation.commit_rejected",
+            agent=row.agent_name,
+            commit_sha=commit_sha,
+            reviewer=reviewer,
+        )
+        return {"status": "rejected", "commit_sha": commit_sha}
+
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/mutations/pending/{commit_id}/remutate", status_code=200)
+async def remutate_pending_commit(
+    commit_id: str,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Re-mutate an eval_failed commit: reset the local clone and clear the row.
+
+    This is the "try again" action for commits where tests failed.  It:
+    1. Resets the local clone with ``git reset HEAD~1 --mixed`` so the
+       working tree is clean for a fresh mutation attempt.
+    2. Marks the row as ``rejected`` (with reviewed_by = 'system:remutate').
+
+    The next time the same agent fails at runtime a new mutation will be
+    triggered automatically (max_mutation_attempts = 1 per *run*, so a fresh
+    run resets the counter).  To manually trigger, re-run the agent from chat.
+    """
+    import asyncio  # noqa: PLC0415
+
+    from acb_audit import AuditEvent, record  # noqa: PLC0415
+
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+
+        with get_session() as sess:
+            result = sess.execute(
+                text(
+                    "SELECT id, agent_name, run_id, local_clone_dir, commit_sha, status "
+                    "FROM pending_commit WHERE id = :id"
+                ),
+                {"id": commit_id},
+            )
+            row = result.fetchone()
+
+        if row is None:
+            raise HTTPException(status_code=404, detail="pending commit not found")
+        if row.status not in ("eval_failed", "pending"):
+            raise HTTPException(status_code=409, detail=f"commit is already {row.status}")
+
+        clone_dir: str = row.local_clone_dir
+        commit_sha: str = row.commit_sha
+
+        # Only reset if HEAD is still the mutation commit (safety check)
+        head_proc = await asyncio.create_subprocess_exec(
+            "git", "rev-parse", "HEAD",
+            cwd=clone_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        head_out, _ = await head_proc.communicate()
+        head_sha = head_out.decode().strip()
+        if head_sha == commit_sha:
+            await _git_exec(clone_dir, ["reset", "HEAD~1", "--mixed"])
+
+        reviewer = getattr(user, "sub", None) or getattr(user, "email", "unknown")
+        with get_session() as sess:
+            sess.execute(
+                text(
+                    "UPDATE pending_commit "
+                    "SET status = 'rejected', reviewed_by = 'system:remutate', reviewed_at = now() "
+                    "WHERE id = :id"
+                ),
+                {"id": commit_id},
+            )
+            sess.commit()
+
+        record(
+            AuditEvent(
+                actor=f"human:{reviewer}",
+                action="mutation_commit_remutate_requested",
+                target=f"agent:{row.agent_name}",
+                payload={
+                    "pending_commit_id": commit_id,
+                    "commit_sha": commit_sha,
+                    "run_id": row.run_id,
+                },
+            )
+        )
+        _log.info(
+            "mutation.remutate_requested",
+            agent=row.agent_name,
+            commit_sha=commit_sha,
+            by=reviewer,
+        )
+        return {
+            "status": "reset",
+            "commit_sha": commit_sha,
+            "message": (
+                "Commit cleared from local clone. "
+                "Trigger a fresh agent run to attempt a new fix."
+            ),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.delete("/mutations/pending/{commit_id}", status_code=200)
+async def delete_pending_commit(
+    commit_id: str,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Delete a pending_commit row regardless of status.
+
+    Used by the UI X button to clear any commit entry (pending, approved,
+    rejected, failed) from the agent card view.
+    """
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+
+        reviewer = getattr(user, "sub", None) or getattr(user, "email", "unknown")
+        with get_session() as sess:
+            result = sess.execute(
+                text("DELETE FROM pending_commit WHERE id = :id"),
+                {"id": commit_id},
+            )
+            deleted = result.rowcount
+            sess.commit()
+
+        _log.info("mutation.commit_deleted", commit_id=commit_id, rows=deleted, by=reviewer)
+        return {"deleted": commit_id, "rows_deleted": deleted}
+
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.delete("/mutations/audit/{run_id}", status_code=200)
+async def dismiss_mutation_event(
+    run_id: str,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Remove failed mutation audit_event rows for a given run_id from the inbox.
+
+    Only affects rows where actor = 'system:mutation' so human-created audit
+    records are never touched.  Non-fatal if run_id not found.
+    """
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+
+        reviewer = getattr(user, "sub", None) or getattr(user, "email", "unknown")
+        with get_session() as sess:
+            result = sess.execute(
+                text(
+                    "DELETE FROM audit_event "
+                    "WHERE actor = 'system:mutation' "
+                    "AND payload->>'run_id' = :run_id"
+                ),
+                {"run_id": run_id},
+            )
+            deleted = result.rowcount
+            sess.commit()
+
+        _log.info("mutation.audit_dismissed", run_id=run_id, rows=deleted, by=reviewer)
+        return {"dismissed": run_id, "rows_deleted": deleted}
+
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Git helpers for the approve endpoint
+# ---------------------------------------------------------------------------
+
+async def _git_exec(cwd: str, args: list[str]) -> int:
+    """Run a git command, return the return code."""
+    import asyncio  # noqa: PLC0415
+
+    proc = await asyncio.create_subprocess_exec(
+        "git", *args,
+        cwd=cwd,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    await proc.communicate()
+    return proc.returncode
+
+
+async def _git_push_with_rebase(clone_dir: str) -> bool:
+    """Push HEAD.  If rejected (non-fast-forward), rebase on origin/HEAD and retry.
+
+    Returns True on success, False on unrecoverable failure.
+    """
+    import asyncio  # noqa: PLC0415
+
+    # First attempt — simple push
+    proc = await asyncio.create_subprocess_exec(
+        "git", "push", "origin", "HEAD",
+        cwd=clone_dir,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=60)
+    if proc.returncode == 0:
+        return True
+
+    stderr = stderr_bytes.decode(errors="replace")
+    _log.warning("mutation.push_rejected", reason=stderr[:300])
+
+    # Fetch + rebase on top of the current remote HEAD, preferring our changes
+    # on any conflict (the mutation sandbox authored the change, take it).
+    fetch_rc = await _git_exec(clone_dir, ["fetch", "origin"])
+    if fetch_rc != 0:
+        return False
+
+    rebase_proc = await asyncio.create_subprocess_exec(
+        "git", "rebase", "origin/HEAD",
+        cwd=clone_dir,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env={**__import__("os").environ, "GIT_SEQUENCE_EDITOR": "true"},
+    )
+    _, rebase_err = await asyncio.wait_for(rebase_proc.communicate(), timeout=60)
+    if rebase_proc.returncode != 0:
+        # Rebase hit conflicts — auto-resolve by taking ours
+        _log.warning(
+            "mutation.rebase_conflict",
+            hint="auto-resolving with checkout --ours",
+            stderr=rebase_err.decode(errors="replace")[:200],
+        )
+        await _git_exec(clone_dir, ["checkout", "--ours", "."])
+        await _git_exec(clone_dir, ["add", "-A"])
+        await _git_exec(clone_dir, ["rebase", "--continue"])
+
+    # Retry push
+    retry_proc = await asyncio.create_subprocess_exec(
+        "git", "push", "origin", "HEAD",
+        cwd=clone_dir,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    await asyncio.wait_for(retry_proc.communicate(), timeout=60)
+    return retry_proc.returncode == 0
 
 
 @router.post("/webhook/{source}", status_code=status.HTTP_202_ACCEPTED)

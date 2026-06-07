@@ -7,7 +7,8 @@ from contextlib import asynccontextmanager
 
 from acb_auth import UserContext, UserRole, get_current_user, require_role
 from acb_common import configure_logging, get_logger, get_settings
-from fastapi import Depends, FastAPI
+from fastapi import BackgroundTasks, Depends, FastAPI
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 _log = get_logger("gateway")
@@ -17,12 +18,10 @@ _log = get_logger("gateway")
 # running asyncio event loop.  Importing here (module level, before uvicorn
 # starts the loop) avoids the deadlock entirely.
 try:
-    from agent_framework.ag_ui import add_agent_framework_fastapi_endpoint as _add_ag_ui_endpoint
     from orchestrator.agents import build_orchestrator_agent as _build_orchestrator_agent
     _HAS_MAF = True
 except ImportError:
     _HAS_MAF = False
-    _add_ag_ui_endpoint = None
     _build_orchestrator_agent = None
 
 
@@ -64,16 +63,91 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ── Wire AG-UI endpoint (module level so imports happen before event loop) ──
+# ── Wire AG-UI endpoint — custom per-request endpoint with memory injection ──
+# Replaced the singleton _add_ag_ui_endpoint pattern (which pre-built one agent
+# at module level, making per-request memory enrichment impossible) with a
+# custom FastAPI POST handler that:
+#   1. Builds a fresh MAF Agent per-request (cheap — just wires tools, no I/O)
+#   2. Enriches its instructions with Mem0 + Graphiti context for this user
+#   3. Streams AG-UI SSE events via AgentFrameworkAgent + EventEncoder
+#   4. Fires background memory extraction after the run
 if _HAS_MAF:
     try:
-        _maf_agent = _build_orchestrator_agent(with_history=False)
-        _add_ag_ui_endpoint(
-            app,
-            _maf_agent,
-            "/copilot/chat",
-            dependencies=[Depends(get_current_user)],
-        )
+        from agent_framework_ag_ui import AGUIRequest as _AGUIRequest
+        from ag_ui.encoder import EventEncoder as _EventEncoder
+        from ag_ui.core.events import RunErrorEvent as _RunErrorEvent
+        from agent_framework.ag_ui import AgentFrameworkAgent as _AgentFrameworkAgent
+
+        @app.post("/copilot/chat", tags=["AG-UI"], response_model=None)
+        async def copilot_chat(
+            request_body: _AGUIRequest,
+            background_tasks: BackgroundTasks,
+            user: UserContext = Depends(get_current_user),
+        ) -> StreamingResponse:
+            """MAF orchestrator: per-request agent with Mem0+Graphiti memory injection."""
+            from orchestrator.agents import (
+                build_orchestrator_agent,
+                enrich_instructions_with_memory,
+            )
+
+            user_id: str = getattr(user, "email", "") or "anonymous"
+            input_data = request_body.model_dump(exclude_none=True)
+
+            # Extract the last user message so memory search is query-focused
+            messages = input_data.get("messages", [])
+            last_user_msg: str = next(
+                (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
+                "",
+            )
+
+            # Build per-request agent (cheap — tools are closures, no network I/O)
+            agent = build_orchestrator_agent(with_history=False)
+
+            # Inject Mem0 + Graphiti context into default_options (no-op if disabled)
+            if last_user_msg:
+                enriched = await enrich_instructions_with_memory(agent, user_id, last_user_msg)
+                opts = agent.default_options
+                if isinstance(opts, dict) and enriched:
+                    opts["instructions"] = enriched
+
+            protocol_runner = _AgentFrameworkAgent(agent=agent)
+
+            async def event_generator():
+                encoder = _EventEncoder()
+                try:
+                    async for event in protocol_runner.run(input_data):
+                        yield encoder.encode(event)
+                except Exception as exc:  # noqa: BLE001
+                    _log.exception("copilot_chat.stream_error")
+                    try:
+                        yield encoder.encode(_RunErrorEvent(
+                            message="Internal error during agent run",
+                            code=type(exc).__name__,
+                        ))
+                    except Exception:
+                        pass
+
+            # Post-run memory extraction (fires after response stream closes)
+            try:
+                from acb_memory import add_memories_background  # noqa: PLC0415
+                if last_user_msg and messages:
+                    conv = [
+                        {"role": m.get("role", "user"), "content": m.get("content", "")}
+                        for m in messages if m.get("content")
+                    ]
+                    background_tasks.add_task(add_memories_background, user_id, conv)
+            except ImportError:
+                pass
+
+            return StreamingResponse(
+                event_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
     except Exception as _exc:
         _log.warning("gateway.ag_ui_failed", error=str(_exc))
 
@@ -131,6 +205,20 @@ try:
     from gateway.routes.chat import router as _chat_router
 
     app.include_router(_chat_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
+    from gateway.routes.workspace import router as _workspace_router
+
+    app.include_router(_workspace_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
+    from gateway.routes.memory import router as _memory_router
+
+    app.include_router(_memory_router)
 except Exception:  # pragma: no cover
     pass
 
@@ -276,15 +364,22 @@ class PullResponse(BaseModel):
 @app.post("/pull", response_model=PullResponse, tags=["pull"])
 async def pull(req: PullRequest, _user: UserContext = Depends(get_current_user)) -> PullResponse:
     """Phase-0 pull Q&A: routes through the MAF orchestrator agent."""
+    import asyncio
     import uuid
 
     from acb_llm.guardrails import CITATION_RE  # local import to avoid cold-start cost
 
     trace_id = uuid.uuid4().hex
-    _log.info("pull.received", query=req.query, user=req.user_email, trace_id=trace_id)
+    user_id: str = req.user_email or getattr(_user, "email", "") or "anonymous"
+    _log.info("pull.received", query=req.query, user=user_id, trace_id=trace_id)
     try:
-        from orchestrator.agents import build_orchestrator_agent
+        from orchestrator.agents import build_orchestrator_agent, enrich_instructions_with_memory
         agent = build_orchestrator_agent(with_history=False)
+        # Inject Mem0 + Graphiti context for this user + query (no-op if disabled)
+        enriched = await enrich_instructions_with_memory(agent, user_id, req.query)
+        opts = agent.default_options
+        if isinstance(opts, dict) and enriched:
+            opts["instructions"] = enriched
         async with agent:
             response = await agent.run(req.query)
         text = response.text or ""
@@ -294,6 +389,22 @@ async def pull(req: PullRequest, _user: UserContext = Depends(get_current_user))
             answer=f"[agent error] {type(exc).__name__}: {exc}", citations=[], trace_id=trace_id
         )
     citations = sorted({m.group(0) for m in CITATION_RE.finditer(text)})
+    # Background: extract facts from this exchange into Mem0
+    try:
+        from acb_memory import add_memories_background, add_episode  # noqa: PLC0415
+        messages = [
+            {"role": "user", "content": req.query},
+            {"role": "assistant", "content": text},
+        ]
+        asyncio.create_task(add_memories_background(user_id, messages))
+        asyncio.create_task(add_episode(
+            name=f"pull:{trace_id[:8]}",
+            content=f"Q: {req.query}\nA: {text[:500]}",
+            source_description="pull_endpoint",
+            group_id=user_id,
+        ))
+    except ImportError:
+        pass
     return PullResponse(answer=text, citations=citations, trace_id=trace_id)
 
 

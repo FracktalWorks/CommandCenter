@@ -544,6 +544,15 @@ async def set_provider_key(
         raise HTTPException(status_code=400, detail="api_key cannot be empty")
     try:
         _write_env_key(env_var, req.api_key.strip())
+        # Update the live process environment so _is_provider_configured()
+        # returns True immediately without a gateway restart.
+        os.environ[env_var] = req.api_key.strip()
+        # Bust the settings LRU cache so get_settings() also picks up the new value.
+        try:
+            from acb_common.settings import get_settings as _gs  # noqa: PLC0415
+            _gs.cache_clear()
+        except Exception:  # noqa: BLE001
+            pass
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to write env: {exc}") from exc
     _log.info("settings.llm.key_updated", provider=req.provider, actor=_user.email)

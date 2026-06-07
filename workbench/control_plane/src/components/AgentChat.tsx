@@ -22,16 +22,13 @@ import GenerativeUIPanel from "@/components/GenerativeUIPanel";
 import { getMessages, saveMessages, fetchMessagesFromDb, type PersistedMessage } from "@/lib/sessions";
 
 // Unified model fallback — overridden at runtime from /api/models/all.
+// Only includes always-available models (tiers + auto SDK).
+// Provider-specific models are added dynamically when keys are configured.
 const MODELS_FALLBACK: UnifiedModel[] = [
-  { id: "auto",               label: "auto (SDK picks)",   runtime: "copilot", group: "GitHub Copilot SDK" },
-  { id: "claude-sonnet-4.5",  label: "Claude Sonnet 4.5",  runtime: "copilot", group: "GitHub Copilot SDK" },
-  { id: "claude-haiku-4.5",   label: "Claude Haiku 4.5",   runtime: "copilot", group: "GitHub Copilot SDK" },
-  { id: "gpt-5.5",            label: "GPT 5.5",            runtime: "copilot", group: "GitHub Copilot SDK" },
-  { id: "tier1-local-qwen3",  label: "Tier 1 — Gemini 2.5 Flash Lite", runtime: "litellm", group: "LiteLLM — Tiers" },
-  { id: "tier2-sonnet",       label: "Tier 2 — Gemini 2.5 Flash",      runtime: "litellm", group: "LiteLLM — Tiers" },
-  { id: "tier3-opus",         label: "Tier 3 — Gemini 2.5 Pro",        runtime: "litellm", group: "LiteLLM — Tiers" },
-  { id: "anthropic/claude-sonnet-4-5", label: "Claude Sonnet 4.5", runtime: "litellm", group: "LiteLLM — Anthropic" },
-  { id: "anthropic/claude-haiku-4-5",  label: "Claude Haiku 4.5",  runtime: "litellm", group: "LiteLLM — Anthropic" },
+  { id: "auto",          label: "auto (SDK picks)",       runtime: "copilot", group: "GitHub Copilot SDK" },
+  { id: "tier1-local-qwen3", label: "Tier 1 (fast / cheap)",   runtime: "litellm", group: "LiteLLM — Tiers" },
+  { id: "tier2-sonnet",      label: "Tier 2 (balanced)",        runtime: "litellm", group: "LiteLLM — Tiers" },
+  { id: "tier3-opus",        label: "Tier 3 (powerful)",        runtime: "litellm", group: "LiteLLM — Tiers" },
 ];
 
 type SendMode = "send" | "queue" | "steer";

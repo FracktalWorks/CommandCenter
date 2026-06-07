@@ -837,13 +837,44 @@ export default function ModelsPage() {
               Provider Status
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {config.providers.map((p) => (
-                <ProviderCard
-                  key={p.id}
-                  provider={p}
-                  onKeySet={(key) => handleKeySet(p.id, key)}
-                />
-              ))}
+              {(() => {
+                // Merge the gateway's provider list with the static PROVIDER_GUIDES list
+                // so that Anthropic, OpenRouter etc. always appear even if the gateway is
+                // running old code that doesn't include them yet.
+                const gatewayProviders = config.providers;
+                const gatewayIds = new Set(gatewayProviders.map((p) => p.id));
+
+                // Provider env-var map (mirrors settings.py — for the stub entries)
+                const STATIC_ENV: Record<string, string> = {
+                  gemini: "GEMINI_API_KEY", openai: "OPENAI_API_KEY",
+                  anthropic: "ANTHROPIC_API_KEY", openrouter: "OPENROUTER_API_KEY",
+                  github: "GITHUB_TOKEN", groq: "GROQ_API_KEY",
+                  mistral: "MISTRAL_API_KEY", together: "TOGETHER_API_KEY",
+                };
+
+                // Add stub entries for any providers with a guide that aren't in the gateway response
+                const extraProviders: ProviderInfo[] = Object.entries(PROVIDER_GUIDES)
+                  .filter(([id]) => !gatewayIds.has(id))
+                  .map(([id]) => ({
+                    id,
+                    label: {
+                      gemini: "Google Gemini", openai: "OpenAI", anthropic: "Anthropic",
+                      openrouter: "OpenRouter", github: "GitHub Copilot", groq: "Groq",
+                      mistral: "Mistral AI", together: "Together AI",
+                    }[id] ?? id,
+                    configured: false,
+                    env_var: STATIC_ENV[id] ?? "",
+                    models: [],
+                  }));
+
+                return [...gatewayProviders, ...extraProviders].map((p) => (
+                  <ProviderCard
+                    key={p.id}
+                    provider={p}
+                    onKeySet={(key) => handleKeySet(p.id, key)}
+                  />
+                ));
+              })()}
             </div>
             <p className="mt-3 text-xs text-zinc-600">
               Keys are written to <code className="font-mono">infra/.env</code> and LiteLLM

@@ -634,15 +634,16 @@ async def _register_pending_commit(
         from sqlalchemy import text  # noqa: PLC0415
 
         row_id = str(uuid.uuid4())
+        reviewed_at_expr = "now()" if reviewed_by is not None else "NULL"
         with get_session() as sess:
             sess.execute(
                 text(
                     "INSERT INTO pending_commit "
                     "(id, agent_name, run_id, local_clone_dir, commit_sha, "
                     " commit_message, diff_text, test_summary, status, reviewed_by, reviewed_at) "
-                    "VALUES (:id, :agent_name, :run_id, :local_clone_dir, :commit_sha, "
-                    "        :commit_message, :diff_text, :test_summary, :status, "
-                    "        :reviewed_by, CASE WHEN :reviewed_by IS NOT NULL THEN now() ELSE NULL END)"
+                    f"VALUES (:id, :agent_name, :run_id, :local_clone_dir, :commit_sha, "
+                    f"        :commit_message, :diff_text, :test_summary, :status, "
+                    f"        :reviewed_by, {reviewed_at_expr})"
                 ),
                 {
                     "id": row_id,

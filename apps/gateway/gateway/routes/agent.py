@@ -900,6 +900,8 @@ async def approve_pending_commit(
 
         # Find the local branch that contains the commit and check it out.
         # This avoids a detached HEAD state which breaks `git push origin HEAD`.
+        # Push only up to this specific commit (not the full branch tip) so that
+        # approving an earlier commit in a chain doesn't push unapproved later ones.
         branch_proc = await asyncio.create_subprocess_exec(
             "git", "branch", "--contains", commit_sha, "--format=%(refname:short)",
             cwd=clone_dir,
@@ -913,7 +915,7 @@ async def approve_pending_commit(
         await _git_exec(clone_dir, ["checkout", local_branch])
 
         # Push.  If the fast-forward fails, rebase on top of origin/HEAD and retry.
-        push_ok = await _git_push_with_rebase(clone_dir)
+        push_ok = await _git_push_with_rebase(clone_dir, commit_sha)
         if not push_ok:
             raise HTTPException(
                 status_code=500,
@@ -932,6 +934,55 @@ async def approve_pending_commit(
             )
             sess.commit()
 
+        # ── Cascade: auto-approve any other pending commits for the same agent
+        # that are ancestors of the approved commit.  These were all pushed to
+        # the remote as part of the same push (git sends all commits between
+        # origin/<branch> and HEAD in one push).
+        cascade_ids: list[str] = []
+        try:
+            with get_session() as sess:
+                others = sess.execute(
+                    text(
+                        "SELECT id, commit_sha FROM pending_commit "
+                        "WHERE agent_name = :agent AND id != :id "
+                        "AND status IN ('pending', 'eval_failed')"
+                    ),
+                    {"agent": row.agent_name, "id": commit_id},
+                ).fetchall()
+
+            for other in others:
+                # is_ancestor returns 0 when other_sha IS an ancestor of approved_sha
+                anc_proc = await asyncio.create_subprocess_exec(
+                    "git", "merge-base", "--is-ancestor", other.commit_sha, commit_sha,
+                    cwd=clone_dir,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await anc_proc.communicate()
+                if anc_proc.returncode == 0:
+                    cascade_ids.append(str(other.id))
+
+            if cascade_ids:
+                with get_session() as sess:
+                    sess.execute(
+                        text(
+                            "UPDATE pending_commit "
+                            "SET status = 'approved', reviewed_by = :by, reviewed_at = now() "
+                            "WHERE id = ANY(:ids)"
+                        ),
+                        {"by": f"cascade:{reviewer}", "ids": cascade_ids},
+                    )
+                    sess.commit()
+                _log.info(
+                    "mutation.cascade_approved",
+                    agent=row.agent_name,
+                    approved_sha=commit_sha,
+                    cascade_count=len(cascade_ids),
+                )
+        except Exception as _cascade_exc:  # noqa: BLE001
+            # Non-fatal — the primary commit is already approved
+            _log.warning("mutation.cascade_failed", error=str(_cascade_exc))
+
         record(
             AuditEvent(
                 actor=f"human:{reviewer}",
@@ -949,8 +1000,13 @@ async def approve_pending_commit(
             agent=row.agent_name,
             commit_sha=commit_sha,
             reviewer=reviewer,
+            cascade=len(cascade_ids),
         )
-        return {"status": "approved", "commit_sha": commit_sha}
+        return {
+            "status": "approved",
+            "commit_sha": commit_sha,
+            "cascade_approved": len(cascade_ids),
+        }
 
     except HTTPException:
         raise
@@ -1225,8 +1281,13 @@ async def _git_exec(cwd: str, args: list[str]) -> int:
     return proc.returncode
 
 
-async def _git_push_with_rebase(clone_dir: str) -> bool:
-    """Push HEAD to the remote default branch.  If rejected, rebase and retry.
+async def _git_push_with_rebase(clone_dir: str, commit_sha: str | None = None) -> bool:
+    """Push a specific commit (or HEAD) to the remote default branch.
+
+    ``commit_sha``: if given, push exactly this commit — not the full branch
+    tip.  This ensures approving commit A in a chain A→B→C only pushes A,
+    not B or C (which may not yet be approved).  When approving the tip commit
+    all ancestors are pushed automatically by git.
 
     Returns True on success, False on unrecoverable failure.
     """
@@ -1251,8 +1312,11 @@ async def _git_push_with_rebase(clone_dir: str) -> bool:
     except Exception:  # noqa: BLE001
         pass
 
-    # First attempt — push HEAD to the discovered remote branch
-    push_target = f"HEAD:{remote_branch}"
+    # Push <commit_sha>:<remote_branch> (or HEAD if no specific sha given)
+    push_src = commit_sha if commit_sha else "HEAD"
+    push_target = f"{push_src}:{remote_branch}"
+
+    # First attempt
     proc = await asyncio.create_subprocess_exec(
         "git", "push", "origin", push_target,
         cwd=clone_dir,
@@ -1290,9 +1354,15 @@ async def _git_push_with_rebase(clone_dir: str) -> bool:
         await _git_exec(clone_dir, ["add", "-A"])
         await _git_exec(clone_dir, ["rebase", "--continue"])
 
-    # Retry push
+    # After rebase the SHA of our commit changes; find the new HEAD
+    new_head = push_src
+    if commit_sha:
+        # After rebase our commit is no longer at commit_sha — use HEAD
+        new_head = "HEAD"
+    push_target_retry = f"{new_head}:{remote_branch}"
+
     retry_proc = await asyncio.create_subprocess_exec(
-        "git", "push", "origin", push_target,
+        "git", "push", "origin", push_target_retry,
         cwd=clone_dir,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,

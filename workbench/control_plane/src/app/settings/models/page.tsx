@@ -600,6 +600,148 @@ interface CustomModel {
 }
 
 // ---------------------------------------------------------------------------
+// Visible / Hidden model manager
+// ---------------------------------------------------------------------------
+
+interface VisibleModel { id: string; label: string; group: string; }
+
+function ModelVisibilityManager() {
+  const [allModels, setAllModels] = useState<VisibleModel[]>([]);
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [showHidden, setShowHidden] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [modRes, hidRes] = await Promise.all([
+        fetch("/api/models/all"),
+        fetch("/api/settings/llm/hidden-models"),
+      ]);
+      if (modRes.ok) {
+        const d = (await modRes.json()) as { models?: VisibleModel[] };
+        setAllModels(d.models ?? []);
+      }
+      if (hidRes.ok) {
+        const h = (await hidRes.json()) as string[];
+        setHiddenIds(new Set(Array.isArray(h) ? h : []));
+      }
+    } catch { /* ok */ } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const hide = async (id: string) => {
+    setBusy(id);
+    try {
+      await fetch("/api/settings/llm/hidden-models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      setHiddenIds((prev) => new Set([...prev, id]));
+    } finally { setBusy(null); }
+  };
+
+  const unhide = async (id: string) => {
+    setBusy(id);
+    try {
+      await fetch(`/api/settings/llm/hidden-models/${encodeURIComponent(id)}`, { method: "DELETE" });
+      setHiddenIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
+    } finally { setBusy(null); }
+  };
+
+  const query = search.trim().toLowerCase();
+  // Models currently visible in the picker (from /api/models/all — already hid-filtered)
+  // We show them all here + the hidden ones so users can manage the full set.
+  const visibleModels = allModels.filter(
+    (m) => !hiddenIds.has(m.id) && (!query || m.label.toLowerCase().includes(query) || m.id.toLowerCase().includes(query))
+  );
+  const hiddenModels = [...hiddenIds].filter(
+    (id) => !query || id.toLowerCase().includes(query)
+  );
+
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <div className="text-sm font-semibold text-zinc-100">Visible Models</div>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            Hide models you don&apos;t use — they disappear from the chat picker instantly.
+          </p>
+        </div>
+        {hiddenIds.size > 0 && (
+          <button
+            onClick={() => setShowHidden((v) => !v)}
+            className="text-xs text-zinc-500 hover:text-zinc-300 underline underline-offset-2 transition-colors"
+          >
+            {showHidden ? "Hide hidden list" : `Show ${hiddenIds.size} hidden`}
+          </button>
+        )}
+      </div>
+
+      {/* Search */}
+      <input
+        type="text"
+        placeholder="Search models…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="w-full mb-3 rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:border-zinc-500 focus:outline-none"
+      />
+
+      {loading ? (
+        <div className="text-xs text-zinc-600 py-2">Loading…</div>
+      ) : (
+        <div className="space-y-1 max-h-72 overflow-y-auto">
+          {/* Visible models */}
+          {visibleModels.map((m) => (
+            <div key={m.id} className="flex items-center justify-between rounded-md border border-zinc-700/40 bg-zinc-800/30 px-3 py-1.5 text-xs">
+              <div className="min-w-0">
+                <span className="text-zinc-200 truncate">{m.label}</span>
+                <span className="ml-2 text-zinc-600 text-[10px] font-mono truncate">{m.group}</span>
+              </div>
+              <button
+                onClick={() => hide(m.id)}
+                disabled={busy === m.id}
+                className="ml-2 shrink-0 text-zinc-600 hover:text-orange-400 transition-colors disabled:opacity-40 text-[10px]"
+                title="Hide from picker"
+              >
+                {busy === m.id ? "…" : "Hide"}
+              </button>
+            </div>
+          ))}
+          {visibleModels.length === 0 && !showHidden && (
+            <div className="text-xs text-zinc-600 italic py-1">No visible models match.</div>
+          )}
+
+          {/* Hidden models */}
+          {showHidden && hiddenModels.length > 0 && (
+            <>
+              <div className="pt-2 pb-1 text-[10px] text-zinc-600 uppercase tracking-wide">Hidden</div>
+              {hiddenModels.map((id) => (
+                <div key={id} className="flex items-center justify-between rounded-md border border-zinc-700/30 bg-zinc-900/60 px-3 py-1.5 text-xs opacity-60">
+                  <span className="font-mono text-zinc-500 truncate">{id}</span>
+                  <button
+                    onClick={() => unhide(id)}
+                    disabled={busy === id}
+                    className="ml-2 shrink-0 text-zinc-600 hover:text-emerald-400 transition-colors disabled:opacity-40 text-[10px]"
+                    title="Restore to picker"
+                  >
+                    {busy === id ? "…" : "Unhide"}
+                  </button>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Custom Models Manager
 // ---------------------------------------------------------------------------
 
@@ -621,7 +763,13 @@ function CustomModelsManager() {
     setLoading(true);
     try {
       const r = await fetch("/api/settings/llm/custom-models");
-      if (r.ok) setModels((await r.json()) as CustomModel[]);
+      if (r.ok) {
+        const d = await r.json() as
+          | { custom?: CustomModel[]; hidden?: string[] }
+          | CustomModel[];
+        const list = Array.isArray(d) ? d : (d.custom ?? []);
+        setModels(list);
+      }
     } catch { /* ok */ } finally {
       setLoading(false);
     }
@@ -1096,6 +1244,14 @@ export default function ModelsPage() {
               Custom Models
             </h2>
             <CustomModelsManager />
+          </section>
+
+          {/* Model visibility */}
+          <section className="mb-8">
+            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-600">
+              Model Visibility
+            </h2>
+            <ModelVisibilityManager />
           </section>
 
           {/* LiteLLM UI callout */}

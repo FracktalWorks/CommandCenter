@@ -628,6 +628,44 @@ def _save_custom_models(models: list[dict[str, str]]) -> None:
     p.write_text(json.dumps(models, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def _load_catalogue() -> dict[str, object]:
+    """Load custom_models.json as a dict with 'custom' and 'hidden' lists."""
+    import json  # noqa: PLC0415
+    p = _custom_models_path()
+    if not p.exists():
+        return {"custom": [], "hidden": []}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        # Support legacy format (plain list = custom models only)
+        if isinstance(data, list):
+            return {"custom": data, "hidden": []}
+        return {
+            "custom": data.get("custom", []) if isinstance(data, dict) else [],
+            "hidden": data.get("hidden", []) if isinstance(data, dict) else [],
+        }
+    except Exception:  # noqa: BLE001
+        return {"custom": [], "hidden": []}
+
+
+def _save_catalogue(catalogue: dict[str, object]) -> None:
+    import json  # noqa: PLC0415
+    p = _custom_models_path()
+    p.write_text(json.dumps(catalogue, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+# Keep old helpers working for backward compat
+def _load_custom_models() -> list[dict[str, str]]:
+    cat = _load_catalogue()
+    raw = cat.get("custom", [])
+    return raw if isinstance(raw, list) else []  # type: ignore[return-value]
+
+
+def _save_custom_models(models: list[dict[str, str]]) -> None:
+    cat = _load_catalogue()
+    cat["custom"] = models  # type: ignore[assignment]
+    _save_catalogue(cat)
+
+
 class CustomModelEntry(BaseModel):
     id: str        # LiteLLM model string, e.g. "openrouter/qwen/qwen3.8-preview"
     label: str     # display name in the picker
@@ -645,9 +683,13 @@ class CustomModelAddRequest(BaseModel):
 @router.get("/llm/custom-models")
 async def list_custom_models(
     _user: UserContext = Depends(get_current_user),
-) -> list[CustomModelEntry]:
-    """Return all user-defined custom model entries."""
-    return [CustomModelEntry(**m) for m in _load_custom_models()]
+) -> dict[str, object]:
+    """Return custom models and the hidden model list."""
+    cat = _load_catalogue()
+    return {
+        "custom": [CustomModelEntry(**m) for m in (cat.get("custom") or [])],
+        "hidden": cat.get("hidden") or [],
+    }
 
 
 @router.post("/llm/custom-models", status_code=201)
@@ -700,3 +742,57 @@ async def remove_custom_model(
     _save_custom_models(new_models)
     _log.info("settings.llm.custom_model_removed", id=model_id, actor=_user.email)
     return {"deleted": model_id}
+
+
+# ---------------------------------------------------------------------------
+# Hidden model list  — models suppressed from the chat picker
+# ---------------------------------------------------------------------------
+
+@router.get("/llm/hidden-models")
+async def list_hidden_models(
+    _user: UserContext = Depends(get_current_user),
+) -> list[str]:
+    """Return the list of model IDs currently hidden from the chat picker."""
+    cat = _load_catalogue()
+    raw = cat.get("hidden", [])
+    return raw if isinstance(raw, list) else []  # type: ignore[return-value]
+
+
+@router.post("/llm/hidden-models", status_code=201)
+async def hide_model(
+    body: dict[str, str],
+    _user: UserContext = Depends(get_current_user),
+) -> dict[str, str]:
+    """Add a model ID to the hidden list so it no longer appears in the chat picker."""
+    model_id = (body.get("id") or "").strip()
+    if not model_id:
+        raise HTTPException(status_code=400, detail="id cannot be empty")
+    cat = _load_catalogue()
+    hidden: list[str] = cat.get("hidden", [])  # type: ignore[assignment]
+    if not isinstance(hidden, list):
+        hidden = []
+    if model_id not in hidden:
+        hidden.append(model_id)
+        cat["hidden"] = hidden  # type: ignore[assignment]
+        _save_catalogue(cat)
+        _log.info("settings.llm.model_hidden", id=model_id, actor=_user.email)
+    return {"hidden": model_id}
+
+
+@router.delete("/llm/hidden-models/{model_id:path}", status_code=200)
+async def unhide_model(
+    model_id: str,
+    _user: UserContext = Depends(get_current_user),
+) -> dict[str, str]:
+    """Remove a model ID from the hidden list so it reappears in the chat picker."""
+    cat = _load_catalogue()
+    hidden: list[str] = cat.get("hidden", [])  # type: ignore[assignment]
+    if not isinstance(hidden, list):
+        hidden = []
+    if model_id not in hidden:
+        raise HTTPException(status_code=404, detail=f"Model {model_id!r} is not hidden")
+    hidden.remove(model_id)
+    cat["hidden"] = hidden  # type: ignore[assignment]
+    _save_catalogue(cat)
+    _log.info("settings.llm.model_unhidden", id=model_id, actor=_user.email)
+    return {"unhidden": model_id}

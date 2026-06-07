@@ -152,22 +152,31 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
     if (process.env.VLLM_BASE_URL?.trim())       configured.add("vllm");
   }
 
-  // ── Fetch user-defined custom models from the gateway ────────────────────
+  // ── Fetch custom models + hidden list from the gateway ───────────────────
   // These are stored in infra/custom_models.json and managed via
-  // Settings → Models → Custom Models.  They are merged LAST so they always
-  // appear at the bottom of their provider group in the picker.
+  // Settings → Models.  Custom models are merged into the picker; hidden
+  // model IDs are removed from all groups (built-in + custom).
   let customModels: { id: string; label: string; provider: string; group: string }[] = [];
+  const hiddenSet = new Set<string>();
   try {
     const cr = await fetch(`${GATEWAY_URL}/settings/llm/custom-models`, {
       headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
       signal: AbortSignal.timeout(3_000),
     });
     if (cr.ok) {
-      const data = (await cr.json()) as { id: string; label: string; provider: string; group: string }[];
-      if (Array.isArray(data)) customModels = data;
+      const data = (await cr.json()) as
+        | { custom?: { id: string; label: string; provider: string; group: string }[]; hidden?: string[] }
+        | { id: string; label: string; provider: string; group: string }[];
+      // Support both old (plain array) and new (object with custom+hidden) shapes
+      if (Array.isArray(data)) {
+        customModels = data;
+      } else {
+        customModels = data.custom ?? [];
+        for (const id of data.hidden ?? []) hiddenSet.add(id);
+      }
     }
   } catch {
-    // custom models file may not exist yet — safe to ignore
+    // safe to ignore — custom_models.json may not exist yet
   }
   // Fetched live from the gateway when GITHUB_TOKEN is set; fallback otherwise.
   let copilotModels: { id: string; label: string }[] = configured.has("github")
@@ -198,20 +207,22 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
     }
   }
 
-  // ── Build model list — only include provider-specific entries when the key is set ─
+  // ── Build model list — filter by provider key + hidden list ─────────────
   const litellmModels = LITELLM_MODELS.filter(
-    (m) => m.provider === null || configured.has(m.provider)
+    (m) => (m.provider === null || configured.has(m.provider)) && !hiddenSet.has(m.id)
   );
 
   const models: UnifiedModel[] = [
     // GitHub Copilot SDK group — only shown when GITHUB_TOKEN is set
     ...(configured.has("github")
-      ? copilotModels.map((m) => ({
-          id: m.id,
-          label: m.label,
-          runtime: "copilot" as ModelRuntime,
-          group: "GitHub Copilot SDK",
-        }))
+      ? copilotModels
+          .filter((m) => !hiddenSet.has(m.id))
+          .map((m) => ({
+            id: m.id,
+            label: m.label,
+            runtime: "copilot" as ModelRuntime,
+            group: "GitHub Copilot SDK",
+          }))
       : []),
     // LiteLLM group — tiers always shown, provider-specific models gated by key
     ...litellmModels.map((m) => ({
@@ -220,9 +231,9 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
       runtime: "litellm" as ModelRuntime,
       group: m.group,
     })),
-    // User-defined custom models — only shown when that provider key is set
+    // User-defined custom models — gated by provider key + hidden filter
     ...customModels
-      .filter((m) => m.provider === null || configured.has(m.provider))
+      .filter((m) => (m.provider === null || configured.has(m.provider)) && !hiddenSet.has(m.id))
       .map((m) => ({
         id: m.id,
         label: m.label,

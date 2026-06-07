@@ -182,7 +182,8 @@ async def spawn_copilot_agent(    task: str,
         f"Create or modify the code as described. Commit and push when done."
     )
 
-    pr_url, container_id = await _run_mutation_sandbox(
+    # _run_mutation_sandbox returns (commit_staged, commit_sha, diff_text, test_summary, container_id)
+    commit_staged, commit_sha, _diff, _test_summary, container_id = await _run_mutation_sandbox(
         agent_name, run_id, run_id[:8], telemetry, settings
     )
 

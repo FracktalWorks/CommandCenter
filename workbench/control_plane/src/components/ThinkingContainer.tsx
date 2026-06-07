@@ -150,7 +150,7 @@ export default function ThinkingContainer({
     let earliest = Infinity;
     let latest = 0;
     for (const t of toolEvents) {
-      if (t.startedAt < earliest) earliest = t.startedAt;
+      if (t.startedAt !== undefined && t.startedAt < earliest) earliest = t.startedAt;
       if (t.endedAt && t.endedAt > latest) latest = t.endedAt;
     }
     if (!isFinite(earliest) || latest === 0) return null;

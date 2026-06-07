@@ -28,7 +28,7 @@ export interface ToolEvent {
   args?: Record<string, unknown>;
   result?: string;
   status: "running" | "done" | "error";
-  startedAt: number;
+  startedAt?: number;
   endedAt?: number;
   /** Set when this tool is a call_agent delegation — the target agent name. */
   subAgentName?: string;

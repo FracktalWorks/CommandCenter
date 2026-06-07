@@ -452,6 +452,21 @@ async def _run_sub_agent_streaming(
         return f"Sub-task to {agent_name!r} failed: {exc}"
 
 
+async def _get_current_head(agent_dir: str) -> str:
+    """Return the current HEAD SHA of *agent_dir*, or '' on error."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "rev-parse", "HEAD",
+            cwd=agent_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        return out.decode(errors="replace").strip() if proc.returncode == 0 else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 async def _install_push_guard(agent_dir: str) -> None:
     """Install a git pre-push hook that rejects all pushes from the local clone.
 
@@ -485,14 +500,16 @@ async def _detect_agent_commits(
     agent_name: str,
     agent_dir: str | None,
     run_id: str,
+    *,
+    since_sha: str | None = None,
 ) -> None:
-    """After a GitHub Copilot agent run, check for commits not yet in origin.
+    """After a GitHub Copilot agent run, register any new commits for inbox approval.
 
-    Copilot SDK agents can write files and run ``git commit`` as part of
-    self-improvement during a normal conversation.  The pre-push hook blocks
-    them from pushing, so new commits accumulate locally.  This function
-    detects those commits and registers each one as a ``pending_commit`` row
-    so they appear in the inbox for human approval.
+    Two detection modes:
+    - ``since_sha`` provided (preferred): detects ALL commits since that SHA,
+      whether pushed or not (``git log {since_sha}..HEAD``).
+    - No ``since_sha``: falls back to local-only detection
+      (``git log origin/HEAD..HEAD``), which misses commits that were pushed.
 
     Only called for ``agent_runtime == "github-copilot"``; MAF agents don't
     commit to the repo during a run.
@@ -503,37 +520,45 @@ async def _detect_agent_commits(
         return
 
     try:
-        # git log origin/HEAD..HEAD --format="%H|%s" lists commits that are
-        # local only (ahead of origin).  If origin is unreachable (e.g. offline
-        # dev) this falls back to checking origin/main or origin/master.
-        proc = await asyncio.create_subprocess_exec(
-            "git", "log", "origin/HEAD..HEAD", "--format=%H|%s",
-            cwd=agent_dir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(
-            proc.communicate(), timeout=10
-        )
-        if proc.returncode != 0:
-            # origin/HEAD may not be set — try explicit branches
-            err = stderr_bytes.decode(errors="replace")
-            if "unknown revision" in err or "ambiguous argument" in err:
-                for base in ("origin/main", "origin/master"):
-                    proc2 = await asyncio.create_subprocess_exec(
-                        "git", "log", f"{base}..HEAD", "--format=%H|%s",
-                        cwd=agent_dir,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    )
-                    out2, _ = await asyncio.wait_for(proc2.communicate(), timeout=10)
-                    if proc2.returncode == 0:
-                        stdout_bytes = out2
-                        break
+        if since_sha:
+            # Detect all new commits since before the run (even if already pushed)
+            git_range = f"{since_sha}..HEAD"
+            proc = await asyncio.create_subprocess_exec(
+                "git", "log", git_range, "--format=%H|%s",
+                cwd=agent_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+            if proc.returncode != 0:
+                return
+        else:
+            # Fallback: only local-only commits (misses pushed ones)
+            proc = await asyncio.create_subprocess_exec(
+                "git", "log", "origin/HEAD..HEAD", "--format=%H|%s",
+                cwd=agent_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=10)
+            if proc.returncode != 0:
+                err = stderr_bytes.decode(errors="replace")
+                if "unknown revision" in err or "ambiguous argument" in err:
+                    for base in ("origin/main", "origin/master"):
+                        proc2 = await asyncio.create_subprocess_exec(
+                            "git", "log", f"{base}..HEAD", "--format=%H|%s",
+                            cwd=agent_dir,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.DEVNULL,
+                        )
+                        out2, _ = await asyncio.wait_for(proc2.communicate(), timeout=10)
+                        if proc2.returncode == 0:
+                            stdout_bytes = out2
+                            break
+                    else:
+                        return
                 else:
                     return
-            else:
-                return
 
         lines = stdout_bytes.decode(errors="replace").strip().splitlines()
         if not lines:
@@ -548,12 +573,26 @@ async def _detect_agent_commits(
 
         from orchestrator.mutation import _git_diff, _register_pending_commit  # noqa: PLC0415
 
+        # Load existing commit SHAs for this agent so we don't double-register.
+        _existing_shas: set[str] = set()
+        try:
+            from acb_graph import get_session as _gs  # noqa: PLC0415
+            from sqlalchemy import text as _txt  # noqa: PLC0415
+            with _gs() as _s:
+                _rows = _s.execute(
+                    _txt("SELECT commit_sha FROM pending_commit WHERE agent_name = :a"),
+                    {"a": agent_name},
+                ).fetchall()
+                _existing_shas = {r[0] for r in _rows}
+        except Exception:  # noqa: BLE001
+            pass
+
         for raw_line in lines:
             parts = raw_line.split("|", 1)
             commit_sha = parts[0].strip()
             commit_message = parts[1].strip() if len(parts) > 1 else commit_sha[:8]
-            if not commit_sha:
-                continue
+            if not commit_sha or commit_sha in _existing_shas:
+                continue  # skip already-registered commits
 
             # Capture the diff for inline review
             diff_text = await _git_diff(agent_dir, commit_sha)
@@ -656,6 +695,26 @@ async def run_agent(
         ) as loaded:
             _agent_dir = str(loaded.agent_dir)
 
+            # For GitHub Copilot SDK agents: install the push guard (prevents
+            # direct pushes; commits stay local until operator approves) and
+            # record the current HEAD so we can detect new commits after the run.
+            _head_before: str = ""
+            _is_copilot_agent = False
+            try:
+                from gateway.routes.agent import (  # noqa: PLC0415
+                    _AGENT_REGISTRY, _load_dynamic_agents as _lda,
+                )
+                _ea = next(
+                    (e for e in _lda() + _AGENT_REGISTRY if e["name"] == agent_name),
+                    None,
+                )
+                if _ea and _ea.get("agent_runtime") == "github-copilot":
+                    _is_copilot_agent = True
+                    await _install_push_guard(_agent_dir)
+                    _head_before = await _get_current_head(_agent_dir)
+            except Exception:  # noqa: BLE001
+                pass
+
             # Resolve credentials for both mandatory and optional integrations.
             # Never raises — partial configs are fine.  Missing integrations are
             # passed to the agent via integration_warnings so it can inform the
@@ -713,7 +772,10 @@ async def run_agent(
         except Exception:  # noqa: BLE001
             pass
         if _registry_runtime == "github-copilot":
-            await _detect_agent_commits(agent_name, _agent_dir, run_id)
+            await _detect_agent_commits(
+                agent_name, _agent_dir, run_id,
+                since_sha=_head_before if _head_before else None,
+            )
         return final_state
 
     except AgentLoadError as exc:
@@ -930,6 +992,11 @@ async def run_agent_stream(
             # real-time visibility of sub-agent progress in the UI.
             if _agent_runtime == "github-copilot" and hasattr(agent, "run"):
                 try:
+                    # Install push guard + capture HEAD before the run so
+                    # _detect_agent_commits can find ALL new commits (even pushed).
+                    await _install_push_guard(str(loaded.agent_dir))
+                    _stream_head_before = await _get_current_head(str(loaded.agent_dir))
+
                     # Inject model override from settings (copilot_chat_model).
                     _configured_model = (getattr(settings, "copilot_chat_model", "") or "").strip()
                     if _configured_model:
@@ -1017,7 +1084,8 @@ async def run_agent_stream(
                     # Post-run: detect any commits the Copilot agent made locally
                     # and register them as pending_commit rows for inbox approval.
                     await _detect_agent_commits(
-                        agent_name, str(loaded.agent_dir), run_id
+                        agent_name, str(loaded.agent_dir), run_id,
+                        since_sha=_stream_head_before if _stream_head_before else None,
                     )
                     return
                 except Exception as _sdk_exc:  # noqa: BLE001

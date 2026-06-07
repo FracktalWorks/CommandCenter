@@ -1,47 +1,28 @@
-"use client";
+﻿"use client";
 
 /**
- * useAgentChat — streaming chat hook for MAF / LiteLLM agents.
+ * useAgentChat — streaming chat hook backed by a module-level store (chatStore.ts).
  *
- * Uses Server-Sent Events (SSE) so tokens and tool-call events stream to the
- * UI in real time, mirroring the VS Code Copilot experience.
+ * State (messages, isLoading, error) lives in chatStore — a singleton Map that
+ * survives component unmount/remount.  SSE loops continue writing to the store
+ * even after navigation away; returning to the chat page immediately reflects
+ * the current stream state via useSyncExternalStore.
  *
- * SSE event types emitted by /api/agent/chat:
- *   {"type":"delta",      "content":"..."}          — partial token
- *   {"type":"reasoning",  "content":"…"}            — model chain-of-thought (reasoning models)
- *   {"type":"progress",   "name":"…"}               — tool about to run (live status)
- *   {"type":"tool_start", "id":"…", "name":"…", "args":{}}
- *   {"type":"tool_end",   "id":"…", "name":"…", "result":"…", "success":bool}
- *   {"type":"done",       "run_id":"…"}
- *   {"type":"error",      "content":"…"}
+ * Multiple concurrent sessions are supported: each threadId has its own store
+ * entry and streams independently.
  */
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import type { ToolEvent } from "@/components/MarkdownMessage";
+import {
+  getSessionState,
+  setSessionState,
+  subscribeSession,
+} from "@/lib/chatStore";
+import type { ChatMessage, ToolEvent } from "@/lib/chatStore";
 
-export type { ToolEvent };
-
-export interface ChatMessage {
-  id: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  timestamp: number;
-  /** True while the assistant is still streaming tokens. */
-  streaming?: boolean;
-  /** Tool-call events that happened while producing this message. */
-  toolEvents?: ToolEvent[];
-  /** Ordered live status lines (tool names) shown in the ThinkingContainer. */
-  progressLines?: string[];
-  /** True while the agent is mid-run (drives the shimmer/working indicator). */
-  isThinkingActive?: boolean;
-  /** Streamed model reasoning / chain-of-thought (reasoning models only). */
-  reasoning?: string;
-  /** AG-UI agent state (STATE_SNAPSHOT / STATE_DELTA) for generative UI. */
-  agentState?: Record<string, unknown>;
-  /** AG-UI CUSTOM events (named rich widgets) emitted during the run. */
-  customEvents?: { name: string; value: unknown }[];
-}
+// Re-export types for backward compatibility with AgentChat.tsx imports.
+export type { ChatMessage, ToolEvent };
 
 export interface ArtifactEntry {
   path: string;
@@ -53,13 +34,9 @@ interface UseAgentChatOptions {
   agentName: string;
   threadId: string;
   initialMessages?: ChatMessage[];
-  /** Copilot SDK model override — e.g. "claude-sonnet-4.5", "gpt-5.5", "auto". */
   model?: string;
-  /** Routing mode: "copilot" (GitHub Copilot SDK) or "litellm" (LiteLLM proxy). */
   mode?: "copilot" | "litellm";
-  /** System-level context (persistent memory / persona) injected server-side. */
   systemContext?: string;
-  /** Called whenever the agent writes a file via write_artifact tool. */
   onArtifact?: (entry: ArtifactEntry) => void;
 }
 
@@ -89,68 +66,76 @@ export function useAgentChat({
 }: UseAgentChatOptions): UseAgentChatReturn {
   const onArtifactRef = useRef(onArtifact);
   useEffect(() => { onArtifactRef.current = onArtifact; }, [onArtifact]);
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // Ref so sendMessage closure always sees latest messages for history
-  const messagesRef = useRef<ChatMessage[]>(initialMessages);
+
+  // Subscribe to the module-level store (survives navigation/unmount).
+  const sessionState = useSyncExternalStore(
+    (l) => subscribeSession(threadId, l),
+    () => getSessionState(threadId),
+    () => getSessionState(threadId),
+  );
+  const messages = sessionState.messages;
+  const isLoading = sessionState.isLoading;
+  const error = sessionState.error;
+
+  // Initialise from initialMessages when store has nothing for this session.
+  const initialMessagesRef = useRef(initialMessages);
+  useEffect(() => { initialMessagesRef.current = initialMessages; }, [initialMessages]);
   useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
-  // Ref to the active AbortController — set on each send, cleared on finish
-  const abortRef = useRef<AbortController | null>(null);
+    const current = getSessionState(threadId);
+    if (current.messages.length === 0 && initialMessagesRef.current.length > 0) {
+      setSessionState(threadId, (prev) => ({
+        ...prev,
+        messages: initialMessagesRef.current,
+      }));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId]);
+
+  // setMessages — backward-compat for AgentChat.tsx DB hydration.
+  const setMessages = useCallback(
+    (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
+      setSessionState(threadId, (prev) => ({
+        ...prev,
+        messages:
+          typeof updater === "function" ? updater(prev.messages) : updater,
+      }));
+    },
+    [threadId],
+  );
 
   const sendMessage = useCallback(
     async (content: string) => {
-      if (!content.trim() || isLoading) return;
+      if (!content.trim() || getSessionState(threadId).isLoading) return;
 
       const controller = new AbortController();
-      abortRef.current = controller;
-
       const userMsg: ChatMessage = {
-        id: nanoid(),
-        role: "user",
-        content: content.trim(),
-        timestamp: Date.now(),
+        id: nanoid(), role: "user", content: content.trim(), timestamp: Date.now(),
       };
-
-      setMessages((prev) => [...prev, userMsg]);
-      setIsLoading(true);
-      setError(null);
-
-      // Create a placeholder streaming message we'll update token-by-token.
       const assistantId = nanoid();
       const assistantMsg: ChatMessage = {
-        id: assistantId,
-        role: "assistant",
-        content: "",
-        timestamp: Date.now(),
-        streaming: true,
-        toolEvents: [],
-        progressLines: [],
-        isThinkingActive: true,
+        id: assistantId, role: "assistant", content: "", timestamp: Date.now(),
+        streaming: true, toolEvents: [], progressLines: [], isThinkingActive: true,
       };
-      setMessages((prev) => [...prev, assistantMsg]);
+
+      setSessionState(threadId, (prev) => ({
+        ...prev,
+        messages: [...prev.messages, userMsg, assistantMsg],
+        isLoading: true, error: null, abortController: controller,
+      }));
 
       try {
+        const history = getSessionState(threadId).messages
+          .slice(0, -1)
+          .filter((m) => m.role !== "system")
+          .map((m) => ({ role: m.role, content: m.content }));
+
         const res = await fetch("/api/agent/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
           body: JSON.stringify({
-            agentName,
-            message: userMsg.content,
-            messages: [...messagesRef.current].map((m) => ({
-              role: m.role,
-              content: m.content,
-            })),
-            threadId,
-            mode,
-            // Always send the model field: "auto" means let the SDK pick;
-            // any other value (e.g. "claude-sonnet-4.5") pins a specific model.
-            model: model ?? "auto",
-            // Persistent memory / persona injected as system-level context.
-            context: systemContext ?? undefined,
+            agentName, message: userMsg.content, messages: history,
+            threadId, mode, model: model ?? "auto", context: systemContext ?? undefined,
           }),
         });
 
@@ -159,15 +144,20 @@ export function useAgentChat({
           throw new Error(text);
         }
 
-        // ── Parse SSE stream ─────────────────────────────────────────────
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
 
+        // Helper: update just the assistant message
+        const upd = (fn: (m: ChatMessage) => ChatMessage) =>
+          setSessionState(threadId, (prev) => ({
+            ...prev,
+            messages: prev.messages.map((m) => m.id === assistantId ? fn(m) : m),
+          }));
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
@@ -176,230 +166,136 @@ export function useAgentChat({
             if (!line.startsWith("data: ")) continue;
             const raw = line.slice(6).trim();
             if (!raw || raw === "[DONE]") continue;
-
             let evt: Record<string, unknown>;
-            try {
-              evt = JSON.parse(raw) as Record<string, unknown>;
-            } catch {
-              continue;
-            }
+            try { evt = JSON.parse(raw) as Record<string, unknown>; } catch { continue; }
+
+
 
             switch (evt.type) {
               case "delta":
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId
-                      ? { ...m, content: m.content + String(evt.content ?? "") }
-                      : m
-                  )
-                );
+                upd((m) => ({ ...m, content: m.content + String(evt.content ?? "") }));
                 break;
-
               case "progress":
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId
-                      ? {
-                          ...m,
-                          progressLines: [
-                            ...(m.progressLines ?? []),
-                            String(evt.name ?? "Working"),
-                          ],
-                        }
-                      : m
-                  )
-                );
+                upd((m) => ({ ...m, progressLines: [...(m.progressLines ?? []), String(evt.name ?? "Working")] }));
                 break;
-
               case "reasoning":
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId
-                      ? { ...m, reasoning: (m.reasoning ?? "") + String(evt.content ?? "") }
-                      : m
-                  )
-                );
+                upd((m) => ({ ...m, reasoning: (m.reasoning ?? "") + String(evt.content ?? "") }));
                 break;
-
               case "tool_start": {
                 const toolId = String(evt.id ?? nanoid());
-                // Detect call_agent delegation: attach subAgentName so ToolRow
-                // can render the nested sub-agent section.
                 const isDelegate = String(evt.name ?? "").toLowerCase().includes("call_agent");
                 const newEvent: ToolEvent = {
-                  id: toolId,
-                  name: String(evt.name ?? "tool"),
-                  args: (evt.args as Record<string, unknown>) ?? {},
-                  status: "running",
-                  startedAt: Date.now(),
-                  ...(isDelegate ? { subAgentActive: true } : {}),
+                  id: toolId, name: String(evt.name ?? "tool"),
+                  args: (evt.args as Record<string, unknown>) ?? {}, status: "running",
+                  startedAt: Date.now(), ...(isDelegate ? { subAgentActive: true } : {}),
                 };
-                setMessages((prev) =>
-                  prev.map((m) => {
-                    if (m.id !== assistantId) return m;
-                    return { ...m, toolEvents: [...(m.toolEvents ?? []), newEvent] };
-                  })
-                );
+                upd((m) => ({ ...m, toolEvents: [...(m.toolEvents ?? []), newEvent] }));
                 break;
               }
-
               case "tool_end":
-                setMessages((prev) =>
-                  prev.map((m) => {
+                upd((m) => ({
+                  ...m,
+                  toolEvents: (m.toolEvents ?? []).map((t) =>
+                    t.id === String(evt.id)
+                      ? {
+                          ...t,
+                          args: evt.args && Object.keys(evt.args as object).length > 0
+                            ? (evt.args as Record<string, unknown>) : t.args,
+                          result: String(evt.result ?? ""),
+                          status: evt.success ? "done" : "error",
+                          endedAt: Date.now(), subAgentActive: false,
+                        }
+                      : t
+                  ),
+                }));
+                break;
+              case "sub_agent_delta": {
+                const tgtAgent = String(evt.agentName ?? "");
+                setSessionState(threadId, (prev) => ({
+                  ...prev,
+                  messages: prev.messages.map((m) => {
+                    if (m.id !== assistantId) return m;
+                    const evts = m.toolEvents ?? [];
+                    const idx = [...evts].reverse().findIndex(
+                      (t) => t.subAgentActive && (t.name.toLowerCase().includes("call_agent") || t.subAgentName)
+                    );
+                    if (idx === -1) return m;
+                    const ri = evts.length - 1 - idx;
+                    return {
+                      ...m, toolEvents: evts.map((t, i) => i === ri
+                        ? { ...t, subAgentName: t.subAgentName ?? tgtAgent, subAgentText: (t.subAgentText ?? "") + String(evt.delta ?? "") }
+                        : t),
+                    };
+                  }),
+                }));
+                break;
+              }
+              case "sub_agent_tool_start": {
+                const tgtAgent2 = String(evt.agentName ?? "");
+                const stId = String(evt.id ?? nanoid());
+                setSessionState(threadId, (prev) => ({
+                  ...prev,
+                  messages: prev.messages.map((m) => {
+                    if (m.id !== assistantId) return m;
+                    const evts = m.toolEvents ?? [];
+                    const idx = [...evts].reverse().findIndex(
+                      (t) => t.subAgentActive && (t.name.toLowerCase().includes("call_agent") || t.subAgentName)
+                    );
+                    if (idx === -1) return m;
+                    const ri = evts.length - 1 - idx;
+                    return {
+                      ...m, toolEvents: evts.map((t, i) => i === ri
+                        ? { ...t, subAgentName: t.subAgentName ?? tgtAgent2, subAgentTools: [...(t.subAgentTools ?? []), { id: stId, name: String(evt.name ?? "tool"), status: "running" as const }] }
+                        : t),
+                    };
+                  }),
+                }));
+                break;
+              }
+              case "sub_agent_tool_end": {
+                const stId2 = String(evt.id ?? "");
+                setSessionState(threadId, (prev) => ({
+                  ...prev,
+                  messages: prev.messages.map((m) => {
                     if (m.id !== assistantId) return m;
                     return {
-                      ...m,
-                      toolEvents: (m.toolEvents ?? []).map((t) =>
-                        t.id === String(evt.id)
-                          ? {
-                              ...t,
-                              // Merge streamed args (the orchestrator path fills
-                              // these in on tool_end, not tool_start).
-                              args:
-                                evt.args && Object.keys(evt.args as object).length > 0
-                                  ? (evt.args as Record<string, unknown>)
-                                  : t.args,
-                              result: String(evt.result ?? ""),
-                              status: evt.success ? "done" : "error",
-                              endedAt: Date.now(),
-                              subAgentActive: false,
-                            }
-                          : t
-                      ),
-                    };
-                  })
-                );
-                break;
-
-              // ── Sub-agent streaming events (call_agent delegation) ───────
-              case "sub_agent_delta": {
-                // Append streaming text to the most recent call_agent tool event.
-                const targetAgent = String(evt.agentName ?? "");
-                setMessages((prev) =>
-                  prev.map((m) => {
-                    if (m.id !== assistantId) return m;
-                    const events = m.toolEvents ?? [];
-                    // Find the last call_agent-like event that is still running.
-                    const idx = [...events].reverse().findIndex(
-                      (t) => t.subAgentActive && (t.name.toLowerCase().includes("call_agent") || t.subAgentName)
-                    );
-                    if (idx === -1) return m;
-                    const realIdx = events.length - 1 - idx;
-                    const updated = events.map((t, i) =>
-                      i === realIdx
-                        ? {
-                            ...t,
-                            subAgentName: t.subAgentName ?? targetAgent,
-                            subAgentText: (t.subAgentText ?? "") + String(evt.delta ?? ""),
-                          }
-                        : t
-                    );
-                    return { ...m, toolEvents: updated };
-                  })
-                );
-                break;
-              }
-
-              case "sub_agent_tool_start": {
-                const targetAgent2 = String(evt.agentName ?? "");
-                const subToolId = String(evt.id ?? nanoid());
-                setMessages((prev) =>
-                  prev.map((m) => {
-                    if (m.id !== assistantId) return m;
-                    const events = m.toolEvents ?? [];
-                    const idx = [...events].reverse().findIndex(
-                      (t) => t.subAgentActive && (t.name.toLowerCase().includes("call_agent") || t.subAgentName)
-                    );
-                    if (idx === -1) return m;
-                    const realIdx = events.length - 1 - idx;
-                    const newSubTool = { id: subToolId, name: String(evt.name ?? "tool"), status: "running" as const };
-                    const updated = events.map((t, i) =>
-                      i === realIdx
-                        ? {
-                            ...t,
-                            subAgentName: t.subAgentName ?? targetAgent2,
-                            subAgentTools: [...(t.subAgentTools ?? []), newSubTool],
-                          }
-                        : t
-                    );
-                    return { ...m, toolEvents: updated };
-                  })
-                );
-                break;
-              }
-
-              case "sub_agent_tool_end": {
-                const subToolId2 = String(evt.id ?? "");
-                setMessages((prev) =>
-                  prev.map((m) => {
-                    if (m.id !== assistantId) return m;
-                    const events = (m.toolEvents ?? []).map((t) => {
-                      if (!t.subAgentTools) return t;
-                      return {
-                        ...t,
-                        subAgentTools: t.subAgentTools.map((st) =>
-                          st.id === subToolId2
-                            ? { ...st, result: String(evt.result ?? ""), status: evt.success ? "done" as const : "error" as const }
-                            : st
+                      ...m, toolEvents: (m.toolEvents ?? []).map((t) => !t.subAgentTools ? t : {
+                        ...t, subAgentTools: t.subAgentTools.map((st) =>
+                          st.id === stId2 ? { ...st, result: String(evt.result ?? ""), status: evt.success ? "done" as const : "error" as const } : st
                         ),
-                      };
-                    });
-                    return { ...m, toolEvents: events };
-                  })
-                );
+                      }),
+                    };
+                  }),
+                }));
                 break;
               }
-
               case "sub_agent_error": {
-                // Mark the active call_agent event with error status.
-                setMessages((prev) =>
-                  prev.map((m) => {
+                setSessionState(threadId, (prev) => ({
+                  ...prev,
+                  messages: prev.messages.map((m) => {
                     if (m.id !== assistantId) return m;
-                    const events = m.toolEvents ?? [];
-                    const idx = [...events].reverse().findIndex((t) => t.subAgentActive);
+                    const evts = m.toolEvents ?? [];
+                    const idx = [...evts].reverse().findIndex((t) => t.subAgentActive);
                     if (idx === -1) return m;
-                    const realIdx = events.length - 1 - idx;
-                    const updated = events.map((t, i) =>
-                      i === realIdx
+                    const ri = evts.length - 1 - idx;
+                    return {
+                      ...m, toolEvents: evts.map((t, i) => i === ri
                         ? { ...t, subAgentActive: false, status: "error" as const, result: String(evt.error ?? "Sub-agent error") }
-                        : t
-                    );
-                    return { ...m, toolEvents: updated };
-                  })
-                );
+                        : t),
+                    };
+                  }),
+                }));
                 break;
               }
-
               case "done":
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId
-                      ? { ...m, streaming: false, isThinkingActive: false }
-                      : m
-                  )
-                );
+                upd((m) => ({ ...m, streaming: false, isThinkingActive: false }));
                 break;
-
               case "state":
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId
-                      ? {
-                          ...m,
-                          agentState: (evt.snapshot as Record<string, unknown>) ?? {},
-                        }
-                      : m
-                  )
-                );
+                upd((m) => ({ ...m, agentState: (evt.snapshot as Record<string, unknown>) ?? {} }));
                 break;
-
               case "custom": {
                 const evtName = String(evt.name ?? "");
-                // Fire onArtifact callback for artifact_created / artifact_updated events
-                if (
-                  (evtName === "artifact_created" || evtName === "artifact_updated") &&
-                  onArtifactRef.current
-                ) {
+                if ((evtName === "artifact_created" || evtName === "artifact_updated") && onArtifactRef.current) {
                   const data = (evt.value ?? evt.data) as Record<string, unknown> | undefined;
                   onArtifactRef.current({
                     path: String(data?.path ?? ""),
@@ -407,80 +303,53 @@ export function useAgentChat({
                     size: data?.size != null ? Number(data.size) : undefined,
                   });
                 }
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId
-                      ? {
-                          ...m,
-                          customEvents: [
-                            ...(m.customEvents ?? []),
-                            { name: evtName, value: evt.value ?? evt.data },
-                          ],
-                        }
-                      : m
-                  )
-                );
+                upd((m) => ({ ...m, customEvents: [...(m.customEvents ?? []), { name: evtName, value: evt.value ?? evt.data }] }));
                 break;
               }
-
               case "error":
                 throw new Error(String(evt.content ?? "Stream error"));
             }
           }
         }
 
-        // Ensure streaming flag is cleared even if "done" event was missing
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId
-              ? { ...m, streaming: false, isThinkingActive: false }
-              : m
-          )
-        );
+        // Ensure streaming flag is cleared even if "done" was missing.
+        upd((m) => ({ ...m, streaming: false, isThinkingActive: false }));
       } catch (err) {
-        // User-initiated stop — don't show an error, just freeze the partial response.
         const isAbort = err instanceof DOMException && err.name === "AbortError";
         if (isAbort) {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, streaming: false, isThinkingActive: false }
-                : m
-            )
-          );
+          setSessionState(threadId, (prev) => ({
+            ...prev,
+            messages: prev.messages.map((m) =>
+              m.id === assistantId ? { ...m, streaming: false, isThinkingActive: false } : m
+            ),
+          }));
           return;
         }
-
         const msg = err instanceof Error ? err.message : String(err);
-        setError(msg);
-
-        // Replace the streaming placeholder with an error system message
-        setMessages((prev) =>
-          prev
+        setSessionState(threadId, (prev) => ({
+          ...prev,
+          error: msg,
+          messages: prev.messages
             .filter((m) => m.id !== assistantId)
-            .concat({
-              id: nanoid(),
-              role: "system",
-              content: `Error: ${msg}`,
-              timestamp: Date.now(),
-            })
-        );
+            .concat({ id: nanoid(), role: "system", content: `Error: ${msg}`, timestamp: Date.now() }),
+        }));
       } finally {
-        abortRef.current = null;
-        setIsLoading(false);
+        setSessionState(threadId, (prev) => ({ ...prev, isLoading: false, abortController: null }));
       }
     },
-    [agentName, threadId, isLoading, model, mode, systemContext]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [agentName, threadId, model, mode, systemContext],
   );
 
   const clearMessages = useCallback(() => {
-    setMessages([]);
-    setError(null);
-  }, []);
+    setSessionState(threadId, (prev) => ({ ...prev, messages: [], error: null }));
+  }, [threadId]);
 
   const stopGeneration = useCallback(() => {
-    abortRef.current?.abort();
-  }, []);
+    const current = getSessionState(threadId);
+    current.abortController?.abort();
+    setSessionState(threadId, (prev) => ({ ...prev, abortController: null }));
+  }, [threadId]);
 
   return { messages, isLoading, error, sendMessage, clearMessages, stopGeneration, setMessages };
 }

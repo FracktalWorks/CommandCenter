@@ -16,7 +16,6 @@
       "zoho-crm"
     ],
     "optional_integrations": [
-      "anthropic",
       "apollo",
       "serpapi",
       "apify",

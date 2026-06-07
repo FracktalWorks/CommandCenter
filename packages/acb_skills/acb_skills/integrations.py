@@ -165,13 +165,6 @@ def _litellm(s: Any) -> dict[str, Any]:
     }
 
 
-def _anthropic(s: Any) -> dict[str, Any]:
-    api_key = getattr(s, "anthropic_api_key", "") or os.getenv("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        raise IntegrationMisconfiguredError("anthropic: ANTHROPIC_API_KEY is required.")
-    return {"type": "api_key", "api_key": api_key}
-
-
 def _serpapi(s: Any) -> dict[str, Any]:
     api_key = getattr(s, "serpapi_api_key", "") or os.getenv("SERPAPI_API_KEY", "")
     if not api_key:
@@ -227,7 +220,6 @@ _REGISTRY: dict[str, Any] = {
     "clickup":       _clickup,
     "smtp":          _smtp,
     "litellm":       _litellm,
-    "anthropic":     _anthropic,
     "serpapi":       _serpapi,
     "apify":         _apify,
     "anymailfinder": _anymailfinder,

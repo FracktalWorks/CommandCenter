@@ -50,6 +50,103 @@ _active_run_queue: contextvars.ContextVar["asyncio.Queue[dict[str, Any] | None] 
 )
 
 
+def _build_injected_tools_addendum() -> str:
+    """Return a system-prompt addendum describing the CommandCenter-injected tools.
+
+    Appended to every GitHub Copilot agent's system message at run time so the
+    LLM knows the injected tools exist, when to use them, and what valid agent
+    names are.  MAF agents receive these instructions via the MAF instructions
+    field directly; this is only needed for the Copilot SDK path where the agent's
+    own ``instructions.md`` was written without knowledge of CommandCenter injection.
+    """
+    # Fetch the live agent registry so the model sees the exact names.
+    agent_lines: list[str] = []
+    try:
+        from gateway.routes.agent import (  # noqa: PLC0415
+            _AGENT_REGISTRY,
+            _load_dynamic_agents,
+        )
+        all_agents = _load_dynamic_agents() + _AGENT_REGISTRY
+        for a in all_agents:
+            name = a.get("name", "")
+            desc = a.get("description", "")
+            if name:
+                agent_lines.append(f"  - {name!r}: {desc}")
+    except Exception:  # noqa: BLE001
+        pass
+
+    registry_block = (
+        "Registered agents you can delegate to:\n" + "\n".join(agent_lines)
+        if agent_lines
+        else "Registered agents: check with the orchestrator if unsure."
+    )
+
+    return f"""
+---
+## CommandCenter Platform Tools (injected at runtime)
+
+In addition to your own tools, the following tools have been injected by the
+CommandCenter platform and are available to you in every session:
+
+### Inter-agent delegation
+- **call_agent(agent_name, message)** — Delegate a task to another agent and
+  wait for its full response. Use when you need the result before continuing.
+- **call_agents_parallel(tasks)** — Run multiple agents concurrently (JSON array
+  of {{\"agent\": \"name\", \"message\": \"...\"}} objects). Use for independent
+  sub-tasks that can run simultaneously.
+- **call_agent_background(agent_name, message)** — Fire-and-forget delegation.
+  Returns immediately. Use when the result is not needed synchronously.
+
+{registry_block}
+
+### Web access (no API key required)
+- **web_search(query, max_results=5)** — Search the web via DuckDuckGo. Use for
+  current information, company research, news, or anything outside your training data.
+- **fetch_page(url, max_chars=8000)** — Fetch any public web page as clean text
+  via Jina Reader. Use when you have a specific URL to read.
+
+### Self-improvement & committing
+When you make changes to your own repository (new skills, bug fixes, improvements
+to agents.py or prompts), you MUST commit those changes using git so they can be
+reviewed and pushed by a human operator.
+
+**How to commit your changes:**
+1. Make your changes in the repository (the local clone is already checked out and
+   authenticated — do NOT re-clone).
+2. Stage your changes: `git add -A` (or target specific files).
+3. Commit on the **current branch** — do NOT create a new branch, do NOT push:
+   ```
+   git commit -m "feat: <short description of what changed and why>"
+   ```
+4. After committing, print the following sentinel lines so the platform records them:
+   ```
+   COMMIT_SHA: <output of: git rev-parse HEAD>
+   ```
+   Printing `COMMIT_SHA:` is mandatory — without it the platform cannot register
+   your commit in the approval queue.
+5. **Do NOT run `git push`.** Pushes are blocked at the hook level. Your commit
+   will appear in the Control Plane inbox where a human can review the diff and
+   click **Approve** to push it, or **Reject** to discard it.
+
+**When to self-commit:**
+- You add or update a skill script in `skills/*/scripts/`.
+- You add or update a tool function in `agents.py`.
+- You fix a bug in your own code.
+- You update `prompts/system.md` or a `skills/*/SKILL.md` file.
+- Any time you modify files in your repository as part of completing a task.
+
+**Bot identity is already configured** in the local clone — you do not need to
+set `git config user.name` or `git config user.email`.
+
+**Important constraints:**
+- Commit minimal, targeted changes — do not refactor unrelated code.
+- Never amend a previous commit; always make a new commit.
+- A single task should produce at most one commit.
+- If `git commit` reports "nothing to commit", you have no unstaged changes —
+  this is fine, just skip the commit step.
+---"""
+
+
 def _inject_agent_tools(agents: list[Any]) -> None:
     """Inject cross-agent delegation tools into every loaded agent.
 
@@ -64,6 +161,7 @@ def _inject_agent_tools(agents: list[Any]) -> None:
         MAF Agent                — appends to ``agent.tools`` (list)
         GitHubCopilotAgent       — appends to ``agent._tools`` (list built at init;
                                    merged into SessionConfig.tools at session creation)
+                                   + appends tool guidance to ``_default_options.system_message``
         Legacy Copilot SDK path  — appends to ``agent._default_options.tools`` (list)
     """
     try:
@@ -76,6 +174,20 @@ def _inject_agent_tools(agents: list[Any]) -> None:
     except ImportError:
         return  # acb_skills not installed in this env — skip silently
 
+    # Zero-credential web tools — always available, no integration config needed.
+    try:
+        from acb_skills.web_tools import fetch_page, web_search  # noqa: PLC0415
+        _extra_tools = _extra_tools + [web_search, fetch_page]
+    except ImportError:
+        pass  # duckduckgo-search / httpx not installed — skip gracefully
+
+    # File-writing artifact tool — surfaces created files in the UI sidebar.
+    try:
+        from acb_skills.write_artifact import write_artifact  # noqa: PLC0415
+        _extra_tools = _extra_tools + [write_artifact]
+    except ImportError:
+        pass
+
     for agent in agents:
         injected = False
 
@@ -84,15 +196,52 @@ def _inject_agent_tools(agents: list[Any]) -> None:
         # Must be patched BEFORE the MAF path because GitHubCopilotAgent also
         # sets self.tools = [] (empty) via its base class — we don't want to
         # append to that empty list and skip the real _tools.
+        #
+        # IMPORTANT: _prepare_tools() (called at session creation) only converts
+        # FunctionTool / CopilotTool / MutableMapping — plain async callables are
+        # silently skipped.  We must wrap each function with normalize_tools() first
+        # so the Copilot SDK actually registers them and the LLM can call them.
         try:
             if hasattr(agent, "_tools") and isinstance(agent._tools, list):
+                # Try to import normalize_tools for FunctionTool wrapping.
+                try:
+                    from agent_framework._tools import normalize_tools as _norm  # noqa: PLC0415
+                except ImportError:
+                    _norm = None  # type: ignore[assignment]
+
                 existing_names = {
                     getattr(getattr(t, "func", t), "__name__", None)
                     for t in agent._tools
                 }
                 for fn in _extra_tools:
                     if fn.__name__ not in existing_names:
-                        agent._tools.append(fn)
+                        # Wrap as FunctionTool so _prepare_tools() picks it up.
+                        wrapped = _norm([fn])[0] if _norm is not None else fn
+                        agent._tools.append(wrapped)
+
+                # Append tool guidance to the system message so the LLM knows
+                # these tools exist, what they do, and what agent names are valid.
+                # The agent's own instructions.md was written before CommandCenter
+                # injection and has no mention of call_agent / web_search / etc.
+                #
+                # _default_options is a plain dict; system_message inside it has
+                # the form {'mode': 'append', 'content': '<text>'}.  We must use
+                # dict access (not setattr) and preserve the nested structure.
+                try:
+                    addendum = _build_injected_tools_addendum()
+                    opts = getattr(agent, "_default_options", None)
+                    if isinstance(opts, dict):
+                        existing_sys = opts.get("system_message")
+                        if isinstance(existing_sys, dict):
+                            # Preserve mode:'append'; extend content field.
+                            existing_sys["content"] = (existing_sys.get("content") or "") + addendum
+                        elif isinstance(existing_sys, str):
+                            opts["system_message"] = {"mode": "append", "content": existing_sys + addendum}
+                        else:
+                            opts["system_message"] = {"mode": "append", "content": addendum}
+                except Exception:  # noqa: BLE001
+                    pass
+
                 injected = True
         except Exception:  # noqa: BLE001
             pass
@@ -117,16 +266,25 @@ def _inject_agent_tools(agents: list[Any]) -> None:
             pass
 
         # ── Legacy: _default_options.tools (older Copilot SDK wrapper) ──────
+        # Same wrapping requirement as _tools above: raw callables are silently
+        # skipped by the SDK.  Wrap each function with normalize_tools() so they
+        # appear in the session's tool schema and the LLM can call them.
         try:
             opts = getattr(agent, "_default_options", None)
             if opts is not None:
+                try:
+                    from agent_framework._tools import normalize_tools as _norm_legacy  # noqa: PLC0415
+                except ImportError:
+                    _norm_legacy = None  # type: ignore[assignment]
+
                 existing = list(getattr(opts, "tools", []) or [])
                 existing_names = {
-                    getattr(fn, "__name__", None) for fn in existing
+                    getattr(getattr(fn, "func", fn), "__name__", None) for fn in existing
                 }
                 for fn in _extra_tools:
                     if fn.__name__ not in existing_names:
-                        existing.append(fn)
+                        wrapped = _norm_legacy([fn])[0] if _norm_legacy is not None else fn
+                        existing.append(wrapped)
                 opts.tools = existing
         except Exception:  # noqa: BLE001
             pass
@@ -294,6 +452,144 @@ async def _run_sub_agent_streaming(
         return f"Sub-task to {agent_name!r} failed: {exc}"
 
 
+async def _install_push_guard(agent_dir: str) -> None:
+    """Install a git pre-push hook that rejects all pushes from the local clone.
+
+    Called once per clone.  Copilot SDK agents must commit locally; the
+    human-approval gateway endpoint handles the push.  This prevents an agent
+    from bypassing the inbox by pushing directly.
+
+    Non-fatal — if the hook already exists or the write fails, execution
+    continues; the post-run commit scan still catches any new commits.
+    """
+    try:
+        hooks_dir = Path(agent_dir) / ".git" / "hooks"
+        if not hooks_dir.is_dir():
+            return
+        hook_file = hooks_dir / "pre-push"
+        if hook_file.exists():
+            return  # already installed
+        hook_file.write_text(
+            "#!/bin/sh\n"
+            "echo 'Direct push blocked: commits are queued for human approval'\n"
+            "echo 'Approve via the CommandCenter Control Plane inbox.'\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        hook_file.chmod(0o755)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("executor.push_guard_install_failed", agent=agent_dir, error=str(exc))
+
+
+async def _detect_agent_commits(
+    agent_name: str,
+    agent_dir: str | None,
+    run_id: str,
+) -> None:
+    """After a GitHub Copilot agent run, check for commits not yet in origin.
+
+    Copilot SDK agents can write files and run ``git commit`` as part of
+    self-improvement during a normal conversation.  The pre-push hook blocks
+    them from pushing, so new commits accumulate locally.  This function
+    detects those commits and registers each one as a ``pending_commit`` row
+    so they appear in the inbox for human approval.
+
+    Only called for ``agent_runtime == "github-copilot"``; MAF agents don't
+    commit to the repo during a run.
+
+    Non-fatal — any subprocess or DB error is logged and swallowed.
+    """
+    if not agent_dir:
+        return
+
+    try:
+        # git log origin/HEAD..HEAD --format="%H|%s" lists commits that are
+        # local only (ahead of origin).  If origin is unreachable (e.g. offline
+        # dev) this falls back to checking origin/main or origin/master.
+        proc = await asyncio.create_subprocess_exec(
+            "git", "log", "origin/HEAD..HEAD", "--format=%H|%s",
+            cwd=agent_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            proc.communicate(), timeout=10
+        )
+        if proc.returncode != 0:
+            # origin/HEAD may not be set — try explicit branches
+            err = stderr_bytes.decode(errors="replace")
+            if "unknown revision" in err or "ambiguous argument" in err:
+                for base in ("origin/main", "origin/master"):
+                    proc2 = await asyncio.create_subprocess_exec(
+                        "git", "log", f"{base}..HEAD", "--format=%H|%s",
+                        cwd=agent_dir,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    out2, _ = await asyncio.wait_for(proc2.communicate(), timeout=10)
+                    if proc2.returncode == 0:
+                        stdout_bytes = out2
+                        break
+                else:
+                    return
+            else:
+                return
+
+        lines = stdout_bytes.decode(errors="replace").strip().splitlines()
+        if not lines:
+            return  # nothing new — agent didn't commit during this run
+
+        _log.info(
+            "executor.agent_commits_detected",
+            agent=agent_name,
+            run_id=run_id,
+            count=len(lines),
+        )
+
+        from orchestrator.mutation import _git_diff, _register_pending_commit  # noqa: PLC0415
+
+        for raw_line in lines:
+            parts = raw_line.split("|", 1)
+            commit_sha = parts[0].strip()
+            commit_message = parts[1].strip() if len(parts) > 1 else commit_sha[:8]
+            if not commit_sha:
+                continue
+
+            # Capture the diff for inline review
+            diff_text = await _git_diff(agent_dir, commit_sha)
+
+            await _register_pending_commit(
+                agent_name=agent_name,
+                run_id=run_id,
+                local_clone_dir=agent_dir,
+                commit_sha=commit_sha,
+                commit_message=commit_message,
+                diff_text=diff_text,
+                test_summary="(agent self-improvement — no test run)",
+            )
+
+        record(
+            AuditEvent(
+                actor=f"agent:{agent_name}",
+                action="agent_self_commit_detected",
+                target=f"agent:{agent_name}",
+                payload={
+                    "run_id": run_id,
+                    "commit_count": len(lines),
+                    "commits": [ln.split("|", 1)[0].strip()[:12] for ln in lines],
+                },
+            )
+        )
+
+    except Exception as exc:  # noqa: BLE001
+        _log.warning(
+            "executor.detect_commits_failed",
+            agent=agent_name,
+            run_id=run_id,
+            error=str(exc),
+        )
+
+
 async def run_agent(
     agent_name: str,
     event_payload: dict[str, Any],
@@ -402,6 +698,22 @@ async def run_agent(
                 },
             )
         )
+        # Post-run: detect commits the agent made during this run (github-copilot only)
+        _registry_runtime = "maf"
+        try:
+            from gateway.routes.agent import (  # noqa: PLC0415
+                _AGENT_REGISTRY, _load_dynamic_agents,
+            )
+            _e = next(
+                (e for e in _load_dynamic_agents() + _AGENT_REGISTRY if e["name"] == agent_name),
+                None,
+            )
+            if _e:
+                _registry_runtime = _e.get("agent_runtime", "maf")
+        except Exception:  # noqa: BLE001
+            pass
+        if _registry_runtime == "github-copilot":
+            await _detect_agent_commits(agent_name, _agent_dir, run_id)
         return final_state
 
     except AgentLoadError as exc:
@@ -561,6 +873,22 @@ async def run_agent_stream(
             agents = loaded.build_agents()
             _inject_agent_tools(agents)  # inject call_agent / call_agent_background
 
+            # Set write_artifact context so the tool knows which session to
+            # report files to and where the workspace root lives.
+            try:
+                from acb_skills.write_artifact import _WRITE_ARTIFACT_CONTEXT  # noqa: PLC0415
+                _WRITE_ARTIFACT_CONTEXT["session_id"] = thread_id or run_id
+                _WRITE_ARTIFACT_CONTEXT["workspace_root"] = str(loaded.agent_dir)
+                _WRITE_ARTIFACT_CONTEXT["gateway_url"] = str(
+                    getattr(settings, "gateway_base_url", "http://127.0.0.1:8000")
+                )
+                _WRITE_ARTIFACT_CONTEXT["gateway_token"] = str(
+                    getattr(settings, "litellm_master_key", "")
+                    or getattr(settings, "gateway_internal_token", "sk-local-dev-change-me")
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
             if not agents:
                 raise ValueError(f"Agent {agent_name!r}: build_agents() returned empty list.")
 
@@ -686,6 +1014,11 @@ async def run_agent_stream(
                     finally:
                         _active_run_queue.reset(_sdk_token)
                     yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
+                    # Post-run: detect any commits the Copilot agent made locally
+                    # and register them as pending_commit rows for inbox approval.
+                    await _detect_agent_commits(
+                        agent_name, str(loaded.agent_dir), run_id
+                    )
                     return
                 except Exception as _sdk_exc:  # noqa: BLE001
                     _log.warning("executor.sdk_stream_failed", agent=agent_name, error=str(_sdk_exc))
@@ -798,6 +1131,26 @@ async def run_agent_stream(
                     except (AttributeError, TypeError):
                         pass  # some agents use __slots__ or properties — skip
 
+            # Shim injected tools that live only in agent.tools (not as agent attributes).
+            # These include call_agent, web_search, fetch_page — appended by
+            # _inject_agent_tools.  They are NOT reachable via getattr(agent, name), so
+            # the loop above misses them.  We shim them in-place in the list so the
+            # Tier 2 stream also shows TOOL_CALL_START/END events for delegation and
+            # web calls.
+            _shimmed_list_indices: list[tuple[int, Any]] = []  # (index, original)
+            if hasattr(agent, "tools") and isinstance(agent.tools, (list, tuple)):
+                _tools_list = agent.tools
+                for _idx, _t in enumerate(_tools_list):
+                    _fn = getattr(_t, "func", _t)
+                    _fn_name = getattr(_fn, "__name__", None)
+                    if _fn_name and not hasattr(agent, _fn_name) and callable(_fn):
+                        _shim = _make_tool_shim(_fn, _fn_name)
+                        try:
+                            _tools_list[_idx] = _shim
+                            _shimmed_list_indices.append((_idx, _t))
+                        except (AttributeError, TypeError):
+                            pass
+
             # Run the agent in a background task.
             message = _build_event_message(agent_name, run_id, event_payload, integrations)
 
@@ -863,12 +1216,20 @@ async def run_agent_stream(
 
             _active_run_queue.reset(_t2_token)  # restore after drain
 
-            # Restore patched tools
+            # Restore patched tools (attribute-based)
             for attr, _, original in patched:
                 try:
                     object.__setattr__(agent, attr, original)
                 except Exception:  # noqa: BLE001
                     pass
+
+            # Restore shimmed list entries
+            if hasattr(agent, "tools") and isinstance(agent.tools, (list, tuple)):
+                for _idx, _orig in _shimmed_list_indices:
+                    try:
+                        agent.tools[_idx] = _orig
+                    except Exception:  # noqa: BLE001
+                        pass
 
             # Get the final text result
             try:
@@ -1217,7 +1578,6 @@ def _inject_integrations_to_env(integrations: dict[str, Any]) -> None:
             ("api_token",   "CLICKUP_API_TOKEN"),
             ("workspace_id", "CLICKUP_WORKSPACE_ID"),
         ],
-        "anthropic":     [("api_key", "ANTHROPIC_API_KEY")],
         "apollo":        [("api_key", "APOLLO_API_KEY")],
         "serpapi":       [("api_key", "SERPAPI_API_KEY")],
         "apify":         [("api_token", "APIFY_API_TOKEN")],

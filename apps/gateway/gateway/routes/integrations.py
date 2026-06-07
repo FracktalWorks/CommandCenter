@@ -183,20 +183,6 @@ _SETUP_GUIDES: dict[str, dict[str, Any]] = {
             {"key": "GITHUB_TOKEN", "label": "Personal Access Token — copilot + repo scopes (Option A)", "sensitive": True},
         ],
     },
-    "anthropic": {
-        "label": "Anthropic (Claude)",
-        "description": "Claude LLM for agent reasoning and content generation.",
-        "setup_url": "https://console.anthropic.com/settings/keys",
-        "docs_url": "https://docs.anthropic.com/en/api/getting-started",
-        "instructions": (
-            "1. Log in to the Anthropic Console.\n"
-            "2. Navigate to Settings → API Keys.\n"
-            "3. Click 'Create Key', copy the API key (starts with sk-ant-)."
-        ),
-        "env_vars": [
-            {"key": "ANTHROPIC_API_KEY", "label": "API Key (sk-ant-...)", "sensitive": True},
-        ],
-    },
     "serpapi": {
         "label": "SerpAPI (Google Search)",
         "description": "Real-time Google search results for research and discovery.",
@@ -274,7 +260,6 @@ def _is_configured(service_name: str, settings: Any) -> bool:
         "clickup":       lambda s: bool(s.clickup_api_token),
         "smtp":          lambda s: bool(s.smtp_host and s.smtp_username),
         "github":        lambda s: bool(s.github_token),
-        "anthropic":     lambda s: bool(getattr(s, "anthropic_api_key", "") or os.getenv("ANTHROPIC_API_KEY", "")),
         "serpapi":       lambda s: bool(getattr(s, "serpapi_api_key", "") or os.getenv("SERPAPI_API_KEY", "")),
         "apify":         lambda s: bool(getattr(s, "apify_api_token", "") or os.getenv("APIFY_API_TOKEN", "")),
         "anymailfinder": lambda s: bool(getattr(s, "anymailfinder_api_key", "") or os.getenv("ANYMAILFINDER_API_KEY", "")),

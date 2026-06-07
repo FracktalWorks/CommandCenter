@@ -37,7 +37,6 @@ class Settings(BaseSettings):
     # LLM provider keys (used by LiteLLM config and settings UI)
     gemini_api_key: str = ""
     openai_api_key: str = ""
-    anthropic_api_key: str = ""
     groq_api_key: str = ""          # console.groq.com — free tier, very fast inference
     mistral_api_key: str = ""       # console.mistral.ai
     together_api_key: str = ""      # api.together.ai — 100+ open-source models
@@ -155,6 +154,35 @@ class Settings(BaseSettings):
     smtp_username: str = ""
     smtp_password: str = ""
     smtp_use_tls: bool = True
+
+    # SerpAPI (Google search results — used by research/prospecting agents)
+    serpapi_api_key: str = ""
+
+    # Apify (web scraping actors)
+    apify_api_token: str = ""
+
+    # AnyMailFinder (email discovery)
+    anymailfinder_api_key: str = ""
+
+    # Google Sheets (service-account key path — can reuse gmail_sa_json_path)
+    google_sheets_sa_json_path: str = ""
+
+    # ---------------------------------------------------------------------------
+    # Memory layer (WBS 2.5) — Mem0 episodic memory + Graphiti bi-temporal KG
+    # ---------------------------------------------------------------------------
+
+    # Mem0 — episodic memory per user (cross-session facts).
+    # Backend: Postgres + pgvector (no new infra when mem0_enabled=true).
+    # Set mem0_enabled=true once MEM0_ENABLED=true is in .env and the Postgres
+    # schema migration (07_mem0_schema.sql) has run.
+    mem0_enabled: bool = False
+
+    # Graphiti — bi-temporal entity KG.
+    # Requires Neo4j running (docker compose --profile memory up -d neo4j).
+    graphiti_enabled: bool = False
+    neo4j_url: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = ""   # required when graphiti_enabled=true
 
 
 @lru_cache(maxsize=1)

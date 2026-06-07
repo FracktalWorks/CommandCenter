@@ -149,6 +149,20 @@ model_list:
       api_key: os.environ/OPENROUTER_API_KEY
       api_base: https://openrouter.ai/api/v1
 
+  # DeepSeek V4 Pro — 1.6T MoE, 1M context, strong agentic + coding
+  - model_name: openrouter/deepseek/deepseek-v4-pro
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v4-pro
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
+  # DeepSeek V4 Flash — faster/cheaper variant of V4
+  - model_name: openrouter/deepseek/deepseek-v4-flash
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v4-flash
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+
   - model_name: openrouter/deepseek/deepseek-r1-0528
     litellm_params:
       model: openrouter/deepseek/deepseek-r1-0528

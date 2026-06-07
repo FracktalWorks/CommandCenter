@@ -47,6 +47,8 @@ export interface MutationEntry {
     | "failed"       // audit_event: sandbox failed
     | "started"      // audit_event: mutation started
     | "commit_pending"; // audit_event: commit staged
+  /** Number of ancestor commits auto-approved as part of this approve (cascade). */
+  cascade_approved?: number;
 }
 
 export async function GET(): Promise<NextResponse> {

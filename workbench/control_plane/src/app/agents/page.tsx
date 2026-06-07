@@ -33,13 +33,19 @@ function PendingCommits({ agentName }: { agentName: string }) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [expandDiff, setExpandDiff] = useState<Record<string, boolean>>({});
   const [diffs, setDiffs] = useState<Record<string, string>>({});
+  // Toast shown after a cascade-approve (e.g. "Approved — 3 earlier commits auto-approved")
+  const [cascadeMsg, setCascadeMsg] = useState<string | null>(null);
 
   const fetchRows = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch("/api/agent/mutations");
       const all: MutationEntry[] = res.ok ? await res.json() : [];
-      setRows(all.filter((r) => r.agent === agentName));
+      // Show oldest first: when reviewing a commit chain (A→B→C) the earliest
+      // commit in the chain should be reviewed first.
+      const filtered = all.filter((r) => r.agent === agentName);
+      filtered.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+      setRows(filtered);
     } catch {
       setRows([]);
     } finally {
@@ -56,12 +62,21 @@ function PendingCommits({ agentName }: { agentName: string }) {
   const act = async (id: string, action: "approve" | "reject") => {
     setBusy((b) => ({ ...b, [id]: action }));
     setErrors((e) => { const c = { ...e }; delete c[id]; return c; });
+    setCascadeMsg(null);
     try {
       const res = await fetch(`/api/agent/mutations/${encodeURIComponent(id)}/${action}`, { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         setErrors((e) => ({ ...e, [id]: body.detail ?? body.error ?? `HTTP ${res.status}` }));
       } else {
+        const body = await res.json().catch(() => ({}));
+        // Show cascade info when an approve auto-approved earlier commits in the chain
+        if (action === "approve" && typeof body.cascade_approved === "number" && body.cascade_approved > 0) {
+          setCascadeMsg(
+            `Approved — ${body.cascade_approved} earlier commit${body.cascade_approved === 1 ? "" : "s"} in this chain were auto-approved.`
+          );
+          setTimeout(() => setCascadeMsg(null), 6000);
+        }
         await fetchRows();
       }
     } catch (err) {
@@ -80,7 +95,6 @@ function PendingCommits({ agentName }: { agentName: string }) {
       if (!res.ok) {
         setErrors((e) => ({ ...e, [id]: body.detail ?? body.error ?? `HTTP ${res.status}` }));
       } else {
-        // Show the gateway's message briefly then refresh
         setErrors((e) => ({ ...e, [id]: body.message ?? "Commit cleared. Trigger a fresh agent run to re-attempt." }));
         await fetchRows();
       }
@@ -91,6 +105,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
     }
   };
 
+  // Dismiss = remove from view only (terminal state: approved / rejected / audit)
   const dismiss = async (runId: string) => {
     setBusy((b) => ({ ...b, [runId]: "dismiss" }));
     try {
@@ -126,8 +141,21 @@ function PendingCommits({ agentName }: { agentName: string }) {
 
   const pending = rows.filter((r) => r.type === "pending_commit" && r.status === "pending");
   const evalFailed = rows.filter((r) => r.type === "pending_commit" && r.status === "eval_failed");
-  const others = rows.filter((r) => !(r.type === "pending_commit" && (r.status === "pending" || r.status === "eval_failed")));
-  const pendingCount = pending.length + evalFailed.length;
+  // Commits awaiting a decision (pending or eval_failed)
+  const awaitingDecision = rows.filter(
+    (r) => r.type === "pending_commit" && (r.status === "pending" || r.status === "eval_failed")
+  );
+  const pendingCount = awaitingDecision.length;
+
+  // Separate display order:
+  // 1. Commits awaiting a decision (oldest first — review in commit order A→B→C)
+  // 2. Terminal/informational entries (approved, rejected, audit) shown below
+  const decisionRows = rows.filter(
+    (r) => r.type === "pending_commit" && (r.status === "pending" || r.status === "eval_failed")
+  );
+  const terminalRows = rows.filter(
+    (r) => !(r.type === "pending_commit" && (r.status === "pending" || r.status === "eval_failed"))
+  );
 
   return (
     <div className="mt-3 border-t border-zinc-800 pt-3">
@@ -147,53 +175,50 @@ function PendingCommits({ agentName }: { agentName: string }) {
 
       {open && (
         <div className="mt-2 flex flex-col gap-2">
+          {/* Cascade toast */}
+          {cascadeMsg && (
+            <div className="rounded-md border border-emerald-700/40 bg-emerald-950/30 px-3 py-2 text-[11px] text-emerald-300">
+              ✓ {cascadeMsg}
+            </div>
+          )}
+
           {fetched && rows.length === 0 && (
             <p className="text-xs text-zinc-700 italic">No commits yet.</p>
           )}
 
-          {[...evalFailed, ...pending, ...others].map((m, i) => {
+          {/* Decision-required entries: approve/reject must happen before dismiss */}
+          {decisionRows.map((m, i) => {
             const key = m.id ?? m.run_id ?? String(i);
-            const isPending = m.type === "pending_commit" && m.status === "pending";
-            const isEvalFailed = m.type === "pending_commit" && m.status === "eval_failed";
-            const isAudit = m.type === "audit_event";
+            const isPending = m.status === "pending";
+            const isEvalFailed = m.status === "eval_failed";
+            // Is there a later commit in the same agent's chain still awaiting review?
+            // If so, show a note that approving this will also unblock those.
+            const laterCount = decisionRows.filter(
+              (r) => r.id !== m.id && new Date(r.at).getTime() > new Date(m.at).getTime()
+            ).length;
+
             return (
               <div
                 key={key}
-                className={`relative rounded-lg border p-3 text-xs ${
-                  isEvalFailed ? "border-amber-800/50 bg-amber-950/20" :
-                  isPending ? "border-blue-800/50 bg-blue-950/20" : "border-zinc-800 bg-zinc-900/40"
+                className={`rounded-lg border p-3 text-xs ${
+                  isEvalFailed
+                    ? "border-amber-800/50 bg-amber-950/20"
+                    : "border-blue-800/50 bg-blue-950/20"
                 }`}
               >
-                {/* X delete button */}
-                <button
-                  onClick={() => isAudit && m.run_id ? dismiss(m.run_id) : m.id ? deleteCommit(m.id) : undefined}
-                  disabled={!!busy[key]}
-                  className="absolute top-2 right-2 rounded p-0.5 text-zinc-700 hover:bg-zinc-800 hover:text-zinc-400 transition-colors disabled:opacity-30"
-                  title="Delete"
-                >
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-                {/* Status badge + commit message */}
-                <div className="flex items-start gap-2 pr-5">
-                  <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${
-                    isEvalFailed ? "border-amber-600/50 bg-amber-900/30 text-amber-300" :
-                    isPending ? "border-blue-700/50 bg-blue-900/30 text-blue-300" :
-                    m.status === "approved" ? "border-emerald-700/50 bg-emerald-900/30 text-emerald-300" :
-                    m.status === "rejected" ? "border-zinc-700/50 bg-zinc-800 text-zinc-500" :
-                    m.status === "failed" ? "border-red-700/50 bg-red-900/30 text-red-300" :
-                    "border-zinc-700/50 bg-zinc-800 text-zinc-500"
-                  }`}>
-                    {isEvalFailed ? "⚠ Eval failed" :
-                     isPending ? "Awaiting review" :
-                     m.status === "approved" ? "Approved" :
-                     m.status === "rejected" ? "Rejected" :
-                     m.status === "failed" ? "Failed" :
-                     m.status}
+                {/* Status badge + commit message — no X here, decision required */}
+                <div className="flex items-start gap-2">
+                  <span
+                    className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${
+                      isEvalFailed
+                        ? "border-amber-600/50 bg-amber-900/30 text-amber-300"
+                        : "border-blue-700/50 bg-blue-900/30 text-blue-300"
+                    }`}
+                  >
+                    {isEvalFailed ? "⚠ Eval failed" : "Awaiting review"}
                   </span>
                   {m.commit_message && (
-                    <span className="font-mono text-zinc-300 line-clamp-1">{m.commit_message}</span>
+                    <span className="font-mono text-zinc-300 line-clamp-1 flex-1">{m.commit_message}</span>
                   )}
                 </div>
 
@@ -201,13 +226,19 @@ function PendingCommits({ agentName }: { agentName: string }) {
                 <div className="mt-1 flex items-center gap-3 text-zinc-600">
                   {m.commit_sha && <span className="font-mono">{m.commit_sha.slice(0, 8)}</span>}
                   <span>{new Date(m.at).toLocaleString("en-IN")}</span>
-                  {m.reviewed_by && <span>· {m.reviewed_by}</span>}
                 </div>
 
                 {m.test_summary && (
                   <div className={`mt-1 ${isEvalFailed ? "text-amber-500/80" : "text-zinc-500"}`}>
                     {m.test_summary}
                   </div>
+                )}
+
+                {/* Cascade hint */}
+                {laterCount > 0 && isPending && (
+                  <p className="mt-1 text-[10px] text-blue-400/60">
+                    Approving will also push {laterCount} later commit{laterCount === 1 ? "" : "s"} in this chain.
+                  </p>
                 )}
 
                 {/* Diff toggle */}
@@ -229,11 +260,11 @@ function PendingCommits({ agentName }: { agentName: string }) {
                   <p className="mt-1.5 text-red-400">{errors[key]}</p>
                 )}
 
-                {/* Actions — eval_failed: Push Anyway / Reject / Re-mutate */}
+                {/* eval_failed actions */}
                 {isEvalFailed && m.id && (
                   <div className="mt-2 flex flex-col gap-1.5">
                     <p className="text-[10px] text-amber-500/70 mb-0.5">
-                      Tests failed. Review the diff before pushing.
+                      Tests failed — review the diff, then choose an action.
                     </p>
                     <div className="flex gap-1.5 flex-wrap">
                       <button
@@ -255,13 +286,13 @@ function PendingCommits({ agentName }: { agentName: string }) {
                         onClick={() => act(m.id!, "reject")}
                         className="rounded bg-red-900/40 px-2.5 py-1 text-red-300 hover:bg-red-800/50 disabled:opacity-50 transition-colors"
                       >
-                        {busy[m.id] === "reject" ? "Rejecting…" : "Reject"}
+                        {busy[m.id] === "reject" ? "Rejecting…" : "Reject & Discard"}
                       </button>
                     </div>
                   </div>
                 )}
 
-                {/* Actions — pending: Approve & Push / Reject */}
+                {/* pending actions */}
                 {isPending && m.id && (
                   <div className="mt-2 flex gap-1.5">
                     <button
@@ -269,20 +300,110 @@ function PendingCommits({ agentName }: { agentName: string }) {
                       onClick={() => act(m.id!, "approve")}
                       className="rounded bg-emerald-800/60 px-2.5 py-1 text-emerald-200 hover:bg-emerald-700/60 disabled:opacity-50 transition-colors"
                     >
-                      {busy[m.id] === "approve" ? "Approving…" : "Approve & Push"}
+                      {busy[m.id] === "approve" ? "Pushing…" : "Approve & Push"}
                     </button>
                     <button
                       disabled={!!busy[m.id]}
                       onClick={() => act(m.id!, "reject")}
                       className="rounded bg-red-900/40 px-2.5 py-1 text-red-300 hover:bg-red-800/50 disabled:opacity-50 transition-colors"
                     >
-                      {busy[m.id] === "reject" ? "Rejecting…" : "Reject"}
+                      {busy[m.id] === "reject" ? "Rejecting…" : "Reject & Discard"}
                     </button>
                   </div>
                 )}
               </div>
             );
           })}
+
+          {/* Terminal / informational entries — dismissable with X */}
+          {terminalRows.length > 0 && (
+            <>
+              {decisionRows.length > 0 && (
+                <div className="border-t border-zinc-800/60 pt-1 text-[10px] text-zinc-600 uppercase tracking-wide">
+                  History
+                </div>
+              )}
+              {terminalRows.map((m, i) => {
+                const key = m.id ?? m.run_id ?? String(i);
+                const isAudit = m.type === "audit_event";
+                const isApproved = m.status === "approved";
+                const isRejected = m.status === "rejected";
+                return (
+                  <div
+                    key={key}
+                    className="relative rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 text-xs"
+                  >
+                    {/* X = dismiss from view (only for terminal entries) */}
+                    <button
+                      onClick={() =>
+                        isAudit && m.run_id
+                          ? dismiss(m.run_id)
+                          : m.id
+                          ? deleteCommit(m.id)
+                          : undefined
+                      }
+                      disabled={!!busy[key]}
+                      className="absolute top-2 right-2 rounded p-0.5 text-zinc-600 hover:bg-zinc-800 hover:text-zinc-400 transition-colors disabled:opacity-30"
+                      title="Dismiss"
+                    >
+                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+
+                    <div className="flex items-start gap-2 pr-5">
+                      <span
+                        className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${
+                          isApproved
+                            ? "border-emerald-700/50 bg-emerald-900/30 text-emerald-300"
+                            : isRejected
+                            ? "border-zinc-700/50 bg-zinc-800 text-zinc-500"
+                            : m.status === "failed"
+                            ? "border-red-700/50 bg-red-900/30 text-red-300"
+                            : "border-zinc-700/50 bg-zinc-800 text-zinc-500"
+                        }`}
+                      >
+                        {isApproved
+                          ? "✓ Approved"
+                          : isRejected
+                          ? "✗ Rejected"
+                          : m.status === "failed"
+                          ? "Failed"
+                          : m.status}
+                      </span>
+                      {m.commit_message && (
+                        <span className="font-mono text-zinc-500 line-clamp-1">{m.commit_message}</span>
+                      )}
+                    </div>
+
+                    <div className="mt-1 flex items-center gap-3 text-zinc-700">
+                      {m.commit_sha && <span className="font-mono">{m.commit_sha.slice(0, 8)}</span>}
+                      <span>{new Date(m.at).toLocaleString("en-IN")}</span>
+                      {m.reviewed_by && (
+                        <span className="text-zinc-600">
+                          · {m.reviewed_by.startsWith("cascade:") ? "auto-approved" : m.reviewed_by}
+                        </span>
+                      )}
+                    </div>
+
+                    {m.id && (
+                      <button
+                        onClick={() => loadDiff(m.id!)}
+                        className="mt-1.5 text-zinc-700 hover:text-zinc-500 underline underline-offset-2"
+                      >
+                        {expandDiff[m.id] ? "Hide diff" : "Show diff"}
+                      </button>
+                    )}
+                    {m.id && expandDiff[m.id] && diffs[m.id] !== undefined && (
+                      <pre className="mt-2 overflow-x-auto max-h-48 rounded bg-zinc-950 p-2 text-[10px] text-zinc-400 border border-zinc-800 whitespace-pre-wrap">
+                        {diffs[m.id] || "(empty diff)"}
+                      </pre>
+                    )}
+                  </div>
+                );
+              })}
+            </>
+          )}
         </div>
       )}
     </div>

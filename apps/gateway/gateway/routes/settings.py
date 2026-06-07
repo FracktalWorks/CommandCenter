@@ -596,3 +596,107 @@ async def set_copilot_model(
         raise HTTPException(status_code=500, detail=f"Failed to write env: {exc}") from exc
     _log.info("settings.llm.copilot_model_updated", model=req.model, actor=_user.email)
     return {"ok": "true", "model": req.model.strip()}
+
+
+# ---------------------------------------------------------------------------
+# Custom model catalogue  — user-managed entries stored in infra/custom_models.json
+# ---------------------------------------------------------------------------
+
+def _custom_models_path() -> Path:
+    """Locate infra/custom_models.json next to infra/litellm/config.yaml."""
+    try:
+        return _infra_dir() / "custom_models.json"
+    except FileNotFoundError:
+        return Path.cwd() / "custom_models.json"
+
+
+def _load_custom_models() -> list[dict[str, str]]:
+    p = _custom_models_path()
+    if not p.exists():
+        return []
+    try:
+        import json  # noqa: PLC0415
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _save_custom_models(models: list[dict[str, str]]) -> None:
+    import json  # noqa: PLC0415
+    p = _custom_models_path()
+    p.write_text(json.dumps(models, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+class CustomModelEntry(BaseModel):
+    id: str        # LiteLLM model string, e.g. "openrouter/qwen/qwen3.8-preview"
+    label: str     # display name in the picker
+    provider: str  # "gemini" | "openrouter" | "anthropic" | ...
+    group: str = ""  # optional group label override (defaults to "Custom — {provider}")
+
+
+class CustomModelAddRequest(BaseModel):
+    id: str
+    label: str
+    provider: str
+    group: str = ""
+
+
+@router.get("/llm/custom-models")
+async def list_custom_models(
+    _user: UserContext = Depends(get_current_user),
+) -> list[CustomModelEntry]:
+    """Return all user-defined custom model entries."""
+    return [CustomModelEntry(**m) for m in _load_custom_models()]
+
+
+@router.post("/llm/custom-models", status_code=201)
+async def add_custom_model(
+    req: CustomModelAddRequest,
+    _user: UserContext = Depends(get_current_user),
+) -> CustomModelEntry:
+    """Add a custom model to the catalogue.
+
+    The model ID must be a valid LiteLLM model string that the configured
+    provider can route (e.g. ``openrouter/qwen/qwen3.8-preview``).
+    No LiteLLM restart is required — the model is routed directly on the
+    next request using the provider's API key already in os.environ.
+    """
+    model_id = req.id.strip()
+    if not model_id:
+        raise HTTPException(status_code=400, detail="id cannot be empty")
+    if not req.label.strip():
+        raise HTTPException(status_code=400, detail="label cannot be empty")
+
+    models = _load_custom_models()
+    # Prevent duplicates
+    if any(m["id"] == model_id for m in models):
+        raise HTTPException(status_code=409, detail=f"Model {model_id!r} already in custom list")
+
+    provider = req.provider.strip() or _provider_from_model(model_id)
+    group = req.group.strip() or f"Custom — {provider.title()}"
+    entry: dict[str, str] = {
+        "id": model_id,
+        "label": req.label.strip(),
+        "provider": provider,
+        "group": group,
+    }
+    models.append(entry)
+    _save_custom_models(models)
+    _log.info("settings.llm.custom_model_added", id=model_id, actor=_user.email)
+    return CustomModelEntry(**entry)
+
+
+@router.delete("/llm/custom-models/{model_id:path}", status_code=200)
+async def remove_custom_model(
+    model_id: str,
+    _user: UserContext = Depends(get_current_user),
+) -> dict[str, str]:
+    """Remove a custom model entry by its LiteLLM model ID."""
+    models = _load_custom_models()
+    new_models = [m for m in models if m["id"] != model_id]
+    if len(new_models) == len(models):
+        raise HTTPException(status_code=404, detail=f"Model {model_id!r} not found in custom list")
+    _save_custom_models(new_models)
+    _log.info("settings.llm.custom_model_removed", id=model_id, actor=_user.email)
+    return {"deleted": model_id}

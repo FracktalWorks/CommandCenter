@@ -152,7 +152,23 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
     if (process.env.VLLM_BASE_URL?.trim())       configured.add("vllm");
   }
 
-  // ── GitHub Copilot SDK model list ─────────────────────────────────────────
+  // ── Fetch user-defined custom models from the gateway ────────────────────
+  // These are stored in infra/custom_models.json and managed via
+  // Settings → Models → Custom Models.  They are merged LAST so they always
+  // appear at the bottom of their provider group in the picker.
+  let customModels: { id: string; label: string; provider: string; group: string }[] = [];
+  try {
+    const cr = await fetch(`${GATEWAY_URL}/settings/llm/custom-models`, {
+      headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+      signal: AbortSignal.timeout(3_000),
+    });
+    if (cr.ok) {
+      const data = (await cr.json()) as { id: string; label: string; provider: string; group: string }[];
+      if (Array.isArray(data)) customModels = data;
+    }
+  } catch {
+    // custom models file may not exist yet — safe to ignore
+  }
   // Fetched live from the gateway when GITHUB_TOKEN is set; fallback otherwise.
   let copilotModels: { id: string; label: string }[] = configured.has("github")
     ? COPILOT_FALLBACK
@@ -204,6 +220,15 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
       runtime: "litellm" as ModelRuntime,
       group: m.group,
     })),
+    // User-defined custom models — only shown when that provider key is set
+    ...customModels
+      .filter((m) => m.provider === null || configured.has(m.provider))
+      .map((m) => ({
+        id: m.id,
+        label: m.label,
+        runtime: "litellm" as ModelRuntime,
+        group: m.group || `Custom — ${m.provider}`,
+      })),
   ];
 
   // Always include at least the tiers so the picker is never empty

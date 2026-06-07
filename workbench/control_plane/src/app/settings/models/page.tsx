@@ -589,6 +589,205 @@ function ProviderCard({
 }
 
 // ---------------------------------------------------------------------------
+// Custom model entry type (mirrors gateway CustomModelEntry)
+// ---------------------------------------------------------------------------
+
+interface CustomModel {
+  id: string;
+  label: string;
+  provider: string;
+  group: string;
+}
+
+// ---------------------------------------------------------------------------
+// Custom Models Manager
+// ---------------------------------------------------------------------------
+
+function CustomModelsManager() {
+  const [models, setModels] = useState<CustomModel[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  // Form state
+  const [formId, setFormId] = useState("");
+  const [formLabel, setFormLabel] = useState("");
+  const [formProvider, setFormProvider] = useState("openrouter");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch("/api/settings/llm/custom-models");
+      if (r.ok) setModels((await r.json()) as CustomModel[]);
+    } catch { /* ok */ } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  // Auto-derive label from model ID when the user types an ID
+  const handleIdChange = (v: string) => {
+    setFormId(v);
+    if (!formLabel || formLabel === deriveLabel(formId)) {
+      setFormLabel(deriveLabel(v));
+    }
+    // Auto-detect provider from prefix
+    const detected = v.startsWith("openrouter/") ? "openrouter"
+      : v.startsWith("anthropic/") ? "anthropic"
+      : v.startsWith("openai/") ? "openai"
+      : v.startsWith("gemini/") ? "gemini"
+      : v.startsWith("groq/") ? "groq"
+      : v.startsWith("mistral/") ? "mistral"
+      : "openrouter";
+    setFormProvider(detected);
+  };
+
+  const deriveLabel = (id: string) => {
+    const parts = id.split("/");
+    return parts[parts.length - 1] ?? id;
+  };
+
+  const handleAdd = async () => {
+    if (!formId.trim() || !formLabel.trim()) return;
+    setAdding(true); setError(null); setSuccess(null);
+    try {
+      const r = await fetch("/api/settings/llm/custom-models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: formId.trim(), label: formLabel.trim(), provider: formProvider }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setError(String((data as Record<string, unknown>)?.detail ?? "Failed to add model"));
+      } else {
+        setSuccess(`Added ${formLabel.trim()}`);
+        setFormId(""); setFormLabel(""); setFormProvider("openrouter");
+        setShowForm(false);
+        setTimeout(() => setSuccess(null), 4000);
+        await load();
+      }
+    } catch (e) { setError(String(e)); } finally { setAdding(false); }
+  };
+
+  const handleRemove = async (id: string) => {
+    setRemoving(id); setError(null);
+    try {
+      const r = await fetch(`/api/settings/llm/custom-models/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setError(String((d as Record<string, unknown>)?.detail ?? "Failed to remove"));
+      } else {
+        await load();
+      }
+    } catch (e) { setError(String(e)); } finally { setRemoving(null); }
+  };
+
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <div className="text-sm font-semibold text-zinc-100">Custom Models</div>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            Add any model ID from your configured providers. No restart needed — models appear in
+            the chat picker immediately.
+          </p>
+        </div>
+        <button
+          onClick={() => { setShowForm((v) => !v); setError(null); }}
+          className="rounded-lg border border-blue-700/50 bg-blue-900/30 px-3 py-1.5 text-xs font-medium text-blue-300 hover:bg-blue-800/40 transition-colors"
+        >
+          {showForm ? "Cancel" : "+ Add model"}
+        </button>
+      </div>
+
+      {/* Add form */}
+      {showForm && (
+        <div className="mb-4 rounded-lg border border-zinc-700 bg-zinc-800/60 p-3 space-y-2">
+          <div>
+            <label className="block text-xs font-medium text-zinc-400 mb-1">Model ID</label>
+            <input
+              autoFocus
+              type="text"
+              placeholder="e.g. openrouter/qwen/qwen3.8-preview"
+              value={formId}
+              onChange={(e) => handleIdChange(e.target.value)}
+              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 font-mono placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+            />
+            <p className="mt-1 text-[10px] text-zinc-600">
+              Full LiteLLM model string — prefix determines the provider (e.g. <code className="font-mono">openrouter/…</code>, <code className="font-mono">anthropic/…</code>, <code className="font-mono">gemini/…</code>)
+            </p>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-zinc-400 mb-1">Display label</label>
+            <input
+              type="text"
+              placeholder="e.g. Qwen 3.8 Preview"
+              value={formLabel}
+              onChange={(e) => setFormLabel(e.target.value)}
+              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+            />
+          </div>
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          <button
+            onClick={handleAdd}
+            disabled={adding || !formId.trim() || !formLabel.trim()}
+            className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
+          >
+            {adding ? "Adding…" : "Add to picker"}
+          </button>
+        </div>
+      )}
+
+      {success && (
+        <div className="mb-3 rounded-md border border-emerald-800/40 bg-emerald-950/30 px-3 py-1.5 text-xs text-emerald-300">
+          ✓ {success}
+        </div>
+      )}
+
+      {/* Model list */}
+      {loading ? (
+        <div className="text-xs text-zinc-600 py-2">Loading…</div>
+      ) : models.length === 0 ? (
+        <div className="text-xs text-zinc-600 italic py-2">
+          No custom models yet. Click "+ Add model" to add any model from OpenRouter, Anthropic, etc.
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {models.map((m) => (
+            <div
+              key={m.id}
+              className="flex items-center justify-between rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-2 text-xs"
+            >
+              <div className="min-w-0">
+                <div className="font-medium text-zinc-200 truncate">{m.label}</div>
+                <div className="font-mono text-zinc-500 text-[10px] truncate">{m.id}</div>
+              </div>
+              <div className="flex items-center gap-2 ml-3 shrink-0">
+                <span className="text-[9px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-500">
+                  {m.provider}
+                </span>
+                <button
+                  onClick={() => handleRemove(m.id)}
+                  disabled={removing === m.id}
+                  className="text-zinc-600 hover:text-red-400 transition-colors disabled:opacity-40"
+                  title="Remove"
+                >
+                  {removing === m.id ? "…" : "✕"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // GitHub Copilot model picker (for GitHubCopilotAgent Tier-1.5 path)
 // ---------------------------------------------------------------------------
 
@@ -889,6 +1088,14 @@ export default function ModelsPage() {
               GitHub Copilot Agent Model
             </h2>
             <CopilotModelPicker />
+          </section>
+
+          {/* Custom model catalogue */}
+          <section className="mb-8">
+            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-600">
+              Custom Models
+            </h2>
+            <CustomModelsManager />
           </section>
 
           {/* LiteLLM UI callout */}

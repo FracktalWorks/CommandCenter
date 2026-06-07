@@ -45,6 +45,10 @@ class AgentRunRequest(BaseModel):
     payload: dict[str, Any] = {}
     thread_id: str | None = None
     run_id: str | None = None
+    model: str | None = None
+    """Optional model override.  If it is a LiteLLM model (contains '/' or starts
+    with 'tier'), the executor injects a BYOK provider block so the Copilot SDK
+    routes completions through the local LiteLLM proxy instead of github.com."""
 
 
 class AgentRunResponse(BaseModel):
@@ -544,6 +548,7 @@ async def run_agent_stream_endpoint(
             req.payload,
             run_id=run_id,
             thread_id=req.thread_id,
+            model=req.model,
         ),
         media_type="text/event-stream",
         headers={

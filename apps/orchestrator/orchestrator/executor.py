@@ -873,6 +873,7 @@ async def run_agent_stream(
     *,
     run_id: str | None = None,
     thread_id: str | None = None,
+    model: str | None = None,
 ) -> AsyncIterator[str]:
     """Load a named agent and yield AG-UI SSE events while it runs.
 
@@ -997,13 +998,59 @@ async def run_agent_stream(
                     await _install_push_guard(str(loaded.agent_dir))
                     _stream_head_before = await _get_current_head(str(loaded.agent_dir))
 
-                    # Inject model override from settings (copilot_chat_model).
+                    # Inject model override / BYOK provider for this run.
+                    #
+                    # Resolution order:
+                    #   1. model arg from the API request (per-chat picker selection)
+                    #   2. copilot_chat_model from Settings (global default)
+                    #
+                    # If the resolved model is a LiteLLM-routable model (contains
+                    # "/" — e.g. "openrouter/deepseek/deepseek-v4-pro" — or is a
+                    # tier alias like "tier1"), inject a BYOK provider block so the
+                    # Copilot SDK routes all completions through the local LiteLLM
+                    # proxy instead of api.githubcopilot.com.  This gives full tool
+                    # execution + streaming for any LiteLLM-supported model.
+                    _requested_model = (model or "").strip()
                     _configured_model = (getattr(settings, "copilot_chat_model", "") or "").strip()
-                    if _configured_model:
+                    _final_model = _requested_model or _configured_model
+
+                    def _is_litellm_model(m: str) -> bool:
+                        """True if the model should be routed through LiteLLM BYOK."""
+                        return "/" in m or m.lower().startswith("tier")
+
+                    if _final_model:
+                        _is_byok = _is_litellm_model(_final_model)
+                        _litellm_base = (getattr(settings, "litellm_base_url", "") or "http://127.0.0.1:4000").rstrip("/")
+                        _litellm_key = (getattr(settings, "litellm_master_key", "") or "sk-local").strip()
                         for _a in agents:
                             try:
                                 if hasattr(_a, "_default_options") and _a._default_options is not None:
-                                    _a._default_options.model = _configured_model
+                                    _opts = _a._default_options
+                                    if _is_byok:
+                                        # Route all SDK completions through LiteLLM proxy.
+                                        _provider_cfg = {
+                                            "type": "openai",
+                                            "base_url": f"{_litellm_base}/v1",
+                                            "api_key": _litellm_key,
+                                        }
+                                        try:
+                                            _opts.model = _final_model
+                                            _opts.provider = _provider_cfg
+                                        except (AttributeError, TypeError):
+                                            try:
+                                                _opts["model"] = _final_model
+                                                _opts["provider"] = _provider_cfg
+                                            except Exception:  # noqa: BLE001
+                                                pass
+                                    else:
+                                        # Native Copilot SDK model — just set model.
+                                        try:
+                                            _opts.model = _final_model
+                                        except (AttributeError, TypeError):
+                                            try:
+                                                _opts["model"] = _final_model
+                                            except Exception:  # noqa: BLE001
+                                                pass
                             except Exception:  # noqa: BLE001
                                 pass
 

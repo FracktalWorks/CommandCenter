@@ -352,11 +352,13 @@ export default function AgentChat({
     models.find((m) => m.id === currentModel)?.label ?? currentModel;
   const modelGroups = Array.from(new Set(models.map((m) => m.group)));
 
-  // GitHub Copilot SDK agents can only use Copilot SDK models — selecting a
-  // LiteLLM model has no effect because the executor always routes through
-  // GitHubCopilotAgent.run() which uses the model baked in agents.py.
-  // We still show all models in the picker but dim + disable LiteLLM entries.
+  // GitHub Copilot SDK agents support BYOK (Bring Your Own Key): when a
+  // LiteLLM model (e.g. openrouter/deepseek/deepseek-v4-pro) is selected,
+  // the executor injects a provider block so the SDK routes through the local
+  // LiteLLM proxy instead of api.githubcopilot.com.  All models are available.
   const isCopilotSdkAgent = agentRuntime === "github-copilot";
+  // True when a Copilot SDK agent is running via BYOK (LiteLLM proxy).
+  const isByokActive = isCopilotSdkAgent && currentRuntime === "litellm";
 
   // Searchable model picker state
   const [showModelMenu, setShowModelMenu] = useState(false);
@@ -557,15 +559,13 @@ export default function AgentChat({
                     className="w-full rounded bg-zinc-800 border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
                   />
                 </div>
-                {/* GitHub Copilot agent constraint notice */}
+                {/* GitHub Copilot SDK BYOK notice */}
                 {isCopilotSdkAgent && (
-                  <div className="px-3 py-2 border-b border-zinc-800 bg-sky-950/30 text-[10px] text-sky-400/80 leading-relaxed">
-                    This agent runs on GitHub Copilot SDK — LiteLLM models are disabled.
-                    Change the model in{" "}
-                    <a href="/settings/models" className="underline hover:text-sky-300 transition-colors">
-                      Settings → Models → Copilot SDK Agent Model
-                    </a>
-                    .
+                  <div className="px-3 py-2 border-b border-zinc-800 bg-sky-950/20 text-[10px] text-sky-400/80 leading-relaxed">
+                    <span className="font-semibold text-sky-300">GitHub Copilot SDK — BYOK enabled.</span>
+                    {" "}SDK models use GitHub Copilot directly.
+                    LiteLLM models route through your local proxy (BYOK).
+                    {" "}<a href="/settings/models" className="underline hover:text-sky-300 transition-colors">Configure providers →</a>
                   </div>
                 )}
                 {/* Grouped list */}
@@ -580,41 +580,43 @@ export default function AgentChat({
                       </div>
                       {filteredModels
                         .filter((m) => m.group === group)
-                        .map((m) => {
-                          // LiteLLM models are not usable with Copilot SDK agents
-                          const isDisabled = isCopilotSdkAgent && m.runtime === "litellm";
-                          return (
-                            <button
-                              key={m.id}
-                              onClick={() => {
-                                if (isDisabled) return;
-                                setCurrentModel(m.id);
-                                setShowModelMenu(false);
-                                setModelSearch("");
-                              }}
-                              className={`w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center justify-between gap-2 ${
-                                isDisabled
-                                  ? "opacity-30 cursor-not-allowed"
-                                  : m.id === currentModel
-                                  ? "text-zinc-100 bg-zinc-800/60 hover:bg-zinc-800"
-                                  : "text-zinc-400 hover:bg-zinc-800"
-                              }`}
-                              title={isDisabled ? "Not available for GitHub Copilot SDK agents" : undefined}
-                            >
-                              <span className="truncate">{m.label}</span>
-                              <div className="flex items-center gap-1 shrink-0">
-                                <span className={`text-[8px] px-1 py-0.5 rounded border ${
-                                  m.runtime === "litellm"
-                                    ? "border-violet-700/40 text-violet-400"
-                                    : "border-sky-700/40 text-sky-400"
-                                }`}>
-                                  {m.runtime === "litellm" ? "LiteLLM" : "SDK"}
+                        .map((m) => (
+                          <button
+                            key={m.id}
+                            onClick={() => {
+                              setCurrentModel(m.id);
+                              setShowModelMenu(false);
+                              setModelSearch("");
+                            }}
+                            className={`w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center justify-between gap-2 ${
+                              m.id === currentModel
+                                ? "text-zinc-100 bg-zinc-800/60 hover:bg-zinc-800"
+                                : "text-zinc-400 hover:bg-zinc-800"
+                            }`}
+                            title={
+                              isCopilotSdkAgent && m.runtime === "litellm"
+                                ? `BYOK: routes through LiteLLM proxy (${m.id})`
+                                : undefined
+                            }
+                          >
+                            <span className="truncate">{m.label}</span>
+                            <div className="flex items-center gap-1 shrink-0">
+                              {isCopilotSdkAgent && m.runtime === "litellm" && (
+                                <span className="text-[8px] px-1 py-0.5 rounded border border-amber-700/40 text-amber-400">
+                                  BYOK
                                 </span>
-                                {m.id === currentModel && !isDisabled && <span className="text-emerald-500 text-[10px]">✓</span>}
-                              </div>
-                            </button>
-                          );
-                        })}
+                              )}
+                              <span className={`text-[8px] px-1 py-0.5 rounded border ${
+                                m.runtime === "litellm"
+                                  ? "border-violet-700/40 text-violet-400"
+                                  : "border-sky-700/40 text-sky-400"
+                              }`}>
+                                {m.runtime === "litellm" ? "LiteLLM" : "SDK"}
+                              </span>
+                              {m.id === currentModel && <span className="text-emerald-500 text-[10px]">✓</span>}
+                            </div>
+                          </button>
+                        ))}
                     </div>
                   ))}
                 </div>
@@ -623,13 +625,21 @@ export default function AgentChat({
           </div>
           <span
             className={`text-[9px] px-1.5 py-0.5 rounded-full border ${
-              currentRuntime === "litellm"
+              isByokActive
+                ? "border-amber-700/50 bg-amber-900/30 text-amber-300"
+                : currentRuntime === "litellm"
                 ? "border-violet-700/50 bg-violet-900/30 text-violet-300"
                 : "border-sky-700/50 bg-sky-900/30 text-sky-300"
             }`}
-            title={currentRuntime === "litellm" ? "Routed via LiteLLM proxy" : "Routed via GitHub Copilot SDK"}
+            title={
+              isByokActive
+                ? "BYOK: GitHub Copilot SDK routing through LiteLLM proxy"
+                : currentRuntime === "litellm"
+                ? "Routed via LiteLLM proxy"
+                : "Routed via GitHub Copilot SDK"
+            }
           >
-            {currentRuntime === "litellm" ? "LiteLLM" : "Copilot"}
+            {isByokActive ? "BYOK" : currentRuntime === "litellm" ? "LiteLLM" : "Copilot"}
           </span>
         </div>
 

@@ -296,6 +296,7 @@ export async function POST(req: NextRequest): Promise<Response> {
           agent: agentName,
           payload: { mode: "chat", message, messages: messages ?? [] },
           thread_id: threadId ?? undefined,
+          model: model ?? undefined,
         }),
         signal: AbortSignal.timeout(310_000),
       });

@@ -1169,6 +1169,25 @@ async def run_agent_stream(
                     _byok_final_model = _final_model_early
                     _byok_litellm_base = (getattr(settings, "litellm_base_url", "") or "http://127.0.0.1:4000").rstrip("/")
                     _byok_litellm_key = (getattr(settings, "litellm_master_key", "") or "sk-local").strip()
+
+                    # Route determination:
+                    # - openrouter/* models: bypass LiteLLM and call OpenRouter directly.
+                    #   LiteLLM uses a strict allowlist (config.yaml model_list) and
+                    #   rejects any model not explicitly defined there, including free-
+                    #   tier variants like "openrouter/meta-llama/llama-3.3-70b:free".
+                    #   OpenRouter's own API accepts any valid model ID natively.
+                    # - tier* / other LiteLLM models: route through LiteLLM proxy as before.
+                    if _byok_final_model.startswith("openrouter/"):
+                        _openrouter_key = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
+                        _byok_base_url = "https://openrouter.ai/api/v1"
+                        _byok_api_key = _openrouter_key or _byok_litellm_key
+                        # Strip the "openrouter/" prefix — the OpenRouter API expects
+                        # just "provider/model" (e.g. "meta-llama/llama-3.3-70b-instruct:free")
+                        _byok_model_id = _byok_final_model[len("openrouter/"):]
+                    else:
+                        _byok_base_url = f"{_byok_litellm_base}/v1"
+                        _byok_api_key = _byok_litellm_key
+                        _byok_model_id = _byok_final_model
                     _byok_tools: list[Any] = []
                     _byok_instructions = ""
                     for _ba in agents:
@@ -1183,9 +1202,9 @@ async def run_agent_stream(
                                 )
 
                     _byok_client = _OpenAI(
-                        model=_byok_final_model,
-                        base_url=f"{_byok_litellm_base}/v1",
-                        api_key=_byok_litellm_key,
+                        model=_byok_model_id,
+                        base_url=_byok_base_url,
+                        api_key=_byok_api_key,
                     )
                     _byok_agent = _MafAgent(
                         client=_byok_client,
@@ -1201,6 +1220,8 @@ async def run_agent_stream(
                         "executor.byok_agent_created",
                         agent=agent_name,
                         model=_byok_final_model,
+                        resolved_model=_byok_model_id,
+                        base_url=_byok_base_url,
                         tool_count=len(_byok_tools),
                     )
                 except Exception as _byok_exc:  # noqa: BLE001

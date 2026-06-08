@@ -337,7 +337,11 @@ async def copilot_models() -> dict:
                     if chat_models:
                         return {
                             "models": [
-                                {"id": m["id"], "label": m.get("name", m["id"])}
+                                {
+                                    "id": m["id"],
+                                    "label": m.get("name", m["id"]),
+                                    "model_picker_enabled": m.get("model_picker_enabled", False),
+                                }
                                 for m in chat_models
                             ],
                             "source": "live",

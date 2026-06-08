@@ -43,6 +43,11 @@ export interface UnifiedModel {
   label: string;
   runtime: ModelRuntime;
   group: string;
+  /** True only for GitHub Copilot SDK models where the subscription plan
+   *  allows the user to switch models.  False means the CLI ignores the
+   *  model selection and always uses its internal default (currently
+   *  claude-sonnet-4.6). Use BYOK (LiteLLM models) to switch models. */
+  model_picker_enabled?: boolean;
 }
 
 export interface UnifiedModelsResponse {
@@ -191,12 +196,12 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
       });
       if (res.ok) {
         const data = (await res.json()) as {
-          models?: { id: string; label: string }[];
+          models?: { id: string; label: string; model_picker_enabled?: boolean }[];
           source?: string;
         };
         if (Array.isArray(data.models) && data.models.length > 0) {
           copilotModels = [
-            { id: "auto", label: "auto (SDK picks)" },
+            { id: "auto", label: "auto (SDK picks)", model_picker_enabled: false },
             ...data.models.filter((m) => m.id !== "auto"),
           ];
           source = data.source ?? "live";
@@ -222,6 +227,7 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
             label: m.label,
             runtime: "copilot" as ModelRuntime,
             group: "GitHub Copilot SDK",
+            model_picker_enabled: (m as { id: string; label: string; model_picker_enabled?: boolean }).model_picker_enabled ?? false,
           }))
       : []),
     // LiteLLM group — tiers always shown, provider-specific models gated by key

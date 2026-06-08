@@ -626,10 +626,14 @@ export default function AgentChat({
                 {/* GitHub Copilot SDK BYOK notice */}
                 {isCopilotSdkAgent && (
                   <div className="px-3 py-2 border-b border-zinc-800 bg-sky-950/20 text-[10px] text-sky-400/80 leading-relaxed">
-                    <span className="font-semibold text-sky-300">GitHub Copilot SDK — BYOK enabled.</span>
-                    {" "}SDK models use GitHub Copilot directly.
-                    LiteLLM models route through your local proxy (BYOK).
-                    {" "}<a href="/settings/models" className="underline hover:text-sky-300 transition-colors">Configure providers →</a>
+                    <span className="font-semibold text-sky-300">GitHub Copilot SDK</span>
+                    {" — "}
+                    <span className="text-amber-400/90">⚠ SDK models are locked to Claude Sonnet 4.6</span>
+                    {" on this subscription ("}
+                    <span className="text-zinc-500">model_picker_enabled: false</span>
+                    {" for all plans below Copilot Pro+/Enterprise). "}
+                    <span className="text-sky-300">Use a BYOK model below to switch providers.</span>
+                    {" "}<a href="/settings/models" className="underline hover:text-sky-200 transition-colors">Configure BYOK →</a>
                   </div>
                 )}
                 {/* Grouped list */}
@@ -657,9 +661,11 @@ export default function AgentChat({
                                 ? "text-zinc-100 bg-zinc-800/60 hover:bg-zinc-800"
                                 : "text-zinc-400 hover:bg-zinc-800"
                             }`}
-                            title={
+                          title={
                               isCopilotSdkAgent && m.runtime === "litellm"
                                 ? `BYOK: routes through LiteLLM proxy (${m.id})`
+                                : isCopilotSdkAgent && m.runtime === "copilot" && m.model_picker_enabled === false
+                                ? "⚠ Locked: this subscription cannot switch Copilot SDK models. Use a BYOK model instead."
                                 : undefined
                             }
                           >
@@ -668,6 +674,11 @@ export default function AgentChat({
                               {isCopilotSdkAgent && m.runtime === "litellm" && (
                                 <span className="text-[8px] px-1 py-0.5 rounded border border-amber-700/40 text-amber-400">
                                   BYOK
+                                </span>
+                              )}
+                              {isCopilotSdkAgent && m.runtime === "copilot" && m.model_picker_enabled === false && (
+                                <span className="text-[10px] text-zinc-600" title="Locked on this subscription">
+                                  🔒
                                 </span>
                               )}
                               <span className={`text-[8px] px-1 py-0.5 rounded border ${

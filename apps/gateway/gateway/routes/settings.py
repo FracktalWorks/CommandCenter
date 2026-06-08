@@ -162,8 +162,6 @@ def _inject_env_into_litellm(env_var: str, value: str) -> None:
     # Just trigger a recreation — the container will read .env at startup.
     _recreate_litellm_bg()
 
-    threading.Thread(target=_do, daemon=True).start()
-
 
 # ---------------------------------------------------------------------------
 # Provider detection helpers

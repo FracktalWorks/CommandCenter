@@ -1177,14 +1177,36 @@ async def run_agent_stream(
                     #   tier variants like "openrouter/meta-llama/llama-3.3-70b:free".
                     #   OpenRouter's own API accepts any valid model ID natively.
                     # - tier* / other LiteLLM models: route through LiteLLM proxy as before.
-                    if _byok_final_model.startswith("openrouter/"):
-                        _openrouter_key = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
-                        _byok_base_url = "https://openrouter.ai/api/v1"
-                        _byok_api_key = _openrouter_key or _byok_litellm_key
-                        # Strip the "openrouter/" prefix — the OpenRouter API expects
-                        # just "provider/model" (e.g. "meta-llama/llama-3.3-70b-instruct:free")
-                        _byok_model_id = _byok_final_model[len("openrouter/"):]
+                    # Provider routing table.
+                    # Each provider that has its own OpenAI-compatible API is
+                    # routed directly, bypassing LiteLLM (which requires every
+                    # model to be explicitly listed in config.yaml).
+                    # Adding a new provider here is the only change needed.
+                    _DIRECT_PROVIDERS: dict[str, tuple[str, str]] = {
+                        # prefix → (base_url, env_var_for_api_key)
+                        "openrouter/": ("https://openrouter.ai/api/v1",      "OPENROUTER_API_KEY"),
+                        "groq/":       ("https://api.groq.com/openai/v1",    "GROQ_API_KEY"),
+                        "anthropic/":  ("https://api.anthropic.com/v1",       "ANTHROPIC_API_KEY"),
+                        "together_ai/":("https://api.together.xyz/v1",        "TOGETHER_API_KEY"),
+                        "mistral/":    ("https://api.mistral.ai/v1",          "MISTRAL_API_KEY"),
+                    }
+                    _matched_prefix: str | None = None
+                    for _pfx in _DIRECT_PROVIDERS:
+                        if _byok_final_model.startswith(_pfx):
+                            _matched_prefix = _pfx
+                            break
+
+                    if _matched_prefix is not None:
+                        _direct_base, _direct_env = _DIRECT_PROVIDERS[_matched_prefix]
+                        _provider_key = (os.environ.get(_direct_env) or "").strip()
+                        _byok_base_url = _direct_base
+                        _byok_api_key = _provider_key or _byok_litellm_key
+                        # Strip provider prefix — the native API expects just "model-name"
+                        # e.g. "groq/llama-3.3-70b-versatile" → "llama-3.3-70b-versatile"
+                        # e.g. "openrouter/meta-llama/llama:free" → "meta-llama/llama:free"
+                        _byok_model_id = _byok_final_model[len(_matched_prefix):]
                     else:
+                        # Unknown provider prefix (e.g. "tier2-sonnet") — route via LiteLLM
                         _byok_base_url = f"{_byok_litellm_base}/v1"
                         _byok_api_key = _byok_litellm_key
                         _byok_model_id = _byok_final_model

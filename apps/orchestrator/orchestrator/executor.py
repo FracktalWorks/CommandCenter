@@ -1224,13 +1224,20 @@ async def run_agent_stream(
                                 )
 
                     # Some providers have small context windows that cannot fit
-                    # 40+ tool schemas.  For known small-context providers, skip
-                    # tool injection (model runs as plain chat, no function calls).
-                    # Groq free tier: 6K token hard limit — tool schemas alone
-                    # exceed this for agents with many tools.
+                    # 40+ tool schemas or large system prompts.  For known small-
+                    # context providers, skip tool injection and truncate instructions.
+                    # Groq free tier: 6K token hard limit.
                     _small_ctx_providers = {"groq/"}
                     _skip_tools = any(_byok_final_model.startswith(p) for p in _small_ctx_providers)
                     _tools_for_byok = [] if _skip_tools else _byok_tools
+
+                    # Truncate instructions for small-context providers.
+                    # ~4 chars per token; 4000 tokens × 4 = 16000 chars headroom
+                    # (leaves ~2000 tokens for conversation + response).
+                    _max_instr_chars = 16_000 if _skip_tools else len(_byok_instructions)
+                    _instructions_for_byok = _byok_instructions[:_max_instr_chars] if _byok_instructions else "You are a helpful assistant."
+                    if _skip_tools and len(_byok_instructions) > _max_instr_chars:
+                        _instructions_for_byok += "\n\n[Instructions truncated for this model's context window.]"
 
                     _byok_client = _OpenAI(
                         model=_byok_model_id,
@@ -1239,7 +1246,7 @@ async def run_agent_stream(
                     )
                     _byok_agent = _MafAgent(
                         client=_byok_client,
-                        instructions=_byok_instructions or "You are a helpful assistant.",
+                        instructions=_instructions_for_byok,
                         tools=_tools_for_byok,
                     )
                     # Inject cross-agent tools onto the BYOK agent too.

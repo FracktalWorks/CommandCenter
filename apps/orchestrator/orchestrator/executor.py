@@ -1427,13 +1427,17 @@ async def run_agent_stream(
                     # For BYOK MAF agents, pass history as proper MAF Message objects
                     # so the LLM sees full user/assistant turn structure (not just a
                     # flat string). Falls back to string-only for other runtimes.
+                    # Cap at last 10 exchanges (20 msgs) to stay within provider limits —
+                    # Groq free tier has a 6000-token hard limit; even paid tiers benefit
+                    # from a tighter window when tools inject large schemas.
                     _history_msgs = event_payload.get("messages") or []
                     _current_msg_text = event_payload.get("message") or event_payload.get("user_query") or ""
                     if _is_byok and _history_msgs:
                         try:
                             from agent_framework import Message as _MAFMsg  # noqa: PLC0415
                             _maf_messages: list[Any] = []
-                            for _h in _history_msgs:
+                            # Keep only the last 20 prior messages (10 exchanges)
+                            for _h in _history_msgs[-20:]:
                                 _h_role = _h.get("role", "user")
                                 _h_content = (_h.get("content") or "").strip()
                                 if not _h_content:
@@ -1444,7 +1448,7 @@ async def run_agent_stream(
                                 _maf_messages.append(_MAFMsg(role=_h_role, content=_h_content))
                             # Append the current user message
                             if _current_msg_text.strip():
-                                _maf_messages.append(_MAFMsg(role="user", content=message))
+                                _maf_messages.append(_MAFMsg(role="user", content=_current_msg_text.strip()))
                             response = await agent.run(_maf_messages if _maf_messages else message)
                         except Exception:  # noqa: BLE001
                             response = await agent.run(message)  # fallback
@@ -1993,7 +1997,8 @@ def _build_event_message(
     current_msg = event_payload.get("message") or event_payload.get("user_query") or ""
     if history:
         history_lines: list[str] = []
-        for m in history:
+        # Cap at last 20 messages (10 exchanges) to avoid context/payload limits.
+        for m in history[-20:]:
             role = m.get("role", "user")
             content = (m.get("content") or "").strip()
             if not content:
@@ -2002,7 +2007,9 @@ def _build_event_message(
             if role == "user" and content == current_msg.strip():
                 continue
             label = "User" if role == "user" else "Assistant"
-            history_lines.append(f"{label}: {content}")
+            # Truncate very long assistant messages (e.g. tool output dumps)
+            short = content if len(content) <= 800 else content[:800] + "…"
+            history_lines.append(f"{label}: {short}")
         if history_lines:
             parts.append("Conversation history:\n" + "\n".join(history_lines))
 

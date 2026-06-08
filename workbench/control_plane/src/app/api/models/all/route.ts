@@ -231,9 +231,10 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
       runtime: "litellm" as ModelRuntime,
       group: m.group,
     })),
-    // User-defined custom models — gated by provider key + hidden filter
+    // User-defined custom models — always shown (user added them intentionally),
+    // hidden filter still applies so explicitly hidden ones stay hidden.
     ...customModels
-      .filter((m) => (m.provider === null || configured.has(m.provider)) && !hiddenSet.has(m.id))
+      .filter((m) => !hiddenSet.has(m.id))
       .map((m) => ({
         id: m.id,
         label: m.label,

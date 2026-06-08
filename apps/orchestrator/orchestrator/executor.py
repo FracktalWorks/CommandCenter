@@ -1381,7 +1381,32 @@ async def run_agent_stream(
                             agent._permission_handler = _PH.approve_all
                     except Exception:  # noqa: BLE001
                         pass
-                    response = await agent.run(message)
+                    # For BYOK MAF agents, pass history as proper MAF Message objects
+                    # so the LLM sees full user/assistant turn structure (not just a
+                    # flat string). Falls back to string-only for other runtimes.
+                    _history_msgs = event_payload.get("messages") or []
+                    _current_msg_text = event_payload.get("message") or event_payload.get("user_query") or ""
+                    if _is_byok and _history_msgs:
+                        try:
+                            from agent_framework import Message as _MAFMsg  # noqa: PLC0415
+                            _maf_messages: list[Any] = []
+                            for _h in _history_msgs:
+                                _h_role = _h.get("role", "user")
+                                _h_content = (_h.get("content") or "").strip()
+                                if not _h_content:
+                                    continue
+                                # Skip the current user message if already in history
+                                if _h_role == "user" and _h_content == _current_msg_text.strip():
+                                    continue
+                                _maf_messages.append(_MAFMsg(role=_h_role, content=_h_content))
+                            # Append the current user message
+                            if _current_msg_text.strip():
+                                _maf_messages.append(_MAFMsg(role="user", content=message))
+                            response = await agent.run(_maf_messages if _maf_messages else message)
+                        except Exception:  # noqa: BLE001
+                            response = await agent.run(message)  # fallback
+                    else:
+                        response = await agent.run(message)
                 return getattr(response, "text", "") or ""
 
             run_task = asyncio.create_task(_run_task())
@@ -1900,6 +1925,10 @@ def _build_event_message(
 
     Handles both interactive chat events (payload has ``message`` key) and
     webhook events (arbitrary payload keys).
+
+    When ``messages`` is present in the payload (chat history from the frontend),
+    it is prepended as conversation context so the agent has full continuity
+    regardless of which model/runtime processed previous turns.
     """
     integration_warnings: dict[str, str] = event_payload.get("integration_warnings", {})
     parts: list[str] = []
@@ -1915,10 +1944,28 @@ def _build_event_message(
             "When they do, output: <<<SETUP:service_name:ENV_VAR_NAME=value>>>"
         )
 
+    # Conversation history — prepend prior turns so model switching mid-chat
+    # preserves full context even when switching between CLI / BYOK / MAF paths.
+    history: list[dict[str, str]] = event_payload.get("messages") or []
+    current_msg = event_payload.get("message") or event_payload.get("user_query") or ""
+    if history:
+        history_lines: list[str] = []
+        for m in history:
+            role = m.get("role", "user")
+            content = (m.get("content") or "").strip()
+            if not content:
+                continue
+            # Skip the current message if it's already in history (frontend may append it)
+            if role == "user" and content == current_msg.strip():
+                continue
+            label = "User" if role == "user" else "Assistant"
+            history_lines.append(f"{label}: {content}")
+        if history_lines:
+            parts.append("Conversation history:\n" + "\n".join(history_lines))
+
     # Main user message — prefer explicit "message" or "user_query" keys
-    msg = event_payload.get("message") or event_payload.get("user_query") or ""
-    if msg:
-        parts.append(msg)
+    if current_msg:
+        parts.append(current_msg)
     else:
         # Webhook / event-driven path: serialise key payload fields as context
         import json  # noqa: PLC0415

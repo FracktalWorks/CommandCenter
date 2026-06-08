@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import json
+import os
 import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator

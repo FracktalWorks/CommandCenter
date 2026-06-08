@@ -1238,6 +1238,18 @@ async def run_agent_stream(
                     _instructions_for_byok = _byok_instructions[:_max_instr_chars] if _byok_instructions else "You are a helpful assistant."
                     if _skip_tools and len(_byok_instructions) > _max_instr_chars:
                         _instructions_for_byok += "\n\n[Instructions truncated for this model's context window.]"
+                    # Always append a BYOK identity note so the model doesn't repeat
+                    # stale model identifiers baked into the agent's instructions.md
+                    # (which may say "Claude Sonnet" or similar when written for a
+                    # different model).  The note goes at the end so it takes
+                    # precedence over any conflicting identity in the system prompt.
+                    _instructions_for_byok += (
+                        f"\n\n---\n"
+                        f"**Runtime note (do not repeat this to the user):** "
+                        f"You are currently running as **{_byok_model_id}** "
+                        f"via {_byok_base_url.split('/')[2]}. "
+                        f"If asked what model or LLM you are, state this accurately."
+                    )
 
                     _byok_client = _OpenAI(
                         model=_byok_model_id,

@@ -998,41 +998,44 @@ async def run_agent_stream(
                     await _install_push_guard(str(loaded.agent_dir))
                     _stream_head_before = await _get_current_head(str(loaded.agent_dir))
 
-                    # Inject model override / BYOK provider for this run.
+                    # Model injection via COPILOT_CHAT_MODEL.
+                    #
+                    # Architecture: COPILOT_LLM_BASE_URL is set globally in .env, so
+                    # the Copilot CLI always routes completions through LiteLLM.  The
+                    # per-session SessionConfig `model` and `provider` fields are
+                    # IGNORED by the CLI when COPILOT_LLM_BASE_URL is set — the CLI
+                    # exclusively reads COPILOT_CHAT_MODEL from the process env.
+                    #
+                    # Since each run_agent_stream() call spawns a new CopilotClient
+                    # (and therefore a new CLI process), setting os.environ before
+                    # `async with agent` (which calls start() / spawns CLI) is safe
+                    # for the current run.  Gateway is single-threaded (asyncio), so
+                    # there is no concurrent mutation risk on os.environ here.
                     #
                     # Resolution order:
-                    #   1. model arg from the API request (per-chat picker selection)
+                    #   1. model arg from the request (per-chat picker selection)
                     #   2. copilot_chat_model from Settings (global default)
-                    #
-                    # If the resolved model is a LiteLLM-routable model (contains
-                    # "/" — e.g. "openrouter/deepseek/deepseek-v4-pro" — or is a
-                    # tier alias like "tier1"), inject a BYOK provider block so the
-                    # Copilot SDK routes all completions through the local LiteLLM
-                    # proxy instead of api.githubcopilot.com.
+                    #   3. existing COPILOT_CHAT_MODEL env var (set in .env)
                     _requested_model = (model or "").strip()
                     _configured_model = (getattr(settings, "copilot_chat_model", "") or "").strip()
                     _final_model = _requested_model or _configured_model
 
                     def _is_litellm_model(m: str) -> bool:
-                        """True if the model should be routed through LiteLLM BYOK."""
+                        """True if the model should be routed through LiteLLM."""
                         return "/" in m or m.lower().startswith("tier")
 
                     _is_byok = bool(_final_model and _is_litellm_model(_final_model))
                     _litellm_base = (getattr(settings, "litellm_base_url", "") or "http://127.0.0.1:4000").rstrip("/")
                     _litellm_key = (getattr(settings, "litellm_master_key", "") or "sk-local").strip()
-                    _byok_provider_cfg: dict[str, Any] | None = None
-                    if _is_byok:
-                        _byok_provider_cfg = {
-                            "type": "openai",
-                            "base_url": f"{_litellm_base}/v1",
-                            "api_key": _litellm_key,
-                        }
 
+                    # Save old value so we can restore it after the run.
+                    _prev_chat_model = os.environ.get("COPILOT_CHAT_MODEL", "")
                     if _final_model:
+                        os.environ["COPILOT_CHAT_MODEL"] = _final_model
+                        # Also update _settings so MAF's _create_session sends the
+                        # right model to the CLI (belt-and-suspenders).
                         for _a in agents:
                             try:
-                                # _settings is the dict read by _create_session for model.
-                                # _default_options.model is NOT read by _create_session.
                                 if hasattr(_a, "_settings") and isinstance(_a._settings, dict):
                                     _a._settings["model"] = _final_model
                             except Exception:  # noqa: BLE001
@@ -1046,22 +1049,6 @@ async def run_agent_stream(
                     async def _run_copilot_stream() -> None:  # noqa: PLR0912
                         try:
                             async with agent:
-                                # BYOK: patch _client.create_session AFTER start() has
-                                # created the CopilotClient, so the SDK routes to LiteLLM.
-                                # MAF's _create_session builds SessionConfig but doesn't
-                                # forward provider from _default_options — we inject it
-                                # here by wrapping _client.create_session directly.
-                                if _is_byok and _byok_provider_cfg is not None:
-                                    _byok_p = _byok_provider_cfg  # snapshot for closure
-                                    try:
-                                        _orig_cs = agent._client.create_session  # type: ignore[union-attr]
-                                        async def _patched_cs(cfg: dict[str, Any], *, _p: dict[str, Any] = _byok_p, _o: Any = _orig_cs) -> Any:
-                                            cfg = dict(cfg)
-                                            cfg["provider"] = _p
-                                            return await _o(cfg)
-                                        agent._client.create_session = _patched_cs  # type: ignore[union-attr]
-                                    except Exception:  # noqa: BLE001
-                                        pass  # If patching fails, fall through to GitHub endpoint
                                 response_stream = agent.run(message, stream=True)
                                 async for update in response_stream:
                                     for content in (update.contents or []):
@@ -1127,6 +1114,12 @@ async def run_agent_stream(
                                     break
                     finally:
                         _active_run_queue.reset(_sdk_token)
+                        # Restore the previous COPILOT_CHAT_MODEL so subsequent runs
+                        # (other agents with their own model preference) are not affected.
+                        if _prev_chat_model:
+                            os.environ["COPILOT_CHAT_MODEL"] = _prev_chat_model
+                        elif "COPILOT_CHAT_MODEL" in os.environ and _final_model:
+                            del os.environ["COPILOT_CHAT_MODEL"]
                     yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
                     # Post-run: detect any commits the Copilot agent made locally
                     # and register them as pending_commit rows for inbox approval.

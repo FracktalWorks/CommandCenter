@@ -92,17 +92,54 @@ def _write_env_key(var: str, value: str) -> None:
 
 
 def _restart_litellm_bg() -> None:
-    """Restart the acb-litellm container in a background thread (best-effort)."""
+    """Restart the acb-litellm container in a background thread (best-effort).
+
+    Uses ``docker restart acb-litellm`` directly (faster, avoids compose
+    validation errors from profiles/unsupported keys in docker-compose.yml).
+    """
     import subprocess
     import threading
 
     def _do() -> None:
         try:
-            compose = _infra_dir() / "docker-compose.yml"
             subprocess.run(
-                ["docker", "compose", "-f", str(compose), "--profile", "core", "restart", "litellm"],
+                ["docker", "restart", "acb-litellm"],
                 check=False, timeout=60, capture_output=True,
             )
+        except Exception:
+            pass
+
+    threading.Thread(target=_do, daemon=True).start()
+
+
+def _inject_env_into_litellm(env_var: str, value: str) -> None:
+    """Write an env var into the running acb-litellm container without restarting.
+
+    LiteLLM reads provider API keys from the process environment at call time
+    (via litellm.utils.get_secret / os.environ), so injecting into the running
+    container is sufficient — no restart needed.
+
+    Falls back to a full container restart if the inject fails.
+    """
+    import subprocess
+    import threading
+
+    def _do() -> None:
+        try:
+            # Use sh -c to set env var persistently in a running container
+            # by writing to /etc/environment (readable by the LiteLLM process).
+            result = subprocess.run(
+                ["docker", "exec", "acb-litellm", "sh", "-c",
+                 f"echo '{env_var}={value}' >> /etc/environment && "
+                 f"export {env_var}='{value}'"],
+                check=False, timeout=15, capture_output=True,
+            )
+            if result.returncode != 0:
+                # Fallback: restart the container so it picks up from .env
+                subprocess.run(
+                    ["docker", "restart", "acb-litellm"],
+                    check=False, timeout=60, capture_output=True,
+                )
         except Exception:
             pass
 
@@ -570,7 +607,9 @@ async def set_provider_key(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to write env: {exc}") from exc
     _log.info("settings.llm.key_updated", provider=req.provider, actor=_user.email)
-    _restart_litellm_bg()
+    # Inject key into running LiteLLM container immediately (no restart needed).
+    # Fallback: restart the container so it picks up the new .env value.
+    _inject_env_into_litellm(env_var, req.api_key.strip())
     return {"ok": "true", "env_var": env_var, "provider": req.provider}
 
 

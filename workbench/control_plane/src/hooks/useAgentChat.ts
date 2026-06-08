@@ -20,6 +20,7 @@ import {
   subscribeSession,
 } from "@/lib/chatStore";
 import type { ChatMessage, ToolEvent } from "@/lib/chatStore";
+import { parseAgentError } from "@/lib/parseAgentError";
 
 // Re-export types for backward compatibility with AgentChat.tsx imports.
 export type { ChatMessage, ToolEvent };
@@ -325,13 +326,19 @@ export function useAgentChat({
           }));
           return;
         }
-        const msg = err instanceof Error ? err.message : String(err);
+        const rawMsg = err instanceof Error ? err.message : String(err);
+        const parsed = parseAgentError(rawMsg);
         setSessionState(threadId, (prev) => ({
           ...prev,
-          error: msg,
+          error: rawMsg,
           messages: prev.messages
             .filter((m) => m.id !== assistantId)
-            .concat({ id: nanoid(), role: "system", content: `Error: ${msg}`, timestamp: Date.now() }),
+            .concat({
+              id: nanoid(),
+              role: "system",
+              content: `__ERROR__${JSON.stringify(parsed)}`,
+              timestamp: Date.now(),
+            }),
         }));
       } finally {
         setSessionState(threadId, (prev) => ({ ...prev, isLoading: false, abortController: null }));

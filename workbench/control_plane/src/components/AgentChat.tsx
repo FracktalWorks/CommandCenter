@@ -9,6 +9,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import React from "react";
 import Link from "next/link";
 import { useAgentChat } from "@/hooks/useAgentChat";
 import type { ArtifactEntry, ChatMessage } from "@/hooks/useAgentChat";
@@ -19,7 +20,72 @@ import MarkdownMessage from "@/components/MarkdownMessage";
 import AgentStatusBar from "@/components/AgentStatusBar";
 import MessageActionBar from "@/components/MessageActionBar";
 import GenerativeUIPanel from "@/components/GenerativeUIPanel";
+import { parseAgentError } from "@/lib/parseAgentError";
+import type { ParsedAgentError } from "@/lib/parseAgentError";
 import { getMessages, saveMessages, fetchMessagesFromDb, type PersistedMessage } from "@/lib/sessions";
+
+// ── Error card — shown inline in the message thread and in the header banner ──
+function ErrorCard({ parsed, compact = false }: { parsed: ParsedAgentError; compact?: boolean }) {
+  const [copied, setCopied] = React.useState(false);
+  const [expanded, setExpanded] = React.useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(parsed.raw).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const codeLabel = parsed.code === 429 ? "429 Rate limit"
+    : parsed.code === 401 ? "401 Unauthorized"
+    : parsed.code === 402 ? "402 Payment required"
+    : parsed.code === 400 ? "400 Bad request"
+    : parsed.code === 404 ? "404 Not found"
+    : null;
+
+  return (
+    <div className={`rounded-xl border border-red-900/50 bg-red-950/30 ${compact ? "px-3 py-2" : "px-4 py-3"} text-sm`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-red-300 font-semibold">{parsed.title}</span>
+            {codeLabel && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-red-800/60 text-red-400">{codeLabel}</span>
+            )}
+          </div>
+          {!compact && (
+            <p className="mt-1 text-xs text-zinc-400 leading-relaxed">{parsed.detail}</p>
+          )}
+          <div className="mt-2 flex items-start gap-1.5">
+            <span className="text-amber-500 shrink-0 text-xs mt-0.5">→</span>
+            <p className="text-xs text-amber-400/90 leading-relaxed">{parsed.suggestion}</p>
+          </div>
+        </div>
+        <button
+          onClick={handleCopy}
+          title="Copy full error"
+          className="shrink-0 text-[10px] px-2 py-1 rounded border border-zinc-700 text-zinc-500 hover:text-zinc-300 hover:border-zinc-500 transition-colors mt-0.5 whitespace-nowrap"
+        >
+          {copied ? "Copied!" : "Copy error"}
+        </button>
+      </div>
+      {!compact && (
+        <div className="mt-2">
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors"
+          >
+            {expanded ? "▲ Hide full error" : "▼ Show full error"}
+          </button>
+          {expanded && (
+            <pre className="mt-1.5 text-[10px] text-zinc-500 bg-zinc-900/60 rounded-lg p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
+              {parsed.raw}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Unified model fallback — shown while /api/models/all is loading.
 // Always includes the tiers (always accessible) and Gemini models (default provider).
@@ -523,9 +589,7 @@ export default function AgentChat({
         ))}
 
         {error && !isLoading && (
-          <div className="text-xs text-red-400 bg-red-950/40 border border-red-900/60 rounded-lg px-4 py-2">
-            {error}
-          </div>
+          <ErrorCard parsed={parseAgentError(error)} />
         )}
 
         <div ref={bottomRef} />
@@ -845,9 +909,19 @@ function MessageBubble({
   const isSystem = message.role === "system";
 
   if (isSystem) {
+    // Check if this is a structured error injected by useAgentChat
+    const content = message.content;
+    if (content.startsWith("__ERROR__")) {
+      try {
+        const parsed: ParsedAgentError = JSON.parse(content.slice(9));
+        return <ErrorCard parsed={parsed} />;
+      } catch {
+        // fall through to generic system message
+      }
+    }
     return (
       <div className="text-center text-xs text-zinc-600 italic py-1">
-        {message.content}
+        {content}
       </div>
     );
   }

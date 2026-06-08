@@ -986,13 +986,26 @@ async def run_agent_stream(
             # token streaming, live tool events.  This is the correct path for
             # any GitHub-sourced agent.
             #
+            # When a LiteLLM model is explicitly requested (model contains '/'
+            # or starts with 'tier'), skip the Copilot CLI path entirely and
+            # fall through to Tier 2 (MAF AG-UI / batch) below.  The Copilot
+            # CLI v1.0.2 does not honour SessionConfig.model for subscriptions
+            # with model_picker_enabled=false — it always defaults to its own
+            # claude-sonnet-4.6.  The only reliable way to use a different
+            # model is to go through LiteLLM via the MAF OpenAIChatClient path.
+            #
             # Queue-based approach (not direct yield): the agent runs in a
             # background task that pushes events to a queue.  The main loop
             # drains the queue and yields SSE.  This allows tool calls
             # (including call_agent sub-delegation) to push SUB_AGENT_* events
             # into the same queue while the main loop is waiting — giving
             # real-time visibility of sub-agent progress in the UI.
-            if _agent_runtime == "github-copilot" and hasattr(agent, "run"):
+            _use_copilot_cli = (
+                _agent_runtime == "github-copilot"
+                and hasattr(agent, "run")
+                and not _is_byok  # LiteLLM models skip the CLI path
+            )
+            if _use_copilot_cli:
                 try:
                     # Install push guard + capture HEAD before the run so
                     # _detect_agent_commits can find ALL new commits (even pushed).
@@ -1132,6 +1145,62 @@ async def run_agent_stream(
                 except Exception as _sdk_exc:  # noqa: BLE001
                     _log.warning("executor.sdk_stream_failed", agent=agent_name, error=str(_sdk_exc))
                     yield _sse({"type": "RUN_ERROR", "runId": run_id, "message": str(_sdk_exc)})
+                    return
+
+            # ── BYOK path: replace GitHubCopilotAgent with a LiteLLM-backed MAF Agent ──
+            # When a LiteLLM model is selected for a github-copilot repo agent,
+            # the Copilot CLI cannot honour the model request (subscription limit).
+            # Instead, extract the tools from the repo's agents.py and run them
+            # through a standard MAF Agent backed by OpenAIChatClient → LiteLLM.
+            # This preserves all tool definitions / instructions while using any model.
+            if _is_byok and _agent_runtime == "github-copilot":
+                try:
+                    from agent_framework import Agent as _MafAgent  # noqa: PLC0415
+                    from agent_framework.openai import OpenAIChatCompletionClient as _OpenAI  # noqa: PLC0415
+
+                    # Collect tools + instructions from all repo agents.
+                    _byok_tools: list[Any] = []
+                    _byok_instructions = ""
+                    for _ba in agents:
+                        _raw_tools = list(getattr(_ba, "_tools", []) or getattr(_ba, "tools", []) or [])
+                        _byok_tools.extend(_raw_tools)
+                        if not _byok_instructions:
+                            _sys = getattr(_ba, "_default_options", {}) or {}
+                            if isinstance(_sys, dict):
+                                _sm = _sys.get("system_message", {})
+                                _byok_instructions = (
+                                    _sm.get("content", "") if isinstance(_sm, dict) else str(_sm)
+                                )
+
+                    _byok_client = _OpenAI(
+                        model=_final_model,
+                        base_url=f"{_litellm_base}/v1",
+                        api_key=_litellm_key,
+                    )
+                    _byok_agent = _MafAgent(
+                        client=_byok_client,
+                        instructions=_byok_instructions or "You are a helpful assistant.",
+                        tools=_byok_tools,
+                    )
+                    # Inject cross-agent tools onto the BYOK agent too.
+                    _inject_agent_tools([_byok_agent])
+                    agent = _byok_agent
+                    # Fall through to Tier 2 (instrumented batch/AG-UI path).
+                    _agent_runtime = "maf"  # treat as MAF for the Tier 2 path
+                    _log.info(
+                        "executor.byok_agent_created",
+                        agent=agent_name,
+                        model=_final_model,
+                        tool_count=len(_byok_tools),
+                    )
+                except Exception as _byok_exc:  # noqa: BLE001
+                    _log.warning(
+                        "executor.byok_fallback_failed",
+                        agent=agent_name,
+                        error=str(_byok_exc),
+                    )
+                    # If we can't build a BYOK agent, yield a clear error.
+                    yield _sse({"type": "RUN_ERROR", "runId": run_id, "message": f"BYOK agent build failed: {_byok_exc}"})
                     return
 
             # ── Tier 2: instrumented batch fallback ─────────────────────────

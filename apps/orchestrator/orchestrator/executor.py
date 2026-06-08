@@ -1223,6 +1223,15 @@ async def run_agent_stream(
                                     _sm.get("content", "") if isinstance(_sm, dict) else str(_sm)
                                 )
 
+                    # Some providers have small context windows that cannot fit
+                    # 40+ tool schemas.  For known small-context providers, skip
+                    # tool injection (model runs as plain chat, no function calls).
+                    # Groq free tier: 6K token hard limit — tool schemas alone
+                    # exceed this for agents with many tools.
+                    _small_ctx_providers = {"groq/"}
+                    _skip_tools = any(_byok_final_model.startswith(p) for p in _small_ctx_providers)
+                    _tools_for_byok = [] if _skip_tools else _byok_tools
+
                     _byok_client = _OpenAI(
                         model=_byok_model_id,
                         base_url=_byok_base_url,
@@ -1231,7 +1240,7 @@ async def run_agent_stream(
                     _byok_agent = _MafAgent(
                         client=_byok_client,
                         instructions=_byok_instructions or "You are a helpful assistant.",
-                        tools=_byok_tools,
+                        tools=_tools_for_byok,
                     )
                     # Inject cross-agent tools onto the BYOK agent too.
                     _inject_agent_tools([_byok_agent])
@@ -1244,7 +1253,8 @@ async def run_agent_stream(
                         model=_byok_final_model,
                         resolved_model=_byok_model_id,
                         base_url=_byok_base_url,
-                        tool_count=len(_byok_tools),
+                        tool_count=len(_tools_for_byok),
+                        tools_skipped=_skip_tools,
                     )
                 except Exception as _byok_exc:  # noqa: BLE001
                     _log.warning(

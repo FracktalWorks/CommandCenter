@@ -994,6 +994,14 @@ async def run_agent_stream(
             # claude-sonnet-4.6.  The only reliable way to use a different
             # model is to go through LiteLLM via the MAF OpenAIChatClient path.
             #
+            # Compute _is_byok early so _use_copilot_cli can reference it.
+            _requested_model_early = (model or "").strip()
+            _configured_model_early = (getattr(settings, "copilot_chat_model", "") or "").strip()
+            _final_model_early = _requested_model_early or _configured_model_early
+            def _is_litellm_model_fn(m: str) -> bool:
+                return "/" in m or m.lower().startswith("tier")
+            _is_byok = bool(_final_model_early and _is_litellm_model_fn(_final_model_early))
+
             # Queue-based approach (not direct yield): the agent runs in a
             # background task that pushes events to a queue.  The main loop
             # drains the queue and yields SSE.  This allows tool calls
@@ -1158,7 +1166,9 @@ async def run_agent_stream(
                     from agent_framework import Agent as _MafAgent  # noqa: PLC0415
                     from agent_framework.openai import OpenAIChatCompletionClient as _OpenAI  # noqa: PLC0415
 
-                    # Collect tools + instructions from all repo agents.
+                    _byok_final_model = _final_model_early
+                    _byok_litellm_base = (getattr(settings, "litellm_base_url", "") or "http://127.0.0.1:4000").rstrip("/")
+                    _byok_litellm_key = (getattr(settings, "litellm_master_key", "") or "sk-local").strip()
                     _byok_tools: list[Any] = []
                     _byok_instructions = ""
                     for _ba in agents:
@@ -1173,9 +1183,9 @@ async def run_agent_stream(
                                 )
 
                     _byok_client = _OpenAI(
-                        model=_final_model,
-                        base_url=f"{_litellm_base}/v1",
-                        api_key=_litellm_key,
+                        model=_byok_final_model,
+                        base_url=f"{_byok_litellm_base}/v1",
+                        api_key=_byok_litellm_key,
                     )
                     _byok_agent = _MafAgent(
                         client=_byok_client,
@@ -1190,7 +1200,7 @@ async def run_agent_stream(
                     _log.info(
                         "executor.byok_agent_created",
                         agent=agent_name,
-                        model=_final_model,
+                        model=_byok_final_model,
                         tool_count=len(_byok_tools),
                     )
                 except Exception as _byok_exc:  # noqa: BLE001

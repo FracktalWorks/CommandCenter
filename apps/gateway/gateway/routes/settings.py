@@ -91,57 +91,76 @@ def _write_env_key(var: str, value: str) -> None:
     env_file.write_text("".join(new_lines), encoding="utf-8")
 
 
-def _restart_litellm_bg() -> None:
-    """Restart the acb-litellm container in a background thread (best-effort).
+def _recreate_litellm_bg() -> None:
+    """Recreate the acb-litellm container so it picks up fresh env vars from .env.
 
-    Uses ``docker restart acb-litellm`` directly (faster, avoids compose
-    validation errors from profiles/unsupported keys in docker-compose.yml).
+    ``docker restart`` keeps the env baked in at creation time and does NOT
+    re-read the host .env file.  The only way to inject new API keys is to
+    recreate the container via ``docker compose up --force-recreate``.
+
+    Falls back to plain ``docker restart`` if compose is unavailable.
     """
     import subprocess
     import threading
 
     def _do() -> None:
         try:
-            subprocess.run(
-                ["docker", "restart", "acb-litellm"],
-                check=False, timeout=60, capture_output=True,
-            )
-        except Exception:
-            pass
+            # Find the infra directory containing docker-compose.yml + .env
+            compose_file = _infra_dir() / "docker-compose.yml"
+            env_file = _infra_dir().parent / ".env"
+            if not env_file.exists():
+                env_file = _infra_dir() / ".env"
 
-    threading.Thread(target=_do, daemon=True).start()
-
-
-def _inject_env_into_litellm(env_var: str, value: str) -> None:
-    """Write an env var into the running acb-litellm container without restarting.
-
-    LiteLLM reads provider API keys from the process environment at call time
-    (via litellm.utils.get_secret / os.environ), so injecting into the running
-    container is sufficient — no restart needed.
-
-    Falls back to a full container restart if the inject fails.
-    """
-    import subprocess
-    import threading
-
-    def _do() -> None:
-        try:
-            # Use sh -c to set env var persistently in a running container
-            # by writing to /etc/environment (readable by the LiteLLM process).
+            # Use docker compose to recreate just the litellm service.
+            # --no-deps: don't touch postgres/redis.
+            # --force-recreate: always destroy & recreate even if nothing changed.
+            # --env-file: explicit so the new API keys from .env are injected.
             result = subprocess.run(
-                ["docker", "exec", "acb-litellm", "sh", "-c",
-                 f"echo '{env_var}={value}' >> /etc/environment && "
-                 f"export {env_var}='{value}'"],
-                check=False, timeout=15, capture_output=True,
+                [
+                    "docker", "compose",
+                    "-f", str(compose_file),
+                    *(["--env-file", str(env_file)] if env_file.exists() else []),
+                    "up", "-d",
+                    "--force-recreate",
+                    "--no-deps",
+                    "litellm",
+                ],
+                check=False, timeout=120, capture_output=True, text=True,
             )
             if result.returncode != 0:
-                # Fallback: restart the container so it picks up from .env
+                # Fallback: simple restart (keeps old env but at least brings it back up)
                 subprocess.run(
                     ["docker", "restart", "acb-litellm"],
                     check=False, timeout=60, capture_output=True,
                 )
         except Exception:
-            pass
+            # Last resort: plain docker restart
+            try:
+                subprocess.run(
+                    ["docker", "restart", "acb-litellm"],
+                    check=False, timeout=60, capture_output=True,
+                )
+            except Exception:
+                pass
+
+    threading.Thread(target=_do, daemon=True).start()
+
+
+# Keep backward compat name used elsewhere in this file
+_restart_litellm_bg = _recreate_litellm_bg
+
+
+def _inject_env_into_litellm(env_var: str, value: str) -> None:
+    """Recreate the LiteLLM container so it picks up the new key from .env.
+
+    Previous approach (writing to /etc/environment inside the container) does
+    not work because LiteLLM reads os.environ which is set at process start,
+    not from /etc/environment.  The only reliable approach is container
+    recreation so Docker injects the fresh env from docker-compose + host .env.
+    """
+    # The key has already been written to .env by _write_env_key().
+    # Just trigger a recreation — the container will read .env at startup.
+    _recreate_litellm_bg()
 
     threading.Thread(target=_do, daemon=True).start()
 

@@ -39,12 +39,6 @@ interface LLMConfig {
   litellm_ui_url: string;
 }
 
-interface LiteLLMHealth {
-  healthy: boolean;
-  detail: string;
-  ui_url: string;
-}
-
 interface TestResult {
   success: boolean;
   response: string;
@@ -861,6 +855,7 @@ function CustomModelsManager() {
       : v.startsWith("anthropic/") ? "anthropic"
       : v.startsWith("openai/") ? "openai"
       : v.startsWith("gemini/") ? "gemini"
+      : v.startsWith("deepseek/") ? "deepseek"
       : v.startsWith("groq/") ? "groq"
       : v.startsWith("mistral/") ? "mistral"
       : "openrouter";
@@ -913,8 +908,8 @@ function CustomModelsManager() {
         <div>
           <div className="text-sm font-semibold text-zinc-100">Custom Models</div>
           <p className="mt-0.5 text-xs text-zinc-500">
-            Add any model ID from your configured providers. No restart needed — models appear in
-            the chat picker immediately.
+            Add models from your configured providers to make them available in the chat
+            picker. Only models you add here (plus Copilot SDK models) appear in the picker.
           </p>
         </div>
         <button
@@ -1091,7 +1086,6 @@ function CopilotModelPicker() {
 
 export default function ModelsPage() {
   const [config, setConfig] = useState<LLMConfig | null>(null);
-  const [health, setHealth] = useState<LiteLLMHealth | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -1101,18 +1095,12 @@ export default function ModelsPage() {
     setLoading(true);
     setLoadError(null);
     try {
-      const [cfgRes, healthRes] = await Promise.all([
-        fetch("/api/settings/llm"),
-        fetch("/api/settings/llm/health"),
-      ]);
+      const cfgRes = await fetch("/api/settings/llm");
       if (cfgRes.ok) {
         setConfig(await cfgRes.json());
       } else {
         const err = await cfgRes.json().catch(() => ({}));
         setLoadError(String(err?.detail ?? err?.error ?? `Error ${cfgRes.status}`));
-      }
-      if (healthRes.ok) {
-        setHealth(await healthRes.json());
       }
     } catch (err) {
       setLoadError(String(err));
@@ -1133,15 +1121,8 @@ export default function ModelsPage() {
       const err = await res.json().catch(() => ({}));
       throw new Error(String(err?.detail ?? "Save failed"));
     }
-    // Poll until LiteLLM is healthy again (restart takes ~25s)
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 3000));
-      const h = await fetch("/api/settings/llm/health").catch(() => null);
-      if (h?.ok) {
-        const hdata: LiteLLMHealth = await h.json().catch(() => null);
-        if (hdata?.healthy) break;
-      }
-    }
+    // Brief delay for the gateway to write the key and restart
+    await new Promise((r) => setTimeout(r, 2000));
     await loadConfig();
   }, [loadConfig]);
 
@@ -1153,15 +1134,8 @@ export default function ModelsPage() {
       const err = await res.json().catch(() => ({}));
       throw new Error(String(err?.detail ?? "Discard failed"));
     }
-    // Poll until LiteLLM is healthy again after restart
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 3000));
-      const h = await fetch("/api/settings/llm/health").catch(() => null);
-      if (h?.ok) {
-        const hdata: LiteLLMHealth = await h.json().catch(() => null);
-        if (hdata?.healthy) break;
-      }
-    }
+    // Brief delay for the gateway to clear the key and restart
+    await new Promise((r) => setTimeout(r, 2000));
     await loadConfig();
   }, [loadConfig]);
 
@@ -1191,40 +1165,15 @@ export default function ModelsPage() {
         <div>
           <h1 className="text-xl font-semibold text-zinc-100">LLM Models</h1>
           <p className="mt-1 text-sm text-zinc-500">
-            Configure which model handles each routing tier. Changes write to{" "}
-            <code className="font-mono text-xs text-zinc-400">infra/litellm/config.yaml</code>.
+            Configure which model handles each routing tier and manage provider API keys.
           </p>
-        </div>
-
-        {/* LiteLLM status + UI link */}
-        <div className="shrink-0 text-right">
-          {health ? (
-            <>
-              <div className={`text-xs font-medium ${health.healthy ? "text-green-400" : "text-red-400"}`}>
-                ● LiteLLM proxy {health.healthy ? "online" : "offline"}
-              </div>
-              <div className="text-xs text-zinc-600 mt-0.5">{health.detail}</div>
-              {health.ui_url && (
-                <a
-                  href={health.ui_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-1 inline-block text-xs text-blue-500 hover:text-blue-400 underline"
-                >
-                  Open LiteLLM UI →
-                </a>
-              )}
-            </>
-          ) : (
-            <div className="text-xs text-zinc-600">Checking LiteLLM…</div>
-          )}
         </div>
       </div>
 
       {/* Save feedback */}
       {saveSuccess && (
         <div className="mb-4 rounded-lg border border-green-800/40 bg-green-950/30 px-4 py-2 text-xs text-green-300">
-          ✓ Saved: {saveSuccess} — restart LiteLLM for changes to take effect if auto-reload fails.
+          ✓ Saved: {saveSuccess}
         </div>
       )}
       {saveError && (
@@ -1319,8 +1268,8 @@ export default function ModelsPage() {
               })()}
             </div>
             <p className="mt-3 text-xs text-zinc-600">
-              Keys are written to <code className="font-mono">infra/.env</code> and LiteLLM
-              restarts automatically. For Ollama, start it locally and pull models via{" "}
+              Keys are written to <code className="font-mono">infra/.env</code> and applied
+              automatically. For Ollama, start it locally and pull models via{" "}
               <code className="font-mono">ollama pull &lt;model&gt;</code>.
             </p>
           </section>
@@ -1349,28 +1298,7 @@ export default function ModelsPage() {
             <ModelVisibilityManager />
           </section>
 
-          {/* LiteLLM UI callout */}
-          <section>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 px-5 py-4 flex items-center justify-between gap-4">
-              <div>
-                <div className="text-sm font-medium text-zinc-200">LiteLLM Management UI</div>
-                <p className="mt-0.5 text-xs text-zinc-500">
-                  Advanced routing rules, fallback chains, virtual API keys, spend tracking,
-                  and model health checks. Available at{" "}
-                  <code className="font-mono text-zinc-400">localhost:4000/ui</code> when LiteLLM
-                  is running with a database connection.
-                </p>
-              </div>
-              <a
-                href={config.litellm_ui_url}
-                target="_blank"
-                rel="noreferrer"
-                className="shrink-0 rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 transition-colors"
-              >
-                Open UI →
-              </a>
-            </div>
-          </section>
+
         </>
       ) : null}
     </div>

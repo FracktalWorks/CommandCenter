@@ -1,12 +1,6 @@
 {
   "custom": [
     {
-      "id": "openrouter/deepseek/deepseek-v4-pro",
-      "label": "deepseek-v4-pro",
-      "provider": "openrouter",
-      "group": "Custom — Openrouter"
-    },
-    {
       "id": "openrouter/meta-llama/llama-3.3-70b-instruct:free",
       "label": "Llama 3.3 70B (free)",
       "provider": "openrouter",
@@ -37,8 +31,5 @@
       "group": "Custom — Deepseek"
     }
   ],
-  "hidden": [],
-  "keys": {
-    "deepseek": "sk-a40a5330c1494ffe9ca9b31b4294d593"
-  }
+  "hidden": []
 }

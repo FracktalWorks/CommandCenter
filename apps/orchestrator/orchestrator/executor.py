@@ -64,10 +64,10 @@ def _build_injected_tools_addendum() -> str:
     agent_lines: list[str] = []
     try:
         from gateway.routes.agent import (  # noqa: PLC0415
-            _AGENT_REGISTRY,
+            _load_registry_agents,
             _load_dynamic_agents,
         )
-        all_agents = _load_dynamic_agents() + _AGENT_REGISTRY
+        all_agents = _load_dynamic_agents() + _load_registry_agents()
         for a in all_agents:
             name = a.get("name", "")
             desc = a.get("description", "")
@@ -332,10 +332,10 @@ async def _run_sub_agent_streaming(
     _runtime: str = "maf"
     try:
         from gateway.routes.agent import (  # noqa: PLC0415
-            _AGENT_REGISTRY,
+            _load_registry_agents,
             _load_dynamic_agents,
         )
-        _all = _load_dynamic_agents() + _AGENT_REGISTRY
+        _all = _load_dynamic_agents() + _load_registry_agents()
         entry = next((e for e in _all if e["name"] == agent_name), None)
         if entry:
             raw = entry.get("repo_name") or ""
@@ -664,9 +664,9 @@ async def run_agent(
         _registry_repo_name: str | None = None
         _registry_local_path: str | None = None
         try:
-            from gateway.routes.agent import (_AGENT_REGISTRY,  # noqa: PLC0415
+            from gateway.routes.agent import (_load_registry_agents,  # noqa: PLC0415
                                               _load_dynamic_agents)
-            _all_entries = _load_dynamic_agents() + _AGENT_REGISTRY
+            _all_entries = _load_dynamic_agents() + _load_registry_agents()
             _registry_entry = next(
                 (e for e in _all_entries if e["name"] == agent_name), None
             )
@@ -694,10 +694,10 @@ async def run_agent(
             _is_copilot_agent = False
             try:
                 from gateway.routes.agent import (  # noqa: PLC0415
-                    _AGENT_REGISTRY, _load_dynamic_agents as _lda,
+                    _load_registry_agents, _load_dynamic_agents as _lda,
                 )
                 _ea = next(
-                    (e for e in _lda() + _AGENT_REGISTRY if e["name"] == agent_name),
+                    (e for e in _lda() + _load_registry_agents() if e["name"] == agent_name),
                     None,
                 )
                 if _ea and _ea.get("agent_runtime") == "github-copilot":
@@ -753,10 +753,10 @@ async def run_agent(
         _registry_runtime = "maf"
         try:
             from gateway.routes.agent import (  # noqa: PLC0415
-                _AGENT_REGISTRY, _load_dynamic_agents,
+                _load_registry_agents, _load_dynamic_agents,
             )
             _e = next(
-                (e for e in _load_dynamic_agents() + _AGENT_REGISTRY if e["name"] == agent_name),
+                (e for e in _load_dynamic_agents() + _load_registry_agents() if e["name"] == agent_name),
                 None,
             )
             if _e:
@@ -897,9 +897,9 @@ async def run_agent_stream(
     _registry_local_path: str | None = None
     _agent_runtime: str = "maf"
     try:
-        from gateway.routes.agent import (_AGENT_REGISTRY,  # noqa: PLC0415
+        from gateway.routes.agent import (_load_registry_agents,  # noqa: PLC0415
                                           _load_dynamic_agents)
-        _all = _load_dynamic_agents() + _AGENT_REGISTRY
+        _all = _load_dynamic_agents() + _load_registry_agents()
         entry = next((e for e in _all if e["name"] == agent_name), None)
         if entry:
             raw = entry.get("repo_name") or ""

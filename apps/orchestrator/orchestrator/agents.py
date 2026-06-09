@@ -276,8 +276,8 @@ def _load_specialist_agents_as_tools() -> list[Any]:
     """
     tools: list[Any] = []
     try:
-        from gateway.routes.agent import _AGENT_REGISTRY, _load_dynamic_agents  # noqa: PLC0415
-        all_agents = _load_dynamic_agents() + _AGENT_REGISTRY
+        from gateway.routes.agent import _load_registry_agents, _load_dynamic_agents  # noqa: PLC0415
+        all_agents = _load_dynamic_agents() + _load_registry_agents()
     except ImportError:
         return tools
 

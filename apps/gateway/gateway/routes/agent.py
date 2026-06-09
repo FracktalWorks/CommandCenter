@@ -67,96 +67,47 @@ class WebhookEvent(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Agent name allowlist (security: never clone arbitrary user-supplied names)
-# ---------------------------------------------------------------------------
+# Agent name allowlist — loaded from agent_registry.json at runtime.
+# Changes take effect within 5 seconds with NO gateway restart.
 
-_KNOWN_AGENTS: frozenset[str] = frozenset(
-    [
-        "task-manager",
-        "billing",
-        "sales",
-        "delivery",
-        "triage",
-        "reconciler",
-        "strategy",
-    ]
-)
+import time  # noqa: E402
 
-# Human-readable metadata for the Control Plane agent picker.
-# Keys match the bare agent names in _KNOWN_AGENTS.
-_AGENT_REGISTRY: list[dict] = [
-    {
-        "name": "task-manager",
-        "description": "ClickUp task management — status, progress, and workload questions with citations.",
-        "tags": ["tasks", "clickup", "project-management"],
-        "status": "live",
-        # Uses GitHubCopilotAgent — routes through the Copilot SDK executor so
-        # BYOK model injection works correctly (preserves tools + instructions).
-        "agent_runtime": "github-copilot",
-        "local_path": "apps/agent-task-manager",
-        "integrations": ["clickup"],
-        "optional_integrations": [],
-        "webhook_routes": [
-            {"source": "clickup", "event_type": "taskCreated"},
-            {"source": "clickup", "event_type": "taskUpdated"},
-            {"source": "clickup", "event_type": "taskDeleted"},
-        ],
-    },
-    {
-        "name": "sales",
-        "description": "Zoho CRM sales pipeline + deal follow-ups",
-        "tags": ["sales", "zoho"],
-        "status": "live",
-        "agent_runtime": "maf",
-        "integrations": ["zoho-crm"],
-        "optional_integrations": ["gmail-send"],
-    },
-    {
-        "name": "delivery",
-        "description": "Project delivery monitoring + push notifications",
-        "tags": ["delivery"],
-        "status": "live",
-        "agent_runtime": "maf",
-        "integrations": ["clickup"],
-        "optional_integrations": [],
-    },
-    {
-        "name": "triage",
-        "description": "Email / WhatsApp / meeting triage + routing",
-        "tags": ["triage", "email"],
-        "status": "live",
-        "agent_runtime": "maf",
-        "integrations": ["gmail", "zoho-crm"],
-        "optional_integrations": ["clickup"],
-    },
-    {
-        "name": "reconciler",
-        "description": "Nightly source-of-truth diff + escalation",
-        "tags": ["ops"],
-        "status": "live",
-        "agent_runtime": "maf",
-        "integrations": ["clickup", "zoho-crm"],
-        "optional_integrations": [],
-    },
-    {
-        "name": "billing",
-        "description": "Billing & invoice workflows",
-        "tags": ["billing"],
-        "status": "live",
-        "agent_runtime": "maf",
-        "integrations": ["zoho-crm"],
-        "optional_integrations": ["smtp"],
-    },
-    {
-        "name": "strategy",
-        "description": "Weekly digest + planning synthesis",
-        "tags": ["strategy"],
-        "status": "live",
-        "agent_runtime": "maf",
-        "integrations": [],
-        "optional_integrations": [],
-    },
-]
+_registry_path: Path | None = None
+_registry_cache: tuple[float, list[dict]] | None = None  # (timestamp, data)
+_registry_cache_ttl: float = 5.0  # seconds
+
+
+def _get_registry_path() -> Path:
+    """Locate agent_registry.json next to agents.json."""
+    global _registry_path
+    if _registry_path is not None:
+        return _registry_path
+    _registry_path = _get_agents_file().with_name("agent_registry.json")
+    return _registry_path
+
+
+def _load_registry_agents() -> list[dict]:
+    """Return live-reloaded registry agents (cached for 5 s)."""
+    global _registry_cache
+    now = time.monotonic()
+    if _registry_cache is not None and (now - _registry_cache[0]) < _registry_cache_ttl:
+        return _registry_cache[1]
+    path = _get_registry_path()
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            _registry_cache = (now, data)
+            return data
+    except Exception:
+        pass
+    return _registry_cache[1] if _registry_cache else []
+
+
+def _get_known_agents() -> frozenset[str]:
+    """Return the current allowlist from the live registry."""
+    return frozenset(a["name"] for a in _load_registry_agents() if a.get("name"))
 
 
 # ---------------------------------------------------------------------------
@@ -191,20 +142,19 @@ def _save_dynamic_agents(agents: list[dict]) -> None:
 
 
 def _validate_agent_name(name: str) -> str:
-    """Reject agent names not in the static or dynamic allowlist."""
+    """Reject agent names not in the live registry or dynamic agent list."""
     safe = name.lower().strip()
-    if safe not in _KNOWN_AGENTS:
-        # Also accept dynamically registered agents and static registry entries
-        registry_names = {a["name"] for a in _AGENT_REGISTRY}
-        dynamic_names = {a["name"] for a in _load_dynamic_agents()}
-        if safe not in registry_names and safe not in dynamic_names:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    f"Unknown agent {name!r}. "
-                    f"Static allowed: {sorted(_KNOWN_AGENTS)}"
-                ),
-            )
+    registry_names = {a["name"] for a in _load_registry_agents()}
+    dynamic_names = {a["name"] for a in _load_dynamic_agents()}
+    if safe not in registry_names and safe not in dynamic_names:
+        known = sorted(_get_known_agents())
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Unknown agent {name!r}. "
+                f"Allowed: {known}"
+            ),
+        )
     return safe
 
 
@@ -309,11 +259,11 @@ async def get_agent_config(
 async def list_agents(
     user: UserContext = Depends(get_current_user),
 ) -> list[dict]:
-    """Return the merged static + dynamic agent registry."""
+    """Return the merged live-reloaded registry + dynamic agent list."""
     dynamic = _load_dynamic_agents()
     dynamic_names = {a["name"] for a in dynamic}
-    # Static agents not overridden by dynamic entries come first
-    static = [a for a in _AGENT_REGISTRY if a["name"] not in dynamic_names]
+    registry = _load_registry_agents()
+    static = [a for a in registry if a["name"] not in dynamic_names]
     # Back-fill agent_runtime for legacy dynamic entries that predate the field.
     # Rule: only entries registered FROM a GitHub repo URL are "github-copilot";
     # everything else (local path, unknown) is plain MAF.
@@ -350,7 +300,7 @@ async def register_agent(
         )
 
     dynamic = _load_dynamic_agents()
-    all_names = {a["name"] for a in _AGENT_REGISTRY} | {a["name"] for a in dynamic}
+    all_names = {a["name"] for a in _load_registry_agents()} | {a["name"] for a in dynamic}
     if req.name in all_names:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -464,7 +414,7 @@ async def remove_agent(
     user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Delete a dynamic agent from agents.json.  Built-in agents cannot be removed."""
-    if name in _KNOWN_AGENTS:
+    if name in _get_known_agents():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Built-in agent {name!r} cannot be removed via the API.",
@@ -493,7 +443,7 @@ async def patch_agent(
     user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Partially update a dynamic agent's metadata in agents.json."""
-    if name in _KNOWN_AGENTS:
+    if name in _get_known_agents():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Built-in agent {name!r} cannot be modified via the API.",

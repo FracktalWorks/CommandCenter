@@ -1,0 +1,71 @@
+[
+  {
+    "name": "task-manager",
+    "description": "ClickUp task management — status, progress, and workload questions with citations.",
+    "tags": ["tasks", "clickup", "project-management"],
+    "status": "live",
+    "agent_runtime": "github-copilot",
+    "local_path": "apps/agent-task-manager",
+    "integrations": ["clickup"],
+    "optional_integrations": [],
+    "webhook_routes": [
+      {"source": "clickup", "event_type": "taskCreated"},
+      {"source": "clickup", "event_type": "taskUpdated"},
+      {"source": "clickup", "event_type": "taskDeleted"}
+    ]
+  },
+  {
+    "name": "sales",
+    "description": "Zoho CRM sales pipeline + deal follow-ups",
+    "tags": ["sales", "zoho"],
+    "status": "live",
+    "agent_runtime": "maf",
+    "integrations": ["zoho-crm"],
+    "optional_integrations": ["gmail-send"]
+  },
+  {
+    "name": "delivery",
+    "description": "Project delivery monitoring + push notifications",
+    "tags": ["delivery"],
+    "status": "live",
+    "agent_runtime": "maf",
+    "integrations": ["clickup"],
+    "optional_integrations": []
+  },
+  {
+    "name": "triage",
+    "description": "Email / WhatsApp / meeting triage + routing",
+    "tags": ["triage", "email"],
+    "status": "live",
+    "agent_runtime": "maf",
+    "integrations": ["gmail", "zoho-crm"],
+    "optional_integrations": ["clickup"]
+  },
+  {
+    "name": "reconciler",
+    "description": "Nightly source-of-truth diff + escalation",
+    "tags": ["ops"],
+    "status": "live",
+    "agent_runtime": "maf",
+    "integrations": ["clickup", "zoho-crm"],
+    "optional_integrations": []
+  },
+  {
+    "name": "billing",
+    "description": "Billing & invoice workflows",
+    "tags": ["billing"],
+    "status": "live",
+    "agent_runtime": "maf",
+    "integrations": ["zoho-crm"],
+    "optional_integrations": ["smtp"]
+  },
+  {
+    "name": "strategy",
+    "description": "Weekly digest + planning synthesis",
+    "tags": ["strategy"],
+    "status": "live",
+    "agent_runtime": "maf",
+    "integrations": [],
+    "optional_integrations": []
+  }
+]

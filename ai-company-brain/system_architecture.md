@@ -74,7 +74,7 @@ C4Container
         Container(bot, "Meeting Bot Fleet", "Vexa (Apache-2.0, self-hosted)", "Joins Meet/Teams/Zoom; streams audio for transcription")
         Container(stt, "Transcription", "WhisperX + Pyannote", "STT + speaker diarization")
         Container(bus, "Event Bus", "Redis Streams", "Decouples ingestion from orchestration")
-        Container(gw_llm, "LLM Gateway", "LiteLLM proxy (MIT)", "Unified API; prompt caching; model aliases (tier-1/2/3); cost metering. No RouteLLM — simple alias-based tier selection. All MAF agent calls route here.")
+        Container(gw_llm, "LLM Routing", "litellm Python SDK (MIT)", "Unified API; prompt caching; model aliases (tier-1/2/3); cost metering. No proxy container — litellm SDK calls providers directly. All MAF agent calls route through acb_llm.")
         Container(infer, "Local Inference [Phase 2]", "vLLM + Qwen3-8B", "Deferred: requires GPU VM. Phase 0 uses cloud Tier-1 (Haiku / GPT-4o-mini via LiteLLM).")
         Container(scache, "Semantic Cache [Phase 2]", "LiteLLM redis-semantic", "Deferred: redis-stack-server upgrade deferred until LiteLLM semantic cache is actually configured.")
         Container(compress, "Token Compressor [Phase 2]", "LLMLingua-2 (MIT, CPU)", "Deferred: 50-60% compression. Add when context costs become a problem.")

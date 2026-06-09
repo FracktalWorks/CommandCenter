@@ -1,0 +1,44 @@
+{
+  "custom": [
+    {
+      "id": "openrouter/deepseek/deepseek-v4-pro",
+      "label": "deepseek-v4-pro",
+      "provider": "openrouter",
+      "group": "Custom — Openrouter"
+    },
+    {
+      "id": "openrouter/meta-llama/llama-3.3-70b-instruct:free",
+      "label": "Llama 3.3 70B (free)",
+      "provider": "openrouter",
+      "group": "Custom - OpenRouter Free"
+    },
+    {
+      "id": "openrouter/qwen/qwen3-coder:free",
+      "label": "Qwen3 Coder (free)",
+      "provider": "openrouter",
+      "group": "Custom - OpenRouter Free"
+    },
+    {
+      "id": "openrouter/moonshotai/kimi-k2.6:free",
+      "label": "Kimi K2.6 (free)",
+      "provider": "openrouter",
+      "group": "Custom - OpenRouter Free"
+    },
+    {
+      "id": "groq/llama-3.3-70b-versatile",
+      "label": "llama-3.3-70b-versatile",
+      "provider": "groq",
+      "group": "Custom — Groq"
+    },
+    {
+      "id": "deepseek/deepseek-v4-flash",
+      "label": "Deepseek V4 Flash",
+      "provider": "deepseek",
+      "group": "Custom — Deepseek"
+    }
+  ],
+  "hidden": [],
+  "keys": {
+    "deepseek": "sk-a40a5330c1494ffe9ca9b31b4294d593"
+  }
+}

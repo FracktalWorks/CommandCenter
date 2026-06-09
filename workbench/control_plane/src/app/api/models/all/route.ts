@@ -151,6 +151,7 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
     if (process.env.OPENROUTER_API_KEY?.trim())  configured.add("openrouter");
     if (process.env.OPENAI_API_KEY?.trim())      configured.add("openai");
     if (process.env.GITHUB_TOKEN?.trim())        configured.add("github");
+    if (process.env.DEEPSEEK_API_KEY?.trim())    configured.add("deepseek");
     if (process.env.GROQ_API_KEY?.trim())        configured.add("groq");
     if (process.env.MISTRAL_API_KEY?.trim())     configured.add("mistral");
     if (process.env.TOGETHER_API_KEY?.trim())    configured.add("together");

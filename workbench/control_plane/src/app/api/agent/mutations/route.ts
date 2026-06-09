@@ -61,7 +61,7 @@ export async function GET(): Promise<NextResponse> {
       const rows = (await res.json()) as MutationEntry[];
       return NextResponse.json(rows);
     }
-  } catch {
+  } catch (_e) {
     // Gateway unavailable — return empty queue
   }
   return NextResponse.json([]);

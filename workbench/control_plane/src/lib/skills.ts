@@ -112,7 +112,7 @@ export async function getSkill(domain: string, skill_id: string): Promise<SkillD
     return null;
   }
   const p = path.join(root, domain, skill_id, "SKILL.md");
-  try { await fs.access(p); } catch { return null; }
+  try { await fs.access(p); } catch (_e) { return null; }
   return parseSkill(p, root);
 }
 

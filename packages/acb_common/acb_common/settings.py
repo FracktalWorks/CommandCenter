@@ -30,20 +30,30 @@ class Settings(BaseSettings):
     # Redis (event bus)
     redis_url: str = "redis://localhost:6379/0"
 
-    # LiteLLM gateway
-    litellm_base_url: str = "http://localhost:4000"
+    # LiteLLM gateway (DEPRECATED — kept for backward compat during migration)
+    litellm_base_url: str = "http://localhost:8000"
     litellm_master_key: str = "sk-local-dev-change-me"
 
-    # LLM provider keys (used by LiteLLM config and settings UI)
+    # Master encryption key for the provider key store (ADR-008).
+    # Generate: python -c "import secrets; print(secrets.token_urlsafe(32))"
+    # This is the ONLY secret that must be set — all provider keys are encrypted
+    # in Postgres with this key.  Falls back to ACB_MASTER_KEY env var.
+    acb_master_key: str = ""
+
+    # LLM provider keys (DEPRECATED — use the key store via /settings/llm/key API).
+    # Kept as fallback for bootstrap only; acb_llm prefers the key store.
     gemini_api_key: str = ""
     openai_api_key: str = ""
+    anthropic_api_key: str = ""     # console.anthropic.com — Claude models
+    openrouter_api_key: str = ""    # openrouter.ai — 200+ models via one key
+    deepseek_api_key: str = ""      # platform.deepseek.com — DeepSeek V3 / R1
     groq_api_key: str = ""          # console.groq.com — free tier, very fast inference
     mistral_api_key: str = ""       # console.mistral.ai
     together_api_key: str = ""      # api.together.ai — 100+ open-source models
 
     # Gateway
     gateway_host: str = "0.0.0.0"
-    gateway_port: int = 8080
+    gateway_port: int = 8000
     gateway_session_secret: str = "change-me-dev-only"
     allowed_email_domain: str = "fracktal.in"
 

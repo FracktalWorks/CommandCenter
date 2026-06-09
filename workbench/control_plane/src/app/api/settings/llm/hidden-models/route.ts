@@ -23,7 +23,7 @@ export async function GET(): Promise<NextResponse> {
     });
     const data = await r.json().catch(() => []);
     return NextResponse.json(data, { status: r.status });
-  } catch {
+  } catch (_e) {
     return NextResponse.json([], { status: 200 });
   }
 }

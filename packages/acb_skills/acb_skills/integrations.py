@@ -157,10 +157,10 @@ def _smtp(s: Any) -> dict[str, Any]:
 
 
 def _litellm(s: Any) -> dict[str, Any]:
-    """LiteLLM gateway — gives agents access to the shared LLM proxy."""
+    """LLM gateway — gives agents access to shared LLM routing via the gateway's /v1."""
     return {
         "type": "litellm",
-        "base_url": getattr(s, "litellm_base_url", "http://localhost:4000"),
+        "base_url": getattr(s, "litellm_base_url", f"http://localhost:{getattr(s, 'gateway_port', 8000)}"),
         "api_key": getattr(s, "litellm_master_key", ""),
     }
 

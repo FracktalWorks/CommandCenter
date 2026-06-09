@@ -80,6 +80,27 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     import asyncio as _asyncio
     _asyncio.ensure_future(_warmup_copilot_models())
 
+    # Load provider API keys from encrypted Postgres store into litellm SDK.
+    try:
+        from acb_llm.key_store import get_key_store
+        store = get_key_store()
+        existing = await store.get_all()
+        if not existing:
+            _env_to_provider = {
+                "GEMINI_API_KEY": "gemini", "OPENAI_API_KEY": "openai",
+                "ANTHROPIC_API_KEY": "anthropic", "DEEPSEEK_API_KEY": "deepseek",
+                "OPENROUTER_API_KEY": "openrouter", "GROQ_API_KEY": "groq",
+                "MISTRAL_API_KEY": "mistral", "TOGETHER_API_KEY": "together",
+            }
+            for env_var, provider in _env_to_provider.items():
+                val = os.environ.get(env_var, "")
+                if val and val.strip():
+                    await store.put(provider, val.strip())
+        await store.configure_litellm()
+        _log.info("gateway.keys_loaded_from_store")
+    except Exception as exc:
+        _log.warning("gateway.key_store_skipped", error=str(exc))
+
     yield
     _log.info("gateway.shutdown")
 
@@ -226,6 +247,14 @@ try:
     from gateway.routes.settings import router as _settings_router
 
     app.include_router(_settings_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
+    from gateway.routes.v1_compat import routers as _v1_routers
+
+    for _r in _v1_routers:
+        app.include_router(_r)
 except Exception:  # pragma: no cover
     pass
 

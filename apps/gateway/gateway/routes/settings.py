@@ -91,6 +91,36 @@ def _write_env_key(var: str, value: str) -> None:
     env_file.write_text("".join(new_lines), encoding="utf-8")
 
 
+def _clear_env_key(var: str) -> None:
+    """Remove VAR=value from the repo-root .env and the live process environment."""
+    here = Path(__file__).resolve()
+    env_file: Path | None = None
+    for parent in here.parents:
+        pyproject = parent / "pyproject.toml"
+        if pyproject.exists():
+            try:
+                if "[tool.uv.workspace]" in pyproject.read_text(encoding="utf-8"):
+                    env_file = parent / ".env"
+                    break
+            except OSError:
+                pass
+    if env_file is None:
+        env_file = Path.cwd() / ".env"
+    if env_file.exists():
+        lines = env_file.read_text(encoding="utf-8").splitlines(keepends=True)
+        pattern = re.compile(rf"^{re.escape(var)}\s*=")
+        new_lines = [line for line in lines if not pattern.match(line)]
+        env_file.write_text("".join(new_lines), encoding="utf-8")
+    # Also remove from live os.environ
+    os.environ.pop(var, None)
+    # Bust the settings LRU cache so get_settings() picks up the removal.
+    try:
+        from acb_common.settings import get_settings as _gs  # noqa: PLC0415
+        _gs.cache_clear()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _recreate_litellm_bg() -> None:
     """Recreate the acb-litellm container so it picks up fresh env vars from .env.
 
@@ -171,6 +201,7 @@ _PROVIDER_ENV_MAP: dict[str, str] = {
     "gemini":      "GEMINI_API_KEY",
     "openai":      "OPENAI_API_KEY",
     "anthropic":   "ANTHROPIC_API_KEY",
+    "deepseek":    "DEEPSEEK_API_KEY",
     "openrouter":  "OPENROUTER_API_KEY",
     "github":      "GITHUB_TOKEN",    # GitHub Copilot subscription (also routes Claude)
     "groq":        "GROQ_API_KEY",
@@ -184,6 +215,7 @@ _PROVIDER_LABELS: dict[str, str] = {
     "gemini":      "Google Gemini",
     "openai":      "OpenAI",
     "anthropic":   "Anthropic",
+    "deepseek":    "DeepSeek",
     "openrouter":  "OpenRouter",
     "github":      "GitHub Copilot",
     "groq":        "Groq",
@@ -230,6 +262,10 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "anthropic/claude-opus-4",
         "anthropic/claude-sonnet-4",
         "anthropic/claude-3-7-sonnet-latest",
+    ],
+    "deepseek": [
+        "deepseek/deepseek-chat",
+        "deepseek/deepseek-reasoner",
     ],
     "openrouter": [
         "openrouter/anthropic/claude-opus-4-5",
@@ -314,6 +350,8 @@ def _provider_from_model(model: str) -> str:
         return "gemini"
     if model.startswith("anthropic/"):
         return "anthropic"
+    if model.startswith("deepseek/"):
+        return "deepseek"
     if model.startswith("openrouter/"):
         return "openrouter"
     if model.startswith("github/"):
@@ -627,6 +665,32 @@ async def set_provider_key(
     # Inject key into running LiteLLM container immediately (no restart needed).
     # Fallback: restart the container so it picks up the new .env value.
     _inject_env_into_litellm(env_var, req.api_key.strip())
+    return {"ok": "true", "env_var": env_var, "provider": req.provider}
+
+
+# ---------------------------------------------------------------------------
+# DELETE /settings/llm/key  — discard a provider API key from infra/.env
+# ---------------------------------------------------------------------------
+
+class DiscardKeyRequest(BaseModel):
+    provider: str   # "gemini" | "openai" | "deepseek" | ...
+
+
+@router.delete("/llm/key")
+async def discard_provider_key(
+    req: DiscardKeyRequest,
+    _user: UserContext = Depends(get_current_user),
+) -> dict[str, str]:
+    env_var = _PROVIDER_ENV_MAP.get(req.provider)
+    if not env_var:
+        raise HTTPException(status_code=400, detail=f"No env var for provider: {req.provider}")
+    try:
+        _clear_env_key(env_var)
+        _log.info("settings.llm.key_discarded", provider=req.provider, actor=_user.email)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to clear env: {exc}") from exc
+    # Recreate LiteLLM container without the key so it stops routing to this provider.
+    _recreate_litellm_bg()
     return {"ok": "true", "env_var": env_var, "provider": req.provider}
 
 

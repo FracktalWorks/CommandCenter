@@ -6,6 +6,7 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     "litellm>=1.52",
     "tenacity>=9.0",
+    "cryptography>=42.0",
     "acb-common",
 ]
 

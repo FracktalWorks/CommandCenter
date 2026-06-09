@@ -1,19 +1,24 @@
-"""Thin wrapper around LiteLLM that enforces tiered routing.
+"""LiteLLM SDK client with tiered routing (ADR-005, ADR-008).
+
+Connects to providers directly via the litellm Python SDK — no proxy needed.
+Provider API keys are loaded from the encrypted Postgres key store at startup.
 
 Tiers (per system_architecture.md §10):
-    TIER_1  Local Qwen3-8B via vLLM         — classify / triage / cheap extraction
-    TIER_2  Sonnet-class / GPT-4o-class     — structured extraction, action drafting
-    TIER_3  Opus-class / GPT-5-class        — multi-hop reasoning, strategy
+    TIER_1  Cheap/fast models                — classify / triage / cheap extraction
+    TIER_2  Sonnet-class / GPT-4o-class      — structured extraction, action drafting
+    TIER_3  Opus-class / GPT-5-class         — multi-hop reasoning, strategy
 """
 from __future__ import annotations
 
 import asyncio
+import os
 from enum import StrEnum
 from typing import Any
 
+from acb_common import get_logger, get_settings
 from litellm import acompletion  # type: ignore[import-untyped]
 
-from acb_common import get_settings
+_log = get_logger("acb_llm")
 
 # Error substrings that indicate a transient failure worth retrying.
 _TRANSIENT_ERRORS = (
@@ -21,12 +26,79 @@ _TRANSIENT_ERRORS = (
     "timeout", "connection", "retry", "service unavailable",
 )
 
-# Model aliases — these must match keys in infra/litellm/config.yaml.
+# Tier → litellm model string.  These use native litellm provider prefixes
+# so acompletion() routes directly (no proxy needed).
 _TIER_MODEL: dict[str, str] = {
-    "tier1": "tier1-local-qwen3",
-    "tier2": "tier2-sonnet",
-    "tier3": "tier3-opus",
+    "tier1": "deepseek/deepseek-chat",            # fast & cheap
+    "tier2": "deepseek/deepseek-chat",            # balanced
+    "tier3": "deepseek/deepseek-chat",            # powerful
 }
+
+# Track whether keys have been loaded from the store.
+_keys_loaded = False
+
+
+async def _ensure_keys_loaded() -> None:
+    """Load provider keys from the encrypted Postgres store into litellm's config.
+
+    On first run with an empty store, auto-seeds any keys found in env vars.
+    Falls back to env vars only if the store is completely unreachable.
+    """
+    global _keys_loaded
+    if _keys_loaded:
+        return
+    _keys_loaded = True
+
+    try:
+        from acb_llm.key_store import get_key_store
+        store = get_key_store()
+
+        # Seed from env vars on first boot (one-time migration)
+        existing = await store.get_all()
+        if not existing:
+            _env_to_provider = {
+                "GEMINI_API_KEY": "gemini",
+                "OPENAI_API_KEY": "openai",
+                "ANTHROPIC_API_KEY": "anthropic",
+                "DEEPSEEK_API_KEY": "deepseek",
+                "OPENROUTER_API_KEY": "openrouter",
+                "GROQ_API_KEY": "groq",
+                "MISTRAL_API_KEY": "mistral",
+                "TOGETHER_API_KEY": "together",
+            }
+            for env_var, provider in _env_to_provider.items():
+                val = os.environ.get(env_var, "")
+                if val and val.strip():
+                    await store.put(provider, val.strip())
+                    _log.info("acb_llm.key_seeded_from_env", provider=provider)
+
+        await store.configure_litellm()
+        _log.info("acb_llm.keys_loaded_from_store")
+    except Exception as exc:
+        _log.warning("acb_llm.key_store_unavailable", error=str(exc))
+        # Fall back to env vars for bootstrap / first-run
+        _load_keys_from_env()
+
+
+def _load_keys_from_env() -> None:
+    """Bootstrap litellm config from environment variables (fallback)."""
+    import litellm as _litellm
+
+    env_map = {
+        "OPENAI_API_KEY": "api_key",
+        "ANTHROPIC_API_KEY": "anthropic_api_key",
+        "GEMINI_API_KEY": "gemini_api_key",
+        "DEEPSEEK_API_KEY": "deepseek_api_key",
+        "GROQ_API_KEY": "groq_api_key",
+        "MISTRAL_API_KEY": "mistral_api_key",
+        "TOGETHER_API_KEY": "together_api_key",
+        "OPENROUTER_API_KEY": "openrouter_api_key",
+    }
+    for env_var, attr in env_map.items():
+        val = os.environ.get(env_var, "")
+        if val:
+            setattr(_litellm, attr, val)
+            _log.debug("acb_llm.key_from_env", provider=attr)
 
 
 class LLMTier(StrEnum):
@@ -43,12 +115,13 @@ async def complete(
     max_tokens: int = 1024,
     **extra: Any,
 ) -> str:
-    """Send a chat completion through the LiteLLM proxy at the configured tier.
+    """Send a chat completion directly to the provider via litellm SDK.
 
     Returns the assistant message content as a plain string. Caller is responsible
     for any downstream parsing / guardrail validation (see acb_llm.guardrails).
     """
-    settings = get_settings()
+    await _ensure_keys_loaded()
+
     model = _TIER_MODEL[tier.value]
 
     last_exc: Exception | None = None
@@ -57,14 +130,10 @@ async def complete(
             await asyncio.sleep(2 ** attempt)  # 2 s, then 4 s
         try:
             response = await acompletion(
-                # `litellm_proxy/` tells the SDK to hit our LiteLLM proxy (which then
-                # owns the real provider routing per infra/litellm/config.yaml).
-                model=f"litellm_proxy/{model}",
+                model=model,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                api_base=settings.litellm_base_url,
-                api_key=settings.litellm_master_key,
                 **extra,
             )
             # content can be None for thinking models (e.g. gemini-2.5-pro returns
@@ -105,7 +174,8 @@ async def complete_with_tools(
     The returned dict is always JSON-serializable (plain Python dicts/lists, no
     Pydantic objects) so it can be stored in LangGraph state without issue.
     """
-    settings = get_settings()
+    await _ensure_keys_loaded()
+
     model = _TIER_MODEL[tier.value]
 
     last_exc: Exception | None = None
@@ -114,14 +184,12 @@ async def complete_with_tools(
             await asyncio.sleep(2 ** attempt)
         try:
             response = await acompletion(
-                model=f"litellm_proxy/{model}",
+                model=model,
                 messages=messages,
                 tools=tools,
                 tool_choice=tool_choice,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                api_base=settings.litellm_base_url,
-                api_key=settings.litellm_master_key,
                 **extra,
             )
             choices = response.get("choices") or []

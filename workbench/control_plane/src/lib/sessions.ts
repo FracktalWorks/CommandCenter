@@ -28,7 +28,7 @@ export function getSessions(): ChatSession[] {
   if (typeof window === "undefined") return [];
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]") as ChatSession[];
-  } catch {
+  } catch (_e) {
     return [];
   }
 }
@@ -196,7 +196,7 @@ export async function fetchAndMergeSessionsFromDb(): Promise<ChatSession[]> {
     local.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     localStorage.setItem(STORAGE_KEY, JSON.stringify(local));
     return local;
-  } catch {
+  } catch (_e) {
     return getSessions();
   }
 }
@@ -233,7 +233,7 @@ export function getMessages(sessionId: string): PersistedMessage[] {
   try {
     const raw = localStorage.getItem(MESSAGES_PREFIX + sessionId);
     return raw ? (JSON.parse(raw) as PersistedMessage[]) : [];
-  } catch {
+  } catch (_e) {
     return [];
   }
 }
@@ -251,7 +251,7 @@ export function saveMessages(sessionId: string, messages: PersistedMessage[]): v
   // 1. Write-through cache (sync, instant)
   try {
     localStorage.setItem(MESSAGES_PREFIX + sessionId, JSON.stringify(settled));
-  } catch {
+  } catch (_e) {
     // Storage quota exceeded — continue to Postgres anyway
   }
 
@@ -299,9 +299,9 @@ export async function fetchMessagesFromDb(sessionId: string): Promise<PersistedM
     // Update localStorage cache with authoritative Postgres data.
     try {
       localStorage.setItem(MESSAGES_PREFIX + sessionId, JSON.stringify(remote));
-    } catch { /* quota */ }
+    } catch (_e) { /* quota */ }
     return remote;
-  } catch {
+  } catch (_e) {
     return getMessages(sessionId);
   }
 }

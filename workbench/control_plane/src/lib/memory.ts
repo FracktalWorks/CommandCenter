@@ -55,7 +55,7 @@ export async function fetchMemories(userId: string): Promise<Mem0Memory[]> {
       if (Array.isArray(data)) return data;
       return (data as { results?: Mem0Memory[] }).results ?? [];
     }
-  } catch {
+  } catch (_e) {
     // fall through to legacy
   }
 
@@ -70,7 +70,7 @@ export async function fetchMemories(userId: string): Promise<Mem0Memory[]> {
     if (!res.ok) return [];
     const data = await res.json() as Mem0Memory[] | { memories: Mem0Memory[] };
     return Array.isArray(data) ? data : (data.memories ?? []);
-  } catch {
+  } catch (_e) {
     return [];
   }
 }
@@ -97,7 +97,7 @@ export async function searchMemories(
       if (Array.isArray(data)) return data;
       return (data as { results?: Mem0Memory[] }).results ?? [];
     }
-  } catch {
+  } catch (_e) {
     // fall through
   }
 
@@ -113,7 +113,7 @@ export async function searchMemories(
     if (!res.ok) return [];
     const data = await res.json() as Mem0Memory[] | { memories: Mem0Memory[] };
     return Array.isArray(data) ? data : (data.memories ?? []);
-  } catch {
+  } catch (_e) {
     return [];
   }
 }
@@ -138,7 +138,7 @@ export async function saveConversation(
       }
     );
     if (res.ok || res.status === 202) return;
-  } catch {
+  } catch (_e) {
     // fall through
   }
 
@@ -151,7 +151,7 @@ export async function saveConversation(
       headers: legacyHeaders(),
       body: JSON.stringify({ user_id: userId, messages }),
     });
-  } catch {
+  } catch (_e) {
     /* graceful */
   }
 }
@@ -167,7 +167,7 @@ export async function deleteMemory(userId: string, memoryId: string): Promise<vo
       { method: "DELETE", headers: gatewayHeaders() }
     );
     if (res.ok || res.status === 204) return;
-  } catch {
+  } catch (_e) {
     // fall through
   }
 
@@ -179,7 +179,7 @@ export async function deleteMemory(userId: string, memoryId: string): Promise<vo
       method: "DELETE",
       headers: legacyHeaders(),
     });
-  } catch {
+  } catch (_e) {
     /* graceful */
   }
 }
@@ -198,7 +198,7 @@ export async function fetchMemoryStatus(userId: string): Promise<{
       { headers: gatewayHeaders(), next: { revalidate: 30 } }
     );
     if (res.ok) return await res.json();
-  } catch {
+  } catch (_e) {
     /* graceful */
   }
   return { mem0_enabled: false, graphiti_enabled: false };

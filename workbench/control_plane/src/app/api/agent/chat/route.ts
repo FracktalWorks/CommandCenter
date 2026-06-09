@@ -88,7 +88,7 @@ function parseToolArgs(raw: string | undefined): Record<string, unknown> {
     return typeof parsed === "object" && parsed !== null
       ? (parsed as Record<string, unknown>)
       : { value: parsed };
-  } catch {
+  } catch (_e) {
     // Streamed args may be incomplete/non-JSON — surface the raw text.
     return { _raw: raw };
   }
@@ -100,7 +100,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   let body: ChatRequest;
   try {
     body = (await req.json()) as ChatRequest;
-  } catch {
+  } catch (_e) {
     return new Response(
       `data: ${JSON.stringify({ type: "error", content: "Invalid JSON body" })}\n\n`,
       { status: 400, headers: sseHeaders() }
@@ -190,7 +190,7 @@ export async function POST(req: NextRequest): Promise<Response> {
               const raw = line.slice(6).trim();
               if (!raw) continue;
               let ev: Record<string, unknown>;
-              try { ev = JSON.parse(raw); } catch { continue; }
+              try { ev = JSON.parse(raw); } catch (_e) { continue; }
               const t = ev.type as string;
               let out: Record<string, unknown> | null = null;
               if (t === "TEXT_MESSAGE_CONTENT") {
@@ -267,7 +267,7 @@ export async function POST(req: NextRequest): Promise<Response> {
               }
             }
           }
-        } catch {
+        } catch (_e) {
           // stream ended early
         } finally {
           controller.close();
@@ -335,7 +335,7 @@ export async function POST(req: NextRequest): Promise<Response> {
               const raw = line.slice(6).trim();
               if (!raw) continue;
               let ev: Record<string, unknown>;
-              try { ev = JSON.parse(raw); } catch { continue; }
+              try { ev = JSON.parse(raw); } catch (_e) { continue; }
               const t = ev.type as string;
               let out: Record<string, unknown> | null = null;
               if (t === "TEXT_MESSAGE_CONTENT") {
@@ -395,7 +395,7 @@ export async function POST(req: NextRequest): Promise<Response> {
               }
             }
           }
-        } catch {
+        } catch (_e) {
           // stream ended early
         } finally {
           controller.close();
@@ -588,7 +588,7 @@ function streamLiteLLM({
               if (reasoningDelta) {
                 controller.enqueue(sseEvent({ type: "reasoning", content: reasoningDelta }));
               }
-            } catch {
+            } catch (_e) {
               // ignore non-JSON keep-alive lines
             }
           }

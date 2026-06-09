@@ -1,7 +1,7 @@
 """Frontend connectivity audit."""
 import json
-import urllib.request
 import urllib.error
+import urllib.request
 
 BASE = "http://localhost:3001"
 GW   = "http://localhost:8000"
@@ -91,7 +91,7 @@ print("\n=== CHAT — litellm mode (tier2) ===")
 s, raw = post(
     BASE + "/api/agent/chat",
     {"agentName": "task-manager", "message": "Hello, what can you help me with?",
-     "messages": [], "threadId": "audit-001", "mode": "litellm", "model": "tier2-sonnet"},
+     "messages": [], "threadId": "audit-001", "mode": "litellm", "model": "tier-balanced"},
 )
 # Parse SSE stream: pick first delta
 answer = ""

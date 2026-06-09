@@ -61,8 +61,9 @@ const PROVIDER_COLOURS: Record<string, string> = {
   anthropic:  "bg-orange-500/15 text-orange-300 border-orange-800/40",
   openrouter: "bg-rose-500/15 text-rose-300 border-rose-800/40",
   github:     "bg-sky-500/15 text-sky-300 border-sky-800/40",
+  deepseek:   "bg-cyan-500/15 text-cyan-300 border-cyan-800/40",
   groq:       "bg-yellow-500/15 text-yellow-300 border-yellow-800/40",
-  mistral:    "bg-rose-500/15 text-rose-300 border-rose-800/40",
+  mistral:    "bg-indigo-500/15 text-indigo-300 border-indigo-800/40",
   together:   "bg-teal-500/15 text-teal-300 border-teal-800/40",
   ollama:     "bg-violet-500/15 text-violet-400 border-violet-800/40",
   vllm:       "bg-violet-500/15 text-violet-400 border-violet-800/40",
@@ -75,9 +76,10 @@ const PROVIDER_ICONS: Record<string, string> = {
   anthropic:  "◆",
   openrouter: "⊕",
   github:     "✦",
+  deepseek:   "🐋",
   groq:       "⚡",
-  mistral:    "M",
-  together:   "T",
+  mistral:    "🌪",
+  together:   "🤝",
   ollama:     "🦙",
   vllm:       "⚡",
 };
@@ -166,6 +168,17 @@ const PROVIDER_GUIDES: Record<string, ProviderGuide> = {
       "Log in to console.mistral.ai.",
       "Go to API Keys → Create new key.",
       "Copy the key.",
+    ],
+  },
+  deepseek: {
+    description: "DeepSeek direct API — DeepSeek-V3 (chat) and DeepSeek-R1 (reasoner) at very competitive pricing.",
+    setup_url: "https://platform.deepseek.com/api-keys",
+    docs_url: "https://platform.deepseek.com/docs",
+    instructions: [
+      "Log in to platform.deepseek.com.",
+      "Go to API Keys → Create new API key.",
+      "Copy the key — it starts with 'sk-…'.",
+      "Add balance in the Billing section to enable API access.",
     ],
   },
   together: {
@@ -413,15 +426,19 @@ function TierCard({
 function ProviderCard({
   provider,
   onKeySet,
+  onKeyDiscard,
 }: {
   provider: ProviderInfo;
   onKeySet: (key: string) => Promise<void>;
+  onKeyDiscard: (providerId: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [keyVal, setKeyVal] = useState("");
   const [show, setShow] = useState(false);
   const [saving, setSaving] = useState(false);
   const [keyError, setKeyError] = useState<string | null>(null);
+  const [discarding, setDiscarding] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   const isLocal = provider.id === "ollama" || provider.id === "vllm";
   const colour = PROVIDER_COLOURS[provider.id] ?? PROVIDER_COLOURS.unknown;
@@ -439,6 +456,18 @@ function ProviderCard({
       setKeyError(String(err));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDiscard = async () => {
+    setDiscarding(true);
+    try {
+      await onKeyDiscard(provider.id);
+      setConfirmDiscard(false);
+    } catch (err) {
+      setKeyError(String(err));
+    } finally {
+      setDiscarding(false);
     }
   };
 
@@ -460,12 +489,40 @@ function ProviderCard({
             <>
               <span className="text-xs font-medium text-green-400">● Configured</span>
               {!isLocal && (
-                <button
-                  onClick={() => setEditing((e) => !e)}
-                  className="text-[10px] text-zinc-500 hover:text-zinc-300 underline underline-offset-2 transition-colors"
-                >
-                  {editing ? "cancel" : "update key"}
-                </button>
+                <>
+                  <button
+                    onClick={() => { setEditing((e) => !e); setConfirmDiscard(false); }}
+                    className="text-[10px] text-zinc-500 hover:text-zinc-300 underline underline-offset-2 transition-colors"
+                  >
+                    {editing ? "cancel" : "update key"}
+                  </button>
+                  {confirmDiscard ? (
+                    <span className="flex items-center gap-1">
+                      <button
+                        onClick={handleDiscard}
+                        disabled={discarding}
+                        className="rounded border border-red-700/50 bg-red-950/40 px-2 py-0.5 text-xs text-red-400 hover:bg-red-900/40 transition-colors disabled:opacity-40"
+                      >
+                        {discarding ? "Discarding…" : "Confirm discard"}
+                      </button>
+                      <button
+                        onClick={() => setConfirmDiscard(false)}
+                        disabled={discarding}
+                        className="text-[10px] text-zinc-500 hover:text-zinc-300 underline underline-offset-2 transition-colors"
+                      >
+                        cancel
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => { setConfirmDiscard(true); setEditing(false); }}
+                      className="text-[10px] text-red-500/70 hover:text-red-400 underline underline-offset-2 transition-colors"
+                      title="Remove key and disconnect this provider"
+                    >
+                      discard key
+                    </button>
+                  )}
+                </>
               )}
             </>
           ) : provider.id === "ollama" ? (
@@ -488,8 +545,8 @@ function ProviderCard({
         <p className="mt-1.5 text-xs opacity-70 leading-relaxed">{guide.description}</p>
       )}
 
-      {/* Setup panel — shown when editing (key entry) or when not configured */}
-      {(editing || (!provider.configured && !isLocal)) && guide && (
+      {/* Setup panel — shown only when editing (user clicked "Set key →" or "update key") */}
+      {editing && guide && (
         <div className="mt-3 rounded-lg border border-zinc-700/50 bg-zinc-900/60 p-3 space-y-3">
           {/* Quick-start links */}
           <div className="flex items-center gap-3">
@@ -527,63 +584,79 @@ function ProviderCard({
           </ol>
 
           {/* Key input */}
-          {editing && (
-            <>
-              <div className="relative">
-                <input
-                  type={show ? "text" : "password"}
-                  value={keyVal}
-                  onChange={(e) => setKeyVal(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleSave()}
-                  placeholder={`Paste ${provider.env_var}…`}
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 pr-14 text-xs text-zinc-100 placeholder-zinc-600 font-mono focus:border-blue-500 focus:outline-none"
-                  autoFocus
-                />
-                <button
-                  onClick={() => setShow((s) => !s)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-zinc-500 hover:text-zinc-300"
-                >
-                  {show ? "hide" : "show"}
-                </button>
-              </div>
-              {keyError && <p className="text-xs text-red-400">{keyError}</p>}
-              <div className="flex gap-2">
-                <button
-                  onClick={handleSave}
-                  disabled={saving || !keyVal.trim()}
-                  className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
-                >
-                  {saving ? "Saving & restarting LiteLLM…" : "Save & apply"}
-                </button>
-                <button
-                  onClick={() => { setEditing(false); setKeyVal(""); setKeyError(null); }}
-                  disabled={saving}
-                  className="rounded-lg border border-zinc-700 px-3 py-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-40 transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-              {saving && (
-                <p className="text-[10px] text-zinc-500">
-                  Writing key to <code className="font-mono">infra/.env</code> and restarting LiteLLM (~25s)…
-                </p>
-              )}
-            </>
-          )}
-
-          {/* When not configured and not in edit mode, show a prompt to set the key */}
-          {!editing && !provider.configured && (
+          <div className="relative">
+            <input
+              type={show ? "text" : "password"}
+              value={keyVal}
+              onChange={(e) => setKeyVal(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSave()}
+              placeholder={`Paste ${provider.env_var}…`}
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 pr-14 text-xs text-zinc-100 placeholder-zinc-600 font-mono focus:border-blue-500 focus:outline-none"
+              autoFocus
+            />
             <button
-              onClick={() => setEditing(true)}
-              className="w-full rounded-lg border border-dashed border-zinc-600 py-1.5 text-xs text-zinc-500 hover:border-zinc-400 hover:text-zinc-300 transition-colors"
+              onClick={() => setShow((s) => !s)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-zinc-500 hover:text-zinc-300"
             >
-              + Paste {provider.env_var} here
+              {show ? "hide" : "show"}
             </button>
+          </div>
+          {keyError && <p className="text-xs text-red-400">{keyError}</p>}
+          <div className="flex gap-2">
+            <button
+              onClick={handleSave}
+              disabled={saving || !keyVal.trim()}
+              className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
+            >
+              {saving ? "Saving & restarting LiteLLM…" : "Save & apply"}
+            </button>
+            <button
+              onClick={() => { setEditing(false); setKeyVal(""); setKeyError(null); }}
+              disabled={saving}
+              className="rounded-lg border border-zinc-700 px-3 py-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-40 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+          {saving && (
+            <p className="text-[10px] text-zinc-500">
+              Writing key to <code className="font-mono">infra/.env</code> and restarting LiteLLM (~25s)…
+            </p>
           )}
         </div>
       )}
 
-      {/* Configured + not editing — no extra content needed */}
+      {/* Confirm discard panel */}
+      {confirmDiscard && (
+        <div className="mt-3 rounded-lg border border-red-800/30 bg-red-950/20 p-3 space-y-2">
+          <p className="text-xs text-red-300">
+            This will remove <code className="font-mono text-red-400">{provider.env_var}</code> from{" "}
+            <code className="font-mono">infra/.env</code> and disconnect the provider.
+            Any tier currently using this provider will fall back to the next available.
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={handleDiscard}
+              disabled={discarding}
+              className="rounded-lg bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-500 disabled:opacity-40 transition-colors"
+            >
+              {discarding ? "Discarding & restarting LiteLLM…" : "Yes, discard key"}
+            </button>
+            <button
+              onClick={() => { setConfirmDiscard(false); setKeyError(null); }}
+              disabled={discarding}
+              className="rounded-lg border border-zinc-700 px-3 py-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-40 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+          {discarding && (
+            <p className="text-[10px] text-zinc-500">
+              Removing key from <code className="font-mono">infra/.env</code> and restarting LiteLLM (~25s)…
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1072,6 +1145,26 @@ export default function ModelsPage() {
     await loadConfig();
   }, [loadConfig]);
 
+  const handleKeyDiscard = useCallback(async (provider: string) => {
+    const res = await fetch(`/api/settings/llm/key?provider=${encodeURIComponent(provider)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(String(err?.detail ?? "Discard failed"));
+    }
+    // Poll until LiteLLM is healthy again after restart
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const h = await fetch("/api/settings/llm/health").catch(() => null);
+      if (h?.ok) {
+        const hdata: LiteLLMHealth = await h.json().catch(() => null);
+        if (hdata?.healthy) break;
+      }
+    }
+    await loadConfig();
+  }, [loadConfig]);
+
   const handleSaveTier = async (tierName: string, model: string, apiBase?: string) => {
     setSaveError(null);
     setSaveSuccess(null);
@@ -1196,6 +1289,7 @@ export default function ModelsPage() {
                   gemini: "GEMINI_API_KEY", openai: "OPENAI_API_KEY",
                   anthropic: "ANTHROPIC_API_KEY", openrouter: "OPENROUTER_API_KEY",
                   github: "GITHUB_TOKEN", groq: "GROQ_API_KEY",
+                  deepseek: "DEEPSEEK_API_KEY",
                   mistral: "MISTRAL_API_KEY", together: "TOGETHER_API_KEY",
                 };
 
@@ -1219,6 +1313,7 @@ export default function ModelsPage() {
                     key={p.id}
                     provider={p}
                     onKeySet={(key) => handleKeySet(p.id, key)}
+                    onKeyDiscard={(id) => handleKeyDiscard(id)}
                   />
                 ));
               })()}

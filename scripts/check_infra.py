@@ -65,20 +65,20 @@ def check_redis(url: str) -> bool:
     return False
 
 
-def check_litellm(base_url: str) -> bool:
-    url = f"{base_url.rstrip('/')}/health/readiness"
+def check_gateway(port: int = 8000) -> bool:
+    """Check the gateway's health endpoint (no LiteLLM proxy needed)."""
+    url = f"http://localhost:{port}/health"
 
     def probe() -> bool:
         with urlopen(url, timeout=3) as r:
             if r.status == 200:
-                print(f"{OK}litellm proxy @ {base_url}")
+                print(f"{OK}gateway @ http://localhost:{port}")
                 return True
             return False
 
-    # LiteLLM can take 30-60s on a cold start (Redis cache wiring, prisma).
-    if _retry(probe, attempts=30, delay=2):
+    if _retry(probe, attempts=10, delay=2):
         return True
-    print(f"{FAIL}litellm @ {url}")
+    print(f"{FAIL}gateway @ {url}")
     return False
 
 
@@ -88,7 +88,7 @@ def main() -> int:
     results = [
         check_postgres(s.database_url),
         check_redis(s.redis_url),
-        check_litellm(s.litellm_base_url),
+        check_gateway(s.gateway_port),
     ]
     return 0 if all(results) else 1
 

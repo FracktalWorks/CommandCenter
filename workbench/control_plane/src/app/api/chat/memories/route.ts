@@ -21,7 +21,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
     await saveConversation(userId, messages);
     return NextResponse.json({ ok: true });
-  } catch {
+  } catch (_e) {
     return NextResponse.json({ error: "Failed to save memories" }, { status: 500 });
   }
 }

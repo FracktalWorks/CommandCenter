@@ -22,7 +22,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   let body: unknown;
   try {
     body = await req.json();
-  } catch {
+  } catch (_e) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 

@@ -35,7 +35,7 @@ function readDynamicAgentsFallback(): AgentEntry[] {
     const raw = readFileSync(jsonPath, "utf-8");
     const parsed = JSON.parse(raw) as AgentEntry[];
     return Array.isArray(parsed) ? parsed : [];
-  } catch {
+  } catch (_e) {
     return [];
   }
 }
@@ -65,7 +65,7 @@ export async function GET(): Promise<NextResponse> {
       const agents = (await res.json()) as AgentEntry[];
       return NextResponse.json(agents);
     }
-  } catch {
+  } catch (_e) {
     // Gateway unavailable — fall through to filesystem fallback
   }
   // Merge static built-ins with whatever is in agents.json so GitHub Copilot

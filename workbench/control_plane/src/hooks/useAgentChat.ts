@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 /**
  * useAgentChat — streaming chat hook backed by a module-level store (chatStore.ts).
@@ -168,7 +168,7 @@ export function useAgentChat({
             const raw = line.slice(6).trim();
             if (!raw || raw === "[DONE]") continue;
             let evt: Record<string, unknown>;
-            try { evt = JSON.parse(raw) as Record<string, unknown>; } catch { continue; }
+            try { evt = JSON.parse(raw) as Record<string, unknown>; } catch (_e) { continue; }
 
 
 

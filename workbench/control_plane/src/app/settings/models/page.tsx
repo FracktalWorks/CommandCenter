@@ -1328,9 +1328,8 @@ export default function ModelsPage() {
               })()}
             </div>
             <p className="mt-3 text-xs text-zinc-600">
-              Keys are written to <code className="font-mono">infra/.env</code> and applied
-              automatically. For Ollama, start it locally and pull models via{" "}
-              <code className="font-mono">ollama pull &lt;model&gt;</code>.
+              Keys are stored encrypted in the Postgres database. Ollama models are
+              auto-detected from your local instance — no manual setup needed.
             </p>
           </section>
 

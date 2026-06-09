@@ -1146,6 +1146,9 @@ async def run_agent_stream(
                     _DIRECT_PROVIDERS: dict[str, tuple[str, str]] = {
                         # prefix → (base_url, env_var_for_api_key)
                         "openrouter/": ("https://openrouter.ai/api/v1",      "OPENROUTER_API_KEY"),
+                        "openai/":     ("https://api.openai.com/v1",          "OPENAI_API_KEY"),
+                        "deepseek/":   ("https://api.deepseek.com/v1",        "DEEPSEEK_API_KEY"),
+                        "gemini/":     ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"),
                         "groq/":       ("https://api.groq.com/openai/v1",    "GROQ_API_KEY"),
                         "anthropic/":  ("https://api.anthropic.com/v1",       "ANTHROPIC_API_KEY"),
                         "together_ai/":("https://api.together.xyz/v1",        "TOGETHER_API_KEY"),

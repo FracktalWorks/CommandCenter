@@ -650,10 +650,7 @@ async def set_provider_key(
         raise HTTPException(status_code=400, detail="api_key cannot be empty")
     try:
         _write_env_key(env_var, req.api_key.strip())
-        # Update the live process environment so _is_provider_configured()
-        # returns True immediately without a gateway restart.
         os.environ[env_var] = req.api_key.strip()
-        # Bust the settings LRU cache so get_settings() also picks up the new value.
         try:
             from acb_common.settings import get_settings as _gs  # noqa: PLC0415
             _gs.cache_clear()
@@ -661,9 +658,15 @@ async def set_provider_key(
             pass
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to write env: {exc}") from exc
+    # Persist encrypted to the provider_keys table (primary store).
+    try:
+        from acb_llm.key_store import get_key_store  # noqa: PLC0415
+        store = get_key_store()
+        await store.put(req.provider, req.api_key.strip())
+        await store.configure_litellm()  # update in-process LiteLLM SDK config
+    except Exception as _ke:  # noqa: BLE001
+        _log.warning("settings.llm.key_store_write_failed", provider=req.provider, error=str(_ke))
     _log.info("settings.llm.key_updated", provider=req.provider, actor=_user.email)
-    # Inject key into running LiteLLM container immediately (no restart needed).
-    # Fallback: restart the container so it picks up the new .env value.
     _inject_env_into_litellm(env_var, req.api_key.strip())
     return {"ok": "true", "env_var": env_var, "provider": req.provider}
 
@@ -689,7 +692,14 @@ async def discard_provider_key(
         _log.info("settings.llm.key_discarded", provider=req.provider, actor=_user.email)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to clear env: {exc}") from exc
-    # Recreate LiteLLM container without the key so it stops routing to this provider.
+    # Also remove from the encrypted provider_keys table.
+    try:
+        from acb_llm.key_store import get_key_store  # noqa: PLC0415
+        store = get_key_store()
+        await store.delete(req.provider)
+        await store.configure_litellm()  # update in-process LiteLLM SDK config
+    except Exception as _ke:  # noqa: BLE001
+        _log.warning("settings.llm.key_store_delete_failed", provider=req.provider, error=str(_ke))
     _recreate_litellm_bg()
     return {"ok": "true", "env_var": env_var, "provider": req.provider}
 

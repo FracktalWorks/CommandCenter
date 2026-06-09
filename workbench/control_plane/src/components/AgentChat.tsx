@@ -237,7 +237,7 @@ export default function AgentChat({
       timestamp: m.timestamp,
       toolEvents: m.toolEvents,
       progressLines: m.progressLines,
-      reasoning: m.reasoning,
+      reasoningBlocks: m.reasoningBlocks,
       agentState: m.agentState,
       customEvents: m.customEvents,
     }));
@@ -975,7 +975,7 @@ function MessageBubble({
           toolEvents={message.toolEvents}
           progressLines={message.progressLines}
           isThinkingActive={message.isThinkingActive}
-          reasoning={message.reasoning}
+          reasoningBlocks={message.reasoningBlocks}
           onChoice={onChoice}
         />
         <GenerativeUIPanel

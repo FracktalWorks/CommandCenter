@@ -51,7 +51,8 @@ export interface ChatMessage {
   toolEvents?: ToolEvent[];
   progressLines?: string[];
   isThinkingActive?: boolean;
-  reasoning?: string;
+  /** Sequential reasoning blocks — each displayed as a separate timeline entry. */
+  reasoningBlocks?: string[];
   agentState?: Record<string, unknown>;
   customEvents?: { name: string; value: unknown }[];
 }

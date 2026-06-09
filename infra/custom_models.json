@@ -29,6 +29,12 @@
       "label": "Deepseek V4 Flash",
       "provider": "deepseek",
       "group": "Custom — Deepseek"
+    },
+    {
+      "id": "deepseek/deepseek-v4-pro",
+      "label": "Deepseek V4 Pro",
+      "provider": "deepseek",
+      "group": "Custom — Deepseek"
     }
   ],
   "hidden": []

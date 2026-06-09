@@ -207,7 +207,9 @@ export async function POST(req: NextRequest): Promise<Response> {
               } else if (t === "TOOL_CALL_START") {
                 const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
                 toolNames[String(ev.toolCallId ?? "")] = name;
-                toolArgs[String(ev.toolCallId ?? "")] = "";
+                // Use initial args so terminal commands show immediately
+                const initArgs = typeof ev.args === "string" ? ev.args : "";
+                toolArgs[String(ev.toolCallId ?? "")] = initArgs;
                 // Emit a live progress line first so the ThinkingContainer shows
                 // activity immediately (before the tool result arrives).
                 controller.enqueue(
@@ -215,28 +217,20 @@ export async function POST(req: NextRequest): Promise<Response> {
                     `data: ${JSON.stringify({ type: "progress", name })}\n\n`
                   )
                 );
-                out = { type: "tool_start", id: ev.toolCallId, name, args: {} };
+                out = { type: "tool_start", id: ev.toolCallId, name, args: parseToolArgs(initArgs) };
               } else if (t === "TOOL_CALL_ARGS") {
                 // Accumulate the streamed argument deltas so the tool input is
                 // visible in the UI (previously dropped — args showed as empty).
                 const id = String(ev.toolCallId ?? "");
                 toolArgs[id] = (toolArgs[id] ?? "") + String(ev.delta ?? "");
-              } else if (t === "TOOL_CALL_END") {
+              } else if (t === "TOOL_CALL_END" || t === "TOOL_CALL_RESULT") {
+                const isPartial2 = ev.partial === true;
                 out = {
-                  type: "tool_end",
+                  type: isPartial2 ? "tool_partial" : "tool_end",
                   id: ev.toolCallId,
                   name: toolNames[String(ev.toolCallId ?? "")] ?? "tool",
-                  args: parseToolArgs(toolArgs[String(ev.toolCallId ?? "")]),
-                  result: ev.result ?? "",
-                  success: true,
-                };
-              } else if (t === "TOOL_CALL_RESULT") {
-                out = {
-                  type: "tool_end",
-                  id: ev.toolCallId,
-                  name: toolNames[String(ev.toolCallId ?? "")] ?? "tool",
-                  args: parseToolArgs(toolArgs[String(ev.toolCallId ?? "")]),
-                  result: ev.content ?? "",
+                  args: isPartial2 ? undefined : parseToolArgs(toolArgs[String(ev.toolCallId ?? "")]),
+                  result: ev.result ?? ev.content ?? "",
                   success: true,
                 };
               } else if (t === "STATE_SNAPSHOT") {
@@ -346,23 +340,26 @@ export async function POST(req: NextRequest): Promise<Response> {
               } else if (t === "TOOL_CALL_START") {
                 const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
                 toolNames2[String(ev.toolCallId ?? "")] = name;
-                toolArgs2[String(ev.toolCallId ?? "")] = "";
+                // Use initial args from the event so terminal commands show immediately
+                const initialArgs = typeof ev.args === "string" ? ev.args : "";
+                toolArgs2[String(ev.toolCallId ?? "")] = initialArgs;
                 controller.enqueue(
                   new TextEncoder().encode(
                     `data: ${JSON.stringify({ type: "progress", name })}\n\n`
                   )
                 );
-                out = { type: "tool_start", id: ev.toolCallId, name, args: {} };
+                out = { type: "tool_start", id: ev.toolCallId, name, args: parseToolArgs(initialArgs) };
               } else if (t === "TOOL_CALL_ARGS") {
                 const id2 = String(ev.toolCallId ?? "");
                 toolArgs2[id2] = (toolArgs2[id2] ?? "") + String(ev.delta ?? "");
               } else if (t === "TOOL_CALL_END" || t === "TOOL_CALL_RESULT") {
                 const id2 = String(ev.toolCallId ?? "");
+                const isPartial = ev.partial === true;
                 out = {
-                  type: "tool_end",
+                  type: isPartial ? "tool_partial" : "tool_end",
                   id: ev.toolCallId,
                   name: toolNames2[id2] ?? "tool",
-                  args: parseToolArgs(toolArgs2[id2]),
+                  args: isPartial ? undefined : parseToolArgs(toolArgs2[id2]),
                   result: ev.result ?? ev.content ?? "",
                   success: true,
                 };

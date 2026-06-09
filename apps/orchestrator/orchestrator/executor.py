@@ -1039,15 +1039,22 @@ async def run_agent_stream(
                 elif isinstance(_sm, str):
                     _sdk_system_msg = _sm
 
-                _sdk_client = _SDKClient()
+                # Agent workspace — where AGENTS.md, skills/, scripts/, .mcp.json live.
+                # The Copilot CLI needs this for config discovery, tool execution,
+                # and agent persona resolution.
+                _agent_workspace = str(loaded.agent_dir)
+
+                _sdk_client = _SDKClient({"working_directory": _agent_workspace})
                 _owns_sdk_client = True
                 try:
                     await _sdk_client.start()
 
-                    # Build SessionConfig
+                    # Build SessionConfig — enable full Copilot CLI autonomy
                     _sdk_cfg: dict[str, Any] = {
                         "on_permission_request": _PH.approve_all,
                         "streaming": True,
+                        "working_directory": _agent_workspace,
+                        "agent_mode": "autopilot",  # autonomous tool execution
                     }
                     if _is_byok and _byok_provider:
                         _sdk_cfg["model"] = _byok_model_id
@@ -1085,16 +1092,20 @@ async def run_agent_stream(
                                   "SessionEventType.TOOL_CALL"):
                             _tc_name = getattr(d, "tool_name", "") or getattr(d, "name", "")
                             _tc_id = getattr(d, "tool_call_id", "") or getattr(d, "id", "") or str(uuid.uuid4())
+                            _tc_args = getattr(d, "arguments", None)
+                            # Send tool_start with args so the UI can show the command
+                            # immediately (e.g. terminal display needs the command line).
+                            _initial_args = json.dumps(_tc_args) if isinstance(_tc_args, dict) else str(_tc_args or "")
                             asyncio.ensure_future(
                                 queue.put({"type": "TOOL_CALL_START",
                                            "toolCallId": _tc_id,
-                                           "toolCallName": _tc_name}))
-                            _tc_args = getattr(d, "arguments", None)
+                                           "toolCallName": _tc_name,
+                                           "args": _initial_args}))
                             if _tc_args:
                                 asyncio.ensure_future(
                                     queue.put({"type": "TOOL_CALL_ARGS",
                                                "toolCallId": _tc_id,
-                                               "delta": json.dumps(_tc_args) if isinstance(_tc_args, dict) else str(_tc_args)}))
+                                               "delta": _initial_args}))
                         elif et in ("SessionEventType.TOOL_EXECUTION_COMPLETE",
                                     "SessionEventType.TOOL_CALL_RESULT"):
                             _tc_id = getattr(d, "tool_call_id", "") or getattr(d, "id", "")
@@ -1106,12 +1117,24 @@ async def run_agent_stream(
                                            "success": True}))
                         elif et == "SessionEventType.TOOL_EXECUTION_PROGRESS":
                             _tc_id = getattr(d, "tool_call_id", "") or getattr(d, "id", "")
-                            _tc_progress = getattr(d, "progress", "") or getattr(d, "message", "")
+                            _tc_progress = getattr(d, "progress_message", "") or getattr(d, "progress", "") or getattr(d, "message", "")
                             if _tc_progress:
                                 asyncio.ensure_future(
                                     queue.put({"type": "TOOL_CALL_ARGS",
                                                "toolCallId": _tc_id,
                                                "delta": f"[progress] {_tc_progress}"}))
+                        elif et == "SessionEventType.TOOL_EXECUTION_PARTIAL_RESULT":
+                            # Streaming terminal output — emit as content deltas
+                            # so the UI can show a live terminal-like view
+                            _tc_id = getattr(d, "tool_call_id", "") or getattr(d, "id", "")
+                            _partial = getattr(d, "partial_output", "") or getattr(d, "partialOutput", "") or ""
+                            if _partial:
+                                asyncio.ensure_future(
+                                    queue.put({"type": "TOOL_CALL_RESULT",
+                                               "toolCallId": _tc_id,
+                                               "content": _partial,
+                                               "partial": True,
+                                               "success": True}))
                         # ── Reasoning / thinking streaming ──────────────
                         elif et == "SessionEventType.ASSISTANT_REASONING_DELTA":
                             _rd = getattr(d, "delta_content", "") or ""
@@ -1125,6 +1148,17 @@ async def run_agent_stream(
                                 asyncio.ensure_future(
                                     queue.put({"type": "THINKING_TEXT_MESSAGE_CONTENT",
                                                "delta": _rc}))
+                        # ── Agent intent (real-time status: "Exploring codebase", etc.) ─
+                        elif et == "SessionEventType.ASSISTANT_INTENT":
+                            _intent = getattr(d, "intent", "") or ""
+                            if _intent:
+                                asyncio.ensure_future(
+                                    queue.put({"type": "TOOL_CALL_START",
+                                               "toolCallId": f"{run_id}:intent:{_intent[:20]}",
+                                               "toolCallName": _intent}))
+                        # ── Turn lifecycle → progress events ────────────
+                        elif et == "SessionEventType.ASSISTANT_TURN_START":
+                            pass
                         # ── Text streaming ──────────────────────────────
                         elif et in ("SessionEventType.ASSISTANT_MESSAGE_DELTA",
                                     "SessionEventType.ASSISTANT_STREAMING_DELTA"):
@@ -1172,24 +1206,33 @@ async def run_agent_stream(
                     _msg_text = event_payload.get("message") or event_payload.get("user_query") or ""
                     await _sdk_session.send({"prompt": _msg_text})
 
-                    # Drain Copilot SDK events → SSE queue
-                    try:
-                        await asyncio.wait_for(_done.wait(), timeout=300.0)
-                    except asyncio.TimeoutError:
-                        yield _sse({"type": "RUN_ERROR", "runId": run_id,
-                                    "message": "Copilot SDK session timed out"})
-                        return
+                    # Drain events and yield SSE frames AS THEY ARRIVE (real-time streaming)
+                    _timeout_seconds = 300.0
+                    _start = asyncio.get_event_loop().time()
+                    while True:
+                        try:
+                            ev = await asyncio.wait_for(queue.get(), timeout=0.1)
+                            if ev is None:
+                                break
+                            yield _sse(ev)
+                        except asyncio.TimeoutError:
+                            if _done.is_set():
+                                # Drain remaining events
+                                while not queue.empty():
+                                    ev = queue.get_nowait()
+                                    if ev:
+                                        yield _sse(ev)
+                                break
+                            elapsed = asyncio.get_event_loop().time() - _start
+                            if elapsed > _timeout_seconds:
+                                yield _sse({"type": "RUN_ERROR", "runId": run_id,
+                                            "message": "Copilot SDK session timed out"})
+                                return
 
                     if _stream_error:
                         yield _sse({"type": "RUN_ERROR", "runId": run_id,
                                     "message": _stream_error})
                         return
-
-                    # Drain any final queue items
-                    while not queue.empty():
-                        ev = queue.get_nowait()
-                        if ev:
-                            yield _sse(ev)
 
                 finally:
                     try:

@@ -189,14 +189,46 @@ export function useAgentChat({
 
 
             switch (evt.type) {
-              case "delta":
-                upd((m) => ({ ...m, content: m.content + String(evt.content ?? "") }));
+              case "delta": {
+                const deltaText = String(evt.content ?? "");
+                upd((m) => ({
+                  ...m,
+                  content: m.content + deltaText,
+                  // Show brief live snippet in the ThinkingContainer header
+                  // so the user sees activity, but do NOT dump into reasoning.
+                  // Reasoning is reserved for actual model chain-of-thought
+                  // tokens (THINKING_TEXT_MESSAGE_CONTENT / ASSISTANT_REASONING_DELTA).
+                  progressLines: [
+                    ...(m.progressLines ?? []).filter((l) => !l.startsWith("↳ ")),
+                    `↳ ${deltaText.slice(0, 80)}`,
+                  ].slice(-3),
+                }));
                 break;
+              }
               case "progress":
                 upd((m) => ({ ...m, progressLines: [...(m.progressLines ?? []), String(evt.name ?? "Working")] }));
                 break;
               case "reasoning":
-                upd((m) => ({ ...m, reasoning: (m.reasoning ?? "") + String(evt.content ?? "") }));
+                upd((m) => {
+                  const chunk = String(evt.content ?? "");
+                  if (!chunk) return m;
+                  const blocks = m.reasoningBlocks ?? [];
+                  // Append to the last block if it ends mid-sentence,
+                  // otherwise start a new block for a clean cascade.
+                  if (blocks.length > 0 && !/[.?!]\s*$/.test(blocks[blocks.length - 1])) {
+                    return {
+                      ...m,
+                      reasoningBlocks: [
+                        ...blocks.slice(0, -1),
+                        blocks[blocks.length - 1] + chunk,
+                      ],
+                    };
+                  }
+                  return {
+                    ...m,
+                    reasoningBlocks: [...blocks, chunk],
+                  };
+                });
                 break;
               case "tool_start": {
                 const toolId = String(evt.id ?? nanoid());
@@ -222,6 +254,18 @@ export function useAgentChat({
                           status: evt.success ? "done" : "error",
                           endedAt: Date.now(), subAgentActive: false,
                         }
+                      : t
+                  ),
+                }));
+                break;
+              case "tool_partial":
+                // Streaming partial output (terminal stdout, tool progress).
+                // Accumulate without marking the tool as complete.
+                upd((m) => ({
+                  ...m,
+                  toolEvents: (m.toolEvents ?? []).map((t) =>
+                    t.id === String(evt.id)
+                      ? { ...t, result: (t.result ?? "") + String(evt.result ?? "") }
                       : t
                   ),
                 }));

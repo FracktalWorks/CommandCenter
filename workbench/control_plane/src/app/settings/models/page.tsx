@@ -11,6 +11,28 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+// ── Inline SVG icons (avoid extra imports) ──────────────────────────────────
+
+function EyeOpen() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function EyeClosed() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+      <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+      <line x1="1" y1="1" x2="23" y2="23" />
+    </svg>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Types (mirrors gateway/routes/settings.py response models)
 // ---------------------------------------------------------------------------
@@ -656,7 +678,7 @@ function ProviderCard({
 }
 
 // ---------------------------------------------------------------------------
-// Custom model entry type (mirrors gateway CustomModelEntry)
+// Combined Model Catalogue — tabbed card with "My Models" + "All Models"
 // ---------------------------------------------------------------------------
 
 interface CustomModel {
@@ -666,22 +688,35 @@ interface CustomModel {
   group: string;
 }
 
-// ---------------------------------------------------------------------------
-// Visible / Hidden model manager
-// ---------------------------------------------------------------------------
-
 interface VisibleModel { id: string; label: string; group: string; }
 
-function ModelVisibilityManager() {
+function ModelCatalogue() {
+  const [tab, setTab] = useState<"added" | "visibility">("added");
+
+  // ── Shared state ──────────────────────────────────────────────────────────
   const [allModels, setAllModels] = useState<VisibleModel[]>([]);
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
+  const [loadingVis, setLoadingVis] = useState(true);
+
+  // Custom models state
+  const [customModels, setCustomModels] = useState<CustomModel[]>([]);
+  const [loadingCust, setLoadingCust] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [formId, setFormId] = useState("");
+  const [formLabel, setFormLabel] = useState("");
+  const [formProvider, setFormProvider] = useState("openrouter");
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  // Visibility state
   const [busy, setBusy] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [showHidden, setShowHidden] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  // ── Load visibility data ──────────────────────────────────────────────────
+  const loadVisibility = useCallback(async () => {
+    setLoadingVis(true);
     try {
       const [modRes, hidRes] = await Promise.all([
         fetch("/api/models/all"),
@@ -695,139 +730,12 @@ function ModelVisibilityManager() {
         const h = (await hidRes.json()) as string[];
         setHiddenIds(new Set(Array.isArray(h) ? h : []));
       }
-    } catch { /* ok */ } finally { setLoading(false); }
+    } catch { /* ok */ } finally { setLoadingVis(false); }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
-
-  const hide = async (id: string) => {
-    setBusy(id);
-    try {
-      await fetch("/api/settings/llm/hidden-models", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
-      });
-      setHiddenIds((prev) => new Set([...prev, id]));
-    } finally { setBusy(null); }
-  };
-
-  const unhide = async (id: string) => {
-    setBusy(id);
-    try {
-      await fetch(`/api/settings/llm/hidden-models/${encodeURIComponent(id)}`, { method: "DELETE" });
-      setHiddenIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
-    } finally { setBusy(null); }
-  };
-
-  const query = search.trim().toLowerCase();
-  // Models currently visible in the picker (from /api/models/all — already hid-filtered)
-  // We show them all here + the hidden ones so users can manage the full set.
-  const visibleModels = allModels.filter(
-    (m) => !hiddenIds.has(m.id) && (!query || m.label.toLowerCase().includes(query) || m.id.toLowerCase().includes(query))
-  );
-  const hiddenModels = [...hiddenIds].filter(
-    (id) => !query || id.toLowerCase().includes(query)
-  );
-
-  return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <div className="text-sm font-semibold text-zinc-100">Visible Models</div>
-          <p className="mt-0.5 text-xs text-zinc-500">
-            Hide models you don&apos;t use — they disappear from the chat picker instantly.
-          </p>
-        </div>
-        {hiddenIds.size > 0 && (
-          <button
-            onClick={() => setShowHidden((v) => !v)}
-            className="text-xs text-zinc-500 hover:text-zinc-300 underline underline-offset-2 transition-colors"
-          >
-            {showHidden ? "Hide hidden list" : `Show ${hiddenIds.size} hidden`}
-          </button>
-        )}
-      </div>
-
-      {/* Search */}
-      <input
-        type="text"
-        placeholder="Search models…"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        className="w-full mb-3 rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:border-zinc-500 focus:outline-none"
-      />
-
-      {loading ? (
-        <div className="text-xs text-zinc-600 py-2">Loading…</div>
-      ) : (
-        <div className="space-y-1 max-h-72 overflow-y-auto">
-          {/* Visible models */}
-          {visibleModels.map((m) => (
-            <div key={m.id} className="flex items-center justify-between rounded-md border border-zinc-700/40 bg-zinc-800/30 px-3 py-1.5 text-xs">
-              <div className="min-w-0">
-                <span className="text-zinc-200 truncate">{m.label}</span>
-                <span className="ml-2 text-zinc-600 text-[10px] font-mono truncate">{m.group}</span>
-              </div>
-              <button
-                onClick={() => hide(m.id)}
-                disabled={busy === m.id}
-                className="ml-2 shrink-0 text-zinc-600 hover:text-orange-400 transition-colors disabled:opacity-40 text-[10px]"
-                title="Hide from picker"
-              >
-                {busy === m.id ? "…" : "Hide"}
-              </button>
-            </div>
-          ))}
-          {visibleModels.length === 0 && !showHidden && (
-            <div className="text-xs text-zinc-600 italic py-1">No visible models match.</div>
-          )}
-
-          {/* Hidden models */}
-          {showHidden && hiddenModels.length > 0 && (
-            <>
-              <div className="pt-2 pb-1 text-[10px] text-zinc-600 uppercase tracking-wide">Hidden</div>
-              {hiddenModels.map((id) => (
-                <div key={id} className="flex items-center justify-between rounded-md border border-zinc-700/30 bg-zinc-900/60 px-3 py-1.5 text-xs opacity-60">
-                  <span className="font-mono text-zinc-500 truncate">{id}</span>
-                  <button
-                    onClick={() => unhide(id)}
-                    disabled={busy === id}
-                    className="ml-2 shrink-0 text-zinc-600 hover:text-emerald-400 transition-colors disabled:opacity-40 text-[10px]"
-                    title="Restore to picker"
-                  >
-                    {busy === id ? "…" : "Unhide"}
-                  </button>
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Custom Models Manager
-// ---------------------------------------------------------------------------
-
-function CustomModelsManager() {
-  const [models, setModels] = useState<CustomModel[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [adding, setAdding] = useState(false);
-  const [removing, setRemoving] = useState<string | null>(null);
-  const [showForm, setShowForm] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-
-  // Form state
-  const [formId, setFormId] = useState("");
-  const [formLabel, setFormLabel] = useState("");
-  const [formProvider, setFormProvider] = useState("openrouter");
-
-  const load = useCallback(async () => {
-    setLoading(true);
+  // ── Load custom models ────────────────────────────────────────────────────
+  const loadCustom = useCallback(async () => {
+    setLoadingCust(true);
     try {
       const r = await fetch("/api/settings/llm/custom-models");
       if (r.ok) {
@@ -835,22 +743,42 @@ function CustomModelsManager() {
           | { custom?: CustomModel[]; hidden?: string[] }
           | CustomModel[];
         const list = Array.isArray(d) ? d : (d.custom ?? []);
-        setModels(list);
+        setCustomModels(list);
       }
-    } catch { /* ok */ } finally {
-      setLoading(false);
-    }
+    } catch { /* ok */ } finally { setLoadingCust(false); }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void loadVisibility(); void loadCustom(); }, [loadVisibility, loadCustom]);
 
-  // Auto-derive label from model ID when the user types an ID
+  // ── Visibility toggle ─────────────────────────────────────────────────────
+  const toggleHidden = async (id: string) => {
+    setBusy(id);
+    try {
+      if (hiddenIds.has(id)) {
+        await fetch(`/api/settings/llm/hidden-models/${encodeURIComponent(id)}`, { method: "DELETE" });
+        setHiddenIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
+      } else {
+        await fetch("/api/settings/llm/hidden-models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id }),
+        });
+        setHiddenIds((prev) => new Set([...prev, id]));
+      }
+    } finally { setBusy(null); }
+  };
+
+  // ── Custom model actions ──────────────────────────────────────────────────
+  const deriveLabel = (id: string) => {
+    const parts = id.split("/");
+    return parts[parts.length - 1] ?? id;
+  };
+
   const handleIdChange = (v: string) => {
     setFormId(v);
     if (!formLabel || formLabel === deriveLabel(formId)) {
       setFormLabel(deriveLabel(v));
     }
-    // Auto-detect provider from prefix
     const detected = v.startsWith("openrouter/") ? "openrouter"
       : v.startsWith("anthropic/") ? "anthropic"
       : v.startsWith("openai/") ? "openai"
@@ -860,11 +788,6 @@ function CustomModelsManager() {
       : v.startsWith("mistral/") ? "mistral"
       : "openrouter";
     setFormProvider(detected);
-  };
-
-  const deriveLabel = (id: string) => {
-    const parts = id.split("/");
-    return parts[parts.length - 1] ?? id;
   };
 
   const handleAdd = async () => {
@@ -884,7 +807,7 @@ function CustomModelsManager() {
         setFormId(""); setFormLabel(""); setFormProvider("openrouter");
         setShowForm(false);
         setTimeout(() => setSuccess(null), 4000);
-        await load();
+        await Promise.all([loadCustom(), loadVisibility()]);
       }
     } catch (e) { setError(String(e)); } finally { setAdding(false); }
   };
@@ -897,107 +820,229 @@ function CustomModelsManager() {
         const d = await r.json().catch(() => ({}));
         setError(String((d as Record<string, unknown>)?.detail ?? "Failed to remove"));
       } else {
-        await load();
+        await Promise.all([loadCustom(), loadVisibility()]);
       }
     } catch (e) { setError(String(e)); } finally { setRemoving(null); }
   };
 
+  // ── Derived data ──────────────────────────────────────────────────────────
+  const query = search.trim().toLowerCase();
+  const visibleModels = allModels.filter(
+    (m) => !hiddenIds.has(m.id) && (!query || m.label.toLowerCase().includes(query) || m.id.toLowerCase().includes(query))
+  );
+  const hiddenModels = allModels.filter(
+    (m) => hiddenIds.has(m.id) && (!query || m.label.toLowerCase().includes(query) || m.id.toLowerCase().includes(query))
+  );
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <div className="text-sm font-semibold text-zinc-100">Custom Models</div>
-          <p className="mt-0.5 text-xs text-zinc-500">
-            Add models from your configured providers to make them available in the chat
-            picker. Only models you add here (plus Copilot SDK models) appear in the picker.
-          </p>
-        </div>
+      {/* Tabs */}
+      <div className="flex items-center gap-0.5 mb-4 p-0.5 rounded-lg bg-zinc-800/50 w-fit">
         <button
-          onClick={() => { setShowForm((v) => !v); setError(null); }}
-          className="rounded-lg border border-blue-700/50 bg-blue-900/30 px-3 py-1.5 text-xs font-medium text-blue-300 hover:bg-blue-800/40 transition-colors"
+          onClick={() => setTab("added")}
+          className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+            tab === "added"
+              ? "bg-zinc-700 text-zinc-100"
+              : "text-zinc-500 hover:text-zinc-300"
+          }`}
         >
-          {showForm ? "Cancel" : "+ Add model"}
+          Added Models
+        </button>
+        <button
+          onClick={() => setTab("visibility")}
+          className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+            tab === "visibility"
+              ? "bg-zinc-700 text-zinc-100"
+              : "text-zinc-500 hover:text-zinc-300"
+          }`}
+        >
+          Model Visibility
         </button>
       </div>
 
-      {/* Add form */}
-      {showForm && (
-        <div className="mb-4 rounded-lg border border-zinc-700 bg-zinc-800/60 p-3 space-y-2">
-          <div>
-            <label className="block text-xs font-medium text-zinc-400 mb-1">Model ID</label>
-            <input
-              autoFocus
-              type="text"
-              placeholder="e.g. openrouter/qwen/qwen3.8-preview"
-              value={formId}
-              onChange={(e) => handleIdChange(e.target.value)}
-              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 font-mono placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
-            />
-            <p className="mt-1 text-[10px] text-zinc-600">
-              Full LiteLLM model string — prefix determines the provider (e.g. <code className="font-mono">openrouter/…</code>, <code className="font-mono">anthropic/…</code>, <code className="font-mono">gemini/…</code>)
+      {/* ── Tab: My Models (custom models manager) ─────────────────────────── */}
+      {tab === "added" && (
+        <>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs text-zinc-500">
+              Add models from your configured providers to make them available in the chat
+              picker. Only models you add here (plus Copilot SDK models) appear.
             </p>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-zinc-400 mb-1">Display label</label>
-            <input
-              type="text"
-              placeholder="e.g. Qwen 3.8 Preview"
-              value={formLabel}
-              onChange={(e) => setFormLabel(e.target.value)}
-              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
-            />
-          </div>
-          {error && <p className="text-xs text-red-400">{error}</p>}
-          <button
-            onClick={handleAdd}
-            disabled={adding || !formId.trim() || !formLabel.trim()}
-            className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
-          >
-            {adding ? "Adding…" : "Add to picker"}
-          </button>
-        </div>
-      )}
-
-      {success && (
-        <div className="mb-3 rounded-md border border-emerald-800/40 bg-emerald-950/30 px-3 py-1.5 text-xs text-emerald-300">
-          ✓ {success}
-        </div>
-      )}
-
-      {/* Model list */}
-      {loading ? (
-        <div className="text-xs text-zinc-600 py-2">Loading…</div>
-      ) : models.length === 0 ? (
-        <div className="text-xs text-zinc-600 italic py-2">
-          No custom models yet. Click "+ Add model" to add any model from OpenRouter, Anthropic, etc.
-        </div>
-      ) : (
-        <div className="space-y-1.5">
-          {models.map((m) => (
-            <div
-              key={m.id}
-              className="flex items-center justify-between rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-2 text-xs"
+            <button
+              onClick={() => { setShowForm((v) => !v); setError(null); }}
+              className="rounded-lg border border-blue-700/50 bg-blue-900/30 px-3 py-1.5 text-xs font-medium text-blue-300 hover:bg-blue-800/40 transition-colors shrink-0 ml-3"
             >
-              <div className="min-w-0">
-                <div className="font-medium text-zinc-200 truncate">{m.label}</div>
-                <div className="font-mono text-zinc-500 text-[10px] truncate">{m.id}</div>
+              {showForm ? "Cancel" : "+ Add model"}
+            </button>
+          </div>
+
+          {/* Add form */}
+          {showForm && (
+            <div className="mb-4 rounded-lg border border-zinc-700 bg-zinc-800/60 p-3 space-y-2">
+              <div>
+                <label className="block text-xs font-medium text-zinc-400 mb-1">Model ID</label>
+                <input
+                  autoFocus
+                  type="text"
+                  placeholder="e.g. openrouter/anthropic/claude-sonnet-4-5"
+                  value={formId}
+                  onChange={(e) => handleIdChange(e.target.value)}
+                  className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 font-mono placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+                />
+                <p className="mt-1 text-[10px] text-zinc-600">
+                  Full LiteLLM model string — prefix auto-detects the provider.
+                </p>
               </div>
-              <div className="flex items-center gap-2 ml-3 shrink-0">
-                <span className="text-[9px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-500">
-                  {m.provider}
-                </span>
-                <button
-                  onClick={() => handleRemove(m.id)}
-                  disabled={removing === m.id}
-                  className="text-zinc-600 hover:text-red-400 transition-colors disabled:opacity-40"
-                  title="Remove"
-                >
-                  {removing === m.id ? "…" : "✕"}
-                </button>
+              <div>
+                <label className="block text-xs font-medium text-zinc-400 mb-1">Display label</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Claude Sonnet 4.5"
+                  value={formLabel}
+                  onChange={(e) => setFormLabel(e.target.value)}
+                  className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+                />
               </div>
+              {error && <p className="text-xs text-red-400">{error}</p>}
+              <button
+                onClick={handleAdd}
+                disabled={adding || !formId.trim() || !formLabel.trim()}
+                className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
+              >
+                {adding ? "Adding…" : "Add to picker"}
+              </button>
             </div>
-          ))}
-        </div>
+          )}
+
+          {success && (
+            <div className="mb-3 rounded-md border border-emerald-800/40 bg-emerald-950/30 px-3 py-1.5 text-xs text-emerald-300">
+              ✓ {success}
+            </div>
+          )}
+
+          {/* Custom model list */}
+          {loadingCust ? (
+            <div className="text-xs text-zinc-600 py-2">Loading…</div>
+          ) : customModels.length === 0 ? (
+            <div className="text-xs text-zinc-500 italic py-2">
+              No custom models yet. Click "+ Add model" to add one.
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {customModels.map((m) => (
+                <div
+                  key={m.id}
+                  className="flex items-center justify-between rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-2 text-xs"
+                >
+                  <div className="min-w-0">
+                    <div className="font-medium text-zinc-200 truncate">{m.label}</div>
+                    <div className="font-mono text-zinc-500 text-[10px] truncate">{m.id}</div>
+                  </div>
+                  <div className="flex items-center gap-2 ml-3 shrink-0">
+                    <span className="text-[9px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-500">
+                      {m.provider}
+                    </span>
+                    <button
+                      onClick={() => handleRemove(m.id)}
+                      disabled={removing === m.id}
+                      className="text-zinc-600 hover:text-red-400 transition-colors disabled:opacity-40"
+                      title="Remove"
+                    >
+                      {removing === m.id ? "…" : "✕"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ── Tab: All Models (visibility manager) ────────────────────────────── */}
+      {tab === "visibility" && (
+        <>
+          <p className="text-xs text-zinc-500 mb-3">
+            Toggle visibility for each model. Hidden models won&apos;t appear in the chat picker.
+          </p>
+
+          <input
+            type="text"
+            placeholder="Search models…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full mb-3 rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:border-zinc-500 focus:outline-none"
+          />
+
+          {loadingVis ? (
+            <div className="text-xs text-zinc-600 py-2">Loading…</div>
+          ) : (
+            <div className="space-y-1 max-h-80 overflow-y-auto">
+              {/* Visible models */}
+              {visibleModels.map((m) => (
+                <div
+                  key={m.id}
+                  className="flex items-center justify-between rounded-md border border-zinc-700/40 bg-zinc-800/30 px-3 py-1.5 text-xs group"
+                >
+                  <div className="min-w-0">
+                    <span className="text-zinc-200 truncate">{m.label}</span>
+                    <span className="ml-2 text-zinc-600 text-[10px] font-mono truncate">{m.group}</span>
+                  </div>
+                  <button
+                    onClick={() => toggleHidden(m.id)}
+                    disabled={busy === m.id}
+                    className="ml-2 shrink-0 text-zinc-500 hover:text-orange-400 transition-colors disabled:opacity-30"
+                    title="Hide from picker"
+                  >
+                    {busy === m.id ? (
+                      <span className="text-[10px]">…</span>
+                    ) : (
+                      <EyeOpen />
+                    )}
+                  </button>
+                </div>
+              ))}
+
+              {/* Hidden models */}
+              {hiddenModels.length > 0 && (
+                <>
+                  <div className="pt-3 pb-1.5 text-[10px] text-zinc-500 uppercase tracking-wide px-1">
+                    Hidden — {hiddenModels.length} model{hiddenModels.length !== 1 ? "s" : ""}
+                  </div>
+                  {hiddenModels.map((m) => (
+                    <div
+                      key={m.id}
+                      className="flex items-center justify-between rounded-md border border-zinc-700/20 bg-zinc-900/40 px-3 py-1.5 text-xs opacity-60 hover:opacity-80 transition-opacity"
+                    >
+                      <div className="min-w-0">
+                        <span className="text-zinc-400 truncate">{m.label}</span>
+                        <span className="ml-2 text-zinc-600 text-[10px] font-mono truncate">{m.group}</span>
+                      </div>
+                      <button
+                        onClick={() => toggleHidden(m.id)}
+                        disabled={busy === m.id}
+                        className="ml-2 shrink-0 text-zinc-500 hover:text-emerald-400 transition-colors disabled:opacity-30"
+                        title="Show in picker"
+                      >
+                        {busy === m.id ? (
+                          <span className="text-[10px]">…</span>
+                        ) : (
+                          <EyeClosed />
+                        )}
+                      </button>
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {visibleModels.length === 0 && hiddenModels.length === 0 && (
+                <div className="text-xs text-zinc-500 italic py-1">
+                  {query ? "No models match your search." : "No models loaded. Add models in the My Models tab."}
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -1282,20 +1327,12 @@ export default function ModelsPage() {
             <CopilotModelPicker />
           </section>
 
-          {/* Custom model catalogue */}
+          {/* Model catalogue — combined Custom Models + Visibility */}
           <section className="mb-8">
             <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-600">
-              Custom Models
+              Model Catalogue
             </h2>
-            <CustomModelsManager />
-          </section>
-
-          {/* Model visibility */}
-          <section className="mb-8">
-            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-600">
-              Model Visibility
-            </h2>
-            <ModelVisibilityManager />
+            <ModelCatalogue />
           </section>
 
 

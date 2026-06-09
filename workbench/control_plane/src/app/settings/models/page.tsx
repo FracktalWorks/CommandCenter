@@ -707,6 +707,9 @@ function ModelCatalogue() {
   const [formId, setFormId] = useState("");
   const [formLabel, setFormLabel] = useState("");
   const [formProvider, setFormProvider] = useState("openrouter");
+  const [availableModels, setAvailableModels] = useState<{ id: string; label: string }[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [modelSearch, setModelSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -769,25 +772,36 @@ function ModelCatalogue() {
   };
 
   // ── Custom model actions ──────────────────────────────────────────────────
-  const deriveLabel = (id: string) => {
-    const parts = id.split("/");
-    return parts[parts.length - 1] ?? id;
+  const fetchProviderModels = useCallback(async (prov: string) => {
+    if (!prov) { setAvailableModels([]); return; }
+    setLoadingModels(true);
+    setModelSearch("");
+    try {
+      const r = await fetch(`/api/settings/llm/provider-models?provider=${encodeURIComponent(prov)}`);
+      if (r.ok) {
+        const data = (await r.json()) as { id: string; label: string }[];
+        setAvailableModels(Array.isArray(data) ? data : []);
+      } else {
+        setAvailableModels([]);
+      }
+    } catch {
+      setAvailableModels([]);
+    } finally {
+      setLoadingModels(false);
+    }
+  }, []);
+
+  const handleProviderChange = (prov: string) => {
+    setFormProvider(prov);
+    setFormId("");
+    setFormLabel("");
+    void fetchProviderModels(prov);
   };
 
-  const handleIdChange = (v: string) => {
-    setFormId(v);
-    if (!formLabel || formLabel === deriveLabel(formId)) {
-      setFormLabel(deriveLabel(v));
-    }
-    const detected = v.startsWith("openrouter/") ? "openrouter"
-      : v.startsWith("anthropic/") ? "anthropic"
-      : v.startsWith("openai/") ? "openai"
-      : v.startsWith("gemini/") ? "gemini"
-      : v.startsWith("deepseek/") ? "deepseek"
-      : v.startsWith("groq/") ? "groq"
-      : v.startsWith("mistral/") ? "mistral"
-      : "openrouter";
-    setFormProvider(detected);
+  const handleModelSelect = (id: string, label: string) => {
+    setFormId(id);
+    setFormLabel(label);
+    setModelSearch("");
   };
 
   const handleAdd = async () => {
@@ -805,6 +819,7 @@ function ModelCatalogue() {
       } else {
         setSuccess(`Added ${formLabel.trim()}`);
         setFormId(""); setFormLabel(""); setFormProvider("openrouter");
+        setAvailableModels([]); setModelSearch("");
         setShowForm(false);
         setTimeout(() => setSuccess(null), 4000);
         await Promise.all([loadCustom(), loadVisibility()]);
@@ -880,25 +895,102 @@ function ModelCatalogue() {
           {/* Add form */}
           {showForm && (
             <div className="mb-4 rounded-lg border border-zinc-700 bg-zinc-800/60 p-3 space-y-2">
+              {/* Provider selector */}
               <div>
-                <label className="block text-xs font-medium text-zinc-400 mb-1">Model ID</label>
-                <input
-                  autoFocus
-                  type="text"
-                  placeholder="e.g. openrouter/anthropic/claude-sonnet-4-5"
-                  value={formId}
-                  onChange={(e) => handleIdChange(e.target.value)}
-                  className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 font-mono placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
-                />
-                <p className="mt-1 text-[10px] text-zinc-600">
-                  Full LiteLLM model string — prefix auto-detects the provider.
-                </p>
+                <label className="block text-xs font-medium text-zinc-400 mb-1">Provider</label>
+                <select
+                  value={formProvider}
+                  onChange={(e) => handleProviderChange(e.target.value)}
+                  className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 focus:border-blue-500 focus:outline-none"
+                >
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="gemini">Google Gemini</option>
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="groq">Groq</option>
+                  <option value="mistral">Mistral AI</option>
+                  <option value="together">Together AI</option>
+                  <option value="github">GitHub Copilot</option>
+                  <option value="ollama">Ollama (local)</option>
+                </select>
               </div>
+
+              {/* Model selector */}
+              <div>
+                <label className="block text-xs font-medium text-zinc-400 mb-1">Model</label>
+                {loadingModels ? (
+                  <div className="text-xs text-zinc-500 py-1.5">Fetching models…</div>
+                ) : formId ? (
+                  <div className="flex items-center gap-2">
+                    <span className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 font-mono truncate">
+                      {formId}
+                    </span>
+                    <button
+                      onClick={() => { setFormId(""); setFormLabel(""); }}
+                      className="text-zinc-500 hover:text-zinc-300 text-xs shrink-0"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <input
+                      type="text"
+                      placeholder={availableModels.length > 0 ? "Search models…" : "No models loaded — select a provider first"}
+                      value={modelSearch}
+                      onChange={(e) => setModelSearch(e.target.value)}
+                      className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+                    />
+                    {availableModels.length > 0 && modelSearch && (
+                      <div className="absolute z-10 mt-1 w-full max-h-44 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-lg">
+                        {availableModels
+                          .filter((m) =>
+                            !modelSearch ||
+                            m.label.toLowerCase().includes(modelSearch.toLowerCase()) ||
+                            m.id.toLowerCase().includes(modelSearch.toLowerCase())
+                          )
+                          .slice(0, 50)
+                          .map((m) => (
+                            <button
+                              key={m.id}
+                              onClick={() => handleModelSelect(m.id, m.label)}
+                              className="w-full text-left px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition-colors flex items-center justify-between"
+                            >
+                              <span className="truncate">{m.label}</span>
+                              <span className="text-[10px] text-zinc-500 font-mono ml-2 shrink-0 truncate max-w-[40%]">
+                                {m.id}
+                              </span>
+                            </button>
+                          ))}
+                      </div>
+                    )}
+                    {availableModels.length > 0 && !modelSearch && (
+                      <div className="absolute z-10 mt-1 w-full max-h-44 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-lg">
+                        {availableModels.slice(0, 50).map((m) => (
+                          <button
+                            key={m.id}
+                            onClick={() => handleModelSelect(m.id, m.label)}
+                            className="w-full text-left px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition-colors flex items-center justify-between"
+                          >
+                            <span className="truncate">{m.label}</span>
+                            <span className="text-[10px] text-zinc-500 font-mono ml-2 shrink-0 truncate max-w-[40%]">
+                              {m.id}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Display label */}
               <div>
                 <label className="block text-xs font-medium text-zinc-400 mb-1">Display label</label>
                 <input
                   type="text"
-                  placeholder="e.g. Claude Sonnet 4.5"
+                  placeholder="Auto-populated from model name"
                   value={formLabel}
                   onChange={(e) => setFormLabel(e.target.value)}
                   className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"

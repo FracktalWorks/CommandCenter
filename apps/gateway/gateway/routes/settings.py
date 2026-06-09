@@ -695,8 +695,137 @@ async def discard_provider_key(
 
 
 # ---------------------------------------------------------------------------
-# POST /settings/llm/copilot-model  — set copilot_chat_model in .env
+# GET /settings/llm/provider-models  — live model discovery from provider APIs
 # ---------------------------------------------------------------------------
+
+# Provider → base URL for OpenAI-compatible /v1/models endpoint.
+# Providers not listed here fall back to the static _PROVIDER_MODELS catalogue.
+_PROVIDER_API_BASES: dict[str, str] = {
+    "openai":     "https://api.openai.com",
+    "deepseek":   "https://api.deepseek.com",
+    "groq":       "https://api.groq.com/openai",
+    "together":   "https://api.together.xyz",
+    "mistral":    "https://api.mistral.ai",
+}
+
+# OpenRouter lists models publicly — no API key needed.
+_OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+
+
+def _model_label_from_id(model_id: str) -> str:
+    """Derive a human-readable label from a model ID.
+    e.g. 'openrouter/deepseek/deepseek-v4-pro' → 'DeepSeek V4 Pro'"""
+    last = model_id.rsplit("/", 1)[-1] if "/" in model_id else model_id
+    # Replace dashes/underscores with spaces, title-case words
+    label = last.replace("-", " ").replace("_", " ")
+    # Capitalize common prefixes
+    label = " ".join(
+        w.upper() if w.lower() in ("gpt", "r1", "v3", "v4", "o1", "o3", "k2")
+        else w[0].upper() + w[1:] if w and w[0].islower()
+        else w
+        for w in label.split()
+    )
+    return label or model_id
+
+
+@router.get("/llm/provider-models")
+async def discover_provider_models(
+    provider: str = "",
+    _user: UserContext = Depends(get_current_user),
+) -> list[dict[str, str]]:
+    """Return live list of models for a provider. Falls back to static catalogue."""
+    if not provider:
+        return []
+
+    # ── OpenRouter: public API, no key needed ────────────────────────────────
+    if provider == "openrouter":
+        try:
+            async with httpx.AsyncClient(timeout=8) as client:
+                r = await client.get(_OPENROUTER_MODELS_URL)
+                if r.status_code == 200:
+                    data = r.json()
+                    models: list[dict[str, str]] = []
+                    for m in data.get("data", []):
+                        mid = m.get("id", "")
+                        if mid:
+                            models.append({
+                                "id": f"openrouter/{mid}",
+                                "label": m.get("name", _model_label_from_id(mid)),
+                            })
+                    if models:
+                        return sorted(models, key=lambda x: x["label"].lower())
+        except Exception:
+            pass  # fall through to static
+
+    # ── OpenAI-compatible /v1/models providers ───────────────────────────────
+    if provider in _PROVIDER_API_BASES:
+        env_var = _PROVIDER_ENV_MAP.get(provider, "")
+        api_key = os.environ.get(env_var, "").strip()
+        if not api_key:
+            try:
+                api_key = (getattr(get_settings(), env_var.lower(), "") or "").strip()
+            except Exception:
+                pass
+        if api_key:
+            try:
+                base = _PROVIDER_API_BASES[provider]
+                async with httpx.AsyncClient(timeout=8) as client:
+                    r = await client.get(
+                        f"{base}/v1/models",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                    )
+                    if r.status_code == 200:
+                        data = r.json()
+                        models: list[dict[str, str]] = []
+                        for m in data.get("data", []):
+                            mid = m.get("id", "")
+                            if mid and not any(
+                                mid.startswith(p) for p in ("ft:", "babbage", "davinci", "tts-", "whisper-", "dall-e")
+                            ):
+                                models.append({
+                                    "id": f"{provider}/{mid}",
+                                    "label": _model_label_from_id(mid),
+                                })
+                        if models:
+                            return sorted(models, key=lambda x: x["label"].lower())
+            except Exception:
+                pass  # fall through to static
+
+    # ── Ollama: local API ────────────────────────────────────────────────────
+    if provider == "ollama":
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                r = await client.get("http://localhost:11434/api/tags")
+                if r.status_code == 200:
+                    data = r.json()
+                    models: list[dict[str, str]] = []
+                    for m in data.get("models", []):
+                        name = m.get("name", "")
+                        if name:
+                            models.append({
+                                "id": f"ollama/{name}",
+                                "label": name,
+                            })
+                    if models:
+                        return sorted(models, key=lambda x: x["label"].lower())
+        except Exception:
+            pass  # fall through to static
+
+    # ── GitHub Copilot — use existing copilot model discovery ────────────────
+    if provider == "github":
+        try:
+            # Copilot SDK models are discovered elsewhere; return a simple list.
+            # The static _PROVIDER_MODELS for github has the main ones.
+            pass
+        except Exception:
+            pass
+
+    # ── Fallback: static _PROVIDER_MODELS catalogue ──────────────────────────
+    static_models = _PROVIDER_MODELS.get(provider, [])
+    return [
+        {"id": mid, "label": _model_label_from_id(mid)}
+        for mid in static_models
+    ]
 
 class CopilotModelRequest(BaseModel):
     model: str   # e.g. "claude-sonnet-4-5", "gpt-4o", "o3-mini"

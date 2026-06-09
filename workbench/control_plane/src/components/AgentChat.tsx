@@ -454,28 +454,34 @@ export default function AgentChat({
     return () => document.removeEventListener("mousedown", handleOutside);
   }, [showModelMenu]);
 
-  /** Display label + styling for an agent_runtime value. */
-  function agentRuntimeMeta(rt: string): { label: string; title: string; cls: string } {
+  /** Display labels + styling for an agent_runtime value. */
+  function agentRuntimeMeta(rt: string): { label: string; title: string; cls: string }[] {
     if (rt === "github-copilot") {
-      return {
-        label: "GitHub Copilot SDK",
-        title: "This agent runs via GitHubCopilotAgent (Microsoft Agent Framework wrapping the GitHub Copilot SDK)",
-        cls: "border-sky-700/50 bg-sky-900/30 text-sky-300",
-      };
+      return [
+        {
+          label: "MAF",
+          title: "Microsoft Agent Framework — unified agent abstraction, streaming, multi-agent workflows",
+          cls: "border-amber-700/50 bg-amber-900/30 text-amber-300",
+        },
+        {
+          label: "Copilot SDK",
+          title: "GitHub Copilot SDK — shell, file r/w, MCP servers, native BYOK provider support",
+          cls: "border-sky-700/50 bg-sky-900/30 text-sky-300",
+        },
+      ];
     }
     if (rt === "langgraph") {
-      return {
+      return [{
         label: "LangGraph",
         title: "Legacy LangGraph agent runner",
         cls: "border-violet-700/50 bg-violet-900/30 text-violet-300",
-      };
+      }];
     }
-    // maf or unknown
-    return {
+    return [{
       label: "MAF",
-      title: "Microsoft Agent Framework agent (pure MAF, no Copilot SDK)",
+      title: "Microsoft Agent Framework agent",
       cls: "border-amber-700/50 bg-amber-900/30 text-amber-300",
-    };
+    }];
   }
 
   return (
@@ -486,13 +492,16 @@ export default function AgentChat({
         <div>
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-zinc-100">{currentAgentName}</span>
-            {/* Agent runtime badge — shows MAF / GitHub Copilot SDK / LangGraph */}
-            <span
-              className={`text-[9px] px-1.5 py-0.5 rounded-full border ${agentRuntimeMeta(agentRuntime).cls}`}
-              title={agentRuntimeMeta(agentRuntime).title}
-            >
-              {agentRuntimeMeta(agentRuntime).label}
-            </span>
+            {/* Agent runtime badges — MAF + Copilot SDK for repo agents */}
+            {agentRuntimeMeta(agentRuntime).map((m, i) => (
+              <span
+                key={i}
+                className={`text-[9px] px-1.5 py-0.5 rounded-full border ${m.cls}`}
+                title={m.title}
+              >
+                {m.label}
+              </span>
+            ))}
             {/* GitHub repo link for GitHub Copilot SDK agents */}
             {agentRuntime === "github-copilot" && currentAgentEntry?.repo_url && (
               <a
@@ -733,13 +742,16 @@ export default function AgentChat({
             {currentAgentName}
             <span className="text-zinc-500 ml-0.5">▾</span>
           </button>
-          {/* Agent runtime badge in toolbar */}
-          <span
-            className={`text-[9px] px-1.5 py-0.5 rounded-full border ${agentRuntimeMeta(agentRuntime).cls}`}
-            title={agentRuntimeMeta(agentRuntime).title}
-          >
-            {agentRuntimeMeta(agentRuntime).label}
-          </span>
+          {/* Agent runtime badges in toolbar */}
+          {agentRuntimeMeta(agentRuntime).map((m, i) => (
+            <span
+              key={i}
+              className={`text-[9px] px-1.5 py-0.5 rounded-full border ${m.cls}`}
+              title={m.title}
+            >
+              {m.label}
+            </span>
+          ))}
 
           {/* Agent dropdown */}
           {showAgentMenu && (
@@ -761,19 +773,16 @@ export default function AgentChat({
                     <div className="flex items-center justify-between gap-1">
                       <span className="font-medium">{a.name}</span>
                       <div className="flex items-center gap-1.5 ml-auto shrink-0">
-                        {/* Per-agent runtime badge in the dropdown */}
-                        {(() => {
-                          const rt = a.agent_runtime ?? "maf";
-                          const m = agentRuntimeMeta(rt);
-                          return (
-                            <span
-                              className={`text-[8px] px-1 py-0.5 rounded-full border ${m.cls}`}
-                              title={m.title}
-                            >
-                              {m.label}
-                            </span>
-                          );
-                        })()}
+                        {/* Per-agent runtime badges in the dropdown */}
+                        {agentRuntimeMeta(a.agent_runtime ?? "maf").map((m, i) => (
+                          <span
+                            key={i}
+                            className={`text-[8px] px-1 py-0.5 rounded-full border ${m.cls}`}
+                            title={m.title}
+                          >
+                            {m.label}
+                          </span>
+                        ))}
                         {a.name === currentAgentName && (
                           <span className="text-emerald-500 text-[10px]">✓</span>
                         )}

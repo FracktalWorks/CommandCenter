@@ -132,11 +132,16 @@ function AgentPickerModal({
                     <div className="flex items-center justify-between">
                       <div className="text-sm font-medium text-zinc-100">{a.name}</div>
                       <div className="flex items-center gap-1.5">
-                        {/* Agent runtime badge in picker */}
+                        {/* Agent runtime badges in picker */}
                         {a.agent_runtime === "github-copilot" ? (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-sky-700/50 bg-sky-900/30 text-sky-300">
-                            Copilot SDK
-                          </span>
+                          <>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-amber-700/40 bg-amber-900/20 text-amber-400">
+                              MAF
+                            </span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-sky-700/50 bg-sky-900/30 text-sky-300">
+                              Copilot SDK
+                            </span>
+                          </>
                         ) : (
                           <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-amber-700/40 bg-amber-900/20 text-amber-400">
                             MAF

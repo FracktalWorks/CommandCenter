@@ -821,15 +821,14 @@ function AddAgentModal({
                   {addedAgent.local_path && (
                     <span className="shrink-0 rounded-full bg-violet-500/15 px-2 py-0.5 text-xs text-violet-400">local</span>
                   )}
-                  {/* Runtime badge in the success preview */}
+                  {/* Runtime badges in the success preview */}
                   {addedAgent.agent_runtime === "github-copilot" ? (
-                    <span className="shrink-0 rounded-full border border-sky-700/50 bg-sky-900/30 px-2 py-0.5 text-xs text-sky-300" title="Runs via GitHub Copilot SDK">
-                      GitHub Copilot SDK
-                    </span>
+                    <>
+                      <span className="shrink-0 rounded-full border border-amber-700/50 bg-amber-900/30 px-2 py-0.5 text-xs text-amber-300">MAF</span>
+                      <span className="shrink-0 rounded-full border border-sky-700/50 bg-sky-900/30 px-2 py-0.5 text-xs text-sky-300" title="GitHub Copilot SDK — shell, file r/w, MCP, native BYOK">Copilot SDK</span>
+                    </>
                   ) : (
-                    <span className="shrink-0 rounded-full border border-amber-700/50 bg-amber-900/30 px-2 py-0.5 text-xs text-amber-300">
-                      MAF
-                    </span>
+                    <span className="shrink-0 rounded-full border border-amber-700/50 bg-amber-900/30 px-2 py-0.5 text-xs text-amber-300">MAF</span>
                   )}
                   <span className="shrink-0 rounded-full bg-green-500/15 px-2 py-0.5 text-xs text-green-400">live</span>
                 </div>
@@ -1149,21 +1148,14 @@ function AgentCard({
                 local
               </span>
             )}
-            {/* Agent runtime badge */}
+            {/* Agent runtime badges */}
             {agent.agent_runtime === "github-copilot" ? (
-              <span
-                className="shrink-0 rounded-full border border-sky-700/50 bg-sky-900/30 px-2 py-0.5 text-xs text-sky-300"
-                title="This agent runs via the GitHub Copilot SDK (GitHubCopilotAgent — MAF wraps the Copilot SDK)"
-              >
-                GitHub Copilot SDK
-              </span>
+              <>
+                <span className="shrink-0 rounded-full border border-amber-700/50 bg-amber-900/30 px-2 py-0.5 text-xs text-amber-300" title="Microsoft Agent Framework">MAF</span>
+                <span className="shrink-0 rounded-full border border-sky-700/50 bg-sky-900/30 px-2 py-0.5 text-xs text-sky-300" title="GitHub Copilot SDK — shell, file r/w, MCP, native BYOK">Copilot SDK</span>
+              </>
             ) : (
-              <span
-                className="shrink-0 rounded-full border border-amber-700/50 bg-amber-900/30 px-2 py-0.5 text-xs text-amber-300"
-                title="Microsoft Agent Framework agent"
-              >
-                MAF
-              </span>
+              <span className="shrink-0 rounded-full border border-amber-700/50 bg-amber-900/30 px-2 py-0.5 text-xs text-amber-300" title="Microsoft Agent Framework agent">MAF</span>
             )}
             <span
               className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${

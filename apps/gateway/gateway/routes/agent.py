@@ -91,9 +91,9 @@ _AGENT_REGISTRY: list[dict] = [
         "description": "ClickUp task management — status, progress, and workload questions with citations.",
         "tags": ["tasks", "clickup", "project-management"],
         "status": "live",
-        # Local monorepo agent — MAF runner (uses GitHubCopilotAgent internally, but
-        # is NOT registered from an external GitHub repo, so agent_runtime = "maf").
-        "agent_runtime": "maf",
+        # Uses GitHubCopilotAgent — routes through the Copilot SDK executor so
+        # BYOK model injection works correctly (preserves tools + instructions).
+        "agent_runtime": "github-copilot",
         "local_path": "apps/agent-task-manager",
         "integrations": ["clickup"],
         "optional_integrations": [],

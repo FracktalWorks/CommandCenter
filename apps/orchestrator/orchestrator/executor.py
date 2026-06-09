@@ -1080,10 +1080,11 @@ async def run_agent_stream(
                         nonlocal _msg_id, _stream_error
                         et = str(event.type)
                         d = event.data
-                        # Tool call events
-                        if et == "SessionEventType.TOOL_CALL":
+                        # ── Tool execution events ───────────────────────
+                        if et in ("SessionEventType.TOOL_EXECUTION_START",
+                                  "SessionEventType.TOOL_CALL"):
                             _tc_name = getattr(d, "tool_name", "") or getattr(d, "name", "")
-                            _tc_id = getattr(d, "tool_call_id", "") or str(uuid.uuid4())
+                            _tc_id = getattr(d, "tool_call_id", "") or getattr(d, "id", "") or str(uuid.uuid4())
                             asyncio.ensure_future(
                                 queue.put({"type": "TOOL_CALL_START",
                                            "toolCallId": _tc_id,
@@ -1094,23 +1095,46 @@ async def run_agent_stream(
                                     queue.put({"type": "TOOL_CALL_ARGS",
                                                "toolCallId": _tc_id,
                                                "delta": json.dumps(_tc_args) if isinstance(_tc_args, dict) else str(_tc_args)}))
-                        elif et == "SessionEventType.TOOL_CALL_RESULT":
-                            _tc_id = getattr(d, "tool_call_id", "")
-                            _tc_result = getattr(d, "result", "")
+                        elif et in ("SessionEventType.TOOL_EXECUTION_COMPLETE",
+                                    "SessionEventType.TOOL_CALL_RESULT"):
+                            _tc_id = getattr(d, "tool_call_id", "") or getattr(d, "id", "")
+                            _tc_result = getattr(d, "result", "") or getattr(d, "output", "")
                             asyncio.ensure_future(
                                 queue.put({"type": "TOOL_CALL_RESULT",
                                            "toolCallId": _tc_id,
                                            "content": str(_tc_result)[:2000],
                                            "success": True}))
-                        # Text streaming
-                        elif et == "SessionEventType.ASSISTANT_MESSAGE_DELTA":
+                        elif et == "SessionEventType.TOOL_EXECUTION_PROGRESS":
+                            _tc_id = getattr(d, "tool_call_id", "") or getattr(d, "id", "")
+                            _tc_progress = getattr(d, "progress", "") or getattr(d, "message", "")
+                            if _tc_progress:
+                                asyncio.ensure_future(
+                                    queue.put({"type": "TOOL_CALL_ARGS",
+                                               "toolCallId": _tc_id,
+                                               "delta": f"[progress] {_tc_progress}"}))
+                        # ── Reasoning / thinking streaming ──────────────
+                        elif et == "SessionEventType.ASSISTANT_REASONING_DELTA":
+                            _rd = getattr(d, "delta_content", "") or ""
+                            if _rd:
+                                asyncio.ensure_future(
+                                    queue.put({"type": "THINKING_TEXT_MESSAGE_CONTENT",
+                                               "delta": _rd}))
+                        elif et == "SessionEventType.ASSISTANT_REASONING":
+                            _rc = getattr(d, "content", "") or ""
+                            if _rc:
+                                asyncio.ensure_future(
+                                    queue.put({"type": "THINKING_TEXT_MESSAGE_CONTENT",
+                                               "delta": _rc}))
+                        # ── Text streaming ──────────────────────────────
+                        elif et in ("SessionEventType.ASSISTANT_MESSAGE_DELTA",
+                                    "SessionEventType.ASSISTANT_STREAMING_DELTA"):
                             if not _msg_id:
                                 _msg_id = str(uuid.uuid4())
                                 asyncio.ensure_future(
                                     queue.put({"type": "TEXT_MESSAGE_START",
                                                "messageId": _msg_id,
                                                "role": "assistant"}))
-                            _delta = getattr(d, "delta_content", "") or ""
+                            _delta = getattr(d, "delta_content", "") or getattr(d, "content", "") or ""
                             if _delta:
                                 _text_parts.append(_delta)
                                 asyncio.ensure_future(

@@ -175,12 +175,14 @@ export default function AgentChat({
   const currentAgentEntry = agents.find((a) => a.name === currentAgentName);
   const agentRuntime: string = currentAgentEntry?.agent_runtime ?? "maf";
 
-  // GitHub Copilot SDK agents (repo-sourced) ALWAYS route through the SDK executor,
-  // regardless of which model is selected in the picker. The model is forwarded as
-  // a hint but the execution path must be "copilot" to reach /agent/run/stream.
-  // If we allow "litellm" here the message goes direct to LiteLLM — no tools, no
-  // script execution, no SDK.
-  const effectiveRuntime = agentRuntime === "github-copilot" ? "copilot" : currentRuntime;
+  // All named agents route through the Copilot SDK executor (/agent/run/stream)
+  // regardless of the model selected. The model is forwarded as a hint for
+  // BYOK provider injection in the executor. This ensures every agent gets
+  // its tools + instructions even when using a custom model.
+  // The orchestrator (CommandCenter) still uses model-driven routing for
+  // fast stateless chat when LiteLLM models are selected.
+  const isOrchestrator = currentAgentName === "orchestrator" || currentAgentName === "commandcenter";
+  const effectiveRuntime = isOrchestrator ? currentRuntime : "copilot";
 
   // System context = persona + persistent memories (sent as system message).
   const systemContext = useMemo(() => {
@@ -459,13 +461,8 @@ export default function AgentChat({
     if (rt === "github-copilot") {
       return [
         {
-          label: "MAF",
-          title: "Microsoft Agent Framework — unified agent abstraction, streaming, multi-agent workflows",
-          cls: "border-amber-700/50 bg-amber-900/30 text-amber-300",
-        },
-        {
           label: "Copilot SDK",
-          title: "GitHub Copilot SDK — shell, file r/w, MCP servers, native BYOK provider support",
+          title: "GitHub Copilot SDK — native shell, file r/w, MCP servers, BYOK provider support",
           cls: "border-sky-700/50 bg-sky-900/30 text-sky-300",
         },
       ];

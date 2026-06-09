@@ -949,8 +949,242 @@ async def run_agent_stream(
 
             agent = agents[0]
 
-            # Ensure permission handler is set for GitHubCopilotAgent before ANY
-            # execution path — repos often omit it from default_options.
+            # ── Resolve BYOK provider config (shared by both runtimes) ──────
+            _DIRECT_PROVIDERS: dict[str, tuple[str, str]] = {
+                "openrouter/": ("https://openrouter.ai/api/v1",      "OPENROUTER_API_KEY"),
+                "openai/":     ("https://api.openai.com/v1",          "OPENAI_API_KEY"),
+                "deepseek/":   ("https://api.deepseek.com/v1",        "DEEPSEEK_API_KEY"),
+                "gemini/":     ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"),
+                "groq/":       ("https://api.groq.com/openai/v1",    "GROQ_API_KEY"),
+                "anthropic/":  ("https://api.anthropic.com/v1",       "ANTHROPIC_API_KEY"),
+                "together_ai/":("https://api.together.xyz/v1",        "TOGETHER_API_KEY"),
+                "mistral/":    ("https://api.mistral.ai/v1",          "MISTRAL_API_KEY"),
+            }
+            _final_model = (model or "").strip()
+            _is_byok = bool(_final_model and ("/" in _final_model or _final_model.lower().startswith("tier")))
+            _log.info("executor.byok_check", model=_final_model, is_byok=_is_byok, agent=agent_name, runtime=_agent_runtime)
+
+            _byok_provider: dict[str, Any] | None = None
+            _byok_model_id: str = _final_model
+            if _is_byok:
+                _byok_litellm_base = (getattr(settings, "litellm_base_url", "") or "http://127.0.0.1:4000").rstrip("/")
+                _byok_litellm_key = (getattr(settings, "litellm_master_key", "") or "sk-local").strip()
+                _matched_prefix: str | None = None
+                for _pfx in _DIRECT_PROVIDERS:
+                    if _final_model.startswith(_pfx):
+                        _matched_prefix = _pfx
+                        break
+                if _matched_prefix is not None:
+                    _direct_base, _direct_env = _DIRECT_PROVIDERS[_matched_prefix]
+                    _provider_key = (os.environ.get(_direct_env) or "").strip()
+                    if not _provider_key:
+                        try:
+                            _provider_key = (getattr(get_settings(), _direct_env.lower(), "") or "").strip()
+                        except Exception:  # noqa: BLE001
+                            pass
+                    _byok_base_url = _direct_base
+                    _byok_api_key = _provider_key or _byok_litellm_key
+                    _byok_model_id = _final_model[len(_matched_prefix):]
+                else:
+                    _byok_base_url = f"{_byok_litellm_base}/v1"
+                    _byok_api_key = _byok_litellm_key
+                    _byok_model_id = _final_model
+                _byok_provider = {
+                    "type": "openai",
+                    "base_url": _byok_base_url,
+                    "api_key": _byok_api_key,
+                }
+
+            # Shared SSE event queue for both runtimes
+            queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+            _t2_token = _active_run_queue.set(queue)  # expose to call_agent for sub-streaming
+
+            # ── GitHub Copilot SDK direct path ──────────────────────────────
+            if _agent_runtime == "github-copilot":
+                from copilot import CopilotClient as _SDKClient  # noqa: PLC0415
+                from copilot.types import PermissionHandler as _PH  # noqa: PLC0415
+
+                # Extract tools + instructions from the loaded agent
+                from copilot.tools import define_tool as _sdk_define_tool  # noqa: PLC0415
+                _sdk_tools: list[Any] = []
+                _ghcp_tools = getattr(agent, "_tools", []) or []
+                for _t in _ghcp_tools:
+                    _fn = getattr(_t, "func", _t) if hasattr(_t, "func") else _t
+                    _t_name = getattr(_t, "name", None) or getattr(_fn, "__name__", "unknown")
+                    _t_desc = getattr(_t, "description", None) or getattr(_fn, "__doc__", "") or ""
+                    _t_params = getattr(_t, "parameters", None)
+                    # Create a Copilot SDK Tool
+                    _sdk_tool = _sdk_define_tool(
+                        _t_name, description=_t_desc, handler=_fn, params_type=_t_params,
+                    )
+                    _sdk_tools.append(_sdk_tool)
+
+                # Include injected tools (call_agent, web_search, etc.)
+                _extra_tool_names = {"call_agent", "call_agents_parallel",
+                                     "call_agent_background", "web_search",
+                                     "fetch_page", "write_artifact"}
+                for _t_name in _extra_tool_names:
+                    _t_fn = getattr(agent, _t_name, None)
+                    if _t_fn and callable(_t_fn):
+                        _t_desc = getattr(_t_fn, "__doc__", "") or f"Injected tool: {_t_name}"
+                        _sdk_tool = _sdk_define_tool(
+                            _t_name, description=_t_desc, handler=_t_fn,
+                        )
+                        _sdk_tools.append(_sdk_tool)
+
+                _sdk_system_msg: dict[str, Any] | str | None = None
+                _sm = agent._default_options.get("system_message") if hasattr(agent, "_default_options") else None
+                if isinstance(_sm, dict):
+                    _sdk_system_msg = _sm
+                elif isinstance(_sm, str):
+                    _sdk_system_msg = _sm
+
+                _sdk_client = _SDKClient()
+                _owns_sdk_client = True
+                try:
+                    await _sdk_client.start()
+
+                    # Build SessionConfig
+                    _sdk_cfg: dict[str, Any] = {
+                        "on_permission_request": _PH.approve_all,
+                        "streaming": True,
+                    }
+                    if _is_byok and _byok_provider:
+                        _sdk_cfg["model"] = _byok_model_id
+                        _sdk_cfg["provider"] = _byok_provider
+                        _log.info("executor.copilot_sdk_byok",
+                                  agent=agent_name, model=_byok_model_id,
+                                  base_url=_byok_provider["base_url"])
+                    elif _final_model:
+                        _sdk_cfg["model"] = _final_model
+                        _log.info("executor.copilot_sdk_model",
+                                  agent=agent_name, model=_final_model)
+                    else:
+                        _log.info("executor.copilot_sdk_default",
+                                  agent=agent_name)
+
+                    if _sdk_system_msg:
+                        _sdk_cfg["system_message"] = _sdk_system_msg
+                    if _sdk_tools:
+                        _sdk_cfg["tools"] = _sdk_tools
+
+                    _sdk_session = await _sdk_client.create_session(_sdk_cfg)
+
+                    # Stream Copilot SDK events → AG-UI protocol
+                    _msg_id: str | None = None
+                    _text_parts: list[str] = []
+                    _done = asyncio.Event()
+                    _stream_error: str | None = None
+
+                    def _on_sdk_event(event: Any) -> None:  # noqa: C901
+                        nonlocal _msg_id, _stream_error
+                        et = str(event.type)
+                        d = event.data
+                        # Tool call events
+                        if et == "SessionEventType.TOOL_CALL":
+                            _tc_name = getattr(d, "tool_name", "") or getattr(d, "name", "")
+                            _tc_id = getattr(d, "tool_call_id", "") or str(uuid.uuid4())
+                            asyncio.ensure_future(
+                                queue.put({"type": "TOOL_CALL_START",
+                                           "toolCallId": _tc_id,
+                                           "toolCallName": _tc_name}))
+                            _tc_args = getattr(d, "arguments", None)
+                            if _tc_args:
+                                asyncio.ensure_future(
+                                    queue.put({"type": "TOOL_CALL_ARGS",
+                                               "toolCallId": _tc_id,
+                                               "delta": json.dumps(_tc_args) if isinstance(_tc_args, dict) else str(_tc_args)}))
+                        elif et == "SessionEventType.TOOL_CALL_RESULT":
+                            _tc_id = getattr(d, "tool_call_id", "")
+                            _tc_result = getattr(d, "result", "")
+                            asyncio.ensure_future(
+                                queue.put({"type": "TOOL_CALL_RESULT",
+                                           "toolCallId": _tc_id,
+                                           "content": str(_tc_result)[:2000],
+                                           "success": True}))
+                        # Text streaming
+                        elif et == "SessionEventType.ASSISTANT_MESSAGE_DELTA":
+                            if not _msg_id:
+                                _msg_id = str(uuid.uuid4())
+                                asyncio.ensure_future(
+                                    queue.put({"type": "TEXT_MESSAGE_START",
+                                               "messageId": _msg_id,
+                                               "role": "assistant"}))
+                            _delta = getattr(d, "delta_content", "") or ""
+                            if _delta:
+                                _text_parts.append(_delta)
+                                asyncio.ensure_future(
+                                    queue.put({"type": "TEXT_MESSAGE_CONTENT",
+                                               "messageId": _msg_id,
+                                               "delta": _delta}))
+                        elif et == "SessionEventType.ASSISTANT_MESSAGE":
+                            _content = getattr(d, "content", "") or ""
+                            if _content and not _text_parts:
+                                if not _msg_id:
+                                    _msg_id = str(uuid.uuid4())
+                                    asyncio.ensure_future(
+                                        queue.put({"type": "TEXT_MESSAGE_START",
+                                                   "messageId": _msg_id,
+                                                   "role": "assistant"}))
+                                _text_parts.append(_content)
+                                asyncio.ensure_future(
+                                    queue.put({"type": "TEXT_MESSAGE_CONTENT",
+                                               "messageId": _msg_id,
+                                               "delta": _content}))
+                        # Session lifecycle
+                        elif et == "SessionEventType.SESSION_IDLE":
+                            if _msg_id:
+                                asyncio.ensure_future(
+                                    queue.put({"type": "TEXT_MESSAGE_END",
+                                               "messageId": _msg_id}))
+                            _done.set()
+                        elif et == "SessionEventType.SESSION_ERROR":
+                            _stream_error = getattr(d, "message", str(d))
+                            _done.set()
+
+                    _sdk_session.on(_on_sdk_event)
+
+                    # Build the message
+                    _msg_text = event_payload.get("message") or event_payload.get("user_query") or ""
+                    await _sdk_session.send({"prompt": _msg_text})
+
+                    # Drain Copilot SDK events → SSE queue
+                    try:
+                        await asyncio.wait_for(_done.wait(), timeout=300.0)
+                    except asyncio.TimeoutError:
+                        yield _sse({"type": "RUN_ERROR", "runId": run_id,
+                                    "message": "Copilot SDK session timed out"})
+                        return
+
+                    if _stream_error:
+                        yield _sse({"type": "RUN_ERROR", "runId": run_id,
+                                    "message": _stream_error})
+                        return
+
+                    # Drain any final queue items
+                    while not queue.empty():
+                        ev = queue.get_nowait()
+                        if ev:
+                            yield _sse(ev)
+
+                finally:
+                    try:
+                        await _sdk_session.disconnect()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    if _owns_sdk_client:
+                        try:
+                            await _sdk_client.stop()
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                _active_run_queue.reset(_t2_token)
+                yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
+                return
+            # ── End Copilot SDK direct path ──────────────────────────────────
+
+            # ── MAF agent path (non-github-copilot runtimes) ────────────────
+            # Ensure permission handler is set for GitHubCopilotAgent
             try:
                 from copilot import PermissionHandler as _PH  # noqa: PLC0415
                 for _a in agents:
@@ -959,111 +1193,52 @@ async def run_agent_stream(
             except Exception:  # noqa: BLE001
                 pass
 
-            # ── BYOK provider injection ──────────────────────────────────────
-            # When a custom model is selected (contains '/' or starts with
-            # 'tier'), inject the provider config so the agent routes through
-            # the target API instead of the default.
-            #
-            # For GitHubCopilotAgent: inject `provider` + `model` into
-            # _default_options — the Copilot SDK handles BYOK natively in
-            # createSession(), preserving ALL Copilot features (shell, file
-            # r/w, MCP servers, image support, etc.).
-            #
-            # For plain MAF Agents: inject OpenAIChatCompletionClient as
-            # model_client — MAF handles the model routing directly.
-            _final_model = (model or "").strip()
-            _is_byok = bool(_final_model and ("/" in _final_model or _final_model.lower().startswith("tier")))
-
-            if _is_byok:
-                try:
-                    _DIRECT_PROVIDERS: dict[str, tuple[str, str]] = {
-                        "openrouter/": ("https://openrouter.ai/api/v1",      "OPENROUTER_API_KEY"),
-                        "openai/":     ("https://api.openai.com/v1",          "OPENAI_API_KEY"),
-                        "deepseek/":   ("https://api.deepseek.com/v1",        "DEEPSEEK_API_KEY"),
-                        "gemini/":     ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"),
-                        "groq/":       ("https://api.groq.com/openai/v1",    "GROQ_API_KEY"),
-                        "anthropic/":  ("https://api.anthropic.com/v1",       "ANTHROPIC_API_KEY"),
-                        "together_ai/":("https://api.together.xyz/v1",        "TOGETHER_API_KEY"),
-                        "mistral/":    ("https://api.mistral.ai/v1",          "MISTRAL_API_KEY"),
-                    }
-                    _byok_litellm_base = (getattr(settings, "litellm_base_url", "") or "http://127.0.0.1:4000").rstrip("/")
-                    _byok_litellm_key = (getattr(settings, "litellm_master_key", "") or "sk-local").strip()
-
-                    _matched_prefix: str | None = None
-                    for _pfx in _DIRECT_PROVIDERS:
-                        if _final_model.startswith(_pfx):
-                            _matched_prefix = _pfx
-                            break
-
-                    if _matched_prefix is not None:
-                        _direct_base, _direct_env = _DIRECT_PROVIDERS[_matched_prefix]
-                        _provider_key = (os.environ.get(_direct_env) or "").strip()
-                        _byok_base_url = _direct_base
-                        _byok_api_key = _provider_key or _byok_litellm_key
-                        _byok_model_id = _final_model[len(_matched_prefix):]
-                    else:
-                        _byok_base_url = f"{_byok_litellm_base}/v1"
-                        _byok_api_key = _byok_litellm_key
-                        _byok_model_id = _final_model
-
-                    # Detect agent type: GitHubCopilotAgent has _default_options
-                    # (a dict that maps to Copilot SDK SessionConfig).  Plain MAF
-                    # Agents use model_client / _model_client.
-                    _is_copilot_sdk_agent = (
-                        hasattr(agent, "_default_options")
-                        and isinstance(agent._default_options, dict)
+            # BYOK for MAF agents: inject OpenAIChatCompletionClient
+            if _is_byok and _byok_provider:
+                _is_ghcp = hasattr(agent, "_default_options") and isinstance(agent._default_options, dict)
+                if _is_ghcp:
+                    from agent_framework import Agent as _MAFAgent  # noqa: PLC0415
+                    from agent_framework.openai import OpenAIChatCompletionClient as _OpenAI  # noqa: PLC0415
+                    _byok_tools: list[Any] = []
+                    for _t in (getattr(agent, "_tools", []) or []):
+                        _raw_fn = getattr(_t, "func", _t) if hasattr(_t, "func") else _t
+                        _byok_tools.append(_raw_fn)
+                    _byok_instructions: str | None = None
+                    _sm2 = agent._default_options.get("system_message") if hasattr(agent, "_default_options") else None
+                    if isinstance(_sm2, dict):
+                        _byok_instructions = _sm2.get("content") or _sm2.get("text") or ""
+                    elif isinstance(_sm2, str):
+                        _byok_instructions = _sm2
+                    if not _byok_instructions:
+                        _byok_instructions = getattr(agent, "_settings", {}).get("system_message") or ""
+                    _byok_client = _OpenAI(
+                        model=_byok_model_id, base_url=_byok_provider["base_url"],
+                        api_key=_byok_provider["api_key"],
                     )
-
-                    if _is_copilot_sdk_agent:
-                        # ── Copilot SDK native BYOK (preserves all features) ─
-                        # Inject provider + model into _default_options so the
-                        # Copilot SDK's createSession() uses them natively.
-                        # This preserves shell, file r/w, MCP, image support,
-                        # and all other Copilot CLI capabilities.
-                        agent._default_options["model"] = _byok_model_id
-                        agent._default_options["provider"] = {
-                            "type": "openai",
-                            "baseUrl": _byok_base_url,
-                            "apiKey": _byok_api_key,
-                        }
-                        _log.info(
-                            "executor.byok_copilot_provider_injected",
-                            agent=agent_name,
-                            model=_final_model,
-                            resolved_model=_byok_model_id,
-                            base_url=_byok_base_url,
-                        )
-                    else:
-                        # ── MAF Agent BYOK (model_client injection) ──────────
-                        from agent_framework.openai import OpenAIChatCompletionClient as _OpenAI  # noqa: PLC0415
-                        _byok_client = _OpenAI(
-                            model=_byok_model_id,
-                            base_url=_byok_base_url,
-                            api_key=_byok_api_key,
-                        )
-                        if hasattr(agent, "model_client"):
-                            object.__setattr__(agent, "model_client", _byok_client)
-                        elif hasattr(agent, "_model_client"):
-                            object.__setattr__(agent, "_model_client", _byok_client)
-                        _log.info(
-                            "executor.byok_maf_client_injected",
-                            agent=agent_name,
-                            model=_final_model,
-                            resolved_model=_byok_model_id,
-                            base_url=_byok_base_url,
-                        )
-                except Exception as _byok_exc:  # noqa: BLE001
-                    _log.warning("executor.byok_inject_failed", agent=agent_name, error=str(_byok_exc))
-                    yield _sse({"type": "RUN_ERROR", "runId": run_id, "message": f"BYOK setup failed: {_byok_exc}"})
-                    return
+                    agent = _MAFAgent(
+                        client=_byok_client, name=agent_name,
+                        instructions=_byok_instructions or None,
+                        tools=_byok_tools if _byok_tools else None,
+                    )
+                    _log.info("executor.byok_maf_agent_created", agent=agent_name,
+                              model=_byok_model_id, base_url=_byok_provider["base_url"])
+                else:
+                    from agent_framework.openai import OpenAIChatCompletionClient as _OpenAI  # noqa: PLC0415
+                    _byok_client = _OpenAI(
+                        model=_byok_model_id, base_url=_byok_provider["base_url"],
+                        api_key=_byok_provider["api_key"],
+                    )
+                    if hasattr(agent, "model_client"):
+                        object.__setattr__(agent, "model_client", _byok_client)
+                    _log.info("executor.byok_maf_client_injected", agent=agent_name,
+                              model=_byok_model_id, base_url=_byok_provider["base_url"])
 
             # ── MAF-native instrumented streaming ───────────────────────────
             # All agents (MAF Agent, GitHubCopilotAgent) are BaseAgents and
             # support agent.run() / agent.run_stream().  We wrap tools with
             # event shims for live TOOL_CALL_* visibility in the UI, then
             # run the agent in a background task while draining a queue.
-            queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
-            _t2_token = _active_run_queue.set(queue)  # expose to call_agent for sub-streaming
+            # (queue is already defined above, shared with Copilot SDK path)
 
             _tool_counter: list[int] = [0]
 

@@ -32,13 +32,16 @@
 
 This repo runs in **three modes simultaneously** with no conflicts:
 
-| Mode | Entry point | When to use |
-|---|---|---|
-| **VS Code Copilot Chat** | `.github/agents/<name>.agent.md` | Local dev, rapid iteration, manually triggering pipeline steps |
-| **CommandCenter orchestrator** | `agents.py` + `config.json` | Production runs, event-driven triggers, Control Plane chat |
-| **MAF standalone** | `agents.py` only (no CommandCenter) | Run the MAF agent directly via Python without the Control Plane |
+| Mode | Entry point | When to use | Runtime in CommandCenter |
+|---|---|---|---|
+| **VS Code Copilot Chat** | `.github/agents/<name>.agent.md` | Local dev, rapid iteration, manually triggering pipeline steps | N/A (local only) |
+| **CommandCenter — Copilot SDK agent** | `agents.py` + `config.json` | Production runs, event-driven triggers, Control Plane chat | Copilot SDK **directly** (bypasses MAF) — native BYOK via `SessionConfig.provider`. Set `agent_runtime: "github-copilot"` in the agent registry. |
+| **CommandCenter — MAF agent** | `agents.py` + `config.json` | Production runs, event-driven triggers, Control Plane chat | MAF `Agent.run()` — BYOK via `OpenAIChatCompletionClient` injection. Set `agent_runtime: "maf"` in the agent registry. |
+| **MAF standalone** | `agents.py` only (no CommandCenter) | Run the MAF agent directly via Python without the Control Plane | N/A (standalone) |
 
-All three modes use the same `instructions.md` + `skills/*/SKILL.md` source of truth. Adding any mode's entry-point does not break the others.
+All modes use the same `instructions.md` + `skills/*/SKILL.md` source of truth. Adding any mode's entry-point does not break the others.
+
+**Future:** When `agent-framework-github-copilot` supports `github-copilot-sdk >= 1.0.0`, Copilot SDK agents will move back under MAF (`GitHubCopilotAgent`) with BYOK passed via `default_options["provider"]`. The `agents.py` contract (`build_agents() → list[Agent]`) remains the same — no agent repo changes needed. See `project_plan.md` §Open Questions #9.
 
 ---
 

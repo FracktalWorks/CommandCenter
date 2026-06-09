@@ -562,7 +562,7 @@ async def run_agent_stream_endpoint(
     agent = _validate_agent_name(req.agent)
     run_id = req.run_id or str(uuid.uuid4())
 
-    _log.info("agent.stream_run_start", agent=agent, run_id=run_id, actor=user.email)
+    _log.info("agent.stream_run_start", agent=agent, run_id=run_id, model=req.model, actor=user.email)
 
     return StreamingResponse(
         run_agent_stream(

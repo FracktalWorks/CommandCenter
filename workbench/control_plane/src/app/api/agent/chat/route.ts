@@ -58,8 +58,9 @@ interface ChatRequest {
 }
 
 const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
-const LITELLM_BASE_URL =
-  process.env.COPILOT_LLM_BASE_URL ?? process.env.LITELLM_BASE_URL ?? "http://localhost:4000/v1";
+// The gateway serves OpenAI-compatible /v1/chat/completions via v1_compat.py.
+// Use the gateway directly instead of a separate LiteLLM proxy container.
+const LITELLM_BASE_URL = GATEWAY_URL;
 const LITELLM_KEY =
   process.env.LITELLM_MASTER_KEY ?? process.env.GATEWAY_INTERNAL_TOKEN ?? "sk-local-dev-change-me";
 const INTERNAL_TOKEN =

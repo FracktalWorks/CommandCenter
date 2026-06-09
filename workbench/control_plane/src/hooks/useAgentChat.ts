@@ -68,6 +68,17 @@ export function useAgentChat({
   const onArtifactRef = useRef(onArtifact);
   useEffect(() => { onArtifactRef.current = onArtifact; }, [onArtifact]);
 
+  // Keep latest values in refs so sendMessage always uses current values
+  // even if its useCallback closure hasn't been recreated yet.
+  const modelRef = useRef(model);
+  const modeRef = useRef(mode);
+  const agentNameRef = useRef(agentName);
+  const systemContextRef = useRef(systemContext);
+  useEffect(() => { modelRef.current = model; }, [model]);
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+  useEffect(() => { agentNameRef.current = agentName; }, [agentName]);
+  useEffect(() => { systemContextRef.current = systemContext; }, [systemContext]);
+
   // Subscribe to the module-level store (survives navigation/unmount).
   const sessionState = useSyncExternalStore(
     (l) => subscribeSession(threadId, l),
@@ -135,8 +146,13 @@ export function useAgentChat({
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
           body: JSON.stringify({
-            agentName, message: userMsg.content, messages: history,
-            threadId, mode, model: model ?? "auto", context: systemContext ?? undefined,
+            agentName: agentNameRef.current,
+            message: userMsg.content,
+            messages: history,
+            threadId,
+            mode: modeRef.current,
+            model: modelRef.current ?? "auto",
+            context: systemContextRef.current ?? undefined,
           }),
         });
 

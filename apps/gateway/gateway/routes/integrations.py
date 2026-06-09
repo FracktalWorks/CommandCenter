@@ -302,7 +302,6 @@ _ALLOWED_ENV_KEYS: frozenset[str] = frozenset(
     "TOGETHER_API_KEY",
     "VLLM_BASE_URL",
     "LITELLM_MASTER_KEY",
-    "COPILOT_CHAT_MODEL",
 })
 
 

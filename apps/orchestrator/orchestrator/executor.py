@@ -369,15 +369,6 @@ async def _run_sub_agent_streaming(
             text_parts: list[str] = []
 
             if _runtime == "github-copilot" and hasattr(agent, "run"):
-                # Apply model override.
-                _model = (getattr(settings, "copilot_chat_model", "") or "").strip()
-                if _model:
-                    try:
-                        if hasattr(agent, "_default_options") and agent._default_options is not None:
-                            agent._default_options.model = _model
-                    except Exception:  # noqa: BLE001
-                        pass
-
                 async with agent:
                     stream = agent.run(message_str, stream=True)
                     async for update in stream:
@@ -995,9 +986,7 @@ async def run_agent_stream(
             # model is to go through LiteLLM via the MAF OpenAIChatClient path.
             #
             # Compute _is_byok early so _use_copilot_cli can reference it.
-            _requested_model_early = (model or "").strip()
-            _configured_model_early = (getattr(settings, "copilot_chat_model", "") or "").strip()
-            _final_model_early = _requested_model_early or _configured_model_early
+            _final_model_early = (model or "").strip()
             def _is_litellm_model_fn(m: str) -> bool:
                 return "/" in m or m.lower().startswith("tier")
             _is_byok = bool(_final_model_early and _is_litellm_model_fn(_final_model_early))
@@ -1020,27 +1009,9 @@ async def run_agent_stream(
                     await _install_push_guard(str(loaded.agent_dir))
                     _stream_head_before = await _get_current_head(str(loaded.agent_dir))
 
-                    # Model injection via COPILOT_CHAT_MODEL.
-                    #
-                    # Architecture: COPILOT_LLM_BASE_URL is set globally in .env, so
-                    # the Copilot CLI always routes completions through LiteLLM.  The
-                    # per-session SessionConfig `model` and `provider` fields are
-                    # IGNORED by the CLI when COPILOT_LLM_BASE_URL is set — the CLI
-                    # exclusively reads COPILOT_CHAT_MODEL from the process env.
-                    #
-                    # Since each run_agent_stream() call spawns a new CopilotClient
-                    # (and therefore a new CLI process), setting os.environ before
-                    # `async with agent` (which calls start() / spawns CLI) is safe
-                    # for the current run.  Gateway is single-threaded (asyncio), so
-                    # there is no concurrent mutation risk on os.environ here.
-                    #
-                    # Resolution order:
-                    #   1. model arg from the request (per-chat picker selection)
-                    #   2. copilot_chat_model from Settings (global default)
-                    #   3. existing COPILOT_CHAT_MODEL env var (set in .env)
-                    _requested_model = (model or "").strip()
-                    _configured_model = (getattr(settings, "copilot_chat_model", "") or "").strip()
-                    _final_model = _requested_model or _configured_model
+                    # Model injection — the chat picker's `model` arg is authoritative.
+                    # If no model is selected, the Copilot CLI uses its own default.
+                    _final_model = (model or "").strip()
 
                     def _is_litellm_model(m: str) -> bool:
                         """True if the model should be routed through LiteLLM."""
@@ -1050,12 +1021,8 @@ async def run_agent_stream(
                     _litellm_base = (getattr(settings, "litellm_base_url", "") or "http://127.0.0.1:4000").rstrip("/")
                     _litellm_key = (getattr(settings, "litellm_master_key", "") or "sk-local").strip()
 
-                    # Save old value so we can restore it after the run.
-                    _prev_chat_model = os.environ.get("COPILOT_CHAT_MODEL", "")
+                    # Inject the requested model into agent settings so the CLI picks it up.
                     if _final_model:
-                        os.environ["COPILOT_CHAT_MODEL"] = _final_model
-                        # Also update _settings so MAF's _create_session sends the
-                        # right model to the CLI (belt-and-suspenders).
                         for _a in agents:
                             try:
                                 if hasattr(_a, "_settings") and isinstance(_a._settings, dict):
@@ -1136,12 +1103,6 @@ async def run_agent_stream(
                                     break
                     finally:
                         _active_run_queue.reset(_sdk_token)
-                        # Restore the previous COPILOT_CHAT_MODEL so subsequent runs
-                        # (other agents with their own model preference) are not affected.
-                        if _prev_chat_model:
-                            os.environ["COPILOT_CHAT_MODEL"] = _prev_chat_model
-                        elif "COPILOT_CHAT_MODEL" in os.environ and _final_model:
-                            del os.environ["COPILOT_CHAT_MODEL"]
                     yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
                     # Post-run: detect any commits the Copilot agent made locally
                     # and register them as pending_commit rows for inbox approval.

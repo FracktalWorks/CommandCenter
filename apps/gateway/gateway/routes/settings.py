@@ -827,26 +827,6 @@ async def discover_provider_models(
         for mid in static_models
     ]
 
-class CopilotModelRequest(BaseModel):
-    model: str   # e.g. "claude-sonnet-4-5", "gpt-4o", "o3-mini"
-
-
-@router.post("/llm/copilot-model")
-async def set_copilot_model(
-    req: CopilotModelRequest,
-    _user: UserContext = Depends(get_current_user),
-) -> dict[str, str]:
-    """Update the model used by GitHub Copilot SDK agents (Tier 1.5 path)."""
-    if not req.model.strip():
-        raise HTTPException(status_code=400, detail="model cannot be empty")
-    try:
-        _write_env_key("COPILOT_CHAT_MODEL", req.model.strip())
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to write env: {exc}") from exc
-    _log.info("settings.llm.copilot_model_updated", model=req.model, actor=_user.email)
-    return {"ok": "true", "model": req.model.strip()}
-
-
 # ---------------------------------------------------------------------------
 # Custom model catalogue  — user-managed entries stored in infra/custom_models.json
 # ---------------------------------------------------------------------------

@@ -1141,83 +1141,6 @@ function ModelCatalogue() {
 }
 
 // ---------------------------------------------------------------------------
-// GitHub Copilot model picker (for GitHubCopilotAgent Tier-1.5 path)
-// ---------------------------------------------------------------------------
-
-const COPILOT_MODELS = [
-  { value: "claude-sonnet-4-5",       label: "Claude Sonnet 4.5" },
-  { value: "gpt-4o",                  label: "GPT-4o" },
-  { value: "gpt-4o-mini",             label: "GPT-4o mini" },
-  { value: "o3-mini",                 label: "o3-mini (reasoning)" },
-  { value: "o1",                      label: "o1 (reasoning)" },
-  { value: "claude-3.7-sonnet",       label: "Claude 3.7 Sonnet" },
-];
-
-function CopilotModelPicker() {
-  const [current, setCurrent] = useState("claude-sonnet-4-5");
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const handleSave = async () => {
-    setSaving(true); setErr(null); setSaved(false);
-    try {
-      const res = await fetch("/api/settings/llm/copilot-model", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: current }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(String(data?.detail ?? "Save failed"));
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="rounded-xl border border-sky-900/40 bg-sky-950/20 px-5 py-4">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="text-sm font-medium text-sky-200">Copilot SDK Agent Model</div>
-          <p className="mt-0.5 text-xs text-zinc-500">
-            Controls which model GitHub Copilot agents use when running via the Tier-1.5 path
-            (Copilot SDK <code className="font-mono text-zinc-400">agent.run(stream=True)</code>).
-            Overrides the model baked into each external agent repo.
-          </p>
-        </div>
-        <span className="shrink-0 rounded-full border border-sky-800/50 bg-sky-900/30 px-2 py-0.5 text-[10px] font-medium text-sky-300">
-          GitHub Copilot
-        </span>
-      </div>
-      <div className="mt-3 flex items-center gap-2">
-        <select
-          value={current}
-          onChange={(e) => setCurrent(e.target.value)}
-          className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 focus:border-sky-500 focus:outline-none"
-        >
-          {COPILOT_MODELS.map((m) => (
-            <option key={m.value} value={m.value}>{m.label} ({m.value})</option>
-          ))}
-        </select>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="rounded-lg bg-sky-700 px-4 py-2 text-xs font-medium text-white hover:bg-sky-600 disabled:opacity-40 transition-colors"
-        >
-          {saving ? "Saving…" : "Save"}
-        </button>
-      </div>
-      {saved && <p className="mt-2 text-xs text-green-400">✓ Saved — takes effect on next agent run.</p>}
-      {err && <p className="mt-2 text-xs text-red-400">{err}</p>}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -1409,14 +1332,6 @@ export default function ModelsPage() {
               automatically. For Ollama, start it locally and pull models via{" "}
               <code className="font-mono">ollama pull &lt;model&gt;</code>.
             </p>
-          </section>
-
-          {/* GitHub Copilot model override */}
-          <section className="mb-8">
-            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-600">
-              GitHub Copilot Agent Model
-            </h2>
-            <CopilotModelPicker />
           </section>
 
           {/* Model catalogue — combined Custom Models + Visibility */}

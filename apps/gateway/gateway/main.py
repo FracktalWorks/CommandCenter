@@ -52,6 +52,34 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:  # pragma: no cover
         _log.warning("gateway.runtime_check_failed", error=str(exc))
 
+    # Pre-warm the Copilot model list cache so /api/models/all returns instantly.
+    async def _warmup_copilot_models() -> None:
+        try:
+            _gh = getattr(settings, "github_token", "") or os.environ.get("GITHUB_TOKEN", "")
+            if not _gh:
+                return
+            os.environ.setdefault("GITHUB_TOKEN", _gh)
+            from copilot import CopilotClient as _CC  # noqa: PLC0415
+            import time as _t  # noqa: PLC0415
+            _c = _CC(); await _c.start()
+            try:
+                _m = await _c.list_models()
+            finally:
+                await _c.stop()
+            if _m:
+                _copilot_models_cache["data"] = {
+                    "models": [{"id": x.id, "label": x.name, "model_picker_enabled": True}
+                               for x in _m if not x.policy or x.policy.state == "enabled"],
+                    "source": "live",
+                }
+                _copilot_models_cache["ts"] = _t.monotonic()
+                _log.info("gateway.copilot_models_cache_warmed", count=len(_m))
+        except Exception as _e:  # noqa: BLE001
+            _log.debug("gateway.copilot_models_warmup_skipped", error=str(_e))
+
+    import asyncio as _asyncio
+    _asyncio.ensure_future(_warmup_copilot_models())
+
     yield
     _log.info("gateway.shutdown")
 
@@ -291,65 +319,54 @@ async def health_runtime() -> dict:
 # works without blocking.
 
 _COPILOT_MODELS_STATIC = [
-    {"id": "claude-sonnet-4.5",           "label": "Claude Sonnet 4.5"},
-    {"id": "claude-haiku-4.5",            "label": "Claude Haiku 4.5"},
-    {"id": "claude-opus-4-5",             "label": "Claude Opus 4.5"},
-    {"id": "gpt-4o",                      "label": "GPT-4o"},
-    {"id": "gpt-4.1",                     "label": "GPT-4.1"},
-    {"id": "o3-mini",                     "label": "o3-mini (reasoning)"},
-    {"id": "gemini-2.5-pro",              "label": "Gemini 2.5 Pro"},
-    {"id": "gemini-2.5-flash",            "label": "Gemini 2.5 Flash"},
+    {"id": "claude-sonnet-4.6",    "label": "Claude Sonnet 4.6"},
+    {"id": "claude-sonnet-4.5",    "label": "Claude Sonnet 4.5"},
+    {"id": "claude-haiku-4.5",     "label": "Claude Haiku 4.5"},
+    {"id": "claude-opus-4.6",      "label": "Claude Opus 4.6"},
+    {"id": "claude-opus-4.6-fast", "label": "Claude Opus 4.6 (fast mode)"},
+    {"id": "claude-opus-4.5",      "label": "Claude Opus 4.5"},
+    {"id": "gpt-5.4",              "label": "GPT-5.4"},
+    {"id": "gpt-5-mini",           "label": "GPT-5 mini"},
 ]
+
+import time as _time
+_copilot_models_cache: dict = {"data": None, "ts": 0.0}
+_COPILOT_MODELS_CACHE_TTL = 300
 
 
 @app.get("/copilot/models", tags=["copilot"])
 async def copilot_models() -> dict:
-    """Return the list of models available through the GitHub Copilot SDK.
-
-    Attempts to query the Copilot SDK for the live model list (requires
-    GITHUB_TOKEN to be set and the ``gh`` CLI to be authenticated).  Falls back
-    to a curated static list so the UI never fails.
-    """
+    """Return Copilot SDK models with 5-min TTL cache."""
+    _now = _time.monotonic()
+    if _copilot_models_cache["data"] is not None and (_now - _copilot_models_cache["ts"]) < _COPILOT_MODELS_CACHE_TTL:
+        return _copilot_models_cache["data"]
     settings = get_settings()
     github_token: str = getattr(settings, "github_token", "") or os.environ.get("GITHUB_TOKEN", "")
-
     if github_token:
         try:
-            import httpx
-            async with httpx.AsyncClient(timeout=5) as client:
-                resp = await client.get(
-                    "https://api.githubcopilot.com/models",
-                    headers={
-                        "Authorization": f"Bearer {github_token}",
-                        "Copilot-Integration-Id": "vscode-chat",
-                    },
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    # Copilot API returns {"data": [{"id": "...", "name": "...", ...}]}
-                    raw = data.get("data", [])
-                    # Filter to chat-capable models only
-                    chat_models = [
-                        m for m in raw
-                        if m.get("capabilities", {}).get("type") in ("chat", None)
-                        and not m.get("id", "").startswith("text-embedding")
-                    ]
-                    if chat_models:
-                        return {
-                            "models": [
-                                {
-                                    "id": m["id"],
-                                    "label": m.get("name", m["id"]),
-                                    "model_picker_enabled": m.get("model_picker_enabled", False),
-                                }
-                                for m in chat_models
-                            ],
-                            "source": "live",
-                        }
+            os.environ.setdefault("GITHUB_TOKEN", github_token)
+            from copilot import CopilotClient  # noqa: PLC0415
+            _sdk = CopilotClient()
+            await _sdk.start()
+            try:
+                _models = await _sdk.list_models()
+            finally:
+                await _sdk.stop()
+            if _models:
+                result = {
+                    "models": [{"id": m.id, "label": m.name, "model_picker_enabled": True}
+                               for m in _models if not m.policy or m.policy.state == "enabled"],
+                    "source": "live",
+                }
+                _copilot_models_cache["data"] = result
+                _copilot_models_cache["ts"] = _now
+                return result
         except Exception:
-            pass  # Fall through to static list
-
-    return {"models": _COPILOT_MODELS_STATIC, "source": "static"}
+            pass
+    static = {"models": [dict(m, model_picker_enabled=True) for m in _COPILOT_MODELS_STATIC], "source": "static"}
+    _copilot_models_cache["data"] = static
+    _copilot_models_cache["ts"] = _now - (_COPILOT_MODELS_CACHE_TTL - 30)
+    return static
 
 
 # ---------- Pull mode (Phase 0 stub) ----------

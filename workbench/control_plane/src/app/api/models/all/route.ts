@@ -1,4 +1,4 @@
-﻿/**
+/**
  * GET /api/models/all
  *
  * Unified model catalogue for the AgentChat model picker.
@@ -140,7 +140,7 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
         gatewayReachable = true;
       }
     }
-  } catch {
+  } catch (_e) {
     // Gateway unreachable — fall back to process.env so the picker still works
   }
 
@@ -180,7 +180,7 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
         for (const id of data.hidden ?? []) hiddenSet.add(id);
       }
     }
-  } catch {
+  } catch (_e) {
     // safe to ignore — custom_models.json may not exist yet
   }
   // Fetched live from the gateway when GITHUB_TOKEN is set; fallback otherwise.
@@ -207,7 +207,7 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
           source = data.source ?? "live";
         }
       }
-    } catch {
+    } catch (_e) {
       // keep fallback list
     }
   }
@@ -239,8 +239,9 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
     })),
     // User-defined custom models — always shown (user added them intentionally),
     // hidden filter still applies so explicitly hidden ones stay hidden.
+    // Deduplicate: skip custom models whose id already appears in the built-in list.
     ...customModels
-      .filter((m) => !hiddenSet.has(m.id))
+      .filter((m) => !hiddenSet.has(m.id) && !litellmModels.some((b) => b.id === m.id))
       .map((m) => ({
         id: m.id,
         label: m.label,

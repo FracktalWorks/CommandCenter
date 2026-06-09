@@ -79,6 +79,7 @@ _KNOWN_AGENTS: frozenset[str] = frozenset(
         "triage",
         "reconciler",
         "strategy",
+        "agent-project-manager",
     ]
 )
 
@@ -101,6 +102,26 @@ _AGENT_REGISTRY: list[dict] = [
             {"source": "clickup", "event_type": "taskUpdated"},
             {"source": "clickup", "event_type": "taskDeleted"},
         ],
+    },
+    {
+        "name": "agent-project-manager",
+        "description": (
+            "Project management and HR delegation agent for Fracktal Works. "
+            "Plans projects, breaks down technical work, delegates to the right people "
+            "based on resume-inferred skills and live ClickUp workload, tracks risks and "
+            "follow-ups, syncs to ClickUp, and creates technical project plans "
+            "(WBS, Gantt, risk register). "
+            "Trigger keywords: project plan, delegate, assign, WBS, Gantt, workload, "
+            "who is free, ClickUp, risk, status report, technical planning."
+        ),
+        "tags": ["hr", "project-management", "clickup", "delegation", "technical-planning"],
+        "status": "live",
+        "agent_runtime": "github-copilot",
+        "repo_url": "https://github.com/FracktalWorks/agent-project-manager",
+        "repo_name": "FracktalWorks/agent-project-manager",
+        "local_path": "C:/Users/VijayRaghavVarada/Documents/Github/agent-project-manager",
+        "integrations": ["anthropic", "clickup", "serpapi", "openai"],
+        "optional_integrations": [],
     },
     {
         "name": "sales",
@@ -194,9 +215,10 @@ def _validate_agent_name(name: str) -> str:
     """Reject agent names not in the static or dynamic allowlist."""
     safe = name.lower().strip()
     if safe not in _KNOWN_AGENTS:
-        # Also accept dynamically registered agents
+        # Also accept dynamically registered agents and static registry entries
+        registry_names = {a["name"] for a in _AGENT_REGISTRY}
         dynamic_names = {a["name"] for a in _load_dynamic_agents()}
-        if safe not in dynamic_names:
+        if safe not in registry_names and safe not in dynamic_names:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=(

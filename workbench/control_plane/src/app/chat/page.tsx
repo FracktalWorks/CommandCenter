@@ -483,7 +483,7 @@ function ChatPageInner() {
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
   return (
-    <div className="flex h-full min-h-screen">
+    <div className="flex h-screen overflow-hidden">
       {/* Agent picker modal */}
       {showPicker && (
         <AgentPickerModal

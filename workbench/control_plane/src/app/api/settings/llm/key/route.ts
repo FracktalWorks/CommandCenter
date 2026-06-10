@@ -13,6 +13,7 @@ const PROVIDER_ENV_MAP: Record<string, string> = {
   gemini:     "GEMINI_API_KEY",
   openai:     "OPENAI_API_KEY",
   anthropic:  "ANTHROPIC_API_KEY",
+  deepseek:   "DEEPSEEK_API_KEY",
   openrouter: "OPENROUTER_API_KEY",
   github:     "GITHUB_TOKEN",
   groq:       "GROQ_API_KEY",
@@ -79,6 +80,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(data2, { status: r2.status });
     }
     return NextResponse.json({ ok: "true", env_var: envVar, provider });
+  } catch (err) {
+    return NextResponse.json({ detail: String(err) }, { status: 502 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const provider = searchParams.get("provider") ?? "";
+
+  if (!provider) {
+    return NextResponse.json({ detail: "provider param required" }, { status: 400 });
+  }
+
+  try {
+    const r = await fetch(`${GATEWAY}/settings/llm/key`, {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${INTERNAL_TOKEN}`,
+      },
+      body: JSON.stringify({ provider }),
+      signal: AbortSignal.timeout(8_000),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.ok) return NextResponse.json(data);
+    return NextResponse.json(data, { status: r.status });
   } catch (err) {
     return NextResponse.json({ detail: String(err) }, { status: 502 });
   }

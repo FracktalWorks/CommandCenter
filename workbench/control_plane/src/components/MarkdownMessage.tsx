@@ -48,8 +48,8 @@ interface MarkdownMessageProps {
   progressLines?: string[];
   /** True while the agent run is in progress (drives shimmer/working state). */
   isThinkingActive?: boolean;
-  /** Streamed model reasoning / chain-of-thought (reasoning models only). */
-  reasoning?: string;
+  /** Sequential reasoning blocks — each its own timeline entry. */
+  reasoningBlocks?: string[];
   /** Invoked when the user clicks an MCQ choice button (```choices block). */
   onChoice?: (choice: string) => void;
 }
@@ -202,13 +202,13 @@ export default function MarkdownMessage({
   toolEvents,
   progressLines,
   isThinkingActive,
-  reasoning,
+  reasoningBlocks,
   onChoice,
 }: MarkdownMessageProps) {
   const hasTools =
     (toolEvents && toolEvents.length > 0) ||
     (progressLines && progressLines.length > 0);
-  const hasReasoning = !!reasoning && reasoning.trim().length > 0;
+  const hasReasoning = !!(reasoningBlocks && reasoningBlocks.length > 0);
   // Show the ThinkingContainer for the ENTIRE active phase (not just until the
   // first token). The container disappears mid-stream if we gate on content===""
   // — the user sees "Thinking…" flash then nothing while text is still arriving.
@@ -223,7 +223,7 @@ export default function MarkdownMessage({
           <ThinkingContainer
             toolEvents={toolEvents ?? []}
             progressLines={progressLines ?? []}
-            reasoning={reasoning}
+            reasoningBlocks={reasoningBlocks}
             isActive={!!isThinkingActive}
           />
         </div>

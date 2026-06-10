@@ -53,6 +53,9 @@ _SETUP_GUIDES: dict[str, dict[str, Any]] = {
             {"key": "ZOHO_CLIENT_ID", "label": "Client ID", "sensitive": False},
             {"key": "ZOHO_CLIENT_SECRET", "label": "Client Secret", "sensitive": True},
             {"key": "ZOHO_REFRESH_TOKEN", "label": "Refresh Token", "sensitive": True},
+            {"key": "ZOHO_API_DOMAIN", "label": "API Domain (default: zohoapis.com)", "sensitive": False},
+            {"key": "ZOHO_ACCOUNTS_URL", "label": "Accounts URL (default: accounts.zoho.com)", "sensitive": False},
+            {"key": "ZOHO_REGION", "label": "Region (in/eu/us, default: in)", "sensitive": False},
         ],
     },
     "apollo": {

@@ -366,12 +366,53 @@ async def _run_sub_agent_streaming(
             text_parts: list[str] = []
 
             if _runtime == "github-copilot" and hasattr(agent, "run"):
-                # Apply model override.
-                _model = (getattr(settings, "copilot_chat_model", "") or "").strip()
+                # Resolve model from configured default (copilot_chat_model).
+                _model = (
+                    getattr(settings, "copilot_chat_model", "") or ""
+                ).strip()
+
                 if _model:
                     try:
-                        if hasattr(agent, "_default_options") and agent._default_options is not None:
-                            agent._default_options.model = _model
+                        if (
+                            hasattr(agent, "_default_options")
+                            and agent._default_options is not None
+                        ):
+                            # BYOK: if the model is a LiteLLM model (contains
+                            # '/' or starts with 'tier'), route through the
+                            # gateway's /v1 endpoint so the Copilot SDK session
+                            # uses the BYOK provider instead of the default
+                            # api.githubcopilot.com endpoint.
+                            _is_sub_byok = (
+                                "/" in _model
+                                or _model.lower().startswith("tier")
+                            )
+                            if _is_sub_byok:
+                                _gw_base = (
+                                    getattr(
+                                        settings, "litellm_base_url", ""
+                                    )
+                                    or "http://127.0.0.1:8080"
+                                ).rstrip("/")
+                                _gw_key = (
+                                    getattr(
+                                        settings, "litellm_master_key", ""
+                                    )
+                                    or "sk-local"
+                                ).strip()
+                                agent._default_options["provider"] = {
+                                    "type": "openai",
+                                    "base_url": f"{_gw_base}/v1",
+                                    "api_key": _gw_key,
+                                }
+                                agent._default_options["model"] = _model
+                                _log.info(
+                                    "executor.sub_agent_byok",
+                                    agent=agent_name,
+                                    model=_model,
+                                    base_url=_gw_base,
+                                )
+                            else:
+                                agent._default_options["model"] = _model
                     except Exception:  # noqa: BLE001
                         pass
 
@@ -967,16 +1008,70 @@ async def run_agent_stream(
             except Exception:  # noqa: BLE001
                 pass
 
+            # ── BYOK early detection (must happen BEFORE tier selection) ────
+            # When a LiteLLM model is requested (contains '/' or starts with
+            # 'tier') AND the agent uses the GitHub Copilot SDK runtime, the
+            # BYOK provider must be configured on the agent before any MAF
+            # streaming path runs — otherwise the Copilot SDK session will
+            # reject the unknown model name.
+            _requested_model_early = (model or "").strip()
+            _configured_model_early = (
+                getattr(settings, "copilot_chat_model", "") or ""
+            ).strip()
+            _final_model_early = _requested_model_early or _configured_model_early
+            _is_byok_early = bool(
+                _final_model_early
+                and (
+                    "/" in _final_model_early
+                    or _final_model_early.lower().startswith("tier")
+                )
+            )
+            _byok_provider_early: dict[str, Any] | None = None
+            _byok_model_id_early = _final_model_early
+            if _is_byok_early and _agent_runtime == "github-copilot":
+                _gw_base = (
+                    getattr(settings, "litellm_base_url", "")
+                    or "http://127.0.0.1:8080"
+                ).rstrip("/")
+                _gw_key = (
+                    getattr(settings, "litellm_master_key", "") or "sk-local"
+                ).strip()
+                _byok_provider_early = {
+                    "type": "openai",
+                    "base_url": f"{_gw_base}/v1",
+                    "api_key": _gw_key,
+                }
+                agent._default_options["provider"] = _byok_provider_early
+                agent._default_options["model"] = _byok_model_id_early
+                _log.info(
+                    "executor.copilot_maf_byok_early",
+                    agent=agent_name,
+                    model=_byok_model_id_early,
+                    base_url=_gw_base,
+                )
+            elif _final_model_early and _agent_runtime == "github-copilot":
+                agent._default_options["model"] = _final_model_early
+
             # ── Tier 1: try native MAF AG-UI streaming ──────────────────────
-            try:
-                from agent_framework.ag_ui import \
-                    stream_agent_response  # noqa: PLC0415
-                message = _build_event_message(agent_name, run_id, event_payload, integrations)
-                async for line in stream_agent_response(agent, message, run_id=run_id):
-                    yield line
-                return
-            except (ImportError, AttributeError):
-                pass  # MAF AG-UI streaming not available → fall through
+            # Skip Tier 1 for BYOK GitHub Copilot agents — the MAF AG-UI path
+            # calls agent.run() which creates a Copilot SDK session without the
+            # BYOK provider routing, causing the SDK to reject unknown models.
+            # Instead, fall through to Tier 1.5 where CommandCenterCopilotAgent
+            # properly forwards the provider config to the Copilot SDK.
+            if not (_is_byok_early and _agent_runtime == "github-copilot"):
+                try:
+                    from agent_framework.ag_ui import \
+                        stream_agent_response  # noqa: PLC0415
+                    message = _build_event_message(
+                        agent_name, run_id, event_payload, integrations
+                    )
+                    async for line in stream_agent_response(
+                        agent, message, run_id=run_id
+                    ):
+                        yield line
+                    return
+                except (ImportError, AttributeError):
+                    pass  # MAF AG-UI streaming not available → fall through
 
             # ── Tier 1.5: GitHubCopilotAgent native streaming ───────────────
             # agent.run(stream=True) uses _stream_updates() which subscribes to
@@ -984,22 +1079,10 @@ async def run_agent_stream(
             # token streaming, live tool events.  This is the correct path for
             # any GitHub-sourced agent.
             #
-            # When a LiteLLM model is explicitly requested (model contains '/'
-            # or starts with 'tier'), skip the Copilot CLI path entirely and
-            # fall through to Tier 2 (MAF AG-UI / batch) below.  The Copilot
-            # CLI v1.0.2 does not honour SessionConfig.model for subscriptions
-            # with model_picker_enabled=false — it always defaults to its own
-            # claude-sonnet-4.6.  The only reliable way to use a different
-            # model is to go through LiteLLM via the MAF OpenAIChatClient path.
+            # BYOK provider + model already resolved in the early-detection
+            # block above (before Tier 1).  Reuse those values here so the
+            # GitHub Copilot SDK path doesn't duplicate the lookup.
             #
-            # Compute _is_byok early so _use_copilot_cli can reference it.
-            _requested_model_early = (model or "").strip()
-            _configured_model_early = (getattr(settings, "copilot_chat_model", "") or "").strip()
-            _final_model_early = _requested_model_early or _configured_model_early
-            def _is_litellm_model_fn(m: str) -> bool:
-                return "/" in m or m.lower().startswith("tier")
-            _is_byok = bool(_final_model_early and _is_litellm_model_fn(_final_model_early))
-
             # Queue-based approach (not direct yield): the agent runs in a
             # background task that pushes events to a queue.  The main loop
             # drains the queue and yields SSE.  This allows tool calls
@@ -1023,33 +1106,11 @@ async def run_agent_stream(
                 await _install_push_guard(str(loaded.agent_dir))
                 _stream_head_before = await _get_current_head(str(loaded.agent_dir))
 
-                # Resolve model and BYOK.
-                _requested_model = (model or "").strip()
-                _configured_model = (getattr(settings, "copilot_chat_model", "") or "").strip()
-                _final_model = _requested_model or _configured_model
-
-                # BYOK: route ALL model calls through the gateway's /v1 endpoint.
-                # The gateway reads provider keys from the encrypted Postgres store
-                # and handles tier mapping — no separate proxy, no env var key leakage.
-                _is_byok = bool(_final_model and ("/" in _final_model or _final_model.lower().startswith("tier")))
-                _byok_provider: dict[str, Any] | None = None
-                _byok_model_id = _final_model
-
-                if _is_byok:
-                    _gw_base = (getattr(settings, "litellm_base_url", "") or "http://127.0.0.1:8080").rstrip("/")
-                    _gw_key = (getattr(settings, "litellm_master_key", "") or "sk-local").strip()
-                    _byok_provider = {
-                        "type": "openai",
-                        "base_url": f"{_gw_base}/v1",
-                        "api_key": _gw_key,
-                    }
-                    agent._default_options["provider"] = _byok_provider
-                    agent._default_options["model"] = _byok_model_id
-                    _log.info("executor.copilot_maf_byok", agent=agent_name,
-                              model=_byok_model_id, base_url=_gw_base)
-                elif _final_model:
-                    agent._default_options["model"] = _final_model
-                    _log.info("executor.copilot_maf_model", agent=agent_name, model=_final_model)
+                # BYOK provider + model already resolved in the early-
+                # detection block.  Reuse pre-computed values.
+                _is_byok = _is_byok_early
+                _byok_provider = _byok_provider_early
+                _byok_model_id = _byok_model_id_early
 
                 # Ensure permission handler.
                 try:
@@ -1068,8 +1129,8 @@ async def run_agent_stream(
                         _run_opts: dict[str, Any] = {}
                         if _is_byok and _byok_provider:
                             _run_opts["model"] = _byok_model_id
-                        elif _final_model:
-                            _run_opts["model"] = _final_model
+                        elif _final_model_early:
+                            _run_opts["model"] = _final_model_early
                         _stream = agent.run(_msg_text, stream=True,
                                            options=_run_opts if _run_opts else None)
                         async for _update in _stream:

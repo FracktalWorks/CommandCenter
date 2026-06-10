@@ -3,12 +3,18 @@ import type { NextRequest } from "next/server";
 import { auth, isAuthEnabled } from "@/auth";
 
 export async function proxy(req: NextRequest) {
-  // If Google credentials are not configured, run wide open (dev mode).
+  // If Microsoft credentials are not configured, run wide open (dev mode).
   if (!isAuthEnabled) return NextResponse.next();
 
   const { pathname } = req.nextUrl;
   const isPublic =
     pathname.startsWith("/api/auth") ||
+    pathname.startsWith("/api/models") ||
+    pathname.startsWith("/api/agent") ||
+    pathname.startsWith("/api/chat/") ||
+    pathname.startsWith("/api/integrations/") ||
+    pathname.startsWith("/api/memory/") ||
+    pathname.startsWith("/api/settings/") ||
     pathname === "/signin" ||
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico";

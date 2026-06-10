@@ -821,13 +821,22 @@ def load_agent(
 
         injected_paths: list[str] = []
         for skill_repo_name in skill_repos:
-            skill_dir = _ensure_repo(
-                skill_repo_name,
-                org=org,
-                token=token,
-                cache_root=cache_root,
-                settings=settings,
-            )
+            try:
+                skill_dir = _ensure_repo(
+                    skill_repo_name,
+                    org=org,
+                    token=token,
+                    cache_root=cache_root,
+                    settings=settings,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _log.warning(
+                    "loader.skill_clone_failed",
+                    skill=skill_repo_name,
+                    agent=agent_name,
+                    error=str(exc),
+                )
+                continue
             skill_src = skill_dir / "src"
             skill_path = str(skill_src if skill_src.exists() else skill_dir)
             sys.path.insert(0, skill_path)
@@ -883,13 +892,22 @@ def load_agent(
 
     # Ensure each skill repo is present and up-to-date
     for skill_repo_name in skill_repos:
-        skill_dir = _ensure_repo(
-            skill_repo_name,
-            org=org,
-            token=token,
-            cache_root=cache_root,
-            settings=settings,
-        )
+        try:
+            skill_dir = _ensure_repo(
+                skill_repo_name,
+                org=org,
+                token=token,
+                cache_root=cache_root,
+                settings=settings,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log.warning(
+                "loader.skill_clone_failed",
+                skill=skill_repo_name,
+                agent=agent_name,
+                error=str(exc),
+            )
+            continue
         skill_src = skill_dir / "src"
         skill_path = str(skill_src if skill_src.exists() else skill_dir)
         sys.path.insert(0, skill_path)

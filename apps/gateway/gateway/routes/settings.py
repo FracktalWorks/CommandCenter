@@ -378,7 +378,7 @@ class ProviderInfo(BaseModel):
 class LLMConfig(BaseModel):
     tiers: list[TierInfo]
     providers: list[ProviderInfo]
-    litellm_ui_url: str
+    litellm_ui_url: str = ""  # no separate proxy — empty string
 
 
 class TierUpdateRequest(BaseModel):
@@ -439,7 +439,7 @@ async def get_llm_config(_user: UserContext = Depends(get_current_user)) -> LLMC
     return LLMConfig(
         tiers=tiers,
         providers=providers,
-        litellm_ui_url=None,  # no separate proxy — gateway serves /v1 directly
+        litellm_ui_url="",  # no separate proxy
     )
 
 
@@ -523,7 +523,7 @@ async def update_tier(
 class LiteLLMHealth(BaseModel):
     healthy: bool
     detail: str
-    ui_url: str | None = None
+    ui_url: str = ""
 
 
 @router.get("/llm/health", response_model=LiteLLMHealth)
@@ -548,7 +548,7 @@ async def llm_health(_user: UserContext = Depends(get_current_user)) -> LiteLLMH
     except Exception as exc:
         healthy = False
         detail = f"Unreachable: {exc}"
-    return LiteLLMHealth(healthy=healthy, detail=detail, ui_url=None)
+    return LiteLLMHealth(healthy=healthy, detail=detail, ui_url="")
 
 
 # ---------------------------------------------------------------------------

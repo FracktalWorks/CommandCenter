@@ -80,7 +80,6 @@ _KNOWN_AGENTS: frozenset[str] = frozenset(
         "triage",
         "reconciler",
         "strategy",
-        "agent-project-manager",
     ]
 )
 
@@ -103,26 +102,6 @@ _AGENT_REGISTRY: list[dict] = [
             {"source": "clickup", "event_type": "taskUpdated"},
             {"source": "clickup", "event_type": "taskDeleted"},
         ],
-    },
-    {
-        "name": "agent-project-manager",
-        "description": (
-            "Project management and HR delegation agent for Fracktal Works. "
-            "Plans projects, breaks down technical work, delegates to the right people "
-            "based on resume-inferred skills and live ClickUp workload, tracks risks and "
-            "follow-ups, syncs to ClickUp, and creates technical project plans "
-            "(WBS, Gantt, risk register). "
-            "Trigger keywords: project plan, delegate, assign, WBS, Gantt, workload, "
-            "who is free, ClickUp, risk, status report, technical planning."
-        ),
-        "tags": ["hr", "project-management", "clickup", "delegation", "technical-planning"],
-        "status": "live",
-        "agent_runtime": "github-copilot",
-        "repo_url": "https://github.com/FracktalWorks/agent-project-manager",
-        "repo_name": "FracktalWorks/agent-project-manager",
-        "local_path": "C:/Users/VijayRaghavVarada/Documents/Github/agent-project-manager",
-        "integrations": ["anthropic", "clickup", "serpapi", "openai"],
-        "optional_integrations": [],
     },
     {
         "name": "sales",

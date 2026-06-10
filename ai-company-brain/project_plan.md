@@ -1,6 +1,6 @@
 ﻿# Project Plan — CommandCenter v2
 
-> **Organisation:** Fracktal Works · **Date:** 2026-06-06 · **Version:** 2.5 — web tools + full inter-agent wiring verified
+> **Organisation:** Fracktal Works · **Date:** 2026-06-10 · **Version:** 2.6 — unified MAF runtime + local git tracking + smart mutation
 > **For AI agents:** Read [`AGENTS.md`](AGENTS.md) first — it has current build status, file index, and glossary.
 > This file covers: scope boundaries, milestones, resource allocation, constraints, and open questions.
 > **Full detail lives in:** `wbs.md` (tasks + estimates) · `product_requirements.md` (what to build) · `system_architecture.md` (how it works)
@@ -96,71 +96,60 @@ A **headless, self-mutating agent orchestration platform** for running a company
 4. **Observability without SDK overhead**: MAF has built-in OpenTelemetry instrumentation (`configure_otel_providers()`) that can export to any OTLP backend. No `langfuse` Python SDK or `openllmetry` in agent code. (Langfuse has been **removed** from the Phase-0 stack to save RAM; wire an OTLP backend here later if tracing is needed.)
 5. **Simpler agent repos**: Each agent repo exports `build_agents() → list[Agent]` instead of a LangGraph `StateGraph`. MAF agents are simpler to test, compose, and read.
 
-### Runtime Architecture — Current State + Future Re-integration Plan
+### Runtime Architecture — Unified MAF (as of 2026-06-10)
 
-**Current state (2026-06-09): Dual runtime.** The executor (`apps/orchestrator/orchestrator/executor.py`) uses two separate execution paths:
+**Current state: Single unified MAF runtime.** The dual-runtime split has been retired. The `agent-framework-github-copilot` 1.0.0rc1 release (2026-06-05) relaxed the SDK dependency from `<0.1.33` to `<2,>=1.0.0`, enabling full re-integration.
+
+| Package | Previous | Current |
+|---|---|---|
+| `agent-framework-core` | 1.7.0 | **1.8.0** |
+| `agent-framework-github-copilot` | 1.0.0b260402 | **1.0.0rc1** |
+| `github-copilot-sdk` | 0.1.32 | **1.0.0** |
 
 | Agent `agent_runtime` | Executor path | BYOK mechanism |
 |---|---|---|
-| `github-copilot` | Copilot SDK **directly** (`CopilotClient.create_session()`, bypasses MAF) | Native `provider` field in `SessionConfig` → Copilot CLI v1.0.2+ |
+| `github-copilot` | `CommandCenterCopilotAgent` (MAF subclass) → `agent.run(stream=True)` | `provider` in `default_options` → forwarded to Copilot SDK via patched `_create_session()` |
 | `maf` | MAF `Agent.run()` | `OpenAIChatCompletionClient` injection with BYOK `base_url` + `api_key` |
 
-**Why the split?** The MAF wrapper (`agent-framework-github-copilot`) constrains `github-copilot-sdk` to `<0.1.33`, but working BYOK requires SDK >= 1.0.0 (CLI v1.0.2+). To deliver BYOK for Copilot SDK agents now, the executor talks to the Copilot SDK directly, bypassing the MAF `GitHubCopilotAgent` wrapper entirely.
+**How it works:** The `CommandCenterCopilotAgent` (at `apps/orchestrator/orchestrator/copilot_agent.py`) extends `GitHubCopilotAgent` with BYOK provider forwarding and rich event streaming (reasoning, tool progress, partial results, agent intent). At runtime, the executor monkey-patches these methods onto the loaded agent — zero changes required in agent repos. All Copilot SDK event types are captured and forwarded as AG-UI SSE events to the frontend.
 
-**Future re-integration plan (Open Question):** When `agent-framework-github-copilot` relaxes its SDK dependency constraint to allow `github-copilot-sdk >= 1.0.0`, we should:
-
-1. Remove the Copilot SDK direct path from `executor.py`.
-2. Route all `github-copilot` agents through MAF's `GitHubCopilotAgent` again.
-3. Pass BYOK provider config via `default_options["provider"]` — the MAF wrapper's `_create_session()` must forward this to the Copilot SDK's `SessionConfig`.
-4. This restores Copilot SDK features (shell, file r/w, MCP servers, skill discovery) for BYOK sessions while keeping the unified MAF agent abstraction.
-
-**When to act:** Monitor the `agent-framework-github-copilot` changelog. When a release drops the `<0.1.33` constraint, test BYOK through MAF and remove the direct path. This is a ~1-day migration with no agent repo changes required.
+**Previous dual-runtime split (historical):** The MAF wrapper had constrained `github-copilot-sdk` to `<0.1.33`, but BYOK required SDK >= 1.0.0. The executor worked around this by talking to the Copilot SDK directly for `github-copilot` agents. This workaround was removed when the upstream constraint was lifted.
 
 ### The Runtimes
 
-- **GitHub Copilot SDK** (`github-copilot-sdk >= 1.0.0b9`) — interactive agent chat for `github-copilot` agents (direct path). Also used for the mutation container (`acb-mutation-runner` Docker image spawned by `Self_Mutation_Node`).
-- **MAF** (`agent-framework`, `agent-framework-github-copilot`, `agent-framework-ag-ui`) — agent execution for `maf` agents and multi-agent orchestration. Will also host `github-copilot` agents once the SDK dependency constraint is relaxed (see above).
+- **MAF** (`agent-framework`, `agent-framework-github-copilot`, `agent-framework-ag-ui`) — ALL agent execution. `CommandCenterCopilotAgent` wraps Copilot SDK agents inside MAF for unified streaming, tool calling, and orchestration.
+- **GitHub Copilot SDK** (`github-copilot-sdk >= 1.0.0`) — used ONLY inside `GitHubCopilotAgent` / `CommandCenterCopilotAgent` (MAF wrappers) and the mutation sandbox (`acb-mutation-runner` Docker container). Never called directly by application code.
 - **LiteLLM** — unified model gateway for all MAF agent calls. Prompt caching, cost metering, model aliases.
 - **No LangGraph. No deepagents. No langchain-core. No n8n.**
 
 ### Runtime And Tool-Calling Ownership Matrix (Authoritative)
 
-Use this table to decide where new work belongs. **Note:** Copilot SDK direct path is temporary — `github-copilot` agents will move back under MAF when the SDK dependency constraint is relaxed.
-
 | Scenario | Orchestration owner | Agent-turn runtime | Tool-calling owner | Build here | Do not build here |
 |---|---|---|---|---|---|
-| Operator chat — `github-copilot` agent | Executor Copilot SDK direct path | Copilot SDK directly (bypasses MAF) | Copilot SDK native tool execution | `executor.py` Copilot SDK path | New standalone chat endpoints |
-| Operator chat — `maf` agent | MAF (`agent-framework-ag-ui`) | MAF `Agent.run()` | MAF agent turn with injected tools | MAF AG-UI endpoint + MAF agent definitions | Raw Copilot SDK path for MAF agents |
+| Operator chat — any agent | MAF (`agent-framework-ag-ui` for orchestrator; `/agent/run/stream` for named agents) | `CommandCenterCopilotAgent` (github-copilot) or MAF `Agent` (maf) | MAF agent turn with injected tools | `executor.py` MAF path + `copilot_agent.py` | Raw Copilot SDK paths |
 | Webhook / cron / ambient autonomous runs | MAF workflow engine | MAF agent selected by router | Per-agent MAF tool calling | `orchestrator.executor` + MAF workflow routing | Raw Copilot SDK background runner |
 | Multi-agent routing (triage/handoff/concurrent) | MAF orchestrators | Per-agent provider | Per-agent turn tool calls; cross-agent control in MAF | `HandoffBuilder` / concurrent workflows | Ad-hoc orchestration outside MAF |
 | Self-mutation on failure | `Self_Mutation_Node` | Copilot SDK sandbox container | Copilot SDK inside isolated container | `acb-mutation-runner` only | General business-agent runtime |
 
-### Implementation Reality (As Of 2026-06-09)
+### Implementation Reality (As Of 2026-06-10)
 
-Current executor architecture uses dual runtime paths. Target is MAF-only once the SDK dependency constraint is lifted.
+✅ **Unified MAF runtime achieved.** All agents — Copilot SDK and MAF — run through MAF.
 
-- ✅ Copilot SDK agents (`agent_runtime=github-copilot`) run through the **Copilot SDK direct path** — `CopilotClient.create_session()` with native BYOK `provider` support (SDK v1.0.0b9, CLI v1.0.2+).
-- ✅ MAF agents (`agent_runtime=maf`) run through the **MAF executor path** with BYOK via `OpenAIChatCompletionClient` injection.
-- ✅ All injected tools (`call_agent`, `call_agents_parallel`, `call_agent_background`, `web_search`, `fetch_page`) are wrapped as `FunctionTool` and converted to Copilot SDK `Tool` objects for the direct path.
-- ✅ System message addendum with live agent registry injected into every Copilot agent at run time.
-- ✅ CopilotKit removed entirely (M2.5).
-- ✅ Frontend agent picker separates "Copilot SDK agents" from "MAF agents".
-- ⚠️ **Open Question:** Re-integrate Copilot SDK agents under MAF when `agent-framework-github-copilot` supports `github-copilot-sdk >= 1.0.0` with BYOK. See Runtime Architecture section above.
-- ⚠️ Eval CI gate (WBS 1.4) not yet built — M2 formal demo blocked on this.
+- ✅ `CommandCenterCopilotAgent` wraps Copilot SDK agents in MAF with BYOK provider forwarding
+- ✅ All Copilot SDK event types (reasoning, tool progress, partial results, agent intent) captured and forwarded to frontend as AG-UI SSE
+- ✅ `agent-framework-github-copilot` 1.0.0rc1 relaxed SDK constraint — no override needed
+- ✅ Copilot SDK direct path removed from `executor.py` (~200 lines → ~80 lines)
+- ✅ Zero agent repo changes required — monkey-patching at runtime
+- ✅ All injected tools (`call_agent`, `web_search`, `fetch_page`, `write_artifact`) work through MAF
+- ✅ 154/154 tests pass with no regressions
+- ✅ Full chat UI/UX preserved: text streaming, reasoning/thinking, tool calls, terminal output
 
-Migration-complete definition for runtime re-unification (when MAF SDK constraint is relaxed):
+### Mutation Layer Enhancements (2026-06-10)
 
-1. Copilot SDK direct path in `executor.py` is removed.
-2. All `github-copilot` agents route through MAF's `GitHubCopilotAgent` again.
-3. BYOK provider config flows through `default_options["provider"]` → `_create_session()` → Copilot SDK `SessionConfig.provider`.
-4. Copilot SDK features (shell, file r/w, MCP, skill discovery) are available for BYOK sessions.
-5. No webhook/event route dispatches to raw Copilot SDK background runner for business-agent execution.
-
-Build-policy summary for engineers:
-
-1. If the feature is user-facing chat, event-triggered automation, or multi-agent orchestration: implement in MAF.
-2. If the feature is failure-repair code mutation in isolated sandbox: implement in Copilot SDK mutation runner.
-3. If a change introduces new raw Copilot SDK runtime paths for business-agent execution, treat it as architecture regression.
+- ✅ **Agent purpose context** — the mutation sandbox now receives the failing agent's `instructions.md`, skill descriptions, and trigger event (what the user asked). Previously it only got the error message.
+- ✅ **Local git tracking for MAF agents** — agents registered via `local_path` get automatic local git initialisation in the cache directory. This enables version control, commit tracking, and rollback without a GitHub remote.
+- ✅ **Local-only repo handling** — mutation approval for local-only repos keeps the commit (no push needed); rejection uses `git reset HEAD~1`.
+- ✅ **Monorepo agent guard** — agents without a separate repo directory skip mutation gracefully with a clear log message.
 
 ### DurableTask (DTS Emulator) — Deferred to Phase 2
 
@@ -530,4 +519,6 @@ This gives a working file browser + viewer for files already on disk, without th
 6. **DurableTask hosting (Phase 2)** — when agents need to genuinely wait hours/days mid-workflow, choose between (a) DTS emulator (dev/MVP) or (b) Azure Durable Task Scheduler cloud service. Postgres is NOT the DTS backend — DTS is a separate store. Decision deferred until Phase 2 scope is locked.
 7. **OAuth provider registration** — ClickUp, Zoho, and Google OAuth apps must be registered with `redirect_uri` pointing to the VPS hostname. Decide: one shared OAuth app per service (org-level) or per-operator? Affects credential scope and token isolation.
 8. **Cloud sandbox GitHub token model** — use a single org-level GitHub App installation token (rotated every hour automatically) or per-operator fine-grained PAT? The former is simpler operationally; the latter gives per-user audit trails for agent actions.
-9. **Copilot SDK within MAF with BYOK** — when `agent-framework-github-copilot` relaxes its SDK dependency constraint to allow `github-copilot-sdk >= 1.0.0`, re-integrate `github-copilot` agents under MAF. This removes the Copilot SDK direct path in `executor.py` and restores Copilot SDK features (shell, file r/w, MCP servers) for BYOK sessions. Monitor the `agent-framework-github-copilot` changelog. Estimated migration effort: ~1 day with no agent repo changes. See `system_architecture.md` §13.3 for the dual-runtime architecture and re-integration plan.
+9. ~~**Copilot SDK within MAF with BYOK**~~ — **RESOLVED (2026-06-10).** `agent-framework-github-copilot` 1.0.0rc1 relaxed the SDK dependency to `<2,>=1.0.0`. The Copilot SDK direct path has been removed from `executor.py`. All `github-copilot` agents now run through `CommandCenterCopilotAgent` (MAF subclass) with BYOK via `default_options["provider"]`. Copilot SDK features (shell, file r/w, MCP servers) are available for BYOK sessions through the unified MAF abstraction. All Copilot SDK event types (reasoning, tool progress, partial results) flow through MAF to the frontend. See `system_architecture.md` §13.3.
+10. **MAF agent local git tracking** — pure MAF agents without GitHub repos now get automatic local git initialisation in the cache directory. Enables version control, commit tracking, mutation sandbox compatibility, and rollback without external dependencies. See `system_architecture.md` §13.4.
+11. **Mutation layer agent context** — the mutation sandbox now receives the failing agent's purpose (`instructions.md`), skill descriptions, and trigger event context, not just the error message. This enables smarter, context-aware fixes that preserve the agent's persona and domain behaviour.

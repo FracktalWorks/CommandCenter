@@ -165,6 +165,9 @@ def _install_push_guard(repo_dir: Path) -> None:
     Written once on first clone.  The executor's post-run commit scan detects
     any commits the agent made locally and registers them as pending_commit rows
     for inbox approval.  This hook is the hard stop preventing a direct push.
+
+    Skipped for local-only repos (no remote origin) — there is nothing to
+    protect against pushing to.
     """
     try:
         hooks_dir = repo_dir / ".git" / "hooks"
@@ -173,6 +176,18 @@ def _install_push_guard(repo_dir: Path) -> None:
         hook_file = hooks_dir / "pre-push"
         if hook_file.exists():
             return
+
+        # Check if this repo has a remote origin — local-only repos don't need
+        # a push guard since there's nothing to push to.
+        remote_check = _run_git(["remote", "get-url", "origin"], cwd=repo_dir, timeout=5)
+        if remote_check.returncode != 0:
+            _log.debug(
+                "loader.push_guard_skipped_local",
+                repo=repo_dir.name,
+                hint="Local-only repo — no origin remote.",
+            )
+            return
+
         hook_file.write_text(
             "#!/bin/sh\n"
             "echo 'Direct push blocked: commits are queued for human approval'\n"
@@ -259,6 +274,106 @@ def _pull_latest(repo_dir: Path) -> None:
         _run_git(["stash", "drop"], cwd=repo_dir, timeout=10)
 
     _log.info("loader.pull_reset_ok", repo=repo_dir.name)
+
+
+def _ensure_local_git_repo(source_dir: Path, cache_dir: Path, settings: Any) -> None:
+    """Initialise or sync a local-only git-tracked working copy of *source_dir*.
+
+    This gives pure MAF agents (without GitHub remotes) the same version-control
+    benefits as GitHub-sourced agents:
+
+    - **Local git tracking** — every change is versioned, committable, and revertible.
+    - **Mutation sandbox compatibility** — the cache dir is a proper git repo
+      that can be mounted into the Docker sandbox.
+    - **Inbox approval flow** — commits are registered for human review.
+      Approve → keep.  Reject → ``git reset --hard HEAD~1``.
+
+    Sync strategy (lightweight copy):
+        On each call, the source files are copied to the cache.  Only files that
+        differ are overwritten (timestamp + size check).  Files in the cache that
+        don't exist in the source are left untouched (they may be agent-generated
+        improvements awaiting approval).
+
+    Git initialisation (first call only):
+        If the cache directory has no ``.git``, a new repo is initialised and an
+        initial commit is created as a baseline for ``git reset`` rollback.
+
+    Args:
+        source_dir: The agent's source directory (e.g. ``C:/dev/my-agent/``).
+        cache_dir:  The persistent cache directory
+                    (e.g. ``{agents_clone_dir}/repos/my-agent/``).
+        settings:   The application settings object.
+
+    Raises:
+        :class:`AgentLoadError` if the cache directory cannot be created or git
+        operations fail.
+    """
+    import shutil
+    import filecmp
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Sync source → cache ─────────────────────────────────────────────
+    _sync_source_to_cache(source_dir, cache_dir)
+
+    # ── Initialise local git repo (first call only) ──────────────────────
+    git_dir = cache_dir / ".git"
+    if not git_dir.is_dir():
+        _log.info("loader.local_git_init", agent=cache_dir.name, source=str(source_dir))
+        result = _run_git(["init"], cwd=cache_dir, timeout=15)
+        if result.returncode != 0:
+            raise AgentLoadError(
+                f"git init failed for {cache_dir}: {result.stderr.strip()}"
+            )
+        _configure_bot_identity(cache_dir, settings)
+
+        # Stage everything and create the initial commit as a rollback baseline.
+        _run_git(["add", "-A"], cwd=cache_dir, timeout=15)
+        commit_result = _run_git(
+            ["commit", "-m", "initial: seeded from local source"],
+            cwd=cache_dir, timeout=15,
+        )
+        if commit_result.returncode != 0:
+            # "nothing to commit" is fine — empty repo or all files ignored.
+            _log.debug(
+                "loader.local_git_init_empty_commit",
+                agent=cache_dir.name,
+                stderr=commit_result.stderr.strip()[:100],
+            )
+        _log.info("loader.local_git_ready", agent=cache_dir.name)
+
+
+def _sync_source_to_cache(source_dir: Path, cache_dir: Path) -> None:
+    """Copy files from *source_dir* to *cache_dir* that are new or changed.
+
+    Only overwrites files whose modification time OR size differs.
+    Files in the cache that don't exist in the source are left untouched
+    (preserving agent-generated improvements).
+    """
+    import shutil
+
+    for src_file in source_dir.rglob("*"):
+        if src_file.is_dir():
+            continue
+        # Skip git internals, bytecode, and env files
+        if any(p.startswith(".") for p in src_file.parts if p not in (".", "..")):
+            if ".git" in src_file.parts or "__pycache__" in src_file.parts:
+                continue
+        if src_file.name.endswith(".pyc") or src_file.name == ".env":
+            continue
+
+        rel = src_file.relative_to(source_dir)
+        dst_file = cache_dir / rel
+        dst_file.parent.mkdir(parents=True, exist_ok=True)
+
+        if not dst_file.exists():
+            shutil.copy2(src_file, dst_file)
+        else:
+            src_stat = src_file.stat()
+            dst_stat = dst_file.stat()
+            if (src_stat.st_mtime != dst_stat.st_mtime
+                    or src_stat.st_size != dst_stat.st_size):
+                shutil.copy2(src_file, dst_file)
 
 
 def _sync_new_skills(agent_dir: Path, settings: Any) -> None:
@@ -675,15 +790,25 @@ def load_agent(
     token: str | None = _get_auth_token(settings)
     cache_root = Path(getattr(settings, "agents_clone_dir", "/tmp/acb_agents")) / "repos"
 
-    # ── Local-path fast path ────────────────────────────────────────────────
-    # When a local_path is registered (e.g. during local development) we skip
-    # the entire git-clone machinery and use the directory directly.
+    # ── Local-path with local git tracking ──────────────────────────────────
+    # When a local_path is registered (e.g. during local development) we copy
+    # the source into the persistent cache and auto-initialise a local-only git
+    # repo.  This gives pure MAF agents the same version-control benefits as
+    # GitHub-sourced agents: commit tracking, mutation sandbox compatibility,
+    # and rollback via git reset.
     if local_path:
-        agent_dir = Path(local_path)
-        if not agent_dir.is_dir():
+        source_dir = Path(local_path)
+        if not source_dir.is_dir():
             raise AgentLoadError(
                 f"local_path {local_path!r} does not exist or is not a directory."
             )
+
+        # Use the cache directory as the working copy — isolates the running
+        # agent from the development source and gives the mutation sandbox a
+        # clean, git-tracked directory to mount.
+        agent_dir = cache_root / agent_name
+        _ensure_local_git_repo(source_dir, agent_dir, settings)
+
         config_path = agent_dir / "config.json"
         config: dict[str, Any] = {}
         skill_repos: list[str] = []
@@ -717,7 +842,7 @@ def load_agent(
             graph_module: Any = None
         else:
             graph_module = _import_graph_module(agent_dir, module_name=module_name)
-        _log.info("loader.agent_ready_local", agent=agent_name, run_id=run_id, path=local_path)
+        _log.info("loader.agent_ready_local", agent=agent_name, run_id=run_id, path=str(agent_dir))
         return LoadedAgent(
             agent_name=agent_name,
             run_id=run_id,

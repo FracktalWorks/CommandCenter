@@ -366,6 +366,19 @@ async def _run_sub_agent_streaming(
             except Exception:  # noqa: BLE001
                 pass
 
+            # Patch GitHub Copilot agents with enhanced BYOK + streaming methods.
+            if _runtime == "github-copilot":
+                try:
+                    from orchestrator.copilot_agent import CommandCenterCopilotAgent  # noqa: PLC0415
+                    agent._create_session = CommandCenterCopilotAgent._create_session.__get__(
+                        agent, type(agent)
+                    )
+                    agent._stream_updates = CommandCenterCopilotAgent._stream_updates.__get__(
+                        agent, type(agent)
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
             text_parts: list[str] = []
 
             if _runtime == "github-copilot" and hasattr(agent, "run"):
@@ -791,6 +804,7 @@ async def run_agent(
             error=exc,
             agent_dir=_agent_dir,
             incompatibility=True,
+            event_payload=event_payload,
         )
         pr_url = mutation_result.pr_url if mutation_result else None
         raise AgentRunError(
@@ -826,6 +840,7 @@ async def run_agent(
             run_id=run_id,
             error=exc,
             agent_dir=_agent_dir,  # pass persistent clone path for authenticated push
+            event_payload=event_payload,
         )
         pr_url = mutation_result.pr_url if mutation_result else None
 
@@ -999,256 +1014,155 @@ async def run_agent_stream(
             queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
             _t2_token = _active_run_queue.set(queue)  # expose to call_agent for sub-streaming
 
-            # ── GitHub Copilot SDK direct path ──────────────────────────────
+            # ── GitHub Copilot SDK path (MAF-wrapped via CommandCenterCopilotAgent) ─
             if _agent_runtime == "github-copilot":
-                from copilot import CopilotClient as _SDKClient  # noqa: PLC0415
-                from copilot.types import PermissionHandler as _PH  # noqa: PLC0415
+                from orchestrator.copilot_agent import CommandCenterCopilotAgent  # noqa: PLC0415
 
-                # Extract tools + instructions from the loaded agent
-                from copilot.tools import define_tool as _sdk_define_tool  # noqa: PLC0415
-                _sdk_tools: list[Any] = []
-                _ghcp_tools = getattr(agent, "_tools", []) or []
-                for _t in _ghcp_tools:
-                    _fn = getattr(_t, "func", _t) if hasattr(_t, "func") else _t
-                    _t_name = getattr(_t, "name", None) or getattr(_fn, "__name__", "unknown")
-                    _t_desc = getattr(_t, "description", None) or getattr(_fn, "__doc__", "") or ""
-                    _t_params = getattr(_t, "parameters", None)
-                    # Create a Copilot SDK Tool
-                    _sdk_tool = _sdk_define_tool(
-                        _t_name, description=_t_desc, handler=_fn, params_type=_t_params,
+                # Patch the loaded agent's _create_session and _stream_updates
+                # to use the enhanced versions that support BYOK and rich events.
+                # This avoids needing to reconstruct the agent or change agent repos.
+                _orig_create = agent._create_session
+                _orig_stream = agent._stream_updates
+                agent._create_session = CommandCenterCopilotAgent._create_session.__get__(
+                    agent, type(agent)
+                )
+                agent._stream_updates = CommandCenterCopilotAgent._stream_updates.__get__(
+                    agent, type(agent)
+                )
+
+                # Inject BYOK provider config into the agent's default_options
+                if _is_byok and _byok_provider:
+                    agent._default_options["provider"] = _byok_provider
+                    agent._default_options["model"] = _byok_model_id
+                    _log.info(
+                        "executor.copilot_maf_byok",
+                        agent=agent_name, model=_byok_model_id,
+                        base_url=_byok_provider["base_url"],
                     )
-                    _sdk_tools.append(_sdk_tool)
+                elif _final_model:
+                    agent._default_options["model"] = _final_model
+                    _log.info("executor.copilot_maf_model", agent=agent_name, model=_final_model)
 
-                # Include injected tools (call_agent, web_search, etc.)
-                _extra_tool_names = {"call_agent", "call_agents_parallel",
-                                     "call_agent_background", "web_search",
-                                     "fetch_page", "write_artifact"}
-                for _t_name in _extra_tool_names:
-                    _t_fn = getattr(agent, _t_name, None)
-                    if _t_fn and callable(_t_fn):
-                        _t_desc = getattr(_t_fn, "__doc__", "") or f"Injected tool: {_t_name}"
-                        _sdk_tool = _sdk_define_tool(
-                            _t_name, description=_t_desc, handler=_t_fn,
-                        )
-                        _sdk_tools.append(_sdk_tool)
-
-                _sdk_system_msg: dict[str, Any] | str | None = None
-                _sm = agent._default_options.get("system_message") if hasattr(agent, "_default_options") else None
-                if isinstance(_sm, dict):
-                    _sdk_system_msg = _sm
-                elif isinstance(_sm, str):
-                    _sdk_system_msg = _sm
-
-                # Agent workspace — where AGENTS.md, skills/, scripts/, .mcp.json live.
-                # The Copilot CLI needs this for config discovery, tool execution,
-                # and agent persona resolution.
-                _agent_workspace = str(loaded.agent_dir)
-
-                _sdk_client = _SDKClient({"working_directory": _agent_workspace})
-                _owns_sdk_client = True
+                # Ensure permission handler is set
                 try:
-                    await _sdk_client.start()
+                    from copilot import PermissionHandler as _PH  # noqa: PLC0415
+                    if hasattr(agent, "_permission_handler") and agent._permission_handler is None:
+                        agent._permission_handler = _PH.approve_all
+                except Exception:  # noqa: BLE001
+                    pass
 
-                    # Build SessionConfig — enable full Copilot CLI autonomy
-                    _sdk_cfg: dict[str, Any] = {
-                        "on_permission_request": _PH.approve_all,
-                        "streaming": True,
-                        "working_directory": _agent_workspace,
-                        "agent_mode": "autopilot",  # autonomous tool execution
-                    }
-                    if _is_byok and _byok_provider:
-                        _sdk_cfg["model"] = _byok_model_id
-                        _sdk_cfg["provider"] = _byok_provider
-                        _log.info("executor.copilot_sdk_byok",
-                                  agent=agent_name, model=_byok_model_id,
-                                  base_url=_byok_provider["base_url"])
-                    elif _final_model:
-                        _sdk_cfg["model"] = _final_model
-                        _log.info("executor.copilot_sdk_model",
-                                  agent=agent_name, model=_final_model)
-                    else:
-                        _log.info("executor.copilot_sdk_default",
-                                  agent=agent_name)
+                # Build the message from the event payload
+                _msg_text = (
+                    event_payload.get("message")
+                    or event_payload.get("user_query")
+                    or ""
+                )
 
-                    if _sdk_system_msg:
-                        _sdk_cfg["system_message"] = _sdk_system_msg
-                    if _sdk_tools:
-                        _sdk_cfg["tools"] = _sdk_tools
+                # Run the agent with MAF streaming → translate to AG-UI
+                _msg_id: str | None = None
+                _text_started = False
+                try:
+                    async with agent:
+                        _run_opts: dict[str, Any] = {}
+                        if _is_byok and _byok_provider:
+                            _run_opts["model"] = _byok_model_id
+                        elif _final_model:
+                            _run_opts["model"] = _final_model
+                        _stream = agent.run(_msg_text, stream=True, options=_run_opts if _run_opts else None)
+                        async for _update in _stream:
+                            # Process each content item in the update
+                            for _c in (_update.contents or []):
+                                _ct = getattr(_c, "type", None)
+                                if _ct == "text":
+                                    _delta = _c.text or ""
+                                    if _delta:
+                                        if not _text_started:
+                                            _text_started = True
+                                            _msg_id = _update.message_id or str(uuid.uuid4())
+                                            yield _sse({
+                                                "type": "TEXT_MESSAGE_START",
+                                                "messageId": _msg_id,
+                                                "role": "assistant",
+                                            })
+                                        yield _sse({
+                                            "type": "TEXT_MESSAGE_CONTENT",
+                                            "messageId": _msg_id,
+                                            "delta": _delta,
+                                        })
+                                elif _ct == "text_reasoning":
+                                    _delta = _c.text or ""
+                                    if _delta:
+                                        yield _sse({
+                                            "type": "THINKING_TEXT_MESSAGE_CONTENT",
+                                            "delta": _delta,
+                                        })
+                                elif _ct == "function_call":
+                                    _tc_id = _c.call_id or ""
+                                    _tc_name = _c.name or ""
+                                    _tc_args = _c.arguments
+                                    _args_str = (
+                                        json.dumps(_tc_args)
+                                        if isinstance(_tc_args, dict)
+                                        else str(_tc_args or "")
+                                    )
+                                    yield _sse({
+                                        "type": "TOOL_CALL_START",
+                                        "toolCallId": _tc_id,
+                                        "toolCallName": _tc_name,
+                                        "args": _args_str,
+                                    })
+                                    if _tc_args:
+                                        yield _sse({
+                                            "type": "TOOL_CALL_ARGS",
+                                            "toolCallId": _tc_id,
+                                            "delta": _args_str,
+                                        })
+                                elif _ct == "function_result":
+                                    _tc_id = _c.call_id or ""
+                                    _tc_result = _c.result or ""
+                                    _tc_ok = not _c.exception
+                                    yield _sse({
+                                        "type": "TOOL_CALL_RESULT",
+                                        "toolCallId": _tc_id,
+                                        "content": str(_tc_result)[:2000],
+                                        "success": _tc_ok,
+                                    })
 
-                    _sdk_session = await _sdk_client.create_session(_sdk_cfg)
+                            # Also handle raw events for agent intent / status
+                            _raw = _update.raw_representation
+                            if _raw is not None:
+                                try:
+                                    _raw_type = str(_raw.type)
+                                    if "INTENT" in _raw_type:
+                                        _intent = getattr(_raw.data, "intent", "") or ""
+                                        if _intent:
+                                            yield _sse({
+                                                "type": "TOOL_CALL_START",
+                                                "toolCallId": f"{run_id}:intent:{_intent[:20]}",
+                                                "toolCallName": _intent,
+                                            })
+                                except Exception:  # noqa: BLE001
+                                    pass
 
-                    # Stream Copilot SDK events → AG-UI protocol
-                    _msg_id: str | None = None
-                    _text_parts: list[str] = []
-                    _done = asyncio.Event()
-                    _stream_error: str | None = None
+                except Exception as _exc:  # noqa: BLE001
+                    _log.exception("executor.copilot_maf_stream_error", agent=agent_name)
+                    yield _sse({
+                        "type": "RUN_ERROR",
+                        "runId": run_id,
+                        "message": str(_exc),
+                    })
+                    return
 
-                    def _on_sdk_event(event: Any) -> None:  # noqa: C901
-                        nonlocal _msg_id, _stream_error
-                        et = str(event.type)
-                        d = event.data
-                        # ── Tool execution events ───────────────────────
-                        if et in ("SessionEventType.TOOL_EXECUTION_START",
-                                  "SessionEventType.TOOL_CALL"):
-                            _tc_name = getattr(d, "tool_name", "") or getattr(d, "name", "")
-                            _tc_id = getattr(d, "tool_call_id", "") or getattr(d, "id", "") or str(uuid.uuid4())
-                            _tc_args = getattr(d, "arguments", None)
-                            # Send tool_start with args so the UI can show the command
-                            # immediately (e.g. terminal display needs the command line).
-                            _initial_args = json.dumps(_tc_args) if isinstance(_tc_args, dict) else str(_tc_args or "")
-                            asyncio.ensure_future(
-                                queue.put({"type": "TOOL_CALL_START",
-                                           "toolCallId": _tc_id,
-                                           "toolCallName": _tc_name,
-                                           "args": _initial_args}))
-                            if _tc_args:
-                                asyncio.ensure_future(
-                                    queue.put({"type": "TOOL_CALL_ARGS",
-                                               "toolCallId": _tc_id,
-                                               "delta": _initial_args}))
-                        elif et in ("SessionEventType.TOOL_EXECUTION_COMPLETE",
-                                    "SessionEventType.TOOL_CALL_RESULT"):
-                            _tc_id = getattr(d, "tool_call_id", "") or getattr(d, "id", "")
-                            _tc_result = getattr(d, "result", "") or getattr(d, "output", "")
-                            asyncio.ensure_future(
-                                queue.put({"type": "TOOL_CALL_RESULT",
-                                           "toolCallId": _tc_id,
-                                           "content": str(_tc_result)[:2000],
-                                           "success": True}))
-                        elif et == "SessionEventType.TOOL_EXECUTION_PROGRESS":
-                            _tc_id = getattr(d, "tool_call_id", "") or getattr(d, "id", "")
-                            _tc_progress = getattr(d, "progress_message", "") or getattr(d, "progress", "") or getattr(d, "message", "")
-                            if _tc_progress:
-                                asyncio.ensure_future(
-                                    queue.put({"type": "TOOL_CALL_ARGS",
-                                               "toolCallId": _tc_id,
-                                               "delta": f"[progress] {_tc_progress}"}))
-                        elif et == "SessionEventType.TOOL_EXECUTION_PARTIAL_RESULT":
-                            # Streaming terminal output — emit as content deltas
-                            # so the UI can show a live terminal-like view
-                            _tc_id = getattr(d, "tool_call_id", "") or getattr(d, "id", "")
-                            _partial = getattr(d, "partial_output", "") or getattr(d, "partialOutput", "") or ""
-                            if _partial:
-                                asyncio.ensure_future(
-                                    queue.put({"type": "TOOL_CALL_RESULT",
-                                               "toolCallId": _tc_id,
-                                               "content": _partial,
-                                               "partial": True,
-                                               "success": True}))
-                        # ── Reasoning / thinking streaming ──────────────
-                        elif et == "SessionEventType.ASSISTANT_REASONING_DELTA":
-                            _rd = getattr(d, "delta_content", "") or ""
-                            if _rd:
-                                asyncio.ensure_future(
-                                    queue.put({"type": "THINKING_TEXT_MESSAGE_CONTENT",
-                                               "delta": _rd}))
-                        elif et == "SessionEventType.ASSISTANT_REASONING":
-                            _rc = getattr(d, "content", "") or ""
-                            if _rc:
-                                asyncio.ensure_future(
-                                    queue.put({"type": "THINKING_TEXT_MESSAGE_CONTENT",
-                                               "delta": _rc}))
-                        # ── Agent intent (real-time status: "Exploring codebase", etc.) ─
-                        elif et == "SessionEventType.ASSISTANT_INTENT":
-                            _intent = getattr(d, "intent", "") or ""
-                            if _intent:
-                                asyncio.ensure_future(
-                                    queue.put({"type": "TOOL_CALL_START",
-                                               "toolCallId": f"{run_id}:intent:{_intent[:20]}",
-                                               "toolCallName": _intent}))
-                        # ── Turn lifecycle → progress events ────────────
-                        elif et == "SessionEventType.ASSISTANT_TURN_START":
-                            pass
-                        # ── Text streaming ──────────────────────────────
-                        elif et in ("SessionEventType.ASSISTANT_MESSAGE_DELTA",
-                                    "SessionEventType.ASSISTANT_STREAMING_DELTA"):
-                            if not _msg_id:
-                                _msg_id = str(uuid.uuid4())
-                                asyncio.ensure_future(
-                                    queue.put({"type": "TEXT_MESSAGE_START",
-                                               "messageId": _msg_id,
-                                               "role": "assistant"}))
-                            _delta = getattr(d, "delta_content", "") or getattr(d, "content", "") or ""
-                            if _delta:
-                                _text_parts.append(_delta)
-                                asyncio.ensure_future(
-                                    queue.put({"type": "TEXT_MESSAGE_CONTENT",
-                                               "messageId": _msg_id,
-                                               "delta": _delta}))
-                        elif et == "SessionEventType.ASSISTANT_MESSAGE":
-                            _content = getattr(d, "content", "") or ""
-                            if _content and not _text_parts:
-                                if not _msg_id:
-                                    _msg_id = str(uuid.uuid4())
-                                    asyncio.ensure_future(
-                                        queue.put({"type": "TEXT_MESSAGE_START",
-                                                   "messageId": _msg_id,
-                                                   "role": "assistant"}))
-                                _text_parts.append(_content)
-                                asyncio.ensure_future(
-                                    queue.put({"type": "TEXT_MESSAGE_CONTENT",
-                                               "messageId": _msg_id,
-                                               "delta": _content}))
-                        # Session lifecycle
-                        elif et == "SessionEventType.SESSION_IDLE":
-                            if _msg_id:
-                                asyncio.ensure_future(
-                                    queue.put({"type": "TEXT_MESSAGE_END",
-                                               "messageId": _msg_id}))
-                            _done.set()
-                        elif et == "SessionEventType.SESSION_ERROR":
-                            _stream_error = getattr(d, "message", str(d))
-                            _done.set()
-
-                    _sdk_session.on(_on_sdk_event)
-
-                    # Build the message
-                    _msg_text = event_payload.get("message") or event_payload.get("user_query") or ""
-                    await _sdk_session.send({"prompt": _msg_text})
-
-                    # Drain events and yield SSE frames AS THEY ARRIVE (real-time streaming)
-                    _timeout_seconds = 300.0
-                    _start = asyncio.get_event_loop().time()
-                    while True:
-                        try:
-                            ev = await asyncio.wait_for(queue.get(), timeout=0.1)
-                            if ev is None:
-                                break
-                            yield _sse(ev)
-                        except asyncio.TimeoutError:
-                            if _done.is_set():
-                                # Drain remaining events
-                                while not queue.empty():
-                                    ev = queue.get_nowait()
-                                    if ev:
-                                        yield _sse(ev)
-                                break
-                            elapsed = asyncio.get_event_loop().time() - _start
-                            if elapsed > _timeout_seconds:
-                                yield _sse({"type": "RUN_ERROR", "runId": run_id,
-                                            "message": "Copilot SDK session timed out"})
-                                return
-
-                    if _stream_error:
-                        yield _sse({"type": "RUN_ERROR", "runId": run_id,
-                                    "message": _stream_error})
-                        return
-
-                finally:
-                    try:
-                        await _sdk_session.disconnect()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    if _owns_sdk_client:
-                        try:
-                            await _sdk_client.stop()
-                        except Exception:  # noqa: BLE001
-                            pass
-
+                # Emit final events
+                if _msg_id and _text_started:
+                    yield _sse({
+                        "type": "TEXT_MESSAGE_END",
+                        "messageId": _msg_id,
+                    })
                 _active_run_queue.reset(_t2_token)
                 yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
                 return
-            # ── End Copilot SDK direct path ──────────────────────────────────
+            # ── End Copilot SDK MAF-wrapped path ─────────────────────────────
 
             # ── MAF agent path (non-github-copilot runtimes) ────────────────
             # Ensure permission handler is set for GitHubCopilotAgent

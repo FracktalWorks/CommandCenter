@@ -870,12 +870,32 @@ async def approve_pending_commit(
             local_branch = "main"
         await _git_exec(clone_dir, ["checkout", local_branch])
 
-        # Push.  If the fast-forward fails, rebase on top of origin/HEAD and retry.
-        push_ok = await _git_push_with_rebase(clone_dir, commit_sha)
-        if not push_ok:
-            raise HTTPException(
-                status_code=500,
-                detail="git push failed after rebase — check gateway logs",
+        # Detect local-only repos (no remote origin).  For these, approval
+        # simply keeps the commit — there is no remote to push to.
+        remote_proc = await asyncio.create_subprocess_exec(
+            "git", "remote", "get-url", "origin",
+            cwd=clone_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await remote_proc.communicate()
+        has_remote = remote_proc.returncode == 0
+
+        if has_remote:
+            # Push.  If the fast-forward fails, rebase on top of origin/HEAD and retry.
+            push_ok = await _git_push_with_rebase(clone_dir, commit_sha)
+            if not push_ok:
+                raise HTTPException(
+                    status_code=500,
+                    detail="git push failed after rebase — check gateway logs",
+                )
+            _log.info("mutation.commit_pushed", agent=row.agent_name, commit_sha=commit_sha[:8])
+        else:
+            _log.info(
+                "mutation.commit_kept_local",
+                agent=row.agent_name,
+                commit_sha=commit_sha[:8],
+                hint="Local-only repo — no remote to push to. Commit kept.",
             )
 
         reviewer = getattr(user, "sub", None) or getattr(user, "email", "unknown")

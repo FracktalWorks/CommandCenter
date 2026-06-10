@@ -3,13 +3,15 @@
 /**
  * GitHubDeviceConnect
  *
- * Guides the user through connecting a GitHub account via the OAuth Device Flow.
- * No callback URL, no port-forwarding — works on localhost and remote servers.
+ * Guides the user through connecting a GitHub account.
+ * Two paths are offered side-by-side in the setup phase:
+ *   Option A (recommended) — paste a classic PAT with repo + copilot scopes
+ *   Option B — OAuth Device Flow (needs a Client ID first)
  *
  * Phases:
- *  "setup"        → Instructions + Client ID input (first-time only)
- *  "saving"       → Saving GITHUB_CLIENT_ID to .env
- *  "ready"        → Client ID saved; show "Connect GitHub Account" button
+ *  "setup"        → Instructions + PAT field + Client ID field
+ *  "saving"       → Saving credentials to .env
+ *  "ready"        → Client ID saved (no PAT); show "Connect GitHub Account" button
  *  "starting"     → Calling device/start
  *  "flow"         → Showing user_code + polling for approval
  *  "authorized"   → Token saved; shows GitHub login + success
@@ -72,11 +74,22 @@ export default function GitHubDeviceConnect({
   integration,
   onConfigured,
 }: GitHubDeviceConnectProps) {
-  // Detect initial phase: if GITHUB_CLIENT_ID is already set, skip to "ready"
-  // The status endpoint includes GITHUB_CLIENT_ID in missing_keys only when it's unset.
+  // Detect initial phase:
+  // - If GITHUB_TOKEN is already set → "authorized" (PAT path is done)
+  // - If only GITHUB_CLIENT_ID is set → "ready" (can start device flow)
+  // - If neither is set → "setup" (show both fields)
+  const hasToken = !integration.missing_keys?.includes("GITHUB_TOKEN");
   const hasClientId = !integration.missing_keys?.includes("GITHUB_CLIENT_ID");
-  const [phase, setPhase] = useState<Phase>(hasClientId ? "ready" : "setup");
 
+  const initialPhase: Phase = hasToken
+    ? "authorized"
+    : hasClientId
+    ? "ready"
+    : "setup";
+
+  const [phase, setPhase] = useState<Phase>(initialPhase);
+
+  const [tokenInput, setTokenInput] = useState("");
   const [clientIdInput, setClientIdInput] = useState("");
   const [deviceInfo, setDeviceInfo] = useState<DeviceFlowInfo | null>(null);
   const [login, setLogin] = useState<string | null>(null);
@@ -97,22 +110,33 @@ export default function GitHubDeviceConnect({
   useEffect(() => () => stopPolling(), [stopPolling]);
 
   // ---------------------------------------------------------------------------
-  // Step 1: Save GITHUB_CLIENT_ID
+  // Step 1: Save credentials (PAT and/or Client ID)
   // ---------------------------------------------------------------------------
 
-  const handleSaveClientId = async () => {
-    if (!clientIdInput.trim()) return;
+  const handleSaveCredentials = async () => {
+    const hasPat = tokenInput.trim();
+    const hasCid = clientIdInput.trim();
+    if (!hasPat && !hasCid) return;
     setPhase("saving");
     try {
+      const vars: { key: string; value: string }[] = [];
+      if (hasPat) vars.push({ key: "GITHUB_TOKEN", value: tokenInput.trim() });
+      if (hasCid) vars.push({ key: "GITHUB_CLIENT_ID", value: clientIdInput.trim() });
+
       const res = await fetch("/api/integrations/configure", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          vars: [{ key: "GITHUB_CLIENT_ID", value: clientIdInput.trim() }],
-        }),
+        body: JSON.stringify({ vars }),
       });
       if (res.ok) {
-        setPhase("ready");
+        // If PAT was provided, skip device flow — go straight to authorized.
+        if (hasPat) {
+          setPhase("authorized");
+          setTimeout(onConfigured, 1200);
+        } else {
+          // Only Client ID saved — proceed to device flow.
+          setPhase("ready");
+        }
       } else {
         const data = await res.json().catch(() => ({}));
         setErrorMsg(String(data.error ?? `Save failed (${res.status})`));
@@ -244,43 +268,91 @@ export default function GitHubDeviceConnect({
           </p>
         </div>
         <a
-          href={integration.setup_url}
+          href="https://github.com/settings/tokens/new?scopes=copilot,repo"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs px-3 py-1.5 rounded-lg border border-neutral-600 text-neutral-400 hover:bg-neutral-800 transition-colors shrink-0"
+          className="text-xs px-3 py-1.5 rounded-lg border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 transition-colors shrink-0"
         >
-          Create OAuth App →
+          Create PAT →
         </a>
       </div>
 
-      {/* Phase: setup — collect Client ID */}
+      {/* Phase: setup — collect PAT (recommended) and/or Client ID */}
       {(phase === "setup" || phase === "saving") && (
         <div className="space-y-4">
           <pre className="text-xs text-neutral-400 bg-neutral-800/60 rounded-lg p-4 whitespace-pre-wrap leading-relaxed">
             {integration.instructions}
           </pre>
-          <div>
-            <label className="block text-xs text-neutral-400 mb-1">
-              OAuth App Client ID
-              <span className="ml-2 font-mono text-neutral-500 text-xs">(GITHUB_CLIENT_ID)</span>
-            </label>
-            <input
-              type="text"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="Ov23li…"
-              value={clientIdInput}
-              onChange={(e) => setClientIdInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && void handleSaveClientId()}
-              className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-blue-500 transition-colors font-mono"
-            />
+
+          {/* Option A: PAT (recommended) */}
+          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+                RECOMMENDED
+              </span>
+              <span className="text-sm font-medium text-neutral-200">Option A — Personal Access Token</span>
+            </div>
+            <p className="text-xs text-neutral-500">
+              Paste a classic PAT with <code className="text-neutral-400">repo</code> +{" "}
+              <code className="text-neutral-400">copilot</code> scopes. Covers both
+              private repo cloning and Copilot model access.
+            </p>
+            <div>
+              <label className="block text-xs text-neutral-400 mb-1">
+                Personal Access Token
+                <span className="ml-2 font-mono text-neutral-500 text-xs">(GITHUB_TOKEN)</span>
+              </label>
+              <input
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="ghp_… or github_pat_…"
+                value={tokenInput}
+                onChange={(e) => setTokenInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && void handleSaveCredentials()}
+                className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-emerald-500 transition-colors font-mono"
+              />
+            </div>
           </div>
+
+          {/* Divider */}
+          <div className="flex items-center gap-3">
+            <div className="h-px flex-1 bg-neutral-700" />
+            <span className="text-xs text-neutral-600">or use device flow</span>
+            <div className="h-px flex-1 bg-neutral-700" />
+          </div>
+
+          {/* Option B: OAuth Client ID */}
+          <div className="rounded-lg border border-neutral-700 bg-neutral-900/50 p-4 space-y-3">
+            <span className="text-sm font-medium text-neutral-400">Option B — OAuth Device Flow</span>
+            <p className="text-xs text-neutral-500">
+              Create an OAuth App first, then paste its Client ID below. No
+              token entry needed — you'll authenticate in the browser.
+            </p>
+            <div>
+              <label className="block text-xs text-neutral-400 mb-1">
+                OAuth App Client ID
+                <span className="ml-2 font-mono text-neutral-500 text-xs">(GITHUB_CLIENT_ID)</span>
+              </label>
+              <input
+                type="text"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="Ov23li…"
+                value={clientIdInput}
+                onChange={(e) => setClientIdInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && void handleSaveCredentials()}
+                className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-blue-500 transition-colors font-mono"
+              />
+            </div>
+          </div>
+
           <button
-            onClick={() => void handleSaveClientId()}
-            disabled={!clientIdInput.trim() || phase === "saving"}
-            className="w-full py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium text-white transition-colors"
+            onClick={() => void handleSaveCredentials()}
+            disabled={(!tokenInput.trim() && !clientIdInput.trim()) || phase === "saving"}
+            className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium text-white transition-colors"
           >
-            {phase === "saving" ? "Saving…" : "Save Client ID →"}
+            {phase === "saving" ? "Saving…" : tokenInput.trim() ? "Save & Connect →" : "Save & Continue →"}
           </button>
         </div>
       )}
@@ -374,8 +446,8 @@ export default function GitHubDeviceConnect({
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
           </svg>
           <span>
-            GitHub account <strong className="text-emerald-300">{login}</strong> connected.
-            Token saved — ready to clone private repos.
+            GitHub {login ? <span>account <strong className="text-emerald-300">{login}</strong></span> : "token"} connected.
+            Ready to clone private repos.
           </span>
         </div>
       )}
@@ -420,7 +492,7 @@ export default function GitHubDeviceConnect({
           <button
             onClick={() => {
               setErrorMsg(null);
-              setPhase(hasClientId ? "ready" : "setup");
+              setPhase(initialPhase);
             }}
             className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm text-neutral-200 transition-colors"
           >

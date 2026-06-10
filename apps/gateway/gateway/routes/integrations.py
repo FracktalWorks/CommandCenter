@@ -178,11 +178,13 @@ _SETUP_GUIDES: dict[str, dict[str, Any]] = {
             "   use Option A if you want Copilot model access."
         ),
         "env_vars": [
+            # GITHUB_TOKEN (Option A — recommended): classic or fine-grained PAT
+            # with copilot + repo scopes.  Shown first because it's the simpler,
+            # self-contained path.
+            {"key": "GITHUB_TOKEN", "label": "Personal Access Token — copilot + repo scopes (recommended)", "sensitive": True},
             # GITHUB_CLIENT_ID is used for the OAuth device flow (Option B).
-            {"key": "GITHUB_CLIENT_ID", "label": "OAuth App Client ID (Option B)", "sensitive": False},
-            # GITHUB_TOKEN can be set directly as a PAT (Option A), or is written
-            # automatically after a successful device-flow authentication.
-            {"key": "GITHUB_TOKEN", "label": "Personal Access Token — copilot + repo scopes (Option A)", "sensitive": True},
+            # Only needed if you prefer the device-flow UX over a PAT.
+            {"key": "GITHUB_CLIENT_ID", "label": "OAuth App Client ID (Option B — device flow)", "sensitive": False},
         ],
     },
     "serpapi": {

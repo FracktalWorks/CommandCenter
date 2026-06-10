@@ -134,7 +134,6 @@ async def attempt_self_mutation(
     mutation_attempts: int = 0,
     agent_dir: str | None = None,
     incompatibility: bool = False,
-    event_payload: dict[str, Any] | None = None,
 ) -> MutationResult:
     """Attempt to fix a failing agent using an isolated Copilot SDK sandbox.
 
@@ -200,34 +199,7 @@ async def attempt_self_mutation(
         )
     )
 
-    telemetry = _build_telemetry(agent_name, run_id, short_run, error_text, settings, agent_dir=agent_dir, incompatibility=incompatibility, event_payload=event_payload)
-
-    # ── Guard: skip mutation when there is no agent repo to fix ─────────
-    # Plain MAF agents that live inside the monorepo (e.g. orchestrator)
-    # don't have their own GitHub repos or local clone directories.
-    # The mutation sandbox needs a repo to mount — without one, it cannot
-    # safely isolate the fix from the rest of the platform code.
-    if not agent_dir:
-        reason = (
-            "No agent directory available — this agent may be a monorepo MAF agent "
-            "without a separate repository. Self-mutation requires an isolated "
-            "agent repo (cloned via repo_url or pointed at via local_path). "
-            "Register the agent with a repo_url to enable self-mutation."
-        )
-        _log.warning("mutation.skipped_no_repo", agent=agent_name, run_id=run_id, reason=reason)
-        _log.info(
-            "mutation.manual_prompt",
-            agent=agent_name,
-            run_id=run_id,
-            prompt=_build_mutation_prompt(telemetry),
-        )
-        return MutationResult(
-            agent_name=agent_name,
-            run_id=run_id,
-            attempted=False,
-            skipped_reason=reason,
-        )
-
+    telemetry = _build_telemetry(agent_name, run_id, short_run, error_text, settings, agent_dir=agent_dir, incompatibility=incompatibility)
     commit_staged, commit_sha, diff_text, test_summary, conversation_id = await _run_mutation_sandbox(
         agent_name, run_id, short_run, telemetry, settings
     )
@@ -333,7 +305,7 @@ def _build_telemetry(
     bot_name = getattr(settings, "github_bot_name", "commandcenter-bot")
     bot_email = getattr(settings, "github_bot_email", "") or f"{bot_name}@users.noreply.github.com"
 
-    # Locate the agent_repo_compatibility.md guide to embed in incompatibility prompts
+    # Locate the agent_repo_compatibility.md guide
     compat_guide: str = ""
     if incompatibility:
         for candidate in Path(__file__).parents:
@@ -342,25 +314,20 @@ def _build_telemetry(
                 compat_guide = guide.read_text(encoding="utf-8", errors="replace")
                 break
 
-    # ── Agent purpose context ──────────────────────────────────────────
-    # Read the agent's own documentation so the sandbox understands what
-    # this agent is supposed to do, not just what broke.
+    # Agent purpose context — read instructions.md and skill descriptions
     instructions_md: str = ""
     skills_summary: str = ""
     if agent_dir:
         agent_path = Path(agent_dir)
-        # Primary system prompt
         instr_path = agent_path / "instructions.md"
         if instr_path.exists():
             instructions_md = instr_path.read_text(encoding="utf-8", errors="replace")[:4000]
-        # Skill descriptions for domain context
         skills_dir = agent_path / "skills"
         if skills_dir.is_dir():
             skill_lines: list[str] = []
             for skill_md in sorted(skills_dir.glob("*/SKILL.md")):
                 try:
                     content = skill_md.read_text(encoding="utf-8", errors="replace")
-                    # Extract first meaningful paragraph (skip frontmatter)
                     in_frontmatter = False
                     for line in content.splitlines():
                         stripped = line.strip()
@@ -371,13 +338,12 @@ def _build_telemetry(
                             continue
                         skill_lines.append(f"- {skill_md.parent.name}: {stripped[:200]}")
                         break
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
             if skill_lines:
                 skills_summary = "\n".join(skill_lines)
 
-    # ── Trigger context ────────────────────────────────────────────────
-    # What was the agent doing when it failed?
+    # Trigger context — what was the agent doing when it failed?
     trigger_summary: str = ""
     if event_payload:
         user_msg = event_payload.get("message") or event_payload.get("user_query") or ""
@@ -399,16 +365,13 @@ def _build_telemetry(
         "short_run": short_run,
         "error": error_text,
         "repo_url": f"https://github.com/{org}/agent-{agent_name}",
-        # branch_name kept for backward compat (used in prompts) but no longer pushed
         "branch_name": f"auto-fix/{short_run}",
         "commit_message": f"auto-fix: {error_text[:72]}",
-        # Persistent local clone — already authenticated + bot identity set
         "local_clone_dir": agent_dir,
         "bot_name": bot_name,
         "bot_email": bot_email,
         "incompatibility": incompatibility,
         "compat_guide": compat_guide,
-        # Agent purpose (new)
         "instructions_md": instructions_md,
         "skills_summary": skills_summary,
         "trigger_summary": trigger_summary,
@@ -465,12 +428,7 @@ def _build_incompatibility_prompt(telemetry: dict[str, Any]) -> str:
 
 
 def _build_runtime_fix_prompt(telemetry: dict[str, Any]) -> str:
-    """Prompt for runtime errors — finds and patches the root cause.
-
-    Includes the agent's purpose (instructions.md), available skills, and
-    the trigger event so the sandbox understands what the agent was trying
-    to do when it failed — not just the error message.
-    """
+    """Prompt for runtime errors — finds and patches the root cause."""
     if telemetry.get("local_clone_dir"):
         repo_section = (
             f"## Repository (local clone — already authenticated)\n"
@@ -490,54 +448,21 @@ def _build_runtime_fix_prompt(telemetry: dict[str, Any]) -> str:
         )
         cd_step = f"1. Clone from `{telemetry['repo_url']}` and configure bot identity."
 
-    # ── Agent purpose preamble ──────────────────────────────────────────
-    purpose_block = ""
-    instructions_md = telemetry.get("instructions_md", "")
-    skills_summary = telemetry.get("skills_summary", "")
-    trigger_summary = telemetry.get("trigger_summary", "")
-
-    if instructions_md or skills_summary or trigger_summary:
-        purpose_lines = ["## Agent Context — what this agent does\n"]
-        if instructions_md:
-            purpose_lines.append(
-                "### Agent instructions (instructions.md)\n"
-                "This is the agent's system prompt. The fix MUST preserve "
-                "the agent's persona, domain, and behavioural rules:\n\n"
-                f"{instructions_md}\n"
-            )
-        if skills_summary:
-            purpose_lines.append(
-                "### Available skills\n"
-                "These are the skills the agent uses. The fix must not break "
-                "their integration:\n\n"
-                f"{skills_summary}\n"
-            )
-        if trigger_summary:
-            purpose_lines.append(
-                "### What triggered the failure\n"
-                "The agent was handling this request when it crashed. "
-                "The fix must ensure this request succeeds:\n\n"
-                f"{trigger_summary}\n"
-            )
-        purpose_block = "\n".join(purpose_lines)
-
     return (
         f"You are orchestrating a two-phase code repair using researcher and editor sub-agents.\n\n"
-        f"{purpose_block}"
         f"{repo_section}\n"
         f"## Error\n```\n{telemetry['error']}\n```\n\n"
         f"## Sub-agent workflow\n"
         f"### Phase 1 — Researcher (read-only)\n"
         f"{cd_step}\n"
         f"Use grep/view tools to:\n"
-        f"  a. Understand the repo structure AND the agent's purpose (see Agent Context above)\n"
+        f"  a. Understand the repo structure\n"
         f"  b. Identify the root cause of the error\n"
         f"  c. Find all files that need changing\n"
-        f"  d. Verify the fix is consistent with the agent's instructions and skills\n"
-        f"  e. Write a precise fix plan before touching anything\n\n"
+        f"  d. Write a precise fix plan before touching anything\n\n"
         f"### Phase 2 — Editor (minimal write)\n"
         f"Execute ONLY the fix plan from Phase 1:\n"
-        f"  a. Make minimal, correct changes — do NOT change the agent's persona or behaviour\n"
+        f"  a. Make minimal, correct changes\n"
         f"  b. Run `pytest` — all tests must pass. Capture the summary line.\n"
         f"  c. `git add -A` and commit on the **current branch** (do NOT create a new branch or push):\n"
         f"     `git commit -m 'auto-fix: <short description>'`\n"
@@ -546,8 +471,6 @@ def _build_runtime_fix_prompt(telemetry: dict[str, Any]) -> str:
         f"**Safety rules:**\n"
         f"- Never write without first completing Phase 1 analysis\n"
         f"- Minimal fix only — do not refactor unrelated code\n"
-        f"- The fix must preserve the agent's existing persona, domain knowledge, and skill integrations\n"
-        f"- If the trigger request would still fail after your fix, the fix is incomplete\n"
         f"- Commit author: `{telemetry['bot_name']}` <`{telemetry['bot_email']}`>\n"
         f"- **Do NOT push and do NOT open a PR.** Commit locally only.\n"
         f"  The orchestrator will push once a human approves via the inbox.\n"
@@ -760,6 +683,7 @@ async def _register_pending_commit(
     """
     try:
         import uuid  # noqa: PLC0415
+
         from acb_graph import get_session  # noqa: PLC0415
         from sqlalchemy import text  # noqa: PLC0415
 

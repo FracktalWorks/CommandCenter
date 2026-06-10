@@ -63,11 +63,9 @@ def _build_injected_tools_addendum() -> str:
     # Fetch the live agent registry so the model sees the exact names.
     agent_lines: list[str] = []
     try:
-        from gateway.routes.agent import (  # noqa: PLC0415
-            _load_registry_agents,
-            _load_dynamic_agents,
-        )
-        all_agents = _load_dynamic_agents() + _load_registry_agents()
+        from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
+        from gateway.routes.agent import _load_dynamic_agents
+        all_agents = _load_dynamic_agents() + _AGENT_REGISTRY
         for a in all_agents:
             name = a.get("name", "")
             desc = a.get("description", "")
@@ -166,18 +164,17 @@ def _inject_agent_tools(agents: list[Any]) -> None:
         Legacy Copilot SDK path  — appends to ``agent._default_options.tools`` (list)
     """
     try:
-        from acb_skills.agent_tools import (  # noqa: PLC0415
-            call_agent,
-            call_agent_background,
-            call_agents_parallel,
-        )
+        from acb_skills.agent_tools import call_agent  # noqa: PLC0415
+        from acb_skills.agent_tools import (call_agent_background,
+                                            call_agents_parallel)
         _extra_tools = [call_agent, call_agents_parallel, call_agent_background]
     except ImportError:
         return  # acb_skills not installed in this env — skip silently
 
     # Zero-credential web tools — always available, no integration config needed.
     try:
-        from acb_skills.web_tools import fetch_page, web_search  # noqa: PLC0415
+        from acb_skills.web_tools import fetch_page  # noqa: PLC0415
+        from acb_skills.web_tools import web_search
         _extra_tools = _extra_tools + [web_search, fetch_page]
     except ImportError:
         pass  # duckduckgo-search / httpx not installed — skip gracefully
@@ -206,7 +203,8 @@ def _inject_agent_tools(agents: list[Any]) -> None:
             if hasattr(agent, "_tools") and isinstance(agent._tools, list):
                 # Try to import normalize_tools for FunctionTool wrapping.
                 try:
-                    from agent_framework._tools import normalize_tools as _norm  # noqa: PLC0415
+                    from agent_framework._tools import \
+                        normalize_tools as _norm  # noqa: PLC0415
                 except ImportError:
                     _norm = None  # type: ignore[assignment]
 
@@ -274,7 +272,8 @@ def _inject_agent_tools(agents: list[Any]) -> None:
             opts = getattr(agent, "_default_options", None)
             if opts is not None:
                 try:
-                    from agent_framework._tools import normalize_tools as _norm_legacy  # noqa: PLC0415
+                    from agent_framework._tools import \
+                        normalize_tools as _norm_legacy  # noqa: PLC0415
                 except ImportError:
                     _norm_legacy = None  # type: ignore[assignment]
 
@@ -331,11 +330,9 @@ async def _run_sub_agent_streaming(
     _local_path: str | None = None
     _runtime: str = "maf"
     try:
-        from gateway.routes.agent import (  # noqa: PLC0415
-            _load_registry_agents,
-            _load_dynamic_agents,
-        )
-        _all = _load_dynamic_agents() + _load_registry_agents()
+        from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
+        from gateway.routes.agent import _load_dynamic_agents
+        _all = _load_dynamic_agents() + _AGENT_REGISTRY
         entry = next((e for e in _all if e["name"] == agent_name), None)
         if entry:
             raw = entry.get("repo_name") or ""
@@ -366,22 +363,18 @@ async def _run_sub_agent_streaming(
             except Exception:  # noqa: BLE001
                 pass
 
-            # Patch GitHub Copilot agents with enhanced BYOK + streaming methods.
-            if _runtime == "github-copilot":
-                try:
-                    from orchestrator.copilot_agent import CommandCenterCopilotAgent  # noqa: PLC0415
-                    agent._create_session = CommandCenterCopilotAgent._create_session.__get__(
-                        agent, type(agent)
-                    )
-                    agent._stream_updates = CommandCenterCopilotAgent._stream_updates.__get__(
-                        agent, type(agent)
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
-
             text_parts: list[str] = []
 
             if _runtime == "github-copilot" and hasattr(agent, "run"):
+                # Apply model override.
+                _model = (getattr(settings, "copilot_chat_model", "") or "").strip()
+                if _model:
+                    try:
+                        if hasattr(agent, "_default_options") and agent._default_options is not None:
+                            agent._default_options.model = _model
+                    except Exception:  # noqa: BLE001
+                        pass
+
                 async with agent:
                     stream = agent.run(message_str, stream=True)
                     async for update in stream:
@@ -576,7 +569,8 @@ async def _detect_agent_commits(
             count=len(lines),
         )
 
-        from orchestrator.mutation import _git_diff, _register_pending_commit  # noqa: PLC0415
+        from orchestrator.mutation import _git_diff  # noqa: PLC0415
+        from orchestrator.mutation import _register_pending_commit
 
         # Load existing commit SHAs for this agent so we don't double-register.
         _existing_shas: set[str] = set()
@@ -677,9 +671,9 @@ async def run_agent(
         _registry_repo_name: str | None = None
         _registry_local_path: str | None = None
         try:
-            from gateway.routes.agent import (_load_registry_agents,  # noqa: PLC0415
-                                              _load_dynamic_agents)
-            _all_entries = _load_dynamic_agents() + _load_registry_agents()
+            from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
+            from gateway.routes.agent import _load_dynamic_agents
+            _all_entries = _load_dynamic_agents() + _AGENT_REGISTRY
             _registry_entry = next(
                 (e for e in _all_entries if e["name"] == agent_name), None
             )
@@ -706,11 +700,11 @@ async def run_agent(
             _head_before: str = ""
             _is_copilot_agent = False
             try:
-                from gateway.routes.agent import (  # noqa: PLC0415
-                    _load_registry_agents, _load_dynamic_agents as _lda,
-                )
+                from gateway.routes.agent import _AGENT_REGISTRY
+                from gateway.routes.agent import \
+                    _load_dynamic_agents as _lda  # noqa: PLC0415
                 _ea = next(
-                    (e for e in _lda() + _load_registry_agents() if e["name"] == agent_name),
+                    (e for e in _lda() + _AGENT_REGISTRY if e["name"] == agent_name),
                     None,
                 )
                 if _ea and _ea.get("agent_runtime") == "github-copilot":
@@ -765,11 +759,10 @@ async def run_agent(
         # Post-run: detect commits the agent made during this run (github-copilot only)
         _registry_runtime = "maf"
         try:
-            from gateway.routes.agent import (  # noqa: PLC0415
-                _load_registry_agents, _load_dynamic_agents,
-            )
+            from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
+            from gateway.routes.agent import _load_dynamic_agents
             _e = next(
-                (e for e in _load_dynamic_agents() + _load_registry_agents() if e["name"] == agent_name),
+                (e for e in _load_dynamic_agents() + _AGENT_REGISTRY if e["name"] == agent_name),
                 None,
             )
             if _e:
@@ -797,14 +790,14 @@ async def run_agent(
         # Trigger the Copilot SDK mutation sandbox to auto-fix the repo and open a PR.
         # The sandbox receives the full error + the agent_repo_compatibility.md guide
         # so the SDK agent knows exactly what the repo needs to look like.
-        from orchestrator.mutation import attempt_self_mutation  # noqa: PLC0415
+        from orchestrator.mutation import \
+            attempt_self_mutation  # noqa: PLC0415
         mutation_result = await attempt_self_mutation(
             agent_name=agent_name,
             run_id=run_id,
             error=exc,
             agent_dir=_agent_dir,
             incompatibility=True,
-            event_payload=event_payload,
         )
         pr_url = mutation_result.pr_url if mutation_result else None
         raise AgentRunError(
@@ -840,7 +833,6 @@ async def run_agent(
             run_id=run_id,
             error=exc,
             agent_dir=_agent_dir,  # pass persistent clone path for authenticated push
-            event_payload=event_payload,
         )
         pr_url = mutation_result.pr_url if mutation_result else None
 
@@ -912,9 +904,9 @@ async def run_agent_stream(
     _registry_local_path: str | None = None
     _agent_runtime: str = "maf"
     try:
-        from gateway.routes.agent import (_load_registry_agents,  # noqa: PLC0415
-                                          _load_dynamic_agents)
-        _all = _load_dynamic_agents() + _load_registry_agents()
+        from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
+        from gateway.routes.agent import _load_dynamic_agents
+        _all = _load_dynamic_agents() + _AGENT_REGISTRY
         entry = next((e for e in _all if e["name"] == agent_name), None)
         if entry:
             raw = entry.get("repo_name") or ""
@@ -946,7 +938,8 @@ async def run_agent_stream(
             # Set write_artifact context so the tool knows which session to
             # report files to and where the workspace root lives.
             try:
-                from acb_skills.write_artifact import _WRITE_ARTIFACT_CONTEXT  # noqa: PLC0415
+                from acb_skills.write_artifact import \
+                    _WRITE_ARTIFACT_CONTEXT  # noqa: PLC0415
                 _WRITE_ARTIFACT_CONTEXT["session_id"] = thread_id or run_id
                 _WRITE_ARTIFACT_CONTEXT["workspace_root"] = str(loaded.agent_dir)
                 _WRITE_ARTIFACT_CONTEXT["gateway_url"] = str(
@@ -964,208 +957,8 @@ async def run_agent_stream(
 
             agent = agents[0]
 
-            # ── Resolve BYOK provider config (shared by both runtimes) ──────
-            _DIRECT_PROVIDERS: dict[str, tuple[str, str]] = {
-                "openrouter/": ("https://openrouter.ai/api/v1",      "OPENROUTER_API_KEY"),
-                "openai/":     ("https://api.openai.com/v1",          "OPENAI_API_KEY"),
-                "deepseek/":   ("https://api.deepseek.com/v1",        "DEEPSEEK_API_KEY"),
-                "gemini/":     ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"),
-                "groq/":       ("https://api.groq.com/openai/v1",    "GROQ_API_KEY"),
-                "anthropic/":  ("https://api.anthropic.com/v1",       "ANTHROPIC_API_KEY"),
-                "together_ai/":("https://api.together.xyz/v1",        "TOGETHER_API_KEY"),
-                "mistral/":    ("https://api.mistral.ai/v1",          "MISTRAL_API_KEY"),
-            }
-            _final_model = (model or "").strip()
-            _is_byok = bool(_final_model and ("/" in _final_model or _final_model.lower().startswith("tier")))
-            _log.info("executor.byok_check", model=_final_model, is_byok=_is_byok, agent=agent_name, runtime=_agent_runtime)
-
-            _byok_provider: dict[str, Any] | None = None
-            _byok_model_id: str = _final_model
-            if _is_byok:
-                _byok_litellm_base = (getattr(settings, "litellm_base_url", "") or "http://127.0.0.1:4000").rstrip("/")
-                _byok_litellm_key = (getattr(settings, "litellm_master_key", "") or "sk-local").strip()
-                _matched_prefix: str | None = None
-                for _pfx in _DIRECT_PROVIDERS:
-                    if _final_model.startswith(_pfx):
-                        _matched_prefix = _pfx
-                        break
-                if _matched_prefix is not None:
-                    _direct_base, _direct_env = _DIRECT_PROVIDERS[_matched_prefix]
-                    _provider_key = (os.environ.get(_direct_env) or "").strip()
-                    if not _provider_key:
-                        try:
-                            _provider_key = (getattr(get_settings(), _direct_env.lower(), "") or "").strip()
-                        except Exception:  # noqa: BLE001
-                            pass
-                    _byok_base_url = _direct_base
-                    _byok_api_key = _provider_key or _byok_litellm_key
-                    _byok_model_id = _final_model[len(_matched_prefix):]
-                else:
-                    _byok_base_url = f"{_byok_litellm_base}/v1"
-                    _byok_api_key = _byok_litellm_key
-                    _byok_model_id = _final_model
-                _byok_provider = {
-                    "type": "openai",
-                    "base_url": _byok_base_url,
-                    "api_key": _byok_api_key,
-                }
-
-            # Shared SSE event queue for both runtimes
-            queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
-            _t2_token = _active_run_queue.set(queue)  # expose to call_agent for sub-streaming
-
-            # ── GitHub Copilot SDK path (MAF-wrapped via CommandCenterCopilotAgent) ─
-            if _agent_runtime == "github-copilot":
-                from orchestrator.copilot_agent import CommandCenterCopilotAgent  # noqa: PLC0415
-
-                # Patch the loaded agent's _create_session and _stream_updates
-                # to use the enhanced versions that support BYOK and rich events.
-                # This avoids needing to reconstruct the agent or change agent repos.
-                _orig_create = agent._create_session
-                _orig_stream = agent._stream_updates
-                agent._create_session = CommandCenterCopilotAgent._create_session.__get__(
-                    agent, type(agent)
-                )
-                agent._stream_updates = CommandCenterCopilotAgent._stream_updates.__get__(
-                    agent, type(agent)
-                )
-
-                # Inject BYOK provider config into the agent's default_options
-                if _is_byok and _byok_provider:
-                    agent._default_options["provider"] = _byok_provider
-                    agent._default_options["model"] = _byok_model_id
-                    _log.info(
-                        "executor.copilot_maf_byok",
-                        agent=agent_name, model=_byok_model_id,
-                        base_url=_byok_provider["base_url"],
-                    )
-                elif _final_model:
-                    agent._default_options["model"] = _final_model
-                    _log.info("executor.copilot_maf_model", agent=agent_name, model=_final_model)
-
-                # Ensure permission handler is set
-                try:
-                    from copilot import PermissionHandler as _PH  # noqa: PLC0415
-                    if hasattr(agent, "_permission_handler") and agent._permission_handler is None:
-                        agent._permission_handler = _PH.approve_all
-                except Exception:  # noqa: BLE001
-                    pass
-
-                # Build the message from the event payload
-                _msg_text = (
-                    event_payload.get("message")
-                    or event_payload.get("user_query")
-                    or ""
-                )
-
-                # Run the agent with MAF streaming → translate to AG-UI
-                _msg_id: str | None = None
-                _text_started = False
-                try:
-                    async with agent:
-                        _run_opts: dict[str, Any] = {}
-                        if _is_byok and _byok_provider:
-                            _run_opts["model"] = _byok_model_id
-                        elif _final_model:
-                            _run_opts["model"] = _final_model
-                        _stream = agent.run(_msg_text, stream=True, options=_run_opts if _run_opts else None)
-                        async for _update in _stream:
-                            # Process each content item in the update
-                            for _c in (_update.contents or []):
-                                _ct = getattr(_c, "type", None)
-                                if _ct == "text":
-                                    _delta = _c.text or ""
-                                    if _delta:
-                                        if not _text_started:
-                                            _text_started = True
-                                            _msg_id = _update.message_id or str(uuid.uuid4())
-                                            yield _sse({
-                                                "type": "TEXT_MESSAGE_START",
-                                                "messageId": _msg_id,
-                                                "role": "assistant",
-                                            })
-                                        yield _sse({
-                                            "type": "TEXT_MESSAGE_CONTENT",
-                                            "messageId": _msg_id,
-                                            "delta": _delta,
-                                        })
-                                elif _ct == "text_reasoning":
-                                    _delta = _c.text or ""
-                                    if _delta:
-                                        yield _sse({
-                                            "type": "THINKING_TEXT_MESSAGE_CONTENT",
-                                            "delta": _delta,
-                                        })
-                                elif _ct == "function_call":
-                                    _tc_id = _c.call_id or ""
-                                    _tc_name = _c.name or ""
-                                    _tc_args = _c.arguments
-                                    _args_str = (
-                                        json.dumps(_tc_args)
-                                        if isinstance(_tc_args, dict)
-                                        else str(_tc_args or "")
-                                    )
-                                    yield _sse({
-                                        "type": "TOOL_CALL_START",
-                                        "toolCallId": _tc_id,
-                                        "toolCallName": _tc_name,
-                                        "args": _args_str,
-                                    })
-                                    if _tc_args:
-                                        yield _sse({
-                                            "type": "TOOL_CALL_ARGS",
-                                            "toolCallId": _tc_id,
-                                            "delta": _args_str,
-                                        })
-                                elif _ct == "function_result":
-                                    _tc_id = _c.call_id or ""
-                                    _tc_result = _c.result or ""
-                                    _tc_ok = not _c.exception
-                                    yield _sse({
-                                        "type": "TOOL_CALL_RESULT",
-                                        "toolCallId": _tc_id,
-                                        "content": str(_tc_result)[:2000],
-                                        "success": _tc_ok,
-                                    })
-
-                            # Also handle raw events for agent intent / status
-                            _raw = _update.raw_representation
-                            if _raw is not None:
-                                try:
-                                    _raw_type = str(_raw.type)
-                                    if "INTENT" in _raw_type:
-                                        _intent = getattr(_raw.data, "intent", "") or ""
-                                        if _intent:
-                                            yield _sse({
-                                                "type": "TOOL_CALL_START",
-                                                "toolCallId": f"{run_id}:intent:{_intent[:20]}",
-                                                "toolCallName": _intent,
-                                            })
-                                except Exception:  # noqa: BLE001
-                                    pass
-
-                except Exception as _exc:  # noqa: BLE001
-                    _log.exception("executor.copilot_maf_stream_error", agent=agent_name)
-                    yield _sse({
-                        "type": "RUN_ERROR",
-                        "runId": run_id,
-                        "message": str(_exc),
-                    })
-                    return
-
-                # Emit final events
-                if _msg_id and _text_started:
-                    yield _sse({
-                        "type": "TEXT_MESSAGE_END",
-                        "messageId": _msg_id,
-                    })
-                _active_run_queue.reset(_t2_token)
-                yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
-                return
-            # ── End Copilot SDK MAF-wrapped path ─────────────────────────────
-
-            # ── MAF agent path (non-github-copilot runtimes) ────────────────
-            # Ensure permission handler is set for GitHubCopilotAgent
+            # Ensure permission handler is set for GitHubCopilotAgent before ANY
+            # execution path — repos often omit it from default_options.
             try:
                 from copilot import PermissionHandler as _PH  # noqa: PLC0415
                 for _a in agents:
@@ -1174,52 +967,209 @@ async def run_agent_stream(
             except Exception:  # noqa: BLE001
                 pass
 
-            # BYOK for MAF agents: inject OpenAIChatCompletionClient
-            if _is_byok and _byok_provider:
-                _is_ghcp = hasattr(agent, "_default_options") and isinstance(agent._default_options, dict)
-                if _is_ghcp:
-                    from agent_framework import Agent as _MAFAgent  # noqa: PLC0415
-                    from agent_framework.openai import OpenAIChatCompletionClient as _OpenAI  # noqa: PLC0415
-                    _byok_tools: list[Any] = []
-                    for _t in (getattr(agent, "_tools", []) or []):
-                        _raw_fn = getattr(_t, "func", _t) if hasattr(_t, "func") else _t
-                        _byok_tools.append(_raw_fn)
-                    _byok_instructions: str | None = None
-                    _sm2 = agent._default_options.get("system_message") if hasattr(agent, "_default_options") else None
-                    if isinstance(_sm2, dict):
-                        _byok_instructions = _sm2.get("content") or _sm2.get("text") or ""
-                    elif isinstance(_sm2, str):
-                        _byok_instructions = _sm2
-                    if not _byok_instructions:
-                        _byok_instructions = getattr(agent, "_settings", {}).get("system_message") or ""
-                    _byok_client = _OpenAI(
-                        model=_byok_model_id, base_url=_byok_provider["base_url"],
-                        api_key=_byok_provider["api_key"],
-                    )
-                    agent = _MAFAgent(
-                        client=_byok_client, name=agent_name,
-                        instructions=_byok_instructions or None,
-                        tools=_byok_tools if _byok_tools else None,
-                    )
-                    _log.info("executor.byok_maf_agent_created", agent=agent_name,
-                              model=_byok_model_id, base_url=_byok_provider["base_url"])
-                else:
-                    from agent_framework.openai import OpenAIChatCompletionClient as _OpenAI  # noqa: PLC0415
-                    _byok_client = _OpenAI(
-                        model=_byok_model_id, base_url=_byok_provider["base_url"],
-                        api_key=_byok_provider["api_key"],
-                    )
-                    if hasattr(agent, "model_client"):
-                        object.__setattr__(agent, "model_client", _byok_client)
-                    _log.info("executor.byok_maf_client_injected", agent=agent_name,
-                              model=_byok_model_id, base_url=_byok_provider["base_url"])
+            # ── Tier 1: try native MAF AG-UI streaming ──────────────────────
+            try:
+                from agent_framework.ag_ui import \
+                    stream_agent_response  # noqa: PLC0415
+                message = _build_event_message(agent_name, run_id, event_payload, integrations)
+                async for line in stream_agent_response(agent, message, run_id=run_id):
+                    yield line
+                return
+            except (ImportError, AttributeError):
+                pass  # MAF AG-UI streaming not available → fall through
 
-            # ── MAF-native instrumented streaming ───────────────────────────
-            # All agents (MAF Agent, GitHubCopilotAgent) are BaseAgents and
-            # support agent.run() / agent.run_stream().  We wrap tools with
-            # event shims for live TOOL_CALL_* visibility in the UI, then
-            # run the agent in a background task while draining a queue.
-            # (queue is already defined above, shared with Copilot SDK path)
+            # ── Tier 1.5: GitHubCopilotAgent native streaming ───────────────
+            # agent.run(stream=True) uses _stream_updates() which subscribes to
+            # the Copilot session event bus — no 60s timeout, genuine token-by-
+            # token streaming, live tool events.  This is the correct path for
+            # any GitHub-sourced agent.
+            #
+            # When a LiteLLM model is explicitly requested (model contains '/'
+            # or starts with 'tier'), skip the Copilot CLI path entirely and
+            # fall through to Tier 2 (MAF AG-UI / batch) below.  The Copilot
+            # CLI v1.0.2 does not honour SessionConfig.model for subscriptions
+            # with model_picker_enabled=false — it always defaults to its own
+            # claude-sonnet-4.6.  The only reliable way to use a different
+            # model is to go through LiteLLM via the MAF OpenAIChatClient path.
+            #
+            # Compute _is_byok early so _use_copilot_cli can reference it.
+            _requested_model_early = (model or "").strip()
+            _configured_model_early = (getattr(settings, "copilot_chat_model", "") or "").strip()
+            _final_model_early = _requested_model_early or _configured_model_early
+            def _is_litellm_model_fn(m: str) -> bool:
+                return "/" in m or m.lower().startswith("tier")
+            _is_byok = bool(_final_model_early and _is_litellm_model_fn(_final_model_early))
+
+            # Queue-based approach (not direct yield): the agent runs in a
+            # background task that pushes events to a queue.  The main loop
+            # drains the queue and yields SSE.  This allows tool calls
+            # (including call_agent sub-delegation) to push SUB_AGENT_* events
+            # into the same queue while the main loop is waiting — giving
+            # real-time visibility of sub-agent progress in the UI.
+
+            # ── GitHub Copilot path (MAF-wrapped via CommandCenterCopilotAgent) ─
+            if _agent_runtime == "github-copilot":
+                from orchestrator.copilot_agent import CommandCenterCopilotAgent  # noqa: PLC0415
+
+                # Patch the loaded agent with enhanced BYOK + streaming methods.
+                agent._create_session = CommandCenterCopilotAgent._create_session.__get__(
+                    agent, type(agent)
+                )
+                agent._stream_updates = CommandCenterCopilotAgent._stream_updates.__get__(
+                    agent, type(agent)
+                )
+
+                # Install push guard + capture HEAD for post-run commit detection.
+                await _install_push_guard(str(loaded.agent_dir))
+                _stream_head_before = await _get_current_head(str(loaded.agent_dir))
+
+                # Resolve model and BYOK.
+                _requested_model = (model or "").strip()
+                _configured_model = (getattr(settings, "copilot_chat_model", "") or "").strip()
+                _final_model = _requested_model or _configured_model
+
+                _DIRECT_PROVIDERS: dict[str, tuple[str, str]] = {
+                    "openrouter/": ("https://openrouter.ai/api/v1",      "OPENROUTER_API_KEY"),
+                    "openai/":     ("https://api.openai.com/v1",          "OPENAI_API_KEY"),
+                    "deepseek/":   ("https://api.deepseek.com/v1",        "DEEPSEEK_API_KEY"),
+                    "gemini/":     ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"),
+                    "groq/":       ("https://api.groq.com/openai/v1",    "GROQ_API_KEY"),
+                    "anthropic/":  ("https://api.anthropic.com/v1",       "ANTHROPIC_API_KEY"),
+                    "together_ai/":("https://api.together.xyz/v1",        "TOGETHER_API_KEY"),
+                    "mistral/":    ("https://api.mistral.ai/v1",          "MISTRAL_API_KEY"),
+                }
+                _is_byok = bool(_final_model and ("/" in _final_model or _final_model.lower().startswith("tier")))
+                _byok_provider: dict[str, Any] | None = None
+                _byok_model_id = _final_model
+
+                if _is_byok:
+                    _byok_litellm_base = (getattr(settings, "litellm_base_url", "") or "http://127.0.0.1:4000").rstrip("/")
+                    _byok_litellm_key = (getattr(settings, "litellm_master_key", "") or "sk-local").strip()
+                    _matched_prefix = None
+                    for _pfx in _DIRECT_PROVIDERS:
+                        if _final_model.startswith(_pfx):
+                            _matched_prefix = _pfx
+                            break
+                    if _matched_prefix is not None:
+                        _direct_base, _direct_env = _DIRECT_PROVIDERS[_matched_prefix]
+                        _provider_key = (os.environ.get(_direct_env) or "").strip()
+                        _byok_base_url = _direct_base
+                        _byok_api_key = _provider_key or _byok_litellm_key
+                        _byok_model_id = _final_model[len(_matched_prefix):]
+                    else:
+                        _byok_base_url = f"{_byok_litellm_base}/v1"
+                        _byok_api_key = _byok_litellm_key
+                        _byok_model_id = _final_model
+                    _byok_provider = {
+                        "type": "openai",
+                        "base_url": _byok_base_url,
+                        "api_key": _byok_api_key,
+                    }
+                    agent._default_options["provider"] = _byok_provider
+                    agent._default_options["model"] = _byok_model_id
+                    _log.info("executor.copilot_maf_byok", agent=agent_name,
+                              model=_byok_model_id, base_url=_byok_base_url)
+                elif _final_model:
+                    agent._default_options["model"] = _final_model
+                    _log.info("executor.copilot_maf_model", agent=agent_name, model=_final_model)
+
+                # Ensure permission handler.
+                try:
+                    from copilot import PermissionHandler as _PH  # noqa: PLC0415
+                    if hasattr(agent, "_permission_handler") and agent._permission_handler is None:
+                        agent._permission_handler = _PH.approve_all
+                except Exception:  # noqa: BLE001
+                    pass
+
+                _msg_text = event_payload.get("message") or event_payload.get("user_query") or ""
+                _msg_id: str | None = None
+                _text_started = False
+
+                try:
+                    async with agent:
+                        _run_opts: dict[str, Any] = {}
+                        if _is_byok and _byok_provider:
+                            _run_opts["model"] = _byok_model_id
+                        elif _final_model:
+                            _run_opts["model"] = _final_model
+                        _stream = agent.run(_msg_text, stream=True,
+                                           options=_run_opts if _run_opts else None)
+                        async for _update in _stream:
+                            for _c in (_update.contents or []):
+                                _ct = getattr(_c, "type", None)
+                                if _ct == "text":
+                                    _delta = _c.text or ""
+                                    if _delta:
+                                        if not _text_started:
+                                            _text_started = True
+                                            _msg_id = _update.message_id or str(uuid.uuid4())
+                                            yield _sse({"type": "TEXT_MESSAGE_START",
+                                                        "messageId": _msg_id, "role": "assistant"})
+                                        yield _sse({"type": "TEXT_MESSAGE_CONTENT",
+                                                    "messageId": _msg_id, "delta": _delta})
+                                elif _ct == "text_reasoning":
+                                    _delta = _c.text or ""
+                                    if _delta:
+                                        yield _sse({"type": "THINKING_TEXT_MESSAGE_CONTENT",
+                                                    "delta": _delta})
+                                elif _ct == "function_call":
+                                    _tc_id = _c.call_id or ""
+                                    _tc_name = _c.name or ""
+                                    _tc_args = _c.arguments
+                                    _args_str = (json.dumps(_tc_args) if isinstance(_tc_args, dict)
+                                                 else str(_tc_args or ""))
+                                    yield _sse({"type": "TOOL_CALL_START",
+                                                "toolCallId": _tc_id,
+                                                "toolCallName": _tc_name,
+                                                "args": _args_str})
+                                    if _tc_args:
+                                        yield _sse({"type": "TOOL_CALL_ARGS",
+                                                    "toolCallId": _tc_id,
+                                                    "delta": _args_str})
+                                elif _ct == "function_result":
+                                    _tc_id = _c.call_id or ""
+                                    _tc_result = _c.result or ""
+                                    _tc_ok = not _c.exception
+                                    yield _sse({"type": "TOOL_CALL_RESULT",
+                                                "toolCallId": _tc_id,
+                                                "content": str(_tc_result)[:2000],
+                                                "success": _tc_ok})
+                            # Agent intent from raw events
+                            _raw = _update.raw_representation
+                            if _raw is not None:
+                                try:
+                                    _raw_type = str(_raw.type)
+                                    if "INTENT" in _raw_type:
+                                        _intent = getattr(_raw.data, "intent", "") or ""
+                                        if _intent:
+                                            yield _sse({"type": "TOOL_CALL_START",
+                                                        "toolCallId": f"{run_id}:intent:{_intent[:20]}",
+                                                        "toolCallName": _intent})
+                                except Exception:  # noqa: BLE001
+                                    pass
+                except Exception as _exc:  # noqa: BLE001
+                    _log.exception("executor.copilot_maf_stream_error", agent=agent_name)
+                    yield _sse({"type": "RUN_ERROR", "runId": run_id, "message": str(_exc)})
+                    return
+
+                if _msg_id and _text_started:
+                    yield _sse({"type": "TEXT_MESSAGE_END", "messageId": _msg_id})
+                yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
+
+                await _detect_agent_commits(
+                    agent_name, str(loaded.agent_dir), run_id,
+                    since_sha=_stream_head_before if _stream_head_before else None,
+                )
+                return
+
+            # ── Tier 2: instrumented batch fallback ─────────────────────────
+            # (orphaned old code removed — see CommandCenterCopilotAgent path above)
+
+            # ── Tier 2: instrumented batch fallback ─────────────────────────
+            # Wrap every callable tool on the agent so it pushes tool events
+            # onto a queue that we drain while the run executes in a task.
+            queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+            _t2_token = _active_run_queue.set(queue)  # expose to call_agent for sub-streaming
 
             _tool_counter: list[int] = [0]
 
@@ -1353,7 +1303,8 @@ async def run_agent_stream(
                     # may not be installed.  Our Python tools (e.g. zoho_crm) work fine
                     # without it, and we don't want the LLM to fall back to shell execution.
                     try:
-                        from copilot import CopilotClient as _CopilotClient  # noqa: PLC0415
+                        from copilot import \
+                            CopilotClient as _CopilotClient  # noqa: PLC0415
                         if hasattr(agent, "_client") and agent._client is None:
                             _agent_settings = getattr(agent, "_settings", {}) or {}
                             _cli_opts: dict[str, Any] = {}
@@ -1378,7 +1329,8 @@ async def run_agent_stream(
                         await stack.enter_async_context(agent)
                     # Apply approve_all permission handler if needed (GitHubCopilotAgent)
                     try:
-                        from copilot import PermissionHandler as _PH  # noqa: PLC0415
+                        from copilot import \
+                            PermissionHandler as _PH  # noqa: PLC0415
                         if hasattr(agent, "_permission_handler") and agent._permission_handler is None:
                             agent._permission_handler = _PH.approve_all
                     except Exception:  # noqa: BLE001
@@ -1393,7 +1345,8 @@ async def run_agent_stream(
                     _current_msg_text = event_payload.get("message") or event_payload.get("user_query") or ""
                     if _is_byok and _history_msgs:
                         try:
-                            from agent_framework import Message as _MAFMsg  # noqa: PLC0415
+                            from agent_framework import \
+                                Message as _MAFMsg  # noqa: PLC0415
                             _maf_messages: list[Any] = []
                             # Keep only the last 20 prior messages (10 exchanges)
                             for _h in _history_msgs[-20:]:
@@ -1864,7 +1817,8 @@ async def _run_with_maf_agent(
         # Chat path: reconstruct proper Message sequence so the LLM sees the
         # full conversation window, not just the latest turn.
         try:
-            from agent_framework._types import Message as _Message  # noqa: PLC0415
+            from agent_framework._types import \
+                Message as _Message  # noqa: PLC0415
 
             # Build the preamble (integrations / warnings) as a system message.
             system_parts: list[str] = []

@@ -58,9 +58,8 @@ interface ChatRequest {
 }
 
 const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
-// The gateway serves OpenAI-compatible /v1/chat/completions via v1_compat.py.
-// Use the gateway directly instead of a separate LiteLLM proxy container.
-const LITELLM_BASE_URL = GATEWAY_URL;
+const LITELLM_BASE_URL =
+  process.env.COPILOT_LLM_BASE_URL ?? process.env.LITELLM_BASE_URL ?? "http://localhost:4000/v1";
 const LITELLM_KEY =
   process.env.LITELLM_MASTER_KEY ?? process.env.GATEWAY_INTERNAL_TOKEN ?? "sk-local-dev-change-me";
 const INTERNAL_TOKEN =
@@ -207,9 +206,7 @@ export async function POST(req: NextRequest): Promise<Response> {
               } else if (t === "TOOL_CALL_START") {
                 const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
                 toolNames[String(ev.toolCallId ?? "")] = name;
-                // Use initial args so terminal commands show immediately
-                const initArgs = typeof ev.args === "string" ? ev.args : "";
-                toolArgs[String(ev.toolCallId ?? "")] = initArgs;
+                toolArgs[String(ev.toolCallId ?? "")] = "";
                 // Emit a live progress line first so the ThinkingContainer shows
                 // activity immediately (before the tool result arrives).
                 controller.enqueue(
@@ -217,20 +214,28 @@ export async function POST(req: NextRequest): Promise<Response> {
                     `data: ${JSON.stringify({ type: "progress", name })}\n\n`
                   )
                 );
-                out = { type: "tool_start", id: ev.toolCallId, name, args: parseToolArgs(initArgs) };
+                out = { type: "tool_start", id: ev.toolCallId, name, args: {} };
               } else if (t === "TOOL_CALL_ARGS") {
                 // Accumulate the streamed argument deltas so the tool input is
                 // visible in the UI (previously dropped — args showed as empty).
                 const id = String(ev.toolCallId ?? "");
                 toolArgs[id] = (toolArgs[id] ?? "") + String(ev.delta ?? "");
-              } else if (t === "TOOL_CALL_END" || t === "TOOL_CALL_RESULT") {
-                const isPartial2 = ev.partial === true;
+              } else if (t === "TOOL_CALL_END") {
                 out = {
-                  type: isPartial2 ? "tool_partial" : "tool_end",
+                  type: "tool_end",
                   id: ev.toolCallId,
                   name: toolNames[String(ev.toolCallId ?? "")] ?? "tool",
-                  args: isPartial2 ? undefined : parseToolArgs(toolArgs[String(ev.toolCallId ?? "")]),
-                  result: ev.result ?? ev.content ?? "",
+                  args: parseToolArgs(toolArgs[String(ev.toolCallId ?? "")]),
+                  result: ev.result ?? "",
+                  success: true,
+                };
+              } else if (t === "TOOL_CALL_RESULT") {
+                out = {
+                  type: "tool_end",
+                  id: ev.toolCallId,
+                  name: toolNames[String(ev.toolCallId ?? "")] ?? "tool",
+                  args: parseToolArgs(toolArgs[String(ev.toolCallId ?? "")]),
+                  result: ev.content ?? "",
                   success: true,
                 };
               } else if (t === "STATE_SNAPSHOT") {
@@ -340,26 +345,23 @@ export async function POST(req: NextRequest): Promise<Response> {
               } else if (t === "TOOL_CALL_START") {
                 const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
                 toolNames2[String(ev.toolCallId ?? "")] = name;
-                // Use initial args from the event so terminal commands show immediately
-                const initialArgs = typeof ev.args === "string" ? ev.args : "";
-                toolArgs2[String(ev.toolCallId ?? "")] = initialArgs;
+                toolArgs2[String(ev.toolCallId ?? "")] = "";
                 controller.enqueue(
                   new TextEncoder().encode(
                     `data: ${JSON.stringify({ type: "progress", name })}\n\n`
                   )
                 );
-                out = { type: "tool_start", id: ev.toolCallId, name, args: parseToolArgs(initialArgs) };
+                out = { type: "tool_start", id: ev.toolCallId, name, args: {} };
               } else if (t === "TOOL_CALL_ARGS") {
                 const id2 = String(ev.toolCallId ?? "");
                 toolArgs2[id2] = (toolArgs2[id2] ?? "") + String(ev.delta ?? "");
               } else if (t === "TOOL_CALL_END" || t === "TOOL_CALL_RESULT") {
                 const id2 = String(ev.toolCallId ?? "");
-                const isPartial = ev.partial === true;
                 out = {
-                  type: isPartial ? "tool_partial" : "tool_end",
+                  type: "tool_end",
                   id: ev.toolCallId,
                   name: toolNames2[id2] ?? "tool",
-                  args: isPartial ? undefined : parseToolArgs(toolArgs2[id2]),
+                  args: parseToolArgs(toolArgs2[id2]),
                   result: ev.result ?? ev.content ?? "",
                   success: true,
                 };

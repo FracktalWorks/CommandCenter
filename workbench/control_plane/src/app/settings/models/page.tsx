@@ -11,28 +11,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-// ── Inline SVG icons (avoid extra imports) ──────────────────────────────────
-
-function EyeOpen() {
-  return (
-    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
-  );
-}
-
-function EyeClosed() {
-  return (
-    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-      <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-      <line x1="1" y1="1" x2="23" y2="23" />
-    </svg>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Types (mirrors gateway/routes/settings.py response models)
 // ---------------------------------------------------------------------------
@@ -61,6 +39,12 @@ interface LLMConfig {
   litellm_ui_url: string;
 }
 
+interface LiteLLMHealth {
+  healthy: boolean;
+  detail: string;
+  ui_url: string;
+}
+
 interface TestResult {
   success: boolean;
   response: string;
@@ -77,9 +61,8 @@ const PROVIDER_COLOURS: Record<string, string> = {
   anthropic:  "bg-orange-500/15 text-orange-300 border-orange-800/40",
   openrouter: "bg-rose-500/15 text-rose-300 border-rose-800/40",
   github:     "bg-sky-500/15 text-sky-300 border-sky-800/40",
-  deepseek:   "bg-cyan-500/15 text-cyan-300 border-cyan-800/40",
   groq:       "bg-yellow-500/15 text-yellow-300 border-yellow-800/40",
-  mistral:    "bg-indigo-500/15 text-indigo-300 border-indigo-800/40",
+  mistral:    "bg-rose-500/15 text-rose-300 border-rose-800/40",
   together:   "bg-teal-500/15 text-teal-300 border-teal-800/40",
   ollama:     "bg-violet-500/15 text-violet-400 border-violet-800/40",
   vllm:       "bg-violet-500/15 text-violet-400 border-violet-800/40",
@@ -92,10 +75,9 @@ const PROVIDER_ICONS: Record<string, string> = {
   anthropic:  "◆",
   openrouter: "⊕",
   github:     "✦",
-  deepseek:   "🐋",
   groq:       "⚡",
-  mistral:    "🌪",
-  together:   "🤝",
+  mistral:    "M",
+  together:   "T",
   ollama:     "🦙",
   vllm:       "⚡",
 };
@@ -184,17 +166,6 @@ const PROVIDER_GUIDES: Record<string, ProviderGuide> = {
       "Log in to console.mistral.ai.",
       "Go to API Keys → Create new key.",
       "Copy the key.",
-    ],
-  },
-  deepseek: {
-    description: "DeepSeek direct API — DeepSeek-V3 (chat) and DeepSeek-R1 (reasoner) at very competitive pricing.",
-    setup_url: "https://platform.deepseek.com/api-keys",
-    docs_url: "https://platform.deepseek.com/docs",
-    instructions: [
-      "Log in to platform.deepseek.com.",
-      "Go to API Keys → Create new API key.",
-      "Copy the key — it starts with 'sk-…'.",
-      "Add balance in the Billing section to enable API access.",
     ],
   },
   together: {
@@ -442,19 +413,15 @@ function TierCard({
 function ProviderCard({
   provider,
   onKeySet,
-  onKeyDiscard,
 }: {
   provider: ProviderInfo;
   onKeySet: (key: string) => Promise<void>;
-  onKeyDiscard: (providerId: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [keyVal, setKeyVal] = useState("");
   const [show, setShow] = useState(false);
   const [saving, setSaving] = useState(false);
   const [keyError, setKeyError] = useState<string | null>(null);
-  const [discarding, setDiscarding] = useState(false);
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   const isLocal = provider.id === "ollama" || provider.id === "vllm";
   const colour = PROVIDER_COLOURS[provider.id] ?? PROVIDER_COLOURS.unknown;
@@ -472,18 +439,6 @@ function ProviderCard({
       setKeyError(String(err));
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handleDiscard = async () => {
-    setDiscarding(true);
-    try {
-      await onKeyDiscard(provider.id);
-      setConfirmDiscard(false);
-    } catch (err) {
-      setKeyError(String(err));
-    } finally {
-      setDiscarding(false);
     }
   };
 
@@ -505,40 +460,12 @@ function ProviderCard({
             <>
               <span className="text-xs font-medium text-green-400">● Configured</span>
               {!isLocal && (
-                <>
-                  <button
-                    onClick={() => { setEditing((e) => !e); setConfirmDiscard(false); }}
-                    className="text-[10px] text-zinc-500 hover:text-zinc-300 underline underline-offset-2 transition-colors"
-                  >
-                    {editing ? "cancel" : "update key"}
-                  </button>
-                  {confirmDiscard ? (
-                    <span className="flex items-center gap-1">
-                      <button
-                        onClick={handleDiscard}
-                        disabled={discarding}
-                        className="rounded border border-red-700/50 bg-red-950/40 px-2 py-0.5 text-xs text-red-400 hover:bg-red-900/40 transition-colors disabled:opacity-40"
-                      >
-                        {discarding ? "Discarding…" : "Confirm discard"}
-                      </button>
-                      <button
-                        onClick={() => setConfirmDiscard(false)}
-                        disabled={discarding}
-                        className="text-[10px] text-zinc-500 hover:text-zinc-300 underline underline-offset-2 transition-colors"
-                      >
-                        cancel
-                      </button>
-                    </span>
-                  ) : (
-                    <button
-                      onClick={() => { setConfirmDiscard(true); setEditing(false); }}
-                      className="text-[10px] text-red-500/70 hover:text-red-400 underline underline-offset-2 transition-colors"
-                      title="Remove key and disconnect this provider"
-                    >
-                      discard key
-                    </button>
-                  )}
-                </>
+                <button
+                  onClick={() => setEditing((e) => !e)}
+                  className="text-[10px] text-zinc-500 hover:text-zinc-300 underline underline-offset-2 transition-colors"
+                >
+                  {editing ? "cancel" : "update key"}
+                </button>
               )}
             </>
           ) : provider.id === "ollama" ? (
@@ -561,8 +488,8 @@ function ProviderCard({
         <p className="mt-1.5 text-xs opacity-70 leading-relaxed">{guide.description}</p>
       )}
 
-      {/* Setup panel — shown only when editing (user clicked "Set key →" or "update key") */}
-      {editing && guide && (
+      {/* Setup panel — shown when editing (key entry) or when not configured */}
+      {(editing || (!provider.configured && !isLocal)) && guide && (
         <div className="mt-3 rounded-lg border border-zinc-700/50 bg-zinc-900/60 p-3 space-y-3">
           {/* Quick-start links */}
           <div className="flex items-center gap-3">
@@ -600,85 +527,69 @@ function ProviderCard({
           </ol>
 
           {/* Key input */}
-          <div className="relative">
-            <input
-              type={show ? "text" : "password"}
-              value={keyVal}
-              onChange={(e) => setKeyVal(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSave()}
-              placeholder={`Paste ${provider.env_var}…`}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 pr-14 text-xs text-zinc-100 placeholder-zinc-600 font-mono focus:border-blue-500 focus:outline-none"
-              autoFocus
-            />
+          {editing && (
+            <>
+              <div className="relative">
+                <input
+                  type={show ? "text" : "password"}
+                  value={keyVal}
+                  onChange={(e) => setKeyVal(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSave()}
+                  placeholder={`Paste ${provider.env_var}…`}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 pr-14 text-xs text-zinc-100 placeholder-zinc-600 font-mono focus:border-blue-500 focus:outline-none"
+                  autoFocus
+                />
+                <button
+                  onClick={() => setShow((s) => !s)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-zinc-500 hover:text-zinc-300"
+                >
+                  {show ? "hide" : "show"}
+                </button>
+              </div>
+              {keyError && <p className="text-xs text-red-400">{keyError}</p>}
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSave}
+                  disabled={saving || !keyVal.trim()}
+                  className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
+                >
+                  {saving ? "Saving & restarting LiteLLM…" : "Save & apply"}
+                </button>
+                <button
+                  onClick={() => { setEditing(false); setKeyVal(""); setKeyError(null); }}
+                  disabled={saving}
+                  className="rounded-lg border border-zinc-700 px-3 py-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-40 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+              {saving && (
+                <p className="text-[10px] text-zinc-500">
+                  Writing key to <code className="font-mono">infra/.env</code> and restarting LiteLLM (~25s)…
+                </p>
+              )}
+            </>
+          )}
+
+          {/* When not configured and not in edit mode, show a prompt to set the key */}
+          {!editing && !provider.configured && (
             <button
-              onClick={() => setShow((s) => !s)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-zinc-500 hover:text-zinc-300"
+              onClick={() => setEditing(true)}
+              className="w-full rounded-lg border border-dashed border-zinc-600 py-1.5 text-xs text-zinc-500 hover:border-zinc-400 hover:text-zinc-300 transition-colors"
             >
-              {show ? "hide" : "show"}
+              + Paste {provider.env_var} here
             </button>
-          </div>
-          {keyError && <p className="text-xs text-red-400">{keyError}</p>}
-          <div className="flex gap-2">
-            <button
-              onClick={handleSave}
-              disabled={saving || !keyVal.trim()}
-              className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
-            >
-              {saving ? "Saving & restarting LiteLLM…" : "Save & apply"}
-            </button>
-            <button
-              onClick={() => { setEditing(false); setKeyVal(""); setKeyError(null); }}
-              disabled={saving}
-              className="rounded-lg border border-zinc-700 px-3 py-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-40 transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-          {saving && (
-            <p className="text-[10px] text-zinc-500">
-              Writing key to <code className="font-mono">infra/.env</code> and restarting LiteLLM (~25s)…
-            </p>
           )}
         </div>
       )}
 
-      {/* Confirm discard panel */}
-      {confirmDiscard && (
-        <div className="mt-3 rounded-lg border border-red-800/30 bg-red-950/20 p-3 space-y-2">
-          <p className="text-xs text-red-300">
-            This will remove <code className="font-mono text-red-400">{provider.env_var}</code> from{" "}
-            <code className="font-mono">infra/.env</code> and disconnect the provider.
-            Any tier currently using this provider will fall back to the next available.
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={handleDiscard}
-              disabled={discarding}
-              className="rounded-lg bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-500 disabled:opacity-40 transition-colors"
-            >
-              {discarding ? "Discarding & restarting LiteLLM…" : "Yes, discard key"}
-            </button>
-            <button
-              onClick={() => { setConfirmDiscard(false); setKeyError(null); }}
-              disabled={discarding}
-              className="rounded-lg border border-zinc-700 px-3 py-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-40 transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-          {discarding && (
-            <p className="text-[10px] text-zinc-500">
-              Removing key from <code className="font-mono">infra/.env</code> and restarting LiteLLM (~25s)…
-            </p>
-          )}
-        </div>
-      )}
+      {/* Configured + not editing — no extra content needed */}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Combined Model Catalogue — tabbed card with "My Models" + "All Models"
+// Custom model entry type (mirrors gateway CustomModelEntry)
 // ---------------------------------------------------------------------------
 
 interface CustomModel {
@@ -688,38 +599,22 @@ interface CustomModel {
   group: string;
 }
 
+// ---------------------------------------------------------------------------
+// Visible / Hidden model manager
+// ---------------------------------------------------------------------------
+
 interface VisibleModel { id: string; label: string; group: string; }
 
-function ModelCatalogue() {
-  const [tab, setTab] = useState<"added" | "visibility">("added");
-
-  // ── Shared state ──────────────────────────────────────────────────────────
+function ModelVisibilityManager() {
   const [allModels, setAllModels] = useState<VisibleModel[]>([]);
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
-  const [loadingVis, setLoadingVis] = useState(true);
-
-  // Custom models state
-  const [customModels, setCustomModels] = useState<CustomModel[]>([]);
-  const [loadingCust, setLoadingCust] = useState(true);
-  const [adding, setAdding] = useState(false);
-  const [removing, setRemoving] = useState<string | null>(null);
-  const [showForm, setShowForm] = useState(false);
-  const [formId, setFormId] = useState("");
-  const [formLabel, setFormLabel] = useState("");
-  const [formProvider, setFormProvider] = useState("openrouter");
-  const [availableModels, setAvailableModels] = useState<{ id: string; label: string }[]>([]);
-  const [loadingModels, setLoadingModels] = useState(false);
-  const [modelSearch, setModelSearch] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-
-  // Visibility state
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [showHidden, setShowHidden] = useState(false);
 
-  // ── Load visibility data ──────────────────────────────────────────────────
-  const loadVisibility = useCallback(async () => {
-    setLoadingVis(true);
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
       const [modRes, hidRes] = await Promise.all([
         fetch("/api/models/all"),
@@ -733,12 +628,139 @@ function ModelCatalogue() {
         const h = (await hidRes.json()) as string[];
         setHiddenIds(new Set(Array.isArray(h) ? h : []));
       }
-    } catch { /* ok */ } finally { setLoadingVis(false); }
+    } catch { /* ok */ } finally { setLoading(false); }
   }, []);
 
-  // ── Load custom models ────────────────────────────────────────────────────
-  const loadCustom = useCallback(async () => {
-    setLoadingCust(true);
+  useEffect(() => { void load(); }, [load]);
+
+  const hide = async (id: string) => {
+    setBusy(id);
+    try {
+      await fetch("/api/settings/llm/hidden-models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      setHiddenIds((prev) => new Set([...prev, id]));
+    } finally { setBusy(null); }
+  };
+
+  const unhide = async (id: string) => {
+    setBusy(id);
+    try {
+      await fetch(`/api/settings/llm/hidden-models/${encodeURIComponent(id)}`, { method: "DELETE" });
+      setHiddenIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
+    } finally { setBusy(null); }
+  };
+
+  const query = search.trim().toLowerCase();
+  // Models currently visible in the picker (from /api/models/all — already hid-filtered)
+  // We show them all here + the hidden ones so users can manage the full set.
+  const visibleModels = allModels.filter(
+    (m) => !hiddenIds.has(m.id) && (!query || m.label.toLowerCase().includes(query) || m.id.toLowerCase().includes(query))
+  );
+  const hiddenModels = [...hiddenIds].filter(
+    (id) => !query || id.toLowerCase().includes(query)
+  );
+
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <div className="text-sm font-semibold text-zinc-100">Visible Models</div>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            Hide models you don&apos;t use — they disappear from the chat picker instantly.
+          </p>
+        </div>
+        {hiddenIds.size > 0 && (
+          <button
+            onClick={() => setShowHidden((v) => !v)}
+            className="text-xs text-zinc-500 hover:text-zinc-300 underline underline-offset-2 transition-colors"
+          >
+            {showHidden ? "Hide hidden list" : `Show ${hiddenIds.size} hidden`}
+          </button>
+        )}
+      </div>
+
+      {/* Search */}
+      <input
+        type="text"
+        placeholder="Search models…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="w-full mb-3 rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:border-zinc-500 focus:outline-none"
+      />
+
+      {loading ? (
+        <div className="text-xs text-zinc-600 py-2">Loading…</div>
+      ) : (
+        <div className="space-y-1 max-h-72 overflow-y-auto">
+          {/* Visible models */}
+          {visibleModels.map((m) => (
+            <div key={m.id} className="flex items-center justify-between rounded-md border border-zinc-700/40 bg-zinc-800/30 px-3 py-1.5 text-xs">
+              <div className="min-w-0">
+                <span className="text-zinc-200 truncate">{m.label}</span>
+                <span className="ml-2 text-zinc-600 text-[10px] font-mono truncate">{m.group}</span>
+              </div>
+              <button
+                onClick={() => hide(m.id)}
+                disabled={busy === m.id}
+                className="ml-2 shrink-0 text-zinc-600 hover:text-orange-400 transition-colors disabled:opacity-40 text-[10px]"
+                title="Hide from picker"
+              >
+                {busy === m.id ? "…" : "Hide"}
+              </button>
+            </div>
+          ))}
+          {visibleModels.length === 0 && !showHidden && (
+            <div className="text-xs text-zinc-600 italic py-1">No visible models match.</div>
+          )}
+
+          {/* Hidden models */}
+          {showHidden && hiddenModels.length > 0 && (
+            <>
+              <div className="pt-2 pb-1 text-[10px] text-zinc-600 uppercase tracking-wide">Hidden</div>
+              {hiddenModels.map((id) => (
+                <div key={id} className="flex items-center justify-between rounded-md border border-zinc-700/30 bg-zinc-900/60 px-3 py-1.5 text-xs opacity-60">
+                  <span className="font-mono text-zinc-500 truncate">{id}</span>
+                  <button
+                    onClick={() => unhide(id)}
+                    disabled={busy === id}
+                    className="ml-2 shrink-0 text-zinc-600 hover:text-emerald-400 transition-colors disabled:opacity-40 text-[10px]"
+                    title="Restore to picker"
+                  >
+                    {busy === id ? "…" : "Unhide"}
+                  </button>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Custom Models Manager
+// ---------------------------------------------------------------------------
+
+function CustomModelsManager() {
+  const [models, setModels] = useState<CustomModel[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  // Form state
+  const [formId, setFormId] = useState("");
+  const [formLabel, setFormLabel] = useState("");
+  const [formProvider, setFormProvider] = useState("openrouter");
+
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
       const r = await fetch("/api/settings/llm/custom-models");
       if (r.ok) {
@@ -746,62 +768,35 @@ function ModelCatalogue() {
           | { custom?: CustomModel[]; hidden?: string[] }
           | CustomModel[];
         const list = Array.isArray(d) ? d : (d.custom ?? []);
-        setCustomModels(list);
+        setModels(list);
       }
-    } catch { /* ok */ } finally { setLoadingCust(false); }
-  }, []);
-
-  useEffect(() => { void loadVisibility(); void loadCustom(); }, [loadVisibility, loadCustom]);
-
-  // ── Visibility toggle ─────────────────────────────────────────────────────
-  const toggleHidden = async (id: string) => {
-    setBusy(id);
-    try {
-      if (hiddenIds.has(id)) {
-        await fetch(`/api/settings/llm/hidden-models/${encodeURIComponent(id)}`, { method: "DELETE" });
-        setHiddenIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
-      } else {
-        await fetch("/api/settings/llm/hidden-models", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id }),
-        });
-        setHiddenIds((prev) => new Set([...prev, id]));
-      }
-    } finally { setBusy(null); }
-  };
-
-  // ── Custom model actions ──────────────────────────────────────────────────
-  const fetchProviderModels = useCallback(async (prov: string) => {
-    if (!prov) { setAvailableModels([]); return; }
-    setLoadingModels(true);
-    setModelSearch("");
-    try {
-      const r = await fetch(`/api/settings/llm/provider-models?provider=${encodeURIComponent(prov)}`);
-      if (r.ok) {
-        const data = (await r.json()) as { id: string; label: string }[];
-        setAvailableModels(Array.isArray(data) ? data : []);
-      } else {
-        setAvailableModels([]);
-      }
-    } catch {
-      setAvailableModels([]);
-    } finally {
-      setLoadingModels(false);
+    } catch { /* ok */ } finally {
+      setLoading(false);
     }
   }, []);
 
-  const handleProviderChange = (prov: string) => {
-    setFormProvider(prov);
-    setFormId("");
-    setFormLabel("");
-    void fetchProviderModels(prov);
+  useEffect(() => { void load(); }, [load]);
+
+  // Auto-derive label from model ID when the user types an ID
+  const handleIdChange = (v: string) => {
+    setFormId(v);
+    if (!formLabel || formLabel === deriveLabel(formId)) {
+      setFormLabel(deriveLabel(v));
+    }
+    // Auto-detect provider from prefix
+    const detected = v.startsWith("openrouter/") ? "openrouter"
+      : v.startsWith("anthropic/") ? "anthropic"
+      : v.startsWith("openai/") ? "openai"
+      : v.startsWith("gemini/") ? "gemini"
+      : v.startsWith("groq/") ? "groq"
+      : v.startsWith("mistral/") ? "mistral"
+      : "openrouter";
+    setFormProvider(detected);
   };
 
-  const handleModelSelect = (id: string, label: string) => {
-    setFormId(id);
-    setFormLabel(label);
-    setModelSearch("");
+  const deriveLabel = (id: string) => {
+    const parts = id.split("/");
+    return parts[parts.length - 1] ?? id;
   };
 
   const handleAdd = async () => {
@@ -819,10 +814,9 @@ function ModelCatalogue() {
       } else {
         setSuccess(`Added ${formLabel.trim()}`);
         setFormId(""); setFormLabel(""); setFormProvider("openrouter");
-        setAvailableModels([]); setModelSearch("");
         setShowForm(false);
         setTimeout(() => setSuccess(null), 4000);
-        await Promise.all([loadCustom(), loadVisibility()]);
+        await load();
       }
     } catch (e) { setError(String(e)); } finally { setAdding(false); }
   };
@@ -835,307 +829,185 @@ function ModelCatalogue() {
         const d = await r.json().catch(() => ({}));
         setError(String((d as Record<string, unknown>)?.detail ?? "Failed to remove"));
       } else {
-        await Promise.all([loadCustom(), loadVisibility()]);
+        await load();
       }
     } catch (e) { setError(String(e)); } finally { setRemoving(null); }
   };
 
-  // ── Derived data ──────────────────────────────────────────────────────────
-  const query = search.trim().toLowerCase();
-  const visibleModels = allModels.filter(
-    (m) => !hiddenIds.has(m.id) && (!query || m.label.toLowerCase().includes(query) || m.id.toLowerCase().includes(query))
-  );
-  const hiddenModels = allModels.filter(
-    (m) => hiddenIds.has(m.id) && (!query || m.label.toLowerCase().includes(query) || m.id.toLowerCase().includes(query))
-  );
-
-  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
-      {/* Tabs */}
-      <div className="flex items-center gap-0.5 mb-4 p-0.5 rounded-lg bg-zinc-800/50 w-fit">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <div className="text-sm font-semibold text-zinc-100">Custom Models</div>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            Add any model ID from your configured providers. No restart needed — models appear in
+            the chat picker immediately.
+          </p>
+        </div>
         <button
-          onClick={() => setTab("added")}
-          className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-            tab === "added"
-              ? "bg-zinc-700 text-zinc-100"
-              : "text-zinc-500 hover:text-zinc-300"
-          }`}
+          onClick={() => { setShowForm((v) => !v); setError(null); }}
+          className="rounded-lg border border-blue-700/50 bg-blue-900/30 px-3 py-1.5 text-xs font-medium text-blue-300 hover:bg-blue-800/40 transition-colors"
         >
-          Added Models
-        </button>
-        <button
-          onClick={() => setTab("visibility")}
-          className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-            tab === "visibility"
-              ? "bg-zinc-700 text-zinc-100"
-              : "text-zinc-500 hover:text-zinc-300"
-          }`}
-        >
-          Model Visibility
+          {showForm ? "Cancel" : "+ Add model"}
         </button>
       </div>
 
-      {/* ── Tab: My Models (custom models manager) ─────────────────────────── */}
-      {tab === "added" && (
-        <>
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-xs text-zinc-500">
-              Add models from your configured providers to make them available in the chat
-              picker. Only models you add here (plus Copilot SDK models) appear.
+      {/* Add form */}
+      {showForm && (
+        <div className="mb-4 rounded-lg border border-zinc-700 bg-zinc-800/60 p-3 space-y-2">
+          <div>
+            <label className="block text-xs font-medium text-zinc-400 mb-1">Model ID</label>
+            <input
+              autoFocus
+              type="text"
+              placeholder="e.g. openrouter/qwen/qwen3.8-preview"
+              value={formId}
+              onChange={(e) => handleIdChange(e.target.value)}
+              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 font-mono placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+            />
+            <p className="mt-1 text-[10px] text-zinc-600">
+              Full LiteLLM model string — prefix determines the provider (e.g. <code className="font-mono">openrouter/…</code>, <code className="font-mono">anthropic/…</code>, <code className="font-mono">gemini/…</code>)
             </p>
-            <button
-              onClick={() => { setShowForm((v) => !v); setError(null); }}
-              className="rounded-lg border border-blue-700/50 bg-blue-900/30 px-3 py-1.5 text-xs font-medium text-blue-300 hover:bg-blue-800/40 transition-colors shrink-0 ml-3"
-            >
-              {showForm ? "Cancel" : "+ Add model"}
-            </button>
           </div>
-
-          {/* Add form */}
-          {showForm && (
-            <div className="mb-4 rounded-lg border border-zinc-700 bg-zinc-800/60 p-3 space-y-2">
-              {/* Provider selector */}
-              <div>
-                <label className="block text-xs font-medium text-zinc-400 mb-1">Provider</label>
-                <select
-                  value={formProvider}
-                  onChange={(e) => handleProviderChange(e.target.value)}
-                  className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 focus:border-blue-500 focus:outline-none"
-                >
-                  <option value="openrouter">OpenRouter</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="anthropic">Anthropic</option>
-                  <option value="gemini">Google Gemini</option>
-                  <option value="deepseek">DeepSeek</option>
-                  <option value="groq">Groq</option>
-                  <option value="mistral">Mistral AI</option>
-                  <option value="together">Together AI</option>
-                  <option value="github">GitHub Copilot</option>
-                  <option value="ollama">Ollama (local)</option>
-                </select>
-              </div>
-
-              {/* Model selector */}
-              <div>
-                <label className="block text-xs font-medium text-zinc-400 mb-1">Model</label>
-                {loadingModels ? (
-                  <div className="text-xs text-zinc-500 py-1.5">Fetching models…</div>
-                ) : formId ? (
-                  <div className="flex items-center gap-2">
-                    <span className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 font-mono truncate">
-                      {formId}
-                    </span>
-                    <button
-                      onClick={() => { setFormId(""); setFormLabel(""); }}
-                      className="text-zinc-500 hover:text-zinc-300 text-xs shrink-0"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ) : (
-                  <div className="relative">
-                    <input
-                      type="text"
-                      placeholder={availableModels.length > 0 ? "Search models…" : "No models loaded — select a provider first"}
-                      value={modelSearch}
-                      onChange={(e) => setModelSearch(e.target.value)}
-                      className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
-                    />
-                    {availableModels.length > 0 && modelSearch && (
-                      <div className="absolute z-10 mt-1 w-full max-h-44 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-lg">
-                        {availableModels
-                          .filter((m) =>
-                            !modelSearch ||
-                            m.label.toLowerCase().includes(modelSearch.toLowerCase()) ||
-                            m.id.toLowerCase().includes(modelSearch.toLowerCase())
-                          )
-                          .slice(0, 50)
-                          .map((m) => (
-                            <button
-                              key={m.id}
-                              onClick={() => handleModelSelect(m.id, m.label)}
-                              className="w-full text-left px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition-colors flex items-center justify-between"
-                            >
-                              <span className="truncate">{m.label}</span>
-                              <span className="text-[10px] text-zinc-500 font-mono ml-2 shrink-0 truncate max-w-[40%]">
-                                {m.id}
-                              </span>
-                            </button>
-                          ))}
-                      </div>
-                    )}
-                    {availableModels.length > 0 && !modelSearch && (
-                      <div className="absolute z-10 mt-1 w-full max-h-44 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-lg">
-                        {availableModels.slice(0, 50).map((m) => (
-                          <button
-                            key={m.id}
-                            onClick={() => handleModelSelect(m.id, m.label)}
-                            className="w-full text-left px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition-colors flex items-center justify-between"
-                          >
-                            <span className="truncate">{m.label}</span>
-                            <span className="text-[10px] text-zinc-500 font-mono ml-2 shrink-0 truncate max-w-[40%]">
-                              {m.id}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Display label */}
-              <div>
-                <label className="block text-xs font-medium text-zinc-400 mb-1">Display label</label>
-                <input
-                  type="text"
-                  placeholder="Auto-populated from model name"
-                  value={formLabel}
-                  onChange={(e) => setFormLabel(e.target.value)}
-                  className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
-                />
-              </div>
-              {error && <p className="text-xs text-red-400">{error}</p>}
-              <button
-                onClick={handleAdd}
-                disabled={adding || !formId.trim() || !formLabel.trim()}
-                className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
-              >
-                {adding ? "Adding…" : "Add to picker"}
-              </button>
-            </div>
-          )}
-
-          {success && (
-            <div className="mb-3 rounded-md border border-emerald-800/40 bg-emerald-950/30 px-3 py-1.5 text-xs text-emerald-300">
-              ✓ {success}
-            </div>
-          )}
-
-          {/* Custom model list */}
-          {loadingCust ? (
-            <div className="text-xs text-zinc-600 py-2">Loading…</div>
-          ) : customModels.length === 0 ? (
-            <div className="text-xs text-zinc-500 italic py-2">
-              No custom models yet. Click "+ Add model" to add one.
-            </div>
-          ) : (
-            <div className="space-y-1.5">
-              {customModels.map((m) => (
-                <div
-                  key={m.id}
-                  className="flex items-center justify-between rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-2 text-xs"
-                >
-                  <div className="min-w-0">
-                    <div className="font-medium text-zinc-200 truncate">{m.label}</div>
-                    <div className="font-mono text-zinc-500 text-[10px] truncate">{m.id}</div>
-                  </div>
-                  <div className="flex items-center gap-2 ml-3 shrink-0">
-                    <span className="text-[9px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-500">
-                      {m.provider}
-                    </span>
-                    <button
-                      onClick={() => handleRemove(m.id)}
-                      disabled={removing === m.id}
-                      className="text-zinc-600 hover:text-red-400 transition-colors disabled:opacity-40"
-                      title="Remove"
-                    >
-                      {removing === m.id ? "…" : "✕"}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
+          <div>
+            <label className="block text-xs font-medium text-zinc-400 mb-1">Display label</label>
+            <input
+              type="text"
+              placeholder="e.g. Qwen 3.8 Preview"
+              value={formLabel}
+              onChange={(e) => setFormLabel(e.target.value)}
+              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+            />
+          </div>
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          <button
+            onClick={handleAdd}
+            disabled={adding || !formId.trim() || !formLabel.trim()}
+            className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
+          >
+            {adding ? "Adding…" : "Add to picker"}
+          </button>
+        </div>
       )}
 
-      {/* ── Tab: All Models (visibility manager) ────────────────────────────── */}
-      {tab === "visibility" && (
-        <>
-          <p className="text-xs text-zinc-500 mb-3">
-            Toggle visibility for each model. Hidden models won&apos;t appear in the chat picker.
+      {success && (
+        <div className="mb-3 rounded-md border border-emerald-800/40 bg-emerald-950/30 px-3 py-1.5 text-xs text-emerald-300">
+          ✓ {success}
+        </div>
+      )}
+
+      {/* Model list */}
+      {loading ? (
+        <div className="text-xs text-zinc-600 py-2">Loading…</div>
+      ) : models.length === 0 ? (
+        <div className="text-xs text-zinc-600 italic py-2">
+          No custom models yet. Click "+ Add model" to add any model from OpenRouter, Anthropic, etc.
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {models.map((m) => (
+            <div
+              key={m.id}
+              className="flex items-center justify-between rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-2 text-xs"
+            >
+              <div className="min-w-0">
+                <div className="font-medium text-zinc-200 truncate">{m.label}</div>
+                <div className="font-mono text-zinc-500 text-[10px] truncate">{m.id}</div>
+              </div>
+              <div className="flex items-center gap-2 ml-3 shrink-0">
+                <span className="text-[9px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-500">
+                  {m.provider}
+                </span>
+                <button
+                  onClick={() => handleRemove(m.id)}
+                  disabled={removing === m.id}
+                  className="text-zinc-600 hover:text-red-400 transition-colors disabled:opacity-40"
+                  title="Remove"
+                >
+                  {removing === m.id ? "…" : "✕"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// GitHub Copilot model picker (for GitHubCopilotAgent Tier-1.5 path)
+// ---------------------------------------------------------------------------
+
+const COPILOT_MODELS = [
+  { value: "claude-sonnet-4-5",       label: "Claude Sonnet 4.5" },
+  { value: "gpt-4o",                  label: "GPT-4o" },
+  { value: "gpt-4o-mini",             label: "GPT-4o mini" },
+  { value: "o3-mini",                 label: "o3-mini (reasoning)" },
+  { value: "o1",                      label: "o1 (reasoning)" },
+  { value: "claude-3.7-sonnet",       label: "Claude 3.7 Sonnet" },
+];
+
+function CopilotModelPicker() {
+  const [current, setCurrent] = useState("claude-sonnet-4-5");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    setSaving(true); setErr(null); setSaved(false);
+    try {
+      const res = await fetch("/api/settings/llm/copilot-model", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: current }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(String(data?.detail ?? "Save failed"));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-sky-900/40 bg-sky-950/20 px-5 py-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-sm font-medium text-sky-200">Copilot SDK Agent Model</div>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            Controls which model GitHub Copilot agents use when running via the Tier-1.5 path
+            (Copilot SDK <code className="font-mono text-zinc-400">agent.run(stream=True)</code>).
+            Overrides the model baked into each external agent repo.
           </p>
-
-          <input
-            type="text"
-            placeholder="Search models…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full mb-3 rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:border-zinc-500 focus:outline-none"
-          />
-
-          {loadingVis ? (
-            <div className="text-xs text-zinc-600 py-2">Loading…</div>
-          ) : (
-            <div className="space-y-1 max-h-80 overflow-y-auto">
-              {/* Visible models */}
-              {visibleModels.map((m) => (
-                <div
-                  key={m.id}
-                  className="flex items-center justify-between rounded-md border border-zinc-700/40 bg-zinc-800/30 px-3 py-1.5 text-xs group"
-                >
-                  <div className="min-w-0">
-                    <span className="text-zinc-200 truncate">{m.label}</span>
-                    <span className="ml-2 text-zinc-600 text-[10px] font-mono truncate">{m.group}</span>
-                  </div>
-                  <button
-                    onClick={() => toggleHidden(m.id)}
-                    disabled={busy === m.id}
-                    className="ml-2 shrink-0 text-zinc-500 hover:text-orange-400 transition-colors disabled:opacity-30"
-                    title="Hide from picker"
-                  >
-                    {busy === m.id ? (
-                      <span className="text-[10px]">…</span>
-                    ) : (
-                      <EyeOpen />
-                    )}
-                  </button>
-                </div>
-              ))}
-
-              {/* Hidden models */}
-              {hiddenModels.length > 0 && (
-                <>
-                  <div className="pt-3 pb-1.5 text-[10px] text-zinc-500 uppercase tracking-wide px-1">
-                    Hidden — {hiddenModels.length} model{hiddenModels.length !== 1 ? "s" : ""}
-                  </div>
-                  {hiddenModels.map((m) => (
-                    <div
-                      key={m.id}
-                      className="flex items-center justify-between rounded-md border border-zinc-700/20 bg-zinc-900/40 px-3 py-1.5 text-xs opacity-60 hover:opacity-80 transition-opacity"
-                    >
-                      <div className="min-w-0">
-                        <span className="text-zinc-400 truncate">{m.label}</span>
-                        <span className="ml-2 text-zinc-600 text-[10px] font-mono truncate">{m.group}</span>
-                      </div>
-                      <button
-                        onClick={() => toggleHidden(m.id)}
-                        disabled={busy === m.id}
-                        className="ml-2 shrink-0 text-zinc-500 hover:text-emerald-400 transition-colors disabled:opacity-30"
-                        title="Show in picker"
-                      >
-                        {busy === m.id ? (
-                          <span className="text-[10px]">…</span>
-                        ) : (
-                          <EyeClosed />
-                        )}
-                      </button>
-                    </div>
-                  ))}
-                </>
-              )}
-
-              {visibleModels.length === 0 && hiddenModels.length === 0 && (
-                <div className="text-xs text-zinc-500 italic py-1">
-                  {query ? "No models match your search." : "No models loaded. Add models in the My Models tab."}
-                </div>
-              )}
-            </div>
-          )}
-        </>
-      )}
+        </div>
+        <span className="shrink-0 rounded-full border border-sky-800/50 bg-sky-900/30 px-2 py-0.5 text-[10px] font-medium text-sky-300">
+          GitHub Copilot
+        </span>
+      </div>
+      <div className="mt-3 flex items-center gap-2">
+        <select
+          value={current}
+          onChange={(e) => setCurrent(e.target.value)}
+          className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 focus:border-sky-500 focus:outline-none"
+        >
+          {COPILOT_MODELS.map((m) => (
+            <option key={m.value} value={m.value}>{m.label} ({m.value})</option>
+          ))}
+        </select>
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="rounded-lg bg-sky-700 px-4 py-2 text-xs font-medium text-white hover:bg-sky-600 disabled:opacity-40 transition-colors"
+        >
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+      {saved && <p className="mt-2 text-xs text-green-400">✓ Saved — takes effect on next agent run.</p>}
+      {err && <p className="mt-2 text-xs text-red-400">{err}</p>}
     </div>
   );
 }
@@ -1146,6 +1018,7 @@ function ModelCatalogue() {
 
 export default function ModelsPage() {
   const [config, setConfig] = useState<LLMConfig | null>(null);
+  const [health, setHealth] = useState<LiteLLMHealth | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -1155,12 +1028,18 @@ export default function ModelsPage() {
     setLoading(true);
     setLoadError(null);
     try {
-      const cfgRes = await fetch("/api/settings/llm");
+      const [cfgRes, healthRes] = await Promise.all([
+        fetch("/api/settings/llm"),
+        fetch("/api/settings/llm/health"),
+      ]);
       if (cfgRes.ok) {
         setConfig(await cfgRes.json());
       } else {
         const err = await cfgRes.json().catch(() => ({}));
         setLoadError(String(err?.detail ?? err?.error ?? `Error ${cfgRes.status}`));
+      }
+      if (healthRes.ok) {
+        setHealth(await healthRes.json());
       }
     } catch (err) {
       setLoadError(String(err));
@@ -1181,21 +1060,15 @@ export default function ModelsPage() {
       const err = await res.json().catch(() => ({}));
       throw new Error(String(err?.detail ?? "Save failed"));
     }
-    // Brief delay for the gateway to write the key and restart
-    await new Promise((r) => setTimeout(r, 2000));
-    await loadConfig();
-  }, [loadConfig]);
-
-  const handleKeyDiscard = useCallback(async (provider: string) => {
-    const res = await fetch(`/api/settings/llm/key?provider=${encodeURIComponent(provider)}`, {
-      method: "DELETE",
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(String(err?.detail ?? "Discard failed"));
+    // Poll until LiteLLM is healthy again (restart takes ~25s)
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const h = await fetch("/api/settings/llm/health").catch(() => null);
+      if (h?.ok) {
+        const hdata: LiteLLMHealth = await h.json().catch(() => null);
+        if (hdata?.healthy) break;
+      }
     }
-    // Brief delay for the gateway to clear the key and restart
-    await new Promise((r) => setTimeout(r, 2000));
     await loadConfig();
   }, [loadConfig]);
 
@@ -1225,15 +1098,40 @@ export default function ModelsPage() {
         <div>
           <h1 className="text-xl font-semibold text-zinc-100">LLM Models</h1>
           <p className="mt-1 text-sm text-zinc-500">
-            Configure which model handles each routing tier and manage provider API keys.
+            Configure which model handles each routing tier. Changes write to{" "}
+            <code className="font-mono text-xs text-zinc-400">infra/litellm/config.yaml</code>.
           </p>
+        </div>
+
+        {/* LiteLLM status + UI link */}
+        <div className="shrink-0 text-right">
+          {health ? (
+            <>
+              <div className={`text-xs font-medium ${health.healthy ? "text-green-400" : "text-red-400"}`}>
+                ● LiteLLM proxy {health.healthy ? "online" : "offline"}
+              </div>
+              <div className="text-xs text-zinc-600 mt-0.5">{health.detail}</div>
+              {health.ui_url && (
+                <a
+                  href={health.ui_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-1 inline-block text-xs text-blue-500 hover:text-blue-400 underline"
+                >
+                  Open LiteLLM UI →
+                </a>
+              )}
+            </>
+          ) : (
+            <div className="text-xs text-zinc-600">Checking LiteLLM…</div>
+          )}
         </div>
       </div>
 
       {/* Save feedback */}
       {saveSuccess && (
         <div className="mb-4 rounded-lg border border-green-800/40 bg-green-950/30 px-4 py-2 text-xs text-green-300">
-          ✓ Saved: {saveSuccess}
+          ✓ Saved: {saveSuccess} — restart LiteLLM for changes to take effect if auto-reload fails.
         </div>
       )}
       {saveError && (
@@ -1298,7 +1196,6 @@ export default function ModelsPage() {
                   gemini: "GEMINI_API_KEY", openai: "OPENAI_API_KEY",
                   anthropic: "ANTHROPIC_API_KEY", openrouter: "OPENROUTER_API_KEY",
                   github: "GITHUB_TOKEN", groq: "GROQ_API_KEY",
-                  deepseek: "DEEPSEEK_API_KEY",
                   mistral: "MISTRAL_API_KEY", together: "TOGETHER_API_KEY",
                 };
 
@@ -1322,26 +1219,63 @@ export default function ModelsPage() {
                     key={p.id}
                     provider={p}
                     onKeySet={(key) => handleKeySet(p.id, key)}
-                    onKeyDiscard={(id) => handleKeyDiscard(id)}
                   />
                 ));
               })()}
             </div>
             <p className="mt-3 text-xs text-zinc-600">
-              Keys are stored encrypted in the Postgres database. Ollama models are
-              auto-detected from your local instance — no manual setup needed.
+              Keys are written to <code className="font-mono">infra/.env</code> and LiteLLM
+              restarts automatically. For Ollama, start it locally and pull models via{" "}
+              <code className="font-mono">ollama pull &lt;model&gt;</code>.
             </p>
           </section>
 
-          {/* Model catalogue — combined Custom Models + Visibility */}
+          {/* GitHub Copilot model override */}
           <section className="mb-8">
             <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-600">
-              Model Catalogue
+              GitHub Copilot Agent Model
             </h2>
-            <ModelCatalogue />
+            <CopilotModelPicker />
           </section>
 
+          {/* Custom model catalogue */}
+          <section className="mb-8">
+            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-600">
+              Custom Models
+            </h2>
+            <CustomModelsManager />
+          </section>
 
+          {/* Model visibility */}
+          <section className="mb-8">
+            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-600">
+              Model Visibility
+            </h2>
+            <ModelVisibilityManager />
+          </section>
+
+          {/* LiteLLM UI callout */}
+          <section>
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 px-5 py-4 flex items-center justify-between gap-4">
+              <div>
+                <div className="text-sm font-medium text-zinc-200">LiteLLM Management UI</div>
+                <p className="mt-0.5 text-xs text-zinc-500">
+                  Advanced routing rules, fallback chains, virtual API keys, spend tracking,
+                  and model health checks. Available at{" "}
+                  <code className="font-mono text-zinc-400">localhost:4000/ui</code> when LiteLLM
+                  is running with a database connection.
+                </p>
+              </div>
+              <a
+                href={config.litellm_ui_url}
+                target="_blank"
+                rel="noreferrer"
+                className="shrink-0 rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 transition-colors"
+              >
+                Open UI →
+              </a>
+            </div>
+          </section>
         </>
       ) : null}
     </div>

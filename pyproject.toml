@@ -26,8 +26,6 @@ dependencies = [
     "reconciler",
     "action-broker",
     "bcrypt>=5.0.0",
-    "copilot>=0.1.9",
-    "github-copilot-sdk>=0.1.32",
 ]
 
 [dependency-groups]

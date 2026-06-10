@@ -1,5 +1,8 @@
 from __future__ import annotations
-import asyncio, contextlib, logging
+
+import asyncio
+import contextlib
+import logging
 from typing import Any, AsyncIterable
 
 from agent_framework import AgentResponseUpdate, Content, Message

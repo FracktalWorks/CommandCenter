@@ -23,11 +23,10 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
-
 from acb_auth import UserContext, UserRole, get_current_user, require_role
 from acb_common import get_logger, get_settings
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 
 _log = get_logger("gateway.integrations")
 
@@ -302,6 +301,7 @@ _ALLOWED_ENV_KEYS: frozenset[str] = frozenset(
     "TOGETHER_API_KEY",
     "VLLM_BASE_URL",
     "LITELLM_MASTER_KEY",
+    "COPILOT_CHAT_MODEL",
 })
 
 
@@ -382,8 +382,11 @@ async def integration_status(
 
     # Determine which services to check
     if agent:
-        from gateway.routes.agent import _load_registry_agents, _load_dynamic_agents  # noqa: PLC0415
-        entry = next((e for e in _load_registry_agents() if e["name"] == agent), None)
+        from gateway.routes.agent import (_AGENT_REGISTRY,  # noqa: PLC0415
+                                          _load_dynamic_agents)
+
+        # Search static registry first, then dynamic agents from agents.json
+        entry = next((e for e in _AGENT_REGISTRY if e["name"] == agent), None)
         if entry is None:
             entry = next((e for e in _load_dynamic_agents() if e["name"] == agent), None)
         if entry is None:

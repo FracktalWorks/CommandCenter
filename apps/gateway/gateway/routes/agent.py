@@ -26,7 +26,8 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger, get_settings
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import (APIRouter, BackgroundTasks, Depends, HTTPException,
+                     Request, status)
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -67,47 +68,117 @@ class WebhookEvent(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Agent name allowlist — loaded from agent_registry.json at runtime.
-# Changes take effect within 5 seconds with NO gateway restart.
+# Agent name allowlist (security: never clone arbitrary user-supplied names)
+# ---------------------------------------------------------------------------
 
-import time  # noqa: E402
+_KNOWN_AGENTS: frozenset[str] = frozenset(
+    [
+        "task-manager",
+        "billing",
+        "sales",
+        "delivery",
+        "triage",
+        "reconciler",
+        "strategy",
+        "agent-project-manager",
+    ]
+)
 
-_registry_path: Path | None = None
-_registry_cache: tuple[float, list[dict]] | None = None  # (timestamp, data)
-_registry_cache_ttl: float = 5.0  # seconds
-
-
-def _get_registry_path() -> Path:
-    """Locate agent_registry.json next to agents.json."""
-    global _registry_path
-    if _registry_path is not None:
-        return _registry_path
-    _registry_path = _get_agents_file().with_name("agent_registry.json")
-    return _registry_path
-
-
-def _load_registry_agents() -> list[dict]:
-    """Return live-reloaded registry agents (cached for 5 s)."""
-    global _registry_cache
-    now = time.monotonic()
-    if _registry_cache is not None and (now - _registry_cache[0]) < _registry_cache_ttl:
-        return _registry_cache[1]
-    path = _get_registry_path()
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, list):
-            _registry_cache = (now, data)
-            return data
-    except Exception:
-        pass
-    return _registry_cache[1] if _registry_cache else []
-
-
-def _get_known_agents() -> frozenset[str]:
-    """Return the current allowlist from the live registry."""
-    return frozenset(a["name"] for a in _load_registry_agents() if a.get("name"))
+# Human-readable metadata for the Control Plane agent picker.
+# Keys match the bare agent names in _KNOWN_AGENTS.
+_AGENT_REGISTRY: list[dict] = [
+    {
+        "name": "task-manager",
+        "description": "ClickUp task management — status, progress, and workload questions with citations.",
+        "tags": ["tasks", "clickup", "project-management"],
+        "status": "live",
+        # Local monorepo agent — MAF runner (uses GitHubCopilotAgent internally, but
+        # is NOT registered from an external GitHub repo, so agent_runtime = "maf").
+        "agent_runtime": "maf",
+        "local_path": "apps/agent-task-manager",
+        "integrations": ["clickup"],
+        "optional_integrations": [],
+        "webhook_routes": [
+            {"source": "clickup", "event_type": "taskCreated"},
+            {"source": "clickup", "event_type": "taskUpdated"},
+            {"source": "clickup", "event_type": "taskDeleted"},
+        ],
+    },
+    {
+        "name": "agent-project-manager",
+        "description": (
+            "Project management and HR delegation agent for Fracktal Works. "
+            "Plans projects, breaks down technical work, delegates to the right people "
+            "based on resume-inferred skills and live ClickUp workload, tracks risks and "
+            "follow-ups, syncs to ClickUp, and creates technical project plans "
+            "(WBS, Gantt, risk register). "
+            "Trigger keywords: project plan, delegate, assign, WBS, Gantt, workload, "
+            "who is free, ClickUp, risk, status report, technical planning."
+        ),
+        "tags": ["hr", "project-management", "clickup", "delegation", "technical-planning"],
+        "status": "live",
+        "agent_runtime": "github-copilot",
+        "repo_url": "https://github.com/FracktalWorks/agent-project-manager",
+        "repo_name": "FracktalWorks/agent-project-manager",
+        "local_path": "C:/Users/VijayRaghavVarada/Documents/Github/agent-project-manager",
+        "integrations": ["anthropic", "clickup", "serpapi", "openai"],
+        "optional_integrations": [],
+    },
+    {
+        "name": "sales",
+        "description": "Zoho CRM sales pipeline + deal follow-ups",
+        "tags": ["sales", "zoho"],
+        "status": "live",
+        "agent_runtime": "maf",
+        "integrations": ["zoho-crm"],
+        "optional_integrations": ["gmail-send"],
+    },
+    {
+        "name": "delivery",
+        "description": "Project delivery monitoring + push notifications",
+        "tags": ["delivery"],
+        "status": "live",
+        "agent_runtime": "maf",
+        "integrations": ["clickup"],
+        "optional_integrations": [],
+    },
+    {
+        "name": "triage",
+        "description": "Email / WhatsApp / meeting triage + routing",
+        "tags": ["triage", "email"],
+        "status": "live",
+        "agent_runtime": "maf",
+        "integrations": ["gmail", "zoho-crm"],
+        "optional_integrations": ["clickup"],
+    },
+    {
+        "name": "reconciler",
+        "description": "Nightly source-of-truth diff + escalation",
+        "tags": ["ops"],
+        "status": "live",
+        "agent_runtime": "maf",
+        "integrations": ["clickup", "zoho-crm"],
+        "optional_integrations": [],
+    },
+    {
+        "name": "billing",
+        "description": "Billing & invoice workflows",
+        "tags": ["billing"],
+        "status": "live",
+        "agent_runtime": "maf",
+        "integrations": ["zoho-crm"],
+        "optional_integrations": ["smtp"],
+    },
+    {
+        "name": "strategy",
+        "description": "Weekly digest + planning synthesis",
+        "tags": ["strategy"],
+        "status": "live",
+        "agent_runtime": "maf",
+        "integrations": [],
+        "optional_integrations": [],
+    },
+]
 
 
 # ---------------------------------------------------------------------------
@@ -142,19 +213,20 @@ def _save_dynamic_agents(agents: list[dict]) -> None:
 
 
 def _validate_agent_name(name: str) -> str:
-    """Reject agent names not in the live registry or dynamic agent list."""
+    """Reject agent names not in the static or dynamic allowlist."""
     safe = name.lower().strip()
-    registry_names = {a["name"] for a in _load_registry_agents()}
-    dynamic_names = {a["name"] for a in _load_dynamic_agents()}
-    if safe not in registry_names and safe not in dynamic_names:
-        known = sorted(_get_known_agents())
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                f"Unknown agent {name!r}. "
-                f"Allowed: {known}"
-            ),
-        )
+    if safe not in _KNOWN_AGENTS:
+        # Also accept dynamically registered agents and static registry entries
+        registry_names = {a["name"] for a in _AGENT_REGISTRY}
+        dynamic_names = {a["name"] for a in _load_dynamic_agents()}
+        if safe not in registry_names and safe not in dynamic_names:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Unknown agent {name!r}. "
+                    f"Static allowed: {sorted(_KNOWN_AGENTS)}"
+                ),
+            )
     return safe
 
 
@@ -259,11 +331,11 @@ async def get_agent_config(
 async def list_agents(
     user: UserContext = Depends(get_current_user),
 ) -> list[dict]:
-    """Return the merged live-reloaded registry + dynamic agent list."""
+    """Return the merged static + dynamic agent registry."""
     dynamic = _load_dynamic_agents()
     dynamic_names = {a["name"] for a in dynamic}
-    registry = _load_registry_agents()
-    static = [a for a in registry if a["name"] not in dynamic_names]
+    # Static agents not overridden by dynamic entries come first
+    static = [a for a in _AGENT_REGISTRY if a["name"] not in dynamic_names]
     # Back-fill agent_runtime for legacy dynamic entries that predate the field.
     # Rule: only entries registered FROM a GitHub repo URL are "github-copilot";
     # everything else (local path, unknown) is plain MAF.
@@ -300,7 +372,7 @@ async def register_agent(
         )
 
     dynamic = _load_dynamic_agents()
-    all_names = {a["name"] for a in _load_registry_agents()} | {a["name"] for a in dynamic}
+    all_names = {a["name"] for a in _AGENT_REGISTRY} | {a["name"] for a in dynamic}
     if req.name in all_names:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -414,7 +486,7 @@ async def remove_agent(
     user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Delete a dynamic agent from agents.json.  Built-in agents cannot be removed."""
-    if name in _get_known_agents():
+    if name in _KNOWN_AGENTS:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Built-in agent {name!r} cannot be removed via the API.",
@@ -443,7 +515,7 @@ async def patch_agent(
     user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Partially update a dynamic agent's metadata in agents.json."""
-    if name in _get_known_agents():
+    if name in _KNOWN_AGENTS:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Built-in agent {name!r} cannot be modified via the API.",
@@ -491,7 +563,7 @@ async def run_agent_stream_endpoint(
     agent = _validate_agent_name(req.agent)
     run_id = req.run_id or str(uuid.uuid4())
 
-    _log.info("agent.stream_run_start", agent=agent, run_id=run_id, model=req.model, actor=user.email)
+    _log.info("agent.stream_run_start", agent=agent, run_id=run_id, actor=user.email)
 
     return StreamingResponse(
         run_agent_stream(
@@ -882,14 +954,15 @@ async def approve_pending_commit(
         has_remote = remote_proc.returncode == 0
 
         if has_remote:
-            # Push.  If the fast-forward fails, rebase on top of origin/HEAD and retry.
+            # Push.  If the fast-forward fails, rebase and retry.
             push_ok = await _git_push_with_rebase(clone_dir, commit_sha)
             if not push_ok:
                 raise HTTPException(
                     status_code=500,
                     detail="git push failed after rebase — check gateway logs",
                 )
-            _log.info("mutation.commit_pushed", agent=row.agent_name, commit_sha=commit_sha[:8])
+            _log.info("mutation.commit_pushed",
+                      agent=row.agent_name, commit_sha=commit_sha[:8])
         else:
             _log.info(
                 "mutation.commit_kept_local",

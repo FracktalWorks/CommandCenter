@@ -13,11 +13,10 @@ from typing import Any
 
 import httpx
 import yaml
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
-
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger, get_settings
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 
 _log = get_logger("settings")
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -89,36 +88,6 @@ def _write_env_key(var: str, value: str) -> None:
             new_lines.append("\n")
         new_lines.append(f"{var}={value}\n")
     env_file.write_text("".join(new_lines), encoding="utf-8")
-
-
-def _clear_env_key(var: str) -> None:
-    """Remove VAR=value from the repo-root .env and the live process environment."""
-    here = Path(__file__).resolve()
-    env_file: Path | None = None
-    for parent in here.parents:
-        pyproject = parent / "pyproject.toml"
-        if pyproject.exists():
-            try:
-                if "[tool.uv.workspace]" in pyproject.read_text(encoding="utf-8"):
-                    env_file = parent / ".env"
-                    break
-            except OSError:
-                pass
-    if env_file is None:
-        env_file = Path.cwd() / ".env"
-    if env_file.exists():
-        lines = env_file.read_text(encoding="utf-8").splitlines(keepends=True)
-        pattern = re.compile(rf"^{re.escape(var)}\s*=")
-        new_lines = [line for line in lines if not pattern.match(line)]
-        env_file.write_text("".join(new_lines), encoding="utf-8")
-    # Also remove from live os.environ
-    os.environ.pop(var, None)
-    # Bust the settings LRU cache so get_settings() picks up the removal.
-    try:
-        from acb_common.settings import get_settings as _gs  # noqa: PLC0415
-        _gs.cache_clear()
-    except Exception:  # noqa: BLE001
-        pass
 
 
 def _recreate_litellm_bg() -> None:
@@ -608,7 +577,8 @@ async def test_tier(
     _user: UserContext = Depends(get_current_user),
 ) -> TestResult:
     import time
-    from acb_llm.client import complete, LLMTier
+
+    from acb_llm.client import LLMTier, complete
 
     tier_map = {"tier1-local-qwen3": "tier1", "tier2-sonnet": "tier2", "tier3-opus": "tier3"}
     tier_id = tier_map.get(req.tier_name)
@@ -650,192 +620,48 @@ async def set_provider_key(
         raise HTTPException(status_code=400, detail="api_key cannot be empty")
     try:
         _write_env_key(env_var, req.api_key.strip())
+        # Update the live process environment so _is_provider_configured()
+        # returns True immediately without a gateway restart.
         os.environ[env_var] = req.api_key.strip()
+        # Bust the settings LRU cache so get_settings() also picks up the new value.
         try:
-            from acb_common.settings import get_settings as _gs  # noqa: PLC0415
+            from acb_common.settings import \
+                get_settings as _gs  # noqa: PLC0415
             _gs.cache_clear()
         except Exception:  # noqa: BLE001
             pass
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to write env: {exc}") from exc
-    # Persist encrypted to the provider_keys table (primary store).
-    try:
-        from acb_llm.key_store import get_key_store  # noqa: PLC0415
-        store = get_key_store()
-        await store.put(req.provider, req.api_key.strip())
-        await store.configure_litellm()  # update in-process LiteLLM SDK config
-    except Exception as _ke:  # noqa: BLE001
-        _log.warning("settings.llm.key_store_write_failed", provider=req.provider, error=str(_ke))
     _log.info("settings.llm.key_updated", provider=req.provider, actor=_user.email)
+    # Inject key into running LiteLLM container immediately (no restart needed).
+    # Fallback: restart the container so it picks up the new .env value.
     _inject_env_into_litellm(env_var, req.api_key.strip())
     return {"ok": "true", "env_var": env_var, "provider": req.provider}
 
 
 # ---------------------------------------------------------------------------
-# DELETE /settings/llm/key  — discard a provider API key from infra/.env
+# POST /settings/llm/copilot-model  — set copilot_chat_model in .env
 # ---------------------------------------------------------------------------
 
-class DiscardKeyRequest(BaseModel):
-    provider: str   # "gemini" | "openai" | "deepseek" | ...
+class CopilotModelRequest(BaseModel):
+    model: str   # e.g. "claude-sonnet-4-5", "gpt-4o", "o3-mini"
 
 
-@router.delete("/llm/key")
-async def discard_provider_key(
-    req: DiscardKeyRequest,
+@router.post("/llm/copilot-model")
+async def set_copilot_model(
+    req: CopilotModelRequest,
     _user: UserContext = Depends(get_current_user),
 ) -> dict[str, str]:
-    env_var = _PROVIDER_ENV_MAP.get(req.provider)
-    if not env_var:
-        raise HTTPException(status_code=400, detail=f"No env var for provider: {req.provider}")
+    """Update the model used by GitHub Copilot SDK agents (Tier 1.5 path)."""
+    if not req.model.strip():
+        raise HTTPException(status_code=400, detail="model cannot be empty")
     try:
-        _clear_env_key(env_var)
-        _log.info("settings.llm.key_discarded", provider=req.provider, actor=_user.email)
+        _write_env_key("COPILOT_CHAT_MODEL", req.model.strip())
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to clear env: {exc}") from exc
-    # Also remove from the encrypted provider_keys table.
-    try:
-        from acb_llm.key_store import get_key_store  # noqa: PLC0415
-        store = get_key_store()
-        await store.delete(req.provider)
-        await store.configure_litellm()  # update in-process LiteLLM SDK config
-    except Exception as _ke:  # noqa: BLE001
-        _log.warning("settings.llm.key_store_delete_failed", provider=req.provider, error=str(_ke))
-    _recreate_litellm_bg()
-    return {"ok": "true", "env_var": env_var, "provider": req.provider}
+        raise HTTPException(status_code=500, detail=f"Failed to write env: {exc}") from exc
+    _log.info("settings.llm.copilot_model_updated", model=req.model, actor=_user.email)
+    return {"ok": "true", "model": req.model.strip()}
 
-
-# ---------------------------------------------------------------------------
-# GET /settings/llm/provider-models  — live model discovery from provider APIs
-# ---------------------------------------------------------------------------
-
-# Provider → base URL for OpenAI-compatible /v1/models endpoint.
-# Providers not listed here fall back to the static _PROVIDER_MODELS catalogue.
-_PROVIDER_API_BASES: dict[str, str] = {
-    "openai":     "https://api.openai.com",
-    "deepseek":   "https://api.deepseek.com",
-    "groq":       "https://api.groq.com/openai",
-    "together":   "https://api.together.xyz",
-    "mistral":    "https://api.mistral.ai",
-}
-
-# OpenRouter lists models publicly — no API key needed.
-_OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
-
-
-def _model_label_from_id(model_id: str) -> str:
-    """Derive a human-readable label from a model ID.
-    e.g. 'openrouter/deepseek/deepseek-v4-pro' → 'DeepSeek V4 Pro'"""
-    last = model_id.rsplit("/", 1)[-1] if "/" in model_id else model_id
-    # Replace dashes/underscores with spaces, title-case words
-    label = last.replace("-", " ").replace("_", " ")
-    # Capitalize common prefixes
-    label = " ".join(
-        w.upper() if w.lower() in ("gpt", "r1", "v3", "v4", "o1", "o3", "k2")
-        else w[0].upper() + w[1:] if w and w[0].islower()
-        else w
-        for w in label.split()
-    )
-    return label or model_id
-
-
-@router.get("/llm/provider-models")
-async def discover_provider_models(
-    provider: str = "",
-    _user: UserContext = Depends(get_current_user),
-) -> list[dict[str, str]]:
-    """Return live list of models for a provider. Falls back to static catalogue."""
-    if not provider:
-        return []
-
-    # ── OpenRouter: public API, no key needed ────────────────────────────────
-    if provider == "openrouter":
-        try:
-            async with httpx.AsyncClient(timeout=8) as client:
-                r = await client.get(_OPENROUTER_MODELS_URL)
-                if r.status_code == 200:
-                    data = r.json()
-                    models: list[dict[str, str]] = []
-                    for m in data.get("data", []):
-                        mid = m.get("id", "")
-                        if mid:
-                            models.append({
-                                "id": f"openrouter/{mid}",
-                                "label": m.get("name", _model_label_from_id(mid)),
-                            })
-                    if models:
-                        return sorted(models, key=lambda x: x["label"].lower())
-        except Exception:
-            pass  # fall through to static
-
-    # ── OpenAI-compatible /v1/models providers ───────────────────────────────
-    if provider in _PROVIDER_API_BASES:
-        env_var = _PROVIDER_ENV_MAP.get(provider, "")
-        api_key = os.environ.get(env_var, "").strip()
-        if not api_key:
-            try:
-                api_key = (getattr(get_settings(), env_var.lower(), "") or "").strip()
-            except Exception:
-                pass
-        if api_key:
-            try:
-                base = _PROVIDER_API_BASES[provider]
-                async with httpx.AsyncClient(timeout=8) as client:
-                    r = await client.get(
-                        f"{base}/v1/models",
-                        headers={"Authorization": f"Bearer {api_key}"},
-                    )
-                    if r.status_code == 200:
-                        data = r.json()
-                        models: list[dict[str, str]] = []
-                        for m in data.get("data", []):
-                            mid = m.get("id", "")
-                            if mid and not any(
-                                mid.startswith(p) for p in ("ft:", "babbage", "davinci", "tts-", "whisper-", "dall-e")
-                            ):
-                                models.append({
-                                    "id": f"{provider}/{mid}",
-                                    "label": _model_label_from_id(mid),
-                                })
-                        if models:
-                            return sorted(models, key=lambda x: x["label"].lower())
-            except Exception:
-                pass  # fall through to static
-
-    # ── Ollama: local API ────────────────────────────────────────────────────
-    if provider == "ollama":
-        try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                r = await client.get("http://localhost:11434/api/tags")
-                if r.status_code == 200:
-                    data = r.json()
-                    models: list[dict[str, str]] = []
-                    for m in data.get("models", []):
-                        name = m.get("name", "")
-                        if name:
-                            models.append({
-                                "id": f"ollama/{name}",
-                                "label": name,
-                            })
-                    if models:
-                        return sorted(models, key=lambda x: x["label"].lower())
-        except Exception:
-            pass  # fall through to static
-
-    # ── GitHub Copilot — use existing copilot model discovery ────────────────
-    if provider == "github":
-        try:
-            # Copilot SDK models are discovered elsewhere; return a simple list.
-            # The static _PROVIDER_MODELS for github has the main ones.
-            pass
-        except Exception:
-            pass
-
-    # ── Fallback: static _PROVIDER_MODELS catalogue ──────────────────────────
-    static_models = _PROVIDER_MODELS.get(provider, [])
-    return [
-        {"id": mid, "label": _model_label_from_id(mid)}
-        for mid in static_models
-    ]
 
 # ---------------------------------------------------------------------------
 # Custom model catalogue  — user-managed entries stored in infra/custom_models.json

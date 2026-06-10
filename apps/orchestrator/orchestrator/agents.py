@@ -20,21 +20,17 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from agent_framework import Agent, WorkflowBuilder
-from agent_framework.openai import OpenAIChatCompletionClient
-
 from acb_common import get_logger, get_settings
 from acb_graph import get_session
+from agent_framework import Agent, WorkflowBuilder
+from agent_framework.openai import OpenAIChatCompletionClient
 from orchestrator.retrieval import format_context, retrieve
 from orchestrator.sales_views import sales_context as _sales_context_fn
 
 # Memory layer (WBS 2.5) — imported lazily; graceful if acb_memory not installed.
 try:
-    from acb_memory import (
-        get_memory_context,
-        add_memories_background,
-        search_entity_timeline,
-    )
+    from acb_memory import (add_memories_background, get_memory_context,
+                            search_entity_timeline)
     _MEMORY_AVAILABLE = True
 except ImportError:
     _MEMORY_AVAILABLE = False
@@ -154,7 +150,9 @@ async def spawn_copilot_agent(    task: str,
         Summary of actions taken and files changed.
     """
     import uuid as _uuid  # noqa: PLC0415
-    from orchestrator.mutation import _build_telemetry, _run_mutation_sandbox  # noqa: PLC0415
+
+    from orchestrator.mutation import _build_telemetry  # noqa: PLC0415
+    from orchestrator.mutation import _run_mutation_sandbox
 
     run_id = str(_uuid.uuid4())
     settings = get_settings()
@@ -229,7 +227,9 @@ async def delegate_to_agent(agent_name: str, message: str) -> str:
         The specialist agent's full response text.
     """
     import uuid as _uuid  # noqa: PLC0415
-    from orchestrator.executor import AgentRunError, _active_run_queue  # noqa: PLC0415
+
+    from orchestrator.executor import AgentRunError  # noqa: PLC0415
+    from orchestrator.executor import _active_run_queue
 
     run_id = str(_uuid.uuid4())
 
@@ -237,7 +237,8 @@ async def delegate_to_agent(agent_name: str, message: str) -> str:
     event_queue = _active_run_queue.get(None)
     if event_queue is not None:
         try:
-            from orchestrator.executor import _run_sub_agent_streaming  # noqa: PLC0415
+            from orchestrator.executor import \
+                _run_sub_agent_streaming  # noqa: PLC0415
             return await _run_sub_agent_streaming(agent_name, message, run_id, event_queue)
         except Exception as exc:  # noqa: BLE001
             return f"Agent {agent_name!r} failed: {exc}"
@@ -276,8 +277,9 @@ def _load_specialist_agents_as_tools() -> list[Any]:
     """
     tools: list[Any] = []
     try:
-        from gateway.routes.agent import _load_registry_agents, _load_dynamic_agents  # noqa: PLC0415
-        all_agents = _load_dynamic_agents() + _load_registry_agents()
+        from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
+        from gateway.routes.agent import _load_dynamic_agents
+        all_agents = _load_dynamic_agents() + _AGENT_REGISTRY
     except ImportError:
         return tools
 
@@ -316,11 +318,13 @@ def _load_specialist_agents_as_tools() -> list[Any]:
             async def _specialist_fn(task: str, _n: str = _agent_name) -> str:
                 import uuid as _uuid  # noqa: PLC0415
                 run_id = str(_uuid.uuid4())
-                from orchestrator.executor import _active_run_queue  # noqa: PLC0415
+                from orchestrator.executor import \
+                    _active_run_queue  # noqa: PLC0415
                 eq = _active_run_queue.get(None)
                 if eq is not None:
                     try:
-                        from orchestrator.executor import _run_sub_agent_streaming  # noqa: PLC0415
+                        from orchestrator.executor import \
+                            _run_sub_agent_streaming  # noqa: PLC0415
                         return await _run_sub_agent_streaming(_n, task, run_id, eq)
                     except Exception as exc:  # noqa: BLE001
                         return f"Agent {_n!r} failed: {exc}"

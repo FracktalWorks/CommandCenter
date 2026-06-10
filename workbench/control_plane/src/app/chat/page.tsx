@@ -114,49 +114,7 @@ function AgentPickerModal({
           </button>
         </div>
 
-        {/* Copilot SDK Agents — talk directly to GitHub Copilot SDK */} 
-        <div className="mt-4">
-          <div className="text-xs font-medium uppercase tracking-wide text-zinc-600 mb-1.5">
-            Copilot SDK agents
-          </div>
-          {loading ? (
-            <div className="text-xs text-zinc-600 py-2 text-center">Loading agents…</div>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              {agents.filter(a => a.agent_runtime === "github-copilot").map((a) => (
-                <div key={a.name}>
-                  <button
-                    onClick={() => handleAgentClick(a)}
-                    className="w-full text-left rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-4 py-3 hover:border-zinc-500 hover:bg-zinc-800 transition-colors"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-medium text-zinc-100">{a.name}</div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-sky-700/50 bg-sky-900/30 text-sky-300">
-                          Copilot SDK
-                        </span>
-                        {needsSetupBadge(a) && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-900/40 text-orange-400 border border-orange-700/50">
-                            ⚙ Setup needed
-                          </span>
-                        )}
-                        {a.tags.slice(0, 2).map((t) => (
-                          <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-400">{t}</span>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="text-xs text-zinc-500 mt-0.5">{a.description}</div>
-                  </button>
-                </div>
-              ))}
-              {agents.filter(a => a.agent_runtime === "github-copilot").length === 0 && (
-                <div className="text-xs text-zinc-600 py-1">No Copilot SDK agents registered</div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* MAF Agents — run through Microsoft Agent Framework */}
+        {/* MAF Agents */}
         <div className="mt-4">
           <div className="text-xs font-medium uppercase tracking-wide text-zinc-600 mb-1.5">
             MAF agents
@@ -165,7 +123,7 @@ function AgentPickerModal({
             <div className="text-xs text-zinc-600 py-2 text-center">Loading agents…</div>
           ) : (
             <div className="flex flex-col gap-1.5 max-h-72 overflow-y-auto">
-              {agents.filter(a => a.agent_runtime !== "github-copilot").map((a) => (
+              {agents.map((a) => (
                 <div key={a.name}>
                   <button
                     onClick={() => handleAgentClick(a)}
@@ -174,16 +132,28 @@ function AgentPickerModal({
                     <div className="flex items-center justify-between">
                       <div className="text-sm font-medium text-zinc-100">{a.name}</div>
                       <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-amber-700/40 bg-amber-900/20 text-amber-400">
-                          MAF
-                        </span>
+                        {/* Agent runtime badge in picker */}
+                        {a.agent_runtime === "github-copilot" ? (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-sky-700/50 bg-sky-900/30 text-sky-300">
+                            Copilot SDK
+                          </span>
+                        ) : (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-amber-700/40 bg-amber-900/20 text-amber-400">
+                            MAF
+                          </span>
+                        )}
                         {needsSetupBadge(a) && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-900/40 text-orange-400 border border-orange-700/50">
                             ⚙ Setup needed
                           </span>
                         )}
                         {a.tags.slice(0, 2).map((t) => (
-                          <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-400">{t}</span>
+                          <span
+                            key={t}
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-400"
+                          >
+                            {t}
+                          </span>
                         ))}
                       </div>
                     </div>
@@ -483,7 +453,7 @@ function ChatPageInner() {
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-full min-h-screen">
       {/* Agent picker modal */}
       {showPicker && (
         <AgentPickerModal

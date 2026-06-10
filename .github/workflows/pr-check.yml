@@ -1,0 +1,58 @@
+# CommandCenter — PR validation (lint + test only, no deploy).
+#
+# Runs on every PR to main.  Fast feedback loop — catches regressions
+# before they land.  The full deploy workflow runs only on merge to main.
+
+name: pr-check
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "ai-company-brain/**"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: "Lint"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Sync deps
+        run: uv sync
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+  test:
+    name: "Unit tests"
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Sync deps
+        run: uv sync
+
+      - name: Run unit tests
+        run: uv run python -m pytest tests/unit/ -x -v

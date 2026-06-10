@@ -73,7 +73,7 @@ class GraphitiClient:
             from graphiti_core.embedder.openai import OpenAIEmbedderConfig  # noqa: PLC0415
             from openai import AsyncOpenAI  # noqa: PLC0415
 
-            # Reuse our LiteLLM proxy for both LLM and embeddings so there's
+            # Reuse gateway /v1 (litellm SDK) for both LLM and embeddings so there's
             # no separate API key or model config needed.
             openai_client = AsyncOpenAI(
                 api_key=litellm_key,

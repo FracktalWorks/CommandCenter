@@ -107,4 +107,4 @@ Write-Host "Done. Next steps:" -ForegroundColor Green
 Write-Host "  - Edit .env (set ANTHROPIC_API_KEY at minimum)"
 Write-Host "  - Run the gateway:   uv run uvicorn gateway.main:app --reload --port 8080"
 Write-Host "  - Health check:      curl http://localhost:8080/health"
-Write-Host "  - LiteLLM proxy:     http://localhost:4000  (master key in .env)"
+Write-Host "  - LLM routing:      gateway /v1 (litellm SDK — no separate proxy)"

@@ -30,8 +30,9 @@ class Settings(BaseSettings):
     # Redis (event bus)
     redis_url: str = "redis://localhost:6379/0"
 
-    # LiteLLM gateway (DEPRECATED — kept for backward compat during migration)
-    litellm_base_url: str = "http://127.0.0.1:8080"  # gateway /v1 endpoint (was LiteLLM proxy :4000)
+    # LiteLLM SDK routing — gateway /v1/chat/completions endpoint.
+    # All LLM calls use the litellm Python SDK directly (no separate proxy).
+    litellm_base_url: str = "http://127.0.0.1:8080"
     litellm_master_key: str = "sk-local"
 
     # Master encryption key for the provider key store (ADR-008).
@@ -115,7 +116,7 @@ class Settings(BaseSettings):
     mutation_auto_pr: bool = True                    # open a GitHub PR after a successful fix
 
     # Copilot SDK chat (coworker sessions via /copilot/chat)
-    # Auth order: LITELLM_MASTER_KEY → LiteLLM proxy  |  GITHUB_TOKEN → api.githubcopilot.com
+    # Auth order: LITELLM_MASTER_KEY → gateway /v1  |  GITHUB_TOKEN → api.githubcopilot.com
     # Model must be available in whichever provider is active.
     # Also controls the model injected into GitHubCopilotAgent Tier-1.5 runs.
     # Valid values (Copilot API): gpt-4o, gpt-4o-mini, claude-sonnet-4-5, o3-mini, o1

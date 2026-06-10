@@ -6,7 +6,7 @@ Docker Compose, Postgres schema, LiteLLM config (legacy — no longer needed; LL
 ## Key Files
 - docker-compose.yml -- core services (Postgres 16 + pgvector, Redis 7)
 - postgres/ -- schema files (00-08) + 09_app_user.sql (NextAuth users)
-- litellm/ -- legacy proxy config (kept for reference; gateway uses acb_llm SDK directly)
+- litellm/ — (empty — litellm SDK used directly by gateway; no proxy configs remain)
 
 ## Conventions
 - Postgres migrations are numbered SQL files

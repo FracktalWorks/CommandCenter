@@ -105,7 +105,7 @@ The product delivers value in **four levels**, each independently deployable:
 
 | ID | Requirement | Priority |
 |---|---|---|
-| L2-01 | **`Self_Mutation_Node`** in MAF: on agent error, checks `mutation_attempts_this_run < 1`, spawns an isolated Copilot SDK container (`acb-mutation-runner`) via `docker run --rm -d`, injects failure telemetry and the mutation prompt as env vars, mounts the persistent local clone at `/workspace/repo`. BYOK via LiteLLM proxy; `max_mutation_attempts = 1` enforced per run. | Must |
+| L2-01 | **`Self_Mutation_Node`** in MAF: on agent error, checks `mutation_attempts_this_run < 1`, spawns an isolated Copilot SDK container (`acb-mutation-runner`) via `docker run --rm -d`, injects failure telemetry and the mutation prompt as env vars, mounts the persistent local clone at `/workspace/repo`. BYOK via gateway /v1 (litellm SDK); `max_mutation_attempts = 1` enforced per run. | Must |
 | L2-02 | If tests pass: commits fix to local clone main branch (fix is live immediately); pushes branch `auto-fix/{run_id}` to origin; opens GitHub PR with telemetry, diff, and test results. `max_mutation_attempts = 1` enforced per run. | Must |
 | L2-03 | If tests fail: discards all changes (`git reset --hard HEAD`); destroys dev sandbox; logs failure. | Must |
 | L2-04 | Core listens for `pull_request.closed` (unmerged) GitHub webhooks from agent repos. On unmerged close of an `auto-fix` PR: Core issues `git reset --hard origin/main` on the affected local clone (automatic rollback). | Must |

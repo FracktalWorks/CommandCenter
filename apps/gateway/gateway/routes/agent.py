@@ -49,7 +49,7 @@ class AgentRunRequest(BaseModel):
     model: str | None = None
     """Optional model override.  If it is a LiteLLM model (contains '/' or starts
     with 'tier'), the executor injects a BYOK provider block so the Copilot SDK
-    routes completions through the local LiteLLM proxy instead of github.com."""
+    routes completions through the gateway /v1 (litellm SDK) instead of github.com."""
 
 
 class AgentRunResponse(BaseModel):

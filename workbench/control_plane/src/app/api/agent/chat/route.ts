@@ -60,7 +60,7 @@ interface ChatRequest {
 
 const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
 const LITELLM_BASE_URL =
-  process.env.COPILOT_LLM_BASE_URL ?? process.env.LITELLM_BASE_URL ?? "http://localhost:4000/v1";
+  process.env.COPILOT_LLM_BASE_URL ?? process.env.LITELLM_BASE_URL ?? "http://127.0.0.1:8080/v1";
 const LITELLM_KEY =
   process.env.LITELLM_MASTER_KEY ?? process.env.GATEWAY_INTERNAL_TOKEN ?? "sk-local-dev-change-me";
 const INTERNAL_TOKEN =
@@ -151,7 +151,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     );
   }
 
-  // ── LiteLLM path: stream directly from the LiteLLM proxy ──────────────────
+  // ── Gateway /v1 path: stream directly via litellm SDK ────────────────────
   // Routes to LiteLLM tier aliases (tier1/2/3 are cost-optimized tiers).
   // Backend can optionally route tiers through Copilot, Claude, GPT-4, or Gemini
   // (see infra/litellm/config.yaml for current routing).
@@ -514,8 +514,8 @@ export async function POST(req: NextRequest): Promise<Response> {
   return new Response(stream, { headers: sseHeaders() });
 }
 
-// ─── LiteLLM streaming proxy ──────────────────────────────────────────────────
-// Streams an OpenAI-compatible chat completion from the LiteLLM proxy and
+// ─── Gateway /v1 streaming (litellm SDK) ─────────────────────────────────────
+// Streams an OpenAI-compatible chat completion from the gateway /v1 and
 // re-emits it in our SSE format (delta / done / error). Enables the unified
 // chat window to use any LiteLLM model alias (tier1/2/3, copilot/*).
 

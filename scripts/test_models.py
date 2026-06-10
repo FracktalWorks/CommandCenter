@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test multiple models via the LiteLLM proxy on the VPS."""
+"""Test multiple models via the gateway /v1 (litellm SDK) on the VPS."""
 import json
 import os
 import urllib.request
@@ -39,6 +39,6 @@ def test(model: str) -> None:
         print(f"  FAIL  {model}  ->  {e}")
 
 
-print("Testing models via LiteLLM proxy:")
+print("Testing models via gateway /v1 (litellm SDK):")
 for m in MODELS:
     test(m)

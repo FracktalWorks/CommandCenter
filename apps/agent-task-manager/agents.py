@@ -39,9 +39,13 @@ except ImportError:
 # Agent factory
 # ---------------------------------------------------------------------------
 
-def _litellm_provider() -> dict[str, Any]:
-    base_url = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000")
-    api_key = os.environ.get("LITELLM_API_KEY", "")
+def _llm_provider() -> dict[str, Any]:
+    """Return BYOK provider config pointing at the gateway's /v1 endpoint.
+
+    The gateway uses the litellm Python SDK directly — no separate proxy.
+    """
+    base_url = os.environ.get("LITELLM_BASE_URL", "http://127.0.0.1:8080")
+    api_key = os.environ.get("LITELLM_MASTER_KEY", "sk-local")
     return {"type": "openai", "base_url": f"{base_url}/v1", "api_key": api_key}
 
 
@@ -51,7 +55,7 @@ def build_agent() -> GitHubCopilotAgent:
         tools=_TOOLS,
         default_options={
             "model": "tier2-sonnet",
-            "provider": _litellm_provider(),
+            "provider": _llm_provider(),
             "mcp_servers": {},
             "on_permission_request": PermissionHandler.approve_all,
         },

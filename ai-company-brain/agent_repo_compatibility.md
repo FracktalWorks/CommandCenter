@@ -707,9 +707,9 @@ async def memory_update_context(key: str, value: str) -> str:
 
 # ---- LiteLLM provider helper ---------------------------------------------
 
-def _litellm_provider() -> dict[str, Any]:
-    base_url = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000")
-    api_key  = os.environ.get("LITELLM_API_KEY", "")
+def _llm_provider() -> dict[str, Any]:
+    base_url = os.environ.get("LITELLM_BASE_URL", "http://127.0.0.1:8080")
+    api_key  = os.environ.get("LITELLM_MASTER_KEY", "sk-local")
     return {"type": "openai", "base_url": f"{base_url}/v1", "api_key": api_key}
 
 
@@ -853,7 +853,7 @@ asyncio.run(main())
 
 **Requirements for standalone mode:**
 - Install `agent-framework-github-copilot` and all skill packages: `pip install -e .`
-- Set `LITELLM_BASE_URL` + `LITELLM_API_KEY` (or configure LiteLLM locally)
+- Set `LITELLM_BASE_URL` + `LITELLM_MASTER_KEY` (gateway /v1 via litellm SDK)
 - Set all integration credentials in `.env`
 
 Use standalone mode for:
@@ -865,7 +865,7 @@ Use standalone mode for:
 
 ## 9. LiteLLM model tiers
 
-The LiteLLM proxy (running at `LITELLM_BASE_URL`, default `http://litellm:4000`) defines three tier aliases:
+The gateway /v1 endpoint (at `LITELLM_BASE_URL`, default `http://127.0.0.1:8080`) uses the litellm Python SDK to define three tier aliases:
 
 | Alias | Default model | Use for |
 |---|---|---|
@@ -905,7 +905,7 @@ Common integration keys → env variable mapping:
 | `anymailfinder` | `ANYMAILFINDER_API_KEY` |
 | `instantly` | `INSTANTLY_API_KEY` |
 | `google-sheets` | `GOOGLE_SHEETS_SA_JSON_PATH` |
-| `litellm` | `LITELLM_BASE_URL`, `LITELLM_API_KEY` |
+| `litellm` | `LITELLM_BASE_URL`, `LITELLM_MASTER_KEY` |
 
 ---
 

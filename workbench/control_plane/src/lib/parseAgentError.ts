@@ -107,7 +107,7 @@ export function parseAgentError(raw: string): ParsedAgentError {
     return {
       title: "Connection failed",
       detail: "The request to the model provider timed out or was refused.",
-      suggestion: "Check that the gateway and LiteLLM container are running (http://localhost:4000/health/readiness). If using a custom base URL, verify it is reachable.",
+      suggestion: "Check that the gateway is running (http://localhost:8080/health). If using a custom base URL, verify it is reachable.",
       code: null,
       raw,
     };

@@ -117,7 +117,7 @@ Never git push unless explicitly asked.
 ### "GitHub Copilot session error"
 - Check GITHUB_TOKEN is set and valid
 - Check the model name is correct for the provider
-- Check LiteLLM proxy is reachable: curl http://localhost:4000/health
+- Check gateway /v1 is reachable: curl http://localhost:8080/health
 - Check provider API key is in Postgres: uv run python -c "from acb_llm.key_store import get_key_store; ..."
 
 ### "AgentLoadError"

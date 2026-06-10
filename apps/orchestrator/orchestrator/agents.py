@@ -1,7 +1,7 @@
 ﻿"""MAF-based orchestrator agent (WBS 0.7 — replaces LangGraph graph.py harness).
 
 Architecture:
-    A single MAF ``Agent`` backed by our LiteLLM proxy.  Specialist agents from
+    A single MAF ``Agent`` backed by the gateway /v1 (litellm SDK).  Specialist agents from
     registered GitHub repos are exposed as native MAF tools via agent.as_tool(),
     making cross-agent routing automatic and based on each agent's description.
 

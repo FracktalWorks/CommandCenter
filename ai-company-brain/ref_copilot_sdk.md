@@ -49,9 +49,9 @@ async with CopilotClient() as client:
         mcp_servers={             # Inject tool servers (Integration Registry pattern)
             "clickup": {"command": "uvx", "args": ["mcp-clickup"], "env": {...}},
         },
-        provider={                # BYOK — route through LiteLLM
+        provider={                # BYOK — route through gateway /v1 (litellm SDK)
             "type": "openai",
-            "base_url": "http://litellm:4000/v1",
+            "base_url": "http://127.0.0.1:8080/v1",
             "api_key": "sk-...",
         },
         infinite_sessions={       # Auto context compaction (default: enabled)
@@ -155,7 +155,7 @@ When using GitHubCopilotAgent via MAF, telemetry is handled at the MAF level via
 default_options={
     "provider": {
         "type": "openai",                           # LiteLLM is OpenAI-compatible
-        "base_url": "http://litellm:4000/v1",       # LiteLLM proxy endpoint
+        "base_url": "http://127.0.0.1:8080/v1",       # gateway /v1 (litellm SDK)
         "api_key": os.environ["LITELLM_MASTER_KEY"],
     },
     "model": "tier-1",   # LiteLLM alias (maps to claude-haiku or gpt-4o-mini)

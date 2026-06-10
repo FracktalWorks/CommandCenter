@@ -90,7 +90,7 @@ agent = GitHubCopilotAgent(
         },
         "provider": {                    # BYOK through LiteLLM
             "type": "openai",
-            "base_url": "http://litellm:4000/v1",
+            "base_url": "http://127.0.0.1:8080/v1",   # gateway /v1 (litellm SDK)
             "api_key": LITELLM_KEY,
         },
         "on_permission_request": PermissionHandler.approve_all,
@@ -202,7 +202,8 @@ class MyProvider(ContextProvider):
 - RedisHistoryProvider — persists chat **message history** (actual turns) to Redis Lists
 - RedisContextProvider — persists arbitrary **context state** to Redis (key-value)
 - Survives process restarts; thread-isolated per session_id
-- **Uses vanilla edis:7-alpine — no redis-stack needed**
+- **Uses vanilla 
+edis:7-alpine — no redis-stack needed**
 
 `python
 from agent_framework.redis import RedisHistoryProvider

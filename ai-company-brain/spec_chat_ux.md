@@ -219,7 +219,7 @@ const WORKING_MESSAGES = [
 
 ### 4.2 `LLMTitleGenerator` (utility function)
 
-After `RUN_FINISHED`, call the LiteLLM proxy with a small model to generate a 10-word past-tense summary of all tool labels:
+After `RUN_FINISHED`, call the gateway /v1 (litellm SDK) with a small model to generate a 10-word past-tense summary of all tool labels:
 
 ```ts
 async function generateThinkingTitle(toolLabels: string[]): Promise<string> {

@@ -169,7 +169,7 @@ export default function AgentChat({
       .catch(() => {}); // Keep fallback list on error
   }, []);
 
-  // Resolve the selected model's routing runtime (copilot SDK vs LiteLLM proxy).
+  // Resolve the selected model's routing runtime (copilot SDK vs gateway BYOK).
   const selectedModel = models.find((m) => m.id === currentModel);
   const currentRuntime = selectedModel?.runtime ?? "copilot";
 
@@ -427,9 +427,9 @@ export default function AgentChat({
   // GitHub Copilot SDK agents support BYOK (Bring Your Own Key): when a
   // LiteLLM model (e.g. openrouter/deepseek/deepseek-v4-pro) is selected,
   // the executor injects a provider block so the SDK routes through the local
-  // LiteLLM proxy instead of api.githubcopilot.com.  All models are available.
+  // gateway /v1 (litellm SDK) instead of api.githubcopilot.com.  All models are available.
   const isCopilotSdkAgent = agentRuntime === "github-copilot";
-  // True when a Copilot SDK agent is running via BYOK (LiteLLM proxy).
+  // True when a Copilot SDK agent is running via BYOK (gateway /v1).
   const isByokActive = isCopilotSdkAgent && currentRuntime === "litellm";
 
   // Searchable model picker state
@@ -679,7 +679,7 @@ export default function AgentChat({
                             }`}
                           title={
                               isCopilotSdkAgent && m.runtime === "litellm"
-                                ? `BYOK: routes through LiteLLM proxy (${m.id})`
+                                ? `BYOK: routes through gateway /v1 (${m.id})`
                                 : isCopilotSdkAgent && m.runtime === "copilot" && m.model_picker_enabled === false
                                 ? "⚠ Locked: this subscription cannot switch Copilot SDK models. Use a BYOK model instead."
                                 : undefined
@@ -724,9 +724,9 @@ export default function AgentChat({
             }`}
             title={
               isByokActive
-                ? "BYOK: GitHub Copilot SDK routing through LiteLLM proxy"
+                ? "BYOK: GitHub Copilot SDK routing through gateway /v1"
                 : currentRuntime === "litellm"
-                ? "Routed via LiteLLM proxy"
+                ? "Routed via gateway /v1 (litellm SDK)"
                 : "Routed via GitHub Copilot SDK"
             }
           >

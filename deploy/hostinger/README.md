@@ -175,7 +175,7 @@ Setting these to `None` causes a 500 error on the models page
 ### Deployment checklist
 
 ```bash
-# 1. Verify LITELLM_BASE_URL points to gateway (NOT old proxy :4000)
+# 1. Verify LITELLM_BASE_URL points to gateway /v1 (SDK, no separate proxy)
 grep LITELLM_BASE_URL /opt/acb/app/.env
 # Must be: LITELLM_BASE_URL=http://127.0.0.1:8080
 

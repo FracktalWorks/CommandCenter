@@ -3,8 +3,8 @@
 Design:
 - Backend: Postgres + pgvector (reuses the existing CommandCenter Postgres;
   Mem0 creates its own 'mem0_memories' collection automatically).
-- LLM for extraction: our LiteLLM proxy (same tier-1 model as agents use).
-- Embedding: text-embedding-3-small via LiteLLM (same proxy, cached).
+- LLM for extraction: gateway /v1 via litellm SDK (same tier-1 model as agents use).
+- Embedding: text-embedding-3-small via gateway /v1 (litellm SDK, cached).
 - Graceful degradation: if MEM0_ENABLED=false or Postgres is unavailable,
   every function returns empty results — agents work normally.
 

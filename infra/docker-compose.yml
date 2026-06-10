@@ -86,7 +86,7 @@ services:
   # this image on demand; no persistent container is kept running.
   #
   # Auth (pass at least one):
-  #   LITELLM_MASTER_KEY  — BYOK via local LiteLLM proxy (preferred)
+  #   LITELLM_MASTER_KEY  — BYOK auth for gateway /v1 (litellm SDK, no proxy)
   #   GITHUB_TOKEN        — standard Copilot subscription auth
   #
   # Build only: docker compose --profile sandbox build mutation

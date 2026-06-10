@@ -75,7 +75,7 @@ C4Container
         Container(stt, "Transcription", "WhisperX + Pyannote", "STT + speaker diarization")
         Container(bus, "Event Bus", "Redis Streams", "Decouples ingestion from orchestration")
         Container(gw_llm, "LLM Routing", "litellm Python SDK (MIT)", "Unified API; prompt caching; model aliases (tier-1/2/3); cost metering. No proxy container — litellm SDK calls providers directly. All MAF agent calls route through acb_llm.")
-        Container(infer, "Local Inference [Phase 2]", "vLLM + Qwen3-8B", "Deferred: requires GPU VM. Phase 0 uses cloud Tier-1 (Haiku / GPT-4o-mini via LiteLLM).")
+        Container(infer, "Local Inference [Phase 2]", "vLLM + Qwen3-8B", "Deferred: requires GPU VM. Phase 0 uses cloud Tier-1 (Haiku / GPT-4o-mini via litellm SDK).")
         Container(scache, "Semantic Cache [Phase 2]", "LiteLLM redis-semantic", "Deferred: redis-stack-server upgrade deferred until LiteLLM semantic cache is actually configured.")
         Container(compress, "Token Compressor [Phase 2]", "LLMLingua-2 (MIT, CPU)", "Deferred: 50-60% compression. Add when context costs become a problem.")
         Container(obs, "Observability", "MAF native OTel [backend TBD]", "MAF emits OpenTelemetry spans automatically via configure_otel_providers() — no Langfuse Python SDK in agent code. OTLP-ready; a self-hosted trace backend (e.g. Langfuse) is deferred and removed from the Phase-0 stack. MCP trace propagation included. Cost per tier via LiteLLM spend tracking.")
@@ -298,7 +298,7 @@ erDiagram
 | Transcription | WhisperX + Pyannote, self-hosted | Same |
 | LLM Tier-1 | vLLM serving Qwen3-8B (Automatic Prefix Caching) | Dedicated GPU VM |
 | LLM Tier-2/3 | Haiku / Sonnet via LiteLLM (prompt caching) | Same |
-| LLM gateway | LiteLLM proxy + RouteLLM classifier | Same |
+| LLM gateway | litellm SDK + RouteLLM classifier | Same |
 | Semantic cache | GPTCache on Redis | Same |
 | Token compression | LLMLingua-2 (CPU, same VM) | Same |
 | Observability | MAF native OTel (OTLP backend TBD; Langfuse removed from Phase-0 stack) | OTLP backend self-hosted |
@@ -454,7 +454,7 @@ flowchart TD
 - **Decision:** Provision new business number; MAF skill (`skill-whatsapp-send`) handles webhook processing.
 
 ### ADR-008: LiteLLM gateway + RouteLLM + Anthropic/OpenAI prompt caching
-- **Decision:** LiteLLM proxy for unified routing; Anthropic `cache_control` + OpenAI automatic caching on stable prefixes (50–90% cost reduction); RouteLLM in Phase 5.
+- **Decision:** litellm SDK for unified routing; Anthropic `cache_control` + OpenAI automatic caching on stable prefixes (50–90% cost reduction); RouteLLM in Phase 5.
 
 ### ADR-009: ~~Langfuse (MIT, self-hosted) for LLM observability~~ **Superseded** (2026-06-05)
 - **Original decision:** Langfuse via docker-compose on Postgres + ClickHouse as the OTLP backend.
@@ -708,7 +708,7 @@ Mode B — BYOK (provider key):
 **How it calls models:**
 ```python
 # MAF agents call models via GitHubCopilotAgent (autopilot mode)
-# All LLM routing flows: GitHubCopilotAgent → LiteLLM proxy → configured backend
+# All LLM routing flows: GitHubCopilotAgent → gateway /v1 (litellm SDK) → configured backend
 # Or: GitHubCopilotAgent → GitHub Copilot API (GITHUB_TOKEN mode)
 from agent_framework_github_copilot import GitHubCopilotAgent
 
@@ -780,7 +780,7 @@ The model picker in the Control Plane chat UI determines which execution path ha
 | User selects | Route | Orchestrator | Tool calling | Model source |
 |---|---|---|---|---|
 | **MAF agent** (all chat) | CopilotKit → AG-UI → `/copilot/chat` → MAF | **MAF** (`HandoffBuilder`/`ConcurrentBuilder`; `GitHubCopilotAgent`) | ✅ MCP tools, skill calls, HITL | LiteLLM aliases (tier-1/2/3) |
-| **LiteLLM Tier** (simple Q&A) | `/api/agent/chat mode=litellm` | **None** — raw LLM call only | ❌ No tool calling | LiteLLM proxy → Gemini/Claude/GPT |
+| **LiteLLM Tier** (simple Q&A) | `/api/agent/chat mode=litellm` | **None** — raw LLM call only | ❌ No tool calling | litellm SDK → Gemini/Claude/GPT |
 | ~~GitHub Copilot SDK~~ | ~~`copilot_chat.py`~~ | ~~Copilot SDK (`CopilotClient`)~~ | ~~Shell, file r/w~~ | ~~Removed — use MAF AG-UI~~ |
 
 **Note:** The MAF AG-UI endpoint at `/copilot/chat` replaces the previous `copilot_chat.py` SSE path and is the primary chat backend for interactive sessions. CopilotKit frontend connects via AG-UI protocol.
@@ -797,7 +797,7 @@ The model picker in the Control Plane chat UI determines which execution path ha
            │ AG-UI protocol        │ mode=litellm (simple Q&A)
            ▼                      ▼
 ┌──────────────────────────────┐   ┌────────────────────────┐
-│ MAF AG-UI Endpoint           │   │ LiteLLM Proxy          │
+│ MAF AG-UI Endpoint           │   │ Gateway /v1 (litellm SDK) │
 │ /copilot/chat                │   │ (raw LLM, no tools)    │
 │ ──────────────────           │   │ tier-1 → Haiku/4o-mini │
 │ add_agent_framework_         │   │ tier-2 → Sonnet        │

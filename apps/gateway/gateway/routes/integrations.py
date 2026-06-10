@@ -414,15 +414,27 @@ async def integration_status(
     for svc in services:
         guide = _SETUP_GUIDES.get(svc, {})
         configured = _is_configured(svc, settings)
-        missing_keys = (
-            []
-            if configured
-            else [
+        # For GitHub, always compute missing_keys from actual env vars
+        # because the service can be "configured" via PAT (GITHUB_TOKEN)
+        # alone, but the OAuth device flow (Option B) needs
+        # GITHUB_CLIENT_ID separately.  Without this, a configured PAT
+        # hides the Client ID input and the device-flow start returns 422.
+        if svc == "github":
+            missing_keys = [
                 v["key"]
                 for v in guide.get("env_vars", [])
                 if not os.getenv(v["key"], "").strip()
             ]
-        )
+        else:
+            missing_keys = (
+                []
+                if configured
+                else [
+                    v["key"]
+                    for v in guide.get("env_vars", [])
+                    if not os.getenv(v["key"], "").strip()
+                ]
+            )
         result.append(
             {
                 "service": svc,

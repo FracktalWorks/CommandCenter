@@ -18,7 +18,7 @@
  *            (live list from /copilot/models if GITHUB_TOKEN is set; fallback list otherwise)
  *
  * 2. "LiteLLM (tier routing)" group  (model.runtime = "litellm")
- *    What it is: A direct OpenAI-compatible streaming call to the LiteLLM proxy.
+ *    What it is: A direct OpenAI-compatible streaming call to gateway /v1 (litellm SDK).
  *                No orchestration, no tool calling, no agent workspace.
  *    What it does: Raw /chat/completions call to LiteLLM; response streamed to UI.
  *    Route: /api/agent/chat?mode=litellm → LiteLLM /chat/completions
@@ -107,7 +107,7 @@ const LITELLM_MODELS: { id: string; label: string; group: string; provider: stri
   { id: "openai/gpt-4o",     label: "GPT-4o",      group: "LiteLLM — OpenAI",  provider: "openai" },
   { id: "openai/gpt-4o-mini", label: "GPT-4o Mini", group: "LiteLLM — OpenAI",  provider: "openai" },
   { id: "openai/o3-mini",    label: "o3-mini",     group: "LiteLLM — OpenAI",  provider: "openai" },
-  // GitHub Copilot via LiteLLM proxy — requires GITHUB_TOKEN
+  // GitHub Copilot via litellm SDK — requires GITHUB_TOKEN
   { id: "copilot/gpt-4o",        label: "GPT-4o (Copilot)",        group: "LiteLLM — Copilot", provider: "github" },
   { id: "copilot/claude-sonnet", label: "Claude Sonnet (Copilot)",  group: "LiteLLM — Copilot", provider: "github" },
   { id: "copilot/o3-mini",       label: "o3-mini (Copilot)",        group: "LiteLLM — Copilot", provider: "github" },

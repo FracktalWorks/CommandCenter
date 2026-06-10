@@ -181,7 +181,7 @@ Services once running:
 |---|---|
 | Postgres (pgvector) | `localhost:5432` |
 | Redis | `localhost:6379` |
-| LiteLLM proxy | `http://localhost:4000` |
+| LLM routing | Gateway /v1 (litellm Python SDK directly — no separate proxy) |
 
 ### 4. Start the gateway
 
@@ -234,7 +234,7 @@ See [`Makefile`](Makefile) for convenience targets.
 | Orchestration | Microsoft Agent Framework (MAF) |
 | Dynamic loading | Python `importlib` + `sys.path.append()` (per-run agent clone) |
 | Self-mutation | GitHub Copilot SDK (mutation container only) |
-| LLM routing | LiteLLM proxy + Anthropic/OpenAI/Copilot models |
+| LLM routing | Gateway /v1 via litellm SDK + Anthropic/OpenAI/DeepSeek/Copilot models |
 | Database | Postgres 16 + pgvector |
 | Cache / queue | Redis 7 |
 | Evals | Promptfoo + Inspect AI |

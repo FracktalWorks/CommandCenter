@@ -23,7 +23,7 @@ jobs:
     continue-on-error: true   # scaffold: do not hard-block until runner is wired
 
     env:
-      LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || 'http://localhost:4000' }}
+      LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || 'http://127.0.0.1:8080' }}
       LITELLM_API_KEY:  ${{ secrets.LITELLM_API_KEY  || 'sk-local-dev-change-me' }}
 
     steps:

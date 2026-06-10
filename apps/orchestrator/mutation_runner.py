@@ -3,9 +3,9 @@
 Env vars (set by orchestrator.mutation._run_mutation_sandbox):
     MUTATION_PROMPT         Full task prompt for the coding agent.
     COPILOT_GITHUB_TOKEN    GitHub OAuth token (standard Copilot auth).
-    LITELLM_API_KEY         BYOK key for LiteLLM proxy (preferred over GitHub token).
-    LITELLM_BASE_URL        LiteLLM proxy base URL (e.g. http://host.docker.internal:4000).
-    LITELLM_MODEL           Model name (e.g. openai/tier3-opus).
+    GATEWAY_API_KEY         API key for the gateway's /v1 endpoint.
+    GATEWAY_BASE_URL        Gateway base URL (e.g. http://host.docker.internal:8080).
+    GATEWAY_MODEL           Model name (e.g. openai/tier3-opus).
 
 The agent repo is expected to be mounted at /workspace/repo (read-write).
 
@@ -28,13 +28,13 @@ async def main() -> None:
     if not prompt:
         _die("MUTATION_PROMPT is not set")
 
-    litellm_key = os.environ.get("LITELLM_API_KEY", "").strip()
-    litellm_url = os.environ.get("LITELLM_BASE_URL", "").strip()
-    litellm_model = os.environ.get("LITELLM_MODEL", "openai/tier3-opus").strip()
+    gateway_key = os.environ.get("GATEWAY_API_KEY", "").strip()
+    gateway_url = os.environ.get("GATEWAY_BASE_URL", "").strip()
+    gateway_model = os.environ.get("GATEWAY_MODEL", "openai/tier3-opus").strip()
     github_token = os.environ.get("COPILOT_GITHUB_TOKEN", "").strip()
 
-    if not litellm_key and not github_token:
-        _die("No auth configured: set LITELLM_API_KEY+LITELLM_BASE_URL or COPILOT_GITHUB_TOKEN")
+    if not gateway_key and not github_token:
+        _die("No auth configured: set GATEWAY_API_KEY+GATEWAY_BASE_URL or COPILOT_GITHUB_TOKEN")
 
     from copilot import CopilotClient  # noqa: PLC0415
     from copilot.client import SessionConfig  # noqa: PLC0415
@@ -44,18 +44,18 @@ async def main() -> None:
     client_options: CopilotClientOptions = {}
     session_config_kwargs: dict = {
         "on_permission_request": PermissionHandler.approve_all,
-        "model": litellm_model,
+        "model": gateway_model,
     }
 
     repo_dir = "/workspace/repo"
     if os.path.isdir(repo_dir):
         client_options["cwd"] = repo_dir
 
-    if litellm_key and litellm_url:
+    if gateway_key and gateway_url:
         session_config_kwargs["provider"] = {
             "type": "openai",
-            "base_url": litellm_url,
-            "api_key": litellm_key,
+            "base_url": f"{gateway_url.rstrip('/')}/v1",
+            "api_key": gateway_key,
         }
     else:
         client_options["github_token"] = github_token

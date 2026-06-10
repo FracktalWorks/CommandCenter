@@ -1028,47 +1028,25 @@ async def run_agent_stream(
                 _configured_model = (getattr(settings, "copilot_chat_model", "") or "").strip()
                 _final_model = _requested_model or _configured_model
 
-                _DIRECT_PROVIDERS: dict[str, tuple[str, str]] = {
-                    "openrouter/": ("https://openrouter.ai/api/v1",      "OPENROUTER_API_KEY"),
-                    "openai/":     ("https://api.openai.com/v1",          "OPENAI_API_KEY"),
-                    "deepseek/":   ("https://api.deepseek.com/v1",        "DEEPSEEK_API_KEY"),
-                    "gemini/":     ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"),
-                    "groq/":       ("https://api.groq.com/openai/v1",    "GROQ_API_KEY"),
-                    "anthropic/":  ("https://api.anthropic.com/v1",       "ANTHROPIC_API_KEY"),
-                    "together_ai/":("https://api.together.xyz/v1",        "TOGETHER_API_KEY"),
-                    "mistral/":    ("https://api.mistral.ai/v1",          "MISTRAL_API_KEY"),
-                }
+                # BYOK: route ALL model calls through the gateway's /v1 endpoint.
+                # The gateway reads provider keys from the encrypted Postgres store
+                # and handles tier mapping — no separate proxy, no env var key leakage.
                 _is_byok = bool(_final_model and ("/" in _final_model or _final_model.lower().startswith("tier")))
                 _byok_provider: dict[str, Any] | None = None
                 _byok_model_id = _final_model
 
                 if _is_byok:
-                    _byok_litellm_base = (getattr(settings, "litellm_base_url", "") or "http://127.0.0.1:4000").rstrip("/")
-                    _byok_litellm_key = (getattr(settings, "litellm_master_key", "") or "sk-local").strip()
-                    _matched_prefix = None
-                    for _pfx in _DIRECT_PROVIDERS:
-                        if _final_model.startswith(_pfx):
-                            _matched_prefix = _pfx
-                            break
-                    if _matched_prefix is not None:
-                        _direct_base, _direct_env = _DIRECT_PROVIDERS[_matched_prefix]
-                        _provider_key = (os.environ.get(_direct_env) or "").strip()
-                        _byok_base_url = _direct_base
-                        _byok_api_key = _provider_key or _byok_litellm_key
-                        _byok_model_id = _final_model[len(_matched_prefix):]
-                    else:
-                        _byok_base_url = f"{_byok_litellm_base}/v1"
-                        _byok_api_key = _byok_litellm_key
-                        _byok_model_id = _final_model
+                    _gw_base = (getattr(settings, "litellm_base_url", "") or "http://127.0.0.1:8080").rstrip("/")
+                    _gw_key = (getattr(settings, "litellm_master_key", "") or "sk-local").strip()
                     _byok_provider = {
                         "type": "openai",
-                        "base_url": _byok_base_url,
-                        "api_key": _byok_api_key,
+                        "base_url": f"{_gw_base}/v1",
+                        "api_key": _gw_key,
                     }
                     agent._default_options["provider"] = _byok_provider
                     agent._default_options["model"] = _byok_model_id
                     _log.info("executor.copilot_maf_byok", agent=agent_name,
-                              model=_byok_model_id, base_url=_byok_base_url)
+                              model=_byok_model_id, base_url=_gw_base)
                 elif _final_model:
                     agent._default_options["model"] = _final_model
                     _log.info("executor.copilot_maf_model", agent=agent_name, model=_final_model)

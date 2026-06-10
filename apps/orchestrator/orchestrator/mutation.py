@@ -499,19 +499,19 @@ async def _run_mutation_sandbox(
     import asyncio
 
     github_token: str | None = getattr(settings, "github_token", None) or None
-    litellm_key: str | None = getattr(settings, "litellm_master_key", None) or None
-    litellm_url: str = getattr(settings, "litellm_base_url", "http://host.docker.internal:4000")
+    gateway_key: str | None = getattr(settings, "litellm_master_key", None) or None
+    gateway_url: str = getattr(settings, "litellm_base_url", "http://host.docker.internal:8080")
     mutation_model: str = getattr(settings, "mutation_model", "openai/tier3-opus")
     sandbox_image: str = getattr(settings, "mutation_sandbox_image", "acb-mutation-runner:latest")
     timeout_s: int = int(getattr(settings, "mutation_timeout_seconds", 600))
     agent_dir: str | None = telemetry.get("local_clone_dir")
 
-    if not github_token and not litellm_key:
+    if not github_token and not gateway_key:
         _log.warning(
             "mutation.sandbox_not_configured",
             agent=agent_name,
             run_id=run_id,
-            hint="Set GITHUB_TOKEN or LITELLM_MASTER_KEY to enable live self-mutation.",
+            hint="Set GITHUB_TOKEN to enable live self-mutation.",
         )
         _log.info(
             "mutation.manual_prompt",
@@ -532,9 +532,9 @@ async def _run_mutation_sandbox(
         "-e", f"MUTATION_PROMPT={prompt}",
         "-e", f"MUTATION_TELEMETRY_JSON={json.dumps(telemetry)}",
         "-e", f"COPILOT_GITHUB_TOKEN={github_token or ''}",
-        "-e", f"LITELLM_API_KEY={litellm_key or ''}",
-        "-e", f"LITELLM_BASE_URL={litellm_url}",
-        "-e", f"LITELLM_MODEL={mutation_model}",
+        "-e", f"GATEWAY_API_KEY={gateway_key or ''}",
+        "-e", f"GATEWAY_BASE_URL={gateway_url}",
+        "-e", f"GATEWAY_MODEL={mutation_model}",
         "--add-host", "host.docker.internal:host-gateway",
     ]
 

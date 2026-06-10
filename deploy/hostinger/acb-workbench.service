@@ -1,0 +1,18 @@
+[Unit]
+Description=CommandCenter Workbench (Next.js)
+After=network-online.target acb-gateway.service
+Wants=network-online.target
+Requires=acb-gateway.service
+
+[Service]
+Type=simple
+User=acb
+WorkingDirectory=/opt/acb/app/workbench/control_plane
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/acb/app/workbench/control_plane/.env.local
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

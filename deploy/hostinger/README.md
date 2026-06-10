@@ -99,6 +99,38 @@ Once deployed (and DNS pointed):
 
 LiteLLM stays on the internal Docker network — never exposed publicly.
 
+## LLM Routing (Consolidated)
+
+All LLM calls go through the **gateway's own `/v1/chat/completions` endpoint**
+on `http://127.0.0.1:8080/v1`.  Provider API keys live in the **encrypted
+Postgres `provider_keys` table** (seeded from `.env` on first boot).
+
+There is **no separate LiteLLM proxy process**.  The gateway's `acb_llm` package
+loads keys from the encrypted DB at startup and the Python `litellm` SDK routes
+directly to providers.  This means:
+
+- One source of truth for all provider keys (the encrypted DB)
+- No `litellm.env` with plain-text keys
+- One fewer systemd service to maintain
+- Integration Registry key changes take effect on gateway restart
+
+### Key storage
+
+| Store | Used by | Encrypted? |
+|-------|---------|------------|
+| `.env` | Bootstrap/seeding only | ❌ Plain text |
+| Postgres `provider_keys` | Gateway `/v1` endpoint | ✅ Fernet (ACB_MASTER_KEY) |
+| `acb_llm` in-memory cache | All LLM calls | ❌ Runtime only |
+
+### Verification
+
+```bash
+# Test the gateway's /v1 endpoint directly
+curl -s -X POST http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"tier-balanced","messages":[{"role":"user","content":"Hello"}],"max_tokens":20}'
+```
+
 ## CI/CD via GitHub Actions
 
 Push-to-deploy is configured via `.github/workflows/deploy.yml`. On every push to

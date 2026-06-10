@@ -360,11 +360,17 @@ def _load_specialist_agents_as_tools() -> list[Any]:
 # ---------------------------------------------------------------------------
 
 def _make_openai_client() -> OpenAIChatCompletionClient:
-    """Build an OpenAIChatCompletionClient pointing at our LiteLLM proxy (tier-2 alias)."""
+    """Build an OpenAIChatCompletionClient pointing at the gateway's own /v1 endpoint.
+
+    The gateway's /v1/chat/completions reads keys from the encrypted Postgres
+    store — no separate proxy process needed.  Internal-only (localhost:8080).
+    """
     settings = get_settings()
+    gateway_base = getattr(settings, "litellm_base_url", "http://127.0.0.1:8080")
+    gateway_key = getattr(settings, "litellm_master_key", "sk-local") or "sk-local"
     return OpenAIChatCompletionClient(
-        base_url=f"{settings.litellm_base_url}/v1",
-        api_key=settings.litellm_master_key,
+        base_url=f"{gateway_base}/v1",
+        api_key=gateway_key,
         model="tier2-sonnet",
     )
 

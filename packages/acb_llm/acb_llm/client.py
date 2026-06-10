@@ -29,9 +29,9 @@ _TRANSIENT_ERRORS = (
 # Tier → litellm model string.  These use native litellm provider prefixes
 # so acompletion() routes directly (no proxy needed).
 _TIER_MODEL: dict[str, str] = {
-    "tier1": "deepseek/deepseek-chat",            # fast & cheap
-    "tier2": "deepseek/deepseek-chat",            # balanced
-    "tier3": "deepseek/deepseek-chat",            # powerful
+    "tier1": "groq/llama-3.3-70b-versatile",     # fast & cheap (Groq)
+    "tier2": "deepseek/deepseek-chat",            # balanced (DeepSeek)
+    "tier3": "deepseek/deepseek-reasoner",        # powerful reasoning
 }
 
 # Track whether keys have been loaded from the store.
@@ -65,6 +65,7 @@ async def _ensure_keys_loaded() -> None:
                 "GROQ_API_KEY": "groq",
                 "MISTRAL_API_KEY": "mistral",
                 "TOGETHER_API_KEY": "together",
+                "OPENROUTER_API_KEY": "openrouter",
             }
             for env_var, provider in _env_to_provider.items():
                 val = os.environ.get(env_var, "")

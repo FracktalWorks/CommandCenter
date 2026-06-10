@@ -91,58 +91,14 @@ def _write_env_key(var: str, value: str) -> None:
 
 
 def _recreate_litellm_bg() -> None:
-    """Recreate the acb-litellm container so it picks up fresh env vars from .env.
+    """Update runtime tier config after settings change (no-op — SDK uses in-memory config).
 
-    ``docker restart`` keeps the env baked in at creation time and does NOT
-    re-read the host .env file.  The only way to inject new API keys is to
-    recreate the container via ``docker compose up --force-recreate``.
-
-    Falls back to plain ``docker restart`` if compose is unavailable.
+    Previously restarted a LiteLLM Docker container.  Now that all LLM routing
+    goes through the gateway's own /v1 endpoint backed by acb_llm SDK, tier
+    changes take effect on the next request (acb_llm reads tiers dynamically).
     """
-    import subprocess
-    import threading
-
-    def _do() -> None:
-        try:
-            # Find the infra directory containing docker-compose.yml + .env
-            compose_file = _infra_dir() / "docker-compose.yml"
-            env_file = _infra_dir().parent / ".env"
-            if not env_file.exists():
-                env_file = _infra_dir() / ".env"
-
-            # Use docker compose to recreate just the litellm service.
-            # --no-deps: don't touch postgres/redis.
-            # --force-recreate: always destroy & recreate even if nothing changed.
-            # --env-file: explicit so the new API keys from .env are injected.
-            result = subprocess.run(
-                [
-                    "docker", "compose",
-                    "-f", str(compose_file),
-                    *(["--env-file", str(env_file)] if env_file.exists() else []),
-                    "up", "-d",
-                    "--force-recreate",
-                    "--no-deps",
-                    "litellm",
-                ],
-                check=False, timeout=120, capture_output=True, text=True,
-            )
-            if result.returncode != 0:
-                # Fallback: simple restart (keeps old env but at least brings it back up)
-                subprocess.run(
-                    ["docker", "restart", "acb-litellm"],
-                    check=False, timeout=60, capture_output=True,
-                )
-        except Exception:
-            # Last resort: plain docker restart
-            try:
-                subprocess.run(
-                    ["docker", "restart", "acb-litellm"],
-                    check=False, timeout=60, capture_output=True,
-                )
-            except Exception:
-                pass
-
-    threading.Thread(target=_do, daemon=True).start()
+    # Tier changes are live immediately — acb_llm.client reads _TIER_MODEL at call time.
+    pass
 
 
 # Keep backward compat name used elsewhere in this file
@@ -150,16 +106,43 @@ _restart_litellm_bg = _recreate_litellm_bg
 
 
 def _inject_env_into_litellm(env_var: str, value: str) -> None:
-    """Recreate the LiteLLM container so it picks up the new key from .env.
+    """Update the live os.environ and encrypted key store with a new provider key.
 
-    Previous approach (writing to /etc/environment inside the container) does
-    not work because LiteLLM reads os.environ which is set at process start,
-    not from /etc/environment.  The only reliable approach is container
-    recreation so Docker injects the fresh env from docker-compose + host .env.
+    Since there's no separate LiteLLM proxy, keys are set in the current
+    process environment AND the encrypted Postgres key store.  The gateway's
+    /v1 endpoint reads from the key store on every request.
     """
-    # The key has already been written to .env by _write_env_key().
-    # Just trigger a recreation — the container will read .env at startup.
-    _recreate_litellm_bg()
+    # Update os.environ immediately so _is_provider_configured() returns True.
+    os.environ[env_var] = value
+    # Also update the encrypted key store (best-effort).
+    _sync_key_to_store(env_var, value)
+
+
+def _sync_key_to_store(env_var: str, value: str) -> None:
+    """Write a provider key to the encrypted Postgres key store.
+
+    Maps env var name (e.g. GEMINI_API_KEY) → provider slug (e.g. gemini)
+    using the reverse of _PROVIDER_ENV_MAP.
+    """
+    import asyncio as _asyncio
+    # Reverse _PROVIDER_ENV_MAP: "GEMINI_API_KEY" → "gemini", etc.
+    _env_to_provider: dict[str, str] = {
+        v: k for k, v in _PROVIDER_ENV_MAP.items() if v
+    }
+    provider = _env_to_provider.get(env_var)
+    if not provider:
+        return
+    try:
+        from acb_llm.key_store import get_key_store
+        store = get_key_store()
+        loop = _asyncio.get_event_loop()
+        if loop.is_running():
+            # We're in an async context — schedule and forget
+            _asyncio.ensure_future(store.put(provider, value.strip()))
+        else:
+            loop.run_until_complete(store.put(provider, value.strip()))
+    except Exception:
+        pass  # best-effort — key will be re-seeded from .env on restart
 
 
 # ---------------------------------------------------------------------------
@@ -453,13 +436,10 @@ async def get_llm_config(_user: UserContext = Depends(get_current_user)) -> LLMC
             models=_PROVIDER_MODELS.get(pid, []),
         ))
 
-    settings = get_settings()
-    litellm_url = str(settings.litellm_base_url).rstrip("/")
-
     return LLMConfig(
         tiers=tiers,
         providers=providers,
-        litellm_ui_url=f"{litellm_url}/ui",
+        litellm_ui_url=None,  # no separate proxy — gateway serves /v1 directly
     )
 
 
@@ -537,28 +517,38 @@ async def update_tier(
 
 
 # ---------------------------------------------------------------------------
-# GET /settings/llm/health  — proxy LiteLLM health
+# GET /settings/llm/health  — gateway LLM routing health
 # ---------------------------------------------------------------------------
 
 class LiteLLMHealth(BaseModel):
     healthy: bool
     detail: str
-    ui_url: str
+    ui_url: str | None = None
 
 
 @router.get("/llm/health", response_model=LiteLLMHealth)
 async def llm_health(_user: UserContext = Depends(get_current_user)) -> LiteLLMHealth:
+    """Check that the gateway's /v1/chat/completions endpoint is reachable.
+
+    Since LLM routing is now handled by the gateway itself (acb_llm SDK),
+    we test the gateway's own endpoint rather than a separate proxy.
+    """
     settings = get_settings()
     base = str(settings.litellm_base_url).rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:
-            r = await client.get(f"{base}/health/readiness")
+            r = await client.post(
+                f"{base}/v1/chat/completions",
+                json={"model": "tier-balanced",
+                      "messages": [{"role": "user", "content": "ping"}],
+                      "max_tokens": 5},
+            )
         healthy = r.status_code == 200
         detail = "Online" if healthy else f"HTTP {r.status_code}"
     except Exception as exc:
         healthy = False
         detail = f"Unreachable: {exc}"
-    return LiteLLMHealth(healthy=healthy, detail=detail, ui_url=f"{base}/ui")
+    return LiteLLMHealth(healthy=healthy, detail=detail, ui_url=None)
 
 
 # ---------------------------------------------------------------------------

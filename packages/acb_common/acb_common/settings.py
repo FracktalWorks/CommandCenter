@@ -31,8 +31,8 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # LiteLLM gateway (DEPRECATED — kept for backward compat during migration)
-    litellm_base_url: str = "http://localhost:8000"
-    litellm_master_key: str = "sk-local-dev-change-me"
+    litellm_base_url: str = "http://127.0.0.1:8080"  # gateway /v1 endpoint (was LiteLLM proxy :4000)
+    litellm_master_key: str = "sk-local"
 
     # Master encryption key for the provider key store (ADR-008).
     # Generate: python -c "import secrets; print(secrets.token_urlsafe(32))"

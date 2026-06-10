@@ -79,7 +79,7 @@ failure via isolated Copilot SDK sandboxes.
 - FastAPI for all HTTP/WS endpoints
 - Postgres + pgvector for entity graph, memory, audit, integrations
 - Redis Streams for event bus
-- LiteLLM SDK (no proxy container) for model routing and cost tracking
+- Gateway /v1/chat/completions for LLM routing (keys from encrypted Postgres; no separate proxy)
 - MAF native OTel for observability (OTLP-ready)
 - Docker Compose for local dev and single-VM production
 - Type hints required on all public functions

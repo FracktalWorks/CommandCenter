@@ -122,6 +122,82 @@ directly to providers.  This means:
 | Postgres `provider_keys` | Gateway `/v1` endpoint | ✅ Fernet (ACB_MASTER_KEY) |
 | `acb_llm` in-memory cache | All LLM calls | ❌ Runtime only |
 
+### Architecture
+
+```
+┌─────────────────────────────────────┐
+│   Postgres provider_keys (encrypted) │  ← SINGLE SOURCE OF TRUTH
+└──────────────┬──────────────────────┘
+               │ decrypt at startup
+               ▼
+┌─────────────────────────────────────┐
+│   Gateway (:8080)                   │
+│   /v1/chat/completions              │  ← Used by EVERYTHING
+│   ├── orchestrator MAF agent        │
+│   ├── specialist agents (BYOK)      │
+│   ├── mutation sandbox (Docker)     │
+│   └── settings page model test      │
+└─────────────────────────────────────┘
+```
+
+### Tier aliases (must stay in sync)
+
+Two files define tier model mappings.  They **must agree** or chat breaks:
+
+| Config location | Purpose | Example |
+|----------------|---------|---------|
+| `packages/acb_llm/acb_llm/client.py` → `_TIER_MODEL` | Maps tier ID → litellm model string | `"tier2": "deepseek/deepseek-chat"` |
+| `apps/gateway/gateway/routes/v1_compat.py` → `_TIER_NAME_TO_ID` | Maps tier alias → tier ID | `"tier2-sonnet": "tier2"` |
+
+The orchestrator passes tier alias names (`tier2-sonnet`, `tier3-opus`,
+`tier1-local-qwen3`) to the gateway.  If `_TIER_NAME_TO_ID` is missing an
+alias, the gateway passes the raw alias to litellm, which rejects it with
+`BadRequestError: LLM Provider NOT provided`.
+
+**Adding a new tier:**
+1. Add the model string to `_TIER_MODEL` in `client.py`
+2. Add the alias mapping to `_TIER_NAME_TO_ID` in `v1_compat.py`
+3. Optionally add it to `infra/litellm/config.yaml` for the settings UI
+
+### Pydantic model constraints
+
+After removing the proxy, two Pydantic models **must use empty strings, not
+`None`** for fields that previously held proxy URLs:
+
+| Model | Field | Value |
+|-------|-------|-------|
+| `LLMConfig` | `litellm_ui_url` | `""` (empty string, NOT `None`) |
+| `LiteLLMHealth` | `ui_url` | `""` (empty string, NOT `None`) |
+
+Setting these to `None` causes a 500 error on the models page
+(`ValidationError: Input should be a valid string`).
+
+### Deployment checklist
+
+```bash
+# 1. Verify LITELLM_BASE_URL points to gateway (NOT old proxy :4000)
+grep LITELLM_BASE_URL /opt/acb/app/.env
+# Must be: LITELLM_BASE_URL=http://127.0.0.1:8080
+
+# 2. Verify no LiteLLM proxy is running
+systemctl is-active acb-litellm
+# Must be: inactive (or "Unit not found")
+
+# 3. Test the gateway's /v1 endpoint
+curl -s -X POST http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"tier-balanced","messages":[{"role":"user","content":"ping"}],"max_tokens":5}'
+
+# 4. Test the models page endpoint
+curl -s http://127.0.0.1:8080/settings/llm | python3 -m json.tool | head -5
+
+# 5. Test orchestrator chat end-to-end
+curl -s -N -X POST http://127.0.0.1:8080/copilot/chat \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-local" \
+  -d '{"messages":[{"role":"user","content":"Hi"}],"stream":true}' | head -5
+```
+
 ### Verification
 
 ```bash

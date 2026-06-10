@@ -23,6 +23,10 @@ router_v1 = APIRouter(prefix="/v1", tags=["openai-compat"])
 router_root = APIRouter(tags=["openai-compat"])
 
 # Tier name → tier id mapping (constant; the model per tier id is dynamic).
+# IMPORTANT: must stay in sync with acb_llm.client._TIER_MODEL.
+# The orchestrator (agents.py, executor.py) passes these alias names as the
+# "model" field — if an alias is missing here, litellm rejects it with
+# "BadRequestError: LLM Provider NOT provided".
 _TIER_NAME_TO_ID: dict[str, str] = {
     # Friendly names (used by settings UI)
     "tier-fast": "tier1",

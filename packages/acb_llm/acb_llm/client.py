@@ -28,6 +28,8 @@ _TRANSIENT_ERRORS = (
 
 # Tier → litellm model string.  These use native litellm provider prefixes
 # so acompletion() routes directly (no proxy needed).
+# IMPORTANT: the tier ALIASES (tier2-sonnet, tier3-opus, etc.) are defined in
+# v1_compat.py._TIER_NAME_TO_ID — both files must stay in sync when adding tiers.
 _TIER_MODEL: dict[str, str] = {
     "tier1": "groq/llama-3.3-70b-versatile",     # fast & cheap (Groq)
     "tier2": "deepseek/deepseek-chat",            # balanced (DeepSeek)

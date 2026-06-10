@@ -168,13 +168,26 @@ def _safe_resolve(root: Path, rel: str) -> Path:
     return resolved
 
 
+# Directories that are ALWAYS visible in the workspace file tree even if
+# they start with "." or are common cache names.  Agents write artefacts to
+# .tmp/ and outputs/; those must be browseable + downloadable from the chat UI.
+_ALWAYS_VISIBLE_DIRS = frozenset({".tmp", "outputs"})
+
+# Directories explicitly excluded from the file tree.
+_EXCLUDED_DIRS = frozenset({"__pycache__", "node_modules", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache"})
+
 def _walk_tree(root: Path) -> list[FileEntry]:
     """Walk the workspace directory and return a flat list of FileEntry objects."""
     entries: list[FileEntry] = []
     try:
         for dirpath, dirnames, filenames in os.walk(root):
-            # Skip hidden / cache directories
-            dirnames[:] = [d for d in dirnames if not d.startswith((".")) and d not in ("__pycache__", "node_modules", ".git")]
+            # Skip hidden / cache directories but keep agent artefact dirs.
+            dirnames[:] = [
+                d
+                for d in dirnames
+                if d in _ALWAYS_VISIBLE_DIRS
+                or (not d.startswith(".") and d not in _EXCLUDED_DIRS)
+            ]
             dp = Path(dirpath)
             rel_dir = dp.relative_to(root)
 

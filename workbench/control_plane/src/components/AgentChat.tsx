@@ -20,6 +20,9 @@ import MarkdownMessage from "@/components/MarkdownMessage";
 import AgentStatusBar from "@/components/AgentStatusBar";
 import MessageActionBar from "@/components/MessageActionBar";
 import GenerativeUIPanel from "@/components/GenerativeUIPanel";
+import ArtifactCard, { type ArtifactMeta } from "@/components/ArtifactCard";
+import ArtifactViewerModal from "@/components/ArtifactViewerModal";
+import type { FileEntry } from "@/components/ArtifactSidebar";
 import { parseAgentError } from "@/lib/parseAgentError";
 import type { ParsedAgentError } from "@/lib/parseAgentError";
 import { getMessages, saveMessages, fetchMessagesFromDb, type PersistedMessage } from "@/lib/sessions";
@@ -254,6 +257,7 @@ export default function AgentChat({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [statuses, setStatuses] = useState<IntegrationStatus[]>(externalStatuses ?? []);
+  const [viewerEntry, setViewerEntry] = useState<FileEntry | null>(null);
 
   // Keep a live ref to messages so the unmount handler can save the latest.
   const messagesRef = useRef<ChatMessage[]>(messages);
@@ -591,7 +595,13 @@ export default function AgentChat({
         )}
 
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} onChoice={handleChoice} />
+          <MessageBubble
+            key={msg.id}
+            message={msg}
+            sessionId={sessionId}
+            onChoice={handleChoice}
+            onFileOpen={(entry) => setViewerEntry(entry)}
+          />
         ))}
 
         {error && !isLoading && (
@@ -909,6 +919,15 @@ export default function AgentChat({
           </div>
         </div>
       </form>
+
+      {/* Artifact viewer modal — opens when user clicks an inline ArtifactCard */}
+      {viewerEntry && (
+        <ArtifactViewerModal
+          sessionId={sessionId}
+          entry={viewerEntry}
+          onClose={() => setViewerEntry(null)}
+        />
+      )}
     </div>
   );
 }
@@ -917,13 +936,37 @@ export default function AgentChat({
 
 function MessageBubble({
   message,
+  sessionId,
   onChoice,
+  onFileOpen,
 }: {
   message: ChatMessage;
+  sessionId: string;
   onChoice?: (choice: string) => void;
+  onFileOpen?: (entry: FileEntry) => void;
 }) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
+
+  // ── Extract artifact events from custom events ──────────────────────────
+  const artifactEvents: ArtifactMeta[] = (message.customEvents ?? [])
+    .filter(
+      (e) =>
+        (e.name === "artifact_created" || e.name === "artifact_updated") &&
+        e.value &&
+        typeof e.value === "object",
+    )
+    .map((e) => {
+      const v = e.value as Record<string, unknown>;
+      const path = String(v.path ?? "");
+      return {
+        path,
+        name: path.split("/").pop() ?? path,
+        size: typeof v.size === "number" ? v.size : undefined,
+        mimeType: typeof v.mime_type === "string" ? v.mime_type : undefined,
+        sha256: typeof v.sha256 === "string" ? v.sha256 : undefined,
+      } satisfies ArtifactMeta;
+    });
 
   if (isSystem) {
     // Check if this is a structured error injected by useAgentChat
@@ -977,7 +1020,21 @@ function MessageBubble({
           isThinkingActive={message.isThinkingActive}
           reasoningBlocks={message.reasoningBlocks}
           onChoice={onChoice}
+          sessionId={sessionId}
         />
+        {/* Inline artifact cards — generated images, markdown, PDFs, etc. */}
+        {artifactEvents.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {artifactEvents.map((a, i) => (
+              <ArtifactCard
+                key={`${a.path}-${i}`}
+                artifact={a}
+                sessionId={sessionId}
+                onOpen={onFileOpen}
+              />
+            ))}
+          </div>
+        )}
         <GenerativeUIPanel
           agentState={message.agentState}
           customEvents={message.customEvents}

@@ -52,6 +52,56 @@ interface MarkdownMessageProps {
   reasoningBlocks?: string[];
   /** Invoked when the user clicks an MCQ choice button (```choices block). */
   onChoice?: (choice: string) => void;
+  /** Session ID for resolving relative image paths through the workspace file proxy. */
+  sessionId?: string;
+  /** Optional file path context for resolving relative image src in markdown (e.g. the .md file path). */
+  mdFilePath?: string;
+}
+
+// ─── Media path resolver (shared with ArtifactViewerModal) ────────────────────
+
+/**
+ * Rewrite an image src found inside a markdown message so it routes through the
+ * gateway file proxy.
+ *
+ * Rules (in priority order):
+ *  1. Already a full URL (http/https/data:) → pass through unchanged
+ *  2. Absolute path starting with /          → treat as workspace-relative and proxy
+ *  3. Relative path                          → resolve against the mdFilePath's
+ *                                             directory, then proxy
+ */
+function resolveMediaSrc(
+  src: string,
+  sessionId: string | undefined,
+  mdFilePath: string | undefined,
+): string {
+  // Full URLs and data URIs pass through unchanged
+  if (/^(https?:|data:)/i.test(src)) return src;
+  // No session context → can't resolve; return as-is
+  if (!sessionId) return src;
+
+  let workspacePath: string;
+  if (src.startsWith("/")) {
+    // Treat absolute paths as workspace-root-relative
+    workspacePath = src.replace(/^\/+/, "");
+  } else if (mdFilePath) {
+    // Relative: resolve against the directory containing the .md file
+    const mdDir = mdFilePath.includes("/")
+      ? mdFilePath.substring(0, mdFilePath.lastIndexOf("/"))
+      : "";
+    const parts = (mdDir ? `${mdDir}/${src}` : src).split("/");
+    const resolved: string[] = [];
+    for (const part of parts) {
+      if (part === "..") resolved.pop();
+      else if (part !== ".") resolved.push(part);
+    }
+    workspacePath = resolved.join("/");
+  } else {
+    // No mdFilePath context — treat as workspace-root-relative
+    workspacePath = src;
+  }
+
+  return `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(workspacePath)}`;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -204,6 +254,8 @@ export default function MarkdownMessage({
   isThinkingActive,
   reasoningBlocks,
   onChoice,
+  sessionId,
+  mdFilePath,
 }: MarkdownMessageProps) {
   const hasTools =
     (toolEvents && toolEvents.length > 0) ||
@@ -302,6 +354,24 @@ export default function MarkdownMessage({
               {children}
             </blockquote>
           ),
+
+          // ── Images ──
+          // Rewrite src to route through the gateway workspace file proxy.
+          // Full URLs (https://…) and data: URIs pass through unchanged.
+          img({ src, alt, ...rest }) {
+            const rawSrc = typeof src === "string" ? src : "";
+            const resolvedSrc = resolveMediaSrc(rawSrc, sessionId, mdFilePath);
+            // eslint-disable-next-line @next/next/no-img-element
+            return (
+              <img
+                src={resolvedSrc}
+                alt={alt ?? ""}
+                {...rest}
+                className="max-w-full max-h-96 rounded-lg my-3 border border-zinc-700/50 object-contain"
+                loading="lazy"
+              />
+            );
+          },
 
           // ── Tables (GFM) ──
           table: ({ children }) => (

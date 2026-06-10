@@ -84,6 +84,10 @@ failure via isolated Copilot SDK sandboxes.
 - Type hints required on all public functions
 - async/await throughout -- no sync blocking in request paths
 - Tests in tests/unit/ and tests/integration/ -- pytest with asyncio
+- Agent-generated artefacts (images, reports, PDFs) MUST be written to
+  `.tmp/` or `outputs/` within the agent workspace so the Control Plane
+  file browser and inline chat cards can discover them.  The workspace
+  API exposes these directories but hides other dot-prefixed dirs.
 
 ## Package Versions (as of 2026-06-10)
 

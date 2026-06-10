@@ -48,6 +48,8 @@ webhook receivers, OAuth callbacks, and the Control Plane API.
 - Gateway health: GET /health returns {status: ok}
 - Chat endpoint: POST /copilot/chat streams AG-UI events
 - Agent stream: POST /agent/run/stream returns SSE stream with model
+- Workspace files: GET /agent/workspace/{id} lists files; .tmp/ and outputs/ are visible
+- File download: GET /agent/workspace/{id}/file?path= serves raw bytes (50 MB cap)
 - All endpoints require auth (except health)
 
 ## Child DOX Index

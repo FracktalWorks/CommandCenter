@@ -36,6 +36,7 @@
  */
 
 import { NextRequest } from "next/server";
+import { auth } from "@/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -64,6 +65,41 @@ const LITELLM_KEY =
   process.env.LITELLM_MASTER_KEY ?? process.env.GATEWAY_INTERNAL_TOKEN ?? "sk-local-dev-change-me";
 const INTERNAL_TOKEN =
   process.env.GATEWAY_INTERNAL_TOKEN ?? process.env.LITELLM_MASTER_KEY ?? "sk-local-dev-change-me";
+
+/** EXECUTIVE_EMAILS: comma-separated list of executive emails for role assignment. */
+const EXECUTIVE_EMAILS = new Set(
+  (process.env.EXECUTIVE_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean)
+);
+
+/**
+ * Build the headers object for gateway proxy calls.
+ * Always includes the internal Bearer token. When an authenticated session
+ * exists, also forwards X-User-Email and X-User-Role so the gateway can
+ * scope chat history, memory, and audit trails to the real user.
+ */
+async function buildGatewayHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${INTERNAL_TOKEN}`,
+  };
+  try {
+    const session = await auth();
+    if (session?.user?.email) {
+      headers["X-User-Email"] = session.user.email;
+      const role = EXECUTIVE_EMAILS.has(session.user.email.toLowerCase())
+        ? "executive"
+        : "employee";
+      headers["X-User-Role"] = role;
+    }
+  } catch (_e) {
+    // auth() can throw if called outside a request context — fall back to
+    // internal-only headers (backward-compatible with cron/CI callers).
+  }
+  return headers;
+}
 
 // ─── SSE helpers ─────────────────────────────────────────────────────────────
 
@@ -142,10 +178,7 @@ export async function POST(req: NextRequest): Promise<Response> {
       ];
       gatewayRes = await fetch(`${GATEWAY_URL}/copilot/chat`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${INTERNAL_TOKEN}`,
-        },
+        headers: await buildGatewayHeaders(),
         body: JSON.stringify({
           thread_id: threadId ?? "",
           messages: agUiMessages,
@@ -288,10 +321,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     try {
       streamRes = await fetch(`${GATEWAY_URL}/agent/run/stream`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${INTERNAL_TOKEN}`,
-        },
+        headers: await buildGatewayHeaders(),
         body: JSON.stringify({
           agent: agentName,
           payload: { mode: "chat", message, messages: messages ?? [] },
@@ -412,10 +442,7 @@ export async function POST(req: NextRequest): Promise<Response> {
       try {
         const gatewayRes = await fetch(`${GATEWAY_URL}/agent/run`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${INTERNAL_TOKEN}`,
-          },
+          headers: await buildGatewayHeaders(),
           body: JSON.stringify({
             agent: agentName,
             payload: { mode: "chat", message, messages: messages ?? [] },
@@ -467,7 +494,7 @@ export async function POST(req: NextRequest): Promise<Response> {
           if (vars.length > 0) {
             fetch(`${GATEWAY_URL}/integrations/configure`, {
               method: "POST",
-              headers: { "Content-Type": "application/json", Authorization: `Bearer ${INTERNAL_TOKEN}` },
+              headers: await buildGatewayHeaders(),
               body: JSON.stringify({ vars }),
             }).catch(() => {});
           }

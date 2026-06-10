@@ -25,7 +25,7 @@ export default function Home() {
         ))}
       </div>
       <div className="mt-12 rounded-lg border border-zinc-800 bg-zinc-900/30 p-4 text-sm text-zinc-400">
-        <b>Phase 1:</b> Self-Mutation Loop. Google SSO activates once <code>AUTH_GOOGLE_ID</code> / <code>AUTH_GOOGLE_SECRET</code> are set in <code>.env.local</code>.
+        <b>Phase 1:</b> Self-Mutation Loop. Sign in with your Microsoft 365 account via the sidebar.
       </div>
     </div>
   );

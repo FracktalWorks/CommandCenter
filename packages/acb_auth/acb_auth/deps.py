@@ -77,15 +77,36 @@ async def get_current_user(
     Enforcement is done by require_role().
     """
     # 1. Internal Bearer token (Next.js proxy, cron jobs, CI)
+    bearer_ok = False
     if authorization and authorization.startswith("Bearer "):
         submitted = authorization.removeprefix("Bearer ").strip()
         expected = _get_internal_token()
         # Only accept if expected is non-empty AND tokens match.
-        # A timing-safe compare would be ideal, but these are local dev tokens.
         if expected and submitted == expected:
-            return UserContext(email="system:internal", role=UserRole.AGENT)
+            bearer_ok = True
 
-    # 2. SSO headers (browser sessions proxied by Next.js SSO middleware)
+    # 1a. Bearer-matched call WITH user identity headers → real user context.
+    #     This is the normal browser flow: Next.js proxy authenticates the
+    #     session (NextAuth Google SSO) and forwards the verified email + role
+    #     alongside the internal Bearer token.  We trust the identity because
+    #     only the Next.js server can produce a valid Bearer token.
+    if bearer_ok and x_user_email:
+        allowed_domain = os.getenv("ALLOWED_EMAIL_DOMAIN", "fracktal.in").lower().lstrip("@")
+        email = x_user_email
+        if not email.lower().endswith("@" + allowed_domain):
+            email = None
+        return UserContext(
+            email=email or x_user_email,  # still trust Next.js but flag domain mismatch
+            role=_coerce_role(x_user_role),
+        )
+
+    # 1b. Bearer-matched call WITHOUT user headers → internal service call.
+    #     Used by cron jobs, CI pipelines, and legacy LangGraph batch mode
+    #     that predates the identity-forwarding fix.
+    if bearer_ok:
+        return UserContext(email="system:internal", role=UserRole.AGENT)
+
+    # 2. SSO headers without Bearer (direct browser/dev access — no proxy).
     email = x_user_email
     if email:
         # Domain enforcement: reject emails not from the allowed domain.

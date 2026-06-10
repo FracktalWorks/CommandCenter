@@ -5,6 +5,8 @@ Control Plane (Next.js browser UI) and local development tools.
 
 ## Structure
 - control_plane/ -- Next.js app (chat, agents, integrations, settings)
+- control_plane/src/middleware.ts -- Route protection via NextAuth
+- control_plane/src/auth.ts -- NextAuth v5 config (Google SSO, JWT callbacks)
 - control_plane/src/app/api/agent/chat/route.ts -- AG-UI to frontend SSE translation
 - control_plane/src/components/AgentChat.tsx -- Main chat component
 - control_plane/src/components/MarkdownMessage.tsx -- GFM rendering with inline images
@@ -16,7 +18,11 @@ Control Plane (Next.js browser UI) and local development tools.
 - Next.js App Router pattern
 - SSE streaming for real-time chat
 - AG-UI protocol translation in route.ts
-- Google SSO restricted to org domain
+- Google SSO (NextAuth v5) restricted to org domain
+- Route protection via middleware.ts (auth-gated when Google credentials are set)
+- Identity chain: NextAuth session → X-User-Email / X-User-Role headers → gateway UserContext
+- Role resolution: EXECUTIVE_EMAILS env var (comma-separated) → employee by default
+- All API routes that proxy to gateway forward user identity headers alongside Bearer token
 - Agent-generated files (artefacts) are proxied via /api/agent/workspace/{sessionId}/file?path=
 - Image URLs in markdown are rewritten through the workspace file proxy automatically
 - Agents SHOULD write generated files to .tmp/ or outputs/ for discoverability

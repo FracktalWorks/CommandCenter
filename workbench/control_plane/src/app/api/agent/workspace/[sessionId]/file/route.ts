@@ -4,6 +4,7 @@
  * The Content-Type and Content-Disposition headers from the gateway are passed through.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,33 @@ const INTERNAL_TOKEN =
   process.env.GATEWAY_INTERNAL_TOKEN ??
   process.env.LITELLM_MASTER_KEY ??
   "sk-local-dev-change-me";
+
+const EXECUTIVE_EMAILS = new Set(
+  (process.env.EXECUTIVE_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean)
+);
+
+async function buildGatewayHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${INTERNAL_TOKEN}`,
+  };
+  try {
+    const session = await auth();
+    if (session?.user?.email) {
+      headers["X-User-Email"] = session.user.email;
+      headers["X-User-Role"] = EXECUTIVE_EMAILS.has(
+        session.user.email.toLowerCase()
+      )
+        ? "executive"
+        : "employee";
+    }
+  } catch (_e) {
+    // auth() may throw outside request context
+  }
+  return headers;
+}
 
 export async function GET(
   req: NextRequest,
@@ -28,7 +56,7 @@ export async function GET(
     upstream.searchParams.set("path", filePath);
 
     const res = await fetch(upstream.toString(), {
-      headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+      headers: await buildGatewayHeaders(),
       // No timeout here — large files can take a moment to stream
     });
 

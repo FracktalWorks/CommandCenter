@@ -71,6 +71,7 @@ failure via isolated Copilot SDK sandboxes.
 7. No Theia / browser IDE
 8. Source systems are authoritative -- CommandCenter is a read-mostly mirror
 9. All new execution features MUST use MAF paths -- no raw Copilot SDK entrypoints
+10. All gateway endpoints require auth (Bearer token + optional user identity)
 
 ## Global Conventions
 
@@ -84,6 +85,8 @@ failure via isolated Copilot SDK sandboxes.
 - Type hints required on all public functions
 - async/await throughout -- no sync blocking in request paths
 - Tests in tests/unit/ and tests/integration/ -- pytest with asyncio
+- CI/CD via GitHub Actions: deploy.yml (push-to-deploy on main), pr-check.yml (lint+test on PRs)
+- Deploy target: Hostinger KVM 4 VPS (Ubuntu 24.04 + Docker)
 - Agent-generated artefacts (images, reports, PDFs) MUST be written to
   `.tmp/` or `outputs/` within the agent workspace so the Control Plane
   file browser and inline chat cards can discover them.  The workspace

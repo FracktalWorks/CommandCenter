@@ -45,3 +45,4 @@ infra/volumes/
 
 # Theia IDE (old PRD - ADR-014 removed)
 ide/
+.vps

@@ -1,35 +1,44 @@
 import NextAuth from "next-auth";
-import Google from "next-auth/providers/google";
-
-const ALLOWED_DOMAIN = process.env.AUTH_ALLOWED_DOMAIN ?? "fracktal.in";
+import MicrosoftEntraId from "next-auth/providers/microsoft-entra-id";
 
 /**
- * Dev-friendly: if no Google credentials are configured we expose an empty
- * `providers` array and the middleware will allow all traffic. As soon as
- * AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET / AUTH_SECRET are set, auth flips on.
+ * Microsoft Entra ID (Azure AD) SSO for @fracktal.in.
+ *
+ * The tenant-level app registration ensures only users in the Fracktal
+ * Microsoft 365 directory can sign in — no domain check needed.
+ *
+ * Dev-friendly: if no AUTH_MICROSOFT_ENTRA_ID_ID is set, middleware allows
+ * all traffic. Set the env vars to enable auth.
  */
-const hasGoogle = Boolean(process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET);
+const hasProvider = Boolean(process.env.AUTH_MICROSOFT_ENTRA_ID_ID);
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   trustHost: true,
   secret: process.env.AUTH_SECRET ?? "dev-local-insecure-change-me",
-  providers: hasGoogle
-    ? [
-        Google({
-          clientId: process.env.AUTH_GOOGLE_ID!,
-          clientSecret: process.env.AUTH_GOOGLE_SECRET!,
-        }),
-      ]
-    : [],
+  providers: [
+    MicrosoftEntraId({
+      clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_ID ?? "",
+      clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET ?? "",
+      issuer: `https://login.microsoftonline.com/${process.env.AUTH_MICROSOFT_ENTRA_ID_TENANT ?? "organizations"}/v2.0`,
+    }),
+  ],
   callbacks: {
-    async signIn({ profile }) {
-      const email = profile?.email ?? "";
-      const ok = email.toLowerCase().endsWith("@" + ALLOWED_DOMAIN.toLowerCase());
-      return ok;
+    async jwt({ token, profile, account }) {
+      if (profile?.email) {
+        token.email = profile.email as string;
+      }
+      if (account?.provider) {
+        token.provider = account.provider;
+      }
+      return token;
     },
     async session({ session, token }) {
-      // Surface the email/name so the UI can show "Signed in as ...".
-      if (token?.email) session.user.email = token.email as string;
+      if (token?.email) {
+        session.user.email = token.email as string;
+      }
+      if (token?.name) {
+        session.user.name = token.name as string;
+      }
       return session;
     },
   },
@@ -38,4 +47,4 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
 });
 
-export const isAuthEnabled = hasGoogle;
+export const isAuthEnabled = hasProvider;

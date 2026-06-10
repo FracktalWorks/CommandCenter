@@ -50,7 +50,9 @@ webhook receivers, OAuth callbacks, and the Control Plane API.
 - Agent stream: POST /agent/run/stream returns SSE stream with model
 - Workspace files: GET /agent/workspace/{id} lists files; .tmp/ and outputs/ are visible
 - File download: GET /agent/workspace/{id}/file?path= serves raw bytes (50 MB cap)
-- All endpoints require auth (except health)
+- All endpoints require auth (Bearer token + optional X-User-Email/X-User-Role)
+- Identity chain: Next.js → Bearer + user headers → deps.py resolves real UserContext
+- Chat sessions scoped by user.email; fallback to "default" for anonymous/internal calls
 
 ## Child DOX Index
 

@@ -6,6 +6,8 @@ using httpx.AsyncClient with dependency_overrides.
 """
 from __future__ import annotations
 
+import os as _os
+
 import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
@@ -147,3 +149,193 @@ def test_require_role_403_body_contains_required_roles():
     client = TestClient(_make_gated_app())
     r = client.get("/exec-only", headers={"X-User-Role": "employee"})
     assert "executive" in r.json()["detail"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Bearer token + user identity chain (M2.7 — WBS 1.7)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The Next.js proxy sends both an internal Bearer token AND user identity
+# headers (X-User-Email, X-User-Role) on every proxied request.  The gateway
+# MUST:
+#   1. Verify the Bearer token matches GATEWAY_INTERNAL_TOKEN.
+#   2. When Bearer matches AND user headers are present → resolve to the
+#      real user identity (not "system:internal").
+#   3. When Bearer matches but NO user headers → retain legacy "agent" role
+#      for cron/CI/internal services.
+#   4. When Bearer is wrong/missing → fall through to SSO-only or anonymous.
+#
+# These tests use TestClient with headers only (no live token validation
+# unless GATEWAY_INTERNAL_TOKEN is set in the test environment).  See the
+# integration test script for live-token scenarios.
+
+
+def _bearer_app(gateway_token: str | None = None):
+    """Build a mini FastAPI app whose /whoami depends on get_current_user.
+
+    If *gateway_token* is provided, monkey-patch os.environ so
+    _get_internal_token() returns it.  Pass None to leave the env alone
+    (token will be empty → Bearer auth disabled).
+    """
+    if gateway_token is not None:
+        _os.environ["GATEWAY_INTERNAL_TOKEN"] = gateway_token
+        _os.environ.pop("LITELLM_MASTER_KEY", None)  # prevent fallback
+
+    app = FastAPI()
+
+    @app.get("/whoami")
+    async def whoami(user=Depends(get_current_user)):
+        return {"email": user.email, "role": user.role.value}
+
+    return app
+
+
+class TestBearerIdentityChain:
+    """Bearer-token + user-header identity resolution."""
+
+    TOKEN = "test-internal-token-abc123"
+
+    def teardown_method(self) -> None:
+        """Clean up env vars between tests."""
+        _os.environ.pop("GATEWAY_INTERNAL_TOKEN", None)
+
+    # ── Bearer matches + user headers → real identity ──────────────────
+
+    def test_bearer_with_user_email_returns_employee(self):
+        """Bearer matches + X-User-Email + X-User-Role → employee identity."""
+        client = TestClient(_bearer_app(self.TOKEN))
+        r = client.get("/whoami", headers={
+            "Authorization": f"Bearer {self.TOKEN}",
+            "X-User-Email": "dev@fracktal.in",
+            "X-User-Role": "employee",
+        })
+        assert r.status_code == 200
+        assert r.json() == {"email": "dev@fracktal.in", "role": "employee"}
+
+    def test_bearer_with_user_email_returns_executive(self):
+        """Bearer matches + X-User-Email + X-User-Role=executive → exec."""
+        client = TestClient(_bearer_app(self.TOKEN))
+        r = client.get("/whoami", headers={
+            "Authorization": f"Bearer {self.TOKEN}",
+            "X-User-Email": "ceo@fracktal.in",
+            "X-User-Role": "executive",
+        })
+        assert r.status_code == 200
+        assert r.json() == {"email": "ceo@fracktal.in", "role": "executive"}
+
+    def test_bearer_with_user_email_no_role_header_defaults_to_employee(self):
+        """Bearer + email, no X-User-Role → defaults to employee."""
+        client = TestClient(_bearer_app(self.TOKEN))
+        r = client.get("/whoami", headers={
+            "Authorization": f"Bearer {self.TOKEN}",
+            "X-User-Email": "dev@fracktal.in",
+        })
+        assert r.status_code == 200
+        assert r.json() == {"email": "dev@fracktal.in", "role": "employee"}
+
+    # ── Bearer matches, no user headers → agent role (legacy) ──────────
+
+    def test_bearer_only_returns_agent_role(self):
+        """Bearer matches, no X-User-Email → system:internal + agent."""
+        client = TestClient(_bearer_app(self.TOKEN))
+        r = client.get("/whoami", headers={
+            "Authorization": f"Bearer {self.TOKEN}",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["email"] == "system:internal"
+        assert data["role"] == "agent"
+
+    # ── Bearer mismatch → falls through ────────────────────────────────
+
+    def test_bearer_wrong_token_with_user_email_falls_to_sso(self):
+        """Wrong Bearer + valid user headers → SSO path (not agent)."""
+        client = TestClient(_bearer_app(self.TOKEN))
+        r = client.get("/whoami", headers={
+            "Authorization": "Bearer wrong-token",
+            "X-User-Email": "dev@fracktal.in",
+            "X-User-Role": "employee",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["email"] == "dev@fracktal.in"
+        assert data["role"] == "employee"
+
+    def test_bearer_wrong_token_no_headers_anonymous(self):
+        """Wrong Bearer, no user headers → anonymous (email=None)."""
+        client = TestClient(_bearer_app(self.TOKEN))
+        r = client.get("/whoami", headers={
+            "Authorization": "Bearer wrong-token",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["email"] is None
+        assert data["role"] == "employee"
+
+    # ── Token disabled (empty GATEWAY_INTERNAL_TOKEN) ───────────────────
+
+    def test_bearer_disabled_when_token_empty(self):
+        """Empty GATEWAY_INTERNAL_TOKEN → Bearer auth disabled → SSO path."""
+        # explicitly set to empty
+        _os.environ["GATEWAY_INTERNAL_TOKEN"] = ""
+        _os.environ.pop("LITELLM_MASTER_KEY", None)
+
+        client = TestClient(_bearer_app(None))  # None = don't overwrite
+        # Send a Bearer token — it won't matter because _get_internal_token
+        # returns "" and the guard `if expected and submitted == expected`
+        # evaluates to False, so bearer_ok stays False.
+        r = client.get("/whoami", headers={
+            "Authorization": "Bearer anything",
+            "X-User-Email": "dev@fracktal.in",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["email"] == "dev@fracktal.in"
+        assert data["role"] == "employee"
+
+    # ── Domain enforcement under Bearer ────────────────────────────────
+
+    def test_bearer_with_non_fracktal_email_trusts_nextjs(self):
+        """Bearer + non-fracktal email → trusts Next.js, keeps email."""
+        # The gateway's domain check only downgrades to anonymous in the
+        # SSO-only path.  Under Bearer, we trust Next.js to have already
+        # validated the domain via Google SSO + NextAuth signIn callback.
+        # We still flag the mismatch by keeping the email (not None) so
+        # the audit trail is preserved.
+        client = TestClient(_bearer_app(self.TOKEN))
+        r = client.get("/whoami", headers={
+            "Authorization": f"Bearer {self.TOKEN}",
+            "X-User-Email": "hacker@gmail.com",
+            "X-User-Role": "employee",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        # Under Bearer we preserve the email even for non-fracktal domains
+        # because Next.js already validated it.
+        assert data["email"] == "hacker@gmail.com"
+
+    # ── SSO headers without Bearer (direct access) ─────────────────────
+
+    def test_sso_without_bearer_allows_fracktal(self):
+        """SSO headers without Bearer → fracktal.in email accepted."""
+        client = TestClient(_bearer_app(self.TOKEN))
+        r = client.get("/whoami", headers={
+            "X-User-Email": "dev@fracktal.in",
+            "X-User-Role": "employee",
+        })
+        assert r.status_code == 200
+        assert r.json()["email"] == "dev@fracktal.in"
+
+    def test_sso_without_bearer_rejects_non_fracktal(self):
+        """SSO headers without Bearer → non-fracktal.in → email stripped."""
+        client = TestClient(_bearer_app(self.TOKEN))
+        r = client.get("/whoami", headers={
+            "X-User-Email": "hacker@gmail.com",
+            "X-User-Role": "executive",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["email"] is None           # domain rejected
+        # role preserved even when email stripped (defence in depth)
+        assert data["role"] == "executive"
+

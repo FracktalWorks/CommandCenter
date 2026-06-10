@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { useSession, signOut } from "next-auth/react";
 
 type Pane = { href: string; label: string; icon: string; note: string };
 
@@ -17,6 +18,7 @@ const PANES: Pane[] = [
 export default function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const { data: session } = useSession();
 
   return (
     <aside
@@ -83,8 +85,32 @@ export default function Sidebar() {
       </nav>
 
       {!collapsed && (
-        <div className="px-4 pb-4 text-xs text-zinc-600">
-          Phase 1 &middot; Self-Mutation Loop
+        <div className="border-t border-zinc-800 px-4 py-3">
+          {session?.user ? (
+            <div className="flex items-center justify-between">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-xs font-medium text-zinc-300">
+                  {session.user.name ?? session.user.email ?? "Signed in"}
+                </div>
+                <div className="truncate text-xs text-zinc-500">
+                  {session.user.email}
+                </div>
+              </div>
+              <button
+                onClick={() => signOut({ callbackUrl: "/signin" })}
+                className="ml-2 shrink-0 rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
+                title="Sign out"
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M6 2H3v12h3M11 11l3-3-3-3M14 8H6" />
+                </svg>
+              </button>
+            </div>
+          ) : session === undefined ? (
+            <div className="text-xs text-zinc-600">Loading session…</div>
+          ) : (
+            <div className="text-xs text-zinc-600">Phase 1 &middot; Self-Mutation Loop</div>
+          )}
         </div>
       )}
     </aside>

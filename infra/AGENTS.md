@@ -5,7 +5,7 @@ Docker Compose, Postgres schema, LiteLLM config, Redis.
 
 ## Key Files
 - docker-compose.yml -- all services
-- postgres/ -- schema files (00-08)
+- postgres/ -- schema files (00-08) + 09_app_user.sql (NextAuth users)
 - litellm/config.yaml -- model routing, tier aliases, provider keys
 
 ## Conventions

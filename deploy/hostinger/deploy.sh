@@ -12,6 +12,7 @@ say "Pulling images"
 docker compose -f infra/docker-compose.yml pull
 
 say "Booting stack (core)"
+set -a && source /opt/acb/app/.env && set +a
 docker compose -f infra/docker-compose.yml --profile core up -d --remove-orphans
 
 say "Waiting for healthchecks (up to 90s)"
@@ -33,8 +34,8 @@ if [ ! -d .venv ]; then
   uv sync
 fi
 
-say "Reloading Caddy (in case Caddyfile changed)"
-sudo systemctl reload caddy || true
+say "Restarting Caddy"
+sudo systemctl restart caddy || true
 
 say "Probing services"
 uv run python scripts/check_infra.py || {

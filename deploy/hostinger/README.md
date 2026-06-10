@@ -14,7 +14,7 @@ KVM 4 has enough headroom for Postgres + Redis + LiteLLM + workbench. KVM 2 work
 1. Buy a VPS plan from <https://www.hostinger.com/vps-hosting>.
 2. In hPanel → VPS → **Operating system**, pick **Ubuntu 24.04 with Docker** (one-click template).
 3. Add your SSH public key under VPS → SSH keys (or set a strong root password).
-4. Note the public IP. Optionally point a subdomain (e.g. `brain.fracktal.in`) A-record to it.
+4. Note the public IP. Optionally point a subdomain (e.g. `commandcenter.fracktal.in`) A-record to it.
 5. Wait for provisioning (~3–5 min), then `ssh root@<ip>`.
 
 ## One-time: bootstrap
@@ -94,10 +94,49 @@ Hostinger takes weekly backups of the whole VPS automatically (included in plan)
 ## Observability + ops dashboards
 
 Once deployed (and DNS pointed):
-- **Gateway:** `https://brain.your-domain.tld`
-- **Workbench** (Phase 0.5+): `https://workbench.your-domain.tld`
+- **Control Plane (UI):** `https://commandcenter.your-domain.tld`
+- **Gateway API:** `https://api.commandcenter.your-domain.tld`
 
 LiteLLM stays on the internal Docker network — never exposed publicly.
+
+## CI/CD via GitHub Actions
+
+Push-to-deploy is configured via `.github/workflows/deploy.yml`. On every push to
+`main`, the pipeline:
+
+1. **Lint** — Ruff lint + mypy type check
+2. **Test** — Full unit test suite (`pytest tests/unit/`)
+3. **Deploy** — SSH into Hostinger VPS, `git pull`, restart Docker Compose, sync Python deps, reload Caddy, run `check_infra.py`
+4. **Smoke** — Hit `https://commandcenter.your-domain.tld/health` from CI
+
+PRs get a lighter `pr-check.yml` workflow (lint + test only, no deploy).
+
+### One-time: set up CI/CD secrets
+
+In your GitHub repo → Settings → Secrets and variables → Actions, add:
+
+| Secret | Value |
+|--------|-------|
+| `HOSTINGER_HOST` | VPS IP address (e.g. `123.45.67.89`) |
+| `HOSTINGER_USER` | SSH user (`acb`) |
+| `HOSTINGER_SSH_KEY` | SSH private key (ed25519 preferred) |
+| `HOSTINGER_SSH_PORT` | SSH port (usually `22`) |
+
+Generate an SSH key for CI/CD (do NOT reuse your personal key):
+
+```bash
+ssh-keygen -t ed25519 -C "ci-deploy@commandcenter" -f ~/.ssh/ci_deploy_key
+cat ~/.ssh/ci_deploy_key.pub >> ~/.ssh/authorized_keys   # on the VPS
+cat ~/.ssh/ci_deploy_key  # → paste into HOSTINGER_SSH_KEY secret
+```
+
+### Manual deploy (fallback)
+
+If CI/CD is unavailable, SSH into the VPS and run:
+
+```bash
+cd /opt/acb/app && git pull && bash deploy/hostinger/deploy.sh
+```
 
 ## Cost ceiling per `project_plan.md` §8
 

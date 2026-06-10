@@ -8,6 +8,7 @@
  * All routes proxy to the FastAPI gateway /memory/* path.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,33 @@ const INTERNAL_TOKEN =
   process.env.LITELLM_MASTER_KEY ??
   "sk-local-dev-change-me";
 
+const EXECUTIVE_EMAILS = new Set(
+  (process.env.EXECUTIVE_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean)
+);
+
+async function buildGatewayHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${INTERNAL_TOKEN}`,
+  };
+  try {
+    const session = await auth();
+    if (session?.user?.email) {
+      headers["X-User-Email"] = session.user.email;
+      headers["X-User-Role"] = EXECUTIVE_EMAILS.has(
+        session.user.email.toLowerCase()
+      )
+        ? "executive"
+        : "employee";
+    }
+  } catch (_e) {
+    // auth() may throw outside request context
+  }
+  return headers;
+}
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
@@ -25,7 +53,7 @@ export async function GET(
   const upstream = `${GATEWAY_URL}/memory/${path.join("/")}`;
   try {
     const res = await fetch(upstream, {
-      headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+      headers: await buildGatewayHeaders(),
       signal: AbortSignal.timeout(5_000),
     });
     const body = await res.json().catch(() => ({}));
@@ -46,7 +74,7 @@ export async function POST(
     const res = await fetch(upstream, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${INTERNAL_TOKEN}`,
+        ...(await buildGatewayHeaders()),
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
@@ -68,7 +96,7 @@ export async function DELETE(
   try {
     const res = await fetch(upstream, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+      headers: await buildGatewayHeaders(),
       signal: AbortSignal.timeout(5_000),
     });
     return new NextResponse(null, { status: res.status });

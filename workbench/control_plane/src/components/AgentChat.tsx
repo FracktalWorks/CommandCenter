@@ -629,6 +629,7 @@ export default function AgentChat({
 
   // Searchable model picker state
   const [showModelMenu, setShowModelMenu] = useState(false);
+  const [showThinkMenu, setShowThinkMenu] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
   const modelMenuRef = useRef<HTMLDivElement>(null);
 
@@ -1009,16 +1010,31 @@ export default function AgentChat({
 
               <span className="w-px h-3.5 bg-zinc-700/60 shrink-0" />
 
-              {/* Thinking mode — segmented control */}
-              <div className="flex items-center rounded-md bg-zinc-800/60 p-0.5">
-                {THINK_MODES.map((tm) => (
-                  <button key={tm.mode} type="button"
-                    onClick={() => setThinkMode(tm.mode)}
-                    title={tm.title}
-                    className={`px-2 py-0.5 rounded text-[11px] transition-colors ${thinkMode === tm.mode ? "bg-zinc-700 text-zinc-100" : "text-zinc-500 hover:text-zinc-300"}`}>
-                    {tm.label}
-                  </button>
-                ))}
+              {/* Thinking mode — compact dropdown (saves space, easier tap on mobile) */}
+              <div className="relative">
+                <button type="button"
+                  onClick={() => setShowThinkMenu((v) => !v)}
+                  className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-zinc-700/50 hover:text-zinc-200 transition-colors text-zinc-400"
+                  title={THINK_MODES.find((t) => t.mode === thinkMode)?.title}>
+                  <span>{THINK_MODES.find((t) => t.mode === thinkMode)?.label ?? "Auto"}</span>
+                  <span className="text-zinc-600 text-[9px]">▾</span>
+                </button>
+                {showThinkMenu && (
+                  <div className="absolute bottom-full left-0 mb-1.5 w-44 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl z-50 py-1"
+                    onMouseLeave={() => setShowThinkMenu(false)}>
+                    {THINK_MODES.map((tm) => (
+                      <button key={tm.mode} type="button"
+                        onClick={() => { setThinkMode(tm.mode); setShowThinkMenu(false); }}
+                        className={`w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 transition-colors ${thinkMode === tm.mode ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"}`}>
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="font-medium">{tm.label}</span>
+                          {thinkMode === tm.mode && <span className="text-emerald-400 text-[10px]">✓</span>}
+                        </div>
+                        <div className="text-zinc-500 mt-0.5 text-[10px]">{tm.title}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <span className="ml-auto hidden md:inline text-zinc-600">

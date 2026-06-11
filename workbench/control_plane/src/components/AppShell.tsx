@@ -5,9 +5,9 @@
  *
  *   • Desktop (or "Request desktop" on a phone): the classic persistent Sidebar
  *     alongside the scrollable main content area.
- *   • Mobile: a compact top app bar with a hamburger that opens a slide-in
- *     navigation drawer, plus a "Desktop" toggle. The main content area is full
- *     width so individual pages can present their own clean mobile layout.
+ *   • Mobile: a minimal top bar (hamburger + centered title + overflow menu),
+ *     and a unified slide-in drawer.  Child pages inject their own content
+ *     (e.g. conversation list) into the drawer via useMobileDrawer().
  *
  * Layout decisions come from useViewMode(); component-level tweaks elsewhere can
  * rely on plain Tailwind responsive prefixes (kept in sync via the viewport meta).
@@ -15,17 +15,58 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useState,
+  type ReactNode,
+} from "react";
 import { useSession, signOut } from "next-auth/react";
-import { Menu, X, Monitor, Smartphone, LogOut } from "lucide-react";
+import { Menu, X, Monitor, Smartphone, MoreHorizontal, LogOut } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { PANES } from "@/lib/nav";
 
+// ---------------------------------------------------------------------------
+// Mobile drawer context — lets child pages inject content into the hamburger
+// drawer without AppShell needing to know about sessions or filters.
+// ---------------------------------------------------------------------------
+
+type MobileDrawerCtx = {
+  /** True when the drawer is currently open. */
+  isOpen: boolean;
+  /** Open the drawer with the given React content. */
+  open: (content: ReactNode) => void;
+  /** Close the drawer. */
+  close: () => void;
+};
+
+const MobileDrawerCtx = createContext<MobileDrawerCtx>({
+  isOpen: false,
+  open: () => {},
+  close: () => {},
+});
+
+export function useMobileDrawer(): MobileDrawerCtx {
+  return useContext(MobileDrawerCtx);
+}
+
+// ---------------------------------------------------------------------------
+// AppShell
+// ---------------------------------------------------------------------------
+
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const { isMobile, isNarrow, forceDesktop, toggleView } = useViewMode();
-  const [navOpen, setNavOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerContent, setDrawerContent] = useState<ReactNode>(null);
   const pathname = usePathname();
+
+  const openDrawer = useCallback((content: ReactNode) => {
+    setDrawerContent(content);
+    setDrawerOpen(true);
+  }, []);
+  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
 
   // ── Desktop layout ───────────────────────────────────────────────────────
   if (!isMobile) {
@@ -50,122 +91,198 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   // ── Mobile layout ────────────────────────────────────────────────────────
   return (
-    <div className="flex h-screen flex-col overflow-hidden">
-      {/* Top app bar */}
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-900/80 px-3 backdrop-blur">
-        <button
-          onClick={() => setNavOpen(true)}
-          className="-ml-1 rounded p-2 text-zinc-300 hover:bg-zinc-800"
-          aria-label="Open navigation"
-        >
-          <Menu size={20} />
-        </button>
-        <Link href="/" className="min-w-0">
-          <span className="block truncate text-sm font-semibold tracking-tight text-zinc-100">
-            CommandCenter
-          </span>
-        </Link>
-        <button
-          onClick={toggleView}
-          className="ml-auto flex items-center gap-1.5 rounded-md border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-300 hover:border-zinc-500 hover:bg-zinc-800"
-          title="Switch to desktop view"
-        >
-          <Monitor size={14} />
-          Desktop
-        </button>
-      </header>
+    <MobileDrawerCtx.Provider
+      value={{ isOpen: drawerOpen, open: openDrawer, close: closeDrawer }}
+    >
+      <div className="flex h-screen flex-col overflow-hidden bg-zinc-950">
+        {/* Top app bar — minimal, like ChatGPT/DeepSeek */}
+        <header className="flex h-11 shrink-0 items-center border-b border-zinc-800 bg-zinc-900/80 px-2 backdrop-blur">
+          {/* Hamburger */}
+          <button
+            onClick={() => openDrawer(defaultDrawerContent(pathname, toggleView))}
+            className="rounded-lg p-2 text-zinc-300 hover:bg-zinc-800 -ml-0.5"
+            aria-label="Open menu"
+          >
+            <Menu size={20} />
+          </button>
 
-      {/* Page content */}
-      <main className="flex-1 min-h-0 overflow-auto">{children}</main>
+          {/* Centered title */}
+          <Link href="/" className="absolute left-1/2 -translate-x-1/2">
+            <span className="text-sm font-semibold tracking-tight text-zinc-100">
+              CommandCenter
+            </span>
+          </Link>
 
-      {/* Navigation drawer */}
-      {navOpen && (
-        <MobileNavDrawer pathname={pathname} onClose={() => setNavOpen(false)} />
-      )}
-    </div>
+          {/* Overflow menu */}
+          <OverflowMenu toggleView={toggleView} />
+        </header>
+
+        {/* Page content */}
+        <main className="flex-1 min-h-0 overflow-hidden">{children}</main>
+
+        {/* Unified drawer */}
+        {drawerOpen && (
+          <div className="fixed inset-0 z-[70]">
+            <div
+              className="absolute inset-0 bg-black/60"
+              onClick={closeDrawer}
+            />
+            <aside className="absolute inset-y-0 left-0 flex w-[85%] max-w-[320px] flex-col border-r border-zinc-800 bg-zinc-900 shadow-2xl chat-fade-in">
+              {drawerContent}
+            </aside>
+          </div>
+        )}
+      </div>
+    </MobileDrawerCtx.Provider>
   );
 }
 
-function MobileNavDrawer({
+// ---------------------------------------------------------------------------
+// Default drawer content (nav links + user section)
+// ---------------------------------------------------------------------------
+
+function defaultDrawerContent(pathname: string | null, toggleView: () => void) {
+  return <DefaultDrawer pathname={pathname} toggleView={toggleView} />;
+}
+
+function DefaultDrawer({
   pathname,
-  onClose,
+  toggleView,
 }: {
   pathname: string | null;
-  onClose: () => void;
+  toggleView: () => void;
 }) {
   const { data: session } = useSession();
 
   return (
-    <div className="fixed inset-0 z-[70]">
-      {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
-
-      {/* Panel */}
-      <aside className="absolute inset-y-0 left-0 flex w-[82%] max-w-xs flex-col border-r border-zinc-800 bg-zinc-900 shadow-2xl chat-fade-in">
-        <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3.5">
-          <div>
-            <div className="text-base font-semibold tracking-tight text-zinc-100">
-              CommandCenter
-            </div>
-            <div className="text-xs text-zinc-500">Control Plane</div>
+    <>
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+        <div>
+          <div className="text-base font-semibold tracking-tight text-zinc-100">
+            CommandCenter
           </div>
-          <button
-            onClick={onClose}
-            className="rounded p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-            aria-label="Close navigation"
-          >
-            <X size={18} />
-          </button>
+          <div className="text-[11px] text-zinc-500">Control Plane</div>
         </div>
+        <button
+          onClick={() => useMobileDrawer().close()}
+          className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+          aria-label="Close menu"
+        >
+          <X size={18} />
+        </button>
+      </div>
 
-        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-2">
-          {PANES.map((p) => {
-            const active = pathname?.startsWith(p.href);
-            return (
-              <Link
-                key={p.href}
-                href={p.href}
-                onClick={onClose}
-                className={`rounded-md px-3 py-3 transition-colors ${
-                  active
-                    ? "bg-zinc-800 text-white"
-                    : "text-zinc-300 hover:bg-zinc-800/60 hover:text-zinc-100"
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-xs text-zinc-500">[{p.icon}]</span>
-                  <span className="text-sm font-medium">{p.label}</span>
-                </div>
-                <div className="ml-7 mt-0.5 text-xs text-zinc-500">{p.note}</div>
-              </Link>
-            );
-          })}
-        </nav>
-
-        <div className="border-t border-zinc-800 px-4 py-3">
-          {session?.user ? (
-            <div className="flex items-center justify-between">
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-xs font-medium text-zinc-300">
-                  {session.user.name ?? session.user.email ?? "Signed in"}
-                </div>
-                <div className="truncate text-xs text-zinc-500">
-                  {session.user.email}
-                </div>
+      {/* Nav links */}
+      <nav className="flex flex-col gap-0.5 overflow-y-auto p-2">
+        {PANES.map((p) => {
+          const active = pathname?.startsWith(p.href);
+          return (
+            <Link
+              key={p.href}
+              href={p.href}
+              onClick={() => useMobileDrawer().close()}
+              className={`rounded-lg px-3 py-2.5 transition-colors ${
+                active
+                  ? "bg-zinc-800 text-white"
+                  : "text-zinc-300 hover:bg-zinc-800/50 hover:text-zinc-100"
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-zinc-800 text-xs font-mono font-semibold text-zinc-400">
+                  {p.icon}
+                </span>
+                <span className="text-sm font-medium">{p.label}</span>
               </div>
+            </Link>
+          );
+        })}
+      </nav>
+
+      {/* Bottom section */}
+      <div className="mt-auto border-t border-zinc-800 p-3 space-y-2">
+        {/* Desktop toggle */}
+        <button
+          onClick={() => {
+            toggleView();
+            useMobileDrawer().close();
+          }}
+          className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
+        >
+          <Monitor size={16} className="shrink-0" />
+          Desktop view
+        </button>
+
+        {/* User / sign out */}
+        {session?.user && (
+          <button
+            onClick={() => signOut({ callbackUrl: "/signin" })}
+            className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
+          >
+            <LogOut size={16} className="shrink-0" />
+            Sign out
+          </button>
+        )}
+
+        {session?.user && (
+          <div className="px-3 pt-1">
+            <div className="truncate text-[11px] font-medium text-zinc-500">
+              {session.user.name ?? session.user.email}
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// "..." overflow menu (Desktop toggle + sign out, always accessible)
+// ---------------------------------------------------------------------------
+
+function OverflowMenu({ toggleView }: { toggleView: () => void }) {
+  const [open, setOpen] = useState(false);
+  const { data: session } = useSession();
+
+  return (
+    <div className="relative ml-auto">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
+        aria-label="More options"
+      >
+        <MoreHorizontal size={18} />
+      </button>
+
+      {open && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setOpen(false)}
+          />
+          <div className="absolute right-0 top-full mt-1 z-50 w-48 rounded-xl border border-zinc-700 bg-zinc-900 py-1 shadow-xl chat-fade-in">
+            <button
+              onClick={() => {
+                toggleView();
+                setOpen(false);
+              }}
+              className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors"
+            >
+              <Monitor size={15} className="shrink-0 text-zinc-500" />
+              Desktop view
+            </button>
+            {session?.user && (
               <button
                 onClick={() => signOut({ callbackUrl: "/signin" })}
-                className="ml-2 shrink-0 rounded p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-                title="Sign out"
+                className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors"
               >
-                <LogOut size={16} />
+                <LogOut size={15} className="shrink-0 text-zinc-500" />
+                Sign out
               </button>
-            </div>
-          ) : (
-            <div className="text-xs text-zinc-600">Phase 1 · Self-Mutation Loop</div>
-          )}
-        </div>
-      </aside>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

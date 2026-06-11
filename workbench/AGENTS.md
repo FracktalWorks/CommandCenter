@@ -5,7 +5,7 @@ Control Plane (Next.js browser UI) and local development tools.
 
 ## Structure
 - control_plane/ -- Next.js app (chat, agents, integrations, settings)
-- control_plane/src/components/AppShell.tsx -- Responsive shell: desktop Sidebar vs mobile top bar + slide-in nav drawer
+- control_plane/src/components/AppShell.tsx -- Responsive shell: desktop Sidebar vs mobile top bar + unified slide-in drawer via useMobileDrawer() context
 - control_plane/src/components/ViewModeProvider.tsx -- Mobile/desktop view decision + "Request desktop" toggle (persisted)
 - control_plane/src/lib/nav.ts -- Shared primary navigation config (used by Sidebar + mobile drawer)
 - control_plane/src/middleware.ts -- Route protection via NextAuth
@@ -32,13 +32,18 @@ Control Plane (Next.js browser UI) and local development tools.
 
 ## Responsive / mobile layout
 - AppShell picks the layout from useViewMode(): mobile by default on narrow screens (≤767px), desktop otherwise.
-- "Request desktop" (Monitor button in the mobile top bar) sets a persisted preference and widens the
-  viewport meta to width=1280, so the full desktop layout renders and all Tailwind sm:/md: breakpoints
-  evaluate as desktop. A floating "Mobile view" pill returns to the mobile layout.
-- Structural layout switches (sidebar↔drawer, chat side panels↔overlay drawers) are JS-driven via isMobile;
-  in-component tweaks should use plain Tailwind responsive prefixes (kept in sync by the viewport trick).
-- Chat page: sessions + artifact panels become full-height overlay drawers on mobile (opened from the
-  in-chat Chats/Files toolbar); no functionality is removed relative to desktop.
+- "Request desktop" (via the "..." overflow menu on mobile, or the "Monitor" icon in the drawer) sets a persisted
+  preference and widens the viewport meta to width=1280, so the full desktop layout renders.
+- A floating "Mobile view" pill appears in forced-desktop mode to return to the mobile layout.
+- **Mobile top bar**: slim (h-11), hamburger (opens unified drawer) + centered "CommandCenter" title + "…" overflow menu.
+  The overflow menu contains Desktop toggle and Sign out — no toolbar-style "Desktop" button cluttering the header.
+- **Unified drawer**: useMobileDrawer() context lets child pages inject arbitrary content (conversations list,
+  file browser, filters, etc.) into the hamburger drawer. The drawer includes default nav links and user section.
+- **Chat page**: conversations and files are accessed via the drawer — no separate sidebar panels or "Chats/Files"
+  sub-toolbar on mobile. Pills at the top of the chat area ("Chats" / "Files") open the drawer with the
+  appropriate content. Desktop retains its collapsible side-panels.
+- **AgentChat header**: compact on mobile — single runtime badge, GitHub link as icon-only, thread ID hidden.
+  Toolbar wraps and uses smaller gaps on mobile.
 
 ## Artifact rendering
 - Inline images: MarkdownMessage resolves relative paths through the workspace proxy

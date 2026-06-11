@@ -448,14 +448,6 @@ export default function AgentChat({
     : models;
   const filteredGroups = Array.from(new Set(filteredModels.map((m) => m.group)));
 
-  // Check if the Copilot SDK actually restricts model selection (i.e. any
-  // non-"auto" Copilot model has model_picker_enabled === false).  Pro+
-  // and Enterprise plans have full model access so this stays false.
-  const copilotLockedModels = models.filter(
-    (m) => m.runtime === "copilot" && m.id !== "auto" && m.model_picker_enabled === false
-  );
-  const hasLockedCopilotModels = copilotLockedModels.length > 0;
-
   // Close model menu on outside click
   useEffect(() => {
     if (!showModelMenu) return;
@@ -650,27 +642,6 @@ export default function AgentChat({
                     className="w-full rounded bg-zinc-800 border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
                   />
                 </div>
-                {/* GitHub Copilot SDK — BYOK notice */}
-                {isCopilotSdkAgent && (
-                  <div className="px-3 py-2 border-b border-zinc-800 bg-sky-950/20 text-[10px] text-sky-400/80 leading-relaxed">
-                    <span className="font-semibold text-sky-300">GitHub Copilot SDK</span>
-                    {" — "}
-                    {hasLockedCopilotModels ? (
-                      <>
-                        <span className="text-amber-400/90">⚠ Model selection is restricted on this subscription.</span>
-                        {" "}
-                        <span className="text-sky-300">Use a BYOK model below to switch providers.</span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="text-emerald-400/90">✓ Full model access. Select a model above or use</span>
-                        {" "}
-                        <span className="text-sky-300">BYOK models below for custom providers.</span>
-                      </>
-                    )}
-                    {" "}<a href="/settings/models" className="underline hover:text-sky-200 transition-colors">Configure BYOK →</a>
-                  </div>
-                )}
                 {/* Grouped list */}
                 <div className="max-h-72 overflow-y-auto py-1">
                   {filteredGroups.length === 0 && (

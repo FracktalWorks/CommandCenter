@@ -392,7 +392,7 @@ async def copilot_models() -> dict:
                 return result
         except Exception:
             pass
-    static = {"models": [dict(m, model_picker_enabled=True) for m in _COPILOT_MODELS_STATIC], "source": "static"}
+    static = {"models": [dict(m, model_picker_enabled=False) for m in _COPILOT_MODELS_STATIC], "source": "static"}
     _copilot_models_cache["data"] = static
     _copilot_models_cache["ts"] = _now - (_COPILOT_MODELS_CACHE_TTL - 30)
     return static

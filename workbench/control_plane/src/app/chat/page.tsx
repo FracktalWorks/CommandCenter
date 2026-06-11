@@ -630,12 +630,6 @@ function ChatPageInner() {
         </button>
       </div>
       <div className="flex flex-col flex-1 overflow-y-auto p-3">
-        <button
-          onClick={() => { handleNewSession(); closeDrawer(); }}
-          className="mb-3 w-full rounded-lg bg-zinc-800 px-3 py-2.5 text-left text-sm font-medium text-zinc-200 hover:bg-zinc-700 transition-colors"
-        >
-          + New chat
-        </button>
         <SessionList
           sessions={sessions}
           activeId={activeSessionId}

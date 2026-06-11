@@ -91,8 +91,10 @@ async function persistAssistantMessage(
       agent_state: null,
       custom_events: [],
     }];
+    // Write directly to the gateway's chat message store so messages survive
+    // even if the Next.js process restarts mid-stream.
     await fetch(
-      `${GATEWAY_URL}/api/chat/sessions/${threadId}/messages`,
+      `${GATEWAY_URL}/chat/sessions/${threadId}/messages`,
       {
         method: "POST",
         headers: {

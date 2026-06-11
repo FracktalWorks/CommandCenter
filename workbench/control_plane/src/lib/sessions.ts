@@ -218,7 +218,7 @@ export interface PersistedMessage {
   timestamp: number;
   toolEvents?: unknown[];
   progressLines?: string[];
-  reasoning?: string;
+  reasoningBlocks?: string[];
   agentState?: Record<string, unknown>;
   customEvents?: { name: string; value: unknown }[];
 }
@@ -264,7 +264,7 @@ export function saveMessages(sessionId: string, messages: PersistedMessage[]): v
     timestamp: m.timestamp,
     tool_events: m.toolEvents ?? [],
     progress_lines: m.progressLines ?? [],
-    reasoning: m.reasoning ?? null,
+    reasoning: m.reasoningBlocks ?? null,
     agent_state: m.agentState ?? null,
     custom_events: m.customEvents ?? [],
   }));
@@ -296,11 +296,17 @@ export async function fetchMessagesFromDb(sessionId: string): Promise<PersistedM
       agentState?: Record<string, unknown>;
       customEvents?: { name: string; value: unknown }[];
     }>;
+    // Map Postgres `reasoning` field to localStorage `reasoningBlocks`.
+    const mapped = remote.map((r) => ({
+      ...r,
+      reasoningBlocks: r.reasoning ? [r.reasoning] : undefined,
+      reasoning: undefined,
+    }));
     // Update localStorage cache with authoritative Postgres data.
     try {
-      localStorage.setItem(MESSAGES_PREFIX + sessionId, JSON.stringify(remote));
+      localStorage.setItem(MESSAGES_PREFIX + sessionId, JSON.stringify(mapped));
     } catch (_e) { /* quota */ }
-    return remote;
+    return mapped as unknown as PersistedMessage[];
   } catch (_e) {
     return getMessages(sessionId);
   }

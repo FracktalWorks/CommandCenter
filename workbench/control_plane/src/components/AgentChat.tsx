@@ -325,6 +325,54 @@ export default function AgentChat({
     messagesRef.current = messages;
   }, [messages]);
 
+  // Save messages on beforeunload so partial streams survive browser close.
+  useEffect(() => {
+    const handleUnload = () => {
+      const msgs = messagesRef.current;
+      const settled = msgs.filter((m) => !m.streaming || m.content.trim().length > 0);
+      if (settled.length === 0) return;
+      const toSave: PersistedMessage[] = settled.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp,
+        toolEvents: m.toolEvents,
+        progressLines: m.progressLines,
+        reasoningBlocks: m.reasoningBlocks,
+        agentState: m.agentState,
+        customEvents: m.customEvents,
+      }));
+      // Use sendBeacon for reliable delivery during page unload
+      const payload = toSave.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp,
+        tool_events: m.toolEvents ?? [],
+        progress_lines: m.progressLines ?? [],
+        reasoning: m.reasoningBlocks ?? null,
+        agent_state: m.agentState ?? null,
+        custom_events: m.customEvents ?? [],
+      }));
+      try {
+        navigator.sendBeacon(
+          `/api/chat/sessions/${sessionId}/messages`,
+          JSON.stringify(payload)
+        );
+      } catch { /* best-effort */ }
+      // Also save to localStorage synchronously
+      try {
+        localStorage.setItem(`cc-msgs-${sessionId}`, JSON.stringify(toSave));
+      } catch { /* quota exceeded */ }
+    };
+    window.addEventListener("beforeunload", handleUnload);
+    window.addEventListener("pagehide", handleUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleUnload);
+      window.removeEventListener("pagehide", handleUnload);
+    };
+  }, [sessionId]);
+
   // Report activity to the parent for session-list enrichment (title + preview).
   const onActivityRef = useRef(onActivity);
   useEffect(() => {
@@ -639,6 +687,16 @@ export default function AgentChat({
 
       {/* Message thread */}
       <div className="flex-1 overflow-y-auto px-3 sm:px-5 py-3 sm:py-4 space-y-3 sm:space-y-4">
+        {/* Stream interrupted notice — last message was mid-stream when session closed */}
+        {!isLoading && messages.length > 0 && (() => {
+          const last = messages[messages.length - 1];
+          const wasInterrupted = last?.role === "assistant" && last.content && !/[.?!]\s*$/.test(last.content.trim());
+          return wasInterrupted ? (
+            <div className="rounded-lg border border-amber-800/30 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-400/80">
+              ⚡ Stream was interrupted. Messages are saved — you can continue chatting below.
+            </div>
+          ) : null;
+        })()}
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full gap-2 text-center">
             <div className="text-zinc-400 text-sm font-medium">

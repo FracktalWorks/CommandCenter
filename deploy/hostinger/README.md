@@ -7,7 +7,7 @@ Target spec (matches `system_architecture.md` §5 v1 baseline):
 | KVM 2 | 2    | 8 GB | 100 GB NVMe | ~$14.99/mo           |
 | **KVM 4 (recommended)** | **4** | **16 GB** | **200 GB NVMe** | **~$28.99/mo** |
 
-KVM 4 has enough headroom for Postgres + Redis + LiteLLM + workbench. KVM 2 works for Phase 0/1 only.
+KVM 4 has enough headroom for Postgres + Redis + workbench. KVM 2 works for Phase 0/1 only.
 
 ## One-time: provision the server
 
@@ -97,8 +97,6 @@ Once deployed (and DNS pointed):
 - **Control Plane (UI):** `https://commandcenter.your-domain.tld`
 - **Gateway API:** `https://api.commandcenter.your-domain.tld`
 
-LiteLLM stays on the internal Docker network — never exposed publicly.
-
 ## LLM Routing (Consolidated)
 
 All LLM calls go through the **gateway's own `/v1/chat/completions` endpoint**
@@ -175,13 +173,9 @@ Setting these to `None` causes a 500 error on the models page
 ### Deployment checklist
 
 ```bash
-# 1. Verify LITELLM_BASE_URL points to gateway /v1 (SDK, no separate proxy)
+# 2. Verify the gateway's /v1 endpoint (SDK, no separate proxy)
 grep LITELLM_BASE_URL /opt/acb/app/.env
 # Must be: LITELLM_BASE_URL=http://127.0.0.1:8080
-
-# 2. Verify no LiteLLM proxy is running
-systemctl is-active acb-litellm
-# Must be: inactive (or "Unit not found")
 
 # 3. Test the gateway's /v1 endpoint
 curl -s -X POST http://127.0.0.1:8080/v1/chat/completions \

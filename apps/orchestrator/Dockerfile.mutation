@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Runtime deps:
 #   git — the mutation agent commits the fix locally (no push from container)
-#   ca-certificates — HTTPS to GitHub / LiteLLM proxy
+#   ca-certificates — HTTPS to GitHub / gateway
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         git ca-certificates \

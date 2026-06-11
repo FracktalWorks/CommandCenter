@@ -23,6 +23,7 @@ import {
   FileImage,
   FileSpreadsheet,
   RefreshCw,
+  Download,
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -109,10 +110,12 @@ function TreeNodeRow({
   node,
   depth,
   onFileOpen,
+  sessionId,
 }: {
   node: TreeNode;
   depth: number;
   onFileOpen: (entry: FileEntry) => void;
+  sessionId: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const paddingLeft = 8 + depth * 12;
@@ -136,23 +139,33 @@ function TreeNodeRow({
           <span className="truncate font-medium text-zinc-300">{node.name || "/"}</span>
         </button>
         {expanded && children.map((child) => (
-          <TreeNodeRow key={child.path} node={child} depth={depth + 1} onFileOpen={onFileOpen} />
+          <TreeNodeRow key={child.path} node={child} depth={depth + 1} onFileOpen={onFileOpen} sessionId={sessionId} />
         ))}
       </div>
     );
   }
 
   const entry = node.entry!;
+  const downloadUrl = `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`;
   return (
     <div
       className="group flex items-center gap-1.5 rounded px-1 py-0.5 text-xs text-zinc-400 hover:bg-zinc-800 cursor-pointer transition-colors"
       style={{ paddingLeft: paddingLeft + 14 }}
       onDoubleClick={() => onFileOpen(entry)}
-      title={`${entry.path} · ${formatBytes(entry.size)}\nDouble-click to open`}
+      title={`${entry.path} · ${formatBytes(entry.size)}\nDouble-click to open · Click ↓ to download`}
     >
       {fileIcon(entry)}
       <span className="flex-1 truncate">{entry.name}</span>
       <span className="shrink-0 text-zinc-600 text-[10px]">{formatBytes(entry.size)}</span>
+      <a
+        href={downloadUrl}
+        download={entry.name}
+        onClick={(e) => e.stopPropagation()}
+        className="shrink-0 opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-blue-400 transition-all p-0.5"
+        title={`Download ${entry.name}`}
+      >
+        <Download size={12} />
+      </a>
     </div>
   );
 }
@@ -306,7 +319,7 @@ export default function ArtifactSidebar({
           )}
 
           {!loading && rootChildren.map((node) => (
-            <TreeNodeRow key={node.path} node={node} depth={0} onFileOpen={onFileOpen} />
+            <TreeNodeRow key={node.path} node={node} depth={0} onFileOpen={onFileOpen} sessionId={sessionId} />
           ))}
         </div>
       )}

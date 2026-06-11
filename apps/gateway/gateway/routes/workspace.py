@@ -10,6 +10,13 @@ GET  /agent/workspace/{session_id}/file?path=<rel_path>
     Returns the raw file bytes (streamed).  50 MB cap.
     Use Content-Disposition: inline for browser display.
 
+DELETE /agent/workspace/{session_id}/file?path=<rel_path>
+    Delete a file from the workspace.
+
+POST /agent/workspace/{session_id}/upload
+    Upload one or more files (multipart/form-data).  Files land in .tmp/
+    under the workspace root.  Returns the list of created FileEntry objects.
+
 PATCH /agent/workspace/{session_id}
     Set or update the workspace_path for a session (called by write_artifact tool).
 
@@ -382,3 +389,150 @@ async def stream_artifact_events(
             "Connection": "keep-alive",
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /workspace/{session_id}/upload  — user file upload
+# ---------------------------------------------------------------------------
+
+from fastapi import UploadedFile  # noqa: E402
+
+_MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB per file
+_ALLOWED_EXTENSIONS = {
+    ".md", ".txt", ".pdf", ".docx", ".pptx", ".xlsx", ".csv",
+    ".json", ".yaml", ".yml", ".xml", ".html", ".css", ".js", ".ts",
+    ".py", ".sh", ".ps1", ".toml", ".ini", ".cfg",
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico",
+    ".mp3", ".wav", ".mp4", ".webm",
+    ".zip", ".tar", ".gz", ".bz2", ".7z",
+    ".log", ".sql", ".db", ".sqlite",
+}
+
+
+@router.post("/workspace/{session_id}/upload")
+async def upload_files(
+    session_id: str,
+    files: list[UploadedFile],
+    _user: UserContext = Depends(get_current_user),
+) -> list[FileEntry]:
+    """Upload one or more files into the session workspace .tmp/ directory.
+
+    Files are stored under ``{workspace_root}/.tmp/`` and are automatically
+    tracked by Git.  The agent receives a system message with the list of
+    uploaded files and their paths so it can reference them.
+    """
+    workspace = await asyncio.get_event_loop().run_in_executor(
+        None, _get_workspace_path, session_id
+    )
+    if workspace is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No workspace found for this session. "
+                   "Start a chat with an agent first.",
+        )
+
+    tmp_dir = workspace / ".tmp"
+    try:
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Cannot create .tmp directory: {exc}",
+        ) from exc
+
+    uploaded: list[FileEntry] = []
+    for f in files:
+        # Validate filename
+        safe_name = Path(f.filename or "untitled").name
+        ext = Path(safe_name).suffix.lower()
+        if ext not in _ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type: {ext}. "
+                       f"Allowed: {', '.join(sorted(_ALLOWED_EXTENSIONS))}",
+            )
+
+        # Read into memory (capped at _MAX_UPLOAD_BYTES)
+        content = await f.read()
+        if len(content) > _MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File '{safe_name}' too large "
+                       f"({len(content)} bytes). Max is {_MAX_UPLOAD_BYTES}.",
+            )
+
+        # Avoid overwrites: append (1), (2), etc.
+        dest = tmp_dir / safe_name
+        counter = 1
+        stem, ext2 = Path(safe_name).stem, Path(safe_name).suffix
+        while dest.exists():
+            dest = tmp_dir / f"{stem} ({counter}){ext2}"
+            counter += 1
+
+        # Write
+        dest.write_bytes(content)
+
+        # Build response entry
+        stat = dest.stat()
+        mime, _ = mimetypes.guess_type(safe_name)
+        rel_path = str(dest.relative_to(workspace)).replace("\\", "/")
+        uploaded.append(FileEntry(
+            path=rel_path,
+            name=dest.name,
+            size=stat.st_size,
+            modified_at=__import__("datetime").datetime.fromtimestamp(
+                stat.st_mtime, tz=__import__("datetime").timezone.utc
+            ).isoformat(),
+            mime_type=mime or "application/octet-stream",
+            is_dir=False,
+        ))
+
+        _log.info(
+            "workspace.file_uploaded",
+            session_id=session_id,
+            path=rel_path,
+            size=stat.st_size,
+        )
+
+    return uploaded
+
+
+# ---------------------------------------------------------------------------
+# DELETE /workspace/{session_id}/file  — remove a file
+# ---------------------------------------------------------------------------
+
+class DeleteResponse(BaseModel):
+    deleted: bool
+    path: str
+
+
+@router.delete("/workspace/{session_id}/file", response_model=DeleteResponse)
+async def delete_workspace_file(
+    session_id: str,
+    path: str = Query(..., description="Relative path within the workspace"),
+    _user: UserContext = Depends(get_current_user),
+) -> DeleteResponse:
+    """Delete a file from the session workspace."""
+    workspace = await asyncio.get_event_loop().run_in_executor(
+        None, _get_workspace_path, session_id
+    )
+    if workspace is None or not workspace.exists():
+        raise HTTPException(
+            status_code=404, detail="Workspace not found for session"
+        )
+
+    file_path = _safe_resolve(workspace, path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    if file_path.is_dir():
+        raise HTTPException(
+            status_code=400, detail="Cannot delete directories"
+        )
+
+    file_path.unlink()
+    _log.info(
+        "workspace.file_deleted",
+        session_id=session_id,
+        path=path,
+    )
+    return DeleteResponse(deleted=True, path=path)

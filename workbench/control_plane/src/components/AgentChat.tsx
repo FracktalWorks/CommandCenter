@@ -23,6 +23,7 @@ import GenerativeUIPanel from "@/components/GenerativeUIPanel";
 import ArtifactCard, { type ArtifactMeta } from "@/components/ArtifactCard";
 import ArtifactViewerModal from "@/components/ArtifactViewerModal";
 import type { FileEntry } from "@/components/ArtifactSidebar";
+import FileUploadButton from "@/components/FileUploadButton";
 import { parseAgentError } from "@/lib/parseAgentError";
 import type { ParsedAgentError } from "@/lib/parseAgentError";
 import { getMessages, saveMessages, fetchMessagesFromDb, type PersistedMessage } from "@/lib/sessions";
@@ -95,9 +96,9 @@ function ErrorCard({ parsed, compact = false }: { parsed: ParsedAgentError; comp
 // Provider-specific models for other providers are added dynamically after fetch.
 const MODELS_FALLBACK: UnifiedModel[] = [
   { id: "auto",              label: "auto (SDK picks)",     runtime: "copilot", group: "GitHub Copilot SDK" },
-  { id: "tier1-local-qwen3", label: "Tier 1 (fast / cheap)", runtime: "litellm", group: "LiteLLM — Tiers" },
-  { id: "tier2-sonnet",      label: "Tier 2 (balanced)",     runtime: "litellm", group: "LiteLLM — Tiers" },
-  { id: "tier3-opus",        label: "Tier 3 (powerful)",     runtime: "litellm", group: "LiteLLM — Tiers" },
+  { id: "tier-fast",     label: "Tier 1 (fast / cheap)", runtime: "litellm", group: "LiteLLM — Tiers" },
+  { id: "tier-balanced", label: "Tier 2 (balanced)",     runtime: "litellm", group: "LiteLLM — Tiers" },
+  { id: "tier-powerful", label: "Tier 3 (powerful)",     runtime: "litellm", group: "LiteLLM — Tiers" },
   { id: "gemini/gemini-2.5-flash", label: "Gemini 2.5 Flash", runtime: "litellm", group: "LiteLLM — Gemini" },
   { id: "gemini/gemini-2.5-pro",   label: "Gemini 2.5 Pro",   runtime: "litellm", group: "LiteLLM — Gemini" },
 ];
@@ -832,6 +833,19 @@ export default function AgentChat({
           </div>
         )}
         <div className="flex items-end gap-3">
+          {/* Upload button — files land in .tmp/ and context is sent to agent */}
+          <FileUploadButton
+            sessionId={sessionId}
+            onUploadComplete={(files) => {
+              const names = files.map((f) => f.name).join(", ");
+              const paths = files.map((f) => `\`${f.path}\``).join(", ");
+              const ctx = `📎 Uploaded ${files.length} file(s): ${names}\n\nThese files are available in the workspace at:\n${paths}\n\nYou can read them with the read_file tool. Refer to them whenever I mention the uploaded content.`;
+              setInput((prev) => prev.trim() ? `${prev}\n\n${ctx}` : ctx);
+              inputRef.current?.focus();
+            }}
+            className="shrink-0 self-center mb-0.5"
+          />
+
           <textarea
             ref={inputRef}
             value={input}

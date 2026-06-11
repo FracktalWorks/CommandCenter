@@ -17,6 +17,7 @@ import AgentChat from "@/components/AgentChat";
 import type { ArtifactEntry } from "@/hooks/useAgentChat";
 import ArtifactSidebar, { type FileEntry } from "@/components/ArtifactSidebar";
 import ArtifactViewerModal from "@/components/ArtifactViewerModal";
+import FileUploadButton from "@/components/FileUploadButton";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
 import type { AgentEntry } from "@/app/api/agent/list/route";
@@ -557,6 +558,19 @@ function ChatPageInner() {
         </button>
       </div>
       <div className="flex-1 overflow-y-auto">
+        {/* Upload drop zone at top of files drawer */}
+        <div className="px-3 pt-3 pb-2">
+          <FileUploadButton
+            sessionId={activeSessionId}
+            dropZone
+            onUploadComplete={(files) => {
+              setArtifactUpdates((prev) => [
+                ...prev,
+                ...files.map((f) => ({ ...f, is_dir: false })),
+              ]);
+            }}
+          />
+        </div>
         <ArtifactSidebar
           sessionId={activeSessionId}
           open
@@ -665,7 +679,19 @@ function ChatPageInner() {
                 </svg>
                 Files
               </button>
-              <div className="ml-auto text-[10px] text-zinc-600 truncate">
+              {/* Upload button — opens file picker directly (mobile-friendly) */}
+              <FileUploadButton
+                sessionId={activeSession.id}
+                onUploadComplete={(files) => {
+                  // Refresh the files list if the drawer is open
+                  setArtifactUpdates((prev) => [
+                    ...prev,
+                    ...files.map((f) => ({ ...f, is_dir: false })),
+                  ]);
+                }}
+                className="ml-auto"
+              />
+              <div className="text-[10px] text-zinc-600 truncate">
                 {activeSession.agentName}
               </div>
             </div>

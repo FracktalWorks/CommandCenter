@@ -455,6 +455,11 @@ function ProviderCard({
   const [keyError, setKeyError] = useState<string | null>(null);
   const [discarding, setDiscarding] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // GitHub device flow state
+  const [deviceFlow, setDeviceFlow] = useState<{
+    deviceCode: string; userCode: string; verificationUri: string; interval: number;
+  } | null>(null);
+  const [deviceStatus, setDeviceStatus] = useState<string>("");
 
   const isLocal = provider.id === "ollama" || provider.id === "vllm";
   const colour = PROVIDER_COLOURS[provider.id] ?? PROVIDER_COLOURS.unknown;
@@ -484,6 +489,60 @@ function ProviderCard({
       setKeyError(String(err));
     } finally {
       setDiscarding(false);
+    }
+  };
+
+  // ── GitHub OAuth device flow ──────────────────────────────────────────
+  const startDeviceFlow = async () => {
+    setDeviceStatus("Starting device flow…");
+    try {
+      const res = await fetch("/api/integrations/github/device/start", { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setDeviceStatus(String(err.error ?? err.detail ?? "Failed to start"));
+        return;
+      }
+      const data = await res.json();
+      setDeviceFlow({
+        deviceCode: data.device_code,
+        userCode: data.user_code,
+        verificationUri: data.verification_uri,
+        interval: (data.interval ?? 5) * 1000,
+      });
+      setDeviceStatus("Waiting for authorization…");
+      pollDeviceFlow(data.device_code, (data.interval ?? 5) * 1000);
+    } catch (err) {
+      setDeviceStatus(String(err));
+    }
+  };
+
+  const pollDeviceFlow = async (deviceCode: string, interval: number) => {
+    try {
+      const res = await fetch("/api/integrations/github/device/poll", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_code: deviceCode }),
+      });
+      const data = await res.json();
+      if (data.status === "authorized") {
+        setDeviceStatus(`Connected as ${data.login ?? "GitHub user"}!`);
+        setDeviceFlow(null);
+        // Reload config to pick up the new key
+        setTimeout(() => window.location.reload(), 1500);
+      } else if (data.status === "pending") {
+        setDeviceStatus("Waiting for authorization…");
+        setTimeout(() => pollDeviceFlow(deviceCode, interval), interval);
+      } else if (data.status === "slow_down") {
+        const next = (data.interval ?? 10) * 1000;
+        setDeviceStatus("Please wait…");
+        setTimeout(() => pollDeviceFlow(deviceCode, next), next);
+      } else {
+        setDeviceStatus(`Failed: ${data.status}`);
+        setDeviceFlow(null);
+      }
+    } catch (err) {
+      setDeviceStatus(`Error: ${String(err)}`);
+      setDeviceFlow(null);
     }
   };
 
@@ -598,6 +657,59 @@ function ProviderCard({
               </li>
             ))}
           </ol>
+
+          {/* GitHub Copilot: OAuth device flow (easier than copying a PAT) */}
+          {provider.id === "github" && (
+            <div className="rounded-lg border border-sky-800/40 bg-sky-950/20 p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-sm">✦</span>
+                <span className="text-xs font-medium text-sky-300">
+                  GitHub OAuth Device Flow
+                </span>
+              </div>
+              <p className="text-[11px] text-zinc-400 leading-relaxed">
+                No token copying needed — enter a short code on GitHub and this
+                server authenticates automatically.
+              </p>
+
+              {!deviceFlow ? (
+                <button
+                  onClick={startDeviceFlow}
+                  disabled={!!deviceStatus && !deviceStatus.includes("Error")}
+                  className="w-full rounded-lg border border-sky-700/50 bg-sky-900/40 px-3 py-2 text-xs font-medium text-sky-300 hover:bg-sky-800/40 transition-colors disabled:opacity-40"
+                >
+                  {deviceStatus || "Connect with GitHub →"}
+                </button>
+              ) : (
+                <div className="space-y-2">
+                  <div className="rounded-md bg-zinc-950/60 p-3 text-center">
+                    <div className="text-2xl font-bold tracking-[0.3em] text-sky-300 font-mono">
+                      {deviceFlow.userCode}
+                    </div>
+                    <a
+                      href={deviceFlow.verificationUri}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-1 inline-block text-[10px] text-sky-400 underline hover:text-sky-200"
+                    >
+                      Open {deviceFlow.verificationUri} →
+                    </a>
+                  </div>
+                  <p className="text-[10px] text-zinc-500 text-center">
+                    {deviceStatus}
+                  </p>
+                </div>
+              )}
+
+              <div className="text-[10px] text-zinc-600 border-t border-zinc-800 pt-2">
+                Or paste a{" "}
+                <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-400">
+                  Personal Access Token
+                </a>{" "}
+                below:
+              </div>
+            </div>
+          )}
 
           {/* Key input */}
           <div className="relative">

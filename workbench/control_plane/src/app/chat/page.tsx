@@ -20,6 +20,7 @@ import ArtifactViewerModal from "@/components/ArtifactViewerModal";
 import FileUploadButton from "@/components/FileUploadButton";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
+import { useActiveSessions } from "@/hooks/useActiveSessions";
 import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 
@@ -285,12 +286,14 @@ function MemoryPanel({
 function SessionList({
   sessions,
   activeId,
+  activeRunIds,
   onSelect,
   onNew,
   onDelete,
 }: {
   sessions: ChatSession[];
   activeId: string;
+  activeRunIds: Set<string>;
   onSelect: (id: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
@@ -384,6 +387,13 @@ function SessionList({
               <span className="flex-1 text-xs font-medium truncate">
                 {agentName}
               </span>
+              {/* Active run count badge */}
+              {agentSessions.some((s) => activeRunIds.has(s.id)) && (
+                <span className="flex items-center gap-1 text-[10px] text-emerald-400 shrink-0" title="Agent is running">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  {agentSessions.filter((s) => activeRunIds.has(s.id)).length}
+                </span>
+              )}
               <span className="text-[10px] text-zinc-600 tabular-nums shrink-0">
                 {count}
               </span>
@@ -403,7 +413,10 @@ function SessionList({
                     onClick={() => onSelect(s.id)}
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs font-medium">
+                      <div className="truncate text-xs font-medium flex items-center gap-1.5">
+                        {activeRunIds.has(s.id) && (
+                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" title="Agent is generating a response" />
+                        )}
                         {s.title ?? s.name}
                       </div>
                       {s.lastPreview ? (
@@ -447,6 +460,7 @@ function ChatPageInner() {
 
   const { isMobile } = useViewMode();
   const { open: openDrawer, close: closeDrawer } = useMobileDrawer();
+  const activeRunIds = useActiveSessions();
 
   // Refs to hold drawer content (defined later in render).
   const conversationsRef = useRef<React.ReactNode>(null);
@@ -652,6 +666,7 @@ function ChatPageInner() {
         <SessionList
           sessions={sessions}
           activeId={activeSessionId}
+          activeRunIds={activeRunIds}
           onSelect={(id) => { handleSelectSession(id); closeDrawer(); }}
           onNew={() => { handleNewSession(); closeDrawer(); }}
           onDelete={handleDeleteSession}
@@ -764,6 +779,7 @@ function ChatPageInner() {
               <SessionList
                 sessions={sessions}
                 activeId={activeSessionId}
+                activeRunIds={activeRunIds}
                 onSelect={handleSelectSession}
                 onNew={handleNewSession}
                 onDelete={handleDeleteSession}

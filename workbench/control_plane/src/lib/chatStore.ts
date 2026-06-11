@@ -75,6 +75,7 @@ function _defaultState(): SessionStreamState {
 
 const _store = new Map<string, SessionStreamState>();
 const _listeners = new Map<string, Set<() => void>>();
+const _globalListeners = new Set<() => void>();
 
 export function getSessionState(id: string): SessionStreamState {
   // Always return the stored entry — never create a transient object.
@@ -91,11 +92,15 @@ export function setSessionState(
   id: string,
   updater: (prev: SessionStreamState) => SessionStreamState,
 ): void {
-  const prev = getSessionState(id); // uses the cached entry, never a transient object
+  const prev = getSessionState(id);
   const next = updater(prev);
   _store.set(id, next);
-  // Notify all subscribers for this session.
+  // Notify per-session subscribers.
   _listeners.get(id)?.forEach((l) => l());
+  // Notify global subscribers when isLoading toggles.
+  if (prev.isLoading !== next.isLoading) {
+    _globalListeners.forEach((l) => l());
+  }
 }
 
 export function subscribeSession(id: string, listener: () => void): () => void {
@@ -104,4 +109,21 @@ export function subscribeSession(id: string, listener: () => void): () => void {
   return () => {
     _listeners.get(id)?.delete(listener);
   };
+}
+
+// ── Global subscribers (for active-sessions tracking) ────────────────────
+
+/** Subscribe to ANY session state change (for active-sessions dashboard). */
+export function subscribeAllSessions(listener: () => void): () => void {
+  _globalListeners.add(listener);
+  return () => { _globalListeners.delete(listener); };
+}
+
+/** Get the set of session IDs that currently have isLoading === true. */
+export function getActiveSessionIds(): Set<string> {
+  const ids = new Set<string>();
+  for (const [id, state] of _store) {
+    if (state.isLoading) ids.add(id);
+  }
+  return ids;
 }

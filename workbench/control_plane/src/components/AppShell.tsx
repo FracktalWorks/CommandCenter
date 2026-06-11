@@ -26,6 +26,7 @@ import { useSession, signOut } from "next-auth/react";
 import { X, Monitor, Smartphone, MoreHorizontal, LogOut } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import { useViewMode } from "@/components/ViewModeProvider";
+import { useActiveSessions } from "@/hooks/useActiveSessions";
 import { PANES } from "@/lib/nav";
 
 // ---------------------------------------------------------------------------
@@ -152,6 +153,8 @@ function MobileBottomNav({
 }) {
   const { isOpen, open, close } = useMobileDrawer();
   const { data: session } = useSession();
+  const activeRunIds = useActiveSessions();
+  const activeCount = activeRunIds.size;
 
   const menuContent = (
     <>
@@ -239,9 +242,14 @@ function MobileBottomNav({
                 const ev = new CustomEvent("cc-mobile-nav", { detail: "chats" });
                 window.dispatchEvent(ev);
               }}
-              className="flex flex-col items-center gap-0.5 px-4 py-1 rounded-lg transition-colors text-zinc-500 hover:text-zinc-300"
+              className="relative flex flex-col items-center gap-0.5 px-4 py-1 rounded-lg transition-colors text-zinc-500 hover:text-zinc-300"
             >
               <MessageCircle size={20} />
+              {activeCount > 0 && (
+                <span className="absolute -top-0.5 right-1.5 flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-emerald-500 text-[9px] font-bold text-white animate-pulse">
+                  {activeCount}
+                </span>
+              )}
               <span className="text-[9px] font-medium">Chats</span>
             </button>
             <button

@@ -874,7 +874,7 @@ export default function AgentChat({
               <textarea ref={inputRef} value={input}
                 onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} rows={1}
                 placeholder={`Message ${currentAgentName}…`}
-                className="w-full resize-none rounded-lg bg-zinc-800/80 border border-zinc-700/80 px-3 py-2 text-[13px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 max-h-32 overflow-y-auto transition-colors"
+                className="w-full resize-none rounded-lg bg-zinc-800/80 border border-zinc-700/80 px-3 py-2 text-[16px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 max-h-32 overflow-y-auto transition-colors"
                 style={{ minHeight: "40px" }}
                 onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = `${Math.min(t.scrollHeight, 128)}px`; }} />
             </div>
@@ -1114,7 +1114,7 @@ function MessageBubble({
                   onChange={handleEditInput}
                   onKeyDown={handleEditKeyDown}
                   rows={3}
-                  className="w-full resize-none rounded-xl bg-zinc-900 border border-zinc-600 px-4 py-3 text-[13px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-amber-500/60 transition-colors"
+                  className="w-full resize-none rounded-xl bg-zinc-900 border border-zinc-600 px-4 py-3 text-[16px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-amber-500/60 transition-colors"
                   style={{ minHeight: "60px", maxHeight: "300px" }}
                 />
               </div>

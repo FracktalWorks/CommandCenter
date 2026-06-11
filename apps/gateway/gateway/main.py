@@ -75,7 +75,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 _copilot_models_cache["ts"] = _t.monotonic()
                 _log.info("gateway.copilot_models_cache_warmed", count=len(_m))
         except Exception as _e:  # noqa: BLE001
-            _log.debug("gateway.copilot_models_warmup_skipped", error=str(_e))
+            _log.warning("gateway.copilot_models_warmup_failed", error=str(_e))
 
     import asyncio as _asyncio
     _asyncio.ensure_future(_warmup_copilot_models())

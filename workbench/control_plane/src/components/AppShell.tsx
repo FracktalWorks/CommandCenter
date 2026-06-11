@@ -111,7 +111,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 min-h-0 overflow-hidden">{children}</main>
+        <main className="flex-1 min-h-0 overflow-y-auto">{children}</main>
 
         {/* Bottom navigation bar — always visible on mobile */}
         <MobileBottomNav pathname={pathname} toggleView={toggleView} />

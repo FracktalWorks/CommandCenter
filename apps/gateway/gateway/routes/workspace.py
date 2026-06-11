@@ -395,7 +395,7 @@ async def stream_artifact_events(
 # POST /workspace/{session_id}/upload  — user file upload
 # ---------------------------------------------------------------------------
 
-from fastapi import UploadedFile  # noqa: E402
+from fastapi import UploadFile  # noqa: E402
 
 _MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB per file
 _ALLOWED_EXTENSIONS = {
@@ -412,7 +412,7 @@ _ALLOWED_EXTENSIONS = {
 @router.post("/workspace/{session_id}/upload")
 async def upload_files(
     session_id: str,
-    files: list[UploadedFile],
+    files: list[UploadFile],
     _user: UserContext = Depends(get_current_user),
 ) -> list[FileEntry]:
     """Upload one or more files into the session workspace .tmp/ directory.

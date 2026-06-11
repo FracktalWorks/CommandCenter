@@ -26,6 +26,7 @@ dependencies = [
     "reconciler",
     "action-broker",
     "bcrypt>=5.0.0",
+    "python-multipart>=0.0.32",
 ]
 
 [dependency-groups]

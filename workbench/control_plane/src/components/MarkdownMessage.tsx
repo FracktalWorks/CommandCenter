@@ -268,7 +268,7 @@ export default function MarkdownMessage({
   const showThinking = isThinkingActive || hasTools || hasReasoning;
 
   return (
-    <div className="text-sm text-zinc-200 leading-relaxed min-w-0">
+    <div className="text-[13px] sm:text-sm text-zinc-200 leading-relaxed min-w-0">
       {/* Thinking container — groups the whole working phase (reasoning + tool calls + status) */}
       {showThinking && (
         <div className="mb-3">

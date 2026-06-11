@@ -395,17 +395,22 @@ export function useAgentChat({
         // Ensure streaming flag is cleared even if "done" was missing.
         upd((m) => ({ ...m, streaming: false, isThinkingActive: false }));
       } catch (err) {
-        // Browser-disconnect errors: the user refreshed or navigated away.
-        // Don't surface these as agent errors — the backend continues running.
-        const isAbort =
+        // Browser-disconnect errors: the user refreshed, navigated away, or
+        // the network dropped.  Don't surface these as agent errors — the
+        // backend continues running and polling will recover the output.
+        const rawErr = err instanceof Error ? err.message : String(err);
+        const lc = rawErr.toLowerCase();
+        const isDisconnect =
           (err instanceof DOMException && err.name === "AbortError") ||
-          (err instanceof TypeError && err.message.includes("fetch")) ||
-          (err instanceof Error && (
-            err.message.includes("BodyStreamBuffer was aborted") ||
-            err.message.includes("network error") ||
-            err.message.includes("Load failed")
-          ));
-        if (isAbort) {
+          lc.includes("failed to fetch") ||
+          lc.includes("fetch") ||
+          lc.includes("network") ||
+          lc.includes("load failed") ||
+          lc.includes("aborted") ||
+          lc.includes("bodystreambuffer") ||
+          lc.includes("err_network") ||
+          lc.includes("connection");
+        if (isDisconnect) {
           // Mark assistant as no longer streaming but keep the partial content.
           // The polling effect will pick up the completed message from Postgres.
           setSessionState(threadId, (prev) => ({
@@ -417,7 +422,7 @@ export function useAgentChat({
           // Don't clear isLoading — let the polling effect handle recovery.
           return;
         }
-        const rawMsg = err instanceof Error ? err.message : String(err);
+        const rawMsg = rawErr;
         const parsed = parseAgentError(rawMsg);
         emitAgentEvent("onError", { error: rawMsg });
         setSessionState(threadId, (prev) => ({
@@ -444,45 +449,31 @@ export function useAgentChat({
     setSessionState(threadId, (prev) => ({ ...prev, messages: [], error: null }));
   }, [threadId]);
 
-  // ── Auto-resume after refresh / reconnect ──────────────────────────
-  // When the component mounts and the last assistant message looks like it
-  // was interrupted (streaming flag or no terminal punctuation), re-send
-  // the last user message to reconnect to the gateway's SSE stream.
-  // The gateway resumes the existing MAF session via service_session_id
-  // so the agent continues where it left off rather than restarting.
+  // ── Recover after refresh / reconnect ──────────────────────────────
+  // chatStore is in-memory and is wiped on a hard page refresh.  On mount,
+  // AgentChat hydrates messages from localStorage + Postgres.  If the last
+  // assistant message looks interrupted (streaming flag / no terminal
+  // punctuation), we mark it non-streaming and let the polling effect below
+  // pick up any newer content the backend persisted while we were away.
+  // We deliberately do NOT re-run the agent here — that would start a
+  // duplicate run and can fail with "Failed to fetch".  Polling recovers
+  // the persisted output instead.
   useEffect(() => {
     const state = getSessionState(threadId);
-    if (state.isLoading) return; // already streaming — don't double-send
-    if (state.messages.length < 2) return; // need at least user + assistant pair
-
+    if (state.messages.length === 0) return;
     const last = state.messages[state.messages.length - 1];
-    const prevUser = state.messages[state.messages.length - 2];
-
-    // Only resume if the last message is an incomplete assistant and the
-    // preceding message is a user message from this session.
-    // Also, only auto-resume if the message is at least 5s old (gives the
-    // original gateway run time to finish before we start a new one).
     if (
       last?.role === "assistant" &&
-      prevUser?.role === "user" &&
-      (last.streaming || !/[.?!]\s*$/.test(last.content.trim())) &&
-      Date.now() - last.timestamp > 5000
+      (last.streaming || (last.content && !/[.?!]\s*$/.test(last.content.trim())))
     ) {
-      // Re-send the last user message.  Remove the old user+assistant
-      // pair first so sendMessage's new pair doesn't cause duplicates.
-      const msgContent = prevUser.content;
+      // Clear any stale streaming flag so the UI doesn't show a frozen spinner.
       setSessionState(threadId, (prev) => ({
         ...prev,
         error: null,
-        messages: prev.messages.filter(
-          (m) => m.id !== last.id && m.id !== prevUser.id
+        messages: prev.messages.map((m) =>
+          m.id === last.id ? { ...m, streaming: false, isThinkingActive: false } : m
         ),
       }));
-
-      const timer = setTimeout(() => {
-        sendMessage(msgContent);
-      }, 200);
-      return () => clearTimeout(timer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
@@ -546,22 +537,6 @@ export function useAgentChat({
         }>;
         if (!Array.isArray(remote) || remote.length === 0) return;
 
-        // Only update if remote has MORE messages than we currently have
-        if (remote.length <= lastKnownCount) {
-          // Still schedule next poll if needed
-          const remoteLast = remote[remote.length - 1];
-          const stillIncomplete =
-            remoteLast?.role === "assistant" &&
-            remoteLast.content &&
-            !/[.?!]\s*$/.test(remoteLast.content.trim());
-
-          if (!cancelled) {
-            const interval = stillIncomplete ? 3000 : 30000;
-            pollTimer = setTimeout(poll, interval);
-          }
-          return;
-        }
-
         // Map remote format to ChatMessage
         const remoteMsgs: ChatMessage[] = remote.map((r) => ({
           id: r.id,
@@ -577,35 +552,78 @@ export function useAgentChat({
           customEvents: (r.custom_events as Array<{ name: string; value: unknown }>) ?? [],
         }));
 
-        // Merge: keep local non-streaming messages, replace with remote
-        // for any assistant messages that were streaming (now complete on server).
-        // The backend persists assistant messages with id=`assistant-${threadId}`,
-        // which differs from the local nanoid().  We match by role+content prefix
-        // to avoid duplicates when recovering from a lost SSE stream.
-        const localIds = new Set(messages.map((m) => m.id));
-        const localStreamingContent = messages
-          .filter((m) => m.role === "assistant" && m.streaming)
-          .map((m) => m.content);
-        const newMsgs = remoteMsgs.filter((m) => {
-          if (localIds.has(m.id)) return false;
-          // Skip remote assistant messages whose content is a prefix of
-          // a local streaming message (we already have that partial text).
-          if (m.role === "assistant" && m.content) {
-            for (const sc of localStreamingContent) {
-              if (sc && (sc.startsWith(m.content) || m.content.startsWith(sc))) return false;
-            }
-          }
-          return true;
-        });
+        // Content-aware merge.  Handles two recovery cases:
+        //   (a) New messages appended on the server (count grew).
+        //   (b) The same assistant message got LONGER content while we were
+        //       away (refresh recovery) — count is unchanged but content grew.
+        const cur = getSessionState(threadId);
+        // Skip merge entirely if we're actively streaming locally (live SSE
+        // is authoritative — avoid clobbering it with slightly-stale polls).
+        if (cur.abortController) {
+          pollTimer = setTimeout(poll, 3000);
+          return;
+        }
 
-        if (newMsgs.length > 0) {
-          lastKnownCount = remote.length;
+        const localById = new Map(cur.messages.map((m) => [m.id, m]));
+        let changed = false;
+
+        // Find the longest local assistant content (to detect server growth
+        // even when ids differ, e.g. local nanoid vs server assistant-<tid>).
+        const localAssistantContents = cur.messages
+          .filter((m) => m.role === "assistant")
+          .map((m) => m.content);
+
+        const merged: ChatMessage[] = [...cur.messages];
+
+        for (const rm of remoteMsgs) {
+          const localMatch = localById.get(rm.id);
+          if (localMatch) {
+            // Same id — update if the server has more content/tool events.
+            if (
+              rm.content.length > localMatch.content.length ||
+              (rm.toolEvents?.length ?? 0) > (localMatch.toolEvents?.length ?? 0)
+            ) {
+              const idx = merged.findIndex((m) => m.id === rm.id);
+              if (idx >= 0) {
+                merged[idx] = { ...localMatch, ...rm, streaming: false };
+                changed = true;
+              }
+            }
+            continue;
+          }
+
+          // No id match.  If this is an assistant message whose content is a
+          // superset of a local partial assistant message, replace that local
+          // partial (refresh recovery — server has the fuller version).
+          if (rm.role === "assistant" && rm.content) {
+            const supersedesIdx = merged.findIndex(
+              (m) =>
+                m.role === "assistant" &&
+                m.content &&
+                rm.content.startsWith(m.content) &&
+                rm.content.length >= m.content.length,
+            );
+            if (supersedesIdx >= 0) {
+              merged[supersedesIdx] = { ...rm, streaming: false };
+              changed = true;
+              continue;
+            }
+            // Skip if identical content already present anywhere.
+            if (localAssistantContents.includes(rm.content)) continue;
+          }
+
+          // Genuinely new message.
+          merged.push(rm);
+          changed = true;
+        }
+
+        if (changed) {
+          lastKnownCount = merged.length;
           setSessionState(threadId, (prev) => ({
             ...prev,
-            messages: [
-              ...prev.messages.filter((m) => m.role !== "assistant" || !m.streaming),
-              ...newMsgs,
-            ],
+            // Clear loading once we've recovered settled content.
+            isLoading: prev.abortController ? prev.isLoading : false,
+            messages: merged,
           }));
         }
 

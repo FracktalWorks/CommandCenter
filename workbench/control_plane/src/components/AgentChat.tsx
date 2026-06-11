@@ -304,8 +304,12 @@ export default function AgentChat({
     systemContext,
     thinkMode,
     onArtifact,
-    // Load persisted messages so switching sessions restores history instantly (localStorage cache).
-    initialMessages: getMessages(sessionId) as ChatMessage[],
+    // Load persisted messages so switching sessions restores history instantly
+    // (localStorage cache).  Drop any stale __ERROR__ system messages that may
+    // have been saved by older builds — they should never reappear on reload.
+    initialMessages: (getMessages(sessionId) as ChatMessage[]).filter(
+      (m) => !(m.role === "system" && m.content.startsWith("__ERROR__")),
+    ),
   });
 
   // On mount, fetch the authoritative message history from Postgres and sync
@@ -326,9 +330,15 @@ export default function AgentChat({
 
   // Persist messages to localStorage + Postgres whenever they change.
   // We skip mid-stream placeholder messages (streaming=true, content empty)
-  // to avoid saving incomplete assistant turns.
+  // to avoid saving incomplete assistant turns.  We also skip transient
+  // __ERROR__ system messages so a one-off disconnect error doesn't get
+  // persisted and re-displayed on every future refresh.
   useEffect(() => {
-    const settled = messages.filter((m) => !m.streaming || m.content.trim().length > 0);
+    const settled = messages.filter(
+      (m) =>
+        (!m.streaming || m.content.trim().length > 0) &&
+        !(m.role === "system" && m.content.startsWith("__ERROR__")),
+    );
     if (settled.length === 0) return;
     const toSave: PersistedMessage[] = settled.map((m) => ({
       id: m.id,

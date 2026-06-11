@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * MessageActionBar — per-message actions shown under each message bubble.
+ * MessageActionBar — per-message actions shown inline with the timestamp
+ * underneath each message bubble. Always visible on both mobile and desktop.
  *
- * Copy is always visible. Edit (user) and thumbs (assistant) are always
- * visible on mobile, hover-revealed on desktop.
+ * Copy | Edit (user only) | 👍 👎 (assistant only)
  */
 
 import { useState } from "react";
@@ -41,20 +41,20 @@ export default function MessageActionBar({
   };
 
   const btn =
-    "text-zinc-500 hover:text-zinc-200 transition-colors px-1.5 py-0.5 rounded hover:bg-zinc-700/50 text-[11px]";
+    "text-zinc-500 hover:text-zinc-200 transition-colors px-1 py-0.5 rounded hover:bg-zinc-700/50 text-[10px]";
 
   return (
-    <div className="mt-2 flex items-center gap-1 text-[11px]">
-      {/* Copy — always visible, clear text label */}
+    <>
+      {/* Copy — always visible */}
       <button onClick={copy} className={btn} title="Copy" aria-label="Copy message">
         {copied ? "✓ Copied" : "Copy"}
       </button>
 
-      {/* Edit — always visible on mobile, hover on desktop */}
+      {/* Edit — always visible (user messages only) */}
       {role === "user" && onEdit && (
         <button
           onClick={onEdit}
-          className={`${btn} sm:opacity-0 sm:group-hover:opacity-100`}
+          className={btn}
           title="Edit"
           aria-label="Edit message"
         >
@@ -62,9 +62,9 @@ export default function MessageActionBar({
         </button>
       )}
 
-      {/* Thumbs — always visible on mobile, hover on desktop */}
+      {/* Thumbs — always visible (assistant messages only) */}
       {role === "assistant" && (
-        <span className="sm:opacity-0 sm:group-hover:opacity-100 inline-flex items-center gap-1">
+        <>
           <button
             onClick={() => sendVote("up")}
             className={`${btn} ${vote === "up" ? "text-emerald-400" : ""}`}
@@ -81,8 +81,8 @@ export default function MessageActionBar({
           >
             👎
           </button>
-        </span>
+        </>
       )}
-    </div>
+    </>
   );
 }

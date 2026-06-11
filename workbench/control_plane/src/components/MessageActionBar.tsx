@@ -2,7 +2,8 @@
 
 /**
  * MessageActionBar — per-message actions shown inline with the timestamp
- * underneath each message bubble. Always visible on both mobile and desktop.
+ * underneath each message bubble. Visibility is controlled by the parent
+ * (hover-revealed on desktop).
  *
  * Copy | Edit (user only) | 👍 👎 (assistant only)
  */

@@ -702,11 +702,11 @@ export default function AgentChat({
   const doneCount = todos.filter((t) => t.done).length;
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-zinc-950">
       {/* Agent header — VS Code-style minimal bar */}
-      <div className="flex items-center gap-2 px-3 sm:px-4 py-1 sm:py-1.5 border-b border-zinc-800/40 bg-zinc-900/30 shrink-0">
-        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isLoading ? "bg-amber-400 animate-pulse" : "bg-emerald-500"}`} />
-        <span className="text-[11px] font-medium text-zinc-300 truncate">{currentAgentName}</span>
+      <div className="flex items-center gap-2 h-9 px-4 border-b border-zinc-800/60 bg-zinc-900/40 shrink-0">
+        <div className={`w-2 h-2 rounded-full shrink-0 ${isLoading ? "bg-amber-400 animate-pulse" : "bg-emerald-500"}`} />
+        <span className="text-xs font-medium text-zinc-200 truncate">{currentAgentName}</span>
         {isLoading && (
           <span className="hidden sm:inline text-[10px] text-amber-400/70 animate-pulse">thinking…</span>
         )}
@@ -714,7 +714,7 @@ export default function AgentChat({
           <a href={currentAgentEntry.repo_url} target="_blank" rel="noopener noreferrer"
             className="shrink-0 text-zinc-600 hover:text-zinc-300 transition-colors ml-auto"
             title={`Source: ${currentAgentEntry.repo_name ?? currentAgentEntry.repo_url}`}>
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
               <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
             </svg>
           </a>
@@ -723,34 +723,40 @@ export default function AgentChat({
 
       {/* Missing integrations banner (compact) */}
       {!bannerDismissed && missingMandatory.length > 0 && (
-        <div className="shrink-0 border-b border-amber-800/30 bg-amber-950/20 px-3 py-1.5 flex items-center gap-2 text-[11px]">
+        <div className="shrink-0 border-b border-amber-800/30 bg-amber-950/20 px-4 py-2 flex items-center gap-2 text-[11px]">
           <span className="text-amber-400">⚡</span>
           <span className="text-amber-300/80">{missingMandatory.length} integration{missingMandatory.length > 1 ? "s" : ""} not configured</span>
-          <button onClick={() => setBannerDismissed(true)} className="ml-auto text-zinc-500 hover:text-zinc-300">✕</button>
+          <button onClick={() => setBannerDismissed(true)} className="ml-auto w-5 h-5 flex items-center justify-center rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors">✕</button>
         </div>
       )}
 
       {/* ── Todos section (VS Code Copilot style) ────────────────────── */}
       {todos.length > 0 && (
-        <div className="shrink-0 border-b border-zinc-800/40 bg-zinc-900/20">
+        <div className="shrink-0 border-b border-zinc-800/60 bg-zinc-900/30">
           <button
             onClick={() => setTodosExpanded((v) => !v)}
-            className="w-full flex items-center gap-2 px-3 sm:px-4 py-1 text-[11px] text-zinc-400 hover:text-zinc-200 transition-colors"
+            className="w-full flex items-center gap-2 px-4 py-1.5 text-[11px] text-zinc-400 hover:text-zinc-200 transition-colors"
           >
             <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"
-              className={`transition-transform ${todosExpanded ? "rotate-0" : "-rotate-90"}`}>
+              className={`shrink-0 transition-transform ${todosExpanded ? "rotate-0" : "-rotate-90"}`}>
               <path d="M4 6l4 4 4-4" />
             </svg>
-            <span className="font-medium">Todos ({doneCount}/{todos.length})</span>
+            <span className="font-medium">Todos</span>
+            <span className="text-zinc-600">{doneCount}/{todos.length}</span>
+            {/* mini progress bar */}
+            <span className="ml-1 flex-1 max-w-[120px] h-1 rounded-full bg-zinc-800 overflow-hidden">
+              <span className="block h-full bg-emerald-500/70 transition-all"
+                style={{ width: `${todos.length ? (doneCount / todos.length) * 100 : 0}%` }} />
+            </span>
           </button>
           {todosExpanded && (
-            <div className="px-3 sm:px-8 pb-1.5 space-y-0.5">
+            <div className="px-4 sm:px-9 pb-2 space-y-1">
               {todos.map((t) => (
                 <div key={t.id} className="flex items-center gap-2 text-[11px]">
-                  <span className={t.done ? (t.error ? "text-red-400" : "text-emerald-400") : "text-zinc-600"}>
+                  <span className={`shrink-0 ${t.done ? (t.error ? "text-red-400" : "text-emerald-400") : "text-zinc-600"}`}>
                     {t.done ? (t.error ? "✗" : "✓") : "○"}
                   </span>
-                  <span className={t.done ? "text-zinc-500" : "text-zinc-300"}>{t.label}</span>
+                  <span className={`truncate ${t.done ? "text-zinc-500" : "text-zinc-300"}`}>{t.label}</span>
                 </div>
               ))}
             </div>
@@ -759,11 +765,11 @@ export default function AgentChat({
       )}
 
       {/* Message thread */}
-      <div ref={threadRef} className="flex-1 overflow-y-auto px-3 sm:px-4 py-2 space-y-3 relative scrollbar-thin">
+      <div ref={threadRef} className="flex-1 overflow-y-auto px-3 sm:px-4 py-4 relative scrollbar-thin">
         {/* Scroll-to-bottom floating button */}
         {showScrollBtn && (
           <button onClick={scrollToBottom}
-            className="sticky bottom-3 left-1/2 -translate-x-1/2 z-10 w-8 h-8 rounded-full bg-zinc-700 border border-zinc-600 text-zinc-300 shadow-lg flex items-center justify-center hover:bg-zinc-600 hover:text-zinc-100 transition-all animate-bounce-subtle"
+            className="sticky bottom-3 left-1/2 -translate-x-1/2 z-10 w-8 h-8 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-300 shadow-lg flex items-center justify-center hover:bg-zinc-700 hover:text-zinc-100 transition-all"
             aria-label="Scroll to bottom">
             <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M4 6l4 4 4-4" />
@@ -771,7 +777,7 @@ export default function AgentChat({
           </button>
         )}
 
-        <div className="max-w-3xl mx-auto">
+        <div className="max-w-3xl mx-auto space-y-5">
           {/* Stream interrupted notice */}
           {!isLoading && messages.length > 0 && (() => {
             const last = messages[messages.length - 1];
@@ -783,14 +789,16 @@ export default function AgentChat({
             ) : null;
           })()}
           {messages.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full gap-2 text-center">
-              <div className="text-zinc-400 text-sm font-medium">
-                Chat with <span className="text-zinc-200">{currentAgentName}</span>
+            <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3 text-center">
+              <div className="w-12 h-12 rounded-2xl bg-zinc-800/80 border border-zinc-700/60 flex items-center justify-center">
+                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+              </div>
+              <div className="text-zinc-300 text-sm font-medium">
+                Chat with <span className="text-zinc-100">{currentAgentName}</span>
               </div>
               {agentDescription && currentAgentName === agentName && (
-                <div className="text-zinc-600 text-xs max-w-xs">{agentDescription}</div>
+                <div className="text-zinc-500 text-xs max-w-sm leading-relaxed">{agentDescription}</div>
               )}
-              <div className="text-zinc-600 text-xs mt-2">Type a message to begin.</div>
               <SuggestionPills
                 suggestions={AGENT_SUGGESTIONS[currentAgentName] ?? DEFAULT_SUGGESTIONS}
                 onPick={handleChoice}
@@ -830,10 +838,8 @@ export default function AgentChat({
             const last = messages[messages.length - 1];
             if (last?.role === "assistant" && last.content.trim() && !last.streaming) {
               return (
-                <div className="ml-0">
-                  <SuggestionPills suggestions={AGENT_SUGGESTIONS[currentAgentName] ?? DEFAULT_SUGGESTIONS}
-                    onPick={handleChoice} label="Follow up" />
-                </div>
+                <SuggestionPills suggestions={AGENT_SUGGESTIONS[currentAgentName] ?? DEFAULT_SUGGESTIONS}
+                  onPick={handleChoice} label="Follow up" align="start" />
               );
             }
             return null;
@@ -845,12 +851,9 @@ export default function AgentChat({
       </div>
 
       {/* ── Input area + VS Code-style bottom bar ─────────────────────── */}
-      <form onSubmit={handleSubmit} className="shrink-0 border-t border-zinc-800/40 bg-zinc-900/40 px-2 sm:px-4 pt-1 pb-1.5">
-        {/* Feather gradient */}
-        <div className="h-5 -mt-6 mb-0.5 pointer-events-none bg-gradient-to-t from-zinc-900/40 to-transparent" />
-
+      <form onSubmit={handleSubmit} className="shrink-0 border-t border-zinc-800/60 bg-zinc-900/50 px-3 sm:px-4 pt-2 pb-2.5">
         {queuedCount > 0 && (
-          <div className="mb-1 flex items-center gap-2 text-[11px] text-amber-400">
+          <div className="max-w-3xl mx-auto mb-2 flex items-center gap-2 text-[11px] text-amber-400">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
             {queuedCount} message{queuedCount > 1 ? "s" : ""} queued
             <button type="button" onClick={() => { queueRef.current = []; setQueuedCount(0); }}
@@ -859,19 +862,20 @@ export default function AgentChat({
         )}
 
         <div className="max-w-3xl mx-auto">
-          {/* Input row */}
-          <div className="flex items-end gap-1.5 sm:gap-2">
-            <FileUploadButton sessionId={sessionId}
-              onUploadComplete={(files) => {
-                const names = files.map((f) => f.name).join(", ");
-                const paths = files.map((f) => `\`${f.path}\``).join(", ");
-                const ctx = `📎 Uploaded ${files.length} file(s): ${names}\n\nThese files are available in the workspace at:\n${paths}\n\nYou can read them with the read_file tool. Refer to them whenever I mention the uploaded content.`;
-                setInput((prev) => prev.trim() ? `${prev}\n\n${ctx}` : ctx);
-                inputRef.current?.focus();
-              }}
-              className="shrink-0 self-center mb-0.5" />
+          {/* Input pill — textarea + inline controls, unified container */}
+          <div className="rounded-2xl border border-zinc-700/70 bg-zinc-800/60 focus-within:border-zinc-500/80 transition-colors">
+            {/* Row 1: upload + textarea + send */}
+            <div className="flex items-end gap-2 px-2 pt-2 pb-1">
+              <FileUploadButton sessionId={sessionId}
+                onUploadComplete={(files) => {
+                  const names = files.map((f) => f.name).join(", ");
+                  const paths = files.map((f) => `\`${f.path}\``).join(", ");
+                  const ctx = `📎 Uploaded ${files.length} file(s): ${names}\n\nThese files are available in the workspace at:\n${paths}\n\nYou can read them with the read_file tool. Refer to them whenever I mention the uploaded content.`;
+                  setInput((prev) => prev.trim() ? `${prev}\n\n${ctx}` : ctx);
+                  inputRef.current?.focus();
+                }}
+                className="shrink-0 self-end mb-1" />
 
-            <div className="flex-1 relative">
               <textarea ref={inputRef} value={input}
                 onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} rows={1}
                 placeholder={
@@ -879,152 +883,151 @@ export default function AgentChat({
                     ? `${SEND_MODE_LABELS[sendMode]} a follow-up to ${currentAgentName}…`
                     : `Message ${currentAgentName}…`
                 }
-                className="w-full resize-none rounded-lg bg-zinc-800/80 border border-zinc-700/80 px-3 py-2 text-[16px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 max-h-32 overflow-y-auto transition-colors"
-                style={{ minHeight: "40px" }}
-                onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = `${Math.min(t.scrollHeight, 128)}px`; }} />
-            </div>
+                className="flex-1 resize-none bg-transparent px-1 py-1.5 text-[16px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none max-h-40 overflow-y-auto scrollbar-thin"
+                style={{ minHeight: "32px" }}
+                onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = `${Math.min(t.scrollHeight, 160)}px`; }} />
 
-            {/* Contextual send button: idle → simple send, running → stop or follow-up */}
-            {isLoading ? (
-              input.trim() ? (
-                /* Agent is running AND user typed a follow-up — show Send/Queue/Steer */
-                <div className="relative shrink-0 flex items-stretch">
-                  <button type="submit"
-                    className="h-[40px] pl-3 pr-2 rounded-l-lg bg-zinc-100 text-zinc-900 font-semibold text-xs flex items-center gap-1 hover:bg-white transition-colors"
-                    aria-label={SEND_MODE_LABELS[sendMode]}
-                    title={`${SEND_MODE_LABELS[sendMode]} (current mode)`}>
-                    {sendMode === "send" ? "↑" : sendMode === "queue" ? "⏱" : "⤳"}
-                    <span className="text-[11px]">{SEND_MODE_LABELS[sendMode]}</span>
-                  </button>
-                  <button type="button"
-                    onClick={() => setShowSendMenu((v) => !v)}
-                    className="h-[40px] px-1.5 rounded-r-lg bg-zinc-200 text-zinc-900 border-l border-zinc-300 hover:bg-white transition-colors text-[10px]"
-                    aria-label="Choose send mode" title="Choose how to send">
-                    ▾
-                  </button>
-                  {showSendMenu && (
-                    <div className="absolute bottom-full right-0 mb-1 w-56 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl z-50 py-1"
-                      onMouseLeave={() => setShowSendMenu(false)}>
-                      {(["send", "queue", "steer"] as SendMode[]).map((m) => (
-                        <button key={m} type="button"
-                          onClick={() => { setSendMode(m); setShowSendMenu(false); }}
-                          className={`w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 transition-colors ${m === sendMode ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"}`}>
-                          <div className="flex items-center justify-between">
-                            <span className="font-medium">
-                              {m === "send" ? "↑ Send" : m === "queue" ? "⏱ Queue" : "⤳ Steer"}
-                            </span>
-                            {m === sendMode && <span className="text-emerald-500 text-[10px]">✓</span>}
-                          </div>
-                          <div className="text-zinc-600 mt-0.5 text-[10px]">
-                            {m === "send" ? "Send now (queues if busy)"
-                              : m === "queue" ? "Wait for current reply, then send"
-                              : "Interrupt current reply and send now"}
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                /* Agent is running, no follow-up typed — just Stop */
-                <button type="button" onClick={stopGeneration}
-                  className="shrink-0 h-[40px] w-[40px] rounded-lg bg-red-900/50 border border-red-700/50 text-red-300 text-sm flex items-center justify-center hover:bg-red-800/70 transition-colors"
-                  aria-label="Stop generation">■</button>
-              )
-            ) : (
-              /* Agent is idle — simple Send button */
-              <button type="submit" disabled={!input.trim()}
-                className="shrink-0 h-[40px] w-[40px] rounded-lg bg-zinc-100 text-zinc-900 font-semibold text-sm flex items-center justify-center disabled:opacity-30 hover:bg-white transition-colors"
-                aria-label="Send">↑</button>
-            )}
-          </div>
-
-          {/* ── Bottom bar (VS Code Copilot style) ──────────────────────── */}
-          <div className="flex items-center gap-1.5 mt-1.5 text-[10px] text-zinc-500 flex-wrap" ref={modelMenuRef}>
-            {/* Agent selector */}
-            <div className="relative">
-              <button onClick={() => setShowAgentMenu((v) => !v)}
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-zinc-800 hover:text-zinc-300 transition-colors">
-                <span className="w-1 h-1 rounded-full bg-emerald-500 shrink-0" />
-                <span className="truncate max-w-[80px]">{currentAgentName}</span>
-              </button>
-              {showAgentMenu && (
-                <div className="absolute bottom-full left-0 mb-1 w-64 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl z-50 py-1"
-                  onMouseLeave={() => setShowAgentMenu(false)}>
-                  {agents.length === 0 ? (
-                    <div className="px-3 py-2 text-xs text-zinc-600">No agents available</div>
-                  ) : (
-                    agents.map((a) => (
-                      <button key={a.name} onClick={() => handleSwitchAgent(a)}
-                        className={`w-full text-left px-3 py-1.5 text-xs hover:bg-zinc-800 transition-colors ${a.name === currentAgentName ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"}`}>
-                        <div className="flex items-center justify-between gap-1">
-                          <span className="font-medium">{a.name}</span>
-                          {a.name === currentAgentName && <span className="text-emerald-500 text-[10px]">✓</span>}
-                        </div>
-                      </button>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-
-            <span className="text-zinc-700">|</span>
-
-            {/* Model selector */}
-            <div className="relative">
-              <button onClick={() => { setShowModelMenu((v) => !v); setModelSearch(""); }}
-                className="px-1.5 py-0.5 rounded hover:bg-zinc-800 hover:text-zinc-300 transition-colors truncate max-w-[140px]">
-                {currentModelLabel}
-              </button>
-              {showModelMenu && (
-                <div className="absolute bottom-full left-0 mb-1 w-72 rounded-lg border border-zinc-700 bg-zinc-900 shadow-2xl z-50 overflow-hidden">
-                  <div className="p-2 border-b border-zinc-800">
-                    <input autoFocus type="text" placeholder="Search models…" value={modelSearch}
-                      onChange={(e) => setModelSearch(e.target.value)}
-                      className="w-full rounded bg-zinc-800 border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500" />
-                  </div>
-                  <div className="max-h-72 overflow-y-auto py-1">
-                    {filteredGroups.length === 0 && (
-                      <div className="px-3 py-2 text-xs text-zinc-600 italic">No models match</div>
-                    )}
-                    {filteredGroups.map((group) => (
-                      <div key={group}>
-                        <div className="px-3 pt-2 pb-1 text-[9px] text-zinc-600 uppercase tracking-wider font-semibold">{group}</div>
-                        {filteredModels.filter((m) => m.group === group).map((m) => (
-                          <button key={m.id}
-                            onClick={() => { setCurrentModel(m.id); setShowModelMenu(false); setModelSearch(""); }}
-                            className={`w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center justify-between gap-2 ${m.id === currentModel ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400 hover:bg-zinc-800"}`}>
-                            <span className="truncate">{m.label}</span>
-                            {m.id === currentModel && <span className="text-emerald-500 text-[10px]">✓</span>}
+              {/* Contextual send button */}
+              {isLoading ? (
+                input.trim() ? (
+                  <div className="relative shrink-0 flex items-stretch self-end">
+                    <button type="submit"
+                      className="h-8 pl-2.5 pr-2 rounded-l-lg bg-zinc-100 text-zinc-900 font-semibold text-xs flex items-center gap-1 hover:bg-white transition-colors"
+                      aria-label={SEND_MODE_LABELS[sendMode]}
+                      title={`${SEND_MODE_LABELS[sendMode]} (current mode)`}>
+                      {sendMode === "send" ? "↑" : sendMode === "queue" ? "⏱" : "⤳"}
+                      <span className="text-[11px]">{SEND_MODE_LABELS[sendMode]}</span>
+                    </button>
+                    <button type="button"
+                      onClick={() => setShowSendMenu((v) => !v)}
+                      className="h-8 px-1.5 rounded-r-lg bg-zinc-300 text-zinc-900 border-l border-zinc-400/60 hover:bg-white transition-colors text-[10px]"
+                      aria-label="Choose send mode" title="Choose how to send">
+                      ▾
+                    </button>
+                    {showSendMenu && (
+                      <div className="absolute bottom-full right-0 mb-1.5 w-56 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl z-50 py-1"
+                        onMouseLeave={() => setShowSendMenu(false)}>
+                        {(["send", "queue", "steer"] as SendMode[]).map((m) => (
+                          <button key={m} type="button"
+                            onClick={() => { setSendMode(m); setShowSendMenu(false); }}
+                            className={`w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 transition-colors ${m === sendMode ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"}`}>
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium">
+                                {m === "send" ? "↑ Send" : m === "queue" ? "⏱ Queue" : "⤳ Steer"}
+                              </span>
+                              {m === sendMode && <span className="text-emerald-400 text-[10px]">✓</span>}
+                            </div>
+                            <div className="text-zinc-500 mt-0.5 text-[10px]">
+                              {m === "send" ? "Send now (queues if busy)"
+                                : m === "queue" ? "Wait for current reply, then send"
+                                : "Interrupt current reply and send now"}
+                            </div>
                           </button>
                         ))}
                       </div>
-                    ))}
+                    )}
                   </div>
-                </div>
+                ) : (
+                  <button type="button" onClick={stopGeneration}
+                    className="shrink-0 self-end w-8 h-8 rounded-lg bg-red-900/50 border border-red-700/50 text-red-300 text-xs flex items-center justify-center hover:bg-red-800/70 transition-colors"
+                    aria-label="Stop generation" title="Stop generation">■</button>
+                )
+              ) : (
+                <button type="submit" disabled={!input.trim()}
+                  className="shrink-0 self-end w-8 h-8 rounded-lg bg-zinc-100 text-zinc-900 font-semibold text-sm flex items-center justify-center disabled:opacity-25 disabled:cursor-not-allowed hover:bg-white transition-all"
+                  aria-label="Send" title="Send message">↑</button>
               )}
             </div>
 
-            <span className="text-zinc-700">|</span>
-
-            {/* Thinking mode toggle */}
-            <div className="flex items-center gap-0.5">
-              {THINK_MODES.map((tm) => (
-                <button key={tm.mode} type="button"
-                  onClick={() => setThinkMode(tm.mode)}
-                  title={tm.title}
-                  className={`px-1.5 py-0.5 rounded transition-colors ${thinkMode === tm.mode ? "text-zinc-200 bg-zinc-800" : "hover:text-zinc-300 hover:bg-zinc-800/50"}`}>
-                  {tm.label}
+            {/* Row 2: control bar inside the pill */}
+            <div className="flex items-center gap-1 px-2 pb-1.5 text-[11px] text-zinc-500" ref={modelMenuRef}>
+              {/* Agent selector */}
+              <div className="relative">
+                <button onClick={() => setShowAgentMenu((v) => !v)}
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-zinc-700/50 hover:text-zinc-200 transition-colors">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                  <span className="truncate max-w-[90px] font-medium">{currentAgentName}</span>
+                  <span className="text-zinc-600">▾</span>
                 </button>
-              ))}
-            </div>
+                {showAgentMenu && (
+                  <div className="absolute bottom-full left-0 mb-1.5 w-64 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl z-50 py-1"
+                    onMouseLeave={() => setShowAgentMenu(false)}>
+                    {agents.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-zinc-600">No agents available</div>
+                    ) : (
+                      agents.map((a) => (
+                        <button key={a.name} onClick={() => handleSwitchAgent(a)}
+                          className={`w-full text-left px-3 py-1.5 text-xs hover:bg-zinc-800 transition-colors ${a.name === currentAgentName ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"}`}>
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="font-medium">{a.name}</span>
+                            {a.name === currentAgentName && <span className="text-emerald-400 text-[10px]">✓</span>}
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
 
-            <span className="text-zinc-700 ml-auto hidden sm:inline">
-              {isLoading && sendMode !== "send" && (
-                <span className="mr-2 text-amber-400">{sendMode === "queue" ? "⏱ Queue" : "⤳ Steer"} mode</span>
-              )}
-              Enter to send · Shift+Enter for new line
-            </span>
+              <span className="w-px h-3.5 bg-zinc-700/60 shrink-0" />
+
+              {/* Model selector */}
+              <div className="relative">
+                <button onClick={() => { setShowModelMenu((v) => !v); setModelSearch(""); }}
+                  className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-zinc-700/50 hover:text-zinc-200 transition-colors truncate max-w-[150px]">
+                  <span className="truncate">{currentModelLabel}</span>
+                  <span className="text-zinc-600 shrink-0">▾</span>
+                </button>
+                {showModelMenu && (
+                  <div className="absolute bottom-full left-0 mb-1.5 w-72 rounded-lg border border-zinc-700 bg-zinc-900 shadow-2xl z-50 overflow-hidden">
+                    <div className="p-2 border-b border-zinc-800">
+                      <input autoFocus type="text" placeholder="Search models…" value={modelSearch}
+                        onChange={(e) => setModelSearch(e.target.value)}
+                        className="w-full rounded-md bg-zinc-800 border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500" />
+                    </div>
+                    <div className="max-h-72 overflow-y-auto py-1 scrollbar-thin">
+                      {filteredGroups.length === 0 && (
+                        <div className="px-3 py-2 text-xs text-zinc-600 italic">No models match</div>
+                      )}
+                      {filteredGroups.map((group) => (
+                        <div key={group}>
+                          <div className="px-3 pt-2 pb-1 text-[9px] text-zinc-600 uppercase tracking-wider font-semibold">{group}</div>
+                          {filteredModels.filter((m) => m.group === group).map((m) => (
+                            <button key={m.id}
+                              onClick={() => { setCurrentModel(m.id); setShowModelMenu(false); setModelSearch(""); }}
+                              className={`w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center justify-between gap-2 ${m.id === currentModel ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400 hover:bg-zinc-800"}`}>
+                              <span className="truncate">{m.label}</span>
+                              {m.id === currentModel && <span className="text-emerald-400 text-[10px] shrink-0">✓</span>}
+                            </button>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <span className="w-px h-3.5 bg-zinc-700/60 shrink-0" />
+
+              {/* Thinking mode — segmented control */}
+              <div className="flex items-center rounded-md bg-zinc-800/60 p-0.5">
+                {THINK_MODES.map((tm) => (
+                  <button key={tm.mode} type="button"
+                    onClick={() => setThinkMode(tm.mode)}
+                    title={tm.title}
+                    className={`px-2 py-0.5 rounded text-[11px] transition-colors ${thinkMode === tm.mode ? "bg-zinc-700 text-zinc-100" : "text-zinc-500 hover:text-zinc-300"}`}>
+                    {tm.label}
+                  </button>
+                ))}
+              </div>
+
+              <span className="ml-auto hidden md:inline text-zinc-600">
+                {isLoading && sendMode !== "send" && (
+                  <span className="mr-2 text-amber-400">{sendMode === "queue" ? "⏱ Queue" : "⤳ Steer"} mode</span>
+                )}
+                <kbd className="text-zinc-600">⏎</kbd> send · <kbd className="text-zinc-600">⇧⏎</kbd> newline
+              </span>
+            </div>
           </div>
 
           {/* Disclaimer */}
@@ -1194,16 +1197,15 @@ function MessageBubble({
           </div>
         ) : (
           /* ═══ Normal user bubble — compact, right-aligned, no avatar ═══ */
-          <div className="max-w-[90%] sm:max-w-[80%]">
+          <div className="max-w-[88%] sm:max-w-[78%]">
             <div
               onDoubleClick={() => { setEditText(message.content); setEditing(true); }}
-              className="inline-block px-3.5 py-2 text-[12px] sm:text-[13px] leading-relaxed bg-zinc-700 text-zinc-100 rounded-2xl rounded-tr-sm cursor-pointer select-none hover:bg-zinc-600/80 transition-colors"
+              className="px-4 py-2.5 text-[13px] sm:text-sm leading-relaxed bg-zinc-700/90 text-zinc-100 rounded-2xl rounded-tr-md cursor-pointer select-none hover:bg-zinc-700 transition-colors"
               title="Double-click to edit"
             >
               <p className="whitespace-pre-wrap break-words">{message.content}</p>
             </div>
-            <div className="flex items-center justify-end gap-2 mt-1 pr-1">
-              <div className="text-[10px] text-zinc-500">{timestamp}</div>
+            <div className="flex items-center justify-end gap-2 mt-1 pr-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
               {message.content.trim() && (
                 <MessageActionBar
                   content={message.content}
@@ -1212,6 +1214,7 @@ function MessageBubble({
                   onEdit={() => { setEditText(message.content); setEditing(true); }}
                 />
               )}
+              <div className="text-[10px] text-zinc-500">{timestamp}</div>
             </div>
           </div>
         )}
@@ -1253,8 +1256,7 @@ function MessageBubble({
         customEvents={message.customEvents}
       />
       {!message.streaming && (
-        <div className="flex items-center gap-2 mt-1.5">
-          <div className="text-[10px] text-zinc-600">{timestamp}</div>
+        <div className="flex items-center gap-2 mt-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
           {message.content.trim() && (
             <MessageActionBar
               content={message.content}
@@ -1262,6 +1264,7 @@ function MessageBubble({
               role="assistant"
             />
           )}
+          <div className="text-[10px] text-zinc-600">{timestamp}</div>
         </div>
       )}
     </div>

@@ -1,6 +1,6 @@
-# LiteLLM model list — used by the Control Plane Settings UI to manage
-# tier→model assignments.  Since we use the litellm SDK directly (no proxy),
-# the router_settings / general_settings sections are no longer needed.
+# LLM model tier list — used by the Control Plane Settings UI and the
+# gateway /v1 endpoint to map tier aliases → provider models.
+# The gateway uses the litellm Python SDK directly (no proxy process).
 #
 # Tier entries (tier1-*, tier2-*, tier3-*) map to the three quality tiers.
 # Non-tier entries are available models shown in the provider model picker.

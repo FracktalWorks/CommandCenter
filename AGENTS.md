@@ -115,7 +115,7 @@ failure via isolated Copilot SDK sandboxes.
 | Application services | apps/AGENTS.md | Gateway, orchestrator, ingestion, reconciler |
 | Shared packages | packages/AGENTS.md | acb_skills, acb_llm, acb_memory, acb_graph, acb_common |
 | Skills | skills/AGENTS.md | Skill definitions and SKILL.md patterns |
-| Infrastructure | infra/AGENTS.md | Docker Compose, Postgres, LiteLLM config, Redis |
+| Infrastructure | infra/AGENTS.md | Docker Compose, Postgres, LLM tier config, Redis |
 | Deployment | deploy/AGENTS.md | Hostinger VPS deployment |
 | Planning docs | ai-company-brain/AGENTS.md | Product requirements, project plan, architecture |
 | Workbench UI | workbench/AGENTS.md | Control Plane (Next.js) and local dev tools |

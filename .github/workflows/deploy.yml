@@ -106,12 +106,7 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
-            echo "==> Cleaning up deprecated LiteLLM proxy service (if present)"
-            sudo systemctl stop acb-litellm 2>/dev/null || true
-            sudo systemctl disable acb-litellm 2>/dev/null || true
-            sudo rm -f /etc/systemd/system/acb-litellm.service
-            sudo systemctl daemon-reload || true
-            echo "Cleanup done"
+            echo "==> Skipping deprecated LiteLLM proxy cleanup (already removed)"
 
             echo "==> Bootstrapping Docker Compose stack"
             docker compose -f infra/docker-compose.yml --profile core up -d --remove-orphans

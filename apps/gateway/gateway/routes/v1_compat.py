@@ -1,8 +1,8 @@
 """Thin OpenAI-compatible chat completions endpoint.
 
-Replaces the LiteLLM proxy container for MAF agent-framework compatibility.
+Routes /v1/chat/completions through the litellm SDK directly (no proxy).
 The MAF OpenAIChatCompletionClient and Copilot SDK speak OpenAI API — this
-route translates requests to our acb_llm module (which uses litellm SDK directly).
+route translates requests to our acb_llm module.
 
 Serves both /v1/chat/completions (OpenAI standard) and /chat/completions (some SDKs).
 """

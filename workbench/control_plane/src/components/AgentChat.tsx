@@ -1155,22 +1155,17 @@ function MessageBubble({
 
   if (isUser) {
     return (
-      <div className="flex items-start gap-2 sm:gap-3 flex-row-reverse group">
-        {/* Avatar */}
-        <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center shrink-0 text-[10px] sm:text-xs font-semibold bg-zinc-600 text-zinc-200 mt-0.5">
-          U
-        </div>
-
+      <div className="flex justify-end group">
         {editing ? (
           /* ═══ Edit mode ═══ */
-          <div className="flex-1 min-w-0 max-w-full sm:max-w-[80%]">
+          <div className="w-full max-w-full sm:max-w-[85%]">
             <div className="rounded-2xl rounded-tr-sm border-2 border-amber-500/50 bg-zinc-800 shadow-lg shadow-amber-500/5 overflow-hidden">
               {/* Edit header */}
               <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-700/60 bg-zinc-800/80">
                 <span className="text-[11px] text-amber-400/80 font-medium">
                   ✏️ Editing message
                 </span>
-                <span className="text-[10px] text-zinc-500">
+                <span className="text-[10px] text-zinc-500 hidden sm:block">
                   Enter to send · Esc to cancel · Shift+Enter for new line
                 </span>
               </div>
@@ -1197,9 +1192,7 @@ function MessageBubble({
                   Cancel
                 </button>
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-zinc-500">
-                    {editText.length} chars
-                  </span>
+                  <span className="text-[10px] text-zinc-500">{editText.length} chars</span>
                   <button
                     onClick={handleEditSubmit}
                     disabled={!editText.trim()}
@@ -1212,17 +1205,17 @@ function MessageBubble({
             </div>
           </div>
         ) : (
-          /* ═══ Normal user bubble ═══ */
-          <div className="max-w-[85%] sm:max-w-[75%] min-w-0">
+          /* ═══ Normal user bubble — compact, right-aligned, no avatar ═══ */
+          <div className="max-w-[90%] sm:max-w-[80%]">
             <div
               onDoubleClick={() => { setEditText(message.content); setEditing(true); }}
-              className="px-3 sm:px-4 py-2.5 sm:py-3 text-[12px] sm:text-[13px] leading-relaxed bg-zinc-700 text-zinc-100 rounded-2xl rounded-tr-sm cursor-pointer select-none hover:bg-zinc-600/80 transition-colors"
+              className="inline-block px-3.5 py-2 text-[12px] sm:text-[13px] leading-relaxed bg-zinc-700 text-zinc-100 rounded-2xl rounded-tr-sm cursor-pointer select-none hover:bg-zinc-600/80 transition-colors"
               title="Double-click to edit"
             >
               <p className="whitespace-pre-wrap break-words">{message.content}</p>
-              <div className="mt-1.5 flex items-center justify-end gap-2">
-                <div className="text-[10px] text-zinc-400">{timestamp}</div>
-              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 mt-1 pr-1">
+              <div className="text-[10px] text-zinc-500">{timestamp}</div>
               {message.content.trim() && (
                 <MessageActionBar
                   content={message.content}
@@ -1238,53 +1231,51 @@ function MessageBubble({
     );
   }
 
-  // ═══ Assistant message ═══
+  // ═══ Assistant message — no bubble, renders directly ═══
   return (
-    <div className="flex items-start gap-2 sm:gap-3 group">
-      <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center shrink-0 text-[10px] sm:text-xs font-semibold bg-zinc-700 text-zinc-300 mt-0.5">
-        A
-      </div>
-      <div className="min-w-0 flex-1 max-w-[92%] sm:max-w-[85%] px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-800/70 rounded-2xl rounded-tl-sm">
-        <MarkdownMessage
-          content={message.content}
-          streaming={message.streaming}
-          toolEvents={message.toolEvents}
-          progressLines={message.progressLines}
-          isThinkingActive={message.isThinkingActive}
-          reasoningBlocks={message.reasoningBlocks}
-          onChoice={onChoice}
-          sessionId={sessionId}
-        />
-        {/* Inline artifact cards */}
-        {artifactEvents.length > 0 && (
-          <div className="mt-3 space-y-2">
-            {artifactEvents.map((a, i) => (
-              <ArtifactCard
-                key={`${a.path}-${i}`}
-                artifact={a}
-                sessionId={sessionId}
-                onOpen={onFileOpen}
-              />
-            ))}
-          </div>
-        )}
-        <GenerativeUIPanel
-          agentState={message.agentState}
-          customEvents={message.customEvents}
-        />
-        {!message.streaming && (
-          <>
-            <div className="mt-2 text-[10px] text-zinc-600">{timestamp}</div>
-            {message.content.trim() && (
-              <MessageActionBar
-                content={message.content}
-                messageId={message.id}
-                role="assistant"
-              />
-            )}
-          </>
-        )}
-      </div>
+    <div className="group">
+      {/* Content renders directly in the chat window — no wrapper bubble.
+          ThinkingContainer, code blocks, and artifact cards have their own
+          visual containers. Only the timestamp and action bar are added. */}
+      <MarkdownMessage
+        content={message.content}
+        streaming={message.streaming}
+        toolEvents={message.toolEvents}
+        progressLines={message.progressLines}
+        isThinkingActive={message.isThinkingActive}
+        reasoningBlocks={message.reasoningBlocks}
+        onChoice={onChoice}
+        sessionId={sessionId}
+      />
+      {/* Inline artifact cards */}
+      {artifactEvents.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {artifactEvents.map((a, i) => (
+            <ArtifactCard
+              key={`${a.path}-${i}`}
+              artifact={a}
+              sessionId={sessionId}
+              onOpen={onFileOpen}
+            />
+          ))}
+        </div>
+      )}
+      <GenerativeUIPanel
+        agentState={message.agentState}
+        customEvents={message.customEvents}
+      />
+      {!message.streaming && (
+        <div className="flex items-center gap-2 mt-1.5">
+          <div className="text-[10px] text-zinc-600">{timestamp}</div>
+          {message.content.trim() && (
+            <MessageActionBar
+              content={message.content}
+              messageId={message.id}
+              role="assistant"
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }

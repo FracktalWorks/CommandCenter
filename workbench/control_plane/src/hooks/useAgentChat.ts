@@ -439,20 +439,34 @@ export function useAgentChat({
   }, [threadId]);
 
   // ── Reconnection & cross-device polling ─────────────────────────────
-  // Two-tier polling:
-  //   1. Fast poll (3s): when the last assistant message looks incomplete
-  //      (stream was interrupted by tab close / browser quit).
+  // Two-tier polling (always runs, even while a stream appears active):
+  //   1. Fast poll (2s): when the last assistant message looks incomplete
+  //      (stream was interrupted by tab close / refresh / browser quit).
   //   2. Slow poll (30s): always runs, picks up messages from other devices
   //      without requiring a session switch.
+  //
+  // We poll even when isLoading because the browser may have aborted the
+  // SSE fetch on refresh/navigation, leaving the chatStore in a stale
+  // loading state.  The backend continues running regardless, so polling
+  // lets us recover the persisted messages.
   useEffect(() => {
-    // Don't poll while actively streaming (avoids races).
-    if (isLoading) return;
-
     const last = messages[messages.length - 1];
     const lastIncomplete =
       last?.role === "assistant" &&
       last.content &&
       (last.streaming || !/[.?!]\s*$/.test(last.content.trim()));
+
+    // If the store says we're loading but no abortController is present,
+    // the stream was lost (browser refresh / tab close).  Clear the stale
+    // loading flag so polling can take over immediately.
+    if (isLoading) {
+      const current = getSessionState(threadId);
+      if (!current.abortController) {
+        // Stale loading flag from a lost connection — clear it.
+        setSessionState(threadId, (prev) => ({ ...prev, isLoading: false }));
+      }
+      // Regardless, still poll so we don't miss messages.
+    }
 
     let cancelled = false;
     let pollTimer: ReturnType<typeof setTimeout>;
@@ -509,9 +523,25 @@ export function useAgentChat({
         }));
 
         // Merge: keep local non-streaming messages, replace with remote
-        // for any assistant messages that were streaming (now complete on server)
+        // for any assistant messages that were streaming (now complete on server).
+        // The backend persists assistant messages with id=`assistant-${threadId}`,
+        // which differs from the local nanoid().  We match by role+content prefix
+        // to avoid duplicates when recovering from a lost SSE stream.
         const localIds = new Set(messages.map((m) => m.id));
-        const newMsgs = remoteMsgs.filter((m) => !localIds.has(m.id));
+        const localStreamingContent = messages
+          .filter((m) => m.role === "assistant" && m.streaming)
+          .map((m) => m.content);
+        const newMsgs = remoteMsgs.filter((m) => {
+          if (localIds.has(m.id)) return false;
+          // Skip remote assistant messages whose content is a prefix of
+          // a local streaming message (we already have that partial text).
+          if (m.role === "assistant" && m.content) {
+            for (const sc of localStreamingContent) {
+              if (sc && (sc.startsWith(m.content) || m.content.startsWith(sc))) return false;
+            }
+          }
+          return true;
+        });
 
         if (newMsgs.length > 0) {
           lastKnownCount = remote.length;
@@ -540,8 +570,10 @@ export function useAgentChat({
       }
     };
 
-    // Start polling: fast if incomplete, slow otherwise
-    const initialInterval = lastIncomplete ? 2000 : 30000;
+    // Start polling: fast if incomplete or recovering from lost stream,
+    // slow otherwise.
+    const stillRecovering = isLoading; // active stream or stale loading flag
+    const initialInterval = (lastIncomplete || stillRecovering) ? 2000 : 30000;
     pollTimer = setTimeout(poll, initialInterval);
 
     return () => { cancelled = true; clearTimeout(pollTimer); };

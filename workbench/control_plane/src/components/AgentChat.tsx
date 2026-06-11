@@ -596,44 +596,32 @@ export default function AgentChat({
 
   return (
     <div className="flex flex-col h-full">
-      {/* Agent header — compact on mobile */}
-      <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-5 py-2.5 sm:py-3 border-b border-zinc-800 bg-zinc-900/60 shrink-0">
-        <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <span className="text-sm font-semibold text-zinc-100 truncate">{currentAgentName}</span>
-            {/* Single runtime badge on mobile, both on desktop */}
-            {agentRuntimeMeta(agentRuntime).slice(0, 1).map((m, i) => (
-              <span
-                key={i}
-                className={`hidden sm:inline text-[9px] px-1.5 py-0.5 rounded-full border ${m.cls}`}
-                title={m.title}
-              >
-                {m.label}
-              </span>
-            ))}
-          </div>
-          {agentDescription && currentAgentName === agentName && (
-            <div className="text-[10px] sm:text-xs text-zinc-500 truncate">{agentDescription}</div>
-          )}
-        </div>
-        {/* GitHub repo link — icon-only on mobile */}
+      {/* Agent header — VS Code-style minimal bar */}
+      <div className="flex items-center gap-2 px-3 sm:px-4 py-1.5 sm:py-2 border-b border-zinc-800/50 bg-zinc-900/40 shrink-0">
+        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+        <span className="text-[11px] sm:text-xs font-medium text-zinc-300 truncate">{currentAgentName}</span>
+        {agentRuntimeMeta(agentRuntime).slice(0, 1).map((m, i) => (
+          <span
+            key={i}
+            className={`hidden sm:inline text-[8px] px-1 py-0.5 rounded-full border ${m.cls}`}
+            title={m.title}
+          >
+            {m.label}
+          </span>
+        ))}
         {agentRuntime === "github-copilot" && currentAgentEntry?.repo_url && (
           <a
             href={currentAgentEntry.repo_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="shrink-0 text-zinc-500 hover:text-zinc-300 transition-colors"
+            className="shrink-0 text-zinc-600 hover:text-zinc-300 transition-colors ml-auto"
             title={`Source: ${currentAgentEntry.repo_name ?? currentAgentEntry.repo_url}`}
           >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
               <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
             </svg>
           </a>
         )}
-        <div className="hidden sm:block ml-auto text-xs text-zinc-600 font-mono">
-          thread: {sessionId.slice(0, 8)}…
-        </div>
       </div>
 
       {/* Agent status bar — identity + integration reachability */}
@@ -686,7 +674,7 @@ export default function AgentChat({
       )}
 
       {/* Message thread */}
-      <div className="flex-1 overflow-y-auto px-3 sm:px-5 py-3 sm:py-4 space-y-3 sm:space-y-4">
+      <div className="flex-1 overflow-y-auto px-3 sm:px-4 py-3 space-y-3">
         {/* Stream interrupted notice — last message was mid-stream when session closed */}
         {!isLoading && messages.length > 0 && (() => {
           const last = messages[messages.length - 1];
@@ -734,10 +722,10 @@ export default function AgentChat({
       </div>
 
       {/* VS Code-style toolbar: model picker + agent switcher */}
-      <div className="shrink-0 border-t border-zinc-800 bg-zinc-900/60 px-2 sm:px-4 py-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+      <div className="shrink-0 border-t border-zinc-800/50 bg-zinc-900/40 px-2 sm:px-4 py-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]">
         {/* Model picker */}
-        <div className="flex items-center gap-1.5" ref={modelMenuRef}>
-          <span className="text-zinc-500 font-medium">Model</span>
+        <div className="flex items-center gap-1" ref={modelMenuRef}>
+          <span className="text-zinc-500">Model</span>
           <div className="relative">
             <button
               onClick={() => { setShowModelMenu((v) => !v); setModelSearch(""); }}
@@ -844,11 +832,11 @@ export default function AgentChat({
         </div>
 
         {/* Divider */}
-        <div className="w-px h-4 bg-zinc-700/50" />
+        <div className="w-px h-3 bg-zinc-700/40" />
 
         {/* Agent switcher */}
-        <div className="relative flex items-center gap-1.5">
-          <span className="text-zinc-500 font-medium">Agent</span>
+        <div className="relative flex items-center gap-1">
+          <span className="text-zinc-500">Agent</span>
           <button
             onClick={() => setShowAgentMenu((v) => !v)}
             disabled={isLoading}
@@ -923,7 +911,7 @@ export default function AgentChat({
       {/* Input area */}
       <form
         onSubmit={handleSubmit}
-        className="shrink-0 border-t border-zinc-800 bg-zinc-900/80 px-2 sm:px-4 py-2 sm:py-3"
+        className="shrink-0 border-t border-zinc-800/50 bg-zinc-900/40 px-2 sm:px-4 py-2"
       >
         {queuedCount > 0 && (
           <div className="mb-2 flex items-center gap-2 text-[11px] text-amber-400">

@@ -883,50 +883,58 @@ export default function AgentChat({
                 onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = `${Math.min(t.scrollHeight, 128)}px`; }} />
             </div>
 
+            {/* Contextual send button: idle → simple send, running → stop or follow-up */}
             {isLoading ? (
-              <button type="button" onClick={stopGeneration}
-                className="shrink-0 h-[40px] w-[40px] rounded-lg bg-red-900/50 border border-red-700/50 text-red-300 text-sm flex items-center justify-center hover:bg-red-800/70 transition-colors"
-                aria-label="Stop">■</button>
+              input.trim() ? (
+                /* Agent is running AND user typed a follow-up — show Send/Queue/Steer */
+                <div className="relative shrink-0 flex items-stretch">
+                  <button type="submit"
+                    className="h-[40px] pl-3 pr-2 rounded-l-lg bg-zinc-100 text-zinc-900 font-semibold text-xs flex items-center gap-1 hover:bg-white transition-colors"
+                    aria-label={SEND_MODE_LABELS[sendMode]}
+                    title={`${SEND_MODE_LABELS[sendMode]} (current mode)`}>
+                    {sendMode === "send" ? "↑" : sendMode === "queue" ? "⏱" : "⤳"}
+                    <span className="text-[11px]">{SEND_MODE_LABELS[sendMode]}</span>
+                  </button>
+                  <button type="button"
+                    onClick={() => setShowSendMenu((v) => !v)}
+                    className="h-[40px] px-1.5 rounded-r-lg bg-zinc-200 text-zinc-900 border-l border-zinc-300 hover:bg-white transition-colors text-[10px]"
+                    aria-label="Choose send mode" title="Choose how to send">
+                    ▾
+                  </button>
+                  {showSendMenu && (
+                    <div className="absolute bottom-full right-0 mb-1 w-56 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl z-50 py-1"
+                      onMouseLeave={() => setShowSendMenu(false)}>
+                      {(["send", "queue", "steer"] as SendMode[]).map((m) => (
+                        <button key={m} type="button"
+                          onClick={() => { setSendMode(m); setShowSendMenu(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 transition-colors ${m === sendMode ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"}`}>
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium">
+                              {m === "send" ? "↑ Send" : m === "queue" ? "⏱ Queue" : "⤳ Steer"}
+                            </span>
+                            {m === sendMode && <span className="text-emerald-500 text-[10px]">✓</span>}
+                          </div>
+                          <div className="text-zinc-600 mt-0.5 text-[10px]">
+                            {m === "send" ? "Send now (queues if busy)"
+                              : m === "queue" ? "Wait for current reply, then send"
+                              : "Interrupt current reply and send now"}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Agent is running, no follow-up typed — just Stop */
+                <button type="button" onClick={stopGeneration}
+                  className="shrink-0 h-[40px] w-[40px] rounded-lg bg-red-900/50 border border-red-700/50 text-red-300 text-sm flex items-center justify-center hover:bg-red-800/70 transition-colors"
+                  aria-label="Stop generation">■</button>
+              )
             ) : (
-              <div className="relative shrink-0 flex items-stretch">
-                {/* Send button */}
-                <button type="submit" disabled={!input.trim()}
-                  className="h-[40px] pl-3 pr-2 rounded-l-lg bg-zinc-100 text-zinc-900 font-semibold text-xs flex items-center gap-1 disabled:opacity-30 hover:bg-white transition-colors"
-                  aria-label={SEND_MODE_LABELS[sendMode]}
-                  title={`${SEND_MODE_LABELS[sendMode]} (current mode)`}>
-                  {sendMode === "send" ? "↑" : sendMode === "queue" ? "⏱" : "⤳"}
-                  <span className="text-[11px]">{SEND_MODE_LABELS[sendMode]}</span>
-                </button>
-                {/* Mode selector */}
-                <button type="button"
-                  onClick={() => setShowSendMenu((v) => !v)}
-                  className="h-[40px] px-1.5 rounded-r-lg bg-zinc-200 text-zinc-900 border-l border-zinc-300 hover:bg-white transition-colors text-[10px]"
-                  aria-label="Choose send mode" title="Choose how to send">
-                  ▾
-                </button>
-                {showSendMenu && (
-                  <div className="absolute bottom-full right-0 mb-1 w-56 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl z-50 py-1"
-                    onMouseLeave={() => setShowSendMenu(false)}>
-                    {(["send", "queue", "steer"] as SendMode[]).map((m) => (
-                      <button key={m} type="button"
-                        onClick={() => { setSendMode(m); setShowSendMenu(false); }}
-                        className={`w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 transition-colors ${m === sendMode ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"}`}>
-                        <div className="flex items-center justify-between">
-                          <span className="font-medium">
-                            {m === "send" ? "↑ Send" : m === "queue" ? "⏱ Queue" : "⤳ Steer"}
-                          </span>
-                          {m === sendMode && <span className="text-emerald-500 text-[10px]">✓</span>}
-                        </div>
-                        <div className="text-zinc-600 mt-0.5 text-[10px]">
-                          {m === "send" ? "Send now (queues if busy)"
-                            : m === "queue" ? "Wait for current reply, then send"
-                            : "Interrupt current reply and send now"}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              /* Agent is idle — simple Send button */
+              <button type="submit" disabled={!input.trim()}
+                className="shrink-0 h-[40px] w-[40px] rounded-lg bg-zinc-100 text-zinc-900 font-semibold text-sm flex items-center justify-center disabled:opacity-30 hover:bg-white transition-colors"
+                aria-label="Send">↑</button>
             )}
           </div>
 
@@ -1011,7 +1019,7 @@ export default function AgentChat({
             </div>
 
             <span className="text-zinc-700 ml-auto hidden sm:inline">
-              {sendMode !== "send" && (
+              {isLoading && sendMode !== "send" && (
                 <span className="mr-2 text-amber-400">{sendMode === "queue" ? "⏱ Queue" : "⤳ Steer"} mode</span>
               )}
               Enter to send · Shift+Enter for new line

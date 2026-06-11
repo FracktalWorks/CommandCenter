@@ -1,7 +1,8 @@
 # CommandCenter — CI/CD pipeline for Hostinger VPS deployment.
 #
 # Trigger: push to main (after PR merge) or manual dispatch.
-# Flow:    lint → test → SSH to VPS → git pull → docker compose up → health check.
+# Flow:    lint → test → SSH to VPS → git pull → docker compose up →
+#          uv sync → restart gateway → rebuild workbench → reload Caddy.
 #
 # Required GitHub Secrets (set in repo Settings → Secrets and variables → Actions):
 #   HOSTINGER_HOST       — VPS IP or hostname (e.g. 123.45.67.89)
@@ -125,10 +126,28 @@ jobs:
             fi
             uv sync
 
+            echo "==> Restarting gateway (systemd)"
+            sudo systemctl restart acb-gateway
+            sleep 3
+            systemctl is-active --quiet acb-gateway || { echo "GATEWAY FAILED TO START"; exit 1; }
+            echo "Gateway is active"
+
+            echo "==> Rebuilding + restarting workbench (Next.js)"
+            cd "$APP_DIR/workbench/control_plane"
+            if [ -f package-lock.json ] || [ -f package.json ]; then
+              npm ci --prefer-offline 2>/dev/null || npm install
+              npm run build
+            fi
+            sudo systemctl restart acb-workbench
+            sleep 3
+            systemctl is-active --quiet acb-workbench || { echo "WORKBENCH FAILED TO START"; exit 1; }
+            echo "Workbench is active"
+
             echo "==> Reloading Caddy"
             sudo systemctl reload caddy || true
 
             echo "==> Running infra health probe"
+            cd "$APP_DIR"
             uv run python scripts/check_infra.py || {
               echo "INFRA PROBE FAILED — check logs: docker compose -f infra/docker-compose.yml logs --tail=100"
               exit 1

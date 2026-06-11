@@ -15,9 +15,10 @@ Hostinger VPS deployment scripts, Caddy reverse proxy config, and CI/CD pipeline
 
 ## Conventions
 - Bootstrap installs uv, validates GITHUB_TOKEN, writes acb/acb-gateway/acb-workbench systemd units
-- Deploy pulls latest, rebuilds Docker images, restarts services
+- Deploy pulls latest, rebuilds Docker images, syncs Python deps, restarts gateway + workbench systemd services
 - **LLM routing: gateway /v1/chat/completions reads keys from encrypted Postgres — no separate proxy**
 - Provider keys live in the encrypted `provider_keys` table; seeded from `.env` on first boot
+- Next.js workbench is rebuilt (`npm ci && npm run build`) and restarted on every deploy
 - Caddy handles SSL termination and routing
 - CI/CD deploys on push to main; PRs run lint + test only
 - SSH key for CI/CD must be a dedicated key (not a developer personal key)

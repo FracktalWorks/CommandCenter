@@ -167,6 +167,12 @@ export function useAgentChat({
             model: modelRef.current ?? "auto",
             context: systemContextRef.current ?? undefined,
             thinkMode: thinkModeRef.current ?? "auto",
+            // Pass the assistant message ID so the server-side proxy persists
+            // content to the SAME row the frontend renders.  Without this the
+            // proxy used a constant id (assistant-<threadId>) that overwrote
+            // every turn and never correlated with the frontend's nanoid —
+            // breaking refresh recovery.
+            assistantMessageId: assistantId,
           }),
         });
 

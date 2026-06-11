@@ -627,21 +627,10 @@ export default function AgentChat({
   // True when a Copilot SDK agent is running via BYOK (gateway /v1).
   const isByokActive = isCopilotSdkAgent && currentRuntime === "litellm";
 
-  // Searchable model picker state
+  // Model picker state
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showThinkMenu, setShowThinkMenu] = useState(false);
-  const [modelSearch, setModelSearch] = useState("");
   const modelMenuRef = useRef<HTMLDivElement>(null);
-
-  const filteredModels = modelSearch.trim()
-    ? sortedModels.filter(
-        (m) =>
-          m.label.toLowerCase().includes(modelSearch.toLowerCase()) ||
-          m.id.toLowerCase().includes(modelSearch.toLowerCase()) ||
-          m.group.toLowerCase().includes(modelSearch.toLowerCase())
-      )
-    : sortedModels;
-  const filteredGroups = Array.from(new Set(filteredModels.map((m) => m.group)));
 
   // Close model menu on outside click
   useEffect(() => {
@@ -649,7 +638,6 @@ export default function AgentChat({
     const handleOutside = (e: MouseEvent) => {
       if (modelMenuRef.current && !modelMenuRef.current.contains(e.target as Node)) {
         setShowModelMenu(false);
-        setModelSearch("");
       }
     };
     document.addEventListener("mousedown", handleOutside);
@@ -974,28 +962,20 @@ export default function AgentChat({
 
               {/* Model selector */}
               <div className="relative">
-                <button onClick={() => { setShowModelMenu((v) => !v); setModelSearch(""); }}
+                <button onClick={() => setShowModelMenu((v) => !v)}
                   className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-zinc-700/50 hover:text-zinc-200 transition-colors truncate max-w-[150px]">
                   <span className="truncate">{currentModelLabel}</span>
                   <span className="text-zinc-600 shrink-0">▾</span>
                 </button>
                 {showModelMenu && (
                   <div className="absolute bottom-full left-0 mb-1.5 w-72 rounded-lg border border-zinc-700 bg-zinc-900 shadow-2xl z-50 overflow-hidden">
-                    <div className="p-2 border-b border-zinc-800">
-                      <input autoFocus type="text" placeholder="Search models…" value={modelSearch}
-                        onChange={(e) => setModelSearch(e.target.value)}
-                        className="w-full rounded-md bg-zinc-800 border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500" />
-                    </div>
                     <div className="max-h-72 overflow-y-auto py-1 scrollbar-thin">
-                      {filteredGroups.length === 0 && (
-                        <div className="px-3 py-2 text-xs text-zinc-600 italic">No models match</div>
-                      )}
-                      {filteredGroups.map((group) => (
+                      {modelGroups.map((group) => (
                         <div key={group}>
                           <div className="px-3 pt-2 pb-1 text-[9px] text-zinc-600 uppercase tracking-wider font-semibold">{group}</div>
-                          {filteredModels.filter((m) => m.group === group).map((m) => (
+                          {sortedModels.filter((m) => m.group === group).map((m) => (
                             <button key={m.id}
-                              onClick={() => { setCurrentModel(m.id); setShowModelMenu(false); setModelSearch(""); }}
+                              onClick={() => { setCurrentModel(m.id); setShowModelMenu(false); }}
                               className={`w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center justify-between gap-2 ${m.id === currentModel ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400 hover:bg-zinc-800"}`}>
                               <span className="truncate">{m.label}</span>
                               {m.id === currentModel && <span className="text-emerald-400 text-[10px] shrink-0">✓</span>}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, Suspense } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import {
@@ -279,7 +279,7 @@ function MemoryPanel({
 }
 
 // ---------------------------------------------------------------------------
-// Session list in the left sidebar
+// Session list — grouped by agent with accordion sections
 // ---------------------------------------------------------------------------
 
 function SessionList({
@@ -295,49 +295,143 @@ function SessionList({
   onNew: () => void;
   onDelete: (id: string) => void;
 }) {
+  // Group sessions by agentName
+  const groups = useMemo(() => {
+    const map = new Map<string, ChatSession[]>();
+    for (const s of sessions) {
+      const list = map.get(s.agentName) ?? [];
+      list.push(s);
+      map.set(s.agentName, list);
+    }
+    // Sort groups: active agent first, then alphabetically
+    const entries = Array.from(map.entries());
+    const activeAgent = sessions.find((s) => s.id === activeId)?.agentName;
+    entries.sort(([a], [b]) => {
+      if (a === activeAgent) return -1;
+      if (b === activeAgent) return 1;
+      return a.localeCompare(b);
+    });
+    return entries;
+  }, [sessions, activeId]);
+
+  // Track which accordion sections are expanded.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Auto-expand the active agent's group, collapse others on activeId change.
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    const activeAgent = sessions.find((s) => s.id === activeId)?.agentName;
+    if (activeAgent) {
+      setCollapsed((prev) => {
+        const next = new Set(prev);
+        next.delete(activeAgent);
+        return next;
+      });
+    }
+  }, [activeId, sessions]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  const toggleAgent = (agent: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(agent)) next.delete(agent);
+      else next.add(agent);
+      return next;
+    });
+  };
+
+  if (sessions.length === 0) {
+    return (
+      <div className="flex flex-col gap-1">
+        <button
+          onClick={onNew}
+          className="mb-2 w-full rounded-md bg-zinc-800 px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 transition-colors"
+        >
+          + New session
+        </button>
+        <p className="px-1 text-xs text-zinc-600">No sessions yet.</p>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-0.5">
       <button
         onClick={onNew}
-        className="mb-2 w-full rounded-md bg-zinc-800 px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 transition-colors"
+        className="mb-1 w-full rounded-md bg-zinc-800 px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 transition-colors"
       >
         + New session
       </button>
-      {sessions.length === 0 && (
-        <p className="px-1 text-xs text-zinc-600">No sessions yet.</p>
-      )}
-      {sessions.map((s) => (
-        <div
-          key={s.id}
-          className={`group flex items-start justify-between rounded-md px-3 py-2 cursor-pointer transition-colors ${
-            s.id === activeId
-              ? "bg-zinc-800 text-white"
-              : "text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-100"
-          }`}
-          onClick={() => onSelect(s.id)}
-        >
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium">{s.title ?? s.name}</div>
-            {s.lastPreview ? (
-              <div className="truncate text-xs text-zinc-500">{s.lastPreview}</div>
-            ) : null}
-            <div className="text-xs text-zinc-600">
-              {s.messageCount > 0 ? `${s.messageCount} msgs · ` : ""}
-              {s.agentName}
-            </div>
+
+      {groups.map(([agentName, agentSessions]) => {
+        const isCollapsed = collapsed.has(agentName);
+        const isActiveAgent = agentSessions.some((s) => s.id === activeId);
+        const count = agentSessions.length;
+
+        return (
+          <div key={agentName} className="mb-0.5">
+            {/* Accordion header */}
+            <button
+              onClick={() => toggleAgent(agentName)}
+              className={`w-full flex items-center gap-2 rounded-md px-3 py-1.5 text-left transition-colors ${
+                isActiveAgent
+                  ? "bg-zinc-800/60 text-zinc-200"
+                  : "text-zinc-500 hover:bg-zinc-800/40 hover:text-zinc-300"
+              }`}
+            >
+              <span className="text-[10px] transition-transform duration-150" style={{ transform: isCollapsed ? "rotate(-90deg)" : "rotate(0deg)" }}>
+                ▼
+              </span>
+              <span className="flex-1 text-xs font-medium truncate">
+                {agentName}
+              </span>
+              <span className="text-[10px] text-zinc-600 tabular-nums shrink-0">
+                {count}
+              </span>
+            </button>
+
+            {/* Sessions for this agent */}
+            {!isCollapsed && (
+              <div className="ml-2 border-l border-zinc-800/60 pl-2">
+                {agentSessions.map((s) => (
+                  <div
+                    key={s.id}
+                    className={`group flex items-start justify-between rounded-md px-2 py-1.5 cursor-pointer transition-colors ${
+                      s.id === activeId
+                        ? "bg-zinc-800 text-white"
+                        : "text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-100"
+                    }`}
+                    onClick={() => onSelect(s.id)}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-medium">
+                        {s.title ?? s.name}
+                      </div>
+                      {s.lastPreview ? (
+                        <div className="truncate text-[10px] text-zinc-500">
+                          {s.lastPreview}
+                        </div>
+                      ) : null}
+                      <div className="text-[10px] text-zinc-600">
+                        {s.messageCount > 0 ? `${s.messageCount} msgs` : "New"}
+                      </div>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDelete(s.id);
+                      }}
+                      className="ml-1 shrink-0 text-zinc-600 hover:text-red-400 transition-colors text-[10px]"
+                      title="Delete session"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete(s.id);
-            }}
-            className="ml-2 shrink-0 text-zinc-600 hover:text-red-400 transition-colors text-xs"
-            title="Delete session"
-          >
-            ✕
-          </button>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

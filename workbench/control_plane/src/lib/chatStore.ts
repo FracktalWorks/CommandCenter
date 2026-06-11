@@ -99,6 +99,7 @@ export function setSessionState(
   _listeners.get(id)?.forEach((l) => l());
   // Notify global subscribers when isLoading toggles.
   if (prev.isLoading !== next.isLoading) {
+    _invalidActiveIdsCache();
     _globalListeners.forEach((l) => l());
   }
 }
@@ -126,4 +127,23 @@ export function getActiveSessionIds(): Set<string> {
     if (state.isLoading) ids.add(id);
   }
   return ids;
+}
+
+// Cached active-IDs snapshot — must return the SAME reference
+// when the set hasn't changed, otherwise useSyncExternalStore re-renders infinitely.
+let _cachedActiveIds: Set<string> | null = null;
+let _cachedActiveIdsStr: string | null = null;
+
+function _invalidActiveIdsCache() {
+  _cachedActiveIds = null;
+  _cachedActiveIdsStr = null;
+}
+
+export function getActiveSessionIdsStable(): Set<string> {
+  const fresh = getActiveSessionIds();
+  const str = JSON.stringify([...fresh].sort());
+  if (_cachedActiveIds && _cachedActiveIdsStr === str) return _cachedActiveIds;
+  _cachedActiveIds = fresh;
+  _cachedActiveIdsStr = str;
+  return fresh;
 }

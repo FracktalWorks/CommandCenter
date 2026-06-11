@@ -9,7 +9,7 @@
  */
 
 import { useSyncExternalStore, useCallback } from "react";
-import { subscribeAllSessions, getActiveSessionIds } from "@/lib/chatStore";
+import { subscribeAllSessions, getActiveSessionIdsStable } from "@/lib/chatStore";
 
 const EMPTY = new Set<string>();
 
@@ -18,7 +18,7 @@ export function useActiveSessions(): Set<string> {
     (listener: () => void) => subscribeAllSessions(listener),
     [],
   );
-  const getSnapshot = useCallback(() => getActiveSessionIds(), []);
+  const getSnapshot = useCallback(() => getActiveSessionIdsStable(), []);
   // Server snapshot must be stable and not cause hydration mismatches.
   const getServerSnapshot = useCallback(() => EMPTY, []);
 

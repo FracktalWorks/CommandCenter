@@ -66,6 +66,174 @@ const LITELLM_KEY =
 const INTERNAL_TOKEN =
   process.env.GATEWAY_INTERNAL_TOKEN ?? process.env.LITELLM_MASTER_KEY ?? "sk-local-dev-change-me";
 
+// ─── Message persistence during streaming ──────────────────────────────────
+
+/**
+ * Save the accumulated assistant message to Postgres so it survives client
+ * disconnect (tab close, browser quit, network drop). Called periodically
+ * during streaming and once when the stream completes.
+ */
+async function persistAssistantMessage(
+  threadId: string,
+  content: string,
+  toolEvents: Array<Record<string, unknown>> = [],
+): Promise<void> {
+  if (!content.trim() && toolEvents.length === 0) return;
+  try {
+    const payload = [{
+      id: `assistant-${threadId}`,
+      role: "assistant",
+      content,
+      timestamp: Date.now(),
+      tool_events: toolEvents,
+      progress_lines: [],
+      reasoning: null,
+      agent_state: null,
+      custom_events: [],
+    }];
+    await fetch(
+      `${GATEWAY_URL}/api/chat/sessions/${threadId}/messages`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${INTERNAL_TOKEN}`,
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(5000),
+      }
+    );
+  } catch {
+    // Best-effort: don't break the stream for persistence failures
+  }
+}
+
+/**
+ * Translate AG-UI events from the backend into our SSE format, persisting
+ * the accumulated assistant message to Postgres along the way so the
+ * conversation survives client disconnects.
+ *
+ * Returns the accumulated assistant content for final persistence.
+ */
+async function translateAndPersistStream(
+  agUiBody: ReadableStream<Uint8Array>,
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  threadId: string,
+): Promise<string> {
+  const reader = agUiBody.getReader();
+  const decoder = new TextDecoder();
+  const toolNames: Record<string, string> = {};
+  const toolArgs: Record<string, string> = {};
+  const toolEvents: Array<Record<string, unknown>> = [];
+  let buf = "";
+  let assistantContent = "";
+  let lastPersistTime = Date.now();
+  let clientConnected = true;
+
+  /** Safely enqueue to the client; sets clientConnected=false on failure. */
+  const enqueue = (data: Record<string, unknown>) => {
+    if (!clientConnected) return;
+    try {
+      controller.enqueue(
+        new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`)
+      );
+    } catch {
+      clientConnected = false;
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const raw = line.slice(6).trim();
+        if (!raw) continue;
+        let ev: Record<string, unknown>;
+        try { ev = JSON.parse(raw); } catch { continue; }
+        const t = ev.type as string;
+        let out: Record<string, unknown> | null = null;
+
+        if (t === "TEXT_MESSAGE_CONTENT") {
+          const delta = String(ev.delta ?? "");
+          assistantContent += delta;
+          out = { type: "delta", content: delta };
+        } else if (t === "REASONING_MESSAGE_CONTENT" || t === "THINKING_TEXT_MESSAGE_CONTENT") {
+          out = { type: "reasoning", content: ev.delta ?? "" };
+        } else if (t === "TOOL_CALL_START") {
+          const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
+          toolNames[String(ev.toolCallId ?? "")] = name;
+          toolArgs[String(ev.toolCallId ?? "")] = "";
+          enqueue({ type: "progress", name });
+          out = { type: "tool_start", id: ev.toolCallId, name, args: {} };
+        } else if (t === "TOOL_CALL_ARGS") {
+          const id = String(ev.toolCallId ?? "");
+          toolArgs[id] = (toolArgs[id] ?? "") + String(ev.delta ?? "");
+        } else if (t === "TOOL_CALL_END" || t === "TOOL_CALL_RESULT") {
+          const id = String(ev.toolCallId ?? "");
+          const name = toolNames[id] ?? "tool";
+          const result = String(ev.result ?? ev.content ?? "");
+          toolEvents.push({
+            id, name,
+            args: parseToolArgs(toolArgs[id]),
+            result,
+            status: "done",
+          });
+          out = {
+            type: "tool_end", id: ev.toolCallId, name,
+            args: parseToolArgs(toolArgs[id]),
+            result, success: true,
+          };
+        } else if (t === "STATE_SNAPSHOT") {
+          out = { type: "state", snapshot: ev.snapshot ?? {} };
+        } else if (t === "STATE_DELTA") {
+          out = { type: "state_delta", delta: ev.delta ?? [] };
+        } else if (t === "CUSTOM") {
+          out = { type: "custom", name: ev.name ?? "", value: ev.value ?? null };
+        } else if (t === "SUB_AGENT_TEXT_DELTA") {
+          out = { type: "sub_agent_delta", agentName: String(ev.agentName ?? ""), runId: String(ev.runId ?? ""), delta: String(ev.delta ?? "") };
+        } else if (t === "SUB_AGENT_TOOL_CALL_START") {
+          out = { type: "sub_agent_tool_start", agentName: String(ev.agentName ?? ""), id: String(ev.toolCallId ?? ""), name: String(ev.toolCallName ?? "") };
+        } else if (t === "SUB_AGENT_TOOL_CALL_RESULT") {
+          out = { type: "sub_agent_tool_end", agentName: String(ev.agentName ?? ""), id: String(ev.toolCallId ?? ""), result: String(ev.content ?? ""), success: ev.success !== false };
+        } else if (t === "SUB_AGENT_ERROR") {
+          out = { type: "sub_agent_error", agentName: String(ev.agentName ?? ""), error: String(ev.error ?? "Sub-agent error") };
+        } else if (t === "RUN_FINISHED") {
+          out = { type: "done", run_id: ev.runId };
+        } else if (t === "RUN_ERROR") {
+          out = { type: "error", content: String(ev.message ?? "Agent run error") };
+        }
+
+        if (out) enqueue(out);
+
+        // Persist every 3s while streaming, so messages survive client disconnect
+        const now = Date.now();
+        if (assistantContent.trim() && now - lastPersistTime > 3000) {
+          lastPersistTime = now;
+          persistAssistantMessage(threadId, assistantContent, toolEvents).catch(() => {});
+        }
+      }
+    }
+  } catch {
+    // Backend stream ended early
+  }
+
+  // Final persist — ensure the complete message is saved
+  if (assistantContent.trim() || toolEvents.length > 0) {
+    await persistAssistantMessage(threadId, assistantContent, toolEvents).catch(() => {});
+  }
+
+  if (clientConnected) {
+    try { controller.close(); } catch { /* already closed */ }
+  }
+
+  return assistantContent;
+}
+
 /** EXECUTIVE_EMAILS: comma-separated list of executive emails for role assignment. */
 const EXECUTIVE_EMAILS = new Set(
   (process.env.EXECUTIVE_EMAILS ?? "")
@@ -199,112 +367,11 @@ export async function POST(req: NextRequest): Promise<Response> {
         { status: gatewayRes.status, headers: sseHeaders() }
       );
     }
-    // Translate AG-UI protocol → {type:"delta"|"tool_start"|"tool_end"|"done"|"error"}
-    // so the useAgentChat hook can render tokens and tool-call blocks in real time.
-    const agUiBody = gatewayRes.body;
+    // Translate AG-UI → frontend SSE, persisting to Postgres so messages
+    // survive client disconnect (tab close, browser quit, network drop).
     const translated = new ReadableStream<Uint8Array>({
       async start(controller) {
-        const reader = agUiBody.getReader();
-        const decoder = new TextDecoder();
-        // tool name lookup: toolCallId → name (needed for tool_end)
-        const toolNames: Record<string, string> = {};
-        // tool args accumulator: toolCallId → streamed argument JSON string
-        const toolArgs: Record<string, string> = {};
-        let buf = "";
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buf += decoder.decode(value, { stream: true });
-            const lines = buf.split("\n");
-            buf = lines.pop() ?? "";
-            for (const line of lines) {
-              if (!line.startsWith("data: ")) continue;
-              const raw = line.slice(6).trim();
-              if (!raw) continue;
-              let ev: Record<string, unknown>;
-              try { ev = JSON.parse(raw); } catch (_e) { continue; }
-              const t = ev.type as string;
-              let out: Record<string, unknown> | null = null;
-              if (t === "TEXT_MESSAGE_CONTENT") {
-                out = { type: "delta", content: ev.delta ?? "" };
-              } else if (
-                t === "REASONING_MESSAGE_CONTENT" ||
-                t === "THINKING_TEXT_MESSAGE_CONTENT"
-              ) {
-                // Model reasoning / chain-of-thought stream (only emitted by
-                // reasoning-capable models — o-series, Claude extended-thinking,
-                // Gemini 2.5 thinking). Surfaced live inside the ThinkingContainer.
-                out = { type: "reasoning", content: ev.delta ?? "" };
-              } else if (t === "TOOL_CALL_START") {
-                const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
-                toolNames[String(ev.toolCallId ?? "")] = name;
-                toolArgs[String(ev.toolCallId ?? "")] = "";
-                // Emit a live progress line first so the ThinkingContainer shows
-                // activity immediately (before the tool result arrives).
-                controller.enqueue(
-                  new TextEncoder().encode(
-                    `data: ${JSON.stringify({ type: "progress", name })}\n\n`
-                  )
-                );
-                out = { type: "tool_start", id: ev.toolCallId, name, args: {} };
-              } else if (t === "TOOL_CALL_ARGS") {
-                // Accumulate the streamed argument deltas so the tool input is
-                // visible in the UI (previously dropped — args showed as empty).
-                const id = String(ev.toolCallId ?? "");
-                toolArgs[id] = (toolArgs[id] ?? "") + String(ev.delta ?? "");
-              } else if (t === "TOOL_CALL_END") {
-                out = {
-                  type: "tool_end",
-                  id: ev.toolCallId,
-                  name: toolNames[String(ev.toolCallId ?? "")] ?? "tool",
-                  args: parseToolArgs(toolArgs[String(ev.toolCallId ?? "")]),
-                  result: ev.result ?? "",
-                  success: true,
-                };
-              } else if (t === "TOOL_CALL_RESULT") {
-                out = {
-                  type: "tool_end",
-                  id: ev.toolCallId,
-                  name: toolNames[String(ev.toolCallId ?? "")] ?? "tool",
-                  args: parseToolArgs(toolArgs[String(ev.toolCallId ?? "")]),
-                  result: ev.content ?? "",
-                  success: true,
-                };
-              } else if (t === "STATE_SNAPSHOT") {
-                // AG-UI generative UI: full agent-state object (M2.6).
-                out = { type: "state", snapshot: ev.snapshot ?? {} };
-              } else if (t === "STATE_DELTA") {
-                out = { type: "state_delta", delta: ev.delta ?? [] };
-              } else if (t === "CUSTOM") {
-                out = { type: "custom", name: ev.name ?? "", value: ev.value ?? null };
-              } else if (t === "SUB_AGENT_TEXT_DELTA") {
-                // Sub-agent live text stream (call_agent tool delegation).
-                out = { type: "sub_agent_delta", agentName: String(ev.agentName ?? ""), runId: String(ev.runId ?? ""), delta: String(ev.delta ?? "") };
-              } else if (t === "SUB_AGENT_TOOL_CALL_START") {
-                out = { type: "sub_agent_tool_start", agentName: String(ev.agentName ?? ""), id: String(ev.toolCallId ?? ""), name: String(ev.toolCallName ?? "") };
-              } else if (t === "SUB_AGENT_TOOL_CALL_RESULT") {
-                out = { type: "sub_agent_tool_end", agentName: String(ev.agentName ?? ""), id: String(ev.toolCallId ?? ""), result: String(ev.content ?? ""), success: ev.success !== false };
-              } else if (t === "SUB_AGENT_ERROR") {
-                out = { type: "sub_agent_error", agentName: String(ev.agentName ?? ""), error: String(ev.error ?? "Sub-agent error") };
-              } else if (t === "RUN_FINISHED") {
-                out = { type: "done", run_id: ev.runId };
-
-              } else if (t === "RUN_ERROR") {
-                out = { type: "error", content: String(ev.message ?? "Agent run error") };
-              }
-              if (out) {
-                controller.enqueue(
-                  new TextEncoder().encode(`data: ${JSON.stringify(out)}\n\n`)
-                );
-              }
-            }
-          }
-        } catch (_e) {
-          // stream ended early
-        } finally {
-          controller.close();
-        }
+        await translateAndPersistStream(gatewayRes.body!, controller, threadId ?? "");
       },
     });
     return new Response(translated, { headers: sseHeaders() });
@@ -316,7 +383,6 @@ export async function POST(req: NextRequest): Promise<Response> {
   // Legacy langgraph mode: falls back to batch /agent/run (no streaming).
   if (mode === "copilot" && !isOrchestrator) {
     // /agent/run/stream returns the same AG-UI event format as /copilot/chat.
-    // Re-use the exact same translation block already implemented above.
     let streamRes: Response;
     try {
       streamRes = await fetch(`${GATEWAY_URL}/agent/run/stream`, {
@@ -344,92 +410,11 @@ export async function POST(req: NextRequest): Promise<Response> {
         { status: streamRes.status, headers: sseHeaders() }
       );
     }
-    // Translate AG-UI → frontend SSE (same logic as /copilot/chat above).
-    const agUiBody2 = streamRes.body;
+    // Translate AG-UI → frontend SSE, persisting to Postgres so messages
+    // survive client disconnect (tab close, browser quit, network drop).
     const translated2 = new ReadableStream<Uint8Array>({
       async start(controller) {
-        const reader = agUiBody2.getReader();
-        const decoder = new TextDecoder();
-        const toolNames2: Record<string, string> = {};
-        const toolArgs2: Record<string, string> = {};
-        let buf = "";
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buf += decoder.decode(value, { stream: true });
-            const lines = buf.split("\n");
-            buf = lines.pop() ?? "";
-            for (const line of lines) {
-              if (!line.startsWith("data: ")) continue;
-              const raw = line.slice(6).trim();
-              if (!raw) continue;
-              let ev: Record<string, unknown>;
-              try { ev = JSON.parse(raw); } catch (_e) { continue; }
-              const t = ev.type as string;
-              let out: Record<string, unknown> | null = null;
-              if (t === "TEXT_MESSAGE_CONTENT") {
-                out = { type: "delta", content: ev.delta ?? "" };
-              } else if (t === "REASONING_MESSAGE_CONTENT" || t === "THINKING_TEXT_MESSAGE_CONTENT") {
-                out = { type: "reasoning", content: ev.delta ?? "" };
-              } else if (t === "TOOL_CALL_START") {
-                const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
-                toolNames2[String(ev.toolCallId ?? "")] = name;
-                toolArgs2[String(ev.toolCallId ?? "")] = "";
-                controller.enqueue(
-                  new TextEncoder().encode(
-                    `data: ${JSON.stringify({ type: "progress", name })}\n\n`
-                  )
-                );
-                out = { type: "tool_start", id: ev.toolCallId, name, args: {} };
-              } else if (t === "TOOL_CALL_ARGS") {
-                const id2 = String(ev.toolCallId ?? "");
-                toolArgs2[id2] = (toolArgs2[id2] ?? "") + String(ev.delta ?? "");
-              } else if (t === "TOOL_CALL_END" || t === "TOOL_CALL_RESULT") {
-                const id2 = String(ev.toolCallId ?? "");
-                out = {
-                  type: "tool_end",
-                  id: ev.toolCallId,
-                  name: toolNames2[id2] ?? "tool",
-                  args: parseToolArgs(toolArgs2[id2]),
-                  result: ev.result ?? ev.content ?? "",
-                  success: true,
-                };
-              } else if (t === "STATE_SNAPSHOT") {
-                // AG-UI generative UI: full agent-state object (M2.6).
-                out = { type: "state", snapshot: ev.snapshot ?? {} };
-              } else if (t === "STATE_DELTA") {
-                // JSON Patch (RFC 6902) incremental state update.
-                out = { type: "state_delta", delta: ev.delta ?? [] };
-              } else if (t === "CUSTOM") {
-                // Application-defined rich widget event (name + value payload).
-                out = { type: "custom", name: ev.name ?? "", value: ev.value ?? null };
-              } else if (t === "SUB_AGENT_TEXT_DELTA") {
-                out = { type: "sub_agent_delta", agentName: String(ev.agentName ?? ""), runId: String(ev.runId ?? ""), delta: String(ev.delta ?? "") };
-              } else if (t === "SUB_AGENT_TOOL_CALL_START") {
-                out = { type: "sub_agent_tool_start", agentName: String(ev.agentName ?? ""), id: String(ev.toolCallId ?? ""), name: String(ev.toolCallName ?? "") };
-              } else if (t === "SUB_AGENT_TOOL_CALL_RESULT") {
-                out = { type: "sub_agent_tool_end", agentName: String(ev.agentName ?? ""), id: String(ev.toolCallId ?? ""), result: String(ev.content ?? ""), success: ev.success !== false };
-              } else if (t === "SUB_AGENT_ERROR") {
-                out = { type: "sub_agent_error", agentName: String(ev.agentName ?? ""), error: String(ev.error ?? "Sub-agent error") };
-              } else if (t === "RUN_FINISHED") {
-
-                out = { type: "done", run_id: ev.runId };
-              } else if (t === "RUN_ERROR") {
-                out = { type: "error", content: String(ev.message ?? "Agent run error") };
-              }
-              if (out) {
-                controller.enqueue(
-                  new TextEncoder().encode(`data: ${JSON.stringify(out)}\n\n`)
-                );
-              }
-            }
-          }
-        } catch (_e) {
-          // stream ended early
-        } finally {
-          controller.close();
-        }
+        await translateAndPersistStream(streamRes.body!, controller, threadId ?? "");
       },
     });
     return new Response(translated2, { headers: sseHeaders() });

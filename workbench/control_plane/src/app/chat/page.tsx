@@ -532,10 +532,25 @@ function ChatPageInner() {
 
   // After initial localStorage render, fetch from Postgres and merge any sessions
   // that exist there but not in the browser (e.g. after cache clear or new device).
+  // Also poll every 30s so sessions created on other devices appear in the sidebar
+  // without requiring a page refresh.
   useEffect(() => {
-    fetchAndMergeSessionsFromDb().then((merged) => {
-      setSessions(merged);
-    }).catch(() => {});
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const sync = async () => {
+      if (cancelled) return;
+      try {
+        const merged = await fetchAndMergeSessionsFromDb();
+        if (!cancelled) setSessions(merged);
+      } catch { /* best-effort */ }
+      if (!cancelled) timer = setTimeout(sync, 30000);
+    };
+
+    // Initial sync
+    sync();
+
+    return () => { cancelled = true; clearTimeout(timer); };
   }, []);
 
   // Fetch memories from Mem0 (or return [] gracefully).

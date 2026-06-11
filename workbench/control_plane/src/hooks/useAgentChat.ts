@@ -418,5 +418,114 @@ export function useAgentChat({
     setSessionState(threadId, (prev) => ({ ...prev, abortController: null }));
   }, [threadId]);
 
+  // ── Reconnection & cross-device polling ─────────────────────────────
+  // Two-tier polling:
+  //   1. Fast poll (3s): when the last assistant message looks incomplete
+  //      (stream was interrupted by tab close / browser quit).
+  //   2. Slow poll (30s): always runs, picks up messages from other devices
+  //      without requiring a session switch.
+  useEffect(() => {
+    // Don't poll while actively streaming (avoids races).
+    if (isLoading) return;
+
+    const last = messages[messages.length - 1];
+    const lastIncomplete =
+      last?.role === "assistant" &&
+      last.content &&
+      (last.streaming || !/[.?!]\s*$/.test(last.content.trim()));
+
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setTimeout>;
+
+    // Track the last known message count so we only update on change
+    let lastKnownCount = messages.length;
+
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const res = await fetch(
+          `/api/chat/sessions/${threadId}/messages`,
+          { signal: AbortSignal.timeout(5000) }
+        );
+        if (!res.ok) return;
+        const remote = await res.json() as Array<{
+          id: string; role: string; content: string;
+          timestamp: number; tool_events?: unknown[];
+          progress_lines?: string[]; reasoning?: string[] | null;
+          agent_state?: Record<string, unknown> | null;
+          custom_events?: unknown[];
+        }>;
+        if (!Array.isArray(remote) || remote.length === 0) return;
+
+        // Only update if remote has MORE messages than we currently have
+        if (remote.length <= lastKnownCount) {
+          // Still schedule next poll if needed
+          const remoteLast = remote[remote.length - 1];
+          const stillIncomplete =
+            remoteLast?.role === "assistant" &&
+            remoteLast.content &&
+            !/[.?!]\s*$/.test(remoteLast.content.trim());
+
+          if (!cancelled) {
+            const interval = stillIncomplete ? 3000 : 30000;
+            pollTimer = setTimeout(poll, interval);
+          }
+          return;
+        }
+
+        // Map remote format to ChatMessage
+        const remoteMsgs: ChatMessage[] = remote.map((r) => ({
+          id: r.id,
+          role: r.role as "user" | "assistant" | "system",
+          content: r.content ?? "",
+          timestamp: r.timestamp ?? Date.now(),
+          toolEvents: (r.tool_events as ToolEvent[]) ?? [],
+          progressLines: r.progress_lines ?? [],
+          reasoningBlocks: Array.isArray(r.reasoning)
+            ? r.reasoning.filter((x): x is string => typeof x === "string")
+            : undefined,
+          agentState: r.agent_state ?? undefined,
+          customEvents: (r.custom_events as Array<{ name: string; value: unknown }>) ?? [],
+        }));
+
+        // Merge: keep local non-streaming messages, replace with remote
+        // for any assistant messages that were streaming (now complete on server)
+        const localIds = new Set(messages.map((m) => m.id));
+        const newMsgs = remoteMsgs.filter((m) => !localIds.has(m.id));
+
+        if (newMsgs.length > 0) {
+          lastKnownCount = remote.length;
+          setSessionState(threadId, (prev) => ({
+            ...prev,
+            messages: [
+              ...prev.messages.filter((m) => m.role !== "assistant" || !m.streaming),
+              ...newMsgs,
+            ],
+          }));
+        }
+
+        // Determine next poll interval
+        const updatedLast = remoteMsgs[remoteMsgs.length - 1];
+        const stillIncomplete =
+          updatedLast?.role === "assistant" &&
+          updatedLast.content &&
+          !/[.?!]\s*$/.test(updatedLast.content.trim());
+
+        if (!cancelled) {
+          const interval = stillIncomplete ? 3000 : 30000;
+          pollTimer = setTimeout(poll, interval);
+        }
+      } catch {
+        if (!cancelled) pollTimer = setTimeout(poll, 10000);
+      }
+    };
+
+    // Start polling: fast if incomplete, slow otherwise
+    const initialInterval = lastIncomplete ? 2000 : 30000;
+    pollTimer = setTimeout(poll, initialInterval);
+
+    return () => { cancelled = true; clearTimeout(pollTimer); };
+  }, [threadId, messages, isLoading]);
+
   return { messages, isLoading, error, sendMessage, clearMessages, stopGeneration, setMessages };
 }

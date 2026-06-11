@@ -510,10 +510,35 @@ export default function AgentChat({
 
   const missingMandatory = statuses.filter((s) => s.mandatory && !s.configured);
 
-  // Auto-scroll to latest message
+  // ── Smart auto-scroll + scroll-to-bottom button ─────────────────────
+  const threadRef = useRef<HTMLDivElement>(null);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const isNearBottomRef = useRef(true);
+
+  // Track whether user has scrolled away from the bottom
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = threadRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const nearBottom = dist < 80;
+      isNearBottomRef.current = nearBottom;
+      setShowScrollBtn(!nearBottom && el.scrollHeight > el.clientHeight + 200);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Auto-scroll only when user is near the bottom
+  useEffect(() => {
+    if (isNearBottomRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages]);
+
+  const scrollToBottom = useCallback(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, []);
 
   const enqueue = useCallback((text: string, front = false) => {
     if (front) queueRef.current.unshift(text);
@@ -655,8 +680,13 @@ export default function AgentChat({
     <div className="flex flex-col h-full">
       {/* Agent header — VS Code-style minimal bar */}
       <div className="flex items-center gap-2 px-3 sm:px-4 py-1.5 sm:py-2 border-b border-zinc-800/50 bg-zinc-900/40 shrink-0">
-        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isLoading ? "bg-amber-400 animate-pulse" : "bg-emerald-500"}`} />
         <span className="text-[11px] sm:text-xs font-medium text-zinc-300 truncate">{currentAgentName}</span>
+        {isLoading && (
+          <span className="hidden sm:inline text-[10px] text-amber-400/70 animate-pulse">
+            thinking…
+          </span>
+        )}
         {agentRuntimeMeta(agentRuntime).slice(0, 1).map((m, i) => (
           <span
             key={i}
@@ -731,7 +761,24 @@ export default function AgentChat({
       )}
 
       {/* Message thread */}
-      <div className="flex-1 overflow-y-auto px-3 sm:px-4 py-3 space-y-3">
+      <div
+        ref={threadRef}
+        className="flex-1 overflow-y-auto px-3 sm:px-4 py-3 space-y-3 relative"
+      >
+        {/* Scroll-to-bottom floating button */}
+        {showScrollBtn && (
+          <button
+            onClick={scrollToBottom}
+            className="sticky bottom-3 left-1/2 -translate-x-1/2 z-10 w-9 h-9 rounded-full bg-zinc-700 border border-zinc-600 text-zinc-300 shadow-lg flex items-center justify-center hover:bg-zinc-600 hover:text-zinc-100 transition-all animate-bounce-subtle"
+            aria-label="Scroll to bottom"
+            title="Jump to latest"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M4 6l4 4 4-4" />
+            </svg>
+          </button>
+        )}
+
         {/* Stream interrupted notice — last message was mid-stream when session closed */}
         {!isLoading && messages.length > 0 && (() => {
           const last = messages[messages.length - 1];
@@ -765,16 +812,38 @@ export default function AgentChat({
           </div>
         )}
 
-        {messages.map((msg) => (
-          <MessageBubble
-            key={msg.id}
-            message={msg}
-            sessionId={sessionId}
-            onChoice={handleChoice}
-            onFileOpen={(entry) => setViewerEntry(entry)}
-            onResend={(content) => { submitText(content); }}
-          />
-        ))}
+        {messages.map((msg, i) => {
+          // Show date divider when the date changes between messages
+          const prevMsg = i > 0 ? messages[i - 1] : null;
+          const showDateDivider =
+            prevMsg &&
+            new Date(msg.timestamp).toDateString() !== new Date(prevMsg.timestamp).toDateString();
+
+          return (
+            <div key={msg.id} className="animate-fade-in">
+              {showDateDivider && (
+                <div className="flex items-center gap-3 my-4">
+                  <div className="flex-1 h-px bg-zinc-800" />
+                  <span className="text-[10px] text-zinc-600 font-medium shrink-0">
+                    {new Date(msg.timestamp).toLocaleDateString(undefined, {
+                      weekday: "short",
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </span>
+                  <div className="flex-1 h-px bg-zinc-800" />
+                </div>
+              )}
+              <MessageBubble
+                message={msg}
+                sessionId={sessionId}
+                onChoice={handleChoice}
+                onFileOpen={(entry) => setViewerEntry(entry)}
+                onResend={(content) => { submitText(content); }}
+              />
+            </div>
+          );
+        })}
 
         {/* HITL confirmation card — shown when agent requests user approval */}
         {confirmation && (
@@ -1023,7 +1092,7 @@ export default function AgentChat({
             </button>
           </div>
         )}
-        <div className="flex items-end gap-3">
+        <div className="flex items-end gap-2 sm:gap-3">
           {/* Upload button — files land in .tmp/ and context is sent to agent */}
           <FileUploadButton
             sessionId={sessionId}
@@ -1037,25 +1106,33 @@ export default function AgentChat({
             className="shrink-0 self-center mb-0.5"
           />
 
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            rows={1}
-            placeholder={
-              isLoading
-                ? `${SEND_MODE_LABELS[sendMode]} a follow-up to ${currentAgentName}…`
-                : `Message ${currentAgentName}…`
-            }
-            className="flex-1 resize-none rounded-xl bg-zinc-800 border border-zinc-700 px-4 py-2.5 text-[13px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 max-h-40 overflow-y-auto transition-colors"
-            style={{ minHeight: "44px" }}
-            onInput={(e) => {
-              const t = e.currentTarget;
-              t.style.height = "auto";
-              t.style.height = `${Math.min(t.scrollHeight, 160)}px`;
-            }}
-          />
+          <div className="flex-1 relative">
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              rows={1}
+              placeholder={
+                isLoading
+                  ? `${SEND_MODE_LABELS[sendMode]} a follow-up to ${currentAgentName}…`
+                  : `Message ${currentAgentName}…`
+              }
+              className="w-full resize-none rounded-xl bg-zinc-800 border border-zinc-700 px-4 py-2.5 text-[13px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 max-h-40 overflow-y-auto transition-colors"
+              style={{ minHeight: "44px" }}
+              onInput={(e) => {
+                const t = e.currentTarget;
+                t.style.height = "auto";
+                t.style.height = `${Math.min(t.scrollHeight, 160)}px`;
+              }}
+            />
+            {/* Keyboard shortcut hint */}
+            {!input.trim() && (
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[9px] text-zinc-600 pointer-events-none hidden sm:block">
+                Enter to send · Shift+Enter for new line
+              </span>
+            )}
+          </div>
 
           {/* Stop button (only while generating) */}
           {isLoading && (

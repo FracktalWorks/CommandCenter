@@ -18,8 +18,9 @@ and streams chat responses as AG-UI events.
 2. copilot_agent.py provides CommandCenterCopilotAgent -- the MAF wrapper for Copilot SDK agents with BYOK
 3. agents.py exports build_orchestrator_agent() -- the main orchestrator MAF Agent
 4. mutation.py handles Self_Mutation_Node -- spawns Docker sandbox on agent failure
-5. All agents must go through MAF -- no raw Copilot SDK paths for business execution
-6. mutation_runner.py runs inside the Docker sandbox -- uses Copilot SDK directly (by design)
+5. stream_relay.py buffers all SSE events to Redis Streams for fire-and-forget chat with live reconnection
+6. All agents must go through MAF -- no raw Copilot SDK paths for business execution
+7. mutation_runner.py runs inside the Docker sandbox -- uses Copilot SDK directly (by design)
 
 ## Work Guidance
 
@@ -42,6 +43,10 @@ and streams chat responses as AG-UI events.
 2. agent.run(stream=True) returns AgentResponseUpdate objects
 3. Each update is translated to AG-UI SSE events (TEXT_MESSAGE_CONTENT, TOOL_CALL_*, etc.)
 4. Events are yielded as SSE frames to the gateway
+5. Every SSE frame is also pushed to Redis Stream (cc:stream:{thread_id}) via stream_relay
+   so the reconnect endpoint (GET /agent/run/{thread_id}/reconnect) can replay missed
+   events after a browser disconnect.
+6. _stream_relay_thread_id context var controls teeing; set per-run, cleared on finish
 
 ## Verification
 

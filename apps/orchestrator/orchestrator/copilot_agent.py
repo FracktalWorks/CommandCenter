@@ -61,6 +61,23 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
         if provider:
             config["provider"] = provider
 
+        # === Reasoning: forward effort so thinking deltas stream ===
+        effort = (
+            opts.get("reasoning_effort")
+            or self._default_options.get("reasoning_effort")
+        )
+        if effort:
+            config["reasoning_effort"] = effort
+            try:
+                return await self._client.create_session(config)
+            except Exception:  # noqa: BLE001
+                # Model may not support reasoning_effort — retry without.
+                logger.warning(
+                    "create_session failed with reasoning_effort=%s; "
+                    "retrying without", effort,
+                )
+                config.pop("reasoning_effort", None)
+
         return await self._client.create_session(config)
 
     async def _stream_updates(
@@ -113,6 +130,10 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
 
         queue: asyncio.Queue[AgentResponseUpdate | Exception | None] = asyncio.Queue()
 
+        # Reasoning blocks already streamed as deltas — used to skip the
+        # duplicate full-content ASSISTANT_REASONING event at block end.
+        _streamed_reasoning_ids: set[str] = set()
+
         def _on_event(event: SessionEvent) -> None:
             """Translate Copilot SDK events to AgentResponseUpdate objects."""
             try:
@@ -132,27 +153,43 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                 elif t == SessionEventType.ASSISTANT_REASONING_DELTA:
                     delta = getattr(d, "delta_content", "") or ""
                     if delta:
+                        _rid = (
+                            getattr(d, "reasoning_id", None)
+                            or getattr(d, "id", None)
+                            or "_default"
+                        )
+                        _streamed_reasoning_ids.add(str(_rid))
                         queue.put_nowait(AgentResponseUpdate(
                             role="assistant",
-                            contents=[Content.from_text_reasoning(delta)],
+                            contents=[Content.from_text_reasoning(text=delta)],
                             raw_representation=event,
                         ))
 
                 elif t == SessionEventType.ASSISTANT_REASONING:
                     content = getattr(d, "content", "") or ""
-                    if content:
+                    _rid = (
+                        getattr(d, "reasoning_id", None)
+                        or getattr(d, "id", None)
+                        or "_default"
+                    )
+                    # Skip if this block already streamed as deltas —
+                    # emitting it again would duplicate the thinking text.
+                    if content and str(_rid) not in _streamed_reasoning_ids:
                         queue.put_nowait(AgentResponseUpdate(
                             role="assistant",
-                            contents=[Content.from_text_reasoning(content)],
+                            contents=[Content.from_text_reasoning(text=content)],
                             raw_representation=event,
                         ))
 
                 elif t == SessionEventType.ASSISTANT_INTENT:
                     intent = getattr(d, "intent", "") or ""
                     if intent:
+                        # No text content — the executor translates the raw
+                        # INTENT event into a timeline entry.  Emitting text
+                        # here would pollute the visible assistant message.
                         queue.put_nowait(AgentResponseUpdate(
                             role="assistant",
-                            contents=[Content.from_text(f"[Intent] {intent}")],
+                            contents=[],
                             raw_representation=event,
                         ))
 

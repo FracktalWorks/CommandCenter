@@ -57,6 +57,22 @@ and streams chat responses as AG-UI events.
 8. Reconnect endpoint (GET /agent/run/{thread_id}/reconnect) replays from the
    cursor then subscribes live FROM THE REPLAY TAIL (no event gap).
 
+### Reasoning / thinking stream (github-copilot runtime)
+- Copilot SDK sessions emit ASSISTANT_REASONING_DELTA token-by-token when
+  SessionConfig has streaming=True; copilot_agent.py translates them via
+  Content.from_text_reasoning(text=...) -- the kwarg is REQUIRED (keyword-only
+  API; positional calls raise TypeError silently swallowed by _on_event).
+- The final ASSISTANT_REASONING full-block event is SKIPPED when its
+  reasoning_id already streamed as deltas (prevents duplicated thinking text).
+- think_mode "thinking"/"max" sets default_options["reasoning_effort"]
+  (medium/high); _create_session forwards it to SessionConfig and retries
+  without it if the model rejects it.
+- Executor translates text_reasoning contents to THINKING_TEXT_MESSAGE_CONTENT
+  SSE frames; tool-role text frames (progress, partial output) become
+  PROGRESS_UPDATE frames -- never TEXT_MESSAGE_CONTENT (would pollute the
+  visible answer). ASSISTANT_INTENT carries no text content; the raw INTENT
+  handler renders it as a timeline entry.
+
 ## Verification
 
 - pytest tests/ -- all 154 tests must pass

@@ -204,6 +204,15 @@ async function translateAndPersistStream(
             }
           }
           out = { type: "reasoning", content: ev.delta ?? "" };
+        } else if (t === "PROGRESS_UPDATE") {
+          // Tool progress / partial output — shown in the thinking header,
+          // never in the visible assistant message.
+          const msg = String(ev.message ?? "");
+          if (msg) {
+            progressLines.push(msg);
+            if (progressLines.length > 20) progressLines.shift();
+          }
+          out = { type: "progress", name: msg };
         } else if (t === "TOOL_CALL_START") {
           const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
           toolNames[String(ev.toolCallId ?? "")] = name;

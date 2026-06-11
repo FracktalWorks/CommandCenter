@@ -218,13 +218,23 @@ export default function ThinkingContainer({
 
   const hasError = toolEvents.some((t) => t.status === "error");
 
-  // Title shown in the header.
+  // Live tail of the model's chain-of-thought — shown in the header while
+  // active so the user sees the "stream of consciousness" even collapsed
+  // (mirrors VS Code Copilot's live thinking snippet).
+  const liveReasoningTail = useMemo(() => {
+    if (!isActive || !hasReasoning) return null;
+    const last = reasoningBlocks![reasoningBlocks!.length - 1].trim();
+    if (!last) return null;
+    return last.length > 90 ? `…${last.slice(-90)}` : last;
+  }, [isActive, hasReasoning, reasoningBlocks]);
+
+  // Title shown in the header.  A currently-running tool takes priority;
+  // otherwise show the live reasoning tail, then the last known label.
+  const hasRunningTool = toolEvents.some((t) => t.status === "running");
   const title = isActive
-    ? lastLabel
-      ? `Working: ${lastLabel}`
-      : hasReasoning
-      ? "Reasoning…"
-      : "Thinking…"
+    ? (hasRunningTool && lastLabel ? `Working: ${lastLabel}` : null)
+      ?? liveReasoningTail
+      ?? (lastLabel ? `Working: ${lastLabel}` : "Thinking…")
     : summaryTitle;
 
   const totalMs = useMemo(() => {

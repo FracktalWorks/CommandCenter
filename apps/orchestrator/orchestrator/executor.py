@@ -1247,12 +1247,12 @@ async def run_agent_stream(
                     try:
                         _opts = agent.default_options
                         if isinstance(_opts, dict):
+                            # Forwarded to SessionConfig.reasoning_effort by
+                            # CommandCenterCopilotAgent._create_session().
                             if _think_mode == "thinking":
-                                _opts["thinking"] = {"type": "enabled", "budget_tokens": 4000}
-                                _opts.setdefault("model_params", {})["reasoning_effort"] = "medium"
+                                _opts["reasoning_effort"] = "medium"
                             elif _think_mode == "max":
-                                _opts["thinking"] = {"type": "enabled", "budget_tokens": 16000}
-                                _opts.setdefault("model_params", {})["reasoning_effort"] = "high"
+                                _opts["reasoning_effort"] = "high"
                     except Exception:  # noqa: BLE001
                         pass
 
@@ -1277,18 +1277,32 @@ async def run_agent_stream(
                                            options=_run_opts if _run_opts else None,
                                            session=_agent_session)
                         async for _update in _stream:
+                            _upd_role = getattr(_update, "role", None)
+                            _upd_role = getattr(_upd_role, "value", _upd_role)
                             for _c in (_update.contents or []):
                                 _ct = getattr(_c, "type", None)
                                 if _ct == "text":
                                     _delta = _c.text or ""
-                                    if _delta:
-                                        if not _text_started:
-                                            _text_started = True
-                                            _msg_id = _update.message_id or str(uuid.uuid4())
-                                            yield _sse({"type": "TEXT_MESSAGE_START",
-                                                        "messageId": _msg_id, "role": "assistant"})
-                                        yield _sse({"type": "TEXT_MESSAGE_CONTENT",
-                                                    "messageId": _msg_id, "delta": _delta})
+                                    if not _delta:
+                                        continue
+                                    # Tool-role text frames (progress lines,
+                                    # partial terminal output) belong in the
+                                    # thinking timeline — NOT the visible
+                                    # assistant message.
+                                    if _upd_role == "tool":
+                                        _pmsg = _delta
+                                        if _pmsg.startswith("[progress] "):
+                                            _pmsg = _pmsg[len("[progress] "):]
+                                        yield _sse({"type": "PROGRESS_UPDATE",
+                                                    "message": _pmsg[:200]})
+                                        continue
+                                    if not _text_started:
+                                        _text_started = True
+                                        _msg_id = _update.message_id or str(uuid.uuid4())
+                                        yield _sse({"type": "TEXT_MESSAGE_START",
+                                                    "messageId": _msg_id, "role": "assistant"})
+                                    yield _sse({"type": "TEXT_MESSAGE_CONTENT",
+                                                "messageId": _msg_id, "delta": _delta})
                                 elif _ct == "text_reasoning":
                                     _delta = _c.text or ""
                                     if _delta:

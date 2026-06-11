@@ -501,7 +501,7 @@ async def _run_mutation_sandbox(
     github_token: str | None = getattr(settings, "github_token", None) or None
     gateway_key: str | None = getattr(settings, "litellm_master_key", None) or None
     gateway_url: str = getattr(settings, "litellm_base_url", "http://host.docker.internal:8080")
-    mutation_model: str = getattr(settings, "mutation_model", "openai/tier3-opus")
+    mutation_model: str = getattr(settings, "mutation_model", "openai/tier-powerful")
     sandbox_image: str = getattr(settings, "mutation_sandbox_image", "acb-mutation-runner:latest")
     timeout_s: int = int(getattr(settings, "mutation_timeout_seconds", 600))
     agent_dir: str | None = telemetry.get("local_clone_dir")

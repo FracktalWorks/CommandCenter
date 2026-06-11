@@ -290,9 +290,9 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
 }
 
 _TIER_LABELS: dict[str, dict[str, str]] = {
-    "tier1-local-qwen3": {"id": "tier1", "label": "Tier 1 — Fast / Cheap", "description": "Triage, classification, quick routing"},
-    "tier2-sonnet":      {"id": "tier2", "label": "Tier 2 — Balanced",     "description": "Structured extraction, drafting, summaries"},
-    "tier3-opus":        {"id": "tier3", "label": "Tier 3 — Powerful",     "description": "Multi-hop reasoning, strategy, planning"},
+    "tier-fast":      {"id": "tier1", "label": "Tier 1 — Fast / Cheap", "description": "Triage, classification, quick routing"},
+    "tier-balanced":  {"id": "tier2", "label": "Tier 2 — Balanced",     "description": "Structured extraction, drafting, summaries"},
+    "tier-powerful":  {"id": "tier3", "label": "Tier 3 — Powerful",     "description": "Multi-hop reasoning, strategy, planning"},
 }
 
 
@@ -358,7 +358,7 @@ def _is_provider_configured(provider: str) -> bool:
 # ---------------------------------------------------------------------------
 
 class TierInfo(BaseModel):
-    tier_name: str          # e.g. "tier1-local-qwen3"
+    tier_name: str          # e.g. "tier-fast"
     tier_id: str            # "tier1" | "tier2" | "tier3"
     label: str
     description: str
@@ -382,13 +382,13 @@ class LLMConfig(BaseModel):
 
 
 class TierUpdateRequest(BaseModel):
-    tier_name: str   # e.g. "tier1-local-qwen3"
+    tier_name: str   # e.g. "tier-fast"
     model: str       # new litellm model string
     api_base: str | None = None   # for Ollama / vLLM
 
 
 class TestRequest(BaseModel):
-    tier_name: str   # e.g. "tier1-local-qwen3"
+    tier_name: str   # e.g. "tier-fast"
 
 
 # ---------------------------------------------------------------------------
@@ -570,7 +570,7 @@ async def test_tier(
 
     from acb_llm.client import LLMTier, complete
 
-    tier_map = {"tier1-local-qwen3": "tier1", "tier2-sonnet": "tier2", "tier3-opus": "tier3"}
+    tier_map = {"tier-fast": "tier1", "tier-balanced": "tier2", "tier-powerful": "tier3"}
     tier_id = tier_map.get(req.tier_name)
     if not tier_id:
         raise HTTPException(status_code=400, detail=f"Unknown tier: {req.tier_name}")

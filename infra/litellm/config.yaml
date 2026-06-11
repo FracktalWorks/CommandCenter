@@ -7,15 +7,15 @@
 
 model_list:
   # ── Tier assignments ────────────────────────────────────────────────────
-  - model_name: tier1-local-qwen3
+  - model_name: tier-fast
     litellm_params:
       model: deepseek/deepseek-chat
       api_key: os.environ/DEEPSEEK_API_KEY
-  - model_name: tier2-sonnet
+  - model_name: tier-balanced
     litellm_params:
       model: gemini/gemini-2.5-flash
       api_key: os.environ/GEMINI_API_KEY
-  - model_name: tier3-opus
+  - model_name: tier-powerful
     litellm_params:
       model: gemini/gemini-2.5-pro
       api_key: os.environ/GEMINI_API_KEY

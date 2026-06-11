@@ -484,7 +484,7 @@ Full (all fields CommandCenter reads):
   "skill_repos": ["skill-clickup-sync"],
   "integrations": ["clickup", "zoho-crm"],
   "optional_integrations": [],
-  "model_tier": "tier2-sonnet",
+  "model_tier": "tier-balanced",
   "mcp_servers": {},
   "execution_budget": {
     "max_runtime_seconds": 300,
@@ -730,7 +730,7 @@ def build_agent() -> GitHubCopilotAgent:
             # CommandCenter auto-detects new scripts and wires them on the next pull.
         ],
         default_options={
-            "model": "tier2-sonnet",
+            "model": "tier-balanced",
             "provider": _litellm_provider(),
             "mcp_servers": {},
             "on_permission_request": PermissionHandler.approve_all,
@@ -869,19 +869,19 @@ The gateway /v1 endpoint (at `LITELLM_BASE_URL`, default `http://127.0.0.1:8080`
 
 | Alias | Default model | Use for |
 |---|---|---|
-| `tier1-local-qwen3` | `gemini/gemini-2.5-flash-lite` | Cheap, fast: classification, triage, extraction |
-| `tier2-sonnet` | `gemini/gemini-2.5-flash` | Standard: structured tasks, drafting, tool calling |
-| `tier3-opus` | `gemini/gemini-2.5-pro` | Heavy reasoning, multi-hop, strategy |
+| `tier-fast` | `gemini/gemini-2.5-flash-lite` | Cheap, fast: classification, triage, extraction |
+| `tier-balanced` | `gemini/gemini-2.5-flash` | Standard: structured tasks, drafting, tool calling |
+| `tier-powerful` | `gemini/gemini-2.5-pro` | Heavy reasoning, multi-hop, strategy |
 
 GitHub Copilot fallbacks (activated automatically if Gemini is unavailable):
 
 | Tier | Copilot fallback |
 |---|---|
-| `tier1-local-qwen3` | `copilot/gpt-4o-mini` |
-| `tier2-sonnet` | `copilot/gpt-4o` |
-| `tier3-opus` | `copilot/o3-mini` |
+| `tier-fast` | `copilot/gpt-4o-mini` |
+| `tier-balanced` | `copilot/gpt-4o` |
+| `tier-powerful` | `copilot/o3-mini` |
 
-Use `"model": "tier2-sonnet"` in `default_options` for most agents. Use `tier3-opus` only for agents that need deep reasoning — it is significantly more expensive.
+Use `"model": "tier-balanced"` in `default_options` for most agents. Use `tier-powerful` only for agents that need deep reasoning — it is significantly more expensive.
 
 ---
 

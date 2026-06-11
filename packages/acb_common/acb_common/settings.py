@@ -110,7 +110,7 @@ class Settings(BaseSettings):
     openhands_api_url: str = ""   # e.g. http://openhands:3000; leave blank to disable mutation
 
     # Copilot SDK Self-Mutation Sandbox (acb-mutation-runner) — WBS 1.2/1.3
-    mutation_model: str = "openai/tier3-opus"       # model the sandbox agent uses
+    mutation_model: str = "openai/tier-powerful"       # model the sandbox agent uses
     mutation_sandbox_image: str = "acb-mutation-runner:latest"
     mutation_timeout_seconds: int = 600              # hard cap on a single mutation run
     mutation_auto_pr: bool = True                    # open a GitHub PR after a successful fix

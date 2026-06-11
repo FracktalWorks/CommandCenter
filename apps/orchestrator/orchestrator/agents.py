@@ -371,7 +371,7 @@ def _make_openai_client() -> OpenAIChatCompletionClient:
     return OpenAIChatCompletionClient(
         base_url=f"{gateway_base}/v1",
         api_key=gateway_key,
-        model="tier2-sonnet",
+        model="tier-balanced",
     )
 
 

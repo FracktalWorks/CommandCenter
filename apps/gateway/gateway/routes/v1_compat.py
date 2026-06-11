@@ -28,14 +28,10 @@ router_root = APIRouter(tags=["openai-compat"])
 # "model" field — if an alias is missing here, litellm rejects it with
 # "BadRequestError: LLM Provider NOT provided".
 _TIER_NAME_TO_ID: dict[str, str] = {
-    # Friendly names (used by settings UI)
+    # Model-agnostic tier names (used by settings UI, orchestrator, and agents)
     "tier-fast": "tier1",
     "tier-balanced": "tier2",
     "tier-powerful": "tier3",
-    # LiteLLM config alias names (used by orchestrator agents.py + executor.py)
-    "tier1-local-qwen3": "tier1",
-    "tier2-sonnet": "tier2",
-    "tier3-opus": "tier3",
 }
 
 

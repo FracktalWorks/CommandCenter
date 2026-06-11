@@ -54,7 +54,7 @@ def build_agent() -> GitHubCopilotAgent:
         instructions=INSTRUCTIONS,
         tools=_TOOLS,
         default_options={
-            "model": "tier2-sonnet",
+            "model": "tier-balanced",
             "provider": _llm_provider(),
             "mcp_servers": {},
             "on_permission_request": PermissionHandler.approve_all,

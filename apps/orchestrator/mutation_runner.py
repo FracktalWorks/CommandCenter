@@ -5,7 +5,7 @@ Env vars (set by orchestrator.mutation._run_mutation_sandbox):
     COPILOT_GITHUB_TOKEN    GitHub OAuth token (standard Copilot auth).
     GATEWAY_API_KEY         API key for the gateway's /v1 endpoint.
     GATEWAY_BASE_URL        Gateway base URL (e.g. http://host.docker.internal:8080).
-    GATEWAY_MODEL           Model name (e.g. openai/tier3-opus).
+    GATEWAY_MODEL           Model name (e.g. openai/tier-powerful).
 
 The agent repo is expected to be mounted at /workspace/repo (read-write).
 
@@ -39,7 +39,7 @@ async def main() -> None:
 
     gateway_key = os.environ.get("GATEWAY_API_KEY", "").strip()
     gateway_url = os.environ.get("GATEWAY_BASE_URL", "").strip()
-    gateway_model = os.environ.get("GATEWAY_MODEL", "openai/tier3-opus").strip()
+    gateway_model = os.environ.get("GATEWAY_MODEL", "openai/tier-powerful").strip()
     github_token = os.environ.get("COPILOT_GITHUB_TOKEN", "").strip()
 
     if not gateway_key and not github_token:

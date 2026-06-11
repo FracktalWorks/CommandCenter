@@ -145,10 +145,10 @@ Two files define tier model mappings.  They **must agree** or chat breaks:
 | Config location | Purpose | Example |
 |----------------|---------|---------|
 | `packages/acb_llm/acb_llm/client.py` → `_TIER_MODEL` | Maps tier ID → litellm model string | `"tier2": "deepseek/deepseek-chat"` |
-| `apps/gateway/gateway/routes/v1_compat.py` → `_TIER_NAME_TO_ID` | Maps tier alias → tier ID | `"tier2-sonnet": "tier2"` |
+| `apps/gateway/gateway/routes/v1_compat.py` → `_TIER_NAME_TO_ID` | Maps tier alias → tier ID | `"tier-balanced": "tier2"` |
 
-The orchestrator passes tier alias names (`tier2-sonnet`, `tier3-opus`,
-`tier1-local-qwen3`) to the gateway.  If `_TIER_NAME_TO_ID` is missing an
+The orchestrator passes tier alias names (`tier-fast`, `tier-balanced`,
+`tier-powerful`) to the gateway.  If `_TIER_NAME_TO_ID` is missing an
 alias, the gateway passes the raw alias to litellm, which rejects it with
 `BadRequestError: LLM Provider NOT provided`.
 

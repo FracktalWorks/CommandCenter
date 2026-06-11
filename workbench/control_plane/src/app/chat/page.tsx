@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, Suspense } from "react";
+import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import {
@@ -354,6 +354,24 @@ function ChatPageInner() {
   const { isMobile } = useViewMode();
   const { open: openDrawer, close: closeDrawer } = useMobileDrawer();
 
+  // Refs to hold drawer content (defined later in render).
+  const conversationsRef = useRef<React.ReactNode>(null);
+  const filesRef = useRef<React.ReactNode>(null);
+
+  // Listen for bottom-nav tab events from AppShell MobileBottomNav.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const tab = (e as CustomEvent<string>).detail;
+      if (tab === "chats" && conversationsRef.current) {
+        openDrawer(conversationsRef.current);
+      } else if (tab === "files" && filesRef.current) {
+        openDrawer(filesRef.current);
+      }
+    };
+    window.addEventListener("cc-mobile-nav", handler);
+    return () => window.removeEventListener("cc-mobile-nav", handler);
+  }, [openDrawer]);
+
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>("");
   const [memories, setMemories] = useState<Mem0Memory[]>([]);
@@ -586,6 +604,12 @@ function ChatPageInner() {
     </>
   );
 
+  // Sync refs after render (avoid refs-during-render lint error).
+  useEffect(() => {
+    conversationsRef.current = conversationsContent;
+    filesRef.current = filesContent;
+  });
+
   // ── Render ─────────────────────────────────────────────────────────────
   return (
     <div className="relative flex h-full overflow-hidden">
@@ -658,44 +682,6 @@ function ChatPageInner() {
       {/* ── Chat area ──────────────────────────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden min-w-0">
         <div className="flex flex-1 flex-col overflow-hidden min-w-0">
-          {/* Mobile: bottom pill bar (Chats / Files) */}
-          {isMobile && activeSession && (
-            <div className="flex shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-900/60 px-3 py-1.5">
-              <button
-                onClick={() => openDrawer(conversationsContent)}
-                className="flex items-center gap-1.5 rounded-full border border-zinc-700/60 px-3 py-1 text-xs text-zinc-300 hover:border-zinc-500 hover:bg-zinc-800/60 transition-colors"
-              >
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M2 4h12M2 8h12M2 12h12" />
-                </svg>
-                Chats
-              </button>
-              <button
-                onClick={() => openDrawer(filesContent)}
-                className="flex items-center gap-1.5 rounded-full border border-zinc-700/60 px-3 py-1 text-xs text-zinc-300 hover:border-zinc-500 hover:bg-zinc-800/60 transition-colors"
-              >
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M2 4a1 1 0 011-1h3l1.5 1.5H13a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" />
-                </svg>
-                Files
-              </button>
-              {/* Upload button — opens file picker directly (mobile-friendly) */}
-              <FileUploadButton
-                sessionId={activeSession.id}
-                onUploadComplete={(files) => {
-                  // Refresh the files list if the drawer is open
-                  setArtifactUpdates((prev) => [
-                    ...prev,
-                    ...files.map((f) => ({ ...f, is_dir: false })),
-                  ]);
-                }}
-                className="ml-auto"
-              />
-              <div className="text-[10px] text-zinc-600 truncate">
-                {activeSession.agentName}
-              </div>
-            </div>
-          )}
 
           {activeSession ? (
             MEMORY_AGENTS.has(activeSession.agentName) ? (

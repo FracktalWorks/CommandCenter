@@ -23,7 +23,7 @@ import {
   type ReactNode,
 } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { Menu, X, Monitor, Smartphone, MoreHorizontal, LogOut } from "lucide-react";
+import { X, Monitor, Smartphone, MoreHorizontal, LogOut } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { PANES } from "@/lib/nav";
@@ -95,17 +95,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       value={{ isOpen: drawerOpen, open: openDrawer, close: closeDrawer }}
     >
       <div className="flex h-screen flex-col overflow-hidden bg-zinc-950">
-        {/* Top app bar — minimal, like ChatGPT/DeepSeek */}
+        {/* Top app bar — just title + overflow, no hamburger */}
         <header className="flex h-11 shrink-0 items-center border-b border-zinc-800 bg-zinc-900/80 px-2 backdrop-blur">
-          {/* Hamburger */}
-          <button
-            onClick={() => openDrawer(defaultDrawerContent(pathname, toggleView))}
-            className="rounded-lg p-2 text-zinc-300 hover:bg-zinc-800 -ml-0.5"
-            aria-label="Open menu"
-          >
-            <Menu size={20} />
-          </button>
-
           {/* Centered title */}
           <Link href="/" className="absolute left-1/2 -translate-x-1/2">
             <span className="text-sm font-semibold tracking-tight text-zinc-100">
@@ -113,21 +104,32 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </span>
           </Link>
 
-          {/* Overflow menu */}
-          <OverflowMenu toggleView={toggleView} />
+          {/* Overflow menu (desktop toggle + sign out) */}
+          <div className="ml-auto">
+            <OverflowMenu toggleView={toggleView} />
+          </div>
         </header>
 
         {/* Page content */}
         <main className="flex-1 min-h-0 overflow-hidden">{children}</main>
 
-        {/* Unified drawer */}
+        {/* Bottom navigation bar — always visible on mobile */}
+        <MobileBottomNav pathname={pathname} toggleView={toggleView} />
+        {/* Bottom navigation bar — always visible on mobile */}
+        <MobileBottomNav pathname={pathname} toggleView={toggleView} />
+
+        {/* Unified drawer (slide-up panel for bottom-nav tab content) */}
         {drawerOpen && (
           <div className="fixed inset-0 z-[70]">
             <div
               className="absolute inset-0 bg-black/60"
               onClick={closeDrawer}
             />
-            <aside className="absolute inset-y-0 left-0 flex w-[85%] max-w-[320px] flex-col border-r border-zinc-800 bg-zinc-900 shadow-2xl chat-fade-in">
+            <aside className="absolute inset-x-0 bottom-0 flex max-h-[85%] flex-col rounded-t-2xl border-t border-zinc-800 bg-zinc-900 shadow-2xl chat-fade-in">
+              {/* Drag handle */}
+              <div className="flex justify-center pt-2 pb-1">
+                <div className="w-10 h-1 rounded-full bg-zinc-700" />
+              </div>
               {drawerContent}
             </aside>
           </div>
@@ -138,43 +140,36 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 }
 
 // ---------------------------------------------------------------------------
-// Default drawer content (nav links + user section)
+// Mobile bottom navigation bar — ChatGPT/DeepSeek-style 3-tab bar
 // ---------------------------------------------------------------------------
 
-function defaultDrawerContent(pathname: string | null, toggleView: () => void) {
-  return <DefaultDrawer pathname={pathname} toggleView={toggleView} />;
-}
+import { MessageCircle, FolderOpen, Menu as MenuIcon } from "lucide-react";
 
-function DefaultDrawer({
+function MobileBottomNav({
   pathname,
   toggleView,
 }: {
   pathname: string | null;
   toggleView: () => void;
 }) {
+  const { isOpen, open, close } = useMobileDrawer();
   const { data: session } = useSession();
-  const { close } = useMobileDrawer();
 
-  return (
+  const menuContent = (
     <>
-      {/* Header */}
       <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
         <div>
-          <div className="text-base font-semibold tracking-tight text-zinc-100">
-            CommandCenter
-          </div>
-          <div className="text-[11px] text-zinc-500">Control Plane</div>
+          <div className="text-sm font-semibold text-zinc-200">Menu</div>
+          <div className="text-[11px] text-zinc-500">CommandCenter</div>
         </div>
         <button
-          onClick={() => close()}
-          className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-          aria-label="Close menu"
+          onClick={close}
+          className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800"
+          aria-label="Close"
         >
-          <X size={18} />
+          <X size={16} />
         </button>
       </div>
-
-      {/* Nav links */}
       <nav className="flex flex-col gap-0.5 overflow-y-auto p-2">
         {PANES.map((p) => {
           const active = pathname?.startsWith(p.href);
@@ -182,49 +177,38 @@ function DefaultDrawer({
             <Link
               key={p.href}
               href={p.href}
-              onClick={() => close()}
-              className={`rounded-lg px-3 py-2.5 transition-colors ${
+              onClick={close}
+              className={`rounded-lg px-3 py-2.5 transition-colors flex items-center gap-2.5 ${
                 active
                   ? "bg-zinc-800 text-white"
                   : "text-zinc-300 hover:bg-zinc-800/50 hover:text-zinc-100"
               }`}
             >
-              <div className="flex items-center gap-2.5">
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-zinc-800 text-xs font-mono font-semibold text-zinc-400">
-                  {p.icon}
-                </span>
-                <span className="text-sm font-medium">{p.label}</span>
-              </div>
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-zinc-800 text-xs font-semibold text-zinc-400">
+                {p.icon}
+              </span>
+              <span className="text-sm font-medium">{p.label}</span>
             </Link>
           );
         })}
       </nav>
-
-      {/* Bottom section */}
       <div className="mt-auto border-t border-zinc-800 p-3 space-y-2">
-        {/* Desktop toggle */}
         <button
-          onClick={() => {
-            toggleView();
-            close();
-          }}
-          className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
+          onClick={() => { toggleView(); close(); }}
+          className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
         >
           <Monitor size={16} className="shrink-0" />
           Desktop view
         </button>
-
-        {/* User / sign out */}
         {session?.user && (
           <button
             onClick={() => signOut({ callbackUrl: "/signin" })}
-            className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
+            className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
           >
             <LogOut size={16} className="shrink-0" />
             Sign out
           </button>
         )}
-
         {session?.user && (
           <div className="px-3 pt-1">
             <div className="truncate text-[11px] font-medium text-zinc-500">
@@ -234,6 +218,42 @@ function DefaultDrawer({
         )}
       </div>
     </>
+  );
+
+  return (
+    <nav className="shrink-0 border-t border-zinc-800 bg-zinc-900/95 backdrop-blur">
+      <div className="flex items-center justify-around py-1.5 px-2">
+        <button
+          onClick={() => { open(menuContent); }}
+          className={`flex flex-col items-center gap-0.5 px-4 py-1 rounded-lg transition-colors ${
+            isOpen ? "text-sky-400" : "text-zinc-500 hover:text-zinc-300"
+          }`}
+        >
+          <MenuIcon size={20} />
+          <span className="text-[9px] font-medium">Menu</span>
+        </button>
+        <button
+          onClick={() => {
+            const ev = new CustomEvent("cc-mobile-nav", { detail: "chats" });
+            window.dispatchEvent(ev);
+          }}
+          className="flex flex-col items-center gap-0.5 px-4 py-1 rounded-lg transition-colors text-zinc-500 hover:text-zinc-300"
+        >
+          <MessageCircle size={20} />
+          <span className="text-[9px] font-medium">Chats</span>
+        </button>
+        <button
+          onClick={() => {
+            const ev = new CustomEvent("cc-mobile-nav", { detail: "files" });
+            window.dispatchEvent(ev);
+          }}
+          className="flex flex-col items-center gap-0.5 px-4 py-1 rounded-lg transition-colors text-zinc-500 hover:text-zinc-300"
+        >
+          <FolderOpen size={20} />
+          <span className="text-[9px] font-medium">Files</span>
+        </button>
+      </div>
+    </nav>
   );
 }
 

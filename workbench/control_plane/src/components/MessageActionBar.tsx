@@ -3,9 +3,8 @@
 /**
  * MessageActionBar — per-message actions shown under each message bubble.
  *
- * Mirrors GitHub Copilot Chat's hover actions: copy, edit (user only),
- * thumbs up/down feedback (assistant only). Always visible on mobile;
- * hover-revealed on desktop.
+ * Copy is always visible. Edit (user) and thumbs (assistant) are always
+ * visible on mobile, hover-revealed on desktop.
  */
 
 import { useState } from "react";
@@ -37,7 +36,6 @@ export default function MessageActionBar({
     const next = vote === v ? null : v;
     setVote(next);
     if (next) {
-      // Placeholder: wire to POST /api/audit when the endpoint exists.
       console.debug("[feedback]", { messageId, vote: next });
     }
   };
@@ -46,22 +44,27 @@ export default function MessageActionBar({
     "text-zinc-500 hover:text-zinc-200 transition-colors px-1.5 py-0.5 rounded hover:bg-zinc-700/50 text-[11px]";
 
   return (
-    <div className="mt-2 flex items-center gap-0.5 text-xs opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-      {/* Copy — always available on all messages */}
+    <div className="mt-2 flex items-center gap-1 text-[11px]">
+      {/* Copy — always visible, clear text label */}
       <button onClick={copy} className={btn} title="Copy" aria-label="Copy message">
-        {copied ? "✓ Copied" : "📋"}
+        {copied ? "✓ Copied" : "Copy"}
       </button>
 
-      {/* Edit — only for user messages */}
+      {/* Edit — always visible on mobile, hover on desktop */}
       {role === "user" && onEdit && (
-        <button onClick={onEdit} className={btn} title="Edit" aria-label="Edit message">
-          ✏️
+        <button
+          onClick={onEdit}
+          className={`${btn} sm:opacity-0 sm:group-hover:opacity-100`}
+          title="Edit"
+          aria-label="Edit message"
+        >
+          Edit
         </button>
       )}
 
-      {/* Thumbs — only for assistant messages */}
+      {/* Thumbs — always visible on mobile, hover on desktop */}
       {role === "assistant" && (
-        <>
+        <span className="sm:opacity-0 sm:group-hover:opacity-100 inline-flex items-center gap-1">
           <button
             onClick={() => sendVote("up")}
             className={`${btn} ${vote === "up" ? "text-emerald-400" : ""}`}
@@ -78,7 +81,7 @@ export default function MessageActionBar({
           >
             👎
           </button>
-        </>
+        </span>
       )}
     </div>
   );

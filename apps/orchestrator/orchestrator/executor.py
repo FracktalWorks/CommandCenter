@@ -1485,7 +1485,7 @@ async def run_agent_stream(
                     # from a tighter window when tools inject large schemas.
                     _history_msgs = event_payload.get("messages") or []
                     _current_msg_text = event_payload.get("message") or event_payload.get("user_query") or ""
-                    if _is_byok and _history_msgs:
+                    if _is_byok_early and _history_msgs:
                         try:
                             from agent_framework import \
                                 Message as _MAFMsg  # noqa: PLC0415

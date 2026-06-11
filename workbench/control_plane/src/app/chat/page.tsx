@@ -554,6 +554,7 @@ function ChatPageInner() {
   }, []);
 
   // Fetch memories from Mem0 (or return [] gracefully).
+  // Polls every 30s so newly extracted memories appear without refresh.
   const loadMemories = useCallback(() => {
     fetch(`/api/memory/${encodeURIComponent(userId)}`)
       .then((r) => r.json())
@@ -567,6 +568,9 @@ function ChatPageInner() {
 
   useEffect(() => {
     loadMemories();
+    // Auto-refresh memories every 30s
+    const interval = setInterval(loadMemories, 30000);
+    return () => clearInterval(interval);
   }, [loadMemories]);
 
   const handleNewSession = useCallback(() => {

@@ -1133,6 +1133,18 @@ async def run_agent_stream(
                     pass
 
                 _msg_text = event_payload.get("message") or event_payload.get("user_query") or ""
+
+                # ── Memory context injection (pre-enriched by the route handler) ──
+                _memory_context = event_payload.get("memory_context") or ""
+                if _memory_context:
+                    try:
+                        _opts = agent.default_options
+                        if isinstance(_opts, dict):
+                            _existing = _opts.get("instructions") or ""
+                            _opts["instructions"] = f"{_existing}\n\n{_memory_context}"
+                    except Exception:  # noqa: BLE001
+                        pass
+
                 _msg_id: str | None = None
                 _text_started = False
 

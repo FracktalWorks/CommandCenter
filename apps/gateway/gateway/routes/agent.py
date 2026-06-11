@@ -522,6 +522,7 @@ async def run_agent_stream_endpoint(
     req: AgentRunRequest,
     _request: Request,
     user: UserContext = Depends(get_current_user),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
 ) -> StreamingResponse:
     """Stream a named-agent run as AG-UI Server-Sent Events.
 
@@ -538,14 +539,50 @@ async def run_agent_stream_endpoint(
     """
     from orchestrator.executor import run_agent_stream  # noqa: PLC0415
 
-    agent = _validate_agent_name(req.agent)
+    agent_name = _validate_agent_name(req.agent)
     run_id = req.run_id or str(uuid.uuid4())
+    user_id: str = getattr(user, "email", "") or "anonymous"
 
-    _log.info("agent.stream_run_start", agent=agent, run_id=run_id, actor=user.email)
+    # ── Memory enrichment: inject relevant past facts into the agent's context ──
+    try:
+        from acb_memory import get_memory_context  # noqa: PLC0415
+        user_msg = (
+            req.payload.get("message")
+            or req.payload.get("user_query")
+            or ""
+        )
+        if user_msg and user_id != "anonymous":
+            mem_ctx = await get_memory_context(user_id, user_msg)
+            if mem_ctx:
+                req.payload["memory_context"] = mem_ctx
+                _log.debug("agent.memory_enriched", agent=agent_name, user=user_id[:20])
+    except ImportError:
+        pass
+
+    # ── Memory extraction: save conversation facts after the run completes ──
+    try:
+        from acb_memory import add_memories_background  # noqa: PLC0415
+        messages = req.payload.get("messages") or []
+        user_msg = req.payload.get("message") or ""
+        if user_msg or messages:
+            conv = list(messages) if messages else []
+            if user_msg and not any(
+                m.get("role") == "user" and m.get("content") == user_msg
+                for m in conv
+            ):
+                conv.append({"role": "user", "content": user_msg})
+            if conv:
+                background_tasks.add_task(
+                    add_memories_background, user_id, conv, agent_name
+                )
+    except ImportError:
+        pass
+
+    _log.info("agent.stream_run_start", agent=agent_name, run_id=run_id, actor=user.email)
 
     return StreamingResponse(
         run_agent_stream(
-            agent,
+            agent_name,
             req.payload,
             run_id=run_id,
             thread_id=req.thread_id,

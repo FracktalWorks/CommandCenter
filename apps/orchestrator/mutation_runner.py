@@ -9,8 +9,12 @@ Env vars (set by orchestrator.mutation._run_mutation_sandbox):
 
 The agent repo is expected to be mounted at /workspace/repo (read-write).
 
-Writes to stdout: JSON object {"pr_url": "...", "success": true/false}.
-Exits 0 when a PR URL is found in the session output, 1 otherwise.
+Output contract (printed to stdout, one per line):
+    COMMIT_SHA: <sha>       — the commit the sandbox produced (if any)
+    TEST_SUMMARY: <text>    — pytest result summary
+    {"success": true|false, "commit_sha": "...", "test_summary": "..."}
+
+Exits 0 on success, 1 on failure.
 """
 from __future__ import annotations
 
@@ -18,8 +22,13 @@ import asyncio
 import json
 import os
 import re
+import subprocess
 import sys
 
+# Regex to detect commit-sha and test-summary sentinels in agent output
+_COMMIT_SHA_RE = re.compile(r"COMMIT_SHA:\s*([a-f0-9]{7,40})", re.IGNORECASE)
+_TEST_SUMMARY_RE = re.compile(r"TEST_SUMMARY:\s*(.+)$", re.IGNORECASE)
+# Also detect PR URLs (legacy — some agents may still create PRs)
 _GITHUB_PR_RE = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+")
 
 
@@ -62,6 +71,8 @@ async def main() -> None:
 
     messages: list[str] = []
     pr_url: str | None = None
+    commit_sha: str = ""
+    test_summary: str = ""
     done = asyncio.Event()
 
     client = CopilotClient(client_options if client_options else None)
@@ -71,10 +82,21 @@ async def main() -> None:
         session = await client.create_session(session_cfg)
 
         def on_event(event) -> None:  # noqa: ANN001
-            nonlocal pr_url
+            nonlocal pr_url, commit_sha, test_summary
             if event.type == SessionEventType.ASSISTANT_MESSAGE:
                 content = event.data.content or ""
                 messages.append(content)
+                # Scan for COMMIT_SHA sentinel
+                if not commit_sha:
+                    m = _COMMIT_SHA_RE.search(content)
+                    if m:
+                        commit_sha = m.group(1)
+                # Scan for TEST_SUMMARY sentinel
+                if not test_summary:
+                    m = _TEST_SUMMARY_RE.search(content)
+                    if m:
+                        test_summary = m.group(1).strip()
+                # Legacy: scan for PR URL
                 if not pr_url:
                     m = _GITHUB_PR_RE.search(content)
                     if m:
@@ -88,17 +110,53 @@ async def main() -> None:
     finally:
         await client.stop()
 
-    # Final scan across all captured messages in case PR URL appeared mid-conversation.
+    # Final scan across all captured messages for missed sentinels
     if not pr_url:
         for msg in messages:
             m = _GITHUB_PR_RE.search(msg)
             if m:
                 pr_url = m.group(0)
                 break
+    if not commit_sha:
+        for msg in messages:
+            m = _COMMIT_SHA_RE.search(msg)
+            if m:
+                commit_sha = m.group(1)
+                break
+    if not test_summary:
+        for msg in messages:
+            m = _TEST_SUMMARY_RE.search(msg)
+            if m:
+                test_summary = m.group(1).strip()
+                break
 
-    result = {"pr_url": pr_url, "success": pr_url is not None}
+    # Fallback: check git directly in the mounted repo
+    if not commit_sha and os.path.isdir(repo_dir):
+        try:
+            r = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_dir, capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode == 0:
+                commit_sha = r.stdout.strip()
+        except Exception:
+            pass
+
+    # Print sentinels for the orchestrator to parse
+    if commit_sha:
+        print(f"COMMIT_SHA: {commit_sha}", flush=True)
+    if test_summary:
+        print(f"TEST_SUMMARY: {test_summary}", flush=True)
+
+    success = bool(commit_sha)  # commit-gate: success = a commit was produced
+    result = {
+        "success": success,
+        "commit_sha": commit_sha,
+        "test_summary": test_summary,
+        "pr_url": pr_url,
+    }
     print(json.dumps(result), flush=True)
-    sys.exit(0 if pr_url else 1)
+    sys.exit(0 if success else 1)
 
 
 def _die(msg: str) -> None:

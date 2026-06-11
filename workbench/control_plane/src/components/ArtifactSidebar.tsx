@@ -51,6 +51,8 @@ interface ArtifactSidebarProps {
   onToggle: () => void;
   onFileOpen: (entry: FileEntry) => void;
   artifactUpdates?: FileEntry[];
+  /** Render as a full-width drawer panel (mobile) rather than a collapsible rail. */
+  fullWidth?: boolean;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -164,6 +166,7 @@ export default function ArtifactSidebar({
   onToggle,
   onFileOpen,
   artifactUpdates = [],
+  fullWidth = false,
 }: ArtifactSidebarProps) {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -225,9 +228,13 @@ export default function ArtifactSidebar({
 
   return (
     <aside
-      className={`shrink-0 border-l border-zinc-800 bg-zinc-900/40 flex flex-col transition-all duration-200 ${
-        open ? "w-64" : "w-10"
-      }`}
+      className={
+        fullWidth
+          ? "h-full w-full border-l border-zinc-800 bg-zinc-900 flex flex-col"
+          : `shrink-0 border-l border-zinc-800 bg-zinc-900/40 flex flex-col transition-all duration-200 ${
+              open ? "w-64" : "w-10"
+            }`
+      }
     >
       {/* Header */}
       <div

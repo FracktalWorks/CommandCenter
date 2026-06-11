@@ -26,6 +26,12 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* Prevent accidental horizontal scrolling of the whole app on small screens. */
+html,
+body {
+  overflow-x: hidden;
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    Chat "thinking" UX — mirrors VS Code Copilot's shimmer/working language.
    The shimmer is a flowing gradient sweep across text (NOT a spinner) and is

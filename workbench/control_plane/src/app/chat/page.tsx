@@ -17,6 +17,7 @@ import AgentChat from "@/components/AgentChat";
 import type { ArtifactEntry } from "@/hooks/useAgentChat";
 import ArtifactSidebar, { type FileEntry } from "@/components/ArtifactSidebar";
 import ArtifactViewerModal from "@/components/ArtifactViewerModal";
+import { useViewMode } from "@/components/ViewModeProvider";
 import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 
@@ -349,6 +350,8 @@ function ChatPageInner() {
   const { data: nextAuthSession } = useSession();
   const userId: string = nextAuthSession?.user?.email ?? "dev@fracktal.in";
 
+  const { isMobile } = useViewMode();
+
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>("");
   const [memories, setMemories] = useState<Mem0Memory[]>([]);
@@ -358,6 +361,18 @@ function ChatPageInner() {
   const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
   const [viewerEntry, setViewerEntry] = useState<FileEntry | null>(null);
   const [artifactUpdates, setArtifactUpdates] = useState<FileEntry[]>([]);
+
+  // On mobile the side panels start collapsed so the chat fills the screen;
+  // they open as overlay drawers on demand.
+  useEffect(() => {
+    if (isMobile) {
+      setSessionPanelOpen(false);
+      setArtifactPanelOpen(false);
+    } else {
+      setSessionPanelOpen(true);
+    }
+  }, [isMobile]);
+
   // Fetch agents once at page level so AgentChat knows agent_runtime before first render.
   const [agentList, setAgentList] = useState<AgentEntry[]>([]);
   useEffect(() => {
@@ -483,7 +498,7 @@ function ChatPageInner() {
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="relative flex h-full overflow-hidden">
       {/* Agent picker modal */}
       {showPicker && (
         <AgentPickerModal
@@ -492,11 +507,25 @@ function ChatPageInner() {
         />
       )}
 
+      {/* Mobile backdrop for the sessions drawer */}
+      {isMobile && sessionPanelOpen && (
+        <div
+          className="fixed inset-x-0 bottom-0 top-12 z-30 bg-black/60"
+          onClick={() => setSessionPanelOpen(false)}
+        />
+      )}
+
       {/* Left panel — sessions + memory */}
       <aside
-        className={`shrink-0 border-r border-zinc-800 bg-zinc-900/40 flex flex-col overflow-hidden transition-all duration-200 ${
-          sessionPanelOpen ? "w-72" : "w-10"
-        }`}
+        className={
+          isMobile
+            ? `fixed bottom-0 left-0 top-12 z-40 flex w-[82%] max-w-xs flex-col overflow-hidden border-r border-zinc-800 bg-zinc-900 transition-transform duration-200 ${
+                sessionPanelOpen ? "translate-x-0" : "-translate-x-full"
+              }`
+            : `shrink-0 border-r border-zinc-800 bg-zinc-900/40 flex flex-col overflow-hidden transition-all duration-200 ${
+                sessionPanelOpen ? "w-72" : "w-10"
+              }`
+        }
       >
         {/* Panel toggle strip */}
         <div className={`flex items-center border-b border-zinc-800 ${
@@ -552,6 +581,29 @@ function ChatPageInner() {
       {/* Right panel — chat (unified AgentChat for every session) */}
       <div className="flex flex-1 overflow-hidden min-w-0">
       <div className="flex flex-1 flex-col overflow-hidden min-w-0">
+        {/* Mobile-only chat toolbar: open conversations / files drawers */}
+        {isMobile && (
+          <div className="flex shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-900/60 px-3 py-2">
+            <button
+              onClick={() => setSessionPanelOpen(true)}
+              className="flex items-center gap-1.5 rounded-md border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-300 hover:border-zinc-500 hover:bg-zinc-800 transition-colors"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M2 4h12M2 8h12M2 12h12" />
+              </svg>
+              Chats
+            </button>
+            <button
+              onClick={() => setArtifactPanelOpen(true)}
+              className="ml-auto flex items-center gap-1.5 rounded-md border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-300 hover:border-zinc-500 hover:bg-zinc-800 transition-colors"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M2 4a1 1 0 011-1h3l1.5 1.5H13a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" />
+              </svg>
+              Files
+            </button>
+          </div>
+        )}
         {activeSession ? (
           MEMORY_AGENTS.has(activeSession.agentName) ? (
             /*
@@ -617,16 +669,43 @@ function ChatPageInner() {
       </div>
 
       {/* Artifact file browser sidebar */}
-      <ArtifactSidebar
-        sessionId={activeSessionId}
-        open={artifactPanelOpen}
-        onToggle={() => setArtifactPanelOpen((o) => !o)}
-        onFileOpen={(entry) => {
-          setViewerEntry(entry);
-          setArtifactPanelOpen(true);
-        }}
-        artifactUpdates={artifactUpdates}
-      />
+      {isMobile ? (
+        <>
+          {artifactPanelOpen && (
+            <div
+              className="fixed inset-x-0 bottom-0 top-12 z-30 bg-black/60"
+              onClick={() => setArtifactPanelOpen(false)}
+            />
+          )}
+          <div
+            className={`fixed bottom-0 right-0 top-12 z-40 w-[82%] max-w-xs transition-transform duration-200 ${
+              artifactPanelOpen ? "translate-x-0" : "translate-x-full"
+            }`}
+          >
+            <ArtifactSidebar
+              sessionId={activeSessionId}
+              open
+              fullWidth
+              onToggle={() => setArtifactPanelOpen(false)}
+              onFileOpen={(entry) => {
+                setViewerEntry(entry);
+              }}
+              artifactUpdates={artifactUpdates}
+            />
+          </div>
+        </>
+      ) : (
+        <ArtifactSidebar
+          sessionId={activeSessionId}
+          open={artifactPanelOpen}
+          onToggle={() => setArtifactPanelOpen((o) => !o)}
+          onFileOpen={(entry) => {
+            setViewerEntry(entry);
+            setArtifactPanelOpen(true);
+          }}
+          artifactUpdates={artifactUpdates}
+        />
+      )}
       </div>
 
       {/* File viewer pop-up */}

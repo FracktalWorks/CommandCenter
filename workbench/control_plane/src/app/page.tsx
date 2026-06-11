@@ -6,8 +6,8 @@ const CARDS = [
 
 export default function Home() {
   return (
-    <div className="p-10 max-w-5xl">
-      <h1 className="text-3xl font-semibold tracking-tight">Welcome back</h1>
+    <div className="p-6 sm:p-10 max-w-5xl">
+      <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Welcome back</h1>
       <p className="mt-2 text-zinc-400">
         Chat with CommandCenter or observe what the agents are doing.
       </p>

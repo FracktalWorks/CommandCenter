@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -12,12 +12,20 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-import Sidebar from "@/components/Sidebar";
+import AppShell from "@/components/AppShell";
 import Providers from "@/components/Providers";
 
 export const metadata: Metadata = {
   title: "CommandCenter Control Plane",
   description: "Skill Studio, Chat, Agents and Integrations for the Fracktal AI Company Brain.",
+};
+
+// Default mobile-friendly viewport. ViewModeProvider widens this to a desktop
+// width at runtime when the user explicitly requests the desktop layout.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -30,12 +38,9 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full bg-zinc-950 text-zinc-100">
+      <body className="h-full bg-zinc-950 text-zinc-100">
         <Providers>
-          <div className="flex min-h-screen">
-            <Sidebar />
-            <main className="flex-1 overflow-auto">{children}</main>
-          </div>
+          <AppShell>{children}</AppShell>
         </Providers>
       </body>
     </html>

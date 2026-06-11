@@ -520,7 +520,7 @@ export default function AgentChat({
             <div className="text-xs text-zinc-500">{agentDescription}</div>
           )}
         </div>
-        <div className="ml-auto text-xs text-zinc-600 font-mono">
+        <div className="ml-auto text-xs text-zinc-600 font-mono hidden sm:block">
           thread: {sessionId.slice(0, 8)}…
         </div>
       </div>
@@ -612,7 +612,7 @@ export default function AgentChat({
       </div>
 
       {/* VS Code-style toolbar: model picker + agent switcher */}
-      <div className="shrink-0 border-t border-zinc-800 bg-zinc-900/60 px-4 py-2 flex items-center gap-2">
+      <div className="shrink-0 border-t border-zinc-800 bg-zinc-900/60 px-4 py-2 flex flex-wrap items-center gap-x-2 gap-y-2">
         {/* Model picker — searchable custom dropdown */}
         <div className="flex items-center gap-1.5" ref={modelMenuRef}>
           <span className="text-[10px] text-zinc-600 uppercase tracking-wide">Model</span>

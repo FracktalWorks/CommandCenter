@@ -4,7 +4,7 @@
     "description": "ClickUp task management — status, progress, and workload questions with citations.",
     "tags": ["tasks", "clickup", "project-management"],
     "status": "live",
-    "agent_runtime": "github-copilot",
+    "agent_runtime": "maf",
     "local_path": "apps/agent-task-manager",
     "integrations": ["clickup"],
     "optional_integrations": [],

@@ -206,6 +206,36 @@ if _HAS_MAF:
                     except Exception:
                         pass
 
+            # ── Detached execution + Redis relay (spec_stream_reconnection) ──
+            # The orchestrator run executes in a background task that tees every
+            # AG-UI frame to the per-thread Redis stream.  This response is a
+            # Redis subscriber: client disconnects don't kill the run, and the
+            # reconnect endpoint can replay missed events.  thread_id comes from
+            # the AG-UI request body (the control plane always sends it).
+            _thread_id: str = (
+                input_data.get("thread_id") or input_data.get("threadId") or ""
+            )
+
+            async def relayed_generator():
+                import json as _json  # noqa: PLC0415
+                from orchestrator.stream_relay import (  # noqa: PLC0415
+                    get_detached_task,
+                    run_detached,
+                )
+                try:
+                    async for evt in run_detached(
+                        _thread_id, event_generator(), tee=True
+                    ):
+                        yield f"data: {_json.dumps(evt)}\n\n"
+                except Exception:  # noqa: BLE001
+                    if get_detached_task(_thread_id) is not None:
+                        _log.warning("copilot_chat.stream_subscribe_lost")
+                        return
+                    # Redis unavailable — degrade to direct streaming.
+                    _log.warning("copilot_chat.stream_relay_unavailable")
+                    async for line in event_generator():
+                        yield line
+
             # Post-run memory extraction (fires after response stream closes)
             try:
                 from acb_memory import add_memories_background  # noqa: PLC0415
@@ -219,7 +249,7 @@ if _HAS_MAF:
                 pass
 
             return StreamingResponse(
-                event_generator(),
+                relayed_generator() if _thread_id else event_generator(),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",

@@ -17,7 +17,7 @@ import json
 from typing import Any
 
 from acb_auth import UserContext, get_current_user
-from acb_common import get_logger
+from acb_common import get_logger, get_settings
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
@@ -304,3 +304,94 @@ async def save_messages(
         raise HTTPException(status_code=400, detail="Maximum 500 messages per upsert")
     await asyncio.to_thread(_upsert_messages, session_id, messages)
     return {"ok": True, "saved": len(messages)}
+
+
+@router.get(
+    "/active-sessions",
+    summary="List session IDs that currently have an active (running) agent",
+)
+async def list_active_sessions(
+    user: UserContext = Depends(get_current_user),
+) -> list[dict]:
+    """Return sessions whose agents are currently executing.
+
+    Scans Redis ``cc:active:*`` keys (set by the executor's stream relay)
+    and cross-references with the ``chat_session`` table to include
+    agent names and titles.  Falls back to an empty list when Redis is
+    unavailable — the frontend will rely on its local chatStore in that
+    case.
+
+    Used by the conversations sidebar to show a pulsing green dot next
+    to sessions that are still running in the background, even after a
+    browser refresh.
+    """
+    user_id = user.email or "default"
+    active_threads: list[str] = []
+
+    # ── Scan Redis for cc:active:* keys ────────────────────────────────
+    try:
+        import redis.asyncio as aioredis  # noqa: PLC0415
+        settings = get_settings()
+        r = aioredis.from_url(settings.redis_url, decode_responses=True)
+        try:
+            cursor = 0
+            while True:
+                cursor, keys = await r.scan(
+                    cursor, match="cc:active:*", count=100
+                )
+                for k in keys:
+                    # Strip the "cc:active:" prefix to recover the thread_id.
+                    tid = k.removeprefix("cc:active:")
+                    if tid:
+                        active_threads.append(tid)
+                if cursor == 0:
+                    break
+        finally:
+            await r.aclose()
+    except Exception:  # noqa: BLE001
+        _log.warning("chat.active_sessions_redis_failed", exc_info=True)
+        return []  # Redis unavailable — frontend falls back to local store
+
+    if not active_threads:
+        return []
+
+    # ── Cross-reference with Postgres for agent name + title ───────────
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+
+        with get_session() as s:
+            rows = s.execute(
+                text(
+                    "SELECT id, agent_name, title "
+                    "FROM chat_session "
+                    "WHERE id = ANY(:ids) AND user_id = :uid"
+                ),
+                {"ids": active_threads, "uid": user_id},
+            ).fetchall()
+
+        found_ids = {r.id for r in rows}
+        result = [
+            {
+                "threadId": r.id,
+                "agentName": r.agent_name,
+                "title": r.title,
+            }
+            for r in rows
+        ]
+        # Include threads that are active in Redis but not yet in Postgres
+        # (race condition: agent started but session row not yet upserted).
+        for tid in active_threads:
+            if tid not in found_ids:
+                result.append({
+                    "threadId": tid,
+                    "agentName": "unknown",
+                    "title": None,
+                })
+        return result
+    except Exception:  # noqa: BLE001
+        # Postgres unavailable — return thread IDs without metadata.
+        return [
+            {"threadId": tid, "agentName": "unknown", "title": None}
+            for tid in active_threads
+        ]

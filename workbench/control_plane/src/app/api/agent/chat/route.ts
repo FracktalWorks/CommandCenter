@@ -245,8 +245,11 @@ async function translateAndPersistStream(
           out = { type: "sub_agent_tool_end", agentName: String(ev.agentName ?? ""), id: String(ev.toolCallId ?? ""), result: String(ev.content ?? ""), success: ev.success !== false };
         } else if (t === "SUB_AGENT_ERROR") {
           out = { type: "sub_agent_error", agentName: String(ev.agentName ?? ""), error: String(ev.error ?? "Sub-agent error") };
-        } else if (t === "RUN_FINISHED") {
-          out = { type: "done", run_id: ev.runId };
+        } else if (t === "RUN_FINISHED" || t === "done") {
+          // RUN_FINISHED: standard AG-UI event from the agent executor.
+          // "done": synthetic event from the reconnect endpoint when the
+          // agent has already finished (Redis stream expired or empty).
+          out = { type: "done", run_id: ev.runId || ev.run_id };
         } else if (t === "RUN_ERROR") {
           out = { type: "error", content: String(ev.message ?? "Agent run error") };
         }

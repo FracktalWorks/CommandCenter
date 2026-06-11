@@ -476,37 +476,74 @@ export function useAgentChat({
   }, [threadId]);
 
   // ── Recover after refresh / reconnect ──────────────────────────────
-  // On mount, if the last assistant message looks interrupted, we attempt
-  // a live SSE reconnection first (fast, token-by-token).  If the reconnect
-  // endpoint is unavailable or the stream has expired, we fall back to the
-  // existing Postgres polling recovery path.
+  // On mount, reconnect to a live agent run when EITHER:
+  //   a) the last local message looks interrupted (mid-stream refresh), OR
+  //   b) the server says an agent is still running for this thread
+  //      (covers refresh-during-thinking, where the empty assistant
+  //      placeholder was never persisted so no local evidence exists).
+  // If the reconnect endpoint is unavailable or the stream has expired,
+  // we fall back to the existing Postgres polling recovery path.
   useEffect(() => {
-    const state = getSessionState(threadId);
-    if (state.messages.length === 0) return;
-    const last = state.messages[state.messages.length - 1];
-    const isInterrupted =
-      last?.role === "assistant" && (
-        last.streaming ||
-        (last.content && !/[.?!]\s*$/.test(last.content.trim()))
-      );
-    if (!isInterrupted) return;
-
-    // Clear stale streaming flags and show "Reconnecting…".
-    const lastId = last.id;
-    setSessionState(threadId, (prev) => ({
-      ...prev,
-      error: null,
-      recovering: true,
-      messages: prev.messages.map((m) =>
-        m.id === lastId ? { ...m, streaming: false, isThinkingActive: false } : m
-      ),
-    }));
-
-    // ── Attempt live SSE reconnection ──────────────────────────────────
     const abortCtrl = new AbortController();
     let reconnected = false;
+    let cancelled = false;
 
     (async () => {
+      const state = getSessionState(threadId);
+      const last = state.messages[state.messages.length - 1];
+      const localInterrupted = Boolean(
+        last?.role === "assistant" && (
+          last.streaming ||
+          (last.content && !/[.?!]\s*$/.test(last.content.trim()))
+        )
+      );
+
+      // Server truth: is an agent actually running for this thread?
+      let serverActive = false;
+      try {
+        const r = await fetch("/api/chat/active-sessions", { signal: abortCtrl.signal });
+        if (r.ok) {
+          const arr = (await r.json()) as { threadId?: string }[];
+          serverActive = Array.isArray(arr) && arr.some((s) => s.threadId === threadId);
+        }
+      } catch { /* server unreachable — rely on local heuristic */ }
+
+      if (cancelled) return;
+      if (!localInterrupted && !serverActive) return;
+
+      // Ensure there's an assistant message to stream the replay into.
+      let lastId: string;
+      let lastContent: string;
+      if (localInterrupted && last) {
+        lastId = last.id;
+        lastContent = last.content || "";
+        // Clear stale streaming flags and show "Reconnecting…".
+        setSessionState(threadId, (prev) => ({
+          ...prev,
+          error: null,
+          recovering: true,
+          messages: prev.messages.map((m) =>
+            m.id === lastId ? { ...m, streaming: false, isThinkingActive: false } : m
+          ),
+        }));
+      } else {
+        // Agent is running but no assistant message survived the refresh
+        // (it was an empty thinking placeholder) — create a fresh one.
+        lastId = nanoid();
+        lastContent = "";
+        const placeholder: ChatMessage = {
+          id: lastId, role: "assistant", content: "", timestamp: Date.now(),
+          streaming: true, toolEvents: [], progressLines: [], isThinkingActive: true,
+        };
+        setSessionState(threadId, (prev) => ({
+          ...prev,
+          error: null,
+          recovering: true,
+          messages: [...prev.messages, placeholder],
+        }));
+      }
+
+      // ── Attempt live SSE reconnection ────────────────────────────────
       try {
         const curState = getSessionState(threadId);
         const res = await fetch("/api/agent/chat", {
@@ -515,7 +552,7 @@ export function useAgentChat({
           signal: abortCtrl.signal,
           body: JSON.stringify({
             agentName: agentNameRef.current,
-            message: last.content || "(reconnect)",
+            message: lastContent || "(reconnect)",
             messages: curState.messages
               .filter((m) => m.role !== "system")
               .map((m) => ({ role: m.role, content: m.content })),
@@ -674,7 +711,7 @@ export function useAgentChat({
         // Reconnect failed (network error, timeout, etc.) — polling handles it.
       } finally {
         // If we never reconnected, make sure recovering is set for polling.
-        if (!reconnected) {
+        if (!reconnected && !cancelled) {
           setSessionState(threadId, (prev) =>
             prev.recovering ? prev : { ...prev, recovering: true }
           );
@@ -683,6 +720,7 @@ export function useAgentChat({
     })();
 
     return () => {
+      cancelled = true;
       abortCtrl.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -752,8 +790,12 @@ export function useAgentChat({
         }>;
         if (!Array.isArray(remote) || remote.length === 0) return;
 
-        // Map remote format to ChatMessage
-        const remoteMsgs: ChatMessage[] = remote.map((r) => ({
+        // Map remote format to ChatMessage.  Drop stale __ERROR__ system
+        // messages persisted by older builds — transient errors must never
+        // resurface via polling.
+        const remoteMsgs: ChatMessage[] = remote
+          .filter((r) => !(r.role === "system" && (r.content ?? "").startsWith("__ERROR__")))
+          .map((r) => ({
           id: r.id,
           role: r.role as "user" | "assistant" | "system",
           content: r.content ?? "",

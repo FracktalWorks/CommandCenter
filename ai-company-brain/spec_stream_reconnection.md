@@ -1,8 +1,8 @@
 # Fire-and-Forget Chat with Live Stream Reconnection
 
-> **Status:** Implemented (2026-06-11)
+> **Status:** Implemented (2026-06-11), rearchitected to detached execution (2026-06-12)
 > **Owner:** CommandCenter Core
-> **Files:** `stream_relay.py`, `executor.py`, `agent.py`, `route.ts`, `useAgentChat.ts`, `chatStore.ts`
+> **Files:** `stream_relay.py`, `executor.py`, `agent.py`, `main.py`, `chat.py`, `route.ts`, `useAgentChat.ts`, `chatStore.ts`, `useActiveSessions.ts`
 
 ## Why We Built This
 
@@ -20,24 +20,38 @@ We needed **fire-and-forget chat**: the agent keeps running in the cloud regardl
 
 ## Architecture
 
-### Event Flow
+### Event Flow (v2 — detached execution)
 
 ```
-Agent (executor.py)
-  │  yield _sse({type: "TEXT_MESSAGE_CONTENT", delta: "Hello"})
-  │
-  ├─→ Gateway SSE Response ──→ Next.js Proxy ──→ Browser
-  │    (primary path)
-  │
-  └─→ Redis Stream cc:stream:{threadId}
-       (tee path — background, non-blocking)
+Agent (executor.py)                      stream_relay.run_detached()
+  │  yield _sse({...})                     background asyncio task
+  │                                        owns the generator
+  └─→ ordered push chains ──→ Redis Stream cc:stream:{threadId}
+                                   │
+        ┌──────────────────────────┴────────────────────────┐
+        ▼                                                    ▼
+  Initial SSE response                          Reconnect endpoint
+  (Redis subscriber from 0)                     (replay since cursor + live)
+        │                                                    │
+        ▼                                                    ▼
+  Next.js Proxy ──→ Browser                     Next.js Proxy ──→ Browser
 ```
 
-Every SSE event the agent emits is:
-1. **Yielded** to the gateway's `StreamingResponse` (primary path — reaches the browser)
-2. **Pushed** to a Redis Stream keyed by `thread_id` (tee path — enables reconnection)
+The agent generator runs in a **detached background task** (`run_detached` in
+`stream_relay.py`) that pushes every event to Redis. The HTTP response — both
+the initial `POST /agent/run/stream` and the `GET .../reconnect` — is merely a
+Redis subscriber. If any consumer (browser, Next.js, gateway client)
+disconnects, uvicorn cancels the *subscriber*, never the agent. The same wraps
+`/copilot/chat` (orchestrator path) with `tee=True`.
 
-The tee is implemented via a `contextvars.ContextVar` in `executor.py`. When set, every call to `_sse()` automatically schedules a background `XADD` to Redis. This means **zero code changes** to the existing event emission logic — all 50+ yield points in the agent execution engine benefit automatically.
+Key ordering guarantees:
+- `_tee_sse_line()` chains pushes per-thread so Redis order == emission order.
+- `RUN_FINISHED` is emitted before the relay teardown; the `finally` awaits
+  pending pushes before `mark_inactive` — reconnectors always see the end.
+- `mark_active(reset=True)` clears the previous run's stream at run start, so
+  replay-from-0 covers exactly the current run.
+- The reconnect endpoint subscribes live **from the replay tail cursor**, not
+  `"$"` — no event gap between replay and live phases.
 
 ### Redis Stream Naming
 

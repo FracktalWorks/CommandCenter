@@ -71,6 +71,43 @@ async def _push_sse_to_stream(thread_id: str, sse_line: str) -> None:
         pass
 
 
+# Per-thread chains of in-flight Redis pushes.  Each new push awaits the
+# previous one so events land in Redis in EXACT emission order (bare
+# fire-and-forget create_task calls can interleave under load).
+_push_chains: dict[str, "asyncio.Task[None]"] = {}
+
+
+def _tee_sse_line(line: str) -> None:
+    """Schedule an ordered, best-effort push of an SSE line to the Redis
+    stream for the current relay thread (no-op when relay is unset)."""
+    tid = _stream_relay_thread_id.get(None)
+    if tid is None:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # No running event loop — skip relay
+    prev = _push_chains.get(tid)
+
+    async def _chained() -> None:
+        if prev is not None:
+            try:
+                await prev
+            except Exception:  # noqa: BLE001
+                pass
+        await _push_sse_to_stream(tid, line)
+
+    task = loop.create_task(_chained())
+    _push_chains[tid] = task
+    task.add_done_callback(
+        lambda t, _tid=tid: (
+            _push_chains.pop(_tid, None)
+            if _push_chains.get(_tid) is t
+            else None
+        )
+    )
+
+
 def _build_injected_tools_addendum() -> str:
     """Return a system-prompt addendum describing the CommandCenter-injected tools.
 
@@ -922,22 +959,31 @@ async def run_agent(
 # Streaming executor — yields AG-UI SSE events for /agent/run/stream
 # ---------------------------------------------------------------------------
 
+# Monotonic counter for local event IDs.  Combined with a timestamp so the
+# frontend can track ``lastEventId`` even for initial streams (where the Redis
+# entry ID isn't yet known).  Format: ``local-<ms>-<seq>``.
+_sse_seq: int = 0
+
+
 def _sse(payload: dict[str, Any]) -> str:
     """Return a single SSE frame as a string.
 
     When ``_stream_relay_thread_id`` context var is set, also schedules a
     background push to the Redis Stream so reconnection can replay events.
+
+    Includes a local ``_stream_id`` in every event so the frontend always
+    has a cursor to resume from, even before the Redis push completes.
     """
+    global _sse_seq
+    import time as _time
+    _sse_seq += 1
+    _local_id = f"local-{int(_time.time() * 1000)}-{_sse_seq}"
+    payload["_stream_id"] = _local_id
+
     line = f"data: {json.dumps(payload)}\n\n"
 
-    # Tee to Redis Stream for reconnection support (best-effort, non-blocking).
-    tid = _stream_relay_thread_id.get(None)
-    if tid is not None:
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(_push_sse_to_stream(tid, line))
-        except RuntimeError:
-            pass  # No running event loop — skip relay
+    # Tee to Redis Stream for reconnection support (ordered, best-effort).
+    _tee_sse_line(line)
 
     return line
 
@@ -1127,6 +1173,9 @@ async def run_agent_stream(
                     async for line in stream_agent_response(
                         agent, message, run_id=run_id
                     ):
+                        # Tee to Redis: this path yields pre-encoded AG-UI
+                        # frames that bypass _sse(), so tee explicitly.
+                        _tee_sse_line(line)
                         yield line
                     return
                 except (ImportError, AttributeError):
@@ -1602,6 +1651,11 @@ async def run_agent_stream(
                     "delta": " ".join(chunk),
                 })
             yield _sse({"type": "TEXT_MESSAGE_END", "messageId": msg_id})
+            # RUN_FINISHED must be emitted INSIDE the try block — the finally
+            # below resets the relay contextvar and marks the thread inactive,
+            # so a later yield would never reach Redis (reconnecting clients
+            # would hang waiting for the run to finish).
+            yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
 
     except AgentRunError:
         raise
@@ -1615,14 +1669,20 @@ async def run_agent_stream(
     finally:
         # Deactivate stream relay so the reconnect endpoint knows the run
         # has finished and can drain remaining events from the Redis stream.
+        # Wait for any in-flight ordered pushes first so RUN_FINISHED lands
+        # in Redis BEFORE the active flag is cleared.
+        _pending_push = _push_chains.get(thread_id)
+        if _pending_push is not None:
+            try:
+                await _pending_push
+            except Exception:  # noqa: BLE001
+                pass
         _stream_relay_thread_id.reset(_relay_token)
         if _relay_mark_inactive is not None:
             try:
                 await _relay_mark_inactive(thread_id)
             except Exception:  # noqa: BLE001
                 pass
-
-    yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
 
 
 # ---------------------------------------------------------------------------

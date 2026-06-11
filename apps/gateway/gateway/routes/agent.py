@@ -580,14 +580,45 @@ async def run_agent_stream_endpoint(
 
     _log.info("agent.stream_run_start", agent=agent_name, run_id=run_id, actor=user.email)
 
+    # ── Detached execution (spec_stream_reconnection) ──────────────────────
+    # The agent generator runs in a background task that pushes ALL events to
+    # the per-thread Redis stream (executor self-tees via _sse).  This HTTP
+    # response is merely a Redis subscriber: if the client disconnects,
+    # uvicorn cancels the subscriber but the agent keeps running.  A
+    # reconnecting client replays from its cursor via GET .../reconnect.
+    from orchestrator.stream_relay import run_detached  # noqa: PLC0415
+
+    thread_id = req.thread_id or f"{agent_name}:{run_id}"
+
+    agent_gen = run_agent_stream(
+        agent_name,
+        req.payload,
+        run_id=run_id,
+        thread_id=thread_id,
+        model=req.model,
+    )
+
+    async def _serve():
+        try:
+            async for evt in run_detached(thread_id, agent_gen, tee=False):
+                yield f"data: {json.dumps(evt)}\n\n"
+        except Exception:  # noqa: BLE001
+            from orchestrator.stream_relay import \
+                get_detached_task  # noqa: PLC0415
+            if get_detached_task(thread_id) is not None:
+                # Drain task already owns the generator — losing the Redis
+                # subscription mid-run must not double-consume it.  The run
+                # continues in the background; the client can reconnect.
+                _log.warning("agent.stream_subscribe_lost", agent=agent_name)
+                return
+            # Redis was unavailable from the start — degrade to direct
+            # streaming with no relay (old behaviour).
+            _log.warning("agent.stream_relay_unavailable", agent=agent_name)
+            async for line in agent_gen:
+                yield line
+
     return StreamingResponse(
-        run_agent_stream(
-            agent_name,
-            req.payload,
-            run_id=run_id,
-            thread_id=req.thread_id,
-            model=req.model,
-        ),
+        _serve(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache, no-transform",
@@ -634,24 +665,43 @@ async def reconnect_agent_stream(
         "agent.reconnect_request",
         thread_id=thread_id[:12],
         since=since[:20],
-        actor=getattr(user, "email", "anonymous")[:20],
+        actor=(getattr(user, "email", None) or "anonymous")[:20],
     )
 
     async def _event_generator():
         # Phase 1: Replay missed events.
+        # Local _stream_id values (e.g. "local-1718123456789-5") are generated
+        # by the executor for the initial SSE stream (before the Redis entry ID
+        # is known).  Redis XREAD doesn't understand them, so fall back to
+        # "0-0".  Streams are reset per run (mark_active(reset=True)), so a
+        # full replay covers exactly the current run.  The frontend clears its
+        # partial message before replay, so duplication is harmless.
+        _since = since
+        if _since.startswith("local-"):
+            _since = "0-0"
+
+        # Track the replay cursor so Phase 2 subscribes from the exact spot —
+        # subscribing from "$" would silently drop any events pushed between
+        # replay end and subscribe start.
+        _cursor = _since
         if await stream_exists(thread_id):
-            missed = await replay_events(thread_id, since_id=since, count=500)
+            missed = await replay_events(thread_id, since_id=_since, count=500)
             for evt in missed:
+                _eid = evt.get("_stream_id")
+                if _eid:
+                    _cursor = _eid
                 yield f"data: {_json.dumps(evt)}\n\n"
 
-        # Phase 2: If agent is still active, subscribe to live events.
+        # Phase 2: If agent is still active, subscribe to live events from
+        # the cursor (no gap with Phase 1).
         if await is_active(thread_id):
-            async for evt in subscribe_events(thread_id, since_id="$"):
+            async for evt in subscribe_events(thread_id, since_id=_cursor):
                 yield f"data: {_json.dumps(evt)}\n\n"
         else:
-            # Agent finished — emit a synthetic "done" so the frontend
-            # knows the stream is complete.
-            yield f"data: {_json.dumps({'type': 'done', 'threadId': thread_id})}\n\n"
+            # Agent finished — emit RUN_FINISHED so the frontend translator
+            # (translateAndPersistStream) maps it to {"type":"done"} and the
+            # UI exits the reconnecting state.
+            yield f"data: {_json.dumps({'type': 'RUN_FINISHED', 'runId': thread_id, 'threadId': thread_id})}\n\n"
 
     return StreamingResponse(
         _event_generator(),

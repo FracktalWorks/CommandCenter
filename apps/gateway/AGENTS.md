@@ -13,9 +13,9 @@ webhook receivers, OAuth callbacks, and the Control Plane API.
 
 ## Local Contracts
 
-1. main.py -- FastAPI app factory, lifespan (key loading, model cache warmup), /copilot/chat AG-UI endpoint
-2. routes/agent.py -- /agent/run, /agent/run/stream, /agent/webhook, agent CRUD, mutation inbox (approve/reject)
-3. routes/chat.py -- Chat history CRUD (Postgres-backed sessions and messages)
+1. main.py -- FastAPI app factory, lifespan (key loading, model cache warmup), /copilot/chat AG-UI endpoint (relayed through stream_relay.run_detached when thread_id present)
+2. routes/agent.py -- /agent/run, /agent/run/stream (detached: agent survives client disconnect), /agent/run/{thread_id}/reconnect (replay + live follow), /agent/webhook, agent CRUD, mutation inbox (approve/reject)
+3. routes/chat.py -- Chat history CRUD (Postgres-backed sessions and messages) + GET /chat/active-sessions (Redis cc:active:* scan for running agents)
 4. routes/oauth.py -- OAuth authorize->callback->refresh for Zoho/ClickUp/Google
 5. routes/integrations.py -- Integration Registry management
 6. routes/memory.py -- Memory search and management endpoints
@@ -48,6 +48,10 @@ webhook receivers, OAuth callbacks, and the Control Plane API.
 - Gateway health: GET /health returns {status: ok}
 - Chat endpoint: POST /copilot/chat streams AG-UI events
 - Agent stream: POST /agent/run/stream returns SSE stream with model
+- Detached runs: disconnect mid-stream, cc:active:{tid} stays "1" and
+  cc:stream:{tid} keeps growing; reconnect endpoint replays to RUN_FINISHED
+  (E2E: uv run python scripts/_test_reconnect_e2e.py <agent> "<prompt>")
+- Active sessions: GET /chat/active-sessions lists running thread IDs
 - Workspace files: GET /agent/workspace/{id} lists files; .tmp/ and outputs/ are visible
 - File download: GET /agent/workspace/{id}/file?path= serves raw bytes (50 MB cap)
 - All endpoints require auth (Bearer token + optional X-User-Email/X-User-Role)

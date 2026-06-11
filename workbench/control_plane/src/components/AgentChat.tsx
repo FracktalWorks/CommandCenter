@@ -318,8 +318,14 @@ export default function AgentChat({
   // assistant record in-place during streaming).
   useEffect(() => {
     let cancelled = false;
-    fetchMessagesFromDb(sessionId).then((remote) => {
-      if (cancelled || remote.length === 0) return;
+    fetchMessagesFromDb(sessionId).then((remoteRaw) => {
+      if (cancelled || remoteRaw.length === 0) return;
+      // Drop stale __ERROR__ system messages persisted by older builds —
+      // transient errors must never resurface on reload.
+      const remote = (remoteRaw as ChatMessage[]).filter(
+        (m) => !(m.role === "system" && m.content?.startsWith("__ERROR__")),
+      );
+      if (remote.length === 0) return;
       const local = getMessages(sessionId);
       // Quick check: more messages → definitely use DB.
       if (remote.length > local.length) {
@@ -415,7 +421,11 @@ export default function AgentChat({
   useEffect(() => {
     const handleUnload = () => {
       const msgs = messagesRef.current;
-      const settled = msgs.filter((m) => !m.streaming || m.content.trim().length > 0);
+      const settled = msgs.filter(
+        (m) =>
+          (!m.streaming || m.content.trim().length > 0) &&
+          !(m.role === "system" && m.content.startsWith("__ERROR__")),
+      );
       if (settled.length === 0) return;
       const toSave: PersistedMessage[] = settled.map((m) => ({
         id: m.id,

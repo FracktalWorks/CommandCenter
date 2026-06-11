@@ -42,11 +42,20 @@ and streams chat responses as AG-UI events.
 1. run_agent_stream() creates CommandCenterCopilotAgent patches on loaded agent
 2. agent.run(stream=True) returns AgentResponseUpdate objects
 3. Each update is translated to AG-UI SSE events (TEXT_MESSAGE_CONTENT, TOOL_CALL_*, etc.)
-4. Events are yielded as SSE frames to the gateway
-5. Every SSE frame is also pushed to Redis Stream (cc:stream:{thread_id}) via stream_relay
-   so the reconnect endpoint (GET /agent/run/{thread_id}/reconnect) can replay missed
-   events after a browser disconnect.
-6. _stream_relay_thread_id context var controls teeing; set per-run, cleared on finish
+4. DETACHED EXECUTION: the gateway wraps the generator in stream_relay.run_detached(),
+   which drains it in a background asyncio task pushing all events to Redis
+   (cc:stream:{thread_id}). The HTTP response is just a Redis subscriber --
+   client disconnects never kill the agent run.
+5. Every _sse() frame is teed to Redis via per-thread ORDERED push chains
+   (_tee_sse_line) so events land in exact emission order. Tier-1 MAF AG-UI
+   frames (which bypass _sse) are teed explicitly in the Tier-1 loop.
+6. RUN_FINISHED is emitted INSIDE the try block (before the finally tears down
+   the relay) and the finally awaits pending pushes before mark_inactive --
+   reconnecting clients always see the run end.
+7. mark_active(reset=True) clears the previous run's stream so replay-from-0
+   covers exactly the current run (prior turns live in Postgres).
+8. Reconnect endpoint (GET /agent/run/{thread_id}/reconnect) replays from the
+   cursor then subscribes live FROM THE REPLAY TAIL (no event gap).
 
 ## Verification
 

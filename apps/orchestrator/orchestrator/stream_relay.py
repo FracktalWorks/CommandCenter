@@ -37,6 +37,7 @@ Usage::
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, AsyncIterator
 
@@ -215,10 +216,21 @@ async def subscribe_events(
         await r.aclose()
 
 
-async def mark_active(thread_id: str) -> None:
-    """Mark a thread's agent as currently running."""
+async def mark_active(thread_id: str, *, reset: bool = False) -> None:
+    """Mark a thread's agent as currently running.
+
+    Args:
+        thread_id: Conversation thread ID.
+        reset:     When True, delete any existing event stream first so the
+                   stream contains ONLY the current run's events.  This
+                   makes ``replay_events(since_id="0-0")`` always correct
+                   for the run in progress (previous turns live in
+                   Postgres, not Redis).
+    """
     r = await _get_client()
     try:
+        if reset:
+            await r.delete(_stream_key(thread_id))
         await r.set(_active_key(thread_id), "1", ex=STREAM_TTL_SECONDS)
     finally:
         await r.aclose()
@@ -255,14 +267,20 @@ async def stream_exists(thread_id: str) -> bool:
 
 
 async def push_sse_event(thread_id: str, sse_line: str) -> str:
-    """Parse an SSE line (``data: {...}\\n\\n``) and push the JSON payload
-    to the per-thread Redis stream.
+    """Parse an SSE frame and push the JSON payload to the per-thread stream.
 
-    Returns the Redis entry ID, or ``""`` if the line couldn't be parsed.
+    Handles both bare ``data: {...}\\n\\n`` frames (executor format) and
+    multi-line frames such as ``event: X\\ndata: {...}\\n\\n`` (AG-UI
+    ``EventEncoder`` format).
+
+    Returns the Redis entry ID, or ``""`` if the frame couldn't be parsed.
     """
-    if not sse_line.startswith("data: "):
-        return ""
-    raw = sse_line[6:].strip()
+    raw = ""
+    for part in sse_line.split("\n"):
+        part = part.strip()
+        if part.startswith("data:"):
+            raw = part[5:].strip()
+            break
     if not raw:
         return ""
     try:
@@ -270,3 +288,104 @@ async def push_sse_event(thread_id: str, sse_line: str) -> str:
     except json.JSONDecodeError:
         return ""
     return await push_event(thread_id, event)
+
+
+# ---------------------------------------------------------------------------
+# Detached execution — decouple agent runs from the HTTP response lifecycle
+# ---------------------------------------------------------------------------
+
+# Strong references to in-flight detached run tasks, keyed by thread_id.
+# Prevents garbage collection and enforces one run per thread.
+_DETACHED_TASKS: dict[str, asyncio.Task[None]] = {}
+
+
+def get_detached_task(thread_id: str) -> asyncio.Task[None] | None:
+    """Return the in-flight detached run task for *thread_id*, if any."""
+    task = _DETACHED_TASKS.get(thread_id)
+    if task is not None and task.done():
+        return None
+    return task
+
+
+async def run_detached(
+    thread_id: str,
+    gen: AsyncIterator[str],
+    *,
+    tee: bool = False,
+) -> AsyncIterator[dict[str, Any]]:
+    """Run *gen* (an SSE-line async generator) in a DETACHED background task
+    and yield its events from the Redis stream.
+
+    This decouples agent execution from the HTTP response: if the client
+    disconnects, uvicorn cancels THIS generator (the subscriber) but the
+    background task keeps draining the agent and pushing events to Redis.
+    A reconnecting client replays from its cursor and resumes live.
+
+    Args:
+        thread_id: Conversation thread ID (stream key).
+        gen:       Async generator yielding SSE-formatted strings.
+        tee:       When True, this helper pushes each yielded line to Redis
+                   (use for generators that don't self-tee, e.g. AG-UI
+                   ``/copilot/chat``).  When False the generator is expected
+                   to tee its own events (executor ``_sse`` contextvar path).
+
+    Yields:
+        Parsed event dicts with ``_stream_id`` (Redis entry ID) attached.
+    """
+    # One run per thread: cancel any stale run still attached to this thread.
+    prev = _DETACHED_TASKS.get(thread_id)
+    if prev is not None and not prev.done():
+        prev.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(prev), timeout=2)
+        except BaseException:  # noqa: BLE001
+            pass
+
+    # Fresh run boundary: clear previous events so replay-from-0 is exact.
+    await mark_active(thread_id, reset=True)
+
+    async def _drain() -> None:
+        try:
+            async for line in gen:
+                if tee:
+                    try:
+                        await push_sse_event(thread_id, line)
+                    except Exception:  # noqa: BLE001
+                        pass  # never let Redis issues kill the agent run
+        except asyncio.CancelledError:
+            try:
+                await push_event(thread_id, {
+                    "type": "RUN_ERROR",
+                    "message": "Run cancelled (superseded)",
+                    "code": "Cancelled",
+                })
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        except Exception as exc:  # noqa: BLE001
+            _log.exception(
+                "stream_relay.detached_run_error",
+                thread_id=thread_id[:12],
+            )
+            try:
+                await push_event(thread_id, {
+                    "type": "RUN_ERROR",
+                    "message": str(exc),
+                    "code": type(exc).__name__,
+                })
+            except Exception:  # noqa: BLE001
+                pass
+        finally:
+            try:
+                await mark_inactive(thread_id)
+            except Exception:  # noqa: BLE001
+                pass
+            if _DETACHED_TASKS.get(thread_id) is task:
+                _DETACHED_TASKS.pop(thread_id, None)
+
+    task = asyncio.create_task(_drain(), name=f"cc-run-{thread_id[:24]}")
+    _DETACHED_TASKS[thread_id] = task
+
+    # Serve events from Redis — the SAME path a reconnecting client uses.
+    async for evt in subscribe_events(thread_id, since_id="0"):
+        yield evt

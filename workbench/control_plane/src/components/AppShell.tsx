@@ -115,8 +115,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* Bottom navigation bar — always visible on mobile */}
         <MobileBottomNav pathname={pathname} toggleView={toggleView} />
-        {/* Bottom navigation bar — always visible on mobile */}
-        <MobileBottomNav pathname={pathname} toggleView={toggleView} />
 
         {/* Unified drawer (slide-up panel for bottom-nav tab content) */}
         {drawerOpen && (

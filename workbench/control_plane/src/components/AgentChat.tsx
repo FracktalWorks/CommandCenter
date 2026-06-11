@@ -763,7 +763,7 @@ export default function AgentChat({
       {/* Message thread */}
       <div
         ref={threadRef}
-        className="flex-1 overflow-y-auto px-3 sm:px-4 py-3 space-y-3 relative"
+        className="flex-1 overflow-y-auto px-3 sm:px-4 py-3 space-y-3 relative scrollbar-thin"
       >
         {/* Scroll-to-bottom floating button */}
         {showScrollBtn && (
@@ -778,6 +778,9 @@ export default function AgentChat({
             </svg>
           </button>
         )}
+
+        {/* Content centered for readability on wide screens */}
+        <div className="max-w-3xl mx-auto">
 
         {/* Stream interrupted notice — last message was mid-stream when session closed */}
         {!isLoading && messages.length > 0 && (() => {
@@ -884,6 +887,7 @@ export default function AgentChat({
           <ErrorCard parsed={parseAgentError(error)} />
         )}
 
+        </div>{/* close max-w-3xl */}
         <div ref={bottomRef} />
       </div>
 
@@ -1077,8 +1081,11 @@ export default function AgentChat({
       {/* Input area */}
       <form
         onSubmit={handleSubmit}
-        className="shrink-0 border-t border-zinc-800/50 bg-zinc-900/40 px-2 sm:px-4 py-2"
+        className="shrink-0 border-t border-zinc-800/50 bg-zinc-900/60 px-2 sm:px-4 pt-1.5 pb-2"
       >
+        {/* Feather gradient — subtle fade from messages into the input */}
+        <div className="h-6 -mt-7 mb-1 pointer-events-none bg-gradient-to-t from-zinc-900/60 to-transparent" />
+
         {queuedCount > 0 && (
           <div className="mb-2 flex items-center gap-2 text-[11px] text-amber-400">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
@@ -1092,115 +1099,123 @@ export default function AgentChat({
             </button>
           </div>
         )}
-        <div className="flex items-end gap-2 sm:gap-3">
-          {/* Upload button — files land in .tmp/ and context is sent to agent */}
-          <FileUploadButton
-            sessionId={sessionId}
-            onUploadComplete={(files) => {
-              const names = files.map((f) => f.name).join(", ");
-              const paths = files.map((f) => `\`${f.path}\``).join(", ");
-              const ctx = `📎 Uploaded ${files.length} file(s): ${names}\n\nThese files are available in the workspace at:\n${paths}\n\nYou can read them with the read_file tool. Refer to them whenever I mention the uploaded content.`;
-              setInput((prev) => prev.trim() ? `${prev}\n\n${ctx}` : ctx);
-              inputRef.current?.focus();
-            }}
-            className="shrink-0 self-center mb-0.5"
-          />
 
-          <div className="flex-1 relative">
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              rows={1}
-              placeholder={
-                isLoading
-                  ? `${SEND_MODE_LABELS[sendMode]} a follow-up to ${currentAgentName}…`
-                  : `Message ${currentAgentName}…`
-              }
-              className="w-full resize-none rounded-xl bg-zinc-800 border border-zinc-700 px-4 py-2.5 text-[13px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 max-h-40 overflow-y-auto transition-colors"
-              style={{ minHeight: "44px" }}
-              onInput={(e) => {
-                const t = e.currentTarget;
-                t.style.height = "auto";
-                t.style.height = `${Math.min(t.scrollHeight, 160)}px`;
+        {/* Input row — centered with max-width for readability on wide screens */}
+        <div className="max-w-3xl mx-auto">
+          <div className="flex items-end gap-2 sm:gap-3">
+            {/* Upload button */}
+            <FileUploadButton
+              sessionId={sessionId}
+              onUploadComplete={(files) => {
+                const names = files.map((f) => f.name).join(", ");
+                const paths = files.map((f) => `\`${f.path}\``).join(", ");
+                const ctx = `📎 Uploaded ${files.length} file(s): ${names}\n\nThese files are available in the workspace at:\n${paths}\n\nYou can read them with the read_file tool. Refer to them whenever I mention the uploaded content.`;
+                setInput((prev) => prev.trim() ? `${prev}\n\n${ctx}` : ctx);
+                inputRef.current?.focus();
               }}
+              className="shrink-0 self-center mb-0.5"
             />
-            {/* Keyboard shortcut hint */}
-            {!input.trim() && (
-              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[9px] text-zinc-600 pointer-events-none hidden sm:block">
-                Enter to send · Shift+Enter for new line
-              </span>
-            )}
-          </div>
 
-          {/* Stop button (only while generating) */}
-          {isLoading && (
-            <button
-              type="button"
-              onClick={stopGeneration}
-              className="shrink-0 h-[44px] w-[44px] rounded-xl bg-red-900/60 border border-red-700/60 text-red-300 text-base flex items-center justify-center hover:bg-red-800/80 transition-colors"
-              aria-label="Stop generation"
-              title="Stop generation"
-            >
-              ■
-            </button>
-          )}
+            <div className="flex-1 relative">
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                rows={1}
+                placeholder={
+                  isLoading
+                    ? `${SEND_MODE_LABELS[sendMode]} a follow-up to ${currentAgentName}…`
+                    : `Message ${currentAgentName}…`
+                }
+                className="w-full resize-none rounded-xl bg-zinc-800 border border-zinc-700 px-4 py-2.5 text-[13px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 max-h-40 overflow-y-auto transition-colors"
+                style={{ minHeight: "44px" }}
+                onInput={(e) => {
+                  const t = e.currentTarget;
+                  t.style.height = "auto";
+                  t.style.height = `${Math.min(t.scrollHeight, 160)}px`;
+                }}
+              />
+              {!input.trim() && (
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[9px] text-zinc-600 pointer-events-none hidden sm:block">
+                  Enter to send · Shift+Enter for new line
+                </span>
+              )}
+            </div>
 
-          {/* Send split-button: primary action + mode selector */}
-          <div className="relative shrink-0 flex items-stretch">
-            <button
-              type="submit"
-              disabled={!input.trim()}
-              className="h-[44px] pl-4 pr-3 rounded-l-xl bg-zinc-100 text-zinc-900 font-semibold text-sm flex items-center gap-1.5 disabled:opacity-30 hover:bg-white transition-colors"
-              aria-label={SEND_MODE_LABELS[sendMode]}
-              title={`${SEND_MODE_LABELS[sendMode]} (current mode)`}
-            >
-              {sendMode === "send" ? "↑" : sendMode === "queue" ? "⏱" : "⤳"}
-              <span className="text-xs">{SEND_MODE_LABELS[sendMode]}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowSendMenu((v) => !v)}
-              className="h-[44px] px-2 rounded-r-xl bg-zinc-200 text-zinc-900 border-l border-zinc-300 hover:bg-white transition-colors text-xs"
-              aria-label="Choose send mode"
-              title="Choose how to send"
-            >
-              ▾
-            </button>
-
-            {showSendMenu && (
-              <div
-                className="absolute bottom-full right-0 mb-1 w-60 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl z-50 py-1"
-                onMouseLeave={() => setShowSendMenu(false)}
+            {/* Stop button */}
+            {isLoading && (
+              <button
+                type="button"
+                onClick={stopGeneration}
+                className="shrink-0 h-[44px] w-[44px] rounded-xl bg-red-900/60 border border-red-700/60 text-red-300 text-base flex items-center justify-center hover:bg-red-800/80 transition-colors"
+                aria-label="Stop generation"
+                title="Stop generation"
               >
-                {(["send", "queue", "steer"] as SendMode[]).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => { setSendMode(m); setShowSendMenu(false); }}
-                    className={`w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 transition-colors ${
-                      m === sendMode ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium">
-                        {m === "send" ? "↑ Send" : m === "queue" ? "⏱ Queue" : "⤳ Steer"}
-                      </span>
-                      {m === sendMode && <span className="text-emerald-500 text-[10px]">✓</span>}
-                    </div>
-                    <div className="text-zinc-600 mt-0.5">
-                      {m === "send"
-                        ? "Send now (queues if busy)"
-                        : m === "queue"
-                        ? "Wait for the current reply, then send"
-                        : "Interrupt the current reply and send now"}
-                    </div>
-                  </button>
-                ))}
-              </div>
+                ■
+              </button>
             )}
+
+            {/* Send split-button */}
+            <div className="relative shrink-0 flex items-stretch">
+              <button
+                type="submit"
+                disabled={!input.trim()}
+                className="h-[44px] pl-4 pr-3 rounded-l-xl bg-zinc-100 text-zinc-900 font-semibold text-sm flex items-center gap-1.5 disabled:opacity-30 hover:bg-white transition-colors"
+                aria-label={SEND_MODE_LABELS[sendMode]}
+                title={`${SEND_MODE_LABELS[sendMode]} (current mode)`}
+              >
+                {sendMode === "send" ? "↑" : sendMode === "queue" ? "⏱" : "⤳"}
+                <span className="text-xs">{SEND_MODE_LABELS[sendMode]}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSendMenu((v) => !v)}
+                className="h-[44px] px-2 rounded-r-xl bg-zinc-200 text-zinc-900 border-l border-zinc-300 hover:bg-white transition-colors text-xs"
+                aria-label="Choose send mode"
+                title="Choose how to send"
+              >
+                ▾
+              </button>
+
+              {showSendMenu && (
+                <div
+                  className="absolute bottom-full right-0 mb-1 w-60 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl z-50 py-1"
+                  onMouseLeave={() => setShowSendMenu(false)}
+                >
+                  {(["send", "queue", "steer"] as SendMode[]).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => { setSendMode(m); setShowSendMenu(false); }}
+                      className={`w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 transition-colors ${
+                        m === sendMode ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium">
+                          {m === "send" ? "↑ Send" : m === "queue" ? "⏱ Queue" : "⤳ Steer"}
+                        </span>
+                        {m === sendMode && <span className="text-emerald-500 text-[10px]">✓</span>}
+                      </div>
+                      <div className="text-zinc-600 mt-0.5">
+                        {m === "send"
+                          ? "Send now (queues if busy)"
+                          : m === "queue"
+                          ? "Wait for the current reply, then send"
+                          : "Interrupt the current reply and send now"}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
+
+          {/* Disclaimer — CopilotKit-style trust text */}
+          <p className="text-[10px] text-zinc-600 text-center mt-2">
+            CommandCenter can make mistakes. Please verify important information.
+          </p>
         </div>
       </form>
 

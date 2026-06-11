@@ -998,6 +998,18 @@ async def run_agent_stream(
 
             agent = agents[0]
 
+            # ── Session continuity: restore Copilot SDK session if available ─
+            # Storing the service_session_id allows MAF's _get_or_create_session
+            # to call resume_session() instead of create_session(), maintaining
+            # server-side conversation state across browser restarts.
+            _copilot_session_id: str | None = None
+            if _agent_runtime == "github-copilot" and thread_id:
+                _copilot_session_id = _get_stored_session_id(thread_id)
+                if _copilot_session_id:
+                    _log.debug("executor.session_restore",
+                               thread_id=thread_id,
+                               copilot_session=_copilot_session_id[:12])
+
             # Ensure permission handler is set for GitHubCopilotAgent before ANY
             # execution path — repos often omit it from default_options.
             try:
@@ -1131,8 +1143,16 @@ async def run_agent_stream(
                             _run_opts["model"] = _byok_model_id
                         elif _final_model_early:
                             _run_opts["model"] = _final_model_early
+                        # Pass stored session for Copilot SDK continuity
+                        _agent_session = None
+                        if _copilot_session_id:
+                            try:
+                                _agent_session = agent.get_session(_copilot_session_id)
+                            except Exception:  # noqa: BLE001
+                                pass
                         _stream = agent.run(_msg_text, stream=True,
-                                           options=_run_opts if _run_opts else None)
+                                           options=_run_opts if _run_opts else None,
+                                           session=_agent_session)
                         async for _update in _stream:
                             for _c in (_update.contents or []):
                                 _ct = getattr(_c, "type", None)
@@ -1194,6 +1214,15 @@ async def run_agent_stream(
                 if _msg_id and _text_started:
                     yield _sse({"type": "TEXT_MESSAGE_END", "messageId": _msg_id})
                 yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
+
+                # Save Copilot session ID for continuity on next request.
+                if _agent_runtime == "github-copilot" and thread_id:
+                    try:
+                        _last_sid = await agent._client.get_last_session_id()
+                        if _last_sid:
+                            _store_session_id(thread_id, _last_sid)
+                    except Exception:  # noqa: BLE001
+                        pass
 
                 await _detect_agent_commits(
                     agent_name, str(loaded.agent_dir), run_id,
@@ -1979,4 +2008,58 @@ def _build_event_message(
             )
 
     return "\n".join(parts) if parts else f"[Agent run: {agent_name} / {run_id}]"
+
+
+# ---------------------------------------------------------------------------
+# Copilot SDK session continuity — store/restore service_session_id so
+# MAF's _get_or_create_session can call resume_session() across requests.
+# ---------------------------------------------------------------------------
+
+# In-memory store: thread_id → Copilot service_session_id
+# Survives browser disconnects within the same gateway process.
+_copilot_session_store: dict[str, str] = {}
+
+
+def _get_stored_session_id(thread_id: str) -> str | None:
+    """Return the previously stored Copilot service_session_id for this thread."""
+    sid = _copilot_session_store.get(thread_id)
+    # Also try Postgres for cross-restart durability
+    if not sid:
+        try:
+            from acb_graph import get_session as _db_session  # noqa: PLC0415
+            from sqlalchemy import text  # noqa: PLC0415
+            with _db_session() as s:
+                row = s.execute(
+                    text("SELECT service_session_id FROM chat_session WHERE id = :id"),
+                    {"id": thread_id},
+                ).fetchone()
+            if row and row.service_session_id:
+                sid = row.service_session_id
+                _copilot_session_store[thread_id] = sid
+        except Exception:  # noqa: BLE001
+            pass
+    return sid
+
+
+def _store_session_id(thread_id: str, service_session_id: str) -> None:
+    """Persist the Copilot service_session_id for future requests."""
+    _copilot_session_store[thread_id] = service_session_id
+    # Also persist to Postgres
+    try:
+        from acb_graph import get_session as _db_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+        def _write():
+            with _db_session() as s:
+                s.execute(
+                    text(
+                        "UPDATE chat_session SET service_session_id = :sid "
+                        "WHERE id = :id"
+                    ),
+                    {"sid": service_session_id, "id": thread_id},
+                )
+                s.commit()
+        import asyncio as _aio
+        _aio.get_event_loop().run_in_executor(None, _write)
+    except Exception:  # noqa: BLE001
+        pass
 

@@ -24,9 +24,17 @@ import {
   FileSpreadsheet,
   RefreshCw,
   Download,
+  Trash2,
 } from "lucide-react";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Files in .tmp/ and outputs/ are user/agent-generated and safe to delete.
+ *  Everything else (agent source, configs, skills) is protected. */
+function isDeletable(entry: FileEntry): boolean {
+  const p = entry.path;
+  return p.startsWith(".tmp/") || p.startsWith("outputs/");
+}
 
 export interface FileEntry {
   path: string;       // relative to workspace root, e.g. "reports/summary.md"
@@ -111,11 +119,13 @@ function TreeNodeRow({
   depth,
   onFileOpen,
   sessionId,
+  onDeleteFile,
 }: {
   node: TreeNode;
   depth: number;
   onFileOpen: (entry: FileEntry) => void;
   sessionId: string;
+  onDeleteFile: (entry: FileEntry) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const paddingLeft = 8 + depth * 12;
@@ -139,7 +149,7 @@ function TreeNodeRow({
           <span className="truncate font-medium text-zinc-300">{node.name || "/"}</span>
         </button>
         {expanded && children.map((child) => (
-          <TreeNodeRow key={child.path} node={child} depth={depth + 1} onFileOpen={onFileOpen} sessionId={sessionId} />
+          <TreeNodeRow key={child.path} node={child} depth={depth + 1} onFileOpen={onFileOpen} sessionId={sessionId} onDeleteFile={onDeleteFile} />
         ))}
       </div>
     );
@@ -147,12 +157,29 @@ function TreeNodeRow({
 
   const entry = node.entry!;
   const downloadUrl = `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`;
+  const deletable = isDeletable(entry);
+
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm(`Delete "${entry.name}"?\n\nThis cannot be undone.`)) return;
+    try {
+      const res = await fetch(
+        `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      onDeleteFile(entry);
+    } catch (err) {
+      alert(`Failed to delete: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   return (
     <div
       className="group flex items-center gap-1.5 rounded px-1 py-0.5 text-xs text-zinc-400 hover:bg-zinc-800 cursor-pointer transition-colors"
       style={{ paddingLeft: paddingLeft + 14 }}
       onDoubleClick={() => onFileOpen(entry)}
-      title={`${entry.path} · ${formatBytes(entry.size)}\nDouble-click to open · Click ↓ to download`}
+      title={`${entry.path} · ${formatBytes(entry.size)}${deletable ? "\nClick 🗑 to delete" : "\nProtected file"}\nDouble-click to open`}
     >
       {fileIcon(entry)}
       <span className="flex-1 truncate">{entry.name}</span>
@@ -166,6 +193,15 @@ function TreeNodeRow({
       >
         <Download size={12} />
       </a>
+      {deletable && (
+        <button
+          onClick={handleDelete}
+          className="shrink-0 opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-400 transition-all p-0.5"
+          title={`Delete ${entry.name}`}
+        >
+          <Trash2 size={12} />
+        </button>
+      )}
     </div>
   );
 }
@@ -232,6 +268,10 @@ export default function ArtifactSidebar({
     });
   }, [artifactUpdates]);
   /* eslint-enable react-hooks/set-state-in-effect */
+
+  const handleDeleteFile = useCallback((entry: FileEntry) => {
+    setFiles((prev) => prev.filter((f) => f.path !== entry.path));
+  }, []);
 
   const tree = buildTree(files);
   const rootChildren = Array.from(tree.children.values()).sort((a, b) => {
@@ -319,7 +359,7 @@ export default function ArtifactSidebar({
           )}
 
           {!loading && rootChildren.map((node) => (
-            <TreeNodeRow key={node.path} node={node} depth={0} onFileOpen={onFileOpen} sessionId={sessionId} />
+            <TreeNodeRow key={node.path} node={node} depth={0} onFileOpen={onFileOpen} sessionId={sessionId} onDeleteFile={handleDeleteFile} />
           ))}
         </div>
       )}

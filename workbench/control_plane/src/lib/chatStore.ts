@@ -65,10 +65,14 @@ export interface SessionStreamState {
   error: string | null;
   /** Kept here so stopGeneration() can abort even when component is unmounted. */
   abortController: AbortController | null;
+  /** True when the stream was interrupted (refresh/tab-close) and polling is
+   *  actively recovering content from Postgres.  The UI shows a "Reconnecting…"
+   *  indicator while this is true. */
+  recovering: boolean;
 }
 
 function _defaultState(): SessionStreamState {
-  return { messages: [], isLoading: false, error: null, abortController: null };
+  return { messages: [], isLoading: false, error: null, abortController: null, recovering: false };
 }
 
 // ── Module-level store ───────────────────────────────────────────────────────

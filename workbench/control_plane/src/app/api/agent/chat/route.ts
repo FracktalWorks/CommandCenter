@@ -74,13 +74,19 @@ const INTERNAL_TOKEN =
  * Save the accumulated assistant message to Postgres so it survives client
  * disconnect (tab close, browser quit, network drop). Called periodically
  * during streaming and once when the stream completes.
+ *
+ * Persists content, tool events, reasoning blocks, and progress lines so
+ * the polling recovery path can restore the full stream state (thinking
+ * cascade, tool progress, etc.) — not just the final text.
  */
 async function persistAssistantMessage(
   threadId: string,
   content: string,
   toolEvents: Array<Record<string, unknown>> = [],
+  reasoningBlocks: string[] = [],
+  progressLines: string[] = [],
 ): Promise<void> {
-  if (!content.trim() && toolEvents.length === 0) return;
+  if (!content.trim() && toolEvents.length === 0 && reasoningBlocks.length === 0) return;
   try {
     const payload = [{
       id: `assistant-${threadId}`,
@@ -88,8 +94,8 @@ async function persistAssistantMessage(
       content,
       timestamp: Date.now(),
       tool_events: toolEvents,
-      progress_lines: [],
-      reasoning: null,
+      progress_lines: progressLines,
+      reasoning: reasoningBlocks.length > 0 ? reasoningBlocks.join("\n---\n") : null,
       agent_state: null,
       custom_events: [],
     }];
@@ -129,6 +135,11 @@ async function translateAndPersistStream(
   const toolNames: Record<string, string> = {};
   const toolArgs: Record<string, string> = {};
   const toolEvents: Array<Record<string, unknown>> = [];
+  /** Accumulated reasoning blocks (model chain-of-thought).  Each complete
+   *  sentence / paragraph becomes a separate block for the UI cascade. */
+  const reasoningBlocks: string[] = [];
+  /** Brief progress snippets shown in the ThinkingContainer header. */
+  const progressLines: string[] = [];
   let buf = "";
   let assistantContent = "";
   let lastPersistTime = Date.now();
@@ -167,11 +178,24 @@ async function translateAndPersistStream(
           assistantContent += delta;
           out = { type: "delta", content: delta };
         } else if (t === "REASONING_MESSAGE_CONTENT" || t === "THINKING_TEXT_MESSAGE_CONTENT") {
+          const chunk = String(ev.delta ?? "");
+          if (chunk) {
+            // Append to last block if it doesn't end with sentence-ending punctuation,
+            // otherwise start a new block (mirrors the frontend cascade logic).
+            if (reasoningBlocks.length > 0 && !/[.?!]\s*$/.test(reasoningBlocks[reasoningBlocks.length - 1])) {
+              reasoningBlocks[reasoningBlocks.length - 1] += chunk;
+            } else {
+              reasoningBlocks.push(chunk);
+            }
+          }
           out = { type: "reasoning", content: ev.delta ?? "" };
         } else if (t === "TOOL_CALL_START") {
           const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
           toolNames[String(ev.toolCallId ?? "")] = name;
           toolArgs[String(ev.toolCallId ?? "")] = "";
+          // Capture progress so the polling recovery path can show tool activity.
+          progressLines.push(name);
+          if (progressLines.length > 20) progressLines.shift();
           enqueue({ type: "progress", name });
           out = { type: "tool_start", id: ev.toolCallId, name, args: {} };
         } else if (t === "TOOL_CALL_ARGS") {
@@ -214,11 +238,14 @@ async function translateAndPersistStream(
 
         if (out) enqueue(out);
 
-        // Persist every 3s while streaming, so messages survive client disconnect
+        // Persist every 3s while streaming, so messages survive client disconnect.
+        // Include reasoning blocks and progress lines so the polling recovery
+        // path can restore the full stream state (thinking cascade, tool
+        // progress, etc.) — not just the final text.
         const now = Date.now();
-        if (assistantContent.trim() && now - lastPersistTime > 3000) {
+        if ((assistantContent.trim() || reasoningBlocks.length > 0) && now - lastPersistTime > 3000) {
           lastPersistTime = now;
-          persistAssistantMessage(threadId, assistantContent, toolEvents).catch(() => {});
+          persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines).catch(() => {});
         }
       }
     }
@@ -226,9 +253,9 @@ async function translateAndPersistStream(
     // Backend stream ended early
   }
 
-  // Final persist — ensure the complete message is saved
-  if (assistantContent.trim() || toolEvents.length > 0) {
-    await persistAssistantMessage(threadId, assistantContent, toolEvents).catch(() => {});
+  // Final persist — ensure the complete message is saved with all stream metadata.
+  if (assistantContent.trim() || toolEvents.length > 0 || reasoningBlocks.length > 0) {
+    await persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines).catch(() => {});
   }
 
   if (clientConnected) {

@@ -54,6 +54,9 @@ interface UseAgentChatReturn {
   stopGeneration: () => void;
   /** Replace the messages array (used to hydrate from Postgres on mount). */
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
+  /** True while polling is actively recovering a stream that was interrupted
+   *  by a page refresh. The UI shows a "Reconnecting…" indicator. */
+  recovering: boolean;
 }
 
 function nanoid(): string {
@@ -455,6 +458,8 @@ export function useAgentChat({
   // assistant message looks interrupted (streaming flag / no terminal
   // punctuation), we mark it non-streaming and let the polling effect below
   // pick up any newer content the backend persisted while we were away.
+  // We also set recovering=true so the UI shows a "Reconnecting…" indicator
+  // until polling confirms the stream has settled.
   // We deliberately do NOT re-run the agent here — that would start a
   // duplicate run and can fail with "Failed to fetch".  Polling recovers
   // the persisted output instead.
@@ -462,14 +467,17 @@ export function useAgentChat({
     const state = getSessionState(threadId);
     if (state.messages.length === 0) return;
     const last = state.messages[state.messages.length - 1];
-    if (
+    const isInterrupted =
       last?.role === "assistant" &&
-      (last.streaming || (last.content && !/[.?!]\s*$/.test(last.content.trim())))
-    ) {
-      // Clear any stale streaming flag so the UI doesn't show a frozen spinner.
+      (last.streaming || (last.content && !/[.?!]\s*$/.test(last.content.trim())));
+    if (isInterrupted) {
+      // Clear any stale streaming flag so the UI doesn't show a frozen spinner,
+      // but set recovering=true so we show a "Reconnecting…" indicator while
+      // polling picks up the stream's continued output.
       setSessionState(threadId, (prev) => ({
         ...prev,
         error: null,
+        recovering: true,
         messages: prev.messages.map((m) =>
           m.id === last.id ? { ...m, streaming: false, isThinkingActive: false } : m
         ),
@@ -485,10 +493,12 @@ export function useAgentChat({
   }, [threadId]);
 
   // ── Reconnection & cross-device polling ─────────────────────────────
-  // Two-tier polling (always runs, even while a stream appears active):
-  //   1. Fast poll (2s): when the last assistant message looks incomplete
-  //      (stream was interrupted by tab close / refresh / browser quit).
-  //   2. Slow poll (30s): always runs, picks up messages from other devices
+  // Three-tier polling (always runs, even while a stream appears active):
+  //   1. Recovery poll (1.5s): when recovering=true (stream was interrupted
+  //      by refresh and we're actively pulling content from Postgres).
+  //   2. Fast poll (3s): when the last assistant message looks incomplete
+  //      (no terminal punctuation) but we're not in recovery mode.
+  //   3. Slow poll (30s): always runs, picks up messages from other devices
   //      without requiring a session switch.
   //
   // We poll even when isLoading because the browser may have aborted the
@@ -520,6 +530,9 @@ export function useAgentChat({
     // Track the last known message count so we only update on change
     let lastKnownCount = messages.length;
 
+    // Recovery timeout: set when recovering is first detected, cleared when done.
+    let recoveryStartedAt = 0;
+
     const poll = async () => {
       if (cancelled) return;
       try {
@@ -531,7 +544,7 @@ export function useAgentChat({
         const remote = await res.json() as Array<{
           id: string; role: string; content: string;
           timestamp: number; tool_events?: unknown[];
-          progress_lines?: string[]; reasoning?: string[] | null;
+          progress_lines?: string[]; reasoning?: string | null;
           agent_state?: Record<string, unknown> | null;
           custom_events?: unknown[];
         }>;
@@ -545,8 +558,8 @@ export function useAgentChat({
           timestamp: r.timestamp ?? Date.now(),
           toolEvents: (r.tool_events as ToolEvent[]) ?? [],
           progressLines: r.progress_lines ?? [],
-          reasoningBlocks: Array.isArray(r.reasoning)
-            ? r.reasoning.filter((x): x is string => typeof x === "string")
+          reasoningBlocks: (typeof r.reasoning === "string" && r.reasoning)
+            ? r.reasoning.split("\n---\n").filter(Boolean)
             : undefined,
           agentState: r.agent_state ?? undefined,
           customEvents: (r.custom_events as Array<{ name: string; value: unknown }>) ?? [],
@@ -578,10 +591,11 @@ export function useAgentChat({
         for (const rm of remoteMsgs) {
           const localMatch = localById.get(rm.id);
           if (localMatch) {
-            // Same id — update if the server has more content/tool events.
+            // Same id — update if the server has more content/tool events/reasoning.
             if (
               rm.content.length > localMatch.content.length ||
-              (rm.toolEvents?.length ?? 0) > (localMatch.toolEvents?.length ?? 0)
+              (rm.toolEvents?.length ?? 0) > (localMatch.toolEvents?.length ?? 0) ||
+              (rm.reasoningBlocks?.length ?? 0) > (localMatch.reasoningBlocks?.length ?? 0)
             ) {
               const idx = merged.findIndex((m) => m.id === rm.id);
               if (idx >= 0) {
@@ -627,15 +641,32 @@ export function useAgentChat({
           }));
         }
 
-        // Determine next poll interval
+        // Determine next poll interval and whether to clear recovering.
         const updatedLast = remoteMsgs[remoteMsgs.length - 1];
         const stillIncomplete =
           updatedLast?.role === "assistant" &&
           updatedLast.content &&
           !/[.?!]\s*$/.test(updatedLast.content.trim());
 
+        // Clear recovering if the server message looks settled (ends with
+        // punctuation) or we've been in recovery for >45s.
+        const curRecovering = getSessionState(threadId).recovering;
+        if (curRecovering) {
+          // Track when recovery first started.
+          if (!recoveryStartedAt) recoveryStartedAt = Date.now();
+          const recoveryAge = Date.now() - recoveryStartedAt;
+          if (!stillIncomplete || recoveryAge > 45000) {
+            setSessionState(threadId, (prev) => ({ ...prev, recovering: false }));
+            recoveryStartedAt = 0;
+          }
+        } else {
+          recoveryStartedAt = 0;
+        }
+
         if (!cancelled) {
-          const interval = stillIncomplete ? 3000 : 30000;
+          // Recovery mode: fast 1.5s polling. Incomplete: 3s. Settled: 30s.
+          const curStillRecovering = getSessionState(threadId).recovering;
+          const interval = curStillRecovering ? 1500 : stillIncomplete ? 3000 : 30000;
           pollTimer = setTimeout(poll, interval);
         }
       } catch {
@@ -643,14 +674,16 @@ export function useAgentChat({
       }
     };
 
-    // Start polling: fast if incomplete or recovering from lost stream,
-    // slow otherwise.
-    const stillRecovering = isLoading; // active stream or stale loading flag
-    const initialInterval = (lastIncomplete || stillRecovering) ? 2000 : 30000;
+    // Start polling: always fast initially (2s) when there are messages,
+    // let the poll function dynamically adjust based on recovering/incomplete state.
+    const hasMessages = messages.length > 0;
+    const initialInterval = hasMessages ? 2000 : 30000;
     pollTimer = setTimeout(poll, initialInterval);
 
     return () => { cancelled = true; clearTimeout(pollTimer); };
   }, [threadId, messages, isLoading]);
 
-  return { messages, isLoading, error, sendMessage, clearMessages, stopGeneration, setMessages };
+  const recovering = getSessionState(threadId).recovering;
+
+  return { messages, isLoading, error, sendMessage, clearMessages, stopGeneration, setMessages, recovering };
 }

@@ -296,7 +296,7 @@ export default function AgentChat({
     return parts.length > 0 ? parts.join("\n\n") : undefined;
   }, [persona, memories]);
 
-  const { messages, isLoading, error, sendMessage, stopGeneration, setMessages } = useAgentChat({
+  const { messages, isLoading, error, sendMessage, stopGeneration, setMessages, recovering } = useAgentChat({
     agentName: currentAgentName,
     threadId: sessionId,
     model: currentModel,
@@ -313,14 +313,28 @@ export default function AgentChat({
   });
 
   // On mount, fetch the authoritative message history from Postgres and sync
-  // the local state if Postgres has more/newer messages (e.g. after cache clear).
+  // the local state if Postgres has richer data (more messages OR longer content
+  // for any message — happens when persistAssistantMessage grows the same
+  // assistant record in-place during streaming).
   useEffect(() => {
     let cancelled = false;
     fetchMessagesFromDb(sessionId).then((remote) => {
       if (cancelled || remote.length === 0) return;
-      // Only update if Postgres has data that the local cache doesn't.
-      const localCount = getMessages(sessionId).length;
-      if (remote.length > localCount) {
+      const local = getMessages(sessionId);
+      // Quick check: more messages → definitely use DB.
+      if (remote.length > local.length) {
+        setMessages(remote as ChatMessage[]);
+        return;
+      }
+      // Same count but maybe richer content?  Compare total content length
+      // and tool-event counts.  This catches the refresh-recovery case
+      // where persistAssistantMessage has grown the assistant message
+      // in-place (same id, longer content / more tool events).
+      const localTotalLen = local.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
+      const remoteTotalLen = remote.reduce((sum: number, m: { content?: string }) => sum + (m.content?.length ?? 0), 0);
+      const localToolCount = local.reduce((sum, m) => sum + ((m as { toolEvents?: unknown[] }).toolEvents?.length ?? 0), 0);
+      const remoteToolCount = remote.reduce((sum: number, m: { toolEvents?: unknown[] }) => sum + (m.toolEvents?.length ?? 0), 0);
+      if (remoteTotalLen > localTotalLen || remoteToolCount > localToolCount) {
         setMessages(remote as ChatMessage[]);
       }
     }).catch(() => {});
@@ -777,8 +791,14 @@ export default function AgentChat({
         )}
 
         <div className="max-w-3xl mx-auto space-y-5">
-          {/* Stream interrupted notice */}
-          {!isLoading && messages.length > 0 && (() => {
+          {/* Stream recovery indicator */}
+          {recovering ? (
+            <div className="rounded-lg border border-sky-800/40 bg-sky-950/30 px-3 py-2 text-[12px] text-sky-300/90 flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-sky-400 animate-pulse shrink-0" />
+              <span className="font-medium">Reconnecting…</span>
+              <span className="text-sky-400/60">Recovering your stream from the server</span>
+            </div>
+          ) : !isLoading && messages.length > 0 && (() => {
             const last = messages[messages.length - 1];
             const wasInterrupted = last?.role === "assistant" && last.content && !/[.?!]\s*$/.test(last.content.trim());
             return wasInterrupted ? (

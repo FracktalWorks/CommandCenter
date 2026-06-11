@@ -359,6 +359,7 @@ export default function AgentChat({
       role: m.role,
       content: m.content,
       timestamp: m.timestamp,
+      streaming: m.streaming,
       toolEvents: m.toolEvents,
       progressLines: m.progressLines,
       reasoningBlocks: m.reasoningBlocks,

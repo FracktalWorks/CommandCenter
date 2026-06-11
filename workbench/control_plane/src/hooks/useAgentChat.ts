@@ -401,18 +401,28 @@ export function useAgentChat({
         // Browser-disconnect errors: the user refreshed, navigated away, or
         // the network dropped.  Don't surface these as agent errors — the
         // backend continues running and polling will recover the output.
+        //
+        // IMPORTANT: Only match browser-level network errors (TypeError /
+        // DOMException).  Backend SSE error events (plain Error thrown by our
+        // own code from "case 'error':" in the reader loop) MUST pass through
+        // so the user sees them.  Otherwise legitimate backend failures like
+        // "Load failed" (Copilot SDK model load error) get swallowed.
         const rawErr = err instanceof Error ? err.message : String(err);
         const lc = rawErr.toLowerCase();
+        const isBrowserNetworkError =
+          err instanceof TypeError || err instanceof DOMException;
         const isDisconnect =
-          (err instanceof DOMException && err.name === "AbortError") ||
-          lc.includes("failed to fetch") ||
-          lc.includes("fetch") ||
-          lc.includes("network") ||
-          lc.includes("load failed") ||
-          lc.includes("aborted") ||
-          lc.includes("bodystreambuffer") ||
-          lc.includes("err_network") ||
-          lc.includes("connection");
+          isBrowserNetworkError && (
+            err instanceof DOMException && err.name === "AbortError" ||
+            lc.includes("failed to fetch") ||
+            lc.includes("fetch") ||
+            lc.includes("network") ||
+            lc.includes("load failed") ||
+            lc.includes("aborted") ||
+            lc.includes("bodystreambuffer") ||
+            lc.includes("err_network") ||
+            lc.includes("connection")
+          );
         if (isDisconnect) {
           // Mark assistant as no longer streaming but keep the partial content.
           // The polling effect will pick up the completed message from Postgres.
@@ -456,8 +466,9 @@ export function useAgentChat({
   // chatStore is in-memory and is wiped on a hard page refresh.  On mount,
   // AgentChat hydrates messages from localStorage + Postgres.  If the last
   // assistant message looks interrupted (streaming flag / no terminal
-  // punctuation), we mark it non-streaming and let the polling effect below
-  // pick up any newer content the backend persisted while we were away.
+  // punctuation / empty content with streaming=true), we mark it non-streaming
+  // and let the polling effect below pick up any newer content the backend
+  // persisted while we were away.
   // We also set recovering=true so the UI shows a "Reconnecting…" indicator
   // until polling confirms the stream has settled.
   // We deliberately do NOT re-run the agent here — that would start a
@@ -467,9 +478,15 @@ export function useAgentChat({
     const state = getSessionState(threadId);
     if (state.messages.length === 0) return;
     const last = state.messages[state.messages.length - 1];
+    // An interrupted stream is one where:
+    //  - The last message is an assistant with streaming=true (refresh before any delta), OR
+    //  - The last message is an assistant with streaming=true AND content (partial delta), OR
+    //  - The last message is an assistant with content that doesn't end with punctuation
     const isInterrupted =
-      last?.role === "assistant" &&
-      (last.streaming || (last.content && !/[.?!]\s*$/.test(last.content.trim())));
+      last?.role === "assistant" && (
+        last.streaming ||  // streaming flag set (refresh before or during streaming)
+        (last.content && !/[.?!]\s*$/.test(last.content.trim()))  // content looks incomplete
+      );
     if (isInterrupted) {
       // Clear any stale streaming flag so the UI doesn't show a frozen spinner,
       // but set recovering=true so we show a "Reconnecting…" indicator while

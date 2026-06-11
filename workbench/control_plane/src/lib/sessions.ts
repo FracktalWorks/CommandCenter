@@ -216,6 +216,8 @@ export interface PersistedMessage {
   role: "user" | "assistant" | "system";
   content: string;
   timestamp: number;
+  /** True if the assistant was still streaming when saved (recovery flag). */
+  streaming?: boolean;
   toolEvents?: unknown[];
   progressLines?: string[];
   reasoningBlocks?: string[];
@@ -240,12 +242,21 @@ export function getMessages(sessionId: string): PersistedMessage[] {
 
 /**
  * Save messages to localStorage immediately, then POST to Postgres in background.
- * Skips empty/mid-stream placeholder messages.
+ * Streaming messages (even with empty content) are preserved so the recovery
+ * effect can detect an interrupted stream on page reload.  __ERROR__ system
+ * messages are always skipped.
  */
 export function saveMessages(sessionId: string, messages: PersistedMessage[]): void {
   if (typeof window === "undefined") return;
   const settled = messages
-    .filter((m) => m.role === "user" || m.content.trim().length > 0)
+    .filter((m) =>
+      m.role === "user" ||
+      m.content.trim().length > 0 ||
+      // Preserve streaming assistant messages even if empty — the recovery
+      // effect needs them to detect an interrupted stream on reload.
+      (m.role === "assistant" && m.streaming)
+    )
+    .filter((m) => !(m.role === "system" && m.content.startsWith("__ERROR__")))
     .slice(-MAX_MESSAGES_PER_SESSION);
 
   // 1. Write-through cache (sync, instant)

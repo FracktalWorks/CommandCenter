@@ -24,6 +24,7 @@ interface ArtifactViewerModalProps {
   sessionId: string;
   entry: FileEntry;
   onClose: () => void;
+  onDelete?: (entry: FileEntry) => void;
 }
 
 type ViewerState =
@@ -261,7 +262,7 @@ function PdfViewer({ url }: { url: string }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function ArtifactViewerModal({ sessionId, entry, onClose }: ArtifactViewerModalProps) {
+export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelete }: ArtifactViewerModalProps) {
   const [state, setState] = useState<ViewerState>({ status: "loading" });
   const blobUrlRef = useRef<string | null>(null);
 
@@ -342,6 +343,22 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose }: Artif
   }, [onClose]);
 
   const downloadUrl = `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`;
+  const deletable = entry.path.startsWith(".tmp/") || entry.path.startsWith("outputs/");
+
+  const handleDelete = async () => {
+    if (!confirm(`Delete "${entry.name}"?\n\nThis cannot be undone.`)) return;
+    try {
+      const res = await fetch(
+        `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      onDelete?.(entry);
+      onClose();
+    } catch (err) {
+      alert(`Failed to delete: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
 
   return (
     /* Backdrop */
@@ -366,6 +383,15 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose }: Artif
             >
               Download
             </a>
+            {deletable && (
+              <button
+                onClick={handleDelete}
+                className="rounded px-2 py-1 text-xs text-red-400 bg-zinc-800 hover:bg-red-900/60 hover:text-red-300 transition-colors"
+                title="Delete file"
+              >
+                Delete
+              </button>
+            )}
             <button
               onClick={onClose}
               className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition-colors text-lg leading-none"

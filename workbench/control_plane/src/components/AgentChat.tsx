@@ -989,6 +989,7 @@ export default function AgentChat({
           sessionId={sessionId}
           entry={viewerEntry}
           onClose={() => setViewerEntry(null)}
+          onDelete={() => setViewerEntry(null)}
         />
       )}
     </div>

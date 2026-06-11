@@ -845,6 +845,10 @@ function ChatPageInner() {
           sessionId={activeSessionId}
           entry={viewerEntry}
           onClose={() => setViewerEntry(null)}
+          onDelete={(entry) => {
+            setViewerEntry(null);
+            setArtifactUpdates((prev) => prev.filter((f) => f.path !== entry.path));
+          }}
         />
       )}
     </div>

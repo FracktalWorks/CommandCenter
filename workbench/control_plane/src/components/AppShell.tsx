@@ -218,6 +218,8 @@ function MobileBottomNav({
     </>
   );
 
+  const isChatPage = pathname?.startsWith("/chat") ?? false;
+
   return (
     <nav className="shrink-0 border-t border-zinc-800 bg-zinc-900/95 backdrop-blur">
       <div className="flex items-center justify-around py-1.5 px-2">
@@ -230,26 +232,30 @@ function MobileBottomNav({
           <MenuIcon size={20} />
           <span className="text-[9px] font-medium">Menu</span>
         </button>
-        <button
-          onClick={() => {
-            const ev = new CustomEvent("cc-mobile-nav", { detail: "chats" });
-            window.dispatchEvent(ev);
-          }}
-          className="flex flex-col items-center gap-0.5 px-4 py-1 rounded-lg transition-colors text-zinc-500 hover:text-zinc-300"
-        >
-          <MessageCircle size={20} />
-          <span className="text-[9px] font-medium">Chats</span>
-        </button>
-        <button
-          onClick={() => {
-            const ev = new CustomEvent("cc-mobile-nav", { detail: "files" });
-            window.dispatchEvent(ev);
-          }}
-          className="flex flex-col items-center gap-0.5 px-4 py-1 rounded-lg transition-colors text-zinc-500 hover:text-zinc-300"
-        >
-          <FolderOpen size={20} />
-          <span className="text-[9px] font-medium">Files</span>
-        </button>
+        {isChatPage && (
+          <>
+            <button
+              onClick={() => {
+                const ev = new CustomEvent("cc-mobile-nav", { detail: "chats" });
+                window.dispatchEvent(ev);
+              }}
+              className="flex flex-col items-center gap-0.5 px-4 py-1 rounded-lg transition-colors text-zinc-500 hover:text-zinc-300"
+            >
+              <MessageCircle size={20} />
+              <span className="text-[9px] font-medium">Chats</span>
+            </button>
+            <button
+              onClick={() => {
+                const ev = new CustomEvent("cc-mobile-nav", { detail: "files" });
+                window.dispatchEvent(ev);
+              }}
+              className="flex flex-col items-center gap-0.5 px-4 py-1 rounded-lg transition-colors text-zinc-500 hover:text-zinc-300"
+            >
+              <FolderOpen size={20} />
+              <span className="text-[9px] font-medium">Files</span>
+            </button>
+          </>
+        )}
       </div>
     </nav>
   );

@@ -1145,6 +1145,21 @@ async def run_agent_stream(
                     except Exception:  # noqa: BLE001
                         pass
 
+                # ── Thinking mode (Auto / Thinking / Max) ──
+                _think_mode = event_payload.get("think_mode") or "auto"
+                if _think_mode and _think_mode != "auto":
+                    try:
+                        _opts = agent.default_options
+                        if isinstance(_opts, dict):
+                            if _think_mode == "thinking":
+                                _opts["thinking"] = {"type": "enabled", "budget_tokens": 4000}
+                                _opts.setdefault("model_params", {})["reasoning_effort"] = "medium"
+                            elif _think_mode == "max":
+                                _opts["thinking"] = {"type": "enabled", "budget_tokens": 16000}
+                                _opts.setdefault("model_params", {})["reasoning_effort"] = "high"
+                    except Exception:  # noqa: BLE001
+                        pass
+
                 _msg_id: str | None = None
                 _text_started = False
 

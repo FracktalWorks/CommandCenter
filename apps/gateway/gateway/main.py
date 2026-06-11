@@ -120,6 +120,29 @@ app = FastAPI(
 #   2. Enriches its instructions with Mem0 + Graphiti context for this user
 #   3. Streams AG-UI SSE events via AgentFrameworkAgent + EventEncoder
 #   4. Fires background memory extraction after the run
+
+def _apply_thinking_mode(opts: dict, think_mode: str) -> None:
+    """Apply thinking/reasoning mode to agent options.
+
+    Maps our three thinking modes to model-specific parameters:
+    - "thinking": enable chain-of-thought with moderate budget
+    - "max":      enable chain-of-thought with maximum budget
+    - "auto":     no override (model decides)
+
+    For Copilot SDK models, this adds a 'thinking' block.
+    For LiteLLM models, this adds 'reasoning_effort' or 'thinking'.
+    """
+    if think_mode == "thinking":
+        # Moderate reasoning depth
+        opts["model_params"] = opts.get("model_params", {})
+        opts["model_params"]["reasoning_effort"] = "medium"
+        opts["thinking"] = {"type": "enabled", "budget_tokens": 4000}
+    elif think_mode == "max":
+        # Maximum reasoning depth
+        opts["model_params"] = opts.get("model_params", {})
+        opts["model_params"]["reasoning_effort"] = "high"
+        opts["thinking"] = {"type": "enabled", "budget_tokens": 16000}
+
 if _HAS_MAF:
     try:
         from agent_framework_ag_ui import AGUIRequest as _AGUIRequest
@@ -158,6 +181,13 @@ if _HAS_MAF:
                 opts = agent.default_options
                 if isinstance(opts, dict) and enriched:
                     opts["instructions"] = enriched
+
+            # Apply thinking mode to agent options
+            think_mode = input_data.get("think_mode", "auto")
+            if think_mode and think_mode != "auto":
+                opts = agent.default_options
+                if isinstance(opts, dict):
+                    _apply_thinking_mode(opts, think_mode)
 
             protocol_runner = _AgentFrameworkAgent(agent=agent)
 

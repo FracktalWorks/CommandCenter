@@ -214,6 +214,9 @@ export default function AgentChat({
   // Active agent / model can change mid-chat (VS Code Copilot style).
   const [currentAgentName, setCurrentAgentName] = useState(agentName);
   const [currentModel, setCurrentModel] = useState(() => getLastModel(agentName) ?? "auto");
+  // ── Thinking mode ──────────────────────────────────────────────────
+  type ThinkMode = "auto" | "thinking" | "max";
+  const [thinkMode, setThinkMode] = useState<ThinkMode>("auto");
   const [showAgentMenu, setShowAgentMenu] = useState(false);
   const [agents, setAgents] = useState<AgentEntry[]>(externalAgents ?? []);
   const [models, setModels] = useState<UnifiedModel[]>(MODELS_FALLBACK);
@@ -299,6 +302,7 @@ export default function AgentChat({
     model: currentModel,
     mode: effectiveRuntime,
     systemContext,
+    thinkMode,
     onArtifact,
     // Load persisted messages so switching sessions restores history instantly (localStorage cache).
     initialMessages: getMessages(sessionId) as ChatMessage[],
@@ -676,9 +680,6 @@ export default function AgentChat({
     }];
   }
 
-  // ── Thinking mode (VS Code Copilot style) ───────────────────────────
-  type ThinkMode = "auto" | "thinking" | "max";
-  const [thinkMode, setThinkMode] = useState<ThinkMode>("auto");
   const THINK_MODES: { mode: ThinkMode; label: string; title: string }[] = [
     { mode: "auto", label: "Auto", title: "Let the model decide" },
     { mode: "thinking", label: "Thinking", title: "Enable chain-of-thought reasoning" },

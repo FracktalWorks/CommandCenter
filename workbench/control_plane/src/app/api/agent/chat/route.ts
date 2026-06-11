@@ -56,6 +56,8 @@ interface ChatRequest {
   model?: string;
   /** System-level context (persistent memory / persona) injected as context. */
   context?: string;
+  /** Thinking mode: "auto" | "thinking" | "max" */
+  thinkMode?: string;
 }
 
 const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
@@ -313,7 +315,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     );
   }
 
-  const { agentName, message, messages, threadId, mode, model, context } = body;
+  const { agentName, message, messages, threadId, mode, model, context, thinkMode } = body;
   if (!agentName || !message) {
     return new Response(
       `data: ${JSON.stringify({ type: "error", content: "agentName and message are required" })}\n\n`,
@@ -352,6 +354,7 @@ export async function POST(req: NextRequest): Promise<Response> {
         body: JSON.stringify({
           thread_id: threadId ?? "",
           messages: agUiMessages,
+          think_mode: thinkMode ?? "auto",
         }),
         signal: AbortSignal.timeout(310_000),
       });
@@ -392,7 +395,7 @@ export async function POST(req: NextRequest): Promise<Response> {
         headers: await buildGatewayHeaders(),
         body: JSON.stringify({
           agent: agentName,
-          payload: { mode: "chat", message, messages: messages ?? [] },
+          payload: { mode: "chat", message, messages: messages ?? [], think_mode: thinkMode ?? "auto" },
           thread_id: threadId ?? undefined,
           model: model ?? undefined,
         }),

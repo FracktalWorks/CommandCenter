@@ -40,6 +40,8 @@ interface UseAgentChatOptions {
   model?: string;
   mode?: "copilot" | "litellm";
   systemContext?: string;
+  /** Thinking mode: "auto" | "thinking" | "max" */
+  thinkMode?: string;
   onArtifact?: (entry: ArtifactEntry) => void;
 }
 
@@ -65,6 +67,7 @@ export function useAgentChat({
   model,
   mode = "litellm",
   systemContext,
+  thinkMode,
   onArtifact,
 }: UseAgentChatOptions): UseAgentChatReturn {
   const onArtifactRef = useRef(onArtifact);
@@ -76,10 +79,12 @@ export function useAgentChat({
   const modeRef = useRef(mode);
   const agentNameRef = useRef(agentName);
   const systemContextRef = useRef(systemContext);
+  const thinkModeRef = useRef(thinkMode);
   useEffect(() => { modelRef.current = model; }, [model]);
   useEffect(() => { modeRef.current = mode; }, [mode]);
   useEffect(() => { agentNameRef.current = agentName; }, [agentName]);
   useEffect(() => { systemContextRef.current = systemContext; }, [systemContext]);
+  useEffect(() => { thinkModeRef.current = thinkMode; }, [thinkMode]);
 
   // Subscribe to the module-level store (survives navigation/unmount).
   const sessionState = useSyncExternalStore(
@@ -158,6 +163,7 @@ export function useAgentChat({
             mode: modeRef.current,
             model: modelRef.current ?? "auto",
             context: systemContextRef.current ?? undefined,
+            thinkMode: thinkModeRef.current ?? "auto",
           }),
         });
 

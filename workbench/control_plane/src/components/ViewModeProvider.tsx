@@ -86,16 +86,45 @@ export default function ViewModeProvider({
     setMounted(true);
     const mql = window.matchMedia(NARROW_QUERY);
     const onChange = () => setIsNarrow(mql.matches);
+
+    // If the device is narrow but forceDesktop was stuck from a prior
+    // session (e.g. user closed tab while in desktop mode), clear it
+    // so the mobile layout renders immediately on next visit.
+    if (mql.matches) {
+      try {
+        const stuck = localStorage.getItem(STORAGE_KEY) === "1";
+        if (stuck) {
+          localStorage.removeItem(STORAGE_KEY);
+          setForceDesktopState(false);
+        }
+      } catch { /* ignore */ }
+    }
+
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  // Keep the viewport meta in sync with the current decision.
+  // Keep the viewport meta in sync. On narrow devices, always apply the
+  // mobile viewport (permissive zoom). Only widen when forcing desktop.
   useEffect(() => {
     if (!mounted) return;
     applyViewport(isNarrow && forceDesktop);
   }, [mounted, isNarrow, forceDesktop]);
+
+  // Also apply immediately on mount in case the static viewport was
+  // restrictive (e.g. maximum-scale=1 from a stale build).
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const mql = window.matchMedia(NARROW_QUERY);
+    if (mql.matches) {
+      const forced = (() => {
+        try { return localStorage.getItem(STORAGE_KEY) === "1"; }
+        catch { return false; }
+      })();
+      applyViewport(forced);
+    }
+  }, []);
 
   const setForceDesktop = useCallback((value: boolean) => {
     setForceDesktopState(value);

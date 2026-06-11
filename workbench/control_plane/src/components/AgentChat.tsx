@@ -733,19 +733,19 @@ export default function AgentChat({
         <div ref={bottomRef} />
       </div>
 
-      {/* VS Code-style toolbar: model picker + agent switcher — wraps on mobile */}
-      <div className="shrink-0 border-t border-zinc-800 bg-zinc-900/60 px-2 sm:px-4 py-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 sm:gap-x-2 sm:gap-y-2">
-        {/* Model picker — searchable custom dropdown */}
-        <div className="flex items-center gap-1" ref={modelMenuRef}>
-          <span className="text-[10px] text-zinc-600 uppercase tracking-wide">Model</span>
+      {/* VS Code-style toolbar: model picker + agent switcher */}
+      <div className="shrink-0 border-t border-zinc-800 bg-zinc-900/60 px-2 sm:px-4 py-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+        {/* Model picker */}
+        <div className="flex items-center gap-1.5" ref={modelMenuRef}>
+          <span className="text-zinc-500 font-medium">Model</span>
           <div className="relative">
             <button
               onClick={() => { setShowModelMenu((v) => !v); setModelSearch(""); }}
               disabled={isLoading}
-              className="flex items-center gap-1.5 text-xs bg-zinc-800 border border-zinc-700 rounded-md px-2.5 py-1 text-zinc-300 hover:border-zinc-500 focus:outline-none disabled:opacity-50 transition-colors max-w-[220px]"
+              className="flex items-center gap-1 bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1 text-zinc-300 hover:border-zinc-500 focus:outline-none disabled:opacity-50 transition-colors max-w-[180px] sm:max-w-[220px]"
             >
-              <span className="truncate">{currentModelLabel}</span>
-              <span className="text-zinc-500 ml-0.5 shrink-0">▾</span>
+              <span className="truncate text-[11px]">{currentModelLabel}</span>
+              <span className="text-zinc-500 shrink-0">▾</span>
             </button>
 
             {showModelMenu && (
@@ -844,19 +844,19 @@ export default function AgentChat({
         </div>
 
         {/* Divider */}
-        <div className="w-px h-4 bg-zinc-700" />
+        <div className="w-px h-4 bg-zinc-700/50" />
 
         {/* Agent switcher */}
         <div className="relative flex items-center gap-1.5">
-          <span className="text-[10px] text-zinc-600 uppercase tracking-wide">Agent</span>
+          <span className="text-zinc-500 font-medium">Agent</span>
           <button
             onClick={() => setShowAgentMenu((v) => !v)}
             disabled={isLoading}
-            className="flex items-center gap-1 text-xs bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1 text-zinc-300 hover:border-zinc-500 focus:outline-none disabled:opacity-50 transition-colors"
+            className="flex items-center gap-1.5 bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1 text-zinc-300 hover:border-zinc-500 focus:outline-none disabled:opacity-50 transition-colors text-[11px]"
           >
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-            {currentAgentName}
-            <span className="text-zinc-500 ml-0.5">▾</span>
+            <span className="truncate max-w-[100px]">{currentAgentName}</span>
+            <span className="text-zinc-500 shrink-0">▾</span>
           </button>
           {/* Agent runtime badges in toolbar */}
           {agentRuntimeMeta(agentRuntime).map((m, i) => (
@@ -963,7 +963,7 @@ export default function AgentChat({
                 ? `${SEND_MODE_LABELS[sendMode]} a follow-up to ${currentAgentName}…`
                 : `Message ${currentAgentName}…`
             }
-            className="flex-1 resize-none rounded-xl bg-zinc-800 border border-zinc-700 px-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 max-h-40 overflow-y-auto"
+            className="flex-1 resize-none rounded-xl bg-zinc-800 border border-zinc-700 px-4 py-2.5 text-[13px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 max-h-40 overflow-y-auto transition-colors"
             style={{ minHeight: "44px" }}
             onInput={(e) => {
               const t = e.currentTarget;
@@ -1074,6 +1074,17 @@ function MessageBubble({
   const isSystem = message.role === "system";
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(message.content);
+  const editRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-grow the edit textarea + focus when entering edit mode
+  useEffect(() => {
+    if (editing && editRef.current) {
+      const t = editRef.current;
+      t.focus();
+      t.style.height = "auto";
+      t.style.height = `${Math.max(t.scrollHeight, 60)}px`;
+    }
+  }, [editing]);
 
   // ── Extract artifact events from custom events ──────────────────────────
   const artifactEvents: ArtifactMeta[] = (message.customEvents ?? [])
@@ -1096,14 +1107,13 @@ function MessageBubble({
     });
 
   if (isSystem) {
-    // Check if this is a structured error injected by useAgentChat
     const content = message.content;
     if (content.startsWith("__ERROR__")) {
       try {
         const parsed: ParsedAgentError = JSON.parse(content.slice(9));
         return <ErrorCard parsed={parsed} />;
       } catch {
-        // fall through to generic system message
+        // fall through
       }
     }
     return (
@@ -1136,45 +1146,77 @@ function MessageBubble({
     }
   };
 
+  const handleEditInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setEditText(e.target.value);
+    const t = e.currentTarget;
+    t.style.height = "auto";
+    t.style.height = `${Math.min(Math.max(t.scrollHeight, 60), 300)}px`;
+  };
+
   if (isUser) {
     return (
-      <div className="flex items-start gap-3 flex-row-reverse group">
-        <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-xs font-semibold bg-zinc-600 text-zinc-200">
+      <div className="flex items-start gap-2 sm:gap-3 flex-row-reverse group">
+        {/* Avatar */}
+        <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center shrink-0 text-[10px] sm:text-xs font-semibold bg-zinc-600 text-zinc-200 mt-0.5">
           U
         </div>
-        <div className="max-w-[85%] sm:max-w-[75%] min-w-0">
-          {editing ? (
-            /* ── Edit mode: textarea + Send / Cancel ── */
-            <div className="bg-zinc-700 rounded-2xl rounded-tr-sm px-3 py-2">
-              <textarea
-                autoFocus
-                value={editText}
-                onChange={(e) => setEditText(e.target.value)}
-                onKeyDown={handleEditKeyDown}
-                rows={Math.min(editText.split("\n").length, 8)}
-                className="w-full resize-none rounded-lg bg-zinc-800 border border-zinc-600 px-3 py-2 text-[13px] text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-400"
-              />
-              <div className="flex items-center justify-end gap-2 mt-2">
+
+        {editing ? (
+          /* ═══ Edit mode ═══ */
+          <div className="flex-1 min-w-0 max-w-full sm:max-w-[80%]">
+            <div className="rounded-2xl rounded-tr-sm border-2 border-amber-500/50 bg-zinc-800 shadow-lg shadow-amber-500/5 overflow-hidden">
+              {/* Edit header */}
+              <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-700/60 bg-zinc-800/80">
+                <span className="text-[11px] text-amber-400/80 font-medium">
+                  ✏️ Editing message
+                </span>
+                <span className="text-[10px] text-zinc-500">
+                  Enter to send · Esc to cancel · Shift+Enter for new line
+                </span>
+              </div>
+
+              {/* Textarea */}
+              <div className="px-3 py-3">
+                <textarea
+                  ref={editRef}
+                  value={editText}
+                  onChange={handleEditInput}
+                  onKeyDown={handleEditKeyDown}
+                  rows={3}
+                  className="w-full resize-none rounded-xl bg-zinc-900 border border-zinc-600 px-4 py-3 text-[13px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-amber-500/60 transition-colors"
+                  style={{ minHeight: "60px", maxHeight: "300px" }}
+                />
+              </div>
+
+              {/* Action buttons */}
+              <div className="flex items-center justify-between px-4 py-2.5 border-t border-zinc-700/60 bg-zinc-800/60">
                 <button
                   onClick={() => { setEditing(false); setEditText(message.content); }}
-                  className="text-[11px] px-2.5 py-1 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-600/50 transition-colors"
+                  className="text-[12px] px-3 py-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/60 transition-colors"
                 >
                   Cancel
                 </button>
-                <button
-                  onClick={handleEditSubmit}
-                  disabled={!editText.trim()}
-                  className="text-[11px] px-3 py-1 rounded-lg bg-zinc-100 text-zinc-900 font-semibold disabled:opacity-30 hover:bg-white transition-colors"
-                >
-                  ↑ Send
-                </button>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-zinc-500">
+                    {editText.length} chars
+                  </span>
+                  <button
+                    onClick={handleEditSubmit}
+                    disabled={!editText.trim()}
+                    className="text-[12px] px-4 py-1.5 rounded-lg bg-zinc-100 text-zinc-900 font-semibold disabled:opacity-30 hover:bg-white transition-colors flex items-center gap-1.5"
+                  >
+                    <span>↑</span> Send
+                  </button>
+                </div>
               </div>
             </div>
-          ) : (
-            /* ── Normal user bubble — double-click to edit ── */
+          </div>
+        ) : (
+          /* ═══ Normal user bubble ═══ */
+          <div className="max-w-[85%] sm:max-w-[75%] min-w-0">
             <div
               onDoubleClick={() => { setEditText(message.content); setEditing(true); }}
-              className="px-4 py-3 text-[12px] sm:text-[13px] leading-relaxed bg-zinc-700 text-zinc-100 rounded-2xl rounded-tr-sm cursor-pointer select-none"
+              className="px-3 sm:px-4 py-2.5 sm:py-3 text-[12px] sm:text-[13px] leading-relaxed bg-zinc-700 text-zinc-100 rounded-2xl rounded-tr-sm cursor-pointer select-none hover:bg-zinc-600/80 transition-colors"
               title="Double-click to edit"
             >
               <p className="whitespace-pre-wrap break-words">{message.content}</p>
@@ -1190,19 +1232,19 @@ function MessageBubble({
                 />
               )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     );
   }
 
-  // Assistant message — full rich markdown rendering
+  // ═══ Assistant message ═══
   return (
-    <div className="flex items-start gap-3 group">
-      <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-xs font-semibold bg-zinc-700 text-zinc-300">
+    <div className="flex items-start gap-2 sm:gap-3 group">
+      <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center shrink-0 text-[10px] sm:text-xs font-semibold bg-zinc-700 text-zinc-300 mt-0.5">
         A
       </div>
-      <div className="min-w-0 flex-1 max-w-[90%] px-4 py-3 bg-zinc-800/70 rounded-2xl rounded-tl-sm">
+      <div className="min-w-0 flex-1 max-w-[92%] sm:max-w-[85%] px-3 sm:px-4 py-2.5 sm:py-3 bg-zinc-800/70 rounded-2xl rounded-tl-sm">
         <MarkdownMessage
           content={message.content}
           streaming={message.streaming}
@@ -1213,7 +1255,7 @@ function MessageBubble({
           onChoice={onChoice}
           sessionId={sessionId}
         />
-        {/* Inline artifact cards — generated images, markdown, PDFs, etc. */}
+        {/* Inline artifact cards */}
         {artifactEvents.length > 0 && (
           <div className="mt-3 space-y-2">
             {artifactEvents.map((a, i) => (

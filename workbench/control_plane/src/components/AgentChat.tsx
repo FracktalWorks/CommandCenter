@@ -111,6 +111,37 @@ const SEND_MODE_LABELS: Record<SendMode, string> = {
   steer: "Steer",
 };
 
+// ── Per-agent model memory ──────────────────────────────────────────────
+
+const MODEL_PREF_KEY = (agent: string) => `cc-model-${agent}`;
+const MODEL_USAGE_KEY = "cc-model-usage";
+
+function getLastModel(agentName: string): string | null {
+  try {
+    return localStorage.getItem(MODEL_PREF_KEY(agentName));
+  } catch { return null; }
+}
+
+function setLastModel(agentName: string, modelId: string): void {
+  try { localStorage.setItem(MODEL_PREF_KEY(agentName), modelId); } catch { /* noop */ }
+}
+
+function getModelUsage(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(MODEL_USAGE_KEY);
+    return raw ? JSON.parse(raw) as Record<string, number> : {};
+  } catch { return {}; }
+}
+
+function incrementModelUsage(modelId: string): void {
+  if (modelId === "auto") return; // don't track auto
+  try {
+    const usage = getModelUsage();
+    usage[modelId] = (usage[modelId] ?? 0) + 1;
+    localStorage.setItem(MODEL_USAGE_KEY, JSON.stringify(usage));
+  } catch { /* noop */ }
+}
+
 interface AgentChatProps {
   agentName: string;
   sessionId: string;
@@ -152,7 +183,7 @@ export default function AgentChat({
 }: AgentChatProps) {
   // Active agent / model can change mid-chat (VS Code Copilot style).
   const [currentAgentName, setCurrentAgentName] = useState(agentName);
-  const [currentModel, setCurrentModel] = useState("auto");
+  const [currentModel, setCurrentModel] = useState(() => getLastModel(agentName) ?? "auto");
   const [showAgentMenu, setShowAgentMenu] = useState(false);
   const [agents, setAgents] = useState<AgentEntry[]>(externalAgents ?? []);
   const [models, setModels] = useState<UnifiedModel[]>(MODELS_FALLBACK);
@@ -169,6 +200,34 @@ export default function AgentChat({
       })
       .catch(() => {}); // Keep fallback list on error
   }, []);
+
+  // Persist model preference per agent + track usage count.
+  useEffect(() => {
+    setLastModel(currentAgentName, currentModel);
+    incrementModelUsage(currentModel);
+  }, [currentModel, currentAgentName]);
+
+  // ── Model sorting: frequently used models float to the top ──────────────
+  const sortedModels = useMemo(() => {
+    const usage = getModelUsage();
+    const topIds = Object.entries(usage)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 4)
+      .map(([id]) => id);
+    const topSet = new Set(topIds);
+
+    // Only promote models that are still in the list (not hidden/removed).
+    const frequent = models.filter((m) => topSet.has(m.id) && m.id !== "auto");
+    const rest = models.filter((m) => !topSet.has(m.id) || m.id === "auto");
+
+    // Attach a synthetic group so the picker can render the section header.
+    const withGroup = (m: UnifiedModel, group: string): UnifiedModel => ({ ...m, group });
+    return [
+      ...frequent.map((m) => withGroup(m, "Frequently Used")),
+      ...rest,
+    ];
+  }, [models]);
+  // ────────────────────────────────────────────────────────────────────────
 
   // Resolve the selected model's routing runtime (copilot SDK vs gateway BYOK).
   const selectedModel = models.find((m) => m.id === currentModel);
@@ -418,12 +477,13 @@ export default function AgentChat({
   /** Switch the active agent mid-chat. History is retained and passed as context. */
   const handleSwitchAgent = useCallback((entry: AgentEntry) => {
     setCurrentAgentName(entry.name);
+    setCurrentModel(getLastModel(entry.name) ?? "auto");
     setShowAgentMenu(false);
   }, []);
 
   const currentModelLabel =
-    models.find((m) => m.id === currentModel)?.label ?? currentModel;
-  const modelGroups = Array.from(new Set(models.map((m) => m.group)));
+    sortedModels.find((m) => m.id === currentModel)?.label ?? currentModel;
+  const modelGroups = Array.from(new Set(sortedModels.map((m) => m.group)));
 
   // GitHub Copilot SDK agents support BYOK (Bring Your Own Key): when a
   // LiteLLM model (e.g. openrouter/deepseek/deepseek-v4-pro) is selected,
@@ -439,13 +499,13 @@ export default function AgentChat({
   const modelMenuRef = useRef<HTMLDivElement>(null);
 
   const filteredModels = modelSearch.trim()
-    ? models.filter(
+    ? sortedModels.filter(
         (m) =>
           m.label.toLowerCase().includes(modelSearch.toLowerCase()) ||
           m.id.toLowerCase().includes(modelSearch.toLowerCase()) ||
           m.group.toLowerCase().includes(modelSearch.toLowerCase())
       )
-    : models;
+    : sortedModels;
   const filteredGroups = Array.from(new Set(filteredModels.map((m) => m.group)));
 
   // Close model menu on outside click

@@ -64,25 +64,32 @@ export default function ViewModeProvider({
   children: React.ReactNode;
 }) {
   const [mounted, setMounted] = useState(false);
-  const [isNarrow, setIsNarrow] = useState(false);
-  const [forceDesktop, setForceDesktopState] = useState(false);
 
-  // Read persisted preference + watch the media query on mount (client only).
+  // Lazy initializers read localStorage + media query once (SSR-safe).
+  const [forceDesktop, setForceDesktopState] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return localStorage.getItem(STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  const [isNarrow, setIsNarrow] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia(NARROW_QUERY).matches;
+  });
+
+  // Subscribe to media query changes on mount.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setMounted(true);
-
-    try {
-      setForceDesktopState(localStorage.getItem(STORAGE_KEY) === "1");
-    } catch {
-      /* ignore storage access errors */
-    }
-
     const mql = window.matchMedia(NARROW_QUERY);
     const onChange = () => setIsNarrow(mql.matches);
-    onChange();
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Keep the viewport meta in sync with the current decision.
   useEffect(() => {

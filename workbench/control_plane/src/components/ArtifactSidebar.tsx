@@ -23,7 +23,6 @@ import {
   FileImage,
   FileSpreadsheet,
   RefreshCw,
-  Download,
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -209,7 +208,8 @@ export default function ArtifactSidebar({
     }
   }, [sessionId, fetchTree]);
 
-  // Merge SSE artifact updates into the local file list
+  // Merge SSE artifact updates into the local file list.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (artifactUpdates.length === 0) return;
     setFiles((prev) => {
@@ -218,6 +218,7 @@ export default function ArtifactSidebar({
       return Array.from(map.values());
     });
   }, [artifactUpdates]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const tree = buildTree(files);
   const rootChildren = Array.from(tree.children.values()).sort((a, b) => {

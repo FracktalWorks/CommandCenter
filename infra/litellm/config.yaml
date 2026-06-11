@@ -1,0 +1,157 @@
+# LiteLLM model list — used by the Control Plane Settings UI to manage
+# tier→model assignments.  Since we use the litellm SDK directly (no proxy),
+# the router_settings / general_settings sections are no longer needed.
+#
+# Tier entries (tier1-*, tier2-*, tier3-*) map to the three quality tiers.
+# Non-tier entries are available models shown in the provider model picker.
+
+model_list:
+  # ── Tier assignments ────────────────────────────────────────────────────
+  - model_name: tier1-local-qwen3
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+  - model_name: tier2-sonnet
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+  - model_name: tier3-opus
+    litellm_params:
+      model: gemini/gemini-2.5-pro
+      api_key: os.environ/GEMINI_API_KEY
+
+  # ── Copilot entries (github/… prefix for BYOK routing) ──────────────────
+  - model_name: copilot/gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_base: https://api.githubcopilot.com
+      api_key: os.environ/GITHUB_TOKEN
+      extra_headers:
+        Copilot-Integration-Id: vscode-chat
+  - model_name: copilot/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_base: https://api.githubcopilot.com
+      api_key: os.environ/GITHUB_TOKEN
+      extra_headers:
+        Copilot-Integration-Id: vscode-chat
+  - model_name: copilot/claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_base: https://api.githubcopilot.com
+      api_key: os.environ/GITHUB_TOKEN
+      extra_headers:
+        Copilot-Integration-Id: vscode-chat
+  - model_name: copilot/o3-mini
+    litellm_params:
+      model: openai/o3-mini
+      api_base: https://api.githubcopilot.com
+      api_key: os.environ/GITHUB_TOKEN
+      extra_headers:
+        Copilot-Integration-Id: vscode-chat
+
+  # ── Direct provider entries ─────────────────────────────────────────────
+  - model_name: anthropic/claude-sonnet-4-5
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: anthropic/claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: anthropic/claude-opus-4-5
+    litellm_params:
+      model: anthropic/claude-opus-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # ── OpenRouter entries ──────────────────────────────────────────────────
+  - model_name: openrouter/anthropic/claude-sonnet-4-5
+    litellm_params:
+      model: openrouter/anthropic/claude-sonnet-4-5
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/openai/gpt-4o
+    litellm_params:
+      model: openrouter/openai/gpt-4o
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/google/gemini-2.5-pro
+    litellm_params:
+      model: openrouter/google/gemini-2.5-pro
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/google/gemini-2.5-flash
+    litellm_params:
+      model: openrouter/google/gemini-2.5-flash
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/meta-llama/llama-4-maverick
+    litellm_params:
+      model: openrouter/meta-llama/llama-4-maverick
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/deepseek/deepseek-r1
+    litellm_params:
+      model: openrouter/deepseek/deepseek-r1
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/deepseek/deepseek-chat-v3-0324
+    litellm_params:
+      model: openrouter/deepseek/deepseek-chat-v3-0324
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/deepseek/deepseek-chat
+    litellm_params:
+      model: openrouter/deepseek/deepseek-chat
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/deepseek/deepseek-v4-pro
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v4-pro
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/deepseek/deepseek-v4-flash
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v4-flash
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/qwen/qwen3.7-max
+    litellm_params:
+      model: openrouter/qwen/qwen3.7-max
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/qwen/qwen3.7-plus
+    litellm_params:
+      model: openrouter/qwen/qwen3.7-plus
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/qwen/qwen3.6-plus
+    litellm_params:
+      model: openrouter/qwen/qwen3.6-plus
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/qwen/qwen3.5-flash-02-23
+    litellm_params:
+      model: openrouter/qwen/qwen3.5-flash-02-23
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/moonshotai/kimi-k2.6
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k2.6
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/moonshotai/kimi-k2-thinking
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k2-thinking
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/moonshotai/kimi-k2.5
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k2.5
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+  - model_name: openrouter/deepseek/deepseek-r1-0528
+    litellm_params:
+      model: openrouter/deepseek/deepseek-r1-0528
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1

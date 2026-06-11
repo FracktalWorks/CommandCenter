@@ -153,6 +153,7 @@ function DefaultDrawer({
   toggleView: () => void;
 }) {
   const { data: session } = useSession();
+  const { close } = useMobileDrawer();
 
   return (
     <>
@@ -165,7 +166,7 @@ function DefaultDrawer({
           <div className="text-[11px] text-zinc-500">Control Plane</div>
         </div>
         <button
-          onClick={() => useMobileDrawer().close()}
+          onClick={() => close()}
           className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
           aria-label="Close menu"
         >
@@ -181,7 +182,7 @@ function DefaultDrawer({
             <Link
               key={p.href}
               href={p.href}
-              onClick={() => useMobileDrawer().close()}
+              onClick={() => close()}
               className={`rounded-lg px-3 py-2.5 transition-colors ${
                 active
                   ? "bg-zinc-800 text-white"
@@ -205,7 +206,7 @@ function DefaultDrawer({
         <button
           onClick={() => {
             toggleView();
-            useMobileDrawer().close();
+            close();
           }}
           className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
         >

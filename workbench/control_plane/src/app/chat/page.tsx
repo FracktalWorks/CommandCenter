@@ -207,7 +207,6 @@ function AgentPickerModal({
 
 function MemoryPanel({
   memories,
-  userId,
   onDelete,
   onRefresh,
 }: {
@@ -367,6 +366,7 @@ function ChatPageInner() {
 
   // On mobile the side panels start collapsed so the chat fills the screen;
   // they open as overlay drawers on demand.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (isMobile) {
       setSessionPanelOpen(false);
@@ -375,6 +375,7 @@ function ChatPageInner() {
       setSessionPanelOpen(true);
     }
   }, [isMobile]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Fetch agents once at page level so AgentChat knows agent_runtime before first render.
   const [agentList, setAgentList] = useState<AgentEntry[]>([]);
@@ -387,11 +388,11 @@ function ChatPageInner() {
 
   // Load sessions from localStorage on mount.
   // If ?agent=<name> is in the URL, immediately open a new session for that agent.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     const agentParam = searchParams?.get("agent");
     const existing = getSessions();
     if (agentParam) {
-      // Find an existing session for this agent or create a fresh one.
       const existing2 = getSessions();
       const match = existing2.find((s) => s.agentName === agentParam);
       if (match) {
@@ -412,8 +413,9 @@ function ChatPageInner() {
       setSessions(existing);
       setActiveSessionId(existing[0].id);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-time init
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // After initial localStorage render, fetch from Postgres and merge any sessions
   // that exist there but not in the browser (e.g. after cache clear or new device).
@@ -421,7 +423,6 @@ function ChatPageInner() {
     fetchAndMergeSessionsFromDb().then((merged) => {
       setSessions(merged);
     }).catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Fetch memories from Mem0 (or return [] gracefully).
@@ -445,7 +446,7 @@ function ChatPageInner() {
   }, []);
 
   const handleSelectAgent = useCallback(
-    (agentName: string, _description?: string, _agentEntry?: AgentEntry) => {
+    (agentName: string) => {
       setShowPicker(false);
       const s = createSession(agentName);
       upsertSession(s);

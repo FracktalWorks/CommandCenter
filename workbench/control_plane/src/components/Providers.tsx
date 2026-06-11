@@ -5,7 +5,6 @@ import ViewModeProvider from "@/components/ViewModeProvider";
 
 export default function Providers({
   children,
-  session,
 }: {
   children: React.ReactNode;
   session?: never;

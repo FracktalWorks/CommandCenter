@@ -676,34 +676,43 @@ export default function AgentChat({
     }];
   }
 
+  // ── Thinking mode (VS Code Copilot style) ───────────────────────────
+  type ThinkMode = "auto" | "thinking" | "max";
+  const [thinkMode, setThinkMode] = useState<ThinkMode>("auto");
+  const THINK_MODES: { mode: ThinkMode; label: string; title: string }[] = [
+    { mode: "auto", label: "Auto", title: "Let the model decide" },
+    { mode: "thinking", label: "Thinking", title: "Enable chain-of-thought reasoning" },
+    { mode: "max", label: "Max", title: "Maximum effort / deeper reasoning" },
+  ];
+
+  // ── Todos (VS Code Copilot-style collapsible section) ──────────────
+  const [todosExpanded, setTodosExpanded] = useState(true);
+  // Derive todos from tool events in the latest assistant message
+  const todos = useMemo(() => {
+    const lastAsst = [...messages].reverse().find((m) => m.role === "assistant");
+    if (!lastAsst?.toolEvents) return [];
+    return lastAsst.toolEvents.map((t) => ({
+      id: t.id,
+      label: t.name.replace(/_/g, " "),
+      done: t.status === "done" || t.status === "error",
+      error: t.status === "error",
+    }));
+  }, [messages]);
+  const doneCount = todos.filter((t) => t.done).length;
+
   return (
     <div className="flex flex-col h-full">
       {/* Agent header — VS Code-style minimal bar */}
-      <div className="flex items-center gap-2 px-3 sm:px-4 py-1.5 sm:py-2 border-b border-zinc-800/50 bg-zinc-900/40 shrink-0">
+      <div className="flex items-center gap-2 px-3 sm:px-4 py-1 sm:py-1.5 border-b border-zinc-800/40 bg-zinc-900/30 shrink-0">
         <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isLoading ? "bg-amber-400 animate-pulse" : "bg-emerald-500"}`} />
-        <span className="text-[11px] sm:text-xs font-medium text-zinc-300 truncate">{currentAgentName}</span>
+        <span className="text-[11px] font-medium text-zinc-300 truncate">{currentAgentName}</span>
         {isLoading && (
-          <span className="hidden sm:inline text-[10px] text-amber-400/70 animate-pulse">
-            thinking…
-          </span>
+          <span className="hidden sm:inline text-[10px] text-amber-400/70 animate-pulse">thinking…</span>
         )}
-        {agentRuntimeMeta(agentRuntime).slice(0, 1).map((m, i) => (
-          <span
-            key={i}
-            className={`hidden sm:inline text-[8px] px-1 py-0.5 rounded-full border ${m.cls}`}
-            title={m.title}
-          >
-            {m.label}
-          </span>
-        ))}
         {agentRuntime === "github-copilot" && currentAgentEntry?.repo_url && (
-          <a
-            href={currentAgentEntry.repo_url}
-            target="_blank"
-            rel="noopener noreferrer"
+          <a href={currentAgentEntry.repo_url} target="_blank" rel="noopener noreferrer"
             className="shrink-0 text-zinc-600 hover:text-zinc-300 transition-colors ml-auto"
-            title={`Source: ${currentAgentEntry.repo_name ?? currentAgentEntry.repo_url}`}
-          >
+            title={`Source: ${currentAgentEntry.repo_name ?? currentAgentEntry.repo_url}`}>
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
               <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
             </svg>
@@ -711,401 +720,147 @@ export default function AgentChat({
         )}
       </div>
 
-      {/* Agent status bar — identity + integration reachability */}
-      <AgentStatusBar
-        agentName={currentAgentName}
-        integrations={statuses}
-        isActive={isLoading}
-      />
-
-      {/* Missing integrations banner */}
+      {/* Missing integrations banner (compact) */}
       {!bannerDismissed && missingMandatory.length > 0 && (
-        <div className="shrink-0 border-b border-amber-900/40 bg-amber-950/30 px-5 py-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-xs font-medium text-amber-400 mb-1.5">
-                {missingMandatory.length} integration{missingMandatory.length > 1 ? "s" : ""} not configured
-                — this agent may have limited functionality.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {missingMandatory.map((svc) => (
-                  <button
-                    key={svc.service}
-                    onClick={() => handleAskAgentConfigure(svc)}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-amber-800/60 bg-amber-900/30 px-3 py-1 text-xs text-amber-300 hover:bg-amber-900/60 transition-colors"
-                    title={`Ask agent to help configure ${svc.label ?? svc.service}`}
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
-                    {svc.label ?? svc.service}
-                    <span className="text-amber-600">+ set up</span>
-                  </button>
-                ))}
-              </div>
-              <p className="mt-2 text-xs text-zinc-600">
-                Click a badge to ask the agent to guide you, or{" "}
-                <Link href="/integrations" className="text-zinc-400 underline hover:text-zinc-200">
-                  configure in Integrations
-                </Link>
-                .
-              </p>
+        <div className="shrink-0 border-b border-amber-800/30 bg-amber-950/20 px-3 py-1.5 flex items-center gap-2 text-[11px]">
+          <span className="text-amber-400">⚡</span>
+          <span className="text-amber-300/80">{missingMandatory.length} integration{missingMandatory.length > 1 ? "s" : ""} not configured</span>
+          <button onClick={() => setBannerDismissed(true)} className="ml-auto text-zinc-500 hover:text-zinc-300">✕</button>
+        </div>
+      )}
+
+      {/* ── Todos section (VS Code Copilot style) ────────────────────── */}
+      {todos.length > 0 && (
+        <div className="shrink-0 border-b border-zinc-800/40 bg-zinc-900/20">
+          <button
+            onClick={() => setTodosExpanded((v) => !v)}
+            className="w-full flex items-center gap-2 px-3 sm:px-4 py-1 text-[11px] text-zinc-400 hover:text-zinc-200 transition-colors"
+          >
+            <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"
+              className={`transition-transform ${todosExpanded ? "rotate-0" : "-rotate-90"}`}>
+              <path d="M4 6l4 4 4-4" />
+            </svg>
+            <span className="font-medium">Todos ({doneCount}/{todos.length})</span>
+          </button>
+          {todosExpanded && (
+            <div className="px-3 sm:px-8 pb-1.5 space-y-0.5">
+              {todos.map((t) => (
+                <div key={t.id} className="flex items-center gap-2 text-[11px]">
+                  <span className={t.done ? (t.error ? "text-red-400" : "text-emerald-400") : "text-zinc-600"}>
+                    {t.done ? (t.error ? "✗" : "✓") : "○"}
+                  </span>
+                  <span className={t.done ? "text-zinc-500" : "text-zinc-300"}>{t.label}</span>
+                </div>
+              ))}
             </div>
-            <button
-              onClick={() => setBannerDismissed(true)}
-              className="shrink-0 text-zinc-600 hover:text-zinc-400 text-lg leading-none transition-colors"
-              aria-label="Dismiss"
-            >
-              ✕
-            </button>
-          </div>
+          )}
         </div>
       )}
 
       {/* Message thread */}
-      <div
-        ref={threadRef}
-        className="flex-1 overflow-y-auto px-3 sm:px-4 py-3 space-y-3 relative scrollbar-thin"
-      >
+      <div ref={threadRef} className="flex-1 overflow-y-auto px-3 sm:px-4 py-2 space-y-3 relative scrollbar-thin">
         {/* Scroll-to-bottom floating button */}
         {showScrollBtn && (
-          <button
-            onClick={scrollToBottom}
-            className="sticky bottom-3 left-1/2 -translate-x-1/2 z-10 w-9 h-9 rounded-full bg-zinc-700 border border-zinc-600 text-zinc-300 shadow-lg flex items-center justify-center hover:bg-zinc-600 hover:text-zinc-100 transition-all animate-bounce-subtle"
-            aria-label="Scroll to bottom"
-            title="Jump to latest"
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
+          <button onClick={scrollToBottom}
+            className="sticky bottom-3 left-1/2 -translate-x-1/2 z-10 w-8 h-8 rounded-full bg-zinc-700 border border-zinc-600 text-zinc-300 shadow-lg flex items-center justify-center hover:bg-zinc-600 hover:text-zinc-100 transition-all animate-bounce-subtle"
+            aria-label="Scroll to bottom">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M4 6l4 4 4-4" />
             </svg>
           </button>
         )}
 
-        {/* Content centered for readability on wide screens */}
         <div className="max-w-3xl mx-auto">
-
-        {/* Stream interrupted notice — last message was mid-stream when session closed */}
-        {!isLoading && messages.length > 0 && (() => {
-          const last = messages[messages.length - 1];
-          const wasInterrupted = last?.role === "assistant" && last.content && !/[.?!]\s*$/.test(last.content.trim());
-          return wasInterrupted ? (
-            <div className="rounded-lg border border-amber-800/30 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-400/80">
-              ⚡ Stream was interrupted. Messages are saved — you can continue chatting below.
-            </div>
-          ) : null;
-        })()}
-        {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full gap-2 text-center">
-            <div className="text-zinc-400 text-sm font-medium">
-              Chat with <span className="text-zinc-200">{currentAgentName}</span>
-            </div>
-            {agentDescription && currentAgentName === agentName && (
-              <div className="text-zinc-600 text-xs max-w-xs">{agentDescription}</div>
-            )}
-            {missingMandatory.length > 0 ? (
-              <div className="text-amber-600 text-xs mt-2 max-w-xs">
-                Some integrations need setup. Click a badge above or just start chatting — the agent will guide you.
+          {/* Stream interrupted notice */}
+          {!isLoading && messages.length > 0 && (() => {
+            const last = messages[messages.length - 1];
+            const wasInterrupted = last?.role === "assistant" && last.content && !/[.?!]\s*$/.test(last.content.trim());
+            return wasInterrupted ? (
+              <div className="rounded-lg border border-amber-800/30 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-400/80">
+                ⚡ Stream was interrupted. Messages are saved — you can continue chatting below.
               </div>
-            ) : (
-              <div className="text-zinc-600 text-xs mt-2">Type a message to begin.</div>
-            )}
-            {/* Suggestion pills — agent-specific starter prompts */}
-            <SuggestionPills
-              suggestions={AGENT_SUGGESTIONS[currentAgentName] ?? DEFAULT_SUGGESTIONS}
-              onPick={handleChoice}
-            />
-          </div>
-        )}
-
-        {messages.map((msg, i) => {
-          // Show date divider when the date changes between messages
-          const prevMsg = i > 0 ? messages[i - 1] : null;
-          const showDateDivider =
-            prevMsg &&
-            new Date(msg.timestamp).toDateString() !== new Date(prevMsg.timestamp).toDateString();
-
-          return (
-            <div key={msg.id} className="animate-fade-in">
-              {showDateDivider && (
-                <div className="flex items-center gap-3 my-4">
-                  <div className="flex-1 h-px bg-zinc-800" />
-                  <span className="text-[10px] text-zinc-600 font-medium shrink-0">
-                    {new Date(msg.timestamp).toLocaleDateString(undefined, {
-                      weekday: "short",
-                      month: "short",
-                      day: "numeric",
-                    })}
-                  </span>
-                  <div className="flex-1 h-px bg-zinc-800" />
-                </div>
+            ) : null;
+          })()}
+          {messages.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-full gap-2 text-center">
+              <div className="text-zinc-400 text-sm font-medium">
+                Chat with <span className="text-zinc-200">{currentAgentName}</span>
+              </div>
+              {agentDescription && currentAgentName === agentName && (
+                <div className="text-zinc-600 text-xs max-w-xs">{agentDescription}</div>
               )}
-              <MessageBubble
-                message={msg}
-                sessionId={sessionId}
-                onChoice={handleChoice}
-                onFileOpen={(entry) => setViewerEntry(entry)}
-                onResend={(content) => { submitText(content); }}
+              <div className="text-zinc-600 text-xs mt-2">Type a message to begin.</div>
+              <SuggestionPills
+                suggestions={AGENT_SUGGESTIONS[currentAgentName] ?? DEFAULT_SUGGESTIONS}
+                onPick={handleChoice}
               />
             </div>
-          );
-        })}
+          )}
 
-        {/* HITL confirmation card — shown when agent requests user approval */}
-        {confirmation && (
-          <ConfirmationCard
-            title={confirmation.title}
-            detail={confirmation.detail}
-            context={confirmation.context}
-            onApprove={() => {
-              submitText(`APPROVE: ${confirmation.id}`);
-              setConfirmation(null);
-            }}
-            onReject={() => {
-              submitText(`REJECT: ${confirmation.id}`);
-              setConfirmation(null);
-            }}
-          />
-        )}
-
-        {/* Suggestion pills after the last assistant message (not streaming) */}
-        {!isLoading && messages.length > 0 && (() => {
-          const last = messages[messages.length - 1];
-          if (last?.role === "assistant" && last.content.trim() && !last.streaming) {
-            const suggestions = AGENT_SUGGESTIONS[currentAgentName] ?? DEFAULT_SUGGESTIONS;
+          {messages.map((msg, i) => {
+            const prevMsg = i > 0 ? messages[i - 1] : null;
+            const showDateDivider = prevMsg &&
+              new Date(msg.timestamp).toDateString() !== new Date(prevMsg.timestamp).toDateString();
             return (
-              <div className="ml-0">
-                <SuggestionPills
-                  suggestions={suggestions}
-                  onPick={handleChoice}
-                  label="Follow up"
-                />
+              <div key={msg.id} className="animate-fade-in">
+                {showDateDivider && (
+                  <div className="flex items-center gap-3 my-4">
+                    <div className="flex-1 h-px bg-zinc-800" />
+                    <span className="text-[10px] text-zinc-600 font-medium shrink-0">
+                      {new Date(msg.timestamp).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
+                    </span>
+                    <div className="flex-1 h-px bg-zinc-800" />
+                  </div>
+                )}
+                <MessageBubble message={msg} sessionId={sessionId} onChoice={handleChoice}
+                  onFileOpen={(entry) => setViewerEntry(entry)}
+                  onResend={(content) => { submitText(content); }} />
               </div>
             );
-          }
-          return null;
-        })()}
+          })}
 
-        {error && !isLoading && (
-          <ErrorCard parsed={parseAgentError(error)} />
-        )}
+          {confirmation && (
+            <ConfirmationCard title={confirmation.title} detail={confirmation.detail} context={confirmation.context}
+              onApprove={() => { submitText(`APPROVE: ${confirmation.id}`); setConfirmation(null); }}
+              onReject={() => { submitText(`REJECT: ${confirmation.id}`); setConfirmation(null); }} />
+          )}
 
-        </div>{/* close max-w-3xl */}
+          {!isLoading && messages.length > 0 && (() => {
+            const last = messages[messages.length - 1];
+            if (last?.role === "assistant" && last.content.trim() && !last.streaming) {
+              return (
+                <div className="ml-0">
+                  <SuggestionPills suggestions={AGENT_SUGGESTIONS[currentAgentName] ?? DEFAULT_SUGGESTIONS}
+                    onPick={handleChoice} label="Follow up" />
+                </div>
+              );
+            }
+            return null;
+          })()}
+
+          {error && !isLoading && <ErrorCard parsed={parseAgentError(error)} />}
+        </div>
         <div ref={bottomRef} />
       </div>
 
-      {/* VS Code-style toolbar: model picker + agent switcher */}
-      <div className="shrink-0 border-t border-zinc-800/50 bg-zinc-900/40 px-2 sm:px-4 py-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]">
-        {/* Model picker */}
-        <div className="flex items-center gap-1" ref={modelMenuRef}>
-          <span className="text-zinc-500">Model</span>
-          <div className="relative">
-            <button
-              onClick={() => { setShowModelMenu((v) => !v); setModelSearch(""); }}
-              disabled={isLoading}
-              className="flex items-center gap-1 bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1 text-zinc-300 hover:border-zinc-500 focus:outline-none disabled:opacity-50 transition-colors max-w-[180px] sm:max-w-[220px]"
-            >
-              <span className="truncate text-[11px]">{currentModelLabel}</span>
-              <span className="text-zinc-500 shrink-0">▾</span>
-            </button>
-
-            {showModelMenu && (
-              <div className="absolute bottom-full left-0 mb-1 w-72 rounded-lg border border-zinc-700 bg-zinc-900 shadow-2xl z-50 overflow-hidden">
-                {/* Search */}
-                <div className="p-2 border-b border-zinc-800">
-                  <input
-                    autoFocus
-                    type="text"
-                    placeholder="Search models…"
-                    value={modelSearch}
-                    onChange={(e) => setModelSearch(e.target.value)}
-                    className="w-full rounded bg-zinc-800 border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
-                  />
-                </div>
-                {/* Grouped list */}
-                <div className="max-h-72 overflow-y-auto py-1">
-                  {filteredGroups.length === 0 && (
-                    <div className="px-3 py-2 text-xs text-zinc-600 italic">No models match</div>
-                  )}
-                  {filteredGroups.map((group) => (
-                    <div key={group}>
-                      <div className="px-3 pt-2 pb-1 text-[9px] text-zinc-600 uppercase tracking-wider font-semibold">
-                        {group}
-                      </div>
-                      {filteredModels
-                        .filter((m) => m.group === group)
-                        .map((m) => (
-                          <button
-                            key={m.id}
-                            onClick={() => {
-                              setCurrentModel(m.id);
-                              setShowModelMenu(false);
-                              setModelSearch("");
-                            }}
-                            className={`w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center justify-between gap-2 ${
-                              m.id === currentModel
-                                ? "text-zinc-100 bg-zinc-800/60 hover:bg-zinc-800"
-                                : "text-zinc-400 hover:bg-zinc-800"
-                            }`}
-                          title={
-                              isCopilotSdkAgent && m.runtime === "litellm"
-                                ? `BYOK: routes through gateway /v1 (${m.id})`
-                                : isCopilotSdkAgent && m.runtime === "copilot" && m.model_picker_enabled === false
-                                ? "⚠ Locked: this subscription cannot switch Copilot SDK models. Use a BYOK model instead."
-                                : undefined
-                            }
-                          >
-                            <span className="truncate">{m.label}</span>
-                            <div className="flex items-center gap-1 shrink-0">
-                              {isCopilotSdkAgent && m.runtime === "litellm" && (
-                                <span className="text-[8px] px-1 py-0.5 rounded border border-amber-700/40 text-amber-400">
-                                  BYOK
-                                </span>
-                              )}
-                              {isCopilotSdkAgent && m.runtime === "copilot" && m.model_picker_enabled === false && (
-                                <span className="text-[10px] text-zinc-600" title="Locked on this subscription">
-                                  🔒
-                                </span>
-                              )}
-                              <span className={`text-[8px] px-1 py-0.5 rounded border ${
-                                m.runtime === "litellm"
-                                  ? "border-violet-700/40 text-violet-400"
-                                  : "border-sky-700/40 text-sky-400"
-                              }`}>
-                                {m.runtime === "litellm" ? "LiteLLM" : "SDK"}
-                              </span>
-                              {m.id === currentModel && <span className="text-emerald-500 text-[10px]">✓</span>}
-                            </div>
-                          </button>
-                        ))}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-          <span
-            className={`text-[9px] px-1.5 py-0.5 rounded-full border ${
-              isByokActive
-                ? "border-amber-700/50 bg-amber-900/30 text-amber-300"
-                : currentRuntime === "litellm"
-                ? "border-violet-700/50 bg-violet-900/30 text-violet-300"
-                : "border-sky-700/50 bg-sky-900/30 text-sky-300"
-            }`}
-            title={
-              isByokActive
-                ? "BYOK: GitHub Copilot SDK routing through gateway /v1"
-                : currentRuntime === "litellm"
-                ? "Routed via gateway /v1 (litellm SDK)"
-                : "Routed via GitHub Copilot SDK"
-            }
-          >
-            {isByokActive ? "BYOK" : currentRuntime === "litellm" ? "LiteLLM" : "Copilot"}
-          </span>
-        </div>
-
-        {/* Divider */}
-        <div className="w-px h-3 bg-zinc-700/40" />
-
-        {/* Agent switcher */}
-        <div className="relative flex items-center gap-1">
-          <span className="text-zinc-500">Agent</span>
-          <button
-            onClick={() => setShowAgentMenu((v) => !v)}
-            disabled={isLoading}
-            className="flex items-center gap-1.5 bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1 text-zinc-300 hover:border-zinc-500 focus:outline-none disabled:opacity-50 transition-colors text-[11px]"
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-            <span className="truncate max-w-[100px]">{currentAgentName}</span>
-            <span className="text-zinc-500 shrink-0">▾</span>
-          </button>
-          {/* Agent runtime badges in toolbar */}
-          {agentRuntimeMeta(agentRuntime).map((m, i) => (
-            <span
-              key={i}
-              className={`text-[9px] px-1.5 py-0.5 rounded-full border ${m.cls}`}
-              title={m.title}
-            >
-              {m.label}
-            </span>
-          ))}
-
-          {/* Agent dropdown */}
-          {showAgentMenu && (
-            <div
-              className="absolute bottom-full left-0 mb-1 w-72 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl z-50 py-1"
-              onMouseLeave={() => setShowAgentMenu(false)}
-            >
-              {agents.length === 0 ? (
-                <div className="px-3 py-2 text-xs text-zinc-600">No agents available</div>
-              ) : (
-                agents.map((a) => (
-                  <button
-                    key={a.name}
-                    onClick={() => handleSwitchAgent(a)}
-                    className={`w-full text-left px-3 py-2.5 text-xs hover:bg-zinc-800 transition-colors ${
-                      a.name === currentAgentName ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-1">
-                      <span className="font-medium">{a.name}</span>
-                      <div className="flex items-center gap-1.5 ml-auto shrink-0">
-                        {/* Per-agent runtime badges in the dropdown */}
-                        {agentRuntimeMeta(a.agent_runtime ?? "maf").map((m, i) => (
-                          <span
-                            key={i}
-                            className={`text-[8px] px-1 py-0.5 rounded-full border ${m.cls}`}
-                            title={m.title}
-                          >
-                            {m.label}
-                          </span>
-                        ))}
-                        {a.name === currentAgentName && (
-                          <span className="text-emerald-500 text-[10px]">✓</span>
-                        )}
-                      </div>
-                    </div>
-                    {a.description && (
-                      <div className="text-zinc-600 mt-0.5 truncate">{a.description}</div>
-                    )}
-                  </button>
-                ))
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Right side: current model label pill */}
-        <div className="ml-auto">
-          <span className="text-[10px] text-zinc-600 font-mono">{currentModelLabel}</span>
-        </div>
-      </div>
-
-      {/* Input area */}
-      <form
-        onSubmit={handleSubmit}
-        className="shrink-0 border-t border-zinc-800/50 bg-zinc-900/60 px-2 sm:px-4 pt-1.5 pb-2"
-      >
-        {/* Feather gradient — subtle fade from messages into the input */}
-        <div className="h-6 -mt-7 mb-1 pointer-events-none bg-gradient-to-t from-zinc-900/60 to-transparent" />
+      {/* ── Input area + VS Code-style bottom bar ─────────────────────── */}
+      <form onSubmit={handleSubmit} className="shrink-0 border-t border-zinc-800/40 bg-zinc-900/40 px-2 sm:px-4 pt-1 pb-1.5">
+        {/* Feather gradient */}
+        <div className="h-5 -mt-6 mb-0.5 pointer-events-none bg-gradient-to-t from-zinc-900/40 to-transparent" />
 
         {queuedCount > 0 && (
-          <div className="mb-2 flex items-center gap-2 text-[11px] text-amber-400">
+          <div className="mb-1 flex items-center gap-2 text-[11px] text-amber-400">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
             {queuedCount} message{queuedCount > 1 ? "s" : ""} queued
-            <button
-              type="button"
-              onClick={() => { queueRef.current = []; setQueuedCount(0); }}
-              className="text-zinc-500 hover:text-zinc-300 underline"
-            >
-              clear
-            </button>
+            <button type="button" onClick={() => { queueRef.current = []; setQueuedCount(0); }}
+              className="text-zinc-500 hover:text-zinc-300 underline">clear</button>
           </div>
         )}
 
-        {/* Input row — centered with max-width for readability on wide screens */}
         <div className="max-w-3xl mx-auto">
-          <div className="flex items-end gap-2 sm:gap-3">
-            {/* Upload button */}
-            <FileUploadButton
-              sessionId={sessionId}
+          {/* Input row */}
+          <div className="flex items-end gap-1.5 sm:gap-2">
+            <FileUploadButton sessionId={sessionId}
               onUploadComplete={(files) => {
                 const names = files.map((f) => f.name).join(", ");
                 const paths = files.map((f) => `\`${f.path}\``).join(", ");
@@ -1113,120 +868,124 @@ export default function AgentChat({
                 setInput((prev) => prev.trim() ? `${prev}\n\n${ctx}` : ctx);
                 inputRef.current?.focus();
               }}
-              className="shrink-0 self-center mb-0.5"
-            />
+              className="shrink-0 self-center mb-0.5" />
 
             <div className="flex-1 relative">
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                rows={1}
-                placeholder={
-                  isLoading
-                    ? `${SEND_MODE_LABELS[sendMode]} a follow-up to ${currentAgentName}…`
-                    : `Message ${currentAgentName}…`
-                }
-                className="w-full resize-none rounded-xl bg-zinc-800 border border-zinc-700 px-4 py-2.5 text-[13px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 max-h-40 overflow-y-auto transition-colors"
-                style={{ minHeight: "44px" }}
-                onInput={(e) => {
-                  const t = e.currentTarget;
-                  t.style.height = "auto";
-                  t.style.height = `${Math.min(t.scrollHeight, 160)}px`;
-                }}
-              />
-              {!input.trim() && (
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[9px] text-zinc-600 pointer-events-none hidden sm:block">
-                  Enter to send · Shift+Enter for new line
-                </span>
-              )}
+              <textarea ref={inputRef} value={input}
+                onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} rows={1}
+                placeholder={`Message ${currentAgentName}…`}
+                className="w-full resize-none rounded-lg bg-zinc-800/80 border border-zinc-700/80 px-3 py-2 text-[13px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-500 max-h-32 overflow-y-auto transition-colors"
+                style={{ minHeight: "40px" }}
+                onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = `${Math.min(t.scrollHeight, 128)}px`; }} />
             </div>
 
-            {/* Stop button */}
-            {isLoading && (
-              <button
-                type="button"
-                onClick={stopGeneration}
-                className="shrink-0 h-[44px] w-[44px] rounded-xl bg-red-900/60 border border-red-700/60 text-red-300 text-base flex items-center justify-center hover:bg-red-800/80 transition-colors"
-                aria-label="Stop generation"
-                title="Stop generation"
-              >
-                ■
-              </button>
+            {isLoading ? (
+              <button type="button" onClick={stopGeneration}
+                className="shrink-0 h-[40px] w-[40px] rounded-lg bg-red-900/50 border border-red-700/50 text-red-300 text-sm flex items-center justify-center hover:bg-red-800/70 transition-colors"
+                aria-label="Stop">■</button>
+            ) : (
+              <button type="submit" disabled={!input.trim()}
+                className="shrink-0 h-[40px] w-[40px] rounded-lg bg-zinc-100 text-zinc-900 font-semibold text-sm flex items-center justify-center disabled:opacity-30 hover:bg-white transition-colors"
+                aria-label="Send">↑</button>
             )}
+          </div>
 
-            {/* Send split-button */}
-            <div className="relative shrink-0 flex items-stretch">
-              <button
-                type="submit"
-                disabled={!input.trim()}
-                className="h-[44px] pl-4 pr-3 rounded-l-xl bg-zinc-100 text-zinc-900 font-semibold text-sm flex items-center gap-1.5 disabled:opacity-30 hover:bg-white transition-colors"
-                aria-label={SEND_MODE_LABELS[sendMode]}
-                title={`${SEND_MODE_LABELS[sendMode]} (current mode)`}
-              >
-                {sendMode === "send" ? "↑" : sendMode === "queue" ? "⏱" : "⤳"}
-                <span className="text-xs">{SEND_MODE_LABELS[sendMode]}</span>
+          {/* ── Bottom bar (VS Code Copilot style) ──────────────────────── */}
+          <div className="flex items-center gap-1.5 mt-1.5 text-[10px] text-zinc-500 flex-wrap" ref={modelMenuRef}>
+            {/* Agent selector */}
+            <div className="relative">
+              <button onClick={() => setShowAgentMenu((v) => !v)}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-zinc-800 hover:text-zinc-300 transition-colors">
+                <span className="w-1 h-1 rounded-full bg-emerald-500 shrink-0" />
+                <span className="truncate max-w-[80px]">{currentAgentName}</span>
               </button>
-              <button
-                type="button"
-                onClick={() => setShowSendMenu((v) => !v)}
-                className="h-[44px] px-2 rounded-r-xl bg-zinc-200 text-zinc-900 border-l border-zinc-300 hover:bg-white transition-colors text-xs"
-                aria-label="Choose send mode"
-                title="Choose how to send"
-              >
-                ▾
-              </button>
-
-              {showSendMenu && (
-                <div
-                  className="absolute bottom-full right-0 mb-1 w-60 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl z-50 py-1"
-                  onMouseLeave={() => setShowSendMenu(false)}
-                >
-                  {(["send", "queue", "steer"] as SendMode[]).map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      onClick={() => { setSendMode(m); setShowSendMenu(false); }}
-                      className={`w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 transition-colors ${
-                        m === sendMode ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium">
-                          {m === "send" ? "↑ Send" : m === "queue" ? "⏱ Queue" : "⤳ Steer"}
-                        </span>
-                        {m === sendMode && <span className="text-emerald-500 text-[10px]">✓</span>}
-                      </div>
-                      <div className="text-zinc-600 mt-0.5">
-                        {m === "send"
-                          ? "Send now (queues if busy)"
-                          : m === "queue"
-                          ? "Wait for the current reply, then send"
-                          : "Interrupt the current reply and send now"}
-                      </div>
-                    </button>
-                  ))}
+              {showAgentMenu && (
+                <div className="absolute bottom-full left-0 mb-1 w-64 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl z-50 py-1"
+                  onMouseLeave={() => setShowAgentMenu(false)}>
+                  {agents.length === 0 ? (
+                    <div className="px-3 py-2 text-xs text-zinc-600">No agents available</div>
+                  ) : (
+                    agents.map((a) => (
+                      <button key={a.name} onClick={() => handleSwitchAgent(a)}
+                        className={`w-full text-left px-3 py-1.5 text-xs hover:bg-zinc-800 transition-colors ${a.name === currentAgentName ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"}`}>
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="font-medium">{a.name}</span>
+                          {a.name === currentAgentName && <span className="text-emerald-500 text-[10px]">✓</span>}
+                        </div>
+                      </button>
+                    ))
+                  )}
                 </div>
               )}
             </div>
+
+            <span className="text-zinc-700">|</span>
+
+            {/* Model selector */}
+            <div className="relative">
+              <button onClick={() => { setShowModelMenu((v) => !v); setModelSearch(""); }}
+                className="px-1.5 py-0.5 rounded hover:bg-zinc-800 hover:text-zinc-300 transition-colors truncate max-w-[140px]">
+                {currentModelLabel}
+              </button>
+              {showModelMenu && (
+                <div className="absolute bottom-full left-0 mb-1 w-72 rounded-lg border border-zinc-700 bg-zinc-900 shadow-2xl z-50 overflow-hidden">
+                  <div className="p-2 border-b border-zinc-800">
+                    <input autoFocus type="text" placeholder="Search models…" value={modelSearch}
+                      onChange={(e) => setModelSearch(e.target.value)}
+                      className="w-full rounded bg-zinc-800 border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500" />
+                  </div>
+                  <div className="max-h-72 overflow-y-auto py-1">
+                    {filteredGroups.length === 0 && (
+                      <div className="px-3 py-2 text-xs text-zinc-600 italic">No models match</div>
+                    )}
+                    {filteredGroups.map((group) => (
+                      <div key={group}>
+                        <div className="px-3 pt-2 pb-1 text-[9px] text-zinc-600 uppercase tracking-wider font-semibold">{group}</div>
+                        {filteredModels.filter((m) => m.group === group).map((m) => (
+                          <button key={m.id}
+                            onClick={() => { setCurrentModel(m.id); setShowModelMenu(false); setModelSearch(""); }}
+                            className={`w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center justify-between gap-2 ${m.id === currentModel ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400 hover:bg-zinc-800"}`}>
+                            <span className="truncate">{m.label}</span>
+                            {m.id === currentModel && <span className="text-emerald-500 text-[10px]">✓</span>}
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <span className="text-zinc-700">|</span>
+
+            {/* Thinking mode toggle */}
+            <div className="flex items-center gap-0.5">
+              {THINK_MODES.map((tm) => (
+                <button key={tm.mode} type="button"
+                  onClick={() => setThinkMode(tm.mode)}
+                  title={tm.title}
+                  className={`px-1.5 py-0.5 rounded transition-colors ${thinkMode === tm.mode ? "text-zinc-200 bg-zinc-800" : "hover:text-zinc-300 hover:bg-zinc-800/50"}`}>
+                  {tm.label}
+                </button>
+              ))}
+            </div>
+
+            <span className="text-zinc-700 ml-auto hidden sm:inline">
+              Enter to send · Shift+Enter for new line
+            </span>
           </div>
 
-          {/* Disclaimer — CopilotKit-style trust text */}
-          <p className="text-[10px] text-zinc-600 text-center mt-2">
+          {/* Disclaimer */}
+          <p className="text-[9px] text-zinc-600 text-center mt-1.5">
             CommandCenter can make mistakes. Please verify important information.
           </p>
         </div>
       </form>
 
-      {/* Artifact viewer modal — opens when user clicks an inline ArtifactCard */}
+      {/* Artifact viewer modal */}
       {viewerEntry && (
-        <ArtifactViewerModal
-          sessionId={sessionId}
-          entry={viewerEntry}
-          onClose={() => setViewerEntry(null)}
-          onDelete={() => setViewerEntry(null)}
-        />
+        <ArtifactViewerModal sessionId={sessionId} entry={viewerEntry}
+          onClose={() => setViewerEntry(null)} onDelete={() => setViewerEntry(null)} />
       )}
     </div>
   );

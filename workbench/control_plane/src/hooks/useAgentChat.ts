@@ -532,6 +532,29 @@ export function useAgentChat({
 
         if (!res.ok || !res.body) { return; }  // Fall back to polling.
 
+        // ── Reset the interrupted message before replay ─────────────────
+        // The reconnect replays ALL events from the Redis stream (since
+        // lastEventId is null — initial SSE frames don't carry stream IDs).
+        // If we don't clear the existing partial content, replayed deltas
+        // get appended on top of what's already there, doubling text,
+        // reasoning blocks, and tool events.
+        setSessionState(threadId, (prev) => ({
+          ...prev,
+          messages: prev.messages.map((m) =>
+            m.id === lastId
+              ? {
+                  ...m,
+                  content: "",
+                  toolEvents: [],
+                  reasoningBlocks: [],
+                  progressLines: [],
+                  isThinkingActive: true,
+                  streaming: true,
+                }
+              : m
+          ),
+        }));
+
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -625,8 +648,19 @@ export function useAgentChat({
                 setSessionState(threadId, (prev) => ({ ...prev, recovering: false }));
                 break;
               case "error":
-                // Reconnect stream errored — fall back to polling.
-                return;
+                // The agent emitted an error during its run (e.g. Copilot
+                // SDK "Load failed" during model warmup).  Don't abort the
+                // entire reconnection — the agent may have recovered and
+                // produced output afterward.  The error will be surfaced
+                // alongside the recovered content.
+                updLast((m) => ({
+                  ...m,
+                  customEvents: [
+                    ...(m.customEvents ?? []),
+                    { name: "agent_error", value: evt.content ?? evt.message ?? "Agent error" },
+                  ],
+                }));
+                break;
             }
           }
         }

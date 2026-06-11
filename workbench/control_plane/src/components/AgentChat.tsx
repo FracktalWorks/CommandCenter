@@ -24,9 +24,13 @@ import ArtifactCard, { type ArtifactMeta } from "@/components/ArtifactCard";
 import ArtifactViewerModal from "@/components/ArtifactViewerModal";
 import type { FileEntry } from "@/components/ArtifactSidebar";
 import FileUploadButton from "@/components/FileUploadButton";
+import SuggestionPills from "@/components/SuggestionPills";
+import ConfirmationCard from "@/components/ConfirmationCard";
 import { parseAgentError } from "@/lib/parseAgentError";
 import type { ParsedAgentError } from "@/lib/parseAgentError";
 import { getMessages, saveMessages, fetchMessagesFromDb, type PersistedMessage } from "@/lib/sessions";
+import { useAgentEvents } from "@/lib/agentEvents";
+import { buildFrontendToolsAddendum } from "@/hooks/useFrontendTool";
 
 // ── Error card — shown inline in the message thread and in the header banner ──
 function ErrorCard({ parsed, compact = false }: { parsed: ParsedAgentError; compact?: boolean }) {
@@ -109,6 +113,32 @@ const SEND_MODE_LABELS: Record<SendMode, string> = {
   send: "Send",
   queue: "Queue",
   steer: "Steer",
+};
+
+// ── Suggestion pills (CopilotKit-style starter prompts) ─────────────────
+
+const DEFAULT_SUGGESTIONS = [
+  "What can you help me with?",
+  "Summarize recent activity",
+  "Create a new task",
+];
+
+const AGENT_SUGGESTIONS: Record<string, string[]> = {
+  orchestrator: [
+    "What can you help me with?",
+    "Summarize recent activity across the company",
+    "Create a task in ClickUp",
+  ],
+  "task-manager": [
+    "Show my open tasks",
+    "Create a new high-priority task",
+    "What's due this week?",
+  ],
+  "sales-assistant": [
+    "Show pipeline summary",
+    "Create a new lead",
+    "What deals are closing this month?",
+  ],
 };
 
 // ── Per-agent model memory ──────────────────────────────────────────────
@@ -247,7 +277,7 @@ export default function AgentChat({
   const isOrchestrator = currentAgentName === "orchestrator" || currentAgentName === "commandcenter";
   const effectiveRuntime = isOrchestrator ? currentRuntime : "copilot";
 
-  // System context = persona + persistent memories (sent as system message).
+  // System context = persona + persistent memories + frontend tools (sent as system message).
   const systemContext = useMemo(() => {
     const parts: string[] = [];
     if (persona) parts.push(persona);
@@ -257,6 +287,9 @@ export default function AgentChat({
           memories.map((m) => `• ${m}`).join("\n")
       );
     }
+    // Inject registered frontend tools into the agent's system prompt
+    const toolsAddendum = buildFrontendToolsAddendum();
+    if (toolsAddendum) parts.push(toolsAddendum);
     return parts.length > 0 ? parts.join("\n\n") : undefined;
   }, [persona, memories]);
 
@@ -318,6 +351,30 @@ export default function AgentChat({
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [statuses, setStatuses] = useState<IntegrationStatus[]>(externalStatuses ?? []);
   const [viewerEntry, setViewerEntry] = useState<FileEntry | null>(null);
+
+  // ── HITL (Human-in-the-Loop) confirmation state ────────────────────────
+  const [confirmation, setConfirmation] = useState<{
+    id: string; title: string; detail?: string; context?: string;
+  } | null>(null);
+
+  // Subscribe to agent events for HITL detection
+  useAgentEvents({
+    onCustomEvent: ({ name, value }) => {
+      if (name === "confirmation_requested" && value && typeof value === "object") {
+        const v = value as Record<string, unknown>;
+        setConfirmation({
+          id: String(v.id ?? Date.now()),
+          title: String(v.title ?? "Confirm action"),
+          detail: v.detail ? String(v.detail) : undefined,
+          context: v.context ? String(v.context) : undefined,
+        });
+      }
+    },
+    onRunFinalized: () => {
+      // Clear any stale confirmation when a run completes
+      setConfirmation((prev) => prev ? null : prev);
+    },
+  });
 
   // Keep a live ref to messages so the unmount handler can save the latest.
   const messagesRef = useRef<ChatMessage[]>(messages);
@@ -700,6 +757,11 @@ export default function AgentChat({
             ) : (
               <div className="text-zinc-600 text-xs mt-2">Type a message to begin.</div>
             )}
+            {/* Suggestion pills — agent-specific starter prompts */}
+            <SuggestionPills
+              suggestions={AGENT_SUGGESTIONS[currentAgentName] ?? DEFAULT_SUGGESTIONS}
+              onPick={handleChoice}
+            />
           </div>
         )}
 
@@ -713,6 +775,41 @@ export default function AgentChat({
             onResend={(content) => { submitText(content); }}
           />
         ))}
+
+        {/* HITL confirmation card — shown when agent requests user approval */}
+        {confirmation && (
+          <ConfirmationCard
+            title={confirmation.title}
+            detail={confirmation.detail}
+            context={confirmation.context}
+            onApprove={() => {
+              submitText(`APPROVE: ${confirmation.id}`);
+              setConfirmation(null);
+            }}
+            onReject={() => {
+              submitText(`REJECT: ${confirmation.id}`);
+              setConfirmation(null);
+            }}
+          />
+        )}
+
+        {/* Suggestion pills after the last assistant message (not streaming) */}
+        {!isLoading && messages.length > 0 && (() => {
+          const last = messages[messages.length - 1];
+          if (last?.role === "assistant" && last.content.trim() && !last.streaming) {
+            const suggestions = AGENT_SUGGESTIONS[currentAgentName] ?? DEFAULT_SUGGESTIONS;
+            return (
+              <div className="ml-0">
+                <SuggestionPills
+                  suggestions={suggestions}
+                  onPick={handleChoice}
+                  label="Follow up"
+                />
+              </div>
+            );
+          }
+          return null;
+        })()}
 
         {error && !isLoading && (
           <ErrorCard parsed={parseAgentError(error)} />

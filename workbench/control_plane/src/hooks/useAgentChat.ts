@@ -21,6 +21,8 @@ import {
 } from "@/lib/chatStore";
 import type { ChatMessage, ToolEvent } from "@/lib/chatStore";
 import { parseAgentError } from "@/lib/parseAgentError";
+import { emitAgentEvent } from "@/lib/agentEvents";
+import { applyStateSnapshot, applyStateDelta } from "@/hooks/useAgentState";
 
 // Re-export types for backward compatibility with AgentChat.tsx imports.
 export type { ChatMessage, ToolEvent };
@@ -134,6 +136,9 @@ export function useAgentChat({
         messages: [...prev.messages, userMsg, assistantMsg],
         isLoading: true, error: null, abortController: controller,
       }));
+
+      // Emit run started event for subscribers
+      emitAgentEvent("onRunStarted", { runId: assistantId });
 
       try {
         const history = getSessionState(threadId).messages
@@ -350,12 +355,20 @@ export function useAgentChat({
               }
               case "done":
                 upd((m) => ({ ...m, streaming: false, isThinkingActive: false }));
+                emitAgentEvent("onRunFinalized", { runId: String(evt.run_id ?? "") });
                 break;
               case "state":
                 upd((m) => ({ ...m, agentState: (evt.snapshot as Record<string, unknown>) ?? {} }));
+                applyStateSnapshot(threadId, (evt.snapshot as Record<string, unknown>) ?? {});
+                emitAgentEvent("onStateChanged", { state: evt.snapshot as Record<string, unknown> });
+                break;
+              case "state_delta":
+                applyStateDelta(threadId, (evt.delta as Array<{ op: string; path: string; value?: unknown }>) ?? []);
+                emitAgentEvent("onStateChanged", { stateDelta: evt.delta });
                 break;
               case "custom": {
                 const evtName = String(evt.name ?? "");
+                emitAgentEvent("onCustomEvent", { name: evtName, value: evt.value ?? evt.data });
                 if ((evtName === "artifact_created" || evtName === "artifact_updated") && onArtifactRef.current) {
                   const data = (evt.value ?? evt.data) as Record<string, unknown> | undefined;
                   onArtifactRef.current({
@@ -388,6 +401,7 @@ export function useAgentChat({
         }
         const rawMsg = err instanceof Error ? err.message : String(err);
         const parsed = parseAgentError(rawMsg);
+        emitAgentEvent("onError", { error: rawMsg });
         setSessionState(threadId, (prev) => ({
           ...prev,
           error: rawMsg,

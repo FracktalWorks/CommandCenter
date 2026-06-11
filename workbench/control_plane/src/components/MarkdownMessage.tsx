@@ -268,7 +268,7 @@ export default function MarkdownMessage({
   const showThinking = isThinkingActive || hasTools || hasReasoning;
 
   return (
-    <div className="text-[13px] sm:text-sm text-zinc-200 leading-relaxed min-w-0">
+    <div className="text-[12px] sm:text-[13px] text-zinc-200 leading-relaxed min-w-0">
       {/* Thinking container — groups the whole working phase (reasoning + tool calls + status) */}
       {showThinking && (
         <div className="mb-3">
@@ -376,7 +376,7 @@ export default function MarkdownMessage({
           // ── Tables (GFM) ──
           table: ({ children }) => (
             <div className="overflow-x-auto my-4 rounded-lg border border-zinc-700/60">
-              <table className="w-full text-sm border-collapse">{children}</table>
+              <table className="w-full text-[12px] sm:text-[13px] border-collapse">{children}</table>
             </div>
           ),
           thead: ({ children }) => (

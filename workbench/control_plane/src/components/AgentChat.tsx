@@ -722,6 +722,7 @@ export default function AgentChat({
             sessionId={sessionId}
             onChoice={handleChoice}
             onFileOpen={(entry) => setViewerEntry(entry)}
+            onResend={(content) => { submitText(content); }}
           />
         ))}
 
@@ -1061,14 +1062,18 @@ function MessageBubble({
   sessionId,
   onChoice,
   onFileOpen,
+  onResend,
 }: {
   message: ChatMessage;
   sessionId: string;
   onChoice?: (choice: string) => void;
   onFileOpen?: (entry: FileEntry) => void;
+  onResend?: (content: string) => void;
 }) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState(message.content);
 
   // ── Extract artifact events from custom events ──────────────────────────
   const artifactEvents: ArtifactMeta[] = (message.customEvents ?? [])
@@ -1113,15 +1118,79 @@ function MessageBubble({
     minute: "2-digit",
   });
 
+  const handleEditSubmit = () => {
+    const trimmed = editText.trim();
+    if (trimmed && onResend) {
+      onResend(trimmed);
+    }
+    setEditing(false);
+  };
+
+  const handleEditKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleEditSubmit();
+    } else if (e.key === "Escape") {
+      setEditing(false);
+      setEditText(message.content);
+    }
+  };
+
   if (isUser) {
     return (
-      <div className="flex items-start gap-3 flex-row-reverse">
+      <div className="flex items-start gap-3 flex-row-reverse group">
         <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-xs font-semibold bg-zinc-600 text-zinc-200">
           U
         </div>
-        <div className="max-w-[75%] px-4 py-3 text-sm leading-relaxed bg-zinc-700 text-zinc-100 rounded-2xl rounded-tr-sm">
-          <p className="whitespace-pre-wrap break-words">{message.content}</p>
-          <div className="mt-1.5 text-[10px] text-zinc-400 text-right">{timestamp}</div>
+        <div className="max-w-[85%] sm:max-w-[75%] min-w-0">
+          {editing ? (
+            /* ── Edit mode: textarea + Send / Cancel ── */
+            <div className="bg-zinc-700 rounded-2xl rounded-tr-sm px-3 py-2">
+              <textarea
+                autoFocus
+                value={editText}
+                onChange={(e) => setEditText(e.target.value)}
+                onKeyDown={handleEditKeyDown}
+                rows={Math.min(editText.split("\n").length, 8)}
+                className="w-full resize-none rounded-lg bg-zinc-800 border border-zinc-600 px-3 py-2 text-[13px] text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-400"
+              />
+              <div className="flex items-center justify-end gap-2 mt-2">
+                <button
+                  onClick={() => { setEditing(false); setEditText(message.content); }}
+                  className="text-[11px] px-2.5 py-1 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-600/50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleEditSubmit}
+                  disabled={!editText.trim()}
+                  className="text-[11px] px-3 py-1 rounded-lg bg-zinc-100 text-zinc-900 font-semibold disabled:opacity-30 hover:bg-white transition-colors"
+                >
+                  ↑ Send
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* ── Normal user bubble — double-click to edit ── */
+            <div
+              onDoubleClick={() => { setEditText(message.content); setEditing(true); }}
+              className="px-4 py-3 text-[12px] sm:text-[13px] leading-relaxed bg-zinc-700 text-zinc-100 rounded-2xl rounded-tr-sm cursor-pointer select-none"
+              title="Double-click to edit"
+            >
+              <p className="whitespace-pre-wrap break-words">{message.content}</p>
+              <div className="mt-1.5 flex items-center justify-end gap-2">
+                <div className="text-[10px] text-zinc-400">{timestamp}</div>
+              </div>
+              {message.content.trim() && (
+                <MessageActionBar
+                  content={message.content}
+                  messageId={message.id}
+                  role="user"
+                  onEdit={() => { setEditText(message.content); setEditing(true); }}
+                />
+              )}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -1165,7 +1234,11 @@ function MessageBubble({
           <>
             <div className="mt-2 text-[10px] text-zinc-600">{timestamp}</div>
             {message.content.trim() && (
-              <MessageActionBar content={message.content} messageId={message.id} />
+              <MessageActionBar
+                content={message.content}
+                messageId={message.id}
+                role="assistant"
+              />
             )}
           </>
         )}

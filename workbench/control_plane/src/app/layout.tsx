@@ -22,9 +22,13 @@ export const metadata: Metadata = {
 
 // Default mobile-friendly viewport. ViewModeProvider widens this to a desktop
 // width at runtime when the user explicitly requests the desktop layout.
+// maximumScale=1 prevents iOS auto-zoom on input focus (the viewport stays at
+// 1× when the keyboard opens/closes).  userScalable=no reinforces this.
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
   viewportFit: "cover",
 };
 

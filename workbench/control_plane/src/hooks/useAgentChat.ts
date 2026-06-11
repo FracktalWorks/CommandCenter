@@ -395,14 +395,26 @@ export function useAgentChat({
         // Ensure streaming flag is cleared even if "done" was missing.
         upd((m) => ({ ...m, streaming: false, isThinkingActive: false }));
       } catch (err) {
-        const isAbort = err instanceof DOMException && err.name === "AbortError";
+        // Browser-disconnect errors: the user refreshed or navigated away.
+        // Don't surface these as agent errors — the backend continues running.
+        const isAbort =
+          (err instanceof DOMException && err.name === "AbortError") ||
+          (err instanceof TypeError && err.message.includes("fetch")) ||
+          (err instanceof Error && (
+            err.message.includes("BodyStreamBuffer was aborted") ||
+            err.message.includes("network error") ||
+            err.message.includes("Load failed")
+          ));
         if (isAbort) {
+          // Mark assistant as no longer streaming but keep the partial content.
+          // The polling effect will pick up the completed message from Postgres.
           setSessionState(threadId, (prev) => ({
             ...prev,
             messages: prev.messages.map((m) =>
               m.id === assistantId ? { ...m, streaming: false, isThinkingActive: false } : m
             ),
           }));
+          // Don't clear isLoading — let the polling effect handle recovery.
           return;
         }
         const rawMsg = err instanceof Error ? err.message : String(err);
@@ -430,6 +442,49 @@ export function useAgentChat({
 
   const clearMessages = useCallback(() => {
     setSessionState(threadId, (prev) => ({ ...prev, messages: [], error: null }));
+  }, [threadId]);
+
+  // ── Auto-resume after refresh / reconnect ──────────────────────────
+  // When the component mounts and the last assistant message looks like it
+  // was interrupted (streaming flag or no terminal punctuation), re-send
+  // the last user message to reconnect to the gateway's SSE stream.
+  // The gateway resumes the existing MAF session via service_session_id
+  // so the agent continues where it left off rather than restarting.
+  useEffect(() => {
+    const state = getSessionState(threadId);
+    if (state.isLoading) return; // already streaming — don't double-send
+    if (state.messages.length < 2) return; // need at least user + assistant pair
+
+    const last = state.messages[state.messages.length - 1];
+    const prevUser = state.messages[state.messages.length - 2];
+
+    // Only resume if the last message is an incomplete assistant and the
+    // preceding message is a user message from this session.
+    // Also, only auto-resume if the message is at least 5s old (gives the
+    // original gateway run time to finish before we start a new one).
+    if (
+      last?.role === "assistant" &&
+      prevUser?.role === "user" &&
+      (last.streaming || !/[.?!]\s*$/.test(last.content.trim())) &&
+      Date.now() - last.timestamp > 5000
+    ) {
+      // Re-send the last user message.  Remove the old user+assistant
+      // pair first so sendMessage's new pair doesn't cause duplicates.
+      const msgContent = prevUser.content;
+      setSessionState(threadId, (prev) => ({
+        ...prev,
+        error: null,
+        messages: prev.messages.filter(
+          (m) => m.id !== last.id && m.id !== prevUser.id
+        ),
+      }));
+
+      const timer = setTimeout(() => {
+        sendMessage(msgContent);
+      }, 200);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
 
   const stopGeneration = useCallback(() => {

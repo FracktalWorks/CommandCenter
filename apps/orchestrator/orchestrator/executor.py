@@ -50,6 +50,26 @@ _active_run_queue: contextvars.ContextVar["asyncio.Queue[dict[str, Any] | None] 
     contextvars.ContextVar("_active_run_queue", default=None)
 )
 
+# ContextVar that holds the current thread_id for stream relay tee-ing.
+# When set, every _sse() call automatically pushes the event to Redis Stream
+# so the reconnect endpoint can replay missed events after a disconnect.
+_stream_relay_thread_id: contextvars.ContextVar[str | None] = (
+    contextvars.ContextVar("_stream_relay_thread_id", default=None)
+)
+
+
+async def _push_sse_to_stream(thread_id: str, sse_line: str) -> None:
+    """Push an SSE line to the Redis stream for reconnection support.
+
+    Best-effort: failures are silently swallowed so the SSE stream is never
+    interrupted by Redis issues.
+    """
+    try:
+        from orchestrator.stream_relay import push_sse_event  # noqa: PLC0415
+        await push_sse_event(thread_id, sse_line)
+    except Exception:  # noqa: BLE001
+        pass
+
 
 def _build_injected_tools_addendum() -> str:
     """Return a system-prompt addendum describing the CommandCenter-injected tools.
@@ -903,8 +923,23 @@ async def run_agent(
 # ---------------------------------------------------------------------------
 
 def _sse(payload: dict[str, Any]) -> str:
-    """Return a single SSE frame as a string."""
-    return f"data: {json.dumps(payload)}\n\n"
+    """Return a single SSE frame as a string.
+
+    When ``_stream_relay_thread_id`` context var is set, also schedules a
+    background push to the Redis Stream so reconnection can replay events.
+    """
+    line = f"data: {json.dumps(payload)}\n\n"
+
+    # Tee to Redis Stream for reconnection support (best-effort, non-blocking).
+    tid = _stream_relay_thread_id.get(None)
+    if tid is not None:
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_push_sse_to_stream(tid, line))
+        except RuntimeError:
+            pass  # No running event loop — skip relay
+
+    return line
 
 
 async def run_agent_stream(
@@ -939,6 +974,18 @@ async def run_agent_stream(
     thread_id = thread_id or f"{agent_name}:{run_id}"
 
     settings = get_settings()
+
+    # ── Stream relay: tee all SSE events to Redis for reconnection support ─
+    _relay_token = _stream_relay_thread_id.set(thread_id)
+    _relay_mark_inactive = None  # type: ignore[assignment]
+    try:
+        from orchestrator.stream_relay import (  # noqa: PLC0415
+            mark_active as _relay_mark_active,
+            mark_inactive as _relay_mark_inactive,
+        )
+        await _relay_mark_active(thread_id)
+    except Exception:  # noqa: BLE001
+        pass
 
     # ── Resolve agent metadata ──────────────────────────────────────────────
     _registry_repo_name: str | None = None
@@ -1565,6 +1612,15 @@ async def run_agent_stream(
             "code": type(exc).__name__,
         })
         return
+    finally:
+        # Deactivate stream relay so the reconnect endpoint knows the run
+        # has finished and can drain remaining events from the Redis stream.
+        _stream_relay_thread_id.reset(_relay_token)
+        if _relay_mark_inactive is not None:
+            try:
+                await _relay_mark_inactive(thread_id)
+            except Exception:  # noqa: BLE001
+                pass
 
     yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
 

@@ -69,10 +69,14 @@ export interface SessionStreamState {
    *  actively recovering content from Postgres.  The UI shows a "Reconnecting…"
    *  indicator while this is true. */
   recovering: boolean;
+  /** Last SSE event ID received from the server.  Used for stream reconnection:
+   *  on reconnect the client sends this ID so the server can replay only events
+   *  that arrived after the disconnect. */
+  lastEventId: string | null;
 }
 
 function _defaultState(): SessionStreamState {
-  return { messages: [], isLoading: false, error: null, abortController: null, recovering: false };
+  return { messages: [], isLoading: false, error: null, abortController: null, recovering: false, lastEventId: null };
 }
 
 // ── Module-level store ───────────────────────────────────────────────────────

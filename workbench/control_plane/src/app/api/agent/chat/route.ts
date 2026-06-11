@@ -62,6 +62,12 @@ interface ChatRequest {
    *  persistence writes to the SAME row the frontend renders, enabling
    *  reliable refresh recovery. */
   assistantMessageId?: string;
+  /** Last SSE event ID the client received before disconnecting.  Sent on
+   *  reconnect so the server can replay only missed events. */
+  lastEventId?: string;
+  /** When true, the client is reconnecting to an existing agent run rather
+   *  than starting a new one.  The route calls the reconnect endpoint. */
+  reconnect?: boolean;
 }
 
 const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
@@ -245,6 +251,12 @@ async function translateAndPersistStream(
           out = { type: "error", content: String(ev.message ?? "Agent run error") };
         }
 
+        // Forward the Redis stream ID so the frontend can track the last
+        // event it received — enables precise reconnection after disconnect.
+        if (out && ev._stream_id) {
+          out._stream_id = ev._stream_id;
+        }
+
         if (out) enqueue(out);
 
         // Persist every 3s while streaming, so messages survive client disconnect.
@@ -351,12 +363,55 @@ export async function POST(req: NextRequest): Promise<Response> {
     );
   }
 
-  const { agentName, message, messages, threadId, mode, model, context, thinkMode, assistantMessageId } = body;
+  const { agentName, message, messages, threadId, mode, model, context, thinkMode, assistantMessageId, lastEventId, reconnect } = body;
   if (!agentName || !message) {
     return new Response(
       `data: ${JSON.stringify({ type: "error", content: "agentName and message are required" })}\n\n`,
       { status: 400, headers: sseHeaders() }
     );
+  }
+
+  // ── Reconnect path: resume an existing agent stream after disconnect ────
+  // When the frontend detects an interrupted stream on mount, it sends
+  // reconnect=true with the last known event ID.  The gateway replays
+  // missed events from Redis and continues with live events if the agent
+  // is still running.
+  if (reconnect && threadId) {
+    const since = lastEventId || "0-0";
+    let reconRes: Response;
+    try {
+      reconRes = await fetch(
+        `${GATEWAY_URL}/agent/run/${encodeURIComponent(threadId)}/reconnect?since=${encodeURIComponent(since)}`,
+        {
+          method: "GET",
+          headers: await buildGatewayHeaders(),
+          signal: AbortSignal.timeout(310_000),
+        },
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return new Response(
+        `data: ${JSON.stringify({ type: "error", content: `Reconnect failed: ${msg}` })}\n\n`,
+        { status: 502, headers: sseHeaders() },
+      );
+    }
+    if (!reconRes.ok || !reconRes.body) {
+      const text = await reconRes.text().catch(() => `status ${reconRes.status}`);
+      return new Response(
+        `data: ${JSON.stringify({ type: "error", content: `Reconnect error: ${text}` })}\n\n`,
+        { status: reconRes.status, headers: sseHeaders() },
+      );
+    }
+    // Pass the reconnect stream through the same translation layer so the
+    // frontend sees the same event format as a live stream.
+    const reconStream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        await translateAndPersistStream(
+          reconRes.body!, controller, threadId, assistantMessageId,
+        );
+      },
+    });
+    return new Response(reconStream, { headers: sseHeaders() });
   }
 
   // ── Gateway /v1 path: stream directly via litellm SDK ────────────────────

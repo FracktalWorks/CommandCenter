@@ -206,6 +206,13 @@ export function useAgentChat({
             let evt: Record<string, unknown>;
             try { evt = JSON.parse(raw) as Record<string, unknown>; } catch (_e) { continue; }
 
+            // Track the last SSE event ID for reconnection support.
+            if (evt._stream_id) {
+              setSessionState(threadId, (prev) => ({
+                ...prev,
+                lastEventId: String(evt._stream_id),
+              }));
+            }
 
 
             switch (evt.type) {
@@ -469,43 +476,181 @@ export function useAgentChat({
   }, [threadId]);
 
   // ── Recover after refresh / reconnect ──────────────────────────────
-  // chatStore is in-memory and is wiped on a hard page refresh.  On mount,
-  // AgentChat hydrates messages from localStorage + Postgres.  If the last
-  // assistant message looks interrupted (streaming flag / no terminal
-  // punctuation / empty content with streaming=true), we mark it non-streaming
-  // and let the polling effect below pick up any newer content the backend
-  // persisted while we were away.
-  // We also set recovering=true so the UI shows a "Reconnecting…" indicator
-  // until polling confirms the stream has settled.
-  // We deliberately do NOT re-run the agent here — that would start a
-  // duplicate run and can fail with "Failed to fetch".  Polling recovers
-  // the persisted output instead.
+  // On mount, if the last assistant message looks interrupted, we attempt
+  // a live SSE reconnection first (fast, token-by-token).  If the reconnect
+  // endpoint is unavailable or the stream has expired, we fall back to the
+  // existing Postgres polling recovery path.
   useEffect(() => {
     const state = getSessionState(threadId);
     if (state.messages.length === 0) return;
     const last = state.messages[state.messages.length - 1];
-    // An interrupted stream is one where:
-    //  - The last message is an assistant with streaming=true (refresh before any delta), OR
-    //  - The last message is an assistant with streaming=true AND content (partial delta), OR
-    //  - The last message is an assistant with content that doesn't end with punctuation
     const isInterrupted =
       last?.role === "assistant" && (
-        last.streaming ||  // streaming flag set (refresh before or during streaming)
-        (last.content && !/[.?!]\s*$/.test(last.content.trim()))  // content looks incomplete
+        last.streaming ||
+        (last.content && !/[.?!]\s*$/.test(last.content.trim()))
       );
-    if (isInterrupted) {
-      // Clear any stale streaming flag so the UI doesn't show a frozen spinner,
-      // but set recovering=true so we show a "Reconnecting…" indicator while
-      // polling picks up the stream's continued output.
-      setSessionState(threadId, (prev) => ({
-        ...prev,
-        error: null,
-        recovering: true,
-        messages: prev.messages.map((m) =>
-          m.id === last.id ? { ...m, streaming: false, isThinkingActive: false } : m
-        ),
-      }));
-    }
+    if (!isInterrupted) return;
+
+    // Clear stale streaming flags and show "Reconnecting…".
+    const lastId = last.id;
+    setSessionState(threadId, (prev) => ({
+      ...prev,
+      error: null,
+      recovering: true,
+      messages: prev.messages.map((m) =>
+        m.id === lastId ? { ...m, streaming: false, isThinkingActive: false } : m
+      ),
+    }));
+
+    // ── Attempt live SSE reconnection ──────────────────────────────────
+    const abortCtrl = new AbortController();
+    let reconnected = false;
+
+    (async () => {
+      try {
+        const curState = getSessionState(threadId);
+        const res = await fetch("/api/agent/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: abortCtrl.signal,
+          body: JSON.stringify({
+            agentName: agentNameRef.current,
+            message: last.content || "(reconnect)",
+            messages: curState.messages
+              .filter((m) => m.role !== "system")
+              .map((m) => ({ role: m.role, content: m.content })),
+            threadId,
+            mode: modeRef.current,
+            model: modelRef.current ?? "auto",
+            context: systemContextRef.current ?? undefined,
+            thinkMode: thinkModeRef.current ?? "auto",
+            assistantMessageId: lastId,
+            lastEventId: curState.lastEventId ?? undefined,
+            reconnect: true,
+          }),
+        });
+
+        if (!res.ok || !res.body) { return; }  // Fall back to polling.
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        // Update helper: modifies the last assistant message.
+        const updLast = (fn: (m: ChatMessage) => ChatMessage) =>
+          setSessionState(threadId, (prev) => ({
+            ...prev,
+            messages: prev.messages.map((m) =>
+              m.role === "assistant" &&
+              (m.id === lastId || m.streaming || (m.content && !/[.?!]\s*$/.test(m.content.trim())))
+                ? fn(m) : m
+            ),
+          }));
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const raw = line.slice(6).trim();
+            if (!raw || raw === "[DONE]") continue;
+            let evt: Record<string, unknown>;
+            try { evt = JSON.parse(raw); } catch { continue; }
+
+            // Track stream ID for future reconnections.
+            if (evt._stream_id) {
+              setSessionState(threadId, (prev) => ({
+                ...prev,
+                lastEventId: String(evt._stream_id),
+              }));
+            }
+
+            switch (evt.type) {
+              case "delta":
+                updLast((m) => ({
+                  ...m,
+                  content: m.content + String(evt.content ?? ""),
+                  streaming: true,
+                }));
+                break;
+              case "reasoning":
+                updLast((m) => {
+                  const chunk = String(evt.content ?? "");
+                  if (!chunk) return m;
+                  const blocks = m.reasoningBlocks ?? [];
+                  if (blocks.length > 0 && !/[.?!]\s*$/.test(blocks[blocks.length - 1])) {
+                    return { ...m, reasoningBlocks: [...blocks.slice(0, -1), blocks[blocks.length - 1] + chunk] };
+                  }
+                  return { ...m, reasoningBlocks: [...blocks, chunk] };
+                });
+                break;
+              case "progress":
+                updLast((m) => ({
+                  ...m,
+                  progressLines: [...(m.progressLines ?? []), String(evt.name ?? "Working")],
+                }));
+                break;
+              case "tool_start": {
+                const toolId = String(evt.id ?? nanoid());
+                updLast((m) => ({
+                  ...m,
+                  toolEvents: [...(m.toolEvents ?? []), {
+                    id: toolId, name: String(evt.name ?? "tool"),
+                    args: (evt.args as Record<string, unknown>) ?? {},
+                    status: "running" as const, startedAt: Date.now(),
+                  }],
+                }));
+                break;
+              }
+              case "tool_end":
+                updLast((m) => {
+                  const newStatus: ToolEvent["status"] = evt.success ? "done" : "error";
+                  return {
+                    ...m,
+                    toolEvents: (m.toolEvents ?? []).map((t) =>
+                      t.id === String(evt.id)
+                        ? { ...t, result: String(evt.result ?? ""), status: newStatus, endedAt: Date.now() }
+                        : t
+                    ),
+                  };
+                });
+                break;
+              case "done":
+                reconnected = true;
+                updLast((m) => ({ ...m, streaming: false, isThinkingActive: false }));
+                setSessionState(threadId, (prev) => ({ ...prev, recovering: false }));
+                break;
+              case "error":
+                // Reconnect stream errored — fall back to polling.
+                return;
+            }
+          }
+        }
+
+        // If we got here without a "done" event, the stream ended cleanly.
+        if (!reconnected) {
+          updLast((m) => ({ ...m, streaming: false, isThinkingActive: false }));
+          setSessionState(threadId, (prev) => ({ ...prev, recovering: false }));
+        }
+      } catch {
+        // Reconnect failed (network error, timeout, etc.) — polling handles it.
+      } finally {
+        // If we never reconnected, make sure recovering is set for polling.
+        if (!reconnected) {
+          setSessionState(threadId, (prev) =>
+            prev.recovering ? prev : { ...prev, recovering: true }
+          );
+        }
+      }
+    })();
+
+    return () => {
+      abortCtrl.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
 

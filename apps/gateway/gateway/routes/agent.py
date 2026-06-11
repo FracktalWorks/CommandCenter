@@ -597,6 +597,73 @@ async def run_agent_stream_endpoint(
     )
 
 
+@router.get(
+    "/run/{thread_id}/reconnect",
+    summary="Reconnect to a running (or recently finished) agent stream",
+)
+async def reconnect_agent_stream(
+    thread_id: str,
+    since: str = "0-0",
+    user: UserContext = Depends(get_current_user),
+) -> StreamingResponse:
+    """Replay missed SSE events and subscribe to live ones.
+
+    Called by the frontend after a page refresh or reconnect to catch up
+    on everything the agent did while the browser was closed.  If the agent
+    is still running, the stream continues with live events after replay.
+
+    Query params:
+        since:  Redis stream ID to replay FROM (exclusive).
+                Default ``"0-0"`` replays everything.
+
+    Returns ``text/event-stream`` with the same AG-UI event format as
+    ``POST /agent/run/stream``.
+
+    Falls back to an empty ``"done"`` event if the stream has expired.
+    """
+    import json as _json
+
+    from orchestrator.stream_relay import (  # noqa: PLC0415
+        is_active,
+        replay_events,
+        stream_exists,
+        subscribe_events,
+    )
+
+    _log.info(
+        "agent.reconnect_request",
+        thread_id=thread_id[:12],
+        since=since[:20],
+        actor=getattr(user, "email", "anonymous")[:20],
+    )
+
+    async def _event_generator():
+        # Phase 1: Replay missed events.
+        if await stream_exists(thread_id):
+            missed = await replay_events(thread_id, since_id=since, count=500)
+            for evt in missed:
+                yield f"data: {_json.dumps(evt)}\n\n"
+
+        # Phase 2: If agent is still active, subscribe to live events.
+        if await is_active(thread_id):
+            async for evt in subscribe_events(thread_id, since_id="$"):
+                yield f"data: {_json.dumps(evt)}\n\n"
+        else:
+            # Agent finished — emit a synthetic "done" so the frontend
+            # knows the stream is complete.
+            yield f"data: {_json.dumps({'type': 'done', 'threadId': thread_id})}\n\n"
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @router.post("/run", response_model=AgentRunResponse)
 async def run_agent_sync(
     req: AgentRunRequest,

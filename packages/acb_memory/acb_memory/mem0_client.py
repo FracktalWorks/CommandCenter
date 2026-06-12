@@ -84,7 +84,7 @@ class MemoryClient:
                 "llm": {
                     "provider": "openai",
                     "config": {
-                        "model": "openai/tier1-haiku",
+                        "model": "tier-fast",
                         "api_key": litellm_key,
                         "openai_base_url": litellm_url,
                     },

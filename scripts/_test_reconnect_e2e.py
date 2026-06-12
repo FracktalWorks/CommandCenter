@@ -12,16 +12,20 @@ Simulates the exact bug scenario:
 import asyncio
 import json
 import subprocess
+import os
 import sys
 import uuid
 
 import httpx
 import redis
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.environ.get("E2E_GATEWAY_URL", "http://127.0.0.1:8000")
 
 
 def gh_token() -> str:
+    tok = os.environ.get("E2E_TOKEN", "")
+    if tok:
+        return tok
     return subprocess.check_output(["gh", "auth", "token"], text=True).strip()
 
 

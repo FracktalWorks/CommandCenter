@@ -73,6 +73,15 @@ and streams chat responses as AG-UI events.
   visible answer). ASSISTANT_INTENT carries no text content; the raw INTENT
   handler renders it as a timeline entry.
 
+### Todo-list tracking (VS Code Todos panel parity)
+- The Copilot CLI tracks the agent's plan with its built-in `sql` tool
+  against a `todos` table (INSERT INTO todos / UPDATE todos SET status).
+- executor._TodoTracker parses those queries from TOOL_CALL args and emits
+  TODO_LIST SSE frames ({todos: [{id,title,status}]}) on every change.
+- Frontend: route.ts maps TODO_LIST -> {type:"todos"}; useAgentChat stores
+  todos[] on the assistant ChatMessage; TodoPanel.tsx renders the
+  collapsible "Todos (n/m)" panel pinned above the chat input.
+
 ## Verification
 
 - pytest tests/ -- all 154 tests must pass

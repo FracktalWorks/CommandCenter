@@ -240,20 +240,20 @@ export function useAgentChat({
                   const chunk = String(evt.content ?? "");
                   if (!chunk) return m;
                   const blocks = m.reasoningBlocks ?? [];
-                  // Append to the last block if it ends mid-sentence,
-                  // otherwise start a new block for a clean cascade.
-                  if (blocks.length > 0 && !/[.?!]\s*$/.test(blocks[blocks.length - 1])) {
-                    return {
-                      ...m,
-                      reasoningBlocks: [
-                        ...blocks.slice(0, -1),
-                        blocks[blocks.length - 1] + chunk,
-                      ],
-                    };
+                  // Verbose token streams: append to the current block and
+                  // only start a new one at paragraph breaks (\n\n) — the
+                  // same grouping VS Code Copilot uses for thinking text.
+                  if (blocks.length === 0) {
+                    return { ...m, reasoningBlocks: [chunk] };
                   }
+                  const last = blocks[blocks.length - 1] + chunk;
+                  const parts = last.split(/\n{2,}/);
                   return {
                     ...m,
-                    reasoningBlocks: [...blocks, chunk],
+                    reasoningBlocks: [
+                      ...blocks.slice(0, -1),
+                      ...parts.filter((p, i) => p.trim() || i === parts.length - 1),
+                    ],
                   };
                 });
                 break;

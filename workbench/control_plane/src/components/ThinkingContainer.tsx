@@ -161,10 +161,20 @@ export default function ThinkingContainer({
   const [expanded, setExpanded] = useState(false);
   const [workingMsg, setWorkingMsg] = useState<string>(() => pickWorkingMessage());
   const userToggledRef = useRef(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   const hasReasoning = !!(reasoningBlocks && reasoningBlocks.length > 0);
   const hasTools = toolEvents.length > 0;
   const hasContent = hasTools || hasReasoning;
+
+  // Auto-follow: while the agent streams verbose reasoning, keep the
+  // timeline scrolled to the newest content (VS Code thinking-pane style).
+  const reasoningLen = reasoningBlocks?.reduce((n, b) => n + b.length, 0) ?? 0;
+  useEffect(() => {
+    if (!isActive || !expanded) return;
+    const el = bodyRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [isActive, expanded, reasoningLen, toolEvents.length, progressLines.length]);
 
   // Auto-expand while the agent is actively working so the user sees the
   // thought process in real time (VS Code Copilot Chat style). Expands on:
@@ -285,7 +295,12 @@ export default function ThinkingContainer({
 
       {/* ── Body: vertical timeline ────────────────────────────────── */}
       {expanded && hasContent && (
-        <div className="border-t border-zinc-700/40 chat-fade-in">
+        <div
+          ref={bodyRef}
+          className={`border-t border-zinc-700/40 chat-fade-in overflow-y-auto ${
+            isActive ? "max-h-72" : "max-h-[32rem]"
+          }`}
+        >
           {/* Container with NO left padding — all items position relative to this.
               Content is indented via ml-8.  Line and dots share the same x=12px axis. */}
           <div className="relative py-2.5">

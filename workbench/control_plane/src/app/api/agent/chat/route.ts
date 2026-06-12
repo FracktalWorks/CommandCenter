@@ -195,12 +195,14 @@ async function translateAndPersistStream(
         } else if (t === "REASONING_MESSAGE_CONTENT" || t === "THINKING_TEXT_MESSAGE_CONTENT") {
           const chunk = String(ev.delta ?? "");
           if (chunk) {
-            // Append to last block if it doesn't end with sentence-ending punctuation,
-            // otherwise start a new block (mirrors the frontend cascade logic).
-            if (reasoningBlocks.length > 0 && !/[.?!]\s*$/.test(reasoningBlocks[reasoningBlocks.length - 1])) {
-              reasoningBlocks[reasoningBlocks.length - 1] += chunk;
-            } else {
+            // Group verbose reasoning into paragraph blocks (split on \n\n),
+            // mirroring the frontend cascade logic.
+            if (reasoningBlocks.length === 0) {
               reasoningBlocks.push(chunk);
+            } else {
+              const merged = reasoningBlocks[reasoningBlocks.length - 1] + chunk;
+              const parts = merged.split(/\n{2,}/).filter((p, i, a) => p.trim() || i === a.length - 1);
+              reasoningBlocks.splice(reasoningBlocks.length - 1, 1, ...parts);
             }
           }
           out = { type: "reasoning", content: ev.delta ?? "" };

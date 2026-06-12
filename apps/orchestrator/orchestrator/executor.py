@@ -1245,19 +1245,23 @@ async def run_agent_stream(
                         pass
 
                 # ── Thinking mode (Auto / Thinking / Max) ──
+                # reasoning_effort unlocks the model's full token-level
+                # chain-of-thought stream (ASSISTANT_REASONING_DELTA) — the
+                # same verbose stream-of-consciousness VS Code Copilot shows.
+                # Without it most models emit only sparse fragments, so Auto
+                # defaults to "low" rather than omitting it entirely.
+                # _create_session() retries without the option if the model
+                # rejects it, so unsupported models degrade gracefully.
                 _think_mode = event_payload.get("think_mode") or "auto"
-                if _think_mode and _think_mode != "auto":
-                    try:
-                        _opts = agent.default_options
-                        if isinstance(_opts, dict):
-                            # Forwarded to SessionConfig.reasoning_effort by
-                            # CommandCenterCopilotAgent._create_session().
-                            if _think_mode == "thinking":
-                                _opts["reasoning_effort"] = "medium"
-                            elif _think_mode == "max":
-                                _opts["reasoning_effort"] = "high"
-                    except Exception:  # noqa: BLE001
-                        pass
+                try:
+                    _opts = agent.default_options
+                    if isinstance(_opts, dict):
+                        _effort = {"thinking": "medium", "max": "high"}.get(
+                            _think_mode, "low"
+                        )
+                        _opts["reasoning_effort"] = _effort
+                except Exception:  # noqa: BLE001
+                    pass
 
                 _msg_id: str | None = None
                 _text_started = False

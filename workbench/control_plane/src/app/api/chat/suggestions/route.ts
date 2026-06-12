@@ -12,7 +12,13 @@ const LITELLM_BASE_URL =
   process.env.COPILOT_LLM_BASE_URL ?? process.env.LITELLM_BASE_URL ?? "http://127.0.0.1:8080/v1";
 const LITELLM_KEY =
   process.env.LITELLM_MASTER_KEY ?? process.env.GATEWAY_INTERNAL_TOKEN ?? "sk-local-dev-change-me";
-const SUGGESTION_MODEL = process.env.SUGGESTION_MODEL ?? "deepseek/deepseek-v4-flash";
+const SUGGESTION_MODEL = process.env.SUGGESTION_MODEL ?? "deepseek/deepseek-chat";
+
+/** Ensure the base URL ends with /v1 (env values vary). */
+function v1Base(): string {
+  const base = LITELLM_BASE_URL.replace(/\/+$/, "");
+  return base.endsWith("/v1") ? base : `${base}/v1`;
+}
 
 export async function POST(req: NextRequest) {
   let body: { userMessage?: string; assistantMessage?: string; agentName?: string };
@@ -26,7 +32,7 @@ export async function POST(req: NextRequest) {
   if (!assistantMessage.trim()) return NextResponse.json({ suggestions: [] });
 
   try {
-    const res = await fetch(`${LITELLM_BASE_URL.replace(/\/$/, "")}/chat/completions`, {
+    const res = await fetch(`${v1Base()}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

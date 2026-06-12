@@ -18,6 +18,8 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { ToolEvent } from "@/components/MarkdownMessage";
 
 interface ThinkingContainerProps {
@@ -408,8 +410,33 @@ export default function ThinkingContainer({
                       <div className="absolute left-[10px] top-[7px] z-10">
                         <span className={`block w-1.5 h-1.5 rounded-full ${live ? "bg-zinc-400 chat-pulse-dot" : "bg-zinc-600"}`} />
                       </div>
-                      <div className="ml-8 mr-3 text-[11.5px] text-zinc-400 whitespace-pre-wrap leading-relaxed">
+                    <div className="ml-8 mr-3 text-[11.5px] text-zinc-400 leading-relaxed">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          p: ({ children }) => <p className="my-1">{children}</p>,
+                          code: ({ className, children, ...props }) => {
+                            const inline = !className;
+                            return inline ? (
+                              <code className="bg-zinc-800/80 text-zinc-300 text-[10.5px] px-1 py-0.5 rounded" {...props}>{children}</code>
+                            ) : (
+                              <code className={`block bg-zinc-800/80 text-zinc-300 text-[10.5px] p-2 rounded overflow-x-auto ${className || ""}`} {...props}>{children}</code>
+                            );
+                          },
+                          pre: ({ children }) => <pre className="bg-zinc-900/80 rounded-md overflow-x-auto my-1.5">{children}</pre>,
+                          ul: ({ children }) => <ul className="list-disc list-inside my-1 space-y-0.5">{children}</ul>,
+                          ol: ({ children }) => <ol className="list-decimal list-inside my-1 space-y-0.5">{children}</ol>,
+                          li: ({ children }) => <li className="text-[11px]">{children}</li>,
+                          strong: ({ children }) => <strong className="text-zinc-300 font-semibold">{children}</strong>,
+                          em: ({ children }) => <em className="italic">{children}</em>,
+                          blockquote: ({ children }) => <blockquote className="border-l-2 border-zinc-600 pl-2 my-1 text-zinc-500">{children}</blockquote>,
+                          a: ({ href, children }) => <a href={href} className="text-sky-400 underline" target="_blank" rel="noopener">{children}</a>,
+                          h1: ({ children }) => <h1 className="text-[13px] font-bold text-zinc-300 mt-2 mb-1">{children}</h1>,
+                          h2: ({ children }) => <h2 className="text-[12px] font-semibold text-zinc-300 mt-1.5 mb-1">{children}</h2>,
+                        }}
+                      >
                         {item.text}
+                      </ReactMarkdown>
                         {live && <span className="inline-block w-[2px] h-[1em] bg-zinc-500 animate-pulse ml-0.5 align-middle rounded-full" />}
                       </div>
                     </div>

@@ -2324,18 +2324,30 @@ def _get_stored_session_id(thread_id: str) -> str | None:
 def _store_session_id(thread_id: str, service_session_id: str) -> None:
     """Persist the Copilot service_session_id for future requests."""
     _copilot_session_store[thread_id] = service_session_id
-    # Also persist to Postgres
+    # Also persist to Postgres — use UPSERT so the row is created if it
+    # doesn't exist yet (the chat_session may be created by the frontend
+    # AFTER the agent finishes, or never at all for named-agent chats).
     try:
         from acb_graph import get_session as _db_session  # noqa: PLC0415
         from sqlalchemy import text  # noqa: PLC0415
+
         def _write():
             with _db_session() as s:
                 s.execute(
                     text(
-                        "UPDATE chat_session SET service_session_id = :sid "
-                        "WHERE id = :id"
+                        "INSERT INTO chat_session "
+                        "(id, user_id, agent_name, service_session_id) "
+                        "VALUES (:id, :uid, :agent, :sid) "
+                        "ON CONFLICT (id) DO UPDATE SET "
+                        "service_session_id = EXCLUDED.service_session_id, "
+                        "updated_at = now()"
                     ),
-                    {"sid": service_session_id, "id": thread_id},
+                    {
+                        "id": thread_id,
+                        "uid": "system",
+                        "agent": "unknown",
+                        "sid": service_session_id,
+                    },
                 )
                 s.commit()
         import asyncio as _aio

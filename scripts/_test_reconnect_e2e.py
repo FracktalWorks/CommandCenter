@@ -36,6 +36,7 @@ async def main() -> None:
 
     tid = f"e2e-reconnect-{uuid.uuid4().hex[:8]}"
     agent = sys.argv[1] if len(sys.argv) > 1 else "task-manager"
+    model = os.environ.get("E2E_MODEL", "")
     prompt = sys.argv[2] if len(sys.argv) > 2 else (
         "Write a detailed 400-word essay about the history of prime numbers, "
         "covering Euclid, Eratosthenes, Fermat, and modern cryptography."
@@ -50,7 +51,12 @@ async def main() -> None:
     async with httpx.AsyncClient(timeout=_timeout) as client:
         async with client.stream(
             "POST", f"{BASE}/agent/run/stream",
-            json={"agent": agent, "payload": {"message": prompt}, "thread_id": tid},
+            json={
+                "agent": agent,
+                "payload": {"message": prompt},
+                "thread_id": tid,
+                **({"model": model} if model else {}),
+            },
             headers=headers,
         ) as resp:
             print("HTTP", resp.status_code)

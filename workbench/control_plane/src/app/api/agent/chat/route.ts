@@ -338,6 +338,53 @@ async function translateAndPersistStream(
   return assistantContent;
 }
 
+// ─── Memory extraction (post-stream) ─────────────────────────────────────────
+
+/**
+ * Fire-and-forget: send the full conversation to Mem0 for fact extraction
+ * AFTER the agent stream completes.  This runs after translateAndPersistStream
+ * has accumulated the complete assistant response, so Mem0 sees both sides
+ * of the conversation.
+ */
+async function extractMemories(
+  threadId: string,
+  userMessage: string,
+  assistantContent: string,
+  history: ChatMessage[],
+  agentName: string,
+): Promise<void> {
+  if (!assistantContent.trim()) return;
+  try {
+    const conv: Array<{ role: string; content: string }> = [];
+    // Include prior turns from history
+    for (const m of history) {
+      if (m.role === "user" || m.role === "assistant") {
+        conv.push({ role: m.role, content: m.content });
+      }
+    }
+    // Append the current turn (may already be in history; deduped server-side)
+    if (userMessage) {
+      conv.push({ role: "user", content: userMessage });
+    }
+    conv.push({ role: "assistant", content: assistantContent });
+
+    // Fire-and-forget to the gateway's /memory/{threadId}/add endpoint.
+    // The gateway is authoritative for Mem0 — this avoids the Next.js
+    // process needing direct DB access or Mem0 credentials.
+    await fetch(`${GATEWAY_URL}/memory/${encodeURIComponent(threadId)}/add`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${INTERNAL_TOKEN}`,
+      },
+      body: JSON.stringify({ messages: conv, agent_id: agentName }),
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch {
+    // Best-effort: never break the main flow for memory failures
+  }
+}
+
 /** EXECUTIVE_EMAILS: comma-separated list of executive emails for role assignment. */
 const EXECUTIVE_EMAILS = new Set(
   (process.env.EXECUTIVE_EMAILS ?? "")
@@ -519,7 +566,12 @@ export async function POST(req: NextRequest): Promise<Response> {
     // survive client disconnect (tab close, browser quit, network drop).
     const translated = new ReadableStream<Uint8Array>({
       async start(controller) {
-        await translateAndPersistStream(gatewayRes.body!, controller, threadId ?? "", assistantMessageId);
+        const assistantContent = await translateAndPersistStream(
+          gatewayRes.body!, controller, threadId ?? "", assistantMessageId,
+        );
+        // Post-stream memory extraction — fires after the full response is
+        // known, so Mem0 sees both sides of the conversation.
+        extractMemories(threadId ?? "", message, assistantContent, messages ?? [], agentName);
       },
     });
     return new Response(translated, { headers: sseHeaders() });
@@ -562,7 +614,12 @@ export async function POST(req: NextRequest): Promise<Response> {
     // survive client disconnect (tab close, browser quit, network drop).
     const translated2 = new ReadableStream<Uint8Array>({
       async start(controller) {
-        await translateAndPersistStream(streamRes.body!, controller, threadId ?? "", assistantMessageId);
+        const assistantContent2 = await translateAndPersistStream(
+          streamRes.body!, controller, threadId ?? "", assistantMessageId,
+        );
+        // Post-stream memory extraction — fires after the full response is
+        // known, so Mem0 sees both sides of the conversation.
+        extractMemories(threadId ?? "", message, assistantContent2, messages ?? [], agentName);
       },
     });
     return new Response(translated2, { headers: sseHeaders() });

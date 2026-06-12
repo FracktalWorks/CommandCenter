@@ -550,6 +550,38 @@ export default function AgentChat({
 
   const missingMandatory = statuses.filter((s) => s.mandatory && !s.configured);
 
+  // ── Smart follow-up suggestions (LLM-generated, contextual) ───────
+  const [smartSuggestions, setSmartSuggestions] = useState<string[]>([]);
+  const lastSuggestedForRef = useRef<string>("");
+  useEffect(() => {
+    if (isLoading) return;
+    const last = messages[messages.length - 1];
+    if (last?.role !== "assistant" || !last.content.trim() || last.streaming) return;
+    if (lastSuggestedForRef.current === last.id) return; // already fetched
+    lastSuggestedForRef.current = last.id;
+    setSmartSuggestions([]); // clear stale suggestions while fetching
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    const ctrl = new AbortController();
+    fetch("/api/chat/suggestions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userMessage: lastUser?.content ?? "",
+        assistantMessage: last.content.slice(0, 4000),
+        agentName: currentAgentName,
+      }),
+      signal: ctrl.signal,
+    })
+      .then((r) => r.json())
+      .then((d: { suggestions?: string[] }) => {
+        if (Array.isArray(d.suggestions) && d.suggestions.length > 0) {
+          setSmartSuggestions(d.suggestions);
+        }
+      })
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, [messages, isLoading, currentAgentName]);
+
   // ── Smart auto-scroll + scroll-to-bottom button ─────────────────────
   const threadRef = useRef<HTMLDivElement>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
@@ -820,7 +852,10 @@ export default function AgentChat({
             const last = messages[messages.length - 1];
             if (last?.role === "assistant" && last.content.trim() && !last.streaming) {
               return (
-                <SuggestionPills suggestions={AGENT_SUGGESTIONS[currentAgentName] ?? DEFAULT_SUGGESTIONS}
+                <SuggestionPills
+                  suggestions={smartSuggestions.length > 0
+                    ? smartSuggestions
+                    : (AGENT_SUGGESTIONS[currentAgentName] ?? DEFAULT_SUGGESTIONS)}
                   onPick={handleChoice} label="Follow up" align="start" />
               );
             }

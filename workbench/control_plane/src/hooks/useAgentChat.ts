@@ -273,7 +273,22 @@ export function useAgentChat({
                   args: (evt.args as Record<string, unknown>) ?? {}, status: "running",
                   startedAt: Date.now(), ...(isDelegate ? { subAgentActive: true } : {}),
                 };
-                upd((m) => ({ ...m, toolEvents: [...(m.toolEvents ?? []), newEvent] }));
+                upd((m) => {
+                  // VS Code-style narration fold: text emitted BEFORE a tool
+                  // call is the model narrating its plan ("Let me check…"),
+                  // not the final answer.  Move it into the thinking
+                  // timeline; only text after the LAST tool call remains as
+                  // the visible answer.
+                  const narration = m.content.trim();
+                  return {
+                    ...m,
+                    content: narration ? "" : m.content,
+                    reasoningBlocks: narration
+                      ? [...(m.reasoningBlocks ?? []), narration]
+                      : m.reasoningBlocks,
+                    toolEvents: [...(m.toolEvents ?? []), newEvent],
+                  };
+                });
                 break;
               }
               case "tool_end":
@@ -664,14 +679,21 @@ export function useAgentChat({
                 break;
               case "tool_start": {
                 const toolId = String(evt.id ?? nanoid());
-                updLast((m) => ({
-                  ...m,
-                  toolEvents: [...(m.toolEvents ?? []), {
-                    id: toolId, name: String(evt.name ?? "tool"),
-                    args: (evt.args as Record<string, unknown>) ?? {},
-                    status: "running" as const, startedAt: Date.now(),
-                  }],
-                }));
+                updLast((m) => {
+                  const narration = m.content.trim();
+                  return {
+                    ...m,
+                    content: narration ? "" : m.content,
+                    reasoningBlocks: narration
+                      ? [...(m.reasoningBlocks ?? []), narration]
+                      : m.reasoningBlocks,
+                    toolEvents: [...(m.toolEvents ?? []), {
+                      id: toolId, name: String(evt.name ?? "tool"),
+                      args: (evt.args as Record<string, unknown>) ?? {},
+                      status: "running" as const, startedAt: Date.now(),
+                    }],
+                  };
+                });
                 break;
               }
               case "tool_end":

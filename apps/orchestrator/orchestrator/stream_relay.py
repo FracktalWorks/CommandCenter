@@ -148,7 +148,8 @@ async def subscribe_events(
     *block_ms* between events.  Yields parsed event dicts as they arrive.
 
     Exits when the stream is marked inactive AND no new events arrive within
-    *block_ms*, or when the stream expires.
+    *block_ms*, when a terminal event (RUN_FINISHED / RUN_ERROR) is yielded,
+    or when the stream expires.
 
     Args:
         thread_id: Conversation thread ID.
@@ -201,6 +202,15 @@ async def subscribe_events(
                                 evt["_stream_id"] = eid
                                 yield evt
                                 cursor = eid
+                                # Terminal event: the run is over — close
+                                # the subscription NOW instead of blocking
+                                # another XREAD cycle (the HTTP response
+                                # would otherwise linger ~30s, leaving the
+                                # UI "loading" and queueing new messages).
+                                if evt.get("type") in (
+                                    "RUN_FINISHED", "RUN_ERROR",
+                                ):
+                                    return
                             except (json.JSONDecodeError, TypeError):
                                 pass
                 else:

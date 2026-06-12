@@ -222,6 +222,13 @@ async function translateAndPersistStream(
           const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
           toolNames[String(ev.toolCallId ?? "")] = name;
           toolArgs[String(ev.toolCallId ?? "")] = "";
+          // VS Code-style narration fold (mirror of the frontend): text
+          // accumulated before a tool call is plan narration, not the
+          // answer — persist it as a reasoning block instead.
+          if (assistantContent.trim()) {
+            reasoningBlocks.push(assistantContent.trim());
+            assistantContent = "";
+          }
           // Capture progress so the polling recovery path can show tool activity.
           progressLines.push(name);
           if (progressLines.length > 20) progressLines.shift();

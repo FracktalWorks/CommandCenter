@@ -1374,11 +1374,33 @@ async def run_agent_stream(
                                     # thinking timeline — NOT the visible
                                     # assistant message.
                                     if _upd_role == "tool":
+                                        # Partial output / progress carrying a
+                                        # tool_call_id streams INTO that tool's
+                                        # row (live terminal output, VS Code
+                                        # style); anonymous frames fall back to
+                                        # the generic progress header line.
+                                        _raw_ev = _update.raw_representation
+                                        _ptc_id = ""
+                                        try:
+                                            _raw_t = str(getattr(_raw_ev, "type", ""))
+                                            if ("PARTIAL_RESULT" in _raw_t
+                                                    or "PROGRESS" in _raw_t):
+                                                _ptc_id = getattr(
+                                                    getattr(_raw_ev, "data", None),
+                                                    "tool_call_id", "",
+                                                ) or ""
+                                        except Exception:  # noqa: BLE001
+                                            pass
                                         _pmsg = _delta
                                         if _pmsg.startswith("[progress] "):
                                             _pmsg = _pmsg[len("[progress] "):]
-                                        yield _sse({"type": "PROGRESS_UPDATE",
-                                                    "message": _pmsg[:200]})
+                                        if _ptc_id:
+                                            yield _sse({"type": "TOOL_CALL_PARTIAL",
+                                                        "toolCallId": _ptc_id,
+                                                        "delta": _pmsg[:2000]})
+                                        else:
+                                            yield _sse({"type": "PROGRESS_UPDATE",
+                                                        "message": _pmsg[:200]})
                                         continue
                                     if not _text_started:
                                         _text_started = True

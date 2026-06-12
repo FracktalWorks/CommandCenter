@@ -149,6 +149,11 @@ async function translateAndPersistStream(
   const decoder = new TextDecoder();
   const toolNames: Record<string, string> = {};
   const toolArgs: Record<string, string> = {};
+  /** Reasoning-block count at each tool's start — persisted as
+   *  reasoningCutoff so the UI can interleave reasoning and tools
+   *  chronologically (VS Code-style timeline). */
+  const toolCutoffs: Record<string, number> = {};
+  const toolStarts: Record<string, number> = {};
   const toolEvents: Array<Record<string, unknown>> = [];
   /** Accumulated reasoning blocks (model chain-of-thought).  Each complete
    *  sentence / paragraph becomes a separate block for the UI cascade. */
@@ -229,6 +234,18 @@ async function translateAndPersistStream(
             reasoningBlocks.push(assistantContent.trim());
             assistantContent = "";
           }
+          // Record where this tool sits in the reasoning timeline, then seal
+          // the current block so later reasoning starts AFTER the tool.
+          // (Keep in sync with foldForToolStart in useAgentChat.ts.)
+          if (reasoningBlocks.length === 0) {
+            toolCutoffs[String(ev.toolCallId ?? "")] = 0;
+          } else if (!reasoningBlocks[reasoningBlocks.length - 1].trim()) {
+            toolCutoffs[String(ev.toolCallId ?? "")] = reasoningBlocks.length - 1;
+          } else {
+            toolCutoffs[String(ev.toolCallId ?? "")] = reasoningBlocks.length;
+            reasoningBlocks.push("");
+          }
+          toolStarts[String(ev.toolCallId ?? "")] = Date.now();
           // Capture progress so the polling recovery path can show tool activity.
           progressLines.push(name);
           if (progressLines.length > 20) progressLines.shift();
@@ -237,6 +254,14 @@ async function translateAndPersistStream(
         } else if (t === "TOOL_CALL_ARGS") {
           const id = String(ev.toolCallId ?? "");
           toolArgs[id] = (toolArgs[id] ?? "") + String(ev.delta ?? "");
+        } else if (t === "TOOL_CALL_PARTIAL") {
+          // Live terminal/tool output for a running tool — forward to the
+          // client so output streams into the tool row (VS Code style).
+          out = {
+            type: "tool_partial",
+            id: ev.toolCallId,
+            result: String(ev.delta ?? ev.content ?? ""),
+          };
         } else if (t === "TOOL_CALL_END" || t === "TOOL_CALL_RESULT") {
           const id = String(ev.toolCallId ?? "");
           const name = toolNames[id] ?? "tool";
@@ -246,6 +271,9 @@ async function translateAndPersistStream(
             args: parseToolArgs(toolArgs[id]),
             result,
             status: "done",
+            reasoningCutoff: toolCutoffs[id] ?? 0,
+            startedAt: toolStarts[id],
+            endedAt: Date.now(),
           });
           out = {
             type: "tool_end", id: ev.toolCallId, name,

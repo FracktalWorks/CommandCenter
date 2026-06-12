@@ -69,9 +69,12 @@ and streams chat responses as AG-UI events.
   without it if the model rejects it.
 - Executor translates text_reasoning contents to THINKING_TEXT_MESSAGE_CONTENT
   SSE frames; tool-role text frames (progress, partial output) become
-  PROGRESS_UPDATE frames -- never TEXT_MESSAGE_CONTENT (would pollute the
-  visible answer). ASSISTANT_INTENT carries no text content; the raw INTENT
-  handler renders it as a timeline entry.
+  TOOL_CALL_PARTIAL {toolCallId, delta} when the raw Copilot event
+  (TOOL_EXECUTION_PARTIAL_RESULT / TOOL_EXECUTION_PROGRESS) carries a
+  tool_call_id -- live terminal output streams into that tool's row in the
+  UI -- otherwise PROGRESS_UPDATE. Never TEXT_MESSAGE_CONTENT (would pollute
+  the visible answer). ASSISTANT_INTENT carries no text content; the raw
+  INTENT handler renders it as a timeline entry.
 
 ### Todo-list tracking (VS Code Todos panel parity)
 - The Copilot CLI tracks the agent's plan with its built-in `sql` tool

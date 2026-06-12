@@ -31,6 +31,11 @@ export interface ToolEvent {
   status: ToolEventStatus;
   startedAt?: number;
   endedAt?: number;
+  /** Number of reasoning blocks that existed when this tool started.
+   *  Lets the UI interleave reasoning text and tool calls chronologically
+   *  (VS Code-style timeline) without a separate timeline structure —
+   *  this field persists through the existing tool_events JSONB column. */
+  reasoningCutoff?: number;
   /** True while a delegated sub-agent is still running. */
   subAgentActive?: boolean;
   /** Name of the sub-agent being delegated to. */

@@ -30,6 +30,26 @@ Control Plane (Next.js browser UI) and local development tools.
 - Image URLs in markdown are rewritten through the workspace file proxy automatically
 - Agents SHOULD write generated files to .tmp/ or outputs/ for discoverability
 
+## Thinking timeline (VS Code parity)
+- ThinkingContainer.tsx renders reasoning text and tool calls as ONE
+  chronologically interleaved timeline (narration bullet → tool row → ...),
+  mirroring VS Code Copilot Chat's thinking pane.
+- Ordering comes from ToolEvent.reasoningCutoff (count of reasoning blocks
+  when the tool started) — stamped by foldForToolStart() in useAgentChat.ts
+  and mirrored in route.ts at TOOL_CALL_START. It persists inside the
+  existing tool_events JSONB; no schema change. Legacy events without a
+  cutoff sort after all reasoning (old behaviour).
+- At each tool start the current reasoning block is "sealed" with an empty
+  sentinel block so later reasoning renders AFTER the tool. Sentinels are
+  skipped at render time; restore paths split reasoning on "\n---\n"
+  WITHOUT filter(Boolean) to keep block indices aligned with cutoffs.
+- Tool rows are compact one-liners ("Ran <cmd>", "Read <file>", "Searched
+  <q>") that expand on click; run-kind tools expand to the terminal card.
+  Running tools auto-expand and show live output streamed via
+  TOOL_CALL_PARTIAL → {type:"tool_partial"} events.
+- Keep the reasoning paragraph-split (\n{2,}) and fold logic in sync across
+  useAgentChat.ts (live + reconnect) and route.ts (persistence).
+
 ## Responsive / mobile layout
 - AppShell picks the layout from useViewMode(): mobile by default on narrow screens (≤767px), desktop otherwise.
 - "Request desktop" (via the "..." overflow menu on mobile, or the "Monitor" icon in the drawer) sets a persisted

@@ -54,6 +54,66 @@ function formatToolName(name: string): string {
   return name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/** Past/present-tense verbs per action kind (VS Code: "Ran", "Read", …). */
+const KIND_VERBS: Record<ActionKind, { done: string; running: string }> = {
+  run: { done: "Ran", running: "Running" },
+  read: { done: "Read", running: "Reading" },
+  search: { done: "Searched", running: "Searching" },
+  edit: { done: "Edited", running: "Editing" },
+  delegate: { done: "Delegated to", running: "Delegating to" },
+  other: { done: "Used", running: "Using" },
+};
+
+/** One-line headline for a tool row — the command, path, query or name. */
+function toolHeadline(event: ToolEvent, kind: ActionKind): string {
+  const args = event.args ?? {};
+  if (kind === "run") return extractCommand(args, event.name);
+  if (kind === "delegate") {
+    const target = event.subAgentName ?? args.agent_name ?? args.agent ?? args.name;
+    if (typeof target === "string" && target) return target;
+  }
+  if (kind === "search") {
+    const q = args.query ?? args.q ?? args.pattern ?? args.search;
+    if (typeof q === "string" && q) return q.slice(0, 120);
+  }
+  const path = formatArgsLikePath(args);
+  if (path) return path;
+  return formatToolName(event.name);
+}
+
+// ─── Interleaved timeline (VS Code chatThinkingContentPart parity) ─────────
+
+type TimelineItem =
+  | { kind: "reasoning"; text: string; blockIndex: number }
+  | { kind: "tool"; event: ToolEvent; toolIndex: number };
+
+/**
+ * Merge reasoning blocks and tool events into one chronological list using
+ * each tool's reasoningCutoff (blocks below the cutoff precede the tool).
+ * Legacy events without a cutoff sort after all reasoning — the previous
+ * rendering order — so old persisted messages still display correctly.
+ */
+function buildTimeline(
+  reasoningBlocks: string[],
+  toolEvents: ToolEvent[],
+): TimelineItem[] {
+  const items: TimelineItem[] = [];
+  let r = 0;
+  toolEvents.forEach((event, toolIndex) => {
+    const cutoff = event.reasoningCutoff ?? Number.POSITIVE_INFINITY;
+    while (r < reasoningBlocks.length && r < cutoff) {
+      items.push({ kind: "reasoning", text: reasoningBlocks[r], blockIndex: r });
+      r++;
+    }
+    items.push({ kind: "tool", event, toolIndex });
+  });
+  while (r < reasoningBlocks.length) {
+    items.push({ kind: "reasoning", text: reasoningBlocks[r], blockIndex: r });
+    r++;
+  }
+  return items;
+}
+
 function formatArgsLikePath(args: Record<string, unknown>): string | null {
   const path = args.path ?? args.filePath ?? args.file ?? args.file_path
     ?? args.target ?? args.destination ?? args.url ?? args.repo;
@@ -162,10 +222,20 @@ export default function ThinkingContainer({
   const [workingMsg, setWorkingMsg] = useState<string>(() => pickWorkingMessage());
   const userToggledRef = useRef(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  // Per-tool expansion override (user click).  Without an override, a tool
+  // row is open while running (live output) and collapsed when done —
+  // matching VS Code's chat tool invocation parts.
+  const [toolOverrides, setToolOverrides] = useState<Record<string, boolean>>({});
 
   const hasReasoning = !!(reasoningBlocks && reasoningBlocks.length > 0);
   const hasTools = toolEvents.length > 0;
   const hasContent = hasTools || hasReasoning;
+
+  // Chronologically interleaved reasoning + tool timeline (VS Code style).
+  const timeline = useMemo(
+    () => buildTimeline(reasoningBlocks ?? [], toolEvents),
+    [reasoningBlocks, toolEvents],
+  );
 
   // Auto-follow: while the agent streams verbose reasoning, keep the
   // timeline scrolled to the newest content (VS Code thinking-pane style).
@@ -213,17 +283,32 @@ export default function ThinkingContainer({
     return null;
   }, [toolEvents, progressLines]);
 
-  // Final summary title once complete.
+  // Final summary title once complete — verb-based, VS Code style
+  // ("Ran 3 commands, read 2 files").
   const summaryTitle = useMemo(() => {
     if (toolEvents.length === 0) {
-      return hasReasoning ? "Has working notes" : "Finished thinking";
+      return hasReasoning ? "Thought through the approach" : "Finished thinking";
     }
-    if (toolEvents.length === 1) {
-      return `Used ${formatToolName(toolEvents[0].name)}`;
+    const counts = new Map<ActionKind, number>();
+    for (const t of toolEvents) {
+      const k = classifyTool(t.name).kind;
+      counts.set(k, (counts.get(k) ?? 0) + 1);
     }
-    const names = Array.from(new Set(toolEvents.map((t) => formatToolName(t.name))));
-    if (names.length === 1) return `Used ${names[0]} ×${toolEvents.length}`;
-    return `Used ${toolEvents.length} tools`;
+    const NOUNS: Record<ActionKind, [string, string]> = {
+      run: ["command", "commands"],
+      read: ["file", "files"],
+      search: ["search", "searches"],
+      edit: ["edit", "edits"],
+      delegate: ["agent", "agents"],
+      other: ["tool", "tools"],
+    };
+    const parts = Array.from(counts.entries()).map(([k, n], i) => {
+      const verb = k === "delegate" ? "called" : KIND_VERBS[k].done.toLowerCase();
+      const noun = NOUNS[k][n === 1 ? 0 : 1];
+      const text = k === "edit" ? `made ${n} ${noun}` : `${verb} ${n} ${noun}`;
+      return i === 0 ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+    });
+    return parts.slice(0, 3).join(", ");
   }, [toolEvents, hasReasoning]);
 
   const hasError = toolEvents.some((t) => t.status === "error");
@@ -233,7 +318,8 @@ export default function ThinkingContainer({
   // (mirrors VS Code Copilot's live thinking snippet).
   const liveReasoningTail = useMemo(() => {
     if (!isActive || !hasReasoning) return null;
-    const last = reasoningBlocks![reasoningBlocks!.length - 1].trim();
+    // Skip trailing empty sentinel blocks (sealed at tool starts).
+    const last = [...reasoningBlocks!].reverse().find((b) => b.trim())?.trim();
     if (!last) return null;
     return last.length > 90 ? `…${last.slice(-90)}` : last;
   }, [isActive, hasReasoning, reasoningBlocks]);
@@ -307,140 +393,159 @@ export default function ThinkingContainer({
             {/* Vertical line at x=12px */}
             <div className="absolute left-[12px] top-2 bottom-2 w-px bg-zinc-700/60" />
 
-            <div className="space-y-2">
-              {/* Sequential reasoning blocks — each is its own timeline entry */}
-              {hasReasoning && reasoningBlocks!.map((block, bi) => {
-                const isLastBlock = bi === reasoningBlocks!.length - 1;
-                return (
-                  <div key={bi} className="relative">
-                    <div className="absolute left-[8px] top-[10px] z-10">
-                      <span className={`block w-2 h-2 rounded-full ${isActive && isLastBlock ? "bg-violet-400 chat-pulse-dot" : "bg-violet-500"}`} />
-                    </div>
-                    <div className="ml-8 mr-3 rounded-md border-l-2 border-violet-700/30 bg-zinc-900/20 px-2.5 py-2">
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <span className="text-[10px] opacity-60">💭</span>
-                        <span className="text-[9px] font-medium text-zinc-500 uppercase tracking-widest">Working notes</span>
-                        {isActive && isLastBlock && <span className="w-1.5 h-1.5 rounded-full bg-violet-400/60 chat-pulse-dot shrink-0" />}
+            <div className="space-y-1.5">
+              {/* Chronologically interleaved reasoning + tool timeline
+                  (VS Code chatThinkingContentPart parity). */}
+              {timeline.map((item) => {
+                if (item.kind === "reasoning") {
+                  if (!item.text.trim() ) return null; // skip empty sentinels
+                  const isLastReasoning =
+                    item.blockIndex === (reasoningBlocks?.length ?? 0) - 1;
+                  const live = isActive && isLastReasoning;
+                  return (
+                    <div key={`r-${item.blockIndex}`} className="relative">
+                      {/* Small muted dot on the timeline axis */}
+                      <div className="absolute left-[10px] top-[7px] z-10">
+                        <span className={`block w-1.5 h-1.5 rounded-full ${live ? "bg-zinc-400 chat-pulse-dot" : "bg-zinc-600"}`} />
                       </div>
-                      <div className="text-[11px] text-zinc-500/80 whitespace-pre-wrap leading-relaxed italic">
-                        {block}
-                        {isActive && isLastBlock && <span className="inline-block w-[2px] h-[1em] bg-zinc-600 animate-pulse ml-0.5 align-middle rounded-full" />}
+                      <div className="ml-8 mr-3 text-[11.5px] text-zinc-400 whitespace-pre-wrap leading-relaxed">
+                        {item.text}
+                        {live && <span className="inline-block w-[2px] h-[1em] bg-zinc-500 animate-pulse ml-0.5 align-middle rounded-full" />}
                       </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                }
 
-              {/* Tool steps as timeline items */}
-              {toolEvents.map((event, i) => {
+                const event = item.event;
                 const style = classifyTool(event.name);
                 const isRunning = event.status === "running";
-                const isLast = i === toolEvents.length - 1;
-                const hasPath = event.args ? formatArgsLikePath(event.args) : null;
+                const isError = event.status === "error";
+                const headline = toolHeadline(event, style.kind);
+                const verb = isRunning ? KIND_VERBS[style.kind].running : KIND_VERBS[style.kind].done;
                 const dur = event.endedAt && event.startedAt ? event.endedAt - event.startedAt : undefined;
+                const open = toolOverrides[event.id] ?? isRunning;
+                const toggle = () =>
+                  setToolOverrides((prev) => ({ ...prev, [event.id]: !open }));
+
                 return (
                   <div key={event.id} className="relative">
-                    {/* Dot centered on line at x=12px: w-2(8px) → left=12-4=8px */}
-                    <div className="absolute left-[8px] top-[10px] z-10">
+                    {/* Colored dot on the timeline axis */}
+                    <div className="absolute left-[8px] top-[6px] z-10">
                       {isRunning ? (
-                        <span className={`block w-2.5 h-2.5 rounded-full ${style.dotClass} chat-pulse-dot`} />
-                      ) : event.status === "error" ? (
+                        <span className={`block w-2 h-2 rounded-full ${style.dotClass} chat-pulse-dot`} />
+                      ) : isError ? (
                         <span className="block w-2 h-2 rounded-full bg-red-500" />
                       ) : (
                         <span className={`block w-2 h-2 rounded-full ${style.dotClass}`} />
                       )}
                     </div>
 
-                    {/* Step card — indented to clear the line + dot */}
-                    <div className={`ml-8 mr-3 rounded-md border-l-2 ${style.borderClass} bg-zinc-900/40 px-2.5 py-1.5`}>
-                      {/* Header row */}
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-[10px] shrink-0">{style.icon}</span>
-                        <span className="text-[10px] font-semibold text-zinc-300 uppercase tracking-wide">{style.label}</span>
-                        <span className="text-[10px] text-zinc-500 font-mono truncate">{formatToolName(event.name)}</span>
-                        {hasPath && <span className="text-[10px] text-zinc-600 font-mono truncate ml-auto">{hasPath}</span>}
-                        {isRunning && <span className="w-1.5 h-1.5 rounded-full bg-sky-400 chat-pulse-dot shrink-0 ml-1" />}
-                        {dur !== undefined && <span className="text-[9px] text-zinc-600 font-mono ml-auto shrink-0">{dur}ms</span>}
-                      </div>
+                    <div className="ml-8 mr-3 min-w-0">
+                      {/* Compact one-line header — "Ran <cmd>", "Read <file>"… */}
+                      <button
+                        onClick={toggle}
+                        className="w-full flex items-baseline gap-1.5 text-left group/tool min-w-0"
+                      >
+                        <span className={`text-[11.5px] shrink-0 ${isRunning ? "chat-shimmer-text" : "text-zinc-500"}`}>
+                          {verb}
+                        </span>
+                        <span className={`text-[11px] font-mono truncate min-w-0 px-1 py-px rounded bg-zinc-800/60 border border-zinc-700/40 ${isError ? "text-red-400" : "text-zinc-300"}`}>
+                          {headline}
+                        </span>
+                        {isError && <span className="text-red-400 text-[10px] shrink-0">✗</span>}
+                        {dur !== undefined && dur > 1000 && (
+                          <span className="text-[9px] text-zinc-600 font-mono shrink-0">{(dur / 1000).toFixed(1)}s</span>
+                        )}
+                        <span className="ml-auto shrink-0 text-zinc-600 text-[9px] opacity-0 group-hover/tool:opacity-100 transition-opacity">
+                          {open ? "▴" : "▾"}
+                        </span>
+                      </button>
 
-                      {/* Args + result */}
-                      {event.args && Object.keys(event.args).length > 0 && (
-                        <div className="text-[10px] text-zinc-600 font-mono mt-1">
-                          {Object.entries(event.args).map(([k, v]) => (
-                            <span key={k} className="inline-block mr-2">
-                              <span className="text-zinc-500">{k}:</span>{" "}
-                              <span className="text-zinc-400">{String(v).slice(0, 80)}</span>
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      {/* Terminal / shell output — VS Code-style terminal in chat */}
-                      {style.kind === "run" && (event.args || event.result) ? (
-                        <div className="mt-1.5 rounded-md bg-[#0c0c0c] border border-zinc-700/60 overflow-hidden">
-                          {/* Title bar */}
-                          <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-zinc-800 bg-zinc-900/80">
-                            <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f56] shrink-0" />
-                            <span className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e] shrink-0" />
-                            <span className="w-2.5 h-2.5 rounded-full bg-[#27c93f] shrink-0" />
-                            <span className="text-[10px] text-zinc-500 ml-2 font-mono tracking-wide">
-                              {event.args?.command
-                                ? "PowerShell"
-                                : formatToolName(event.name)}
-                            </span>
-                            {isRunning && (
-                              <span className="text-[9px] text-sky-400 ml-auto animate-pulse font-mono">● running</span>
-                            )}
-                            {dur !== undefined && (
-                              <span className="text-[9px] text-zinc-600 ml-auto font-mono">{dur}ms</span>
-                            )}
-                          </div>
-                          {/* Terminal body */}
-                          <div className="p-2.5 font-mono text-[11px] leading-relaxed">
-                            {/* Command line — white prompt + syntax-highlighted command */}
-                            {event.args && (
-                              <div className="flex gap-2 mb-1.5">
-                                <span className="text-emerald-400 shrink-0 select-none font-medium">$</span>
-                                <span className="text-zinc-200 break-all font-mono text-[11px] leading-relaxed">
-                                  {highlightCommand(extractCommand(event.args, event.name))}
+                      {/* Expanded detail */}
+                      {open && (
+                        <div className="mt-1">
+                          {style.kind === "run" && (event.args || event.result) ? (
+                            <div className="rounded-md bg-[#0c0c0c] border border-zinc-700/60 overflow-hidden">
+                              {/* Terminal title bar */}
+                              <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-zinc-800 bg-zinc-900/80">
+                                <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f56] shrink-0" />
+                                <span className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e] shrink-0" />
+                                <span className="w-2.5 h-2.5 rounded-full bg-[#27c93f] shrink-0" />
+                                <span className="text-[10px] text-zinc-500 ml-2 font-mono tracking-wide">
+                                  {event.args?.command ? "Terminal" : formatToolName(event.name)}
                                 </span>
-                              </div>
-                            )}
-                            {/* Output — green text on black */}
-                            {event.result && (
-                              <div className="text-[#4ec9b0] whitespace-pre-wrap break-all max-h-64 overflow-y-auto leading-snug">
-                                {String(event.result)}
                                 {isRunning && (
-                                  <span className="inline-block w-[6px] h-[14px] bg-[#4ec9b0] animate-pulse ml-0.5 align-middle" />
+                                  <span className="text-[9px] text-sky-400 ml-auto animate-pulse font-mono">● running</span>
+                                )}
+                                {dur !== undefined && !isRunning && (
+                                  <span className="text-[9px] text-zinc-600 ml-auto font-mono">{dur}ms</span>
                                 )}
                               </div>
-                            )}
-                            {/* Show empty prompt when waiting for output */}
-                            {!event.result && isRunning && (
-                              <div className="flex gap-2">
-                                <span className="text-emerald-400 shrink-0 select-none">$</span>
-                                <span className="inline-block w-[6px] h-[14px] bg-[#4ec9b0] animate-pulse align-middle" />
+                              {/* Terminal body */}
+                              <div className="p-2.5 font-mono text-[11px] leading-relaxed">
+                                {event.args && (
+                                  <div className="flex gap-2 mb-1.5">
+                                    <span className="text-emerald-400 shrink-0 select-none font-medium">$</span>
+                                    <span className="text-zinc-200 break-all font-mono text-[11px] leading-relaxed">
+                                      {highlightCommand(extractCommand(event.args, event.name))}
+                                    </span>
+                                  </div>
+                                )}
+                                {event.result && (
+                                  <div className="text-[#4ec9b0] whitespace-pre-wrap break-all max-h-64 overflow-y-auto leading-snug">
+                                    {String(event.result)}
+                                    {isRunning && (
+                                      <span className="inline-block w-[6px] h-[14px] bg-[#4ec9b0] animate-pulse ml-0.5 align-middle" />
+                                    )}
+                                  </div>
+                                )}
+                                {!event.result && isRunning && (
+                                  <div className="flex gap-2">
+                                    <span className="text-emerald-400 shrink-0 select-none">$</span>
+                                    <span className="inline-block w-[6px] h-[14px] bg-[#4ec9b0] animate-pulse align-middle" />
+                                  </div>
+                                )}
                               </div>
-                            )}
-                          </div>
-                        </div>
-                      ) : event.result && (
-                        <div className="text-[10px] text-zinc-500 font-mono mt-1 truncate">
-                          → {String(event.result).slice(0, 120)}
-                        </div>
-                      )}
+                            </div>
+                          ) : (
+                            <div className={`rounded-md border-l-2 ${style.borderClass} bg-zinc-900/40 px-2.5 py-1.5`}>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-[10px] shrink-0">{style.icon}</span>
+                                <span className="text-[10px] text-zinc-500 font-mono truncate">{formatToolName(event.name)}</span>
+                                {dur !== undefined && <span className="text-[9px] text-zinc-600 font-mono ml-auto shrink-0">{dur}ms</span>}
+                              </div>
+                              {event.args && Object.keys(event.args).length > 0 && (
+                                <div className="text-[10px] text-zinc-600 font-mono mt-1">
+                                  {Object.entries(event.args).map(([k, v]) => (
+                                    <span key={k} className="inline-block mr-2">
+                                      <span className="text-zinc-500">{k}:</span>{" "}
+                                      <span className="text-zinc-400">{String(v).slice(0, 80)}</span>
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              {event.result && (
+                                <pre className="text-[10px] text-zinc-500 font-mono mt-1 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
+                                  {String(event.result).slice(0, 2000)}
+                                </pre>
+                              )}
+                            </div>
+                          )}
 
-                      {/* Sub-agent inline panel */}
-                      {event.subAgentName && (
-                        <div className="mt-1.5 rounded border border-zinc-700/60 bg-zinc-950/50 px-2 py-1.5">
-                          <div className="flex items-center gap-1.5 text-[10px]">
-                            <span className="text-sky-400">🤝</span>
-                            <span className="text-sky-400 font-medium">{event.subAgentName}</span>
-                            {event.subAgentActive && <span className="w-1.5 h-1.5 rounded-full bg-sky-400 chat-pulse-dot shrink-0" />}
-                          </div>
-                          {event.subAgentText && (
-                            <pre className="text-zinc-400 whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed mt-1 max-h-32 overflow-y-auto">
-                              {event.subAgentText}
-                            </pre>
+                          {/* Sub-agent inline panel */}
+                          {event.subAgentName && (
+                            <div className="mt-1.5 rounded border border-zinc-700/60 bg-zinc-950/50 px-2 py-1.5">
+                              <div className="flex items-center gap-1.5 text-[10px]">
+                                <span className="text-sky-400">🤝</span>
+                                <span className="text-sky-400 font-medium">{event.subAgentName}</span>
+                                {event.subAgentActive && <span className="w-1.5 h-1.5 rounded-full bg-sky-400 chat-pulse-dot shrink-0" />}
+                              </div>
+                              {event.subAgentText && (
+                                <pre className="text-zinc-400 whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed mt-1 max-h-32 overflow-y-auto">
+                                  {event.subAgentText}
+                                </pre>
+                              )}
+                            </div>
                           )}
                         </div>
                       )}

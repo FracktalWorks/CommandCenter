@@ -275,7 +275,11 @@ export function saveMessages(sessionId: string, messages: PersistedMessage[]): v
     timestamp: m.timestamp,
     tool_events: m.toolEvents ?? [],
     progress_lines: m.progressLines ?? [],
-    reasoning: m.reasoningBlocks ?? null,
+    // Gateway expects a string — join blocks with the \n---\n separator so
+    // restore can split them back with indices intact (reasoningCutoff).
+    reasoning: m.reasoningBlocks && m.reasoningBlocks.length > 0
+      ? m.reasoningBlocks.join("\n---\n")
+      : null,
     agent_state: m.agentState ?? null,
     custom_events: m.customEvents ?? [],
   }));
@@ -308,9 +312,11 @@ export async function fetchMessagesFromDb(sessionId: string): Promise<PersistedM
       customEvents?: { name: string; value: unknown }[];
     }>;
     // Map Postgres `reasoning` field to localStorage `reasoningBlocks`.
+    // Split on the block separator WITHOUT dropping empty segments so block
+    // indices stay aligned with each tool's reasoningCutoff.
     const mapped = remote.map((r) => ({
       ...r,
-      reasoningBlocks: r.reasoning ? [r.reasoning] : undefined,
+      reasoningBlocks: r.reasoning ? r.reasoning.split("\n---\n") : undefined,
       reasoning: undefined,
     }));
     // Update localStorage cache with authoritative Postgres data.

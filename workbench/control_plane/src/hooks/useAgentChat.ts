@@ -63,6 +63,30 @@ function nanoid(): string {
   return Math.random().toString(36).slice(2, 11);
 }
 
+/**
+ * Fold pre-tool narration into the reasoning blocks and compute the timeline
+ * cutoff for a starting tool (VS Code-style interleaved thinking).
+ *
+ * Blocks with index < cutoff render BEFORE the tool in the timeline;
+ * reasoning that streams in afterwards lands at index >= cutoff and renders
+ * AFTER it.  An empty sentinel block is appended when needed so later
+ * reasoning never merges into a pre-tool block.
+ */
+function foldForToolStart(
+  blocks: string[] | undefined,
+  narration: string,
+): { blocks: string[]; cutoff: number } {
+  const folded = narration ? [...(blocks ?? []), narration] : [...(blocks ?? [])];
+  if (folded.length === 0) return { blocks: folded, cutoff: 0 };
+  if (!folded[folded.length - 1].trim()) {
+    // Trailing empty sentinel from a previous tool — future reasoning merges
+    // into it, so it must sit after this tool too.
+    return { blocks: folded, cutoff: folded.length - 1 };
+  }
+  // Seal the current block so later reasoning starts a NEW block after the tool.
+  return { blocks: [...folded, ""], cutoff: folded.length };
+}
+
 export function useAgentChat({
   agentName,
   threadId,
@@ -268,11 +292,6 @@ export function useAgentChat({
               case "tool_start": {
                 const toolId = String(evt.id ?? nanoid());
                 const isDelegate = String(evt.name ?? "").toLowerCase().includes("call_agent");
-                const newEvent: ToolEvent = {
-                  id: toolId, name: String(evt.name ?? "tool"),
-                  args: (evt.args as Record<string, unknown>) ?? {}, status: "running",
-                  startedAt: Date.now(), ...(isDelegate ? { subAgentActive: true } : {}),
-                };
                 upd((m) => {
                   // VS Code-style narration fold: text emitted BEFORE a tool
                   // call is the model narrating its plan ("Let me check…"),
@@ -280,12 +299,17 @@ export function useAgentChat({
                   // timeline; only text after the LAST tool call remains as
                   // the visible answer.
                   const narration = m.content.trim();
+                  const { blocks, cutoff } = foldForToolStart(m.reasoningBlocks, narration);
+                  const newEvent: ToolEvent = {
+                    id: toolId, name: String(evt.name ?? "tool"),
+                    args: (evt.args as Record<string, unknown>) ?? {}, status: "running",
+                    startedAt: Date.now(), reasoningCutoff: cutoff,
+                    ...(isDelegate ? { subAgentActive: true } : {}),
+                  };
                   return {
                     ...m,
                     content: narration ? "" : m.content,
-                    reasoningBlocks: narration
-                      ? [...(m.reasoningBlocks ?? []), narration]
-                      : m.reasoningBlocks,
+                    reasoningBlocks: blocks,
                     toolEvents: [...(m.toolEvents ?? []), newEvent],
                   };
                 });
@@ -665,10 +689,20 @@ export function useAgentChat({
                   const chunk = String(evt.content ?? "");
                   if (!chunk) return m;
                   const blocks = m.reasoningBlocks ?? [];
-                  if (blocks.length > 0 && !/[.?!]\s*$/.test(blocks[blocks.length - 1])) {
-                    return { ...m, reasoningBlocks: [...blocks.slice(0, -1), blocks[blocks.length - 1] + chunk] };
+                  // Paragraph-break grouping (\n\n) — keep in sync with the
+                  // live loop and route.ts translator.
+                  if (blocks.length === 0) {
+                    return { ...m, reasoningBlocks: [chunk] };
                   }
-                  return { ...m, reasoningBlocks: [...blocks, chunk] };
+                  const merged = blocks[blocks.length - 1] + chunk;
+                  const parts = merged.split(/\n{2,}/);
+                  return {
+                    ...m,
+                    reasoningBlocks: [
+                      ...blocks.slice(0, -1),
+                      ...parts.filter((p, i) => p.trim() || i === parts.length - 1),
+                    ],
+                  };
                 });
                 break;
               case "progress":
@@ -681,16 +715,16 @@ export function useAgentChat({
                 const toolId = String(evt.id ?? nanoid());
                 updLast((m) => {
                   const narration = m.content.trim();
+                  const { blocks, cutoff } = foldForToolStart(m.reasoningBlocks, narration);
                   return {
                     ...m,
                     content: narration ? "" : m.content,
-                    reasoningBlocks: narration
-                      ? [...(m.reasoningBlocks ?? []), narration]
-                      : m.reasoningBlocks,
+                    reasoningBlocks: blocks,
                     toolEvents: [...(m.toolEvents ?? []), {
                       id: toolId, name: String(evt.name ?? "tool"),
                       args: (evt.args as Record<string, unknown>) ?? {},
                       status: "running" as const, startedAt: Date.now(),
+                      reasoningCutoff: cutoff,
                     }],
                   };
                 });
@@ -708,6 +742,17 @@ export function useAgentChat({
                     ),
                   };
                 });
+                break;
+              case "tool_partial":
+                // Live terminal/tool output streaming into the running tool row.
+                updLast((m) => ({
+                  ...m,
+                  toolEvents: (m.toolEvents ?? []).map((t) =>
+                    t.id === String(evt.id)
+                      ? { ...t, result: (t.result ?? "") + String(evt.result ?? "") }
+                      : t
+                  ),
+                }));
                 break;
               case "done":
                 reconnected = true;
@@ -832,8 +877,11 @@ export function useAgentChat({
           timestamp: r.timestamp ?? Date.now(),
           toolEvents: (r.tool_events as ToolEvent[]) ?? [],
           progressLines: r.progress_lines ?? [],
+          // Split WITHOUT dropping empty segments — block indices must stay
+          // aligned with each tool's reasoningCutoff (empty sentinels are
+          // skipped at render time instead).
           reasoningBlocks: (typeof r.reasoning === "string" && r.reasoning)
-            ? r.reasoning.split("\n---\n").filter(Boolean)
+            ? r.reasoning.split("\n---\n")
             : undefined,
           agentState: r.agent_state ?? undefined,
           customEvents: (r.custom_events as Array<{ name: string; value: unknown }>) ?? [],

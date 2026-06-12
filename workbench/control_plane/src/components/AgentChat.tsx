@@ -447,7 +447,9 @@ export default function AgentChat({
         timestamp: m.timestamp,
         tool_events: m.toolEvents ?? [],
         progress_lines: m.progressLines ?? [],
-        reasoning: m.reasoningBlocks ?? null,
+        reasoning: m.reasoningBlocks && m.reasoningBlocks.length > 0
+          ? m.reasoningBlocks.join("\n---\n")
+          : null,
         agent_state: m.agentState ?? null,
         custom_events: m.customEvents ?? [],
       }));

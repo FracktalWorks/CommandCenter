@@ -30,6 +30,9 @@ export interface ToolEvent {
   status: "running" | "done" | "error";
   startedAt?: number;
   endedAt?: number;
+  /** Number of reasoning blocks that existed when this tool started —
+   *  drives chronological interleaving in the ThinkingContainer timeline. */
+  reasoningCutoff?: number;
   /** Set when this tool is a call_agent delegation — the target agent name. */
   subAgentName?: string;
   /** Live streaming text from the sub-agent (appended as it streams). */

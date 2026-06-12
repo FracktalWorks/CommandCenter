@@ -1486,10 +1486,15 @@ async def run_agent_stream(
                 if _agent_runtime == "github-copilot" and thread_id:
                     try:
                         _last_sid = await agent._client.get_last_session_id()
+                        _log.info(
+                            "executor.store_copilot_session",
+                            thread_id=thread_id[:12],
+                            sid=str(_last_sid)[:12] if _last_sid else "None",
+                        )
                         if _last_sid:
                             _store_session_id(thread_id, _last_sid)
                     except Exception:  # noqa: BLE001
-                        pass
+                        _log.exception("executor.store_session_failed")
 
                 await _detect_agent_commits(
                     agent_name, str(loaded.agent_dir), run_id,

@@ -94,7 +94,7 @@ class MemoryClient:
                     "config": {
                         "model": "text-embedding-3-small",
                         "api_key": litellm_key,
-                        "base_url": litellm_url,
+                        "openai_base_url": litellm_url,
                         "embedding_dims": 1536,
                     },
                 },

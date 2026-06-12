@@ -278,9 +278,27 @@ async def test_cross_session_memory(client: httpx.AsyncClient) -> None:
 
     ok(f"Session 1 deposit ({len(text1)} chars)")
 
-    # Wait for post-stream memory extraction to complete
-    print("  Waiting 10s for Mem0 extraction...")
-    await asyncio.sleep(10)
+    # Manually trigger Mem0 extraction (mirrors what the Next.js proxy does).
+    # In production, route.ts calls this automatically after the stream ends.
+    conv = [
+        {"role": "user", "content": msg1},
+        {"role": "assistant", "content": text1},
+    ]
+    print("  Triggering Mem0 extraction...")
+    try:
+        r = await client.post(
+            f"{GATEWAY}/memory/{user_id}/add",
+            json={"messages": conv, "agent_id": "orchestrator"},
+            headers=AUTH,
+            timeout=httpx.Timeout(30),
+        )
+        print(f"  Extraction status: {r.status_code} - {r.text[:100]}")
+    except Exception as e:
+        print(f"  Extraction error: {e}")
+
+    # Wait for async extraction to complete
+    print("  Waiting 5s for Mem0 processing...")
+    await asyncio.sleep(5)
 
     # Check Mem0 has stored facts
     memories = await check_memories(client, user_id)

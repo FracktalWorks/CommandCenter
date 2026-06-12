@@ -433,7 +433,7 @@ function SessionList({
                         e.stopPropagation();
                         onDelete(s.id);
                       }}
-                      className="ml-2 mt-0.5 shrink-0 rounded p-0.5 text-zinc-600 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all text-[10px]"
+                      className="ml-2 mt-0.5 shrink-0 rounded p-0.5 text-zinc-600 hover:text-red-400 transition-colors text-[10px]"
                       title="Delete session"
                     >
                       ✕

@@ -86,7 +86,7 @@ class MemoryClient:
                     "config": {
                         "model": "openai/tier1-haiku",
                         "api_key": litellm_key,
-                        "base_url": litellm_url,
+                        "openai_base_url": litellm_url,
                     },
                 },
                 "embedder": {

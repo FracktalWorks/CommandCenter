@@ -69,22 +69,12 @@ class MemoryClient:
             litellm_url: str = settings.litellm_base_url
             litellm_key: str = settings.litellm_master_key
 
-            # Resolve working LLM endpoint for Mem0 fact extraction.
-            # Priority: OpenAI > DeepSeek > configured LiteLLM URL.
-            oai_key = os.environ.get("OPENAI_API_KEY", "").strip()
-            ds_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-            if oai_key:
-                _llm_url = "https://api.openai.com/v1"
-                _llm_key = oai_key
-                _llm_model = "gpt-4o-mini"
-            elif ds_key:
-                _llm_url = "https://api.deepseek.com/v1"
-                _llm_key = ds_key
-                _llm_model = "deepseek-chat"
-            else:
-                _llm_url = litellm_url
-                _llm_key = litellm_key
-                _llm_model = "tier-fast"
+            # Use the gateway's /v1/chat/completions endpoint (LiteLLM tiers).
+            # tier-fast = DeepSeek, tier-balanced = Gemini Flash, etc.
+            # No OPENAI_API_KEY needed — the gateway handles routing.
+            _llm_url = litellm_url.rstrip("/") + "/v1"
+            _llm_key = litellm_key
+            _llm_model = "tier-fast"
 
             config: dict[str, Any] = {
                 "vector_store": {

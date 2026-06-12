@@ -106,8 +106,12 @@ class MemoryClient:
             _log.info("mem0.client_ready", backend="pgvector")
             return self._client
 
-        except ImportError:
-            _log.warning("mem0.not_installed", hint="pip install mem0ai")
+        except ImportError as exc:
+            _log.warning(
+                "mem0.not_installed",
+                hint="pip install mem0ai",
+                error=str(exc)[:200],
+            )
             return None
         except Exception as exc:  # noqa: BLE001
             _log.warning("mem0.init_failed", error=str(exc)[:200])

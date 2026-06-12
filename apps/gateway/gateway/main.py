@@ -466,6 +466,46 @@ async def chat_completions(
         )
 
 
+class EmbeddingRequest(BaseModel):
+    model: str = "text-embedding-3-small"
+    input: str | list[str]
+
+@app.post("/v1/embeddings", tags=["openai"])
+async def embeddings(
+    req: EmbeddingRequest,
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    """OpenAI-compatible embeddings endpoint.
+    
+    When OPENAI_API_KEY is available, proxies to the real OpenAI API.
+    Otherwise returns a dummy embedding (zero-vector of 1536 dims) so
+    Mem0's add() can complete — facts are stored without semantic search.
+    """
+    oai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if oai_key:
+        from openai import OpenAI  # noqa: PLC0415
+        client = OpenAI(api_key=oai_key)
+        inputs = req.input if isinstance(req.input, list) else [req.input]
+        resp = client.embeddings.create(model=req.model, input=inputs)
+        return resp.model_dump()
+    # Dummy embedding: 1536-dimensional zero vector.
+    inputs = req.input if isinstance(req.input, list) else [req.input]
+    dummy = [0.0] * 1536
+    return {
+        "object": "list",
+        "model": req.model,
+        "data": [
+            {
+                "object": "embedding",
+                "index": i,
+                "embedding": dummy,
+            }
+            for i in range(len(inputs))
+        ],
+        "usage": {"prompt_tokens": 0, "total_tokens": 0},
+    }
+
+
 
 # ---------- Copilot models ----------
 # Returns the list of models available via the GitHub Copilot SDK.

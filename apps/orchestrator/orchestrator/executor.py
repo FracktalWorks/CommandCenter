@@ -2256,6 +2256,12 @@ def _build_event_message(
     # preserves full context even when switching between CLI / BYOK / MAF paths.
     history: list[dict[str, str]] = event_payload.get("messages") or []
     current_msg = event_payload.get("message") or event_payload.get("user_query") or ""
+
+    # Memory context (pre-enriched by the route handler from Mem0) —
+    # inject as a system-level preamble so Tier 2 agents also benefit.
+    memory_ctx = event_payload.get("memory_context") or ""
+    if memory_ctx:
+        parts.append("## Memory from past conversations\n" + memory_ctx)
     if history:
         history_lines: list[str] = []
         # Cap at last 20 messages (10 exchanges) to avoid context/payload limits.

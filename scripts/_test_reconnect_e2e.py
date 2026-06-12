@@ -44,7 +44,10 @@ async def main() -> None:
     print(f"=== Phase 1: start run (agent={agent}, thread={tid}) ===")
     seen_before_disconnect = 0
     last_event_id = None
-    async with httpx.AsyncClient(timeout=120) as client:
+    # Generous read timeout: github-copilot agents cold-start slowly on the
+    # VPS (repo clone + Copilot SDK session) before the first SSE event.
+    _timeout = httpx.Timeout(connect=30, read=300, write=30, pool=30)
+    async with httpx.AsyncClient(timeout=_timeout) as client:
         async with client.stream(
             "POST", f"{BASE}/agent/run/stream",
             json={"agent": agent, "payload": {"message": prompt}, "thread_id": tid},

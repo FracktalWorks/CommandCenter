@@ -100,7 +100,6 @@ class MemoryClient:
                         "user": pg_user,
                         "password": pg_pass,
                         "collection_name": "mem0_memories",
-                        "embedding_model_dims": 1536,
                     },
                 },
                 "llm": {
@@ -117,7 +116,8 @@ class MemoryClient:
                         "model": "text-embedding-3-small",
                         "api_key": _emb_key,
                         "openai_base_url": _emb_url,
-                        "embedding_dims": 1536,
+                        # Groq API doesn't support OpenAI's "dimensions"
+                        # parameter — omit it and rely on the model default.
                     },
                 },
                 # Store raw history in Postgres too (optional, for audit)

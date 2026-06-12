@@ -1482,7 +1482,9 @@ async def run_agent_stream(
                     yield _sse({"type": "TEXT_MESSAGE_END", "messageId": _msg_id})
                 yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
 
-                # Save Copilot session ID for continuity on next request.
+                # ── Save Copilot session ID BEFORE agent context exits ──
+                # The CopilotClient disconnects when async with agent: exits,
+                # so capture the session ID while still inside the block.
                 if _agent_runtime == "github-copilot" and thread_id:
                     try:
                         _last_sid = await agent._client.get_last_session_id()

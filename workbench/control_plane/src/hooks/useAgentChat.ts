@@ -235,6 +235,14 @@ export function useAgentChat({
               case "progress":
                 upd((m) => ({ ...m, progressLines: [...(m.progressLines ?? []), String(evt.name ?? "Working")] }));
                 break;
+              case "todos":
+                upd((m) => ({
+                  ...m,
+                  todos: Array.isArray(evt.todos)
+                    ? (evt.todos as { id: string; title: string; status: string }[])
+                    : m.todos,
+                }));
+                break;
               case "reasoning":
                 upd((m) => {
                   const chunk = String(evt.content ?? "");

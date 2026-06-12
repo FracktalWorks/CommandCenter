@@ -28,6 +28,7 @@ import asyncio
 import contextvars
 import json
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -106,6 +107,81 @@ def _tee_sse_line(line: str) -> None:
             else None
         )
     )
+
+
+# ── Todo-list tracking (VS Code Copilot parity) ────────────────────────────
+# The Copilot CLI manages the agent's plan via its built-in `sql` tool
+# against a `todos` table (INSERT INTO todos ... / UPDATE todos SET status).
+# VS Code renders its Todos panel by tracking those mutations; we do the
+# same: parse the SQL in TOOL_CALL args and emit structured TODO_LIST
+# events the frontend can render.
+
+_TODO_INSERT_RE = re.compile(
+    r"INSERT\s+INTO\s+todos\b.*?VALUES\s*(.+)",
+    re.I | re.S,
+)
+_TODO_ROW_RE = re.compile(
+    r"\(\s*'((?:[^']|'')*)'\s*,\s*'((?:[^']|'')*)'\s*,"
+    r"\s*'((?:[^']|'')*)'\s*,\s*'((?:[^']|'')*)'\s*\)",
+    re.S,
+)
+_TODO_UPDATE_RE = re.compile(
+    r"UPDATE\s+todos\s+SET\s+status\s*=\s*'([^']+)'"
+    r"(?:.*?WHERE\s+id\s*(?:=\s*'([^']+)'|IN\s*\(([^)]+)\)))?",
+    re.I | re.S,
+)
+
+
+class _TodoTracker:
+    """Accumulates todo state from the CLI's sql-tool mutations."""
+
+    def __init__(self) -> None:
+        self.items: dict[str, dict[str, str]] = {}
+        self.order: list[str] = []
+
+    def feed(self, tool_name: str, args: Any) -> bool:
+        """Parse a tool call; return True if todo state changed."""
+        if tool_name != "sql":
+            return False
+        query = ""
+        if isinstance(args, dict):
+            query = str(args.get("query") or "")
+        elif isinstance(args, str):
+            try:
+                query = str(json.loads(args).get("query") or "")
+            except (json.JSONDecodeError, AttributeError):
+                query = args
+        if "todos" not in query.lower():
+            return False
+        changed = False
+        m = _TODO_INSERT_RE.search(query)
+        if m:
+            for row in _TODO_ROW_RE.finditer(m.group(1)):
+                tid, title, _desc, status = (
+                    v.replace("''", "'") for v in row.groups()
+                )
+                if tid not in self.items:
+                    self.order.append(tid)
+                self.items[tid] = {"id": tid, "title": title,
+                                   "status": status or "pending"}
+                changed = True
+        for m in _TODO_UPDATE_RE.finditer(query):
+            status, single_id, in_list = m.groups()
+            ids: list[str] = []
+            if single_id:
+                ids = [single_id]
+            elif in_list:
+                ids = [s.strip().strip("'") for s in in_list.split(",")]
+            else:
+                ids = list(self.order)  # UPDATE without WHERE = all
+            for tid in ids:
+                if tid in self.items:
+                    self.items[tid]["status"] = status
+                    changed = True
+        return changed
+
+    def snapshot(self) -> list[dict[str, str]]:
+        return [self.items[tid] for tid in self.order if tid in self.items]
 
 
 def _build_injected_tools_addendum() -> str:
@@ -1265,6 +1341,7 @@ async def run_agent_stream(
 
                 _msg_id: str | None = None
                 _text_started = False
+                _todo_tracker = _TodoTracker()
 
                 try:
                     async with agent:
@@ -1321,6 +1398,14 @@ async def run_agent_stream(
                                     _tc_args = _c.arguments
                                     _args_str = (json.dumps(_tc_args) if isinstance(_tc_args, dict)
                                                  else str(_tc_args or ""))
+                                    # Track CLI todo mutations (sql tool on
+                                    # the todos table) → structured panel.
+                                    try:
+                                        if _todo_tracker.feed(_tc_name, _tc_args):
+                                            yield _sse({"type": "TODO_LIST",
+                                                        "todos": _todo_tracker.snapshot()})
+                                    except Exception:  # noqa: BLE001
+                                        pass
                                     yield _sse({"type": "TOOL_CALL_START",
                                                 "toolCallId": _tc_id,
                                                 "toolCallName": _tc_name,

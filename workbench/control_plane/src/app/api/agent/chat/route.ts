@@ -215,6 +215,9 @@ async function translateAndPersistStream(
             if (progressLines.length > 20) progressLines.shift();
           }
           out = { type: "progress", name: msg };
+        } else if (t === "TODO_LIST") {
+          // Structured todo list (VS Code Todos panel parity).
+          out = { type: "todos", todos: ev.todos ?? [] };
         } else if (t === "TOOL_CALL_START") {
           const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
           toolNames[String(ev.toolCallId ?? "")] = name;

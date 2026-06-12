@@ -26,6 +26,7 @@ import type { FileEntry } from "@/components/ArtifactSidebar";
 import FileUploadButton from "@/components/FileUploadButton";
 import SuggestionPills from "@/components/SuggestionPills";
 import ConfirmationCard from "@/components/ConfirmationCard";
+import TodoPanel from "@/components/TodoPanel";
 import { parseAgentError } from "@/lib/parseAgentError";
 import type { ParsedAgentError } from "@/lib/parseAgentError";
 import { getMessages, saveMessages, fetchMessagesFromDb, type PersistedMessage } from "@/lib/sessions";
@@ -882,6 +883,17 @@ export default function AgentChat({
 
       {/* ── Input area + VS Code-style bottom bar ─────────────────────── */}
       <form onSubmit={handleSubmit} className="shrink-0 border-t border-zinc-800/60 bg-zinc-900/50 px-3 sm:px-4 pt-2 pb-2.5">
+        {/* VS Code-style Todos panel — latest assistant turn's todo list */}
+        {(() => {
+          for (let i = messages.length - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m.role === "assistant" && m.todos && m.todos.length > 0) {
+              return <TodoPanel todos={m.todos} running={!!m.streaming} />;
+            }
+            if (m.role === "user") break; // only the current turn's todos
+          }
+          return null;
+        })()}
         {queuedCount > 0 && (
           <div className="max-w-3xl mx-auto mb-2 flex items-center gap-2 text-[11px] text-amber-400">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />

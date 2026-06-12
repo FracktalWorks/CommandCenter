@@ -53,6 +53,8 @@ export interface ChatMessage {
   isThinkingActive?: boolean;
   /** Sequential reasoning blocks — each displayed as a separate timeline entry. */
   reasoningBlocks?: string[];
+  /** Agent's structured todo list (VS Code Todos panel parity). */
+  todos?: { id: string; title: string; status: string }[];
   agentState?: Record<string, unknown>;
   customEvents?: { name: string; value: unknown }[];
 }

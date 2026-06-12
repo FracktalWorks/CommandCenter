@@ -357,10 +357,10 @@ function SessionList({
   }
 
   return (
-    <div className="flex flex-col gap-0.5">
+    <div className="flex flex-col gap-1">
       <button
         onClick={onNew}
-        className="mb-1 w-full rounded-md bg-zinc-800 px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 transition-colors"
+        className="mb-2 w-full rounded-md bg-zinc-800 px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 transition-colors"
       >
         + New session
       </button>
@@ -371,7 +371,7 @@ function SessionList({
         const count = agentSessions.length;
 
         return (
-          <div key={agentName} className="mb-0.5">
+          <div key={agentName} className="mb-1">
             {/* Accordion header */}
             <button
               onClick={() => toggleAgent(agentName)}
@@ -401,30 +401,30 @@ function SessionList({
 
             {/* Sessions for this agent */}
             {!isCollapsed && (
-              <div className="ml-2 border-l border-zinc-800/60 pl-2">
+              <div className="mt-1 ml-2.5 flex flex-col gap-1 border-l border-zinc-800/60 pl-2">
                 {agentSessions.map((s) => (
                   <div
                     key={s.id}
-                    className={`group flex items-start justify-between rounded-md px-2 py-1.5 cursor-pointer transition-colors ${
+                    className={`group flex items-start justify-between rounded-md px-2.5 py-2 cursor-pointer transition-colors ${
                       s.id === activeId
                         ? "bg-zinc-800 text-white"
                         : "text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-100"
                     }`}
                     onClick={() => onSelect(s.id)}
                   >
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs font-medium flex items-center gap-1.5">
+                    <div className="min-w-0 flex-1 space-y-0.5">
+                      <div className="truncate text-xs font-medium leading-snug flex items-center gap-1.5">
                         {activeRunIds.has(s.id) && (
                           <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" title="Agent is generating a response" />
                         )}
-                        {s.title ?? s.name}
+                        <span className="truncate">{s.title ?? s.name}</span>
                       </div>
                       {s.lastPreview ? (
-                        <div className="truncate text-[10px] text-zinc-500">
+                        <div className="truncate text-[10px] leading-snug text-zinc-500">
                           {s.lastPreview}
                         </div>
                       ) : null}
-                      <div className="text-[10px] text-zinc-600">
+                      <div className="text-[10px] leading-snug text-zinc-600">
                         {s.messageCount > 0 ? `${s.messageCount} msgs` : "New"}
                       </div>
                     </div>
@@ -433,7 +433,7 @@ function SessionList({
                         e.stopPropagation();
                         onDelete(s.id);
                       }}
-                      className="ml-1 shrink-0 text-zinc-600 hover:text-red-400 transition-colors text-[10px]"
+                      className="ml-2 mt-0.5 shrink-0 rounded p-0.5 text-zinc-600 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all text-[10px]"
                       title="Delete session"
                     >
                       ✕

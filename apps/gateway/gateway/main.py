@@ -430,7 +430,11 @@ async def copilot_models() -> dict:
     if _copilot_models_cache["data"] is not None and (_now - _copilot_models_cache["ts"]) < _COPILOT_MODELS_CACHE_TTL:
         return _copilot_models_cache["data"]
     settings = get_settings()
-    github_token: str = getattr(settings, "github_token", "") or os.environ.get("GITHUB_TOKEN", "")
+    github_token: str = (
+        os.environ.get("COPILOT_GITHUB_TOKEN", "")
+        or getattr(settings, "github_token", "")
+        or os.environ.get("GITHUB_TOKEN", "")
+    )
     if github_token:
         try:
             os.environ.setdefault("GITHUB_TOKEN", github_token)

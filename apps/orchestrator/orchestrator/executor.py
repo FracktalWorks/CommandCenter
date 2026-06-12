@@ -1203,6 +1203,9 @@ async def run_agent_stream(
                 from orchestrator.copilot_agent import CommandCenterCopilotAgent  # noqa: PLC0415
 
                 # Patch the loaded agent with enhanced BYOK + streaming methods.
+                agent.start = CommandCenterCopilotAgent.start.__get__(
+                    agent, type(agent)
+                )
                 agent._create_session = CommandCenterCopilotAgent._create_session.__get__(
                     agent, type(agent)
                 )
@@ -1525,6 +1528,15 @@ async def run_agent_stream(
                             _log_level = _agent_settings.get("log_level")
                             if _log_level:
                                 _cli_opts["log_level"] = _log_level
+                            # Headless auth: explicit Copilot token (servers
+                            # have no logged-in copilot CLI user).
+                            _cop_tok = (
+                                os.environ.get("COPILOT_GITHUB_TOKEN")
+                                or os.environ.get("GITHUB_COPILOT_TOKEN")
+                                or ""
+                            ).strip()
+                            if _cop_tok:
+                                _cli_opts["github_token"] = _cop_tok
                             agent._client = _CopilotClient(_cli_opts if _cli_opts else None)
                             agent._owns_client = True
                     except Exception:  # noqa: BLE001

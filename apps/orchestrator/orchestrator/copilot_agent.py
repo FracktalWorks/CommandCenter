@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 from typing import Any, AsyncIterable
 
 from agent_framework import AgentResponseUpdate, Content, Message
 from agent_framework.exceptions import AgentException
 from agent_framework_github_copilot import GitHubCopilotAgent
-from copilot import CopilotSession, SessionEvent
+from copilot import CopilotClient, CopilotSession, SessionEvent
 from copilot.session import SessionEventType
 
 logger = logging.getLogger(__name__)
@@ -23,7 +24,35 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
        partial terminal output, agent intent/status
     3. Store ``raw_representation`` on every AgentResponseUpdate for
        downstream AG-UI event translation
+    4. Headless auth: pass COPILOT_GITHUB_TOKEN explicitly to the Copilot
+       CLI (servers have no logged-in ``copilot`` CLI user)
     """
+
+    async def start(self) -> None:
+        """Start the Copilot client with explicit token auth when available.
+
+        The upstream GitHubCopilotAgent.start() relies on the CLI's
+        logged-in user, which does not exist on headless servers.  When
+        COPILOT_GITHUB_TOKEN (preferred) or GITHUB_COPILOT_TOKEN is set,
+        construct the client with ``github_token`` so the SDK forwards it
+        as COPILOT_SDK_AUTH_TOKEN to the CLI subprocess.
+        """
+        token = (
+            os.environ.get("COPILOT_GITHUB_TOKEN")
+            or os.environ.get("GITHUB_COPILOT_TOKEN")
+            or ""
+        ).strip()
+        if self._client is None and token:
+            client_options: dict[str, Any] = {"github_token": token}
+            cli_path = self._settings.get("cli_path")
+            if cli_path:
+                client_options["cli_path"] = cli_path
+            log_level = self._settings.get("log_level")
+            if log_level:
+                client_options["log_level"] = log_level
+            self._client = CopilotClient(client_options)
+            logger.info("Copilot client using explicit token auth")
+        await super().start()
 
     async def _create_session(
         self,

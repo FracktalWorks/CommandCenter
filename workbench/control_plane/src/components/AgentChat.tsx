@@ -711,21 +711,6 @@ export default function AgentChat({
     { mode: "max", label: "Max", title: "Maximum effort / deeper reasoning" },
   ];
 
-  // ── Todos (VS Code Copilot-style collapsible section) ──────────────
-  const [todosExpanded, setTodosExpanded] = useState(true);
-  // Derive todos from tool events in the latest assistant message
-  const todos = useMemo(() => {
-    const lastAsst = [...messages].reverse().find((m) => m.role === "assistant");
-    if (!lastAsst?.toolEvents) return [];
-    return lastAsst.toolEvents.map((t) => ({
-      id: t.id,
-      label: t.name.replace(/_/g, " "),
-      done: t.status === "done" || t.status === "error",
-      error: t.status === "error",
-    }));
-  }, [messages]);
-  const doneCount = todos.filter((t) => t.done).length;
-
   return (
     <div className="flex flex-col h-full bg-zinc-950">
       {/* Agent header — VS Code-style minimal bar */}
@@ -752,40 +737,6 @@ export default function AgentChat({
           <span className="text-amber-400">⚡</span>
           <span className="text-amber-300/80">{missingMandatory.length} integration{missingMandatory.length > 1 ? "s" : ""} not configured</span>
           <button onClick={() => setBannerDismissed(true)} className="ml-auto w-5 h-5 flex items-center justify-center rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors">✕</button>
-        </div>
-      )}
-
-      {/* ── Todos section (VS Code Copilot style) ────────────────────── */}
-      {todos.length > 0 && (
-        <div className="shrink-0 border-b border-zinc-800/60 bg-zinc-900/30">
-          <button
-            onClick={() => setTodosExpanded((v) => !v)}
-            className="w-full flex items-center gap-2 px-4 py-1.5 text-[11px] text-zinc-400 hover:text-zinc-200 transition-colors"
-          >
-            <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"
-              className={`shrink-0 transition-transform ${todosExpanded ? "rotate-0" : "-rotate-90"}`}>
-              <path d="M4 6l4 4 4-4" />
-            </svg>
-            <span className="font-medium">Todos</span>
-            <span className="text-zinc-600">{doneCount}/{todos.length}</span>
-            {/* mini progress bar */}
-            <span className="ml-1 flex-1 max-w-[120px] h-1 rounded-full bg-zinc-800 overflow-hidden">
-              <span className="block h-full bg-emerald-500/70 transition-all"
-                style={{ width: `${todos.length ? (doneCount / todos.length) * 100 : 0}%` }} />
-            </span>
-          </button>
-          {todosExpanded && (
-            <div className="px-4 sm:px-9 pb-2 space-y-1">
-              {todos.map((t) => (
-                <div key={t.id} className="flex items-center gap-2 text-[11px]">
-                  <span className={`shrink-0 ${t.done ? (t.error ? "text-red-400" : "text-emerald-400") : "text-zinc-600"}`}>
-                    {t.done ? (t.error ? "✗" : "✓") : "○"}
-                  </span>
-                  <span className={`truncate ${t.done ? "text-zinc-500" : "text-zinc-300"}`}>{t.label}</span>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
 

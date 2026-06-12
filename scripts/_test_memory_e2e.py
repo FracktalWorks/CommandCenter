@@ -138,9 +138,11 @@ async def orchestrator_chat(
             t = evt.get("type")
             if t == "TEXT_MESSAGE_CONTENT":
                 assistant_text += evt.get("delta", "")
-            elif t == "RUN_ERROR":
-                bad(f"Orchestrator error: {evt.get('message', '')}")
-                raise RuntimeError(evt.get("message", "Unknown error"))
+            elif t in ("RUN_ERROR", "RUN_FAILED"):
+                bad(f"Orchestrator error: {evt.get('message', evt.get('error', ''))}")
+                raise RuntimeError(str(evt.get("message", evt.get("error", "Unknown"))))
+            elif t in ("RUN_FINISHED", "done"):
+                break
     return assistant_text, tid
 
 

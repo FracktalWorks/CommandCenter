@@ -1316,13 +1316,23 @@ async def run_agent_stream(
                         _opts = agent.default_options
                         if isinstance(_opts, dict):
                             _existing = (
-                                _opts.get("system_message")
-                                or _opts.get("instructions")
+                                _opts.get("instructions")
+                                or _opts.get("system_message")
                                 or ""
                             )
-                            _opts["system_message"] = (
+                            _merged = (
                                 f"{_existing}\n\n{_memory_context}"
                             )
+                            # MAF Agent base class uses "instructions"
+                            _opts["instructions"] = _merged
+                            # GitHubCopilotAgent uses "system_message" in
+                            # a SEPARATE _default_options dict — inject
+                            # there too so _create_session reads it.
+                            _copilot_opts = getattr(
+                                agent, "_default_options", None
+                            )
+                            if isinstance(_copilot_opts, dict):
+                                _copilot_opts["system_message"] = _merged
                     except Exception:  # noqa: BLE001
                         pass
 

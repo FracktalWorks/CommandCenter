@@ -98,25 +98,24 @@ class MemoryClient:
                 },
                 "history_db_path": "",
             }
-            # Embeddings: only configure when OPENAI_API_KEY is set.
-            # Without embeddings, facts are stored as text-only (no
-            # vector search) — Mem0 still extracts + stores facts via
-            # the LLM, which is sufficient for context injection.
+            # Embeddings: Mem0 requires an embedder at init.  Supply a
+            # dummy key when OPENAI_API_KEY is not set so the embedder
+            # initialises.  add() extracts facts via the LLM first, then
+            # attempts embedding — extraction succeeds even if embedding
+            # fails with a dummy key.
             oai_key = os.environ.get("OPENAI_API_KEY", "").strip()
-            if oai_key:
-                config["embedder"] = {
-                    "provider": "openai",
-                    "config": {
-                        "model": "text-embedding-3-small",
-                        "api_key": oai_key,
-                        "openai_base_url": "https://api.openai.com/v1",
-                    },
-                }
-            else:
-                _log.info(
-                    "mem0.embedder_skipped",
-                    hint="Set OPENAI_API_KEY for vector search",
-                )
+            config["embedder"] = {
+                "provider": "openai",
+                "config": {
+                    "model": "text-embedding-3-small",
+                    "api_key": oai_key or "sk-dummy-for-init",
+                    "openai_base_url": (
+                        "https://api.openai.com/v1"
+                        if oai_key
+                        else _llm_url
+                    ),
+                },
+            }
 
             self._client = _Mem0Memory.from_config(config_dict=config)
             _log.info("mem0.client_ready", backend="pgvector")

@@ -70,9 +70,11 @@ class MemoryClient:
             litellm_key: str = settings.litellm_master_key
 
             # Resolve a working OpenAI-compatible endpoint for Mem0.
-            # The gateway's /v1 is not a proxy — use DeepSeek directly
-            # when available, falling back to the configured LiteLLM URL.
+            # The gateway's /v1 is not a proxy — use provider APIs directly.
+            # LLM: DeepSeek (free, works for fact extraction).
+            # Embeddings: Groq (free tier, supports embedding models).
             ds_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+            gr_key = os.environ.get("GROQ_API_KEY", "").strip()
             if ds_key:
                 _llm_url = "https://api.deepseek.com/v1"
                 _llm_key = ds_key
@@ -81,6 +83,12 @@ class MemoryClient:
                 _llm_url = litellm_url
                 _llm_key = litellm_key
                 _llm_model = "tier-fast"
+            if gr_key:
+                _emb_url = "https://api.groq.com/openai/v1"
+                _emb_key = gr_key
+            else:
+                _emb_url = _llm_url
+                _emb_key = _llm_key
 
             config: dict[str, Any] = {
                 "vector_store": {
@@ -107,8 +115,8 @@ class MemoryClient:
                     "provider": "openai",
                     "config": {
                         "model": "text-embedding-3-small",
-                        "api_key": _llm_key,
-                        "openai_base_url": _llm_url,
+                        "api_key": _emb_key,
+                        "openai_base_url": _emb_url,
                         "embedding_dims": 1536,
                     },
                 },

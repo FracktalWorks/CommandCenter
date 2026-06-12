@@ -18,6 +18,7 @@ Typical usage:
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from functools import lru_cache
 from typing import Any
@@ -68,6 +69,19 @@ class MemoryClient:
             litellm_url: str = settings.litellm_base_url
             litellm_key: str = settings.litellm_master_key
 
+            # Resolve a working OpenAI-compatible endpoint for Mem0.
+            # The gateway's /v1 is not a proxy — use DeepSeek directly
+            # when available, falling back to the configured LiteLLM URL.
+            ds_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+            if ds_key:
+                _llm_url = "https://api.deepseek.com/v1"
+                _llm_key = ds_key
+                _llm_model = "deepseek-chat"
+            else:
+                _llm_url = litellm_url
+                _llm_key = litellm_key
+                _llm_model = "tier-fast"
+
             config: dict[str, Any] = {
                 "vector_store": {
                     "provider": "pgvector",
@@ -84,17 +98,17 @@ class MemoryClient:
                 "llm": {
                     "provider": "openai",
                     "config": {
-                        "model": "tier-fast",
-                        "api_key": litellm_key,
-                        "openai_base_url": litellm_url,
+                        "model": _llm_model,
+                        "api_key": _llm_key,
+                        "openai_base_url": _llm_url,
                     },
                 },
                 "embedder": {
                     "provider": "openai",
                     "config": {
                         "model": "text-embedding-3-small",
-                        "api_key": litellm_key,
-                        "openai_base_url": litellm_url,
+                        "api_key": _llm_key,
+                        "openai_base_url": _llm_url,
                         "embedding_dims": 1536,
                     },
                 },

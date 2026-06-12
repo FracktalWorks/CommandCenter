@@ -52,7 +52,10 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                 client_options["log_level"] = log_level
             self._client = CopilotClient(client_options)
             logger.info("Copilot client using explicit token auth")
-        await super().start()
+        # Explicit base call (not super()): this method is monkey-patched
+        # onto plain GitHubCopilotAgent instances, where zero-arg super()
+        # raises "obj must be an instance or subtype of type".
+        await GitHubCopilotAgent.start(self)
 
     async def _create_session(
         self,

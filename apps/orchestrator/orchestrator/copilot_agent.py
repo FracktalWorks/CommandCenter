@@ -166,6 +166,11 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
         # duplicate full-content ASSISTANT_REASONING event at block end.
         _streamed_reasoning_ids: set[str] = set()
 
+        # Message IDs already streamed as deltas — used to skip the
+        # duplicate full-content ASSISTANT_MESSAGE event at turn end.
+        # Without this, the agent reply appears twice in the UI.
+        _streamed_message_ids: set[str] = set()
+
         def _on_event(event: SessionEvent) -> None:
             """Translate Copilot SDK events to AgentResponseUpdate objects."""
             try:
@@ -174,6 +179,12 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
 
                 if t == SessionEventType.ASSISTANT_MESSAGE_DELTA:
                     if d.delta_content:
+                        _mid = (
+                            getattr(d, "message_id", None)
+                            or getattr(d, "id", None)
+                            or "_default"
+                        )
+                        _streamed_message_ids.add(str(_mid))
                         queue.put_nowait(AgentResponseUpdate(
                             role="assistant",
                             contents=[Content.from_text(d.delta_content)],
@@ -293,7 +304,14 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
 
                 elif t == SessionEventType.ASSISTANT_MESSAGE:
                     content = getattr(d, "content", "") or ""
-                    if content:
+                    _mid = (
+                        getattr(d, "message_id", None)
+                        or getattr(d, "id", None)
+                        or "_default"
+                    )
+                    # Skip if this message already streamed as deltas —
+                    # emitting it again would duplicate the assistant reply.
+                    if content and str(_mid) not in _streamed_message_ids:
                         queue.put_nowait(AgentResponseUpdate(
                             role="assistant",
                             contents=[Content.from_text(content)],

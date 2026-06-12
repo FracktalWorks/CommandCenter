@@ -1315,8 +1315,14 @@ async def run_agent_stream(
                     try:
                         _opts = agent.default_options
                         if isinstance(_opts, dict):
-                            _existing = _opts.get("instructions") or ""
-                            _opts["instructions"] = f"{_existing}\n\n{_memory_context}"
+                            _existing = (
+                                _opts.get("system_message")
+                                or _opts.get("instructions")
+                                or ""
+                            )
+                            _opts["system_message"] = (
+                                f"{_existing}\n\n{_memory_context}"
+                            )
                     except Exception:  # noqa: BLE001
                         pass
 

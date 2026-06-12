@@ -1473,6 +1473,24 @@ async def run_agent_stream(
                                                         "toolCallName": _intent})
                                 except Exception:  # noqa: BLE001
                                     pass
+
+                        # ── Save Copilot session ID before context exits ──
+                        # The CopilotClient is closed when async with agent:
+                        # exits.  Capture the session ID while still inside
+                        # the context manager block.
+                        if _agent_runtime == "github-copilot" and thread_id:
+                            try:
+                                _last_sid = await agent._client.get_last_session_id()
+                                _log.info(
+                                    "executor.store_copilot_session",
+                                    thread_id=thread_id[:12],
+                                    sid=str(_last_sid)[:12] if _last_sid else "None",
+                                )
+                                if _last_sid:
+                                    _store_session_id(thread_id, _last_sid)
+                            except Exception:  # noqa: BLE001
+                                _log.exception("executor.store_session_failed")
+
                 except Exception as _exc:  # noqa: BLE001
                     _log.exception("executor.copilot_maf_stream_error", agent=agent_name)
                     yield _sse({"type": "RUN_ERROR", "runId": run_id, "message": str(_exc)})
@@ -1481,22 +1499,6 @@ async def run_agent_stream(
                 if _msg_id and _text_started:
                     yield _sse({"type": "TEXT_MESSAGE_END", "messageId": _msg_id})
                 yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
-
-                # ── Save Copilot session ID BEFORE agent context exits ──
-                # The CopilotClient disconnects when async with agent: exits,
-                # so capture the session ID while still inside the block.
-                if _agent_runtime == "github-copilot" and thread_id:
-                    try:
-                        _last_sid = await agent._client.get_last_session_id()
-                        _log.info(
-                            "executor.store_copilot_session",
-                            thread_id=thread_id[:12],
-                            sid=str(_last_sid)[:12] if _last_sid else "None",
-                        )
-                        if _last_sid:
-                            _store_session_id(thread_id, _last_sid)
-                    except Exception:  # noqa: BLE001
-                        _log.exception("executor.store_session_failed")
 
                 await _detect_agent_commits(
                     agent_name, str(loaded.agent_dir), run_id,

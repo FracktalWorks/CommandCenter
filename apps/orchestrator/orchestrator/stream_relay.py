@@ -363,14 +363,16 @@ async def run_detached(
                     except Exception:  # noqa: BLE001
                         pass  # never let Redis issues kill the agent run
         except asyncio.CancelledError:
-            try:
-                await push_event(thread_id, {
-                    "type": "RUN_ERROR",
-                    "message": "Run cancelled (superseded)",
-                    "code": "Cancelled",
-                })
-            except Exception:  # noqa: BLE001
-                pass
+            # Do NOT push RUN_ERROR into the stream here.  This task was
+            # cancelled by a new run_detached() call for the same thread
+            # (steer, retry, Quick action).  mark_active(reset=True)
+            # runs in the canceller and wipes the stream — if a RUN_ERROR
+            # lands after that reset, it leaks into the fresh stream and
+            # the frontend treats the new run as a hard failure.
+            #
+            # The canceller already awaits a shielded timeout on this
+            # task, so the `finally` (mark_inactive + pop) will still
+            # execute; the new run takes over cleanly.
             raise
         except Exception as exc:  # noqa: BLE001
             _log.exception(

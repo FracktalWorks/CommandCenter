@@ -347,39 +347,37 @@ async function translateAndPersistStream(
  * of the conversation.
  */
 async function extractMemories(
-  threadId: string,
+  userId: string,
   userMessage: string,
   assistantContent: string,
   history: ChatMessage[],
   agentName: string,
 ): Promise<void> {
-  if (!assistantContent.trim()) return;
+  if (!assistantContent.trim() || !userId) return;
   try {
     const conv: Array<{ role: string; content: string }> = [];
-    // Include prior turns from history
     for (const m of history) {
       if (m.role === "user" || m.role === "assistant") {
         conv.push({ role: m.role, content: m.content });
       }
     }
-    // Append the current turn (may already be in history; deduped server-side)
     if (userMessage) {
       conv.push({ role: "user", content: userMessage });
     }
     conv.push({ role: "assistant", content: assistantContent });
 
-    // Fire-and-forget to the gateway's /memory/{threadId}/add endpoint.
-    // The gateway is authoritative for Mem0 — this avoids the Next.js
-    // process needing direct DB access or Mem0 credentials.
-    await fetch(`${GATEWAY_URL}/memory/${encodeURIComponent(threadId)}/add`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${INTERNAL_TOKEN}`,
+    await fetch(
+      `${GATEWAY_URL}/memory/${encodeURIComponent(userId)}/add`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${INTERNAL_TOKEN}`,
+        },
+        body: JSON.stringify({ messages: conv, agent_id: agentName }),
+        signal: AbortSignal.timeout(10000),
       },
-      body: JSON.stringify({ messages: conv, agent_id: agentName }),
-      signal: AbortSignal.timeout(10000),
-    });
+    );
   } catch {
     // Best-effort: never break the main flow for memory failures
   }
@@ -469,6 +467,13 @@ export async function POST(req: NextRequest): Promise<Response> {
       { status: 400, headers: sseHeaders() }
     );
   }
+
+  // ── Resolve authenticated user for memory extraction ──
+  let userId = "";
+  try {
+    const session = await auth();
+    userId = session?.user?.email ?? "";
+  } catch { /* non-request context — extraction will be skipped */ }
 
   // ── Reconnect path: resume an existing agent stream after disconnect ────
   // When the frontend detects an interrupted stream on mount, it sends
@@ -571,7 +576,7 @@ export async function POST(req: NextRequest): Promise<Response> {
         );
         // Post-stream memory extraction — fires after the full response is
         // known, so Mem0 sees both sides of the conversation.
-        extractMemories(threadId ?? "", message, assistantContent, messages ?? [], agentName);
+        extractMemories(userId, message, assistantContent, messages ?? [], agentName);
       },
     });
     return new Response(translated, { headers: sseHeaders() });
@@ -619,7 +624,7 @@ export async function POST(req: NextRequest): Promise<Response> {
         );
         // Post-stream memory extraction — fires after the full response is
         // known, so Mem0 sees both sides of the conversation.
-        extractMemories(threadId ?? "", message, assistantContent2, messages ?? [], agentName);
+        extractMemories(userId, message, assistantContent2, messages ?? [], agentName);
       },
     });
     return new Response(translated2, { headers: sseHeaders() });

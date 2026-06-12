@@ -69,33 +69,22 @@ class MemoryClient:
             litellm_url: str = settings.litellm_base_url
             litellm_key: str = settings.litellm_master_key
 
-            # Resolve working LLM + embedding endpoints for Mem0.
-            # Priority: OpenAI (when OPENAI_API_KEY is set) > DeepSeek
-            # (LLM only) + Groq (LLM only).  Embeddings REQUIRE an
-            # OpenAI-compatible provider with text-embedding-3-small.
+            # Resolve working LLM endpoint for Mem0 fact extraction.
+            # Priority: OpenAI > DeepSeek > configured LiteLLM URL.
             oai_key = os.environ.get("OPENAI_API_KEY", "").strip()
             ds_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
             if oai_key:
                 _llm_url = "https://api.openai.com/v1"
                 _llm_key = oai_key
                 _llm_model = "gpt-4o-mini"
-                _emb_url = "https://api.openai.com/v1"
-                _emb_key = oai_key
             elif ds_key:
                 _llm_url = "https://api.deepseek.com/v1"
                 _llm_key = ds_key
                 _llm_model = "deepseek-chat"
-                # DeepSeek has no embedding API — skip embeddings.
-                # Mem0 add() will fail at the embedding step, but the
-                # LLM extraction path works if the embedder is a no-op.
-                _emb_url = ""
-                _emb_key = ""
             else:
                 _llm_url = litellm_url
                 _llm_key = litellm_key
                 _llm_model = "tier-fast"
-                _emb_url = ""
-                _emb_key = ""
 
             config: dict[str, Any] = {
                 "vector_store": {
@@ -119,15 +108,25 @@ class MemoryClient:
                 },
                 "history_db_path": "",
             }
-            if _emb_url:
+            # Embeddings: only configure when OPENAI_API_KEY is set.
+            # Without embeddings, facts are stored as text-only (no
+            # vector search) — Mem0 still extracts + stores facts via
+            # the LLM, which is sufficient for context injection.
+            oai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+            if oai_key:
                 config["embedder"] = {
                     "provider": "openai",
                     "config": {
                         "model": "text-embedding-3-small",
-                        "api_key": _emb_key,
-                        "openai_base_url": _emb_url,
+                        "api_key": oai_key,
+                        "openai_base_url": "https://api.openai.com/v1",
                     },
                 }
+            else:
+                _log.info(
+                    "mem0.embedder_skipped",
+                    hint="Set OPENAI_API_KEY for vector search",
+                )
 
             self._client = _Mem0Memory.from_config(config_dict=config)
             _log.info("mem0.client_ready", backend="pgvector")

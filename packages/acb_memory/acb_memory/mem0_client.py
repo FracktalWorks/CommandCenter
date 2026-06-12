@@ -69,26 +69,33 @@ class MemoryClient:
             litellm_url: str = settings.litellm_base_url
             litellm_key: str = settings.litellm_master_key
 
-            # Resolve a working OpenAI-compatible endpoint for Mem0.
-            # The gateway's /v1 is not a proxy — use provider APIs directly.
-            # LLM: DeepSeek (free, works for fact extraction).
-            # Embeddings: Groq (free tier, supports embedding models).
+            # Resolve working LLM + embedding endpoints for Mem0.
+            # Priority: OpenAI (when OPENAI_API_KEY is set) > DeepSeek
+            # (LLM only) + Groq (LLM only).  Embeddings REQUIRE an
+            # OpenAI-compatible provider with text-embedding-3-small.
+            oai_key = os.environ.get("OPENAI_API_KEY", "").strip()
             ds_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-            gr_key = os.environ.get("GROQ_API_KEY", "").strip()
-            if ds_key:
+            if oai_key:
+                _llm_url = "https://api.openai.com/v1"
+                _llm_key = oai_key
+                _llm_model = "gpt-4o-mini"
+                _emb_url = "https://api.openai.com/v1"
+                _emb_key = oai_key
+            elif ds_key:
                 _llm_url = "https://api.deepseek.com/v1"
                 _llm_key = ds_key
                 _llm_model = "deepseek-chat"
+                # DeepSeek has no embedding API — skip embeddings.
+                # Mem0 add() will fail at the embedding step, but the
+                # LLM extraction path works if the embedder is a no-op.
+                _emb_url = ""
+                _emb_key = ""
             else:
                 _llm_url = litellm_url
                 _llm_key = litellm_key
                 _llm_model = "tier-fast"
-            if gr_key:
-                _emb_url = "https://api.groq.com/openai/v1"
-                _emb_key = gr_key
-            else:
-                _emb_url = _llm_url
-                _emb_key = _llm_key
+                _emb_url = ""
+                _emb_key = ""
 
             config: dict[str, Any] = {
                 "vector_store": {
@@ -110,19 +117,17 @@ class MemoryClient:
                         "openai_base_url": _llm_url,
                     },
                 },
-                "embedder": {
+                "history_db_path": "",
+            }
+            if _emb_url:
+                config["embedder"] = {
                     "provider": "openai",
                     "config": {
                         "model": "text-embedding-3-small",
                         "api_key": _emb_key,
                         "openai_base_url": _emb_url,
-                        # Groq API doesn't support OpenAI's "dimensions"
-                        # parameter — omit it and rely on the model default.
                     },
-                },
-                # Store raw history in Postgres too (optional, for audit)
-                "history_db_path": "",  # empty = in-memory; set to a path for SQLite
-            }
+                }
 
             self._client = _Mem0Memory.from_config(config_dict=config)
             _log.info("mem0.client_ready", backend="pgvector")

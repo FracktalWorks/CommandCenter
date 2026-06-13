@@ -34,6 +34,10 @@ export interface IntegrationStatus {
   instructions: string;
   env_vars: IntegrationEnvVar[];
   missing_keys: string[];
+  /** Which credential keys are stored in the encrypted Postgres DB (e.g. ["client_id", "client_secret"]). */
+  db_keys?: string[];
+  /** Storage source: "encrypted-db" | "env-file" | "none". */
+  storage?: string;
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {

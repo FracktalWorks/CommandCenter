@@ -97,6 +97,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 if val and val.strip():
                     await store.put(provider, val.strip())
         await store.configure_litellm()
+        await store.configure_integrations()
         _log.info("gateway.keys_loaded_from_store")
     except Exception as exc:
         _log.warning("gateway.key_store_skipped", error=str(exc))

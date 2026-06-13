@@ -135,8 +135,22 @@ class ProviderKeyStore:
             _log.warning("key_store.decrypt_failed", provider=provider)
             return ""
 
-    async def put(self, provider: str, api_key: str) -> None:
-        """Store an encrypted API key (upsert)."""
+    async def put(
+        self,
+        provider: str,
+        api_key: str,
+        credential_type: str = "llm",
+        service: str | None = None,
+    ) -> None:
+        """Store an encrypted API key (upsert).
+
+        Args:
+            provider: Unique key identifier (e.g. 'openai', 'zoho-crm:client_id').
+            api_key: The plain-text credential to encrypt and store.
+            credential_type: 'llm' (default) or 'integration'.
+            service: For integration keys, the service name (e.g. 'zoho-crm').
+                     Defaults to provider when not given.
+        """
         if not api_key.strip():
             raise ValueError("api_key cannot be empty")
 
@@ -144,18 +158,27 @@ class ProviderKeyStore:
             self._f.encrypt(api_key.encode("utf-8"))
         ).decode("ascii")
 
+        svc = service or provider
+
         await self._execute(
             """
-            INSERT INTO provider_keys (provider, encrypted, updated_at)
-            VALUES (:provider, :encrypted, now())
+            INSERT INTO provider_keys
+                (provider, encrypted, credential_type, service, updated_at)
+            VALUES (:provider, :encrypted, :credential_type, :service, now())
             ON CONFLICT (provider) DO UPDATE
-            SET encrypted = :encrypted, updated_at = now()
+            SET encrypted = :encrypted,
+                credential_type = :credential_type,
+                service = :service,
+                updated_at = now()
             """,
             provider=provider,
             encrypted=encrypted,
+            credential_type=credential_type,
+            service=svc,
         )
         self._cache[provider] = api_key
-        _log.info("key_store.put", provider=provider)
+        _log.info("key_store.put", provider=provider,
+                   credential_type=credential_type)
 
     async def delete(self, provider: str) -> None:
         """Remove a provider's API key."""
@@ -182,6 +205,158 @@ class ProviderKeyStore:
             except Exception:
                 _log.warning("key_store.decrypt_failed", provider=provider)
         return result
+
+    async def get_by_type(self, credential_type: str) -> dict[str, str]:
+        """Return all keys of a given credential_type (decrypted).
+
+        Args:
+            credential_type: 'llm' or 'integration'.
+
+        Returns:
+            {provider: plain_text_key, ...}
+        """
+        rows = await self._execute(
+            "SELECT provider, encrypted FROM provider_keys "
+            "WHERE credential_type = :credential_type",
+            credential_type=credential_type,
+        )
+        result: dict[str, str] = {}
+        for row in rows:
+            provider = row["provider"]
+            if provider in self._cache:
+                result[provider] = self._cache[provider]
+                continue
+            try:
+                plain = self._f.decrypt(
+                    base64.urlsafe_b64decode(row["encrypted"])
+                ).decode("utf-8")
+                self._cache[provider] = plain
+                result[provider] = plain
+            except Exception:
+                _log.warning("key_store.decrypt_failed", provider=provider)
+        return result
+
+    async def get_by_service(self, service: str) -> dict[str, str]:
+        """Return all keys for a given service (decrypted).
+
+        Args:
+            service: Service name, e.g. 'zoho-crm', 'clickup'.
+
+        Returns:
+            {provider: plain_text_key, ...}
+        """
+        rows = await self._execute(
+            "SELECT provider, encrypted FROM provider_keys "
+            "WHERE service = :service",
+            service=service,
+        )
+        result: dict[str, str] = {}
+        for row in rows:
+            provider = row["provider"]
+            if provider in self._cache:
+                result[provider] = self._cache[provider]
+                continue
+            try:
+                plain = self._f.decrypt(
+                    base64.urlsafe_b64decode(row["encrypted"])
+                ).decode("utf-8")
+                self._cache[provider] = plain
+                result[provider] = plain
+            except Exception:
+                _log.warning("key_store.decrypt_failed", provider=provider)
+        return result
+
+    async def configure_integrations(self) -> None:
+        """Load all integration credentials into os.environ.
+
+        Call once at startup so ingestion clients and skills can read
+        credentials via os.environ / get_settings() without code changes.
+
+        Integration → env var mapping mirrors _SETUP_GUIDES in
+        apps/gateway/gateway/routes/integrations.py.
+        """
+        # Service name → {provider suffix → env var name}
+        _integration_env_map: dict[str, dict[str, str]] = {
+            "zoho-crm": {
+                "client_id": "ZOHO_CLIENT_ID",
+                "client_secret": "ZOHO_CLIENT_SECRET",
+                "refresh_token": "ZOHO_REFRESH_TOKEN",
+                "api_domain": "ZOHO_API_DOMAIN",
+                "accounts_url": "ZOHO_ACCOUNTS_URL",
+                "region": "ZOHO_REGION",
+            },
+            "clickup": {
+                "api_token": "CLICKUP_API_TOKEN",
+                "workspace_id": "CLICKUP_WORKSPACE_ID",
+            },
+            "apollo": {
+                "api_key": "APOLLO_API_KEY",
+            },
+            "google-maps": {
+                "api_key": "GOOGLE_MAPS_API_KEY",
+            },
+            "instantly": {
+                "api_key": "INSTANTLY_API_KEY",
+            },
+            "gmail": {
+                "sa_json_path": "GMAIL_SA_JSON_PATH",
+                "default_user": "GMAIL_DEFAULT_USER",
+            },
+            "gmail-send": {
+                "sa_json_path": "GMAIL_SA_JSON_PATH",
+                "default_user": "GMAIL_DEFAULT_USER",
+            },
+            "smtp": {
+                "host": "SMTP_HOST",
+                "port": "SMTP_PORT",
+                "username": "SMTP_USERNAME",
+                "password": "SMTP_PASSWORD",
+            },
+            "github": {
+                "token": "GITHUB_TOKEN",
+                "client_id": "GITHUB_CLIENT_ID",
+            },
+            "serpapi": {
+                "api_key": "SERPAPI_API_KEY",
+            },
+            "apify": {
+                "api_token": "APIFY_API_TOKEN",
+            },
+            "anymailfinder": {
+                "api_key": "ANYMAILFINDER_API_KEY",
+            },
+            "google-sheets": {
+                "sa_json_path": "GOOGLE_SHEETS_SA_JSON_PATH",
+            },
+        }
+
+        for service, key_map in _integration_env_map.items():
+            for suffix, env_var in key_map.items():
+                provider = f"{service}:{suffix}"
+                key = await self.get(provider)
+                if key:
+                    os.environ[env_var] = key
+                    _log.debug(
+                        "key_store.integration_configured",
+                        service=service,
+                        env_var=env_var,
+                    )
+                else:
+                    # Preserve any existing env var (from .env bootstrap)
+                    existing = os.environ.get(env_var, "")
+                    if existing and existing.strip():
+                        # Auto-migrate from env → encrypted store
+                        await self.put(
+                            provider,
+                            existing.strip(),
+                            credential_type="integration",
+                            service=service,
+                        )
+                        _log.info(
+                            "key_store.integration_migrated",
+                            service=service,
+                            env_var=env_var,
+                        )
 
     async def configure_litellm(self) -> None:
         """Load all stored keys into litellm's module-level config.

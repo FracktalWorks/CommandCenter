@@ -31,6 +31,28 @@ function StatusBadge({ configured }: { configured: boolean }) {
   );
 }
 
+/** Shows where credentials are stored: encrypted DB vs .env file. */
+function StorageBadge({ storage }: { storage?: string }) {
+  if (!storage || storage === "none") return null;
+  const isDb = storage === "encrypted-db";
+  return (
+    <span
+      className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border ${
+        isDb
+          ? "bg-violet-500/10 text-violet-400 border-violet-500/25"
+          : "bg-secondary text-muted-foreground border-border"
+      }`}
+      title={
+        isDb
+          ? "Credentials stored encrypted in Postgres"
+          : "Credentials stored in .env file"
+      }
+    >
+      {isDb ? "🔐 DB" : "📄 .env"}
+    </span>
+  );
+}
+
 // Which agents use a given service, split by mandatory vs optional
 function AgentBadges({
   service,
@@ -215,6 +237,7 @@ function IntegrationCard({
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-medium text-foreground">{integration.label}</span>
               <StatusBadge configured={integration.configured} />
+              <StorageBadge storage={integration.storage} />
               {/* "Used for" pills — shown when the integration serves multiple purposes */}
               {(integration.uses ?? []).length > 0 && (
                 <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">

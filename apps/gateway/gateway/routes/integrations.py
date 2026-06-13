@@ -412,6 +412,19 @@ async def integration_status(
         services = list(_SETUP_GUIDES.keys())
         optional_services = set()
 
+    # Fetch all integration keys from the encrypted DB store for source tracking
+    try:
+        from acb_llm.key_store import get_key_store
+        store = get_key_store()
+        db_keys_by_service: dict[str, list[str]] = {}
+        all_int_keys = await store.get_by_type("integration")
+        for provider in all_int_keys:
+            if ":" in provider:
+                svc, suffix = provider.split(":", 1)
+                db_keys_by_service.setdefault(svc, []).append(suffix)
+    except Exception:
+        db_keys_by_service = {}
+
     result = []
     for svc in services:
         guide = _SETUP_GUIDES.get(svc, {})
@@ -437,6 +450,18 @@ async def integration_status(
                     if not os.getenv(v["key"], "").strip()
                 ]
             )
+
+        # Determine which keys are stored in the encrypted DB
+        db_stored_keys = db_keys_by_service.get(svc, [])
+
+        # Determine storage source for display
+        if db_stored_keys:
+            storage = "encrypted-db"
+        elif configured:
+            storage = "env-file"
+        else:
+            storage = "none"
+
         result.append(
             {
                 "service": svc,
@@ -450,6 +475,8 @@ async def integration_status(
                 "instructions": guide.get("instructions", ""),
                 "env_vars": guide.get("env_vars", []),
                 "missing_keys": missing_keys,
+                "db_keys": db_stored_keys,
+                "storage": storage,
             }
         )
 
@@ -464,34 +491,72 @@ async def configure_integrations(
     req: ConfigureRequest,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Write credential env vars to .env and hot-reload Settings cache.
+    """Write integration credentials to the encrypted DB credential store.
+
+    Credentials are encrypted at rest with the same ACB_MASTER_KEY used
+    for LLM provider keys.  They are also set in os.environ for immediate
+    effect and written to .env as a bootstrap fallback.
 
     Only keys present in the allowed list (derived from _SETUP_GUIDES) may
     be written — all others are rejected with 422.
-
-    After writing, calls get_settings.cache_clear() so the running process
-    picks up the new values immediately without restart (dev / bare-metal).
-
-    For Docker deployments: add these vars to docker-compose.yml env section
-    and restart the gateway container — file-based injection does not work
-    inside containers that don't mount the .env file.
     """
     # Validate all keys before writing any
     illegal = [v.key for v in req.vars if v.key not in _ALLOWED_ENV_KEYS]
     if illegal:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Disallowed env var keys: {illegal}. Permitted: {sorted(_ALLOWED_ENV_KEYS)}",
+            detail=(
+                f"Disallowed env var keys: {illegal}. "
+                f"Permitted: {sorted(_ALLOWED_ENV_KEYS)}"
+            ),
         )
+
+    # Build reverse mapping: env_var → (service, suffix)
+    _env_to_service_suffix: dict[str, tuple[str, str]] = {}
+    for svc, guide in _SETUP_GUIDES.items():
+        for var in guide["env_vars"]:
+            suffix = var["key"].lower().removeprefix(f"{svc}_".upper().lower()) \
+                .replace("-", "_")
+            _env_to_service_suffix[var["key"]] = (svc, suffix)
 
     env_path = _find_env_file()
     written: list[str] = []
+    db_written: list[str] = []
+
     for var in req.vars:
         if not var.value.strip():
-            continue  # skip empties — don't overwrite existing with blank
-        _upsert_env_var(env_path, var.key, var.value)
-        # Also set in the current process env so the settings reload picks it up
+            continue  # skip empties
+
+        # 1. Write to encrypted DB store (primary persistence)
+        svc_suffix = _env_to_service_suffix.get(var.key)
+        if svc_suffix:
+            svc, suffix = svc_suffix
+            provider = f"{svc}:{suffix}"
+            try:
+                from acb_llm.key_store import get_key_store
+                store = get_key_store()
+                await store.put(
+                    provider,
+                    var.value,
+                    credential_type="integration",
+                    service=svc,
+                )
+                db_written.append(provider)
+            except Exception as exc:
+                _log.warning(
+                    "integrations.db_write_failed",
+                    key=var.key,
+                    provider=provider,
+                    error=str(exc),
+                )
+
+        # 2. Set in current process env (immediate effect)
         os.environ[var.key] = var.value
+
+        # 3. Write to .env as bootstrap fallback (still useful for
+        #    bare-metal dev and first-boot before DB is available)
+        _upsert_env_var(env_path, var.key, var.value)
+
         written.append(var.key)
         _log.info(
             "integrations.configure",
@@ -505,12 +570,189 @@ async def configure_integrations(
 
     return {
         "written": written,
+        "db_stored": db_written,
         "env_file": str(env_path),
         "reload": "Settings cache cleared — new values active immediately.",
-        "docker_note": (
-            "If running in Docker, also add these vars to docker-compose.yml "
-            "environment section and restart the gateway container."
+        "storage": (
+            "Credentials stored in encrypted Postgres (primary) + "
+            ".env (bootstrap fallback)."
         ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# /integrations/keys — individual credential CRUD (mirrors /settings/llm/key)
+# ---------------------------------------------------------------------------
+
+class IntegrationKeyRequest(BaseModel):
+    service: str        # e.g. "zoho-crm", "clickup", "apollo"
+    key_name: str       # e.g. "client_id", "api_token", "api_key"
+    value: str          # plain-text credential value
+
+
+class IntegrationKeyDelete(BaseModel):
+    service: str
+    key_name: str
+
+
+@router.get("/keys")
+async def list_integration_keys(
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """List all stored integration credentials (values NOT revealed).
+
+    Returns {service: [key_names], ...} — which services have which keys
+    stored in the encrypted DB.  Values are never returned by this endpoint.
+    """
+    from acb_llm.key_store import get_key_store
+    store = get_key_store()
+    all_integration_keys = await store.get_by_type("integration")
+
+    # Group by service
+    by_service: dict[str, list[str]] = {}
+    for provider in all_integration_keys:
+        if ":" in provider:
+            svc, suffix = provider.split(":", 1)
+            by_service.setdefault(svc, []).append(suffix)
+
+    return {
+        "services": by_service,
+        "total_keys": len(all_integration_keys),
+        "storage": "encrypted-postgres",
+    }
+
+
+@router.put("/keys")
+async def put_integration_key(
+    req: IntegrationKeyRequest,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Store or update a single integration credential in the encrypted DB.
+
+    Also sets the corresponding os.environ variable for immediate effect
+    and writes to .env as a bootstrap fallback.
+    """
+    if not req.value.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="value cannot be empty",
+        )
+
+    # Validate the service is known
+    if req.service not in _SETUP_GUIDES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Unknown service: {req.service!r}. "
+                f"Known: {sorted(_SETUP_GUIDES.keys())}"
+            ),
+        )
+
+    # Find the env var for this key
+    guide = _SETUP_GUIDES[req.service]
+    env_var = None
+    for var in guide["env_vars"]:
+        suffix = var["key"].lower().removeprefix(
+            f"{req.service}_".upper().lower()
+        ).replace("-", "_")
+        if suffix == req.key_name:
+            env_var = var["key"]
+            break
+
+    if env_var is None:
+        known_keys = [
+            v["key"].lower().removeprefix(
+                f"{req.service}_".upper().lower()
+            ).replace("-", "_")
+            for v in guide["env_vars"]
+        ]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Unknown key_name {req.key_name!r} for service "
+                f"{req.service!r}. Known keys: {known_keys}"
+            ),
+        )
+
+    # Store in encrypted DB
+    provider = f"{req.service}:{req.key_name}"
+    from acb_llm.key_store import get_key_store
+    store = get_key_store()
+    await store.put(
+        provider,
+        req.value,
+        credential_type="integration",
+        service=req.service,
+    )
+
+    # Set in current process env (immediate effect)
+    os.environ[env_var] = req.value
+
+    # Write to .env as bootstrap fallback
+    env_path = _find_env_file()
+    _upsert_env_var(env_path, env_var, req.value)
+
+    # Bust settings cache
+    from acb_common.settings import get_settings as _gs  # noqa: PLC0415
+    _gs.cache_clear()
+
+    _log.info(
+        "integrations.key_put",
+        service=req.service,
+        key_name=req.key_name,
+        provider=provider,
+        actor=user.email,
+    )
+
+    return {
+        "ok": True,
+        "service": req.service,
+        "key_name": req.key_name,
+        "provider": provider,
+        "env_var": env_var,
+        "storage": "encrypted-postgres",
+    }
+
+
+@router.delete("/keys")
+async def delete_integration_key(
+    req: IntegrationKeyDelete,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Remove a single integration credential from the encrypted DB."""
+    if req.service not in _SETUP_GUIDES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown service: {req.service!r}",
+        )
+
+    provider = f"{req.service}:{req.key_name}"
+    from acb_llm.key_store import get_key_store
+    store = get_key_store()
+    await store.delete(provider)
+
+    # Find and clear the env var
+    guide = _SETUP_GUIDES[req.service]
+    for var in guide["env_vars"]:
+        suffix = var["key"].lower().removeprefix(
+            f"{req.service}_".upper().lower()
+        ).replace("-", "_")
+        if suffix == req.key_name:
+            os.environ.pop(var["key"], None)
+            break
+
+    _log.info(
+        "integrations.key_deleted",
+        service=req.service,
+        key_name=req.key_name,
+        actor=user.email,
+    )
+
+    return {
+        "ok": True,
+        "service": req.service,
+        "key_name": req.key_name,
+        "deleted": True,
     }
 
 

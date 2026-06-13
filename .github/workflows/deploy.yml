@@ -123,6 +123,21 @@ jobs:
 
             echo "==> Skipping deprecated LiteLLM proxy cleanup (already removed)"
 
+            echo "==> Ensuring memory-layer env vars in .env"
+            ENV_FILE="/opt/acb/app/.env"
+            for _var in MEM0_ENABLED GRAPHITI_ENABLED NEO4J_URL NEO4J_USER NEO4J_PASSWORD; do
+              if ! grep -qE "^${_var}=" "$ENV_FILE" 2>/dev/null; then
+                case "$_var" in
+                  MEM0_ENABLED)       echo "MEM0_ENABLED=true" >> "$ENV_FILE" ;;
+                  GRAPHITI_ENABLED)   echo "GRAPHITI_ENABLED=true" >> "$ENV_FILE" ;;
+                  NEO4J_URL)          echo "NEO4J_URL=bolt://localhost:7687" >> "$ENV_FILE" ;;
+                  NEO4J_USER)         echo "NEO4J_USER=neo4j" >> "$ENV_FILE" ;;
+                  NEO4J_PASSWORD)     echo "NEO4J_PASSWORD=neo4j_dev_change_me" >> "$ENV_FILE" ;;
+                esac
+                echo "    + added $_var to .env"
+              fi
+            done
+
             echo "==> Bootstrapping Docker Compose stack (core + memory)"
             docker compose -f infra/docker-compose.yml --profile core --profile memory up -d --remove-orphans
 

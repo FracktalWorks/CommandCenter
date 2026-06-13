@@ -11,6 +11,24 @@ say()  { printf "\n==> %s\n" "$*"; }
 say "Pulling images"
 docker compose -f infra/docker-compose.yml pull
 
+# ── Ensure memory-layer env vars exist in .env (idempotent) ─────────
+# MEM0_ENABLED / GRAPHITI_ENABLED were added after initial bootstrap so
+# existing .env files may not have them.  Append defaults if missing.
+say "Ensuring memory-layer env vars"
+ENV_FILE="/opt/acb/app/.env"
+for _var in MEM0_ENABLED GRAPHITI_ENABLED NEO4J_URL NEO4J_USER NEO4J_PASSWORD; do
+  if ! grep -qE "^${_var}=" "$ENV_FILE" 2>/dev/null; then
+    case "$_var" in
+      MEM0_ENABLED)       echo "MEM0_ENABLED=true" >> "$ENV_FILE" ;;
+      GRAPHITI_ENABLED)   echo "GRAPHITI_ENABLED=true" >> "$ENV_FILE" ;;
+      NEO4J_URL)          echo "NEO4J_URL=bolt://localhost:7687" >> "$ENV_FILE" ;;
+      NEO4J_USER)         echo "NEO4J_USER=neo4j" >> "$ENV_FILE" ;;
+      NEO4J_PASSWORD)     echo "NEO4J_PASSWORD=neo4j_dev_change_me" >> "$ENV_FILE" ;;
+    esac
+    printf "    + added %s to .env\n" "$_var"
+  fi
+done
+
 say "Booting stack (core + memory)"
 set -a && source /opt/acb/app/.env && set +a
 docker compose -f infra/docker-compose.yml --profile core --profile memory up -d --remove-orphans

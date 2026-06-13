@@ -4,14 +4,20 @@ Single master key (ACB_MASTER_KEY env var or settings.acb_master_key) encrypts
 all provider keys at rest.  Keys are decrypted on demand — never logged or
 stored in plain text outside this module's in-memory cache.
 
+Supports TWO credential types via the credential_type column:
+  - 'llm'          — LLM provider API keys (OpenAI, Anthropic, Gemini, etc.)
+  - 'integration'  — Business integration credentials (Zoho, ClickUp, etc.)
+
 Usage:
     from acb_llm.key_store import get_key_store
 
     store = get_key_store()
-    await store.put("openai", "sk-...")
-    key = await store.get("openai")  # returns plain text key or ""
+    await store.put("openai", "sk-...")                     # LLM key (default)
+    await store.put("zoho-crm:client_id", "...", cred_type="integration")
+    key = await store.get("openai")                         # returns plain text key or ""
+    all_llm_keys = await store.get_by_type("llm")           # {provider: plain_text_key}
     await store.delete("openai")
-    all_keys = await store.get_all()  # {provider: plain_text_key, ...}
+    all_keys = await store.get_all()                        # {provider: plain_text_key, ...}
 """
 from __future__ import annotations
 

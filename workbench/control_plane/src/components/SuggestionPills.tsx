@@ -27,13 +27,13 @@ export default function SuggestionPills({
 
   return (
     <div className="mt-3">
-      <div className="text-[10px] text-zinc-500 mb-1.5 uppercase tracking-wide font-medium">{label}</div>
+      <div className="text-[10px] text-muted-foreground mb-1.5 uppercase tracking-wide font-medium">{label}</div>
       <div className={`flex flex-wrap gap-1.5 ${align === "center" ? "justify-center" : "justify-start"}`}>
         {suggestions.map((s, i) => (
           <button
             key={i}
             onClick={() => onPick(s)}
-            className="text-[11px] sm:text-xs px-3 py-1.5 rounded-full border border-zinc-700/60 bg-zinc-800/40 text-zinc-400 hover:border-zinc-600 hover:bg-zinc-700/50 hover:text-zinc-100 transition-colors"
+            className="text-[11px] sm:text-xs px-3 py-1.5 rounded-full border border-border bg-secondary/60 text-muted-foreground hover:border-primary/40 hover:bg-primary/10 hover:text-foreground tech-transition"
           >
             {s}
           </button>

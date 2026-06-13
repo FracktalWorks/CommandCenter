@@ -84,21 +84,21 @@ function AgentPickerModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl"
+        className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-2xl tech-glass-subtle"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <div className="text-base font-semibold text-zinc-100">New session</div>
-            <div className="text-xs text-zinc-500 mt-0.5">Choose an agent to chat with</div>
+            <div className="text-base font-semibold text-foreground">New session</div>
+            <div className="text-xs text-muted-foreground mt-0.5">Choose an agent to chat with</div>
           </div>
           <button
             onClick={onClose}
-            className="text-zinc-500 hover:text-zinc-300 text-sm transition-colors"
+            className="text-muted-foreground hover:text-foreground text-sm tech-transition"
           >
             ✕
           </button>
@@ -106,21 +106,21 @@ function AgentPickerModal({
 
         {/* Default — CommandCenter */}
         <div className="mb-2">
-          <div className="text-xs font-medium uppercase tracking-wide text-zinc-600 mb-1.5">
+          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground/70 mb-1.5">
             Default
           </div>
           <button
             onClick={() => onSelect("orchestrator", "CommandCenter — AI company brain")}
-            className="w-full text-left rounded-lg border border-zinc-700 bg-zinc-800/60 px-4 py-3 hover:border-zinc-500 hover:bg-zinc-800 transition-colors"
+            className="w-full text-left rounded-lg border border-border bg-secondary/60 px-4 py-3 hover:border-primary/40 hover:bg-secondary tech-transition"
           >
-            <div className="text-sm font-medium text-zinc-100">CommandCenter</div>
-            <div className="text-xs text-zinc-500 mt-0.5">General-purpose AI company brain</div>
+            <div className="text-sm font-medium text-foreground">CommandCenter</div>
+            <div className="text-xs text-muted-foreground mt-0.5">General-purpose AI company brain</div>
           </button>
         </div>
 
         {/* Copilot SDK Agents — talk directly to GitHub Copilot SDK */} 
         <div className="mt-4">
-          <div className="text-xs font-medium uppercase tracking-wide text-zinc-600 mb-1.5">
+          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground/70 mb-1.5">
             Copilot SDK agents
           </div>
           {loading ? (
@@ -131,25 +131,25 @@ function AgentPickerModal({
                 <div key={a.name}>
                   <button
                     onClick={() => handleAgentClick(a)}
-                    className="w-full text-left rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-4 py-3 hover:border-zinc-500 hover:bg-zinc-800 transition-colors"
+                    className="w-full text-left rounded-lg border border-border bg-secondary/40 px-4 py-3 hover:border-primary/30 hover:bg-secondary tech-transition"
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-                      <div className="text-sm font-medium text-zinc-100 truncate">{a.name}</div>
+                      <div className="text-sm font-medium text-foreground truncate">{a.name}</div>
                       <div className="flex items-center gap-1.5 flex-wrap shrink-0">
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-sky-700/50 bg-sky-900/30 text-sky-300 whitespace-nowrap">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-primary/40 bg-primary/10 text-primary whitespace-nowrap">
                           Copilot SDK
                         </span>
                         {needsSetupBadge(a) && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-900/40 text-orange-400 border border-orange-700/50 whitespace-nowrap">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-destructive/10 text-destructive border border-destructive/30 whitespace-nowrap">
                             ⚙ Setup needed
                           </span>
                         )}
                         {a.tags.slice(0, 2).map((t) => (
-                          <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-400 whitespace-nowrap">{t}</span>
+                          <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground whitespace-nowrap">{t}</span>
                         ))}
                       </div>
                     </div>
-                    <div className="text-xs text-zinc-500 mt-0.5">{a.description}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">{a.description}</div>
                   </button>
                 </div>
               ))}
@@ -162,7 +162,7 @@ function AgentPickerModal({
 
         {/* MAF Agents — run through Microsoft Agent Framework */}
         <div className="mt-4">
-          <div className="text-xs font-medium uppercase tracking-wide text-zinc-600 mb-1.5">
+          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground/70 mb-1.5">
             MAF agents
           </div>
           {loading ? (
@@ -173,16 +173,16 @@ function AgentPickerModal({
                 <div key={a.name}>
                   <button
                     onClick={() => handleAgentClick(a)}
-                    className="w-full text-left rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-4 py-3 hover:border-zinc-500 hover:bg-zinc-800 transition-colors"
+                    className="w-full text-left rounded-lg border border-border bg-secondary/40 px-4 py-3 hover:border-primary/30 hover:bg-secondary tech-transition"
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-                      <div className="text-sm font-medium text-zinc-100 truncate">{a.name}</div>
+                      <div className="text-sm font-medium text-foreground truncate">{a.name}</div>
                       <div className="flex items-center gap-1.5 flex-wrap shrink-0">
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-amber-700/40 bg-amber-900/20 text-amber-400 whitespace-nowrap">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-accent/40 bg-accent/10 text-accent whitespace-nowrap">
                           MAF
                         </span>
                         {needsSetupBadge(a) && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-900/40 text-orange-400 border border-orange-700/50 whitespace-nowrap">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-destructive/10 text-destructive border border-destructive/30 whitespace-nowrap">
                             ⚙ Setup needed
                           </span>
                         )}
@@ -746,11 +746,11 @@ function ChatPageInner() {
       {/* ── Desktop: sessions sidebar ─────────────────────────────────── */}
       {!isMobile && (
         <aside
-          className={`shrink-0 border-r border-zinc-800 bg-zinc-900/40 flex flex-col overflow-hidden transition-all duration-200 ${
+          className={`shrink-0 border-r border-border bg-sidebar flex flex-col overflow-hidden transition-all duration-200 ${
             sessionPanelOpen ? "w-72" : "w-10"
           }`}
         >
-          <div className={`flex items-center border-b border-zinc-800 ${
+          <div className={`flex items-center border-b border-border ${
             sessionPanelOpen ? "justify-between px-4 py-3" : "justify-center py-3"
           }`}>
             {sessionPanelOpen && (
@@ -855,7 +855,7 @@ function ChatPageInner() {
               />
             )
           ) : (
-            <div className="flex flex-1 items-center justify-center text-zinc-600 text-sm">
+            <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">
               Select or create a session to start chatting.
             </div>
           )}

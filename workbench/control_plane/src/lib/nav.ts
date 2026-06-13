@@ -7,10 +7,13 @@
 //
 // Used by the desktop Sidebar and the mobile navigation drawer so both stay in sync.
 // `PANES` (flat list) is kept for backward-compatible consumers that don't need sections.
+//
+// icon = Lucide icon name (rendered via dynamic import in Sidebar / AppShell).
 
 export type NavPane = {
   href: string;
   label: string;
+  /** Lucide icon name, e.g. "MessageCircle", "Zap", "Wrench" */
   icon: string;
   note: string;
   badge?: string;
@@ -34,37 +37,37 @@ export const NAV_SECTIONS: NavSection[] = [
       {
         href: "/chat",
         label: "Chat",
-        icon: "C",
+        icon: "MessageCircle",
         note: "AI conversations · sessions · memory",
       },
       {
         href: "/email",
         label: "Email",
-        icon: "E",
+        icon: "Mail",
         note: "AI-powered inbox",
       },
       {
         href: "/memory",
         label: "Memories",
-        icon: "~",
+        icon: "Brain",
         note: "Facts · episodic · knowledge graph",
       },
       {
         href: "/tasks",
         label: "Tasks",
-        icon: "T",
+        icon: "CheckSquare",
         note: "AI task manager",
       },
       {
         href: "/notes",
         label: "Notes",
-        icon: "N",
+        icon: "StickyNote",
         note: "AI note taker",
       },
       {
         href: "/dashboard",
         label: "Dashboard",
-        icon: "D",
+        icon: "LayoutDashboard",
         note: "Company overview",
       },
     ],
@@ -79,19 +82,19 @@ export const NAV_SECTIONS: NavSection[] = [
       {
         href: "/settings/models",
         label: "Models",
-        icon: "M",
+        icon: "Cpu",
         note: "LLMs · tiers · providers",
       },
       {
         href: "/agents",
         label: "Agents",
-        icon: "A",
+        icon: "Bot",
         note: "Register · manage · commits · remove",
       },
       {
         href: "/integrations",
         label: "Integrations",
-        icon: "I",
+        icon: "Plug",
         note: "Connected services · credentials",
       },
     ],
@@ -106,13 +109,13 @@ export const NAV_SECTIONS: NavSection[] = [
       {
         href: "/build/agents",
         label: "Agent Workbench",
-        icon: "W",
+        icon: "Wrench",
         note: "MAF agents & skills",
       },
       {
         href: "/build/apps",
         label: "Custom Apps",
-        icon: "+",
+        icon: "PlusSquare",
         note: "User-created applications",
       },
     ],

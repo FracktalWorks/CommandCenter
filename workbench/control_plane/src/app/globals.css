@@ -1,35 +1,136 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* ── RapidTool Design System — HSL colour tokens ─────────────────────────
+   Dark-only professional theme adapted from RapidTool-Fixture.
+   Primary: professional blue  hsl(198 89% 50%)
+   Accent:  warm orange       hsl(27 96% 61%)
+   Surface: deep blue-gray    hsl(220 13% 8%)
+   ──────────────────────────────────────────────────────────────────────── */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: hsl(220 13% 8%);
+  --foreground: hsl(210 40% 98%);
+
+  --card: hsl(220 13% 10%);
+  --card-foreground: hsl(210 40% 98%);
+
+  --popover: hsl(220 13% 12%);
+  --popover-foreground: hsl(210 40% 98%);
+
+  --primary: hsl(198 89% 50%);
+  --primary-foreground: hsl(220 13% 8%);
+
+  --secondary: hsl(220 13% 14%);
+  --secondary-foreground: hsl(210 40% 98%);
+
+  --muted: hsl(220 13% 15%);
+  --muted-foreground: hsl(215 20% 65%);
+
+  --accent: hsl(27 96% 61%);
+  --accent-foreground: hsl(220 13% 8%);
+
+  --destructive: hsl(0 63% 60%);
+  --destructive-foreground: hsl(210 40% 98%);
+
+  --border: hsl(220 13% 16%);
+  --input: hsl(220 13% 16%);
+  --ring: hsl(198 89% 50%);
+
+  --success: hsl(142 76% 47%);
+  --success-foreground: hsl(220 13% 8%);
+
+  --warning: hsl(47 96% 53%);
+  --warning-foreground: hsl(220 13% 8%);
+
+  --radius: 0.75rem;
+
+  /* Sidebar-specific tokens */
+  --sidebar-background: hsl(220 13% 9%);
+  --sidebar-foreground: hsl(210 40% 98%);
+  --sidebar-primary: hsl(198 89% 50%);
+  --sidebar-primary-foreground: hsl(220 13% 8%);
+  --sidebar-accent: hsl(220 13% 13%);
+  --sidebar-accent-foreground: hsl(210 40% 98%);
+  --sidebar-border: hsl(220 13% 16%);
+  --sidebar-ring: hsl(198 89% 50%);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-sidebar: var(--sidebar-background);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-border: var(--sidebar-border);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 /* Prevent accidental horizontal scrolling of the whole app on small screens. */
 html,
 body {
   overflow-x: hidden;
+}
+
+/* ── Tech glass / glow effects ────────────────────────────────────────── */
+.tech-glass {
+  background: hsl(220 13% 12% / 0.65);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid hsl(220 13% 18%);
+}
+
+.tech-glass-subtle {
+  background: hsl(220 13% 10% / 0.5);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid hsl(220 13% 16% / 0.6);
+}
+
+.tech-glow {
+  box-shadow: 0 0 24px hsl(198 89% 50% / 0.08);
+}
+
+.tech-glow:hover {
+  box-shadow: 0 0 32px hsl(198 89% 50% / 0.15);
+}
+
+.tech-transition {
+  transition: all 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 /* ── iOS safe-area padding utilities ─────────────────────────────────────
@@ -59,12 +160,6 @@ body {
   min-height: calc(env(safe-area-inset-bottom, 0px) + 44px);
 }
 
-/* ─────────────────────────────────────────────────────────────────────────
-   Chat "thinking" UX — mirrors VS Code Copilot's shimmer/working language.
-   The shimmer is a flowing gradient sweep across text (NOT a spinner) and is
-   the core "something is happening" visual. See ai-company-brain/spec_chat_ux.md
-   ───────────────────────────────────────────────────────────────────────── */
-
 @keyframes chat-shimmer {
   0%   { background-position: 200% 0; }
   100% { background-position: -200% 0; }
@@ -74,9 +169,9 @@ body {
 .chat-shimmer-text {
   background: linear-gradient(
     90deg,
-    rgb(113 113 122) 0%,    /* zinc-500 */
-    rgb(228 228 231) 45%,   /* zinc-200 */
-    rgb(113 113 122) 90%    /* zinc-500 */
+    hsl(215 20% 50%) 0%,
+    hsl(210 40% 90%) 45%,
+    hsl(215 20% 50%) 90%
   );
   background-size: 200% 100%;
   -webkit-background-clip: text;

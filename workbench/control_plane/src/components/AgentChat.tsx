@@ -62,7 +62,7 @@ function ErrorCard({ parsed, compact = false }: { parsed: ParsedAgentError; comp
             )}
           </div>
           {!compact && (
-            <p className="mt-1 text-xs text-zinc-400 leading-relaxed">{parsed.detail}</p>
+            <p className="mt-1 text-xs text-muted-foreground leading-relaxed">{parsed.detail}</p>
           )}
           <div className="mt-2 flex items-start gap-1.5">
             <span className="text-amber-500 shrink-0 text-xs mt-0.5">→</span>
@@ -72,7 +72,7 @@ function ErrorCard({ parsed, compact = false }: { parsed: ParsedAgentError; comp
         <button
           onClick={handleCopy}
           title="Copy full error"
-          className="shrink-0 text-[10px] px-2 py-1 rounded border border-zinc-700 text-zinc-500 hover:text-zinc-300 hover:border-zinc-500 transition-colors mt-0.5 whitespace-nowrap"
+          className="shrink-0 text-[10px] px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 tech-transition mt-0.5 whitespace-nowrap"
         >
           {copied ? "Copied!" : "Copy error"}
         </button>
@@ -81,12 +81,12 @@ function ErrorCard({ parsed, compact = false }: { parsed: ParsedAgentError; comp
         <div className="mt-2">
           <button
             onClick={() => setExpanded((v) => !v)}
-            className="text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors"
+            className="text-[10px] text-muted-foreground/50 hover:text-muted-foreground tech-transition"
           >
             {expanded ? "▲ Hide full error" : "▼ Show full error"}
           </button>
           {expanded && (
-            <pre className="mt-1.5 text-[10px] text-zinc-500 bg-zinc-900/60 rounded-lg p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
+            <pre className="mt-1.5 text-[10px] text-muted-foreground bg-muted/60 rounded-lg p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
               {parsed.raw}
             </pre>
           )}
@@ -770,17 +770,17 @@ export default function AgentChat({
   ];
 
   return (
-    <div className="flex flex-col h-full bg-zinc-950">
+    <div className="flex flex-col h-full bg-background">
       {/* Agent header — VS Code-style minimal bar */}
-      <div className="flex items-center gap-2 h-9 px-4 border-b border-zinc-800/60 bg-zinc-900/40 shrink-0">
-        <div className={`w-2 h-2 rounded-full shrink-0 ${isLoading ? "bg-amber-400 animate-pulse" : "bg-emerald-500"}`} />
-        <span className="text-xs font-medium text-zinc-200 truncate">{currentAgentName}</span>
+      <div className="flex items-center gap-2 h-9 px-4 border-b border-border bg-card/40 shrink-0">
+        <div className={`w-2 h-2 rounded-full shrink-0 ${isLoading ? "bg-warning animate-pulse" : "bg-success"}`} />
+        <span className="text-xs font-medium text-foreground truncate">{currentAgentName}</span>
         {isLoading && (
-          <span className="hidden sm:inline text-[10px] text-amber-400/70 animate-pulse">thinking…</span>
+          <span className="hidden sm:inline text-[10px] text-warning/70 animate-pulse">thinking…</span>
         )}
         {agentRuntime === "github-copilot" && currentAgentEntry?.repo_url && (
           <a href={currentAgentEntry.repo_url} target="_blank" rel="noopener noreferrer"
-            className="shrink-0 text-zinc-600 hover:text-zinc-300 transition-colors ml-auto"
+            className="shrink-0 text-muted-foreground/40 hover:text-muted-foreground tech-transition ml-auto"
             title={`Source: ${currentAgentEntry.repo_name ?? currentAgentEntry.repo_url}`}>
             <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
               <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
@@ -791,10 +791,10 @@ export default function AgentChat({
 
       {/* Missing integrations banner (compact) */}
       {!bannerDismissed && missingMandatory.length > 0 && (
-        <div className="shrink-0 border-b border-amber-800/30 bg-amber-950/20 px-4 py-2 flex items-center gap-2 text-[11px]">
-          <span className="text-amber-400">⚡</span>
-          <span className="text-amber-300/80">{missingMandatory.length} integration{missingMandatory.length > 1 ? "s" : ""} not configured</span>
-          <button onClick={() => setBannerDismissed(true)} className="ml-auto w-5 h-5 flex items-center justify-center rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors">✕</button>
+        <div className="shrink-0 border-b border-warning/20 bg-warning/5 px-4 py-2 flex items-center gap-2 text-[11px]">
+          <span className="text-warning">⚡</span>
+          <span className="text-warning/80">{missingMandatory.length} integration{missingMandatory.length > 1 ? "s" : ""} not configured</span>
+          <button onClick={() => setBannerDismissed(true)} className="ml-auto w-5 h-5 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition">✕</button>
         </div>
       )}
 
@@ -803,7 +803,7 @@ export default function AgentChat({
         {/* Scroll-to-bottom floating button */}
         {showScrollBtn && (
           <button onClick={scrollToBottom}
-            className="sticky bottom-3 left-1/2 -translate-x-1/2 z-10 w-8 h-8 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-300 shadow-lg flex items-center justify-center hover:bg-zinc-700 hover:text-zinc-100 transition-all"
+            className="sticky bottom-3 left-1/2 -translate-x-1/2 z-10 w-8 h-8 rounded-full bg-card border border-border text-foreground shadow-lg flex items-center justify-center hover:bg-secondary hover:text-foreground tech-transition"
             aria-label="Scroll to bottom">
             <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M4 6l4 4 4-4" />
@@ -814,42 +814,42 @@ export default function AgentChat({
         <div className="max-w-3xl mx-auto space-y-5">
           {/* Stream recovery indicator */}
           {recovering ? (
-            <div className="rounded-lg border border-sky-800/40 bg-sky-950/30 px-3 py-2 text-[12px] text-sky-300/90 flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-sky-400 animate-pulse shrink-0" />
+            <div className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-[12px] text-primary/90 flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-primary animate-pulse shrink-0" />
               <span className="font-medium">Reconnecting…</span>
-              <span className="text-sky-400/60">Recovering your stream from the server</span>
+              <span className="text-primary/60">Recovering your stream from the server</span>
             </div>
           ) : !isLoading && messages.length > 0 && (() => {
             const last = messages[messages.length - 1];
             const wasInterrupted = last?.role === "assistant" && last.content && !/[.?!]\s*$/.test(last.content.trim());
             return wasInterrupted ? (
-              <div className="rounded-lg border border-amber-800/30 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-400/80">
+              <div className="rounded-lg border border-warning/20 bg-warning/5 px-3 py-2 text-[11px] text-warning/80">
                 ⚡ Stream was interrupted. Messages are saved — you can continue chatting below.
               </div>
             ) : null;
           })()}
           {loadingHistory && messages.length === 0 && (
             <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3 text-center">
-              <span className="w-6 h-6 rounded-full border-2 border-zinc-700 border-t-emerald-500 animate-spin" />
-              <div className="text-zinc-300 text-sm font-medium">Loading conversation…</div>
-              <div className="text-zinc-500 text-xs">Fetching your history from the server</div>
+              <span className="w-6 h-6 rounded-full border-2 border-muted border-t-primary animate-spin" />
+              <div className="text-foreground text-sm font-medium">Loading conversation…</div>
+              <div className="text-muted-foreground text-xs">Fetching your history from the server</div>
               <div className="w-full max-w-3xl mx-auto space-y-3 pt-6" aria-hidden>
-                <div className="h-12 w-2/3 rounded-2xl bg-zinc-800/60 animate-pulse" />
-                <div className="h-16 w-3/4 rounded-2xl bg-zinc-800/40 animate-pulse ml-auto" />
-                <div className="h-12 w-1/2 rounded-2xl bg-zinc-800/60 animate-pulse" />
+                <div className="h-12 w-2/3 rounded-2xl bg-muted/40 animate-pulse" />
+                <div className="h-16 w-3/4 rounded-2xl bg-muted/30 animate-pulse ml-auto" />
+                <div className="h-12 w-1/2 rounded-2xl bg-muted/40 animate-pulse" />
               </div>
             </div>
           )}
           {!loadingHistory && messages.length === 0 && (
             <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3 text-center">
-              <div className="w-12 h-12 rounded-2xl bg-zinc-800/80 border border-zinc-700/60 flex items-center justify-center">
-                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+              <div className="w-12 h-12 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center tech-glow">
+                <div className="w-2.5 h-2.5 rounded-full bg-success" />
               </div>
-              <div className="text-zinc-300 text-sm font-medium">
-                Chat with <span className="text-zinc-100">{currentAgentName}</span>
+              <div className="text-muted-foreground text-sm font-medium">
+                Chat with <span className="text-foreground">{currentAgentName}</span>
               </div>
               {agentDescription && currentAgentName === agentName && (
-                <div className="text-zinc-500 text-xs max-w-sm leading-relaxed">{agentDescription}</div>
+                <div className="text-muted-foreground/60 text-xs max-w-sm leading-relaxed">{agentDescription}</div>
               )}
               <SuggestionPills
                 suggestions={AGENT_SUGGESTIONS[currentAgentName] ?? DEFAULT_SUGGESTIONS}
@@ -866,8 +866,8 @@ export default function AgentChat({
               <div key={msg.id} className="animate-fade-in">
                 {showDateDivider && (
                   <div className="flex items-center gap-3 my-4">
-                    <div className="flex-1 h-px bg-zinc-800" />
-                    <span className="text-[10px] text-zinc-600 font-medium shrink-0">
+                    <div className="flex-1 h-px bg-border" />
+                    <span className="text-[10px] text-muted-foreground/40 font-medium shrink-0">
                       {new Date(msg.timestamp).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
                     </span>
                     <div className="flex-1 h-px bg-zinc-800" />
@@ -906,7 +906,7 @@ export default function AgentChat({
       </div>
 
       {/* ── Input area + VS Code-style bottom bar ─────────────────────── */}
-      <form onSubmit={handleSubmit} className="shrink-0 border-t border-zinc-800/60 bg-zinc-900/50 px-3 sm:px-4 pt-2 pb-safe-full">
+      <form onSubmit={handleSubmit} className="shrink-0 border-t border-border bg-card/40 px-3 sm:px-4 pt-2 pb-safe-full">
         {/* VS Code-style Todos panel — latest assistant turn's todo list */}
         {(() => {
           for (let i = messages.length - 1; i >= 0; i--) {
@@ -929,7 +929,7 @@ export default function AgentChat({
 
         <div className="max-w-3xl mx-auto">
           {/* Input pill — textarea + inline controls, unified container */}
-          <div className="rounded-2xl border border-zinc-700/70 bg-zinc-800/60 focus-within:border-zinc-500/80 transition-colors">
+          <div className="rounded-2xl border border-border bg-secondary/50 focus-within:border-primary/40 tech-transition">
             {/* Row 1: upload + textarea + send */}
             <div className="flex items-end gap-2 px-2 pt-2 pb-1">
               <FileUploadButton sessionId={sessionId}
@@ -949,7 +949,7 @@ export default function AgentChat({
                     ? `${SEND_MODE_LABELS[sendMode]} a follow-up to ${currentAgentName}…`
                     : `Message ${currentAgentName}…`
                 }
-                className="flex-1 resize-none bg-transparent px-1 py-1.5 text-[16px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none max-h-40 overflow-y-auto scrollbar-thin"
+                className="flex-1 resize-none bg-transparent px-1 py-1.5 text-[16px] sm:text-sm text-foreground placeholder-muted-foreground focus:outline-none max-h-40 overflow-y-auto scrollbar-thin"
                 style={{ minHeight: "32px" }}
                 onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = `${Math.min(t.scrollHeight, 160)}px`; }} />
 
@@ -958,7 +958,7 @@ export default function AgentChat({
                 input.trim() ? (
                   <div className="relative shrink-0 flex items-stretch self-end">
                     <button type="submit"
-                      className="h-8 pl-2.5 pr-2 rounded-l-lg bg-zinc-100 text-zinc-900 font-semibold text-xs flex items-center gap-1 hover:bg-white transition-colors"
+                      className="h-8 pl-2.5 pr-2 rounded-l-lg bg-primary text-primary-foreground font-semibold text-xs flex items-center gap-1 hover:opacity-90 tech-transition"
                       aria-label={SEND_MODE_LABELS[sendMode]}
                       title={`${SEND_MODE_LABELS[sendMode]} (current mode)`}>
                       {sendMode === "send" ? "↑" : sendMode === "queue" ? "⏱" : "⤳"}
@@ -966,17 +966,17 @@ export default function AgentChat({
                     </button>
                     <button type="button"
                       onClick={() => setShowSendMenu((v) => !v)}
-                      className="h-8 px-1.5 rounded-r-lg bg-zinc-300 text-zinc-900 border-l border-zinc-400/60 hover:bg-white transition-colors text-[10px]"
+                      className="h-8 px-1.5 rounded-r-lg bg-primary/80 text-primary-foreground border-l border-primary-foreground/20 hover:bg-primary tech-transition text-[10px]"
                       aria-label="Choose send mode" title="Choose how to send">
                       ▾
                     </button>
                     {showSendMenu && (
-                      <div className="absolute bottom-full right-0 mb-1.5 w-56 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl z-50 py-1"
+                      <div className="absolute bottom-full right-0 mb-1.5 w-56 rounded-lg border border-border bg-popover shadow-xl z-50 py-1 tech-glass-subtle"
                         onMouseLeave={() => setShowSendMenu(false)}>
                         {(["send", "queue", "steer"] as SendMode[]).map((m) => (
                           <button key={m} type="button"
                             onClick={() => { setSendMode(m); setShowSendMenu(false); }}
-                            className={`w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 transition-colors ${m === sendMode ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"}`}>
+                            className={`w-full text-left px-3 py-2 text-xs hover:bg-secondary tech-transition ${m === sendMode ? "text-foreground bg-secondary/60" : "text-muted-foreground"}`}>
                             <div className="flex items-center justify-between">
                               <span className="font-medium">
                                 {m === "send" ? "↑ Send" : m === "queue" ? "⏱ Queue" : "⤳ Steer"}
@@ -995,35 +995,35 @@ export default function AgentChat({
                   </div>
                 ) : (
                   <button type="button" onClick={stopGeneration}
-                    className="shrink-0 self-end w-8 h-8 rounded-lg bg-red-900/50 border border-red-700/50 text-red-300 text-xs flex items-center justify-center hover:bg-red-800/70 transition-colors"
+                    className="shrink-0 self-end w-8 h-8 rounded-lg bg-destructive/20 border border-destructive/40 text-destructive text-xs flex items-center justify-center hover:bg-destructive/30 tech-transition"
                     aria-label="Stop generation" title="Stop generation">■</button>
                 )
               ) : (
                 <button type="submit" disabled={!input.trim()}
-                  className="shrink-0 self-end w-8 h-8 rounded-lg bg-zinc-100 text-zinc-900 font-semibold text-sm flex items-center justify-center disabled:opacity-25 disabled:cursor-not-allowed hover:bg-white transition-all"
+                  className="shrink-0 self-end w-8 h-8 rounded-lg bg-primary text-primary-foreground font-semibold text-sm flex items-center justify-center disabled:opacity-25 disabled:cursor-not-allowed hover:opacity-90 tech-transition"
                   aria-label="Send" title="Send message">↑</button>
               )}
             </div>
 
             {/* Row 2: control bar inside the pill — wraps on narrow screens */}
-            <div className="flex items-center gap-1 px-2 pb-1.5 text-[11px] text-zinc-500 flex-wrap" ref={modelMenuRef}>
+            <div className="flex items-center gap-1 px-2 pb-1.5 text-[11px] text-muted-foreground flex-wrap" ref={modelMenuRef}>
               {/* Agent selector */}
               <div className="relative">
                 <button onClick={() => setShowAgentMenu((v) => !v)}
-                  className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-zinc-700/50 hover:text-zinc-200 transition-colors">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-secondary hover:text-foreground tech-transition">
+                  <span className="w-1.5 h-1.5 rounded-full bg-success shrink-0" />
                   <span className="truncate max-w-[72px] sm:max-w-[90px] font-medium">{currentAgentName}</span>
-                  <span className="text-zinc-600">▾</span>
+                  <span className="text-muted-foreground/50">▾</span>
                 </button>
                 {showAgentMenu && (
-                  <div className="absolute bottom-full left-0 mb-1.5 w-64 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl z-50 py-1"
+                  <div className="absolute bottom-full left-0 mb-1.5 w-64 rounded-lg border border-border bg-popover shadow-xl z-50 py-1 tech-glass-subtle"
                     onMouseLeave={() => setShowAgentMenu(false)}>
                     {agents.length === 0 ? (
-                      <div className="px-3 py-2 text-xs text-zinc-600">No agents available</div>
+                      <div className="px-3 py-2 text-xs text-muted-foreground">No agents available</div>
                     ) : (
                       agents.map((a) => (
                         <button key={a.name} onClick={() => handleSwitchAgent(a)}
-                          className={`w-full text-left px-3 py-1.5 text-xs hover:bg-zinc-800 transition-colors ${a.name === currentAgentName ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"}`}>
+                          className={`w-full text-left px-3 py-1.5 text-xs hover:bg-secondary tech-transition ${a.name === currentAgentName ? "text-foreground bg-secondary/60" : "text-muted-foreground"}`}>
                           <div className="flex items-center justify-between gap-1">
                             <span className="font-medium">{a.name}</span>
                             {a.name === currentAgentName && <span className="text-emerald-400 text-[10px]">✓</span>}
@@ -1035,25 +1035,25 @@ export default function AgentChat({
                 )}
               </div>
 
-              <span className="w-px h-3.5 bg-zinc-700/60 shrink-0" />
+              <span className="w-px h-3.5 bg-border shrink-0" />
 
               {/* Model selector */}
               <div className="relative">
                 <button onClick={() => setShowModelMenu((v) => !v)}
-                  className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-zinc-700/50 hover:text-zinc-200 transition-colors truncate max-w-[110px] sm:max-w-[150px]">
+                  className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-secondary hover:text-foreground tech-transition truncate max-w-[110px] sm:max-w-[150px]">
                   <span className="truncate">{currentModelLabel}</span>
-                  <span className="text-zinc-600 shrink-0">▾</span>
+                  <span className="text-muted-foreground/50 shrink-0">▾</span>
                 </button>
                 {showModelMenu && (
-                  <div className="absolute bottom-full left-0 mb-1.5 w-72 rounded-lg border border-zinc-700 bg-zinc-900 shadow-2xl z-50 overflow-hidden">
+                  <div className="absolute bottom-full left-0 mb-1.5 w-72 rounded-lg border border-border bg-popover shadow-2xl z-50 overflow-hidden tech-glass-subtle">
                     <div className="max-h-72 overflow-y-auto py-1 scrollbar-thin">
                       {modelGroups.map((group) => (
                         <div key={group}>
-                          <div className="px-3 pt-2 pb-1 text-[9px] text-zinc-600 uppercase tracking-wider font-semibold">{group}</div>
+                          <div className="px-3 pt-2 pb-1 text-[9px] text-muted-foreground/60 uppercase tracking-wider font-semibold">{group}</div>
                           {sortedModels.filter((m) => m.group === group).map((m) => (
                             <button key={m.id}
                               onClick={() => { setCurrentModel(m.id); setShowModelMenu(false); }}
-                              className={`w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center justify-between gap-2 ${m.id === currentModel ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400 hover:bg-zinc-800"}`}>
+                              className={`w-full text-left px-3 py-1.5 text-xs tech-transition flex items-center justify-between gap-2 ${m.id === currentModel ? "text-foreground bg-secondary/60" : "text-muted-foreground hover:bg-secondary"}`}>
                               <span className="truncate">{m.label}</span>
                               {m.id === currentModel && <span className="text-emerald-400 text-[10px] shrink-0">✓</span>}
                             </button>
@@ -1071,18 +1071,18 @@ export default function AgentChat({
               <div className="relative">
                 <button type="button"
                   onClick={() => setShowThinkMenu((v) => !v)}
-                  className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-zinc-700/50 hover:text-zinc-200 transition-colors text-zinc-400"
+                  className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-secondary hover:text-foreground tech-transition text-muted-foreground"
                   title={THINK_MODES.find((t) => t.mode === thinkMode)?.title}>
                   <span>{THINK_MODES.find((t) => t.mode === thinkMode)?.label ?? "Auto"}</span>
-                  <span className="text-zinc-600 text-[9px]">▾</span>
+                  <span className="text-muted-foreground/50 text-[9px]">▾</span>
                 </button>
                 {showThinkMenu && (
-                  <div className="absolute bottom-full left-0 mb-1.5 w-44 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl z-50 py-1"
+                  <div className="absolute bottom-full left-0 mb-1.5 w-44 rounded-lg border border-border bg-popover shadow-xl z-50 py-1 tech-glass-subtle"
                     onMouseLeave={() => setShowThinkMenu(false)}>
                     {THINK_MODES.map((tm) => (
                       <button key={tm.mode} type="button"
                         onClick={() => { setThinkMode(tm.mode); setShowThinkMenu(false); }}
-                        className={`w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 transition-colors ${thinkMode === tm.mode ? "text-zinc-100 bg-zinc-800/60" : "text-zinc-400"}`}>
+                        className={`w-full text-left px-3 py-2 text-xs hover:bg-secondary tech-transition ${thinkMode === tm.mode ? "text-foreground bg-secondary/60" : "text-muted-foreground"}`}>
                         <div className="flex items-center justify-between gap-1">
                           <span className="font-medium">{tm.label}</span>
                           {thinkMode === tm.mode && <span className="text-emerald-400 text-[10px]">✓</span>}
@@ -1104,7 +1104,7 @@ export default function AgentChat({
           </div>
 
           {/* Disclaimer */}
-          <p className="text-[9px] text-zinc-600 text-center mt-1.5">
+          <p className="text-[9px] text-muted-foreground/50 text-center mt-1.5">
             CommandCenter can make mistakes. Please verify important information.
           </p>
         </div>

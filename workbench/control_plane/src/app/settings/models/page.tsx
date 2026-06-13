@@ -443,10 +443,12 @@ function ProviderCard({
   provider,
   onKeySet,
   onKeyDiscard,
+  copilotScopeOk,
 }: {
   provider: ProviderInfo;
   onKeySet: (key: string) => Promise<void>;
   onKeyDiscard: (providerId: string) => Promise<void>;
+  copilotScopeOk?: boolean | null;
 }) {
   const [editing, setEditing] = useState(false);
   const [keyVal, setKeyVal] = useState("");
@@ -615,8 +617,8 @@ function ProviderCard({
         </div>
       </div>
 
-      {/* Copilot scope warning — shown when GitHub token is set but may lack copilot scope */}
-      {provider.id === "github" && provider.configured && !editing && (
+      {/* Copilot scope warning — only shown when token is configured but lacks copilot scope */}
+      {provider.id === "github" && provider.configured && copilotScopeOk === false && !editing && (
         <div className="mt-3 rounded-lg border border-warning/25 bg-warning/5 p-3 space-y-2">
           <div className="flex items-start gap-2">
             <span className="text-warning text-sm shrink-0 mt-0.5">⚠</span>
@@ -1304,17 +1306,25 @@ export default function ModelsPage() {
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+  const [copilotScopeOk, setCopilotScopeOk] = useState<boolean | null>(null);
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
     try {
-      const cfgRes = await fetch("/api/settings/llm");
+      const [cfgRes, modelsRes] = await Promise.all([
+        fetch("/api/settings/llm"),
+        fetch("/api/models"),
+      ]);
       if (cfgRes.ok) {
         setConfig(await cfgRes.json());
       } else {
         const err = await cfgRes.json().catch(() => ({}));
         setLoadError(String(err?.detail ?? err?.error ?? `Error ${cfgRes.status}`));
+      }
+      if (modelsRes.ok) {
+        const modelsData = await modelsRes.json();
+        setCopilotScopeOk(modelsData.copilot_scope_ok ?? null);
       }
     } catch (err) {
       setLoadError(String(err));
@@ -1477,6 +1487,7 @@ export default function ModelsPage() {
                     provider={p}
                     onKeySet={(key) => handleKeySet(p.id, key)}
                     onKeyDiscard={(id) => handleKeyDiscard(id)}
+                    copilotScopeOk={copilotScopeOk}
                   />
                 ));
               })()}

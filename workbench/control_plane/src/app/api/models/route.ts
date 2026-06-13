@@ -41,6 +41,8 @@ export interface CopilotModel {
 export interface ModelsStatus {
   providers: ProviderInfo[];
   copilot_models: CopilotModel[];
+  /** null = no GITHUB_TOKEN set; true = token has copilot scope; false = token is set but lacks copilot scope */
+  copilot_scope_ok: boolean | null;
 }
 
 export async function GET(): Promise<NextResponse<ModelsStatus>> {
@@ -49,7 +51,28 @@ export async function GET(): Promise<NextResponse<ModelsStatus>> {
   const anthropic   = !!process.env.ANTHROPIC_API_KEY?.trim();
   const openrouter  = !!process.env.OPENROUTER_API_KEY?.trim();
   const vllm        = !!process.env.VLLM_BASE_URL?.trim();
-  const github      = !!process.env.GITHUB_TOKEN?.trim();
+  const githubToken = process.env.GITHUB_TOKEN?.trim();
+  const github      = !!githubToken;
+
+  // Check Copilot scope dynamically (non-blocking — if GitHub API is down, we still respond)
+  let copilot_scope_ok: boolean | null = null;
+  if (githubToken) {
+    try {
+      const res = await fetch("https://api.github.com/user", {
+        headers: { Authorization: `Bearer ${githubToken}`, Accept: "application/vnd.github+json" },
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (res.ok) {
+        const scopes = res.headers.get("X-OAuth-Scopes") ?? "";
+        copilot_scope_ok = scopes.split(",").map((s) => s.trim()).includes("copilot");
+      } else {
+        // Token is invalid / expired / rate-limited
+        copilot_scope_ok = false;
+      }
+    } catch {
+      // GitHub API unreachable — leave as null (unknown)
+    }
+  }
 
   const providers: ProviderInfo[] = [
     {
@@ -129,5 +152,5 @@ export async function GET(): Promise<NextResponse<ModelsStatus>> {
     },
   ];
 
-  return NextResponse.json({ providers, copilot_models });
+  return NextResponse.json({ providers, copilot_models, copilot_scope_ok });
 }

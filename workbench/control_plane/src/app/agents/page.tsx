@@ -17,7 +17,6 @@ import Link from "next/link";
 import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { MutationEntry } from "@/app/api/agent/mutations/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
-import type { ModelsStatus, ProviderInfo } from "@/app/api/models/route";
 import GitHubDeviceConnect from "@/components/GitHubDeviceConnect";
 
 // ---------------------------------------------------------------------------
@@ -915,184 +914,6 @@ function AddAgentModal({
 }
 
 // ---------------------------------------------------------------------------
-// ModelAccess panel
-// ---------------------------------------------------------------------------
-
-const PROVIDER_ICON: Record<string, string> = {
-  gemini: "G",
-  openai: "⊕",
-  vllm: "⚡",
-  "github-copilot": "",
-};
-
-function ProviderRow({ p }: { p: ProviderInfo }) {
-  return (
-    <div className="flex items-center gap-3 py-2 border-b border-border last:border-0">
-      {/* Icon */}
-      <span className={`w-7 h-7 rounded-md flex items-center justify-center text-xs font-bold shrink-0 ${
-        p.available ? "bg-secondary text-foreground" : "bg-secondary/60 text-muted-foreground"
-      }`}>
-        {p.id === "github-copilot" ? (
-          <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
-            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
-          </svg>
-        ) : (
-          PROVIDER_ICON[p.id] ?? p.label[0]
-        )}
-      </span>
-
-      {/* Label + note */}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className={`text-sm font-medium ${
-            p.available ? "text-foreground" : "text-muted-foreground"
-          }`}>{p.label}</span>
-          {p.available ? (
-            <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-success/10 text-success border border-success/20">
-              <span className="w-1.5 h-1.5 rounded-full bg-success" />
-              Active
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground border border-border">
-              <span className="w-1.5 h-1.5 rounded-full bg-muted" />
-              Not configured
-            </span>
-          )}
-          {p.type === "copilot" && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
-              via Copilot
-            </span>
-          )}
-          {p.type === "local" && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
-              local
-            </span>
-          )}
-        </div>
-        <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{p.note}</p>
-      </div>
-
-      {/* Tiers */}
-      <div className="flex gap-1 shrink-0">
-        {p.tiers.map((t) => (
-          <span key={t} className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
-            p.available
-              ? "bg-secondary text-muted-foreground border-border"
-              : "bg-card text-muted-foreground/70 border-border"
-          }`}>
-            {t}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function ModelAccess({ models }: { models: ModelsStatus | null }) {
-  const [open, setOpen] = useState(false);
-
-  if (!models) return null;
-
-  const copilot = models.providers.find((p) => p.id === "github-copilot");
-  const direct = models.providers.filter((p) => p.id !== "github-copilot");
-  const activeCount = models.providers.filter((p) => p.available).length;
-
-  return (
-    <div className="mb-6 rounded-xl border border-border bg-card/40">
-      {/* Header — always visible */}
-      <button
-        className="w-full flex items-center justify-between px-4 py-3 text-left"
-        onClick={() => setOpen((v) => !v)}
-      >
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">LLM Model Access</span>
-          <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
-            activeCount > 0
-              ? "bg-success/10 text-success border-success/20"
-              : "bg-secondary text-muted-foreground border-border"
-          }`}>
-            {activeCount}/{models.providers.length} providers active
-          </span>
-          {copilot && (
-            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
-              copilot.available
-                ? "bg-primary/10 text-primary border-primary/20"
-                : "bg-secondary text-muted-foreground border-border"
-            }`}>
-              Copilot models: {copilot.available ? "✓ active" : "⚠ needs GITHUB_TOKEN"}
-            </span>
-          )}
-        </div>
-        <span className="text-muted-foreground text-xs">{open ? "▲" : "▼"}</span>
-      </button>
-
-      {open && (
-        <div className="px-4 pb-4 border-t border-border">
-          {/* Direct providers */}
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mt-3 mb-1">Direct API keys (tier router)</p>
-          <div>
-            {direct.map((p) => <ProviderRow key={p.id} p={p} />)}
-          </div>
-
-          {/* Copilot section */}
-          {copilot && (
-            <>
-              <div className="flex items-center justify-between mt-4 mb-1">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">GitHub Copilot models (included in Copilot subscription)</p>
-                {!copilot.available && (
-                  <Link href="/integrations" className="text-[10px] text-primary hover:text-primary underline shrink-0 ml-2">
-                    Configure in Integrations →
-                  </Link>
-                )}
-              </div>
-              {/* Copilot provider row */}
-              <ProviderRow p={copilot} />
-              {/* Individual Copilot model rows */}
-              <div className="mt-2 space-y-1">
-                {models.copilot_models.map((m) => (
-                  <div key={m.alias} className={`flex items-center gap-3 rounded-lg px-3 py-2 ${
-                    copilot.available ? "bg-secondary/50" : "bg-card/40"
-                  }`}>
-                    <span className={`font-mono text-xs ${
-                      copilot.available ? "text-primary" : "text-muted-foreground"
-                    }`}>
-                      {m.alias}
-                    </span>
-                    <span className={`text-xs flex-1 ${
-                      copilot.available ? "text-foreground" : "text-muted-foreground"
-                    }`}>
-                      {m.label}
-                    </span>
-                    <span className="text-[11px] text-muted-foreground">{m.description}</span>
-                    {m.suggested_tier && (
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
-                        copilot.available
-                          ? "bg-secondary text-muted-foreground border-border"
-                          : "bg-card text-muted-foreground/70 border-border"
-                      }`}>
-                        → {m.suggested_tier}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-              {!copilot.available && (
-                <p className="mt-2 text-[11px] text-muted-foreground">
-                  Set <code className="text-muted-foreground">GITHUB_TOKEN</code> (PAT with{" "}
-                  <code className="text-muted-foreground">copilot</code> scope) in the{" "}
-                  <Link href="/integrations" className="text-primary hover:text-primary underline">Integrations</Link>{" "}
-                  panel to unlock GPT-4o, Claude Sonnet, and o3-mini at no extra per-token cost.
-                </p>
-              )}
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Agent card
 // ---------------------------------------------------------------------------
 
@@ -1368,24 +1189,21 @@ function AgentCard({
 export default function AgentsPage() {
   const [agents, setAgents] = useState<AgentEntry[]>([]);
   const [integrationStatuses, setIntegrationStatuses] = useState<IntegrationStatus[]>([]);
-  const [modelsStatus, setModelsStatus] = useState<ModelsStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
 
   const loadAgents = useCallback(async () => {
     setLoading(true);
     try {
-      const [agentRes, intgRes, modelsRes] = await Promise.all([
+      const [agentRes, intgRes] = await Promise.all([
         fetch("/api/agent/list"),
         fetch("/api/integrations/status"),
-        fetch("/api/models"),
       ]);
       if (agentRes.ok) setAgents(await agentRes.json());
       if (intgRes.ok) {
         const data = await intgRes.json();
         if (Array.isArray(data)) setIntegrationStatuses(data);
       }
-      if (modelsRes.ok) setModelsStatus(await modelsRes.json());
     } catch {
       /* ignore */
     } finally {
@@ -1418,10 +1236,10 @@ export default function AgentsPage() {
         </div>
         <button
           onClick={() => setShowAddModal(true)}
-          className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 transition-colors"
+          className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 transition-colors shrink-0"
         >
           <span className="text-base leading-none">+</span>
-          Add Agent
+          <span className="hidden sm:inline">Add Agent</span>
         </button>
       </div>
 
@@ -1431,8 +1249,6 @@ export default function AgentsPage() {
         </div>
       ) : (
         <>
-          {/* Model access panel */}
-          <ModelAccess models={modelsStatus} />
           {/* Built-in agents */}
           {builtIn.length > 0 && (
             <section className="mb-6">

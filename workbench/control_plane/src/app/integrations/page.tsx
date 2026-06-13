@@ -20,7 +20,7 @@ import GitHubAccountBadge from "@/components/GitHubAccountBadge";
 function StatusBadge({ configured }: { configured: boolean }) {
   return configured ? (
     <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+      <span className="w-1.5 h-1.5 rounded-full bg-success" />
       Connected
     </span>
   ) : (
@@ -126,18 +126,18 @@ function ReconfigureForm({
               setValues((prev) => ({ ...prev, [v.key]: e.target.value }))
             }
             placeholder={`Enter ${v.label}…`}
-            className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-blue-500 transition-colors"
+            className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-primary transition-colors"
           />
         </div>
       ))}
       {error && (
-        <p className="text-sm text-red-400 bg-red-500/10 rounded-lg px-3 py-2">{error}</p>
+        <p className="text-sm text-destructive bg-red-500/10 rounded-lg px-3 py-2">{error}</p>
       )}
       <div className="flex gap-2">
         <button
           onClick={() => void handleSave()}
           disabled={saving}
-          className="flex-1 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-sm font-medium text-white transition-colors"
+          className="flex-1 py-2 rounded-lg bg-primary hover:bg-blue-500 disabled:opacity-40 text-sm font-medium text-white transition-colors"
         >
           {saving ? "Saving…" : "Save credentials"}
         </button>
@@ -225,7 +225,7 @@ function IntegrationCard({
                       className={`px-1.5 py-0.5 rounded font-medium border ${
                         u === "Models"
                           ? "bg-violet-500/10 text-violet-400 border-violet-500/25"
-                          : "bg-blue-500/10 text-blue-400 border-blue-500/25"
+                          : "bg-blue-500/10 text-primary border-blue-500/25"
                       }`}
                     >
                       {u}
@@ -277,7 +277,7 @@ function IntegrationCard({
                   {a.name}
                 </span>
               ))}
-              <span className="text-xs text-amber-500/70 ml-auto">Configure below to unblock</span>
+              <span className="text-xs text-warning/70 ml-auto">Configure below to unblock</span>
             </div>
           )}
           {/* GitHub: unified account badge + CLI import + device flow */}
@@ -311,7 +311,7 @@ function IntegrationCard({
                       href={integration.setup_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-xs px-3 py-1.5 rounded-lg border border-blue-500/30 text-blue-400 hover:bg-blue-500/10 transition-colors"
+                      className="text-xs px-3 py-1.5 rounded-lg border border-blue-500/30 text-primary hover:bg-blue-500/10 transition-colors"
                     >
                       Get credentials →
                     </a>

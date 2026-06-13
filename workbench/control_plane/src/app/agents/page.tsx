@@ -165,7 +165,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
       >
         <span className="font-medium">Self-mutation commits</span>
         {pendingCount > 0 && (
-          <span className="rounded-full bg-blue-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+          <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-white">
             {pendingCount}
           </span>
         )}
@@ -177,7 +177,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
         <div className="mt-2 flex flex-col gap-2">
           {/* Cascade toast */}
           {cascadeMsg && (
-            <div className="rounded-md border border-emerald-700/40 bg-emerald-950/30 px-3 py-2 text-[11px] text-emerald-300">
+            <div className="rounded-md border border-success/20 bg-success/5 px-3 py-2 text-[11px] text-emerald-300">
               ✓ {cascadeMsg}
             </div>
           )}
@@ -202,8 +202,8 @@ function PendingCommits({ agentName }: { agentName: string }) {
                 key={key}
                 className={`rounded-lg border p-3 text-xs ${
                   isEvalFailed
-                    ? "border-amber-800/50 bg-amber-950/20"
-                    : "border-blue-800/50 bg-blue-950/20"
+                    ? "border-warning/20 bg-warning/5"
+                    : "border-primary/20 bg-primary/5"
                 }`}
               >
                 {/* Status badge + commit message — no X here, decision required */}
@@ -211,8 +211,8 @@ function PendingCommits({ agentName }: { agentName: string }) {
                   <span
                     className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${
                       isEvalFailed
-                        ? "border-amber-600/50 bg-amber-900/30 text-amber-300"
-                        : "border-blue-700/50 bg-blue-900/30 text-blue-300"
+                        ? "border-warning/20 bg-warning/10 text-warning"
+                        : "border-primary/20 bg-primary/10 text-primary"
                     }`}
                   >
                     {isEvalFailed ? "⚠ Eval failed" : "Awaiting review"}
@@ -229,14 +229,14 @@ function PendingCommits({ agentName }: { agentName: string }) {
                 </div>
 
                 {m.test_summary && (
-                  <div className={`mt-1 ${isEvalFailed ? "text-amber-500/80" : "text-muted-foreground"}`}>
+                  <div className={`mt-1 ${isEvalFailed ? "text-warning/80" : "text-muted-foreground"}`}>
                     {m.test_summary}
                   </div>
                 )}
 
                 {/* Cascade hint */}
                 {laterCount > 0 && isPending && (
-                  <p className="mt-1 text-[10px] text-blue-400/60">
+                  <p className="mt-1 text-[10px] text-primary/60">
                     Approving will also push {laterCount} later commit{laterCount === 1 ? "" : "s"} in this chain.
                   </p>
                 )}
@@ -257,34 +257,34 @@ function PendingCommits({ agentName }: { agentName: string }) {
                 )}
 
                 {errors[key] && (
-                  <p className="mt-1.5 text-red-400">{errors[key]}</p>
+                  <p className="mt-1.5 text-destructive">{errors[key]}</p>
                 )}
 
                 {/* eval_failed actions */}
                 {isEvalFailed && m.id && (
                   <div className="mt-2 flex flex-col gap-1.5">
-                    <p className="text-[10px] text-amber-500/70 mb-0.5">
+                    <p className="text-[10px] text-warning/70 mb-0.5">
                       Tests failed — review the diff, then choose an action.
                     </p>
                     <div className="flex gap-1.5 flex-wrap">
                       <button
                         disabled={!!busy[m.id]}
                         onClick={() => act(m.id!, "approve")}
-                        className="rounded bg-amber-800/50 px-2.5 py-1 text-amber-200 hover:bg-amber-700/60 disabled:opacity-50 transition-colors"
+                        className="rounded bg-amber-800/50 px-2.5 py-1 text-warning hover:bg-amber-700/60 disabled:opacity-50 transition-colors"
                       >
                         {busy[m.id] === "approve" ? "Pushing…" : "Push Anyway"}
                       </button>
                       <button
                         disabled={!!busy[m.id]}
                         onClick={() => remutate(m.id!)}
-                        className="rounded bg-blue-900/40 px-2.5 py-1 text-blue-300 hover:bg-blue-800/50 disabled:opacity-50 transition-colors"
+                        className="rounded bg-primary/10 px-2.5 py-1 text-primary hover:bg-primary/20 disabled:opacity-50 transition-colors"
                       >
                         {busy[m.id] === "remutate" ? "Resetting…" : "Re-mutate"}
                       </button>
                       <button
                         disabled={!!busy[m.id]}
                         onClick={() => act(m.id!, "reject")}
-                        className="rounded bg-red-900/40 px-2.5 py-1 text-red-300 hover:bg-red-800/50 disabled:opacity-50 transition-colors"
+                        className="rounded bg-red-900/40 px-2.5 py-1 text-destructive hover:bg-red-800/50 disabled:opacity-50 transition-colors"
                       >
                         {busy[m.id] === "reject" ? "Rejecting…" : "Reject & Discard"}
                       </button>
@@ -298,14 +298,14 @@ function PendingCommits({ agentName }: { agentName: string }) {
                     <button
                       disabled={!!busy[m.id]}
                       onClick={() => act(m.id!, "approve")}
-                      className="rounded bg-emerald-800/60 px-2.5 py-1 text-emerald-200 hover:bg-emerald-700/60 disabled:opacity-50 transition-colors"
+                      className="rounded bg-success/15 px-2.5 py-1 text-success hover:bg-success/25 disabled:opacity-50 transition-colors"
                     >
                       {busy[m.id] === "approve" ? "Pushing…" : "Approve & Push"}
                     </button>
                     <button
                       disabled={!!busy[m.id]}
                       onClick={() => act(m.id!, "reject")}
-                      className="rounded bg-red-900/40 px-2.5 py-1 text-red-300 hover:bg-red-800/50 disabled:opacity-50 transition-colors"
+                      className="rounded bg-red-900/40 px-2.5 py-1 text-destructive hover:bg-red-800/50 disabled:opacity-50 transition-colors"
                     >
                       {busy[m.id] === "reject" ? "Rejecting…" : "Reject & Discard"}
                     </button>
@@ -355,11 +355,11 @@ function PendingCommits({ agentName }: { agentName: string }) {
                       <span
                         className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${
                           isApproved
-                            ? "border-emerald-700/50 bg-emerald-900/30 text-emerald-300"
+                            ? "border-success/20 bg-success/10 text-success"
                             : isRejected
                             ? "border-border/50 bg-secondary text-muted-foreground"
                             : m.status === "failed"
-                            ? "border-red-700/50 bg-red-900/30 text-red-300"
+                            ? "border-red-700/50 bg-red-900/30 text-destructive"
                             : "border-border/50 bg-secondary text-muted-foreground"
                         }`}
                       >
@@ -655,7 +655,7 @@ function AddAgentModal({
             <div className="flex flex-col gap-4">
               <div>
                 <label className="mb-1 block text-xs font-medium text-muted-foreground">
-                  GitHub Repo or Local Path <span className="text-red-400">*</span>
+                  GitHub Repo or Local Path <span className="text-destructive">*</span>
                 </label>
                 <div className="relative">
                   <input
@@ -663,10 +663,10 @@ function AddAgentModal({
                     placeholder="owner/repo  ·  https://github.com/owner/repo  ·  C:\path\to\agent"
                     value={form.repoUrl}
                     onChange={(e) => handleRepoUrlChange(e.target.value)}
-                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none pr-8"
+                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none pr-8"
                   />
                   {configLoading && (
-                    <div className="absolute right-2.5 top-2.5 h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+                    <div className="absolute right-2.5 top-2.5 h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                   )}
                   {configLoaded && !configLoading && (
                     <div className="absolute right-2.5 top-2 text-green-400 text-xs" title="config.json loaded">✓</div>
@@ -680,14 +680,14 @@ function AddAgentModal({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1 block text-xs font-medium text-muted-foreground">
-                    Agent name <span className="text-red-400">*</span>
+                    Agent name <span className="text-destructive">*</span>
                   </label>
                   <input
                     type="text"
                     placeholder="my-agent"
                     value={form.name}
                     onChange={(e) => handleField("name", e.target.value)}
-                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
+                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
                   />
                   <p className="mt-1 text-xs text-muted-foreground">lowercase, hyphens only</p>
                 </div>
@@ -698,7 +698,7 @@ function AddAgentModal({
                     placeholder="sales, outbound"
                     value={form.tags}
                     onChange={(e) => handleField("tags", e.target.value)}
-                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
+                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
                   />
                   <p className="mt-1 text-xs text-muted-foreground">comma-separated</p>
                 </div>
@@ -711,7 +711,7 @@ function AddAgentModal({
                   placeholder="What does this agent do?"
                   value={form.description}
                   onChange={(e) => handleField("description", e.target.value)}
-                  className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
+                  className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
                 />
               </div>
 
@@ -725,7 +725,7 @@ function AddAgentModal({
                     placeholder="zoho-crm, apollo"
                     value={form.integrations}
                     onChange={(e) => handleField("integrations", e.target.value)}
-                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
+                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
                   />
                 </div>
                 <div>
@@ -737,7 +737,7 @@ function AddAgentModal({
                     placeholder="instantly, smtp"
                     value={form.optionalIntegrations}
                     onChange={(e) => handleField("optionalIntegrations", e.target.value)}
-                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
+                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
                   />
                 </div>
               </div>
@@ -753,7 +753,7 @@ function AddAgentModal({
                   disabled={!form.repoUrl.trim() || !form.name.trim() || configLoading}
                   onClick={handleFormSubmit}
                   title={configLoading ? "Fetching config.json…" : undefined}
-                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
+                  className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
                 >
                   {configLoading ? "Fetching…" : "Next →"}
                 </button>
@@ -785,7 +785,7 @@ function AddAgentModal({
           {/* ── Step: Registering ── */}
           {step === "registering" && (
             <div className="flex flex-col items-center gap-4 py-8">
-              <div className="h-8 w-8 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
               <div className="text-center">
                 <p className="text-sm text-foreground font-medium">
                   {registerPhase === "saving" ? "Saving agent…" : "Cloning repository…"}
@@ -799,11 +799,11 @@ function AddAgentModal({
                 </p>
               </div>
               <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                <span className={registerPhase === "saving" ? "text-blue-400" : "text-emerald-500"}>
+                <span className={registerPhase === "saving" ? "text-primary" : "text-success"}>
                   {registerPhase === "saving" ? "● saving" : "✓ saved"}
                 </span>
                 <span className="text-muted-foreground/70">→</span>
-                <span className={registerPhase === "cloning" ? "text-blue-400" : "text-muted-foreground"}>
+                <span className={registerPhase === "cloning" ? "text-primary" : "text-muted-foreground"}>
                   {registerPhase === "cloning" ? "● cloning" : "○ clone"}
                 </span>
               </div>
@@ -817,18 +817,18 @@ function AddAgentModal({
               <div className="rounded-xl border border-border bg-secondary/60 p-4">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                   <span className="text-sm font-semibold text-foreground">{addedAgent.name}</span>
-                  <span className="shrink-0 rounded-full bg-blue-500/15 px-2 py-0.5 text-xs text-blue-400">custom</span>
+                  <span className="shrink-0 rounded-full bg-blue-500/15 px-2 py-0.5 text-xs text-primary">custom</span>
                   {addedAgent.local_path && (
                     <span className="shrink-0 rounded-full bg-violet-500/15 px-2 py-0.5 text-xs text-violet-400">local</span>
                   )}
                   {/* Runtime badges in the success preview */}
                   {addedAgent.agent_runtime === "github-copilot" ? (
                     <>
-                      <span className="shrink-0 rounded-full border border-amber-700/50 bg-amber-900/30 px-2 py-0.5 text-xs text-amber-300">MAF</span>
+                      <span className="shrink-0 rounded-full border border-accent/20 bg-accent/10 px-2 py-0.5 text-xs text-accent">MAF</span>
                       <span className="shrink-0 rounded-full border border-sky-700/50 bg-sky-900/30 px-2 py-0.5 text-xs text-sky-300" title="GitHub Copilot SDK — shell, file r/w, MCP, native BYOK">Copilot SDK</span>
                     </>
                   ) : (
-                    <span className="shrink-0 rounded-full border border-amber-700/50 bg-amber-900/30 px-2 py-0.5 text-xs text-amber-300">MAF</span>
+                    <span className="shrink-0 rounded-full border border-accent/20 bg-accent/10 px-2 py-0.5 text-xs text-accent">MAF</span>
                   )}
                   <span className="shrink-0 rounded-full bg-green-500/15 px-2 py-0.5 text-xs text-green-400">live</span>
                 </div>
@@ -885,7 +885,7 @@ function AddAgentModal({
                   onAdded(addedAgent);
                   onClose();
                 }}
-                className="w-full rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
+                className="w-full rounded-lg bg-primary px-5 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
               >
                 Done
               </button>
@@ -895,7 +895,7 @@ function AddAgentModal({
           {/* ── Step: Error ── */}
           {step === "error" && (
             <div className="flex flex-col gap-4 py-4">
-              <div className="rounded-lg border border-red-800 bg-red-900/20 px-4 py-3 text-sm text-red-300">
+              <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
                 {errorMsg}
               </div>
               <div className="flex justify-end gap-2">
@@ -949,7 +949,7 @@ function ProviderRow({ p }: { p: ProviderInfo }) {
           }`}>{p.label}</span>
           {p.available ? (
             <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              <span className="w-1.5 h-1.5 rounded-full bg-success" />
               Active
             </span>
           ) : (
@@ -964,7 +964,7 @@ function ProviderRow({ p }: { p: ProviderInfo }) {
             </span>
           )}
           {p.type === "local" && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-primary border border-blue-500/20">
               local
             </span>
           )}
@@ -1008,7 +1008,7 @@ function ModelAccess({ models }: { models: ModelsStatus | null }) {
           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">LLM Model Access</span>
           <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
             activeCount > 0
-              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+              ? "bg-success/10 text-success border-success/20"
               : "bg-secondary text-muted-foreground border-border"
           }`}>
             {activeCount}/{models.providers.length} providers active
@@ -1139,7 +1139,7 @@ function AgentCard({
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-semibold text-foreground truncate">{agent.name}</span>
             {agent.dynamic && (
-              <span className="shrink-0 rounded-full bg-blue-500/15 px-2 py-0.5 text-xs text-blue-400">
+              <span className="shrink-0 rounded-full bg-blue-500/15 px-2 py-0.5 text-xs text-primary">
                 custom
               </span>
             )}
@@ -1151,11 +1151,11 @@ function AgentCard({
             {/* Agent runtime badges */}
             {agent.agent_runtime === "github-copilot" ? (
               <>
-                <span className="shrink-0 rounded-full border border-amber-700/50 bg-amber-900/30 px-2 py-0.5 text-xs text-amber-300" title="Microsoft Agent Framework">MAF</span>
+                <span className="shrink-0 rounded-full border border-accent/20 bg-accent/10 px-2 py-0.5 text-xs text-accent" title="Microsoft Agent Framework">MAF</span>
                 <span className="shrink-0 rounded-full border border-sky-700/50 bg-sky-900/30 px-2 py-0.5 text-xs text-sky-300" title="GitHub Copilot SDK — shell, file r/w, MCP, native BYOK">Copilot SDK</span>
               </>
             ) : (
-              <span className="shrink-0 rounded-full border border-amber-700/50 bg-amber-900/30 px-2 py-0.5 text-xs text-amber-300" title="Microsoft Agent Framework agent">MAF</span>
+              <span className="shrink-0 rounded-full border border-accent/20 bg-accent/10 px-2 py-0.5 text-xs text-accent" title="Microsoft Agent Framework agent">MAF</span>
             )}
             <span
               className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${
@@ -1236,17 +1236,17 @@ function AgentCard({
                       >
                         <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium cursor-pointer transition-colors ${
                           state === "ok"
-                            ? "border-emerald-700/50 text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20"
+                            ? "border-success/20 text-success bg-success/10 hover:bg-success/20"
                             : state === "missing"
-                            ? "border-red-700/50 text-red-400 bg-red-500/10 hover:bg-red-500/20"
+                            ? "border-red-700/50 text-destructive bg-red-500/10 hover:bg-red-500/20"
                             : "border-border text-muted-foreground hover:border-border"
                         }`}>
                           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                            state === "ok" ? "bg-emerald-400" : state === "missing" ? "bg-red-400" : "bg-muted"
+                            state === "ok" ? "bg-success" : state === "missing" ? "bg-destructive" : "bg-muted"
                           }`} />
                           {intg?.label ?? i}
                           {state === "ok" && <span className="text-emerald-600 text-[10px]">✓</span>}
-                          {state === "missing" && <span className="text-red-500 text-[10px]">!</span>}
+                          {state === "missing" && <span className="text-destructive text-[10px]">!</span>}
                         </span>
                       </Link>
                     );
@@ -1297,7 +1297,7 @@ function AgentCard({
                 <span className="text-amber-400 text-xs">⚠</span>
                 <span className="text-xs text-amber-300">
                   Agent is blocked — needs:{" "}
-                  <Link href="/integrations" className="underline hover:text-amber-200">
+                  <Link href="/integrations" className="underline hover:text-warning">
                     {labels.join(", ")}
                   </Link>
                 </span>
@@ -1346,7 +1346,7 @@ function AgentCard({
             ) : (
               <button
                 onClick={() => setConfirming(true)}
-                className="rounded p-1.5 text-muted-foreground hover:bg-red-900/30 hover:text-red-400 transition-colors mt-1"
+                className="rounded p-1.5 text-muted-foreground hover:bg-red-900/30 hover:text-destructive transition-colors mt-1"
                 title="Remove agent"
               >
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1418,7 +1418,7 @@ export default function AgentsPage() {
         </div>
         <button
           onClick={() => setShowAddModal(true)}
-          className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
+          className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 transition-colors"
         >
           <span className="text-base leading-none">+</span>
           Add Agent
@@ -1457,7 +1457,7 @@ export default function AgentsPage() {
                 <p className="text-sm text-muted-foreground">No custom agents yet.</p>
                 <button
                   onClick={() => setShowAddModal(true)}
-                  className="mt-3 text-sm text-blue-500 hover:text-blue-400 underline"
+                  className="mt-3 text-sm text-blue-500 hover:text-primary underline"
                 >
                   Add your first agent →
                 </button>

@@ -272,7 +272,7 @@ function TierCard({
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-foreground">{tier.label}</span>
             {tier.provider_configured ? (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-400 border border-green-800/40">
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-success/10 text-success border border-success/20">
                 ● Live
               </span>
             ) : (
@@ -562,7 +562,7 @@ function ProviderCard({
         <div className="flex items-center gap-2">
           {provider.configured ? (
             <>
-              <span className="text-xs font-medium text-green-400">● Configured</span>
+              <span className="text-xs font-medium text-success">● Configured</span>
               {!isLocal && (
                 <>
                   <button
@@ -614,6 +614,48 @@ function ProviderCard({
           )}
         </div>
       </div>
+
+      {/* Copilot scope warning — shown when GitHub token is set but may lack copilot scope */}
+      {provider.id === "github" && provider.configured && !editing && (
+        <div className="mt-3 rounded-lg border border-warning/25 bg-warning/5 p-3 space-y-2">
+          <div className="flex items-start gap-2">
+            <span className="text-warning text-sm shrink-0 mt-0.5">⚠</span>
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-warning">Verify your token has the Copilot scope</p>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                A GitHub token is set, but Copilot models will fail with a 403 if the token lacks the
+                {" "}<code className="font-mono bg-secondary px-1 rounded">copilot</code> (read) permission.
+                This is the most common cause of "Not authenticated" errors.
+              </p>
+              <details className="group">
+                <summary className="text-[11px] text-primary cursor-pointer hover:underline select-none list-none flex items-center gap-1">
+                  <span className="transition-transform group-open:rotate-90">▶</span>
+                  How to fix — step by step
+                </summary>
+                <ol className="mt-2 space-y-1.5 pl-4">
+                  {[
+                    <>Go to <a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener noreferrer" className="text-primary underline hover:text-primary/80">github.com/settings/tokens → Fine-grained tokens</a>.</>,
+                    <>Click <strong>Generate new token</strong>.</>,
+                    <>Under <strong>Permissions → Account permissions</strong>, find <strong>Copilot</strong> and set it to <strong>Read-only</strong>.</>,
+                    <>Set <strong>Expiration</strong> to your preference (90 days recommended).</>,
+                    <>Click <strong>Generate token</strong> and copy the token starting with <code className="font-mono bg-secondary px-1 rounded">github_pat_…</code></>,
+                    <>Click <strong>update key</strong> above and paste the new token.</>,
+                    <>Requires an active GitHub Copilot Individual or Business subscription.</>,
+                  ].map((step, i) => (
+                    <li key={i} className="flex items-start gap-2 text-[11px] text-muted-foreground">
+                      <span className="shrink-0 w-4 h-4 rounded-full bg-secondary flex items-center justify-center text-[9px] font-semibold mt-0.5">{i + 1}</span>
+                      <span className="leading-relaxed">{step}</span>
+                    </li>
+                  ))}
+                </ol>
+                <p className="mt-2 text-[11px] text-muted-foreground pl-6">
+                  Alternatively, use <strong>Connect with GitHub OAuth</strong> — click <em>update key</em> above. This grants the correct scope automatically.
+                </p>
+              </details>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Guide description (always shown for non-local providers) */}
       {guide && !isLocal && (

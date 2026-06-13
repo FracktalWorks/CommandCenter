@@ -276,7 +276,7 @@ function TierCard({
                 ● Live
               </span>
             ) : (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 border border-red-800/40">
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-destructive/10 text-destructive border border-destructive/20">
                 ● No key
               </span>
             )}
@@ -423,7 +423,7 @@ function TierCard({
           className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
             testResult.success
               ? "border-green-800/40 bg-green-950/30 text-green-300"
-              : "border-red-800/40 bg-red-950/30 text-red-300"
+              : "border-destructive/20 bg-destructive/5 text-destructive"
           }`}
         >
           <span className="font-medium mr-2">{testResult.success ? "✓ OK" : "✗ Failed"}</span>
@@ -576,7 +576,7 @@ function ProviderCard({
                       <button
                         onClick={handleDiscard}
                         disabled={discarding}
-                        className="rounded border border-red-700/50 bg-red-950/40 px-2 py-0.5 text-xs text-red-400 hover:bg-red-900/40 transition-colors disabled:opacity-40"
+                        className="rounded border border-destructive/20 bg-destructive/5 px-2 py-0.5 text-xs text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-40"
                       >
                         {discarding ? "Discarding…" : "Confirm discard"}
                       </button>
@@ -591,7 +591,7 @@ function ProviderCard({
                   ) : (
                     <button
                       onClick={() => { setConfirmDiscard(true); setEditing(false); }}
-                      className="text-[10px] text-red-500/70 hover:text-red-400 underline underline-offset-2 transition-colors"
+                      className="text-[10px] text-destructive/70 hover:text-destructive underline underline-offset-2 transition-colors"
                       title="Remove key and disconnect this provider"
                     >
                       discard key
@@ -729,7 +729,7 @@ function ProviderCard({
               {show ? "hide" : "show"}
             </button>
           </div>
-          {keyError && <p className="text-xs text-red-400">{keyError}</p>}
+          {keyError && <p className="text-xs text-destructive">{keyError}</p>}
           <div className="flex gap-2">
             <button
               onClick={handleSave}
@@ -756,9 +756,9 @@ function ProviderCard({
 
       {/* Confirm discard panel */}
       {confirmDiscard && (
-        <div className="mt-3 rounded-lg border border-red-800/30 bg-red-950/20 p-3 space-y-2">
-          <p className="text-xs text-red-300">
-            This will remove <code className="font-mono text-red-400">{provider.env_var}</code> from{" "}
+        <div className="mt-3 rounded-lg border border-destructive/20 bg-destructive/5 p-3 space-y-2">
+          <p className="text-xs text-destructive">
+            This will remove <code className="font-mono text-destructive">{provider.env_var}</code> from{" "}
             <code className="font-mono">infra/.env</code> and disconnect the provider.
             Any tier currently using this provider will fall back to the next available.
           </p>
@@ -766,7 +766,7 @@ function ProviderCard({
             <button
               onClick={handleDiscard}
               disabled={discarding}
-              className="rounded-lg bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-500 disabled:opacity-40 transition-colors"
+              className="rounded-lg bg-destructive px-3 py-1 text-xs font-medium text-white hover:bg-destructive disabled:opacity-40 transition-colors"
             >
               {discarding ? "Discarding & restarting LiteLLM…" : "Yes, discard key"}
             </button>
@@ -1108,7 +1108,7 @@ function ModelCatalogue() {
                   className="w-full rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
                 />
               </div>
-              {error && <p className="text-xs text-red-400">{error}</p>}
+              {error && <p className="text-xs text-destructive">{error}</p>}
               <button
                 onClick={handleAdd}
                 disabled={adding || !formId.trim() || !formLabel.trim()}
@@ -1120,7 +1120,7 @@ function ModelCatalogue() {
           )}
 
           {success && (
-            <div className="mb-3 rounded-md border border-emerald-800/40 bg-emerald-950/30 px-3 py-1.5 text-xs text-emerald-300">
+            <div className="mb-3 rounded-md border border-success/20 bg-success/5 px-3 py-1.5 text-xs text-success">
               ✓ {success}
             </div>
           )}
@@ -1150,7 +1150,7 @@ function ModelCatalogue() {
                     <button
                       onClick={() => handleRemove(m.id)}
                       disabled={removing === m.id}
-                      className="text-muted-foreground hover:text-red-400 transition-colors disabled:opacity-40"
+                      className="text-muted-foreground hover:text-destructive transition-colors disabled:opacity-40"
                       title="Remove"
                     >
                       {removing === m.id ? "…" : "✕"}
@@ -1225,7 +1225,7 @@ function ModelCatalogue() {
                       <button
                         onClick={() => toggleHidden(m.id)}
                         disabled={busy === m.id}
-                        className="ml-2 shrink-0 text-muted-foreground hover:text-emerald-400 transition-colors disabled:opacity-30"
+                        className="ml-2 shrink-0 text-muted-foreground hover:text-success transition-colors disabled:opacity-30"
                         title="Show in picker"
                       >
                         {busy === m.id ? (
@@ -1349,7 +1349,7 @@ export default function ModelsPage() {
         </div>
       )}
       {saveError && (
-        <div className="mb-4 rounded-lg border border-red-800/40 bg-red-950/30 px-4 py-2 text-xs text-red-300">
+        <div className="mb-4 rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-2 text-xs text-destructive">
           ✗ {saveError}
         </div>
       )}
@@ -1360,7 +1360,7 @@ export default function ModelsPage() {
         </div>
       ) : loadError ? (
         <div className="rounded-xl border border-border bg-card/60 p-8 text-center">
-          <p className="text-sm text-red-400 mb-2">Failed to load config</p>
+          <p className="text-sm text-destructive mb-2">Failed to load config</p>
           <p className="text-xs text-muted-foreground mb-4">{loadError}</p>
           <p className="text-xs text-muted-foreground">
             Make sure the gateway is running:{" "}

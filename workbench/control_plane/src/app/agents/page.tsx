@@ -177,7 +177,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
         <div className="mt-2 flex flex-col gap-2">
           {/* Cascade toast */}
           {cascadeMsg && (
-            <div className="rounded-md border border-success/20 bg-success/5 px-3 py-2 text-[11px] text-emerald-300">
+            <div className="rounded-md border border-success/20 bg-success/5 px-3 py-2 text-[11px] text-success">
               ✓ {cascadeMsg}
             </div>
           )}
@@ -284,7 +284,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
                       <button
                         disabled={!!busy[m.id]}
                         onClick={() => act(m.id!, "reject")}
-                        className="rounded bg-red-900/40 px-2.5 py-1 text-destructive hover:bg-red-800/50 disabled:opacity-50 transition-colors"
+                        className="rounded bg-destructive/10 px-2.5 py-1 text-destructive hover:bg-red-800/50 disabled:opacity-50 transition-colors"
                       >
                         {busy[m.id] === "reject" ? "Rejecting…" : "Reject & Discard"}
                       </button>
@@ -305,7 +305,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
                     <button
                       disabled={!!busy[m.id]}
                       onClick={() => act(m.id!, "reject")}
-                      className="rounded bg-red-900/40 px-2.5 py-1 text-destructive hover:bg-red-800/50 disabled:opacity-50 transition-colors"
+                      className="rounded bg-destructive/10 px-2.5 py-1 text-destructive hover:bg-red-800/50 disabled:opacity-50 transition-colors"
                     >
                       {busy[m.id] === "reject" ? "Rejecting…" : "Reject & Discard"}
                     </button>
@@ -359,7 +359,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
                             : isRejected
                             ? "border-border/50 bg-secondary text-muted-foreground"
                             : m.status === "failed"
-                            ? "border-red-700/50 bg-red-900/30 text-destructive"
+                            ? "border-destructive/20 bg-destructive/5 text-destructive"
                             : "border-border/50 bg-secondary text-muted-foreground"
                         }`}
                       >
@@ -948,7 +948,7 @@ function ProviderRow({ p }: { p: ProviderInfo }) {
             p.available ? "text-foreground" : "text-muted-foreground"
           }`}>{p.label}</span>
           {p.available ? (
-            <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-success/10 text-success border border-success/20">
               <span className="w-1.5 h-1.5 rounded-full bg-success" />
               Active
             </span>
@@ -1238,14 +1238,14 @@ function AgentCard({
                           state === "ok"
                             ? "border-success/20 text-success bg-success/10 hover:bg-success/20"
                             : state === "missing"
-                            ? "border-red-700/50 text-destructive bg-red-500/10 hover:bg-red-500/20"
+                            ? "border-destructive/20 text-destructive bg-destructive/10 hover:bg-destructive/20"
                             : "border-border text-muted-foreground hover:border-border"
                         }`}>
                           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                             state === "ok" ? "bg-success" : state === "missing" ? "bg-destructive" : "bg-muted"
                           }`} />
                           {intg?.label ?? i}
-                          {state === "ok" && <span className="text-emerald-600 text-[10px]">✓</span>}
+                          {state === "ok" && <span className="text-success text-[10px]">✓</span>}
                           {state === "missing" && <span className="text-destructive text-[10px]">!</span>}
                         </span>
                       </Link>
@@ -1268,11 +1268,11 @@ function AgentCard({
                       >
                         <span className={`inline-flex items-center gap-1.5 rounded-full border border-dashed px-2 py-0.5 text-xs cursor-pointer transition-colors ${
                           state === "ok"
-                            ? "border-emerald-700/40 text-emerald-600 hover:bg-emerald-500/10"
+                            ? "border-success/20 text-success hover:bg-success/10"
                             : "border-border text-muted-foreground hover:border-border"
                         }`}>
                           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                            state === "ok" ? "bg-emerald-600" : "bg-secondary"
+                            state === "ok" ? "bg-success" : "bg-secondary"
                           }`} />
                           {intg?.label ?? i}
                         </span>
@@ -1332,7 +1332,7 @@ function AgentCard({
                 <button
                   disabled={removing}
                   onClick={handleRemove}
-                  className="rounded px-2 py-1 text-xs bg-red-700 hover:bg-destructive text-destructive-foreground transition-colors disabled:opacity-50"
+                  className="rounded px-2 py-1 text-xs bg-destructive hover:bg-destructive text-destructive-foreground transition-colors disabled:opacity-50"
                 >
                   {removing ? "…" : "Yes"}
                 </button>
@@ -1346,7 +1346,7 @@ function AgentCard({
             ) : (
               <button
                 onClick={() => setConfirming(true)}
-                className="rounded p-1.5 text-muted-foreground hover:bg-red-900/30 hover:text-destructive transition-colors mt-1"
+                className="rounded p-1.5 text-muted-foreground hover:bg-destructive/5 hover:text-destructive transition-colors mt-1"
                 title="Remove agent"
               >
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

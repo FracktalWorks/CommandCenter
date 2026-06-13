@@ -241,8 +241,8 @@ export default function GitHubDeviceConnect({
 
   const cardClass = `rounded-xl border p-6 space-y-4 transition-colors ${
     phase === "authorized"
-      ? "border-emerald-500 bg-emerald-500/5"
-      : "border-neutral-700 bg-neutral-900"
+      ? "border-success bg-success/5"
+      : "border-border bg-card"
   }`;
 
   // ---------------------------------------------------------------------------
@@ -255,15 +255,15 @@ export default function GitHubDeviceConnect({
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <GitHubIcon className="w-4 h-4 text-neutral-300" />
-            <span className="font-semibold text-neutral-100">GitHub</span>
+            <GitHubIcon className="w-4 h-4 text-foreground" />
+            <span className="font-semibold text-foreground">GitHub</span>
             {phase === "authorized" && (
-              <span className="text-xs text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+              <span className="text-xs text-success bg-success/10 px-2 py-0.5 rounded-full">
                 ✓ Connected{login ? ` as ${login}` : ""}
               </span>
             )}
           </div>
-          <p className="text-sm text-neutral-400 mt-0.5">
+          <p className="text-sm text-muted-foreground mt-0.5">
             {integration.description}
           </p>
         </div>
@@ -271,7 +271,7 @@ export default function GitHubDeviceConnect({
           href="https://github.com/settings/tokens/new?scopes=copilot,repo"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs px-3 py-1.5 rounded-lg border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 transition-colors shrink-0"
+          className="text-xs px-3 py-1.5 rounded-lg border border-success/40 text-success hover:bg-success/10 transition-colors shrink-0"
         >
           Create PAT →
         </a>
@@ -280,27 +280,27 @@ export default function GitHubDeviceConnect({
       {/* Phase: setup — collect PAT (recommended) and/or Client ID */}
       {(phase === "setup" || phase === "saving") && (
         <div className="space-y-4">
-          <pre className="text-xs text-neutral-400 bg-neutral-800/60 rounded-lg p-4 whitespace-pre-wrap leading-relaxed">
+          <pre className="text-xs text-muted-foreground bg-secondary/60 rounded-lg p-4 whitespace-pre-wrap leading-relaxed">
             {integration.instructions}
           </pre>
 
           {/* Option A: PAT (recommended) */}
-          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-3">
+          <div className="rounded-lg border border-success/20 bg-success/5 p-4 space-y-3">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+              <span className="text-xs font-semibold text-success bg-success/10 px-2 py-0.5 rounded-full">
                 RECOMMENDED
               </span>
-              <span className="text-sm font-medium text-neutral-200">Option A — Personal Access Token</span>
+              <span className="text-sm font-medium text-foreground">Option A — Personal Access Token</span>
             </div>
-            <p className="text-xs text-neutral-500">
-              Paste a classic PAT with <code className="text-neutral-400">repo</code> +{" "}
-              <code className="text-neutral-400">copilot</code> scopes. Covers both
+            <p className="text-xs text-muted-foreground">
+              Paste a classic PAT with <code className="text-muted-foreground">repo</code> +{" "}
+              <code className="text-muted-foreground">copilot</code> scopes. Covers both
               private repo cloning and Copilot model access.
             </p>
             <div>
-              <label className="block text-xs text-neutral-400 mb-1">
+              <label className="block text-xs text-muted-foreground mb-1">
                 Personal Access Token
-                <span className="ml-2 font-mono text-neutral-500 text-xs">(GITHUB_TOKEN)</span>
+                <span className="ml-2 font-mono text-muted-foreground text-xs">(GITHUB_TOKEN)</span>
               </label>
               <input
                 type="password"
@@ -310,29 +310,29 @@ export default function GitHubDeviceConnect({
                 value={tokenInput}
                 onChange={(e) => setTokenInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && void handleSaveCredentials()}
-                className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-emerald-500 transition-colors font-mono"
+                className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-success transition-colors font-mono"
               />
             </div>
           </div>
 
           {/* Divider */}
           <div className="flex items-center gap-3">
-            <div className="h-px flex-1 bg-neutral-700" />
-            <span className="text-xs text-neutral-600">or use device flow</span>
-            <div className="h-px flex-1 bg-neutral-700" />
+            <div className="h-px flex-1 bg-border" />
+            <span className="text-xs text-muted">or use device flow</span>
+            <div className="h-px flex-1 bg-border" />
           </div>
 
           {/* Option B: OAuth Client ID */}
-          <div className="rounded-lg border border-neutral-700 bg-neutral-900/50 p-4 space-y-3">
-            <span className="text-sm font-medium text-neutral-400">Option B — OAuth Device Flow</span>
-            <p className="text-xs text-neutral-500">
+          <div className="rounded-lg border border-border bg-card/50 p-4 space-y-3">
+            <span className="text-sm font-medium text-muted-foreground">Option B — OAuth Device Flow</span>
+            <p className="text-xs text-muted-foreground">
               Create an OAuth App first, then paste its Client ID below. No
               token entry needed — you'll authenticate in the browser.
             </p>
             <div>
-              <label className="block text-xs text-neutral-400 mb-1">
+              <label className="block text-xs text-muted-foreground mb-1">
                 OAuth App Client ID
-                <span className="ml-2 font-mono text-neutral-500 text-xs">(GITHUB_CLIENT_ID)</span>
+                <span className="ml-2 font-mono text-muted-foreground text-xs">(GITHUB_CLIENT_ID)</span>
               </label>
               <input
                 type="text"
@@ -342,7 +342,7 @@ export default function GitHubDeviceConnect({
                 value={clientIdInput}
                 onChange={(e) => setClientIdInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && void handleSaveCredentials()}
-                className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-blue-500 transition-colors font-mono"
+                className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary transition-colors font-mono"
               />
             </div>
           </div>
@@ -360,14 +360,14 @@ export default function GitHubDeviceConnect({
       {/* Phase: ready — offer to start device flow */}
       {phase === "ready" && (
         <div className="space-y-3">
-          <p className="text-sm text-neutral-400">
+          <p className="text-sm text-muted-foreground">
             Click below to authenticate a GitHub account via Device Flow. You'll
             be shown a short code to enter at{" "}
-            <span className="text-blue-400 font-mono">github.com/login/device</span>.
+            <span className="text-primary font-mono">github.com/login/device</span>.
           </p>
           <button
             onClick={() => void handleStartDeviceFlow()}
-            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg bg-neutral-100 hover:bg-white text-neutral-900 text-sm font-semibold transition-colors"
+            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg bg-foreground hover:bg-white text-card text-sm font-semibold transition-colors"
           >
             <GitHubIcon className="w-4 h-4" />
             Connect GitHub Account
@@ -377,8 +377,8 @@ export default function GitHubDeviceConnect({
 
       {/* Phase: starting */}
       {phase === "starting" && (
-        <div className="flex items-center gap-3 text-neutral-400 text-sm">
-          <div className="w-4 h-4 border-2 border-neutral-600 border-t-blue-500 rounded-full animate-spin shrink-0" />
+        <div className="flex items-center gap-3 text-muted-foreground text-sm">
+          <div className="w-4 h-4 border-2 border-muted border-t-primary rounded-full animate-spin shrink-0" />
           Requesting code from GitHub…
         </div>
       )}
@@ -388,30 +388,30 @@ export default function GitHubDeviceConnect({
         <div className="space-y-4">
           {/* Step instructions */}
           <div className="space-y-1">
-            <p className="text-sm text-neutral-300 font-medium">
+            <p className="text-sm text-foreground font-medium">
               1. Open{" "}
               <a
                 href={deviceInfo.verification_uri}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-blue-400 hover:underline"
+                className="text-primary hover:underline"
               >
                 {deviceInfo.verification_uri}
               </a>
             </p>
-            <p className="text-sm text-neutral-300 font-medium">
+            <p className="text-sm text-foreground font-medium">
               2. Enter this code:
             </p>
           </div>
 
           {/* User code display */}
           <div className="flex items-center gap-3">
-            <div className="flex-1 text-center text-3xl font-mono font-bold tracking-[0.3em] text-neutral-100 bg-neutral-800 border border-neutral-600 rounded-xl py-4 select-all">
+            <div className="flex-1 text-center text-3xl font-mono font-bold tracking-[0.3em] text-foreground bg-secondary border border-muted rounded-xl py-4 select-all">
               {deviceInfo.user_code}
             </div>
             <button
               onClick={() => void handleCopy(deviceInfo.user_code)}
-              className="px-3 py-2 rounded-lg border border-neutral-600 hover:bg-neutral-800 text-sm text-neutral-300 transition-colors shrink-0"
+              className="px-3 py-2 rounded-lg border border-muted hover:bg-secondary text-sm text-foreground transition-colors shrink-0"
             >
               {copied ? "Copied!" : "Copy"}
             </button>
@@ -422,15 +422,15 @@ export default function GitHubDeviceConnect({
             href={deviceInfo.verification_uri}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg bg-neutral-100 hover:bg-white text-neutral-900 text-sm font-semibold transition-colors"
+            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-lg bg-foreground hover:bg-white text-card text-sm font-semibold transition-colors"
           >
             <GitHubIcon className="w-4 h-4" />
             Open GitHub Device Activation →
           </a>
 
           {/* Polling indicator */}
-          <div className="flex items-center gap-2 text-xs text-neutral-500">
-            <div className="w-3 h-3 border border-neutral-600 border-t-blue-500 rounded-full animate-spin shrink-0" />
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <div className="w-3 h-3 border border-muted border-t-primary rounded-full animate-spin shrink-0" />
             Waiting for you to approve on GitHub…
             <span className="ml-auto">
               Code expires in ~{Math.round(deviceInfo.expires_in / 60)} min
@@ -441,12 +441,12 @@ export default function GitHubDeviceConnect({
 
       {/* Phase: authorized */}
       {phase === "authorized" && (
-        <div className="flex items-center gap-3 text-emerald-400 text-sm">
+        <div className="flex items-center gap-3 text-success text-sm">
           <svg className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
           </svg>
           <span>
-            GitHub {login ? <span>account <strong className="text-emerald-300">{login}</strong></span> : "token"} connected.
+            GitHub {login ? <span>account <strong className="text-success">{login}</strong></span> : "token"} connected.
             Ready to clone private repos.
           </span>
         </div>
@@ -455,12 +455,12 @@ export default function GitHubDeviceConnect({
       {/* Phase: expired */}
       {phase === "expired" && (
         <div className="space-y-3">
-          <p className="text-sm text-amber-400">
+          <p className="text-sm text-warning">
             The code expired before you approved it. That's OK — just try again.
           </p>
           <button
             onClick={() => void handleStartDeviceFlow()}
-            className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm text-neutral-200 transition-colors"
+            className="px-4 py-2 rounded-lg bg-secondary hover:bg-border text-sm text-foreground transition-colors"
           >
             Restart Device Flow
           </button>
@@ -470,13 +470,13 @@ export default function GitHubDeviceConnect({
       {/* Phase: denied */}
       {phase === "denied" && (
         <div className="space-y-3">
-          <p className="text-sm text-red-400">
+          <p className="text-sm text-destructive">
             Access was denied on GitHub. You can try again and approve the
             request this time.
           </p>
           <button
             onClick={() => void handleStartDeviceFlow()}
-            className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm text-neutral-200 transition-colors"
+            className="px-4 py-2 rounded-lg bg-secondary hover:bg-border text-sm text-foreground transition-colors"
           >
             Try Again
           </button>
@@ -486,7 +486,7 @@ export default function GitHubDeviceConnect({
       {/* Phase: error */}
       {phase === "error" && (
         <div className="space-y-3">
-          <div className="text-sm text-red-400 bg-red-500/10 rounded-lg px-3 py-2">
+          <div className="text-sm text-destructive bg-destructive/10 rounded-lg px-3 py-2">
             {errorMsg ?? "An unexpected error occurred."}
           </div>
           <button
@@ -494,7 +494,7 @@ export default function GitHubDeviceConnect({
               setErrorMsg(null);
               setPhase(initialPhase);
             }}
-            className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm text-neutral-200 transition-colors"
+            className="px-4 py-2 rounded-lg bg-secondary hover:bg-border text-sm text-foreground transition-colors"
           >
             ← Back
           </button>

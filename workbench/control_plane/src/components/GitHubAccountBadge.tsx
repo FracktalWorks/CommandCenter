@@ -39,7 +39,7 @@ function ScopePill({ scope, active }: { scope: string; active: boolean }) {
       className={`inline-flex text-[10px] px-1.5 py-0.5 rounded font-mono border ${
         active
           ? scope === "copilot"
-            ? "bg-violet-500/10 text-violet-400 border-violet-500/25"
+            ? "bg-primary/10 text-primary border-primary/20"
             : "bg-secondary text-muted-foreground border-border"
           : "bg-card text-muted-foreground/70 border-border line-through"
       }`}
@@ -125,7 +125,7 @@ export default function GitHubAccountBadge({
   if (loading) {
     return (
       <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
-        <div className="w-3 h-3 border border-border border-t-zinc-500 rounded-full animate-spin" />
+        <div className="w-3 h-3 border border-border border-t-muted-foreground rounded-full animate-spin" />
         Checking GitHub…
       </div>
     );
@@ -165,7 +165,7 @@ export default function GitHubAccountBadge({
             )}
             {/* Copilot scope warning */}
             {!info.token_has_copilot && (
-              <div className="mt-2 flex items-start gap-2 text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded px-2 py-1.5">
+              <div className="mt-2 flex items-start gap-2 text-[11px] text-warning bg-warning/10 border border-warning/20 rounded px-2 py-1.5">
                 <span className="shrink-0 mt-0.5">⚠</span>
                 <span>
                   Token lacks <code className="font-mono">copilot</code> scope — Copilot models
@@ -195,7 +195,7 @@ export default function GitHubAccountBadge({
             <span className="text-foreground">"Import from GitHub CLI"</span> below to update the stored token:
           </p>
           <div className="flex items-center gap-2">
-            <code className="flex-1 text-[11px] font-mono text-violet-300 bg-secondary px-2 py-1 rounded">
+            <code className="flex-1 text-[11px] font-mono text-primary bg-secondary px-2 py-1 rounded">
               gh auth refresh --scopes copilot,repo
             </code>
             <button
@@ -233,7 +233,7 @@ export default function GitHubAccountBadge({
                     <ScopePill key={s} scope={s} active={info.gh_cli_scopes.includes(s)} />
                   ))}
                   {!info.gh_cli_has_copilot && (
-                    <span className="text-[10px] text-amber-500 ml-1">
+                    <span className="text-[10px] text-warning ml-1">
                       (copilot scope missing)
                     </span>
                   )}
@@ -248,7 +248,7 @@ export default function GitHubAccountBadge({
               <button
                 onClick={() => void handleConnectCli()}
                 disabled={importing}
-                className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-secondary hover:bg-zinc-600 disabled:opacity-40 text-foreground font-medium transition-colors"
+                className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-secondary hover:bg-muted disabled:opacity-40 text-foreground font-medium transition-colors"
               >
                 {importing ? "Importing…" : isConfigured ? "Re-import" : "Import token"}
               </button>
@@ -260,18 +260,18 @@ export default function GitHubAccountBadge({
             <div
               className={`mt-3 text-[11px] rounded px-3 py-2 ${
                 importResult.ok
-                  ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                  : "bg-red-500/10 text-red-400 border border-red-500/20"
+                  ? "bg-success/10 text-success border border-success/20"
+                  : "bg-destructive/10 text-destructive border border-red-500/20"
               }`}
             >
               {importResult.ok ? "✓ " : "✗ "}
               {importResult.ok ? importResult.message : importResult.error}
               {importResult.ok && importResult.refresh_command && (
                 <div className="mt-2 flex items-center gap-2">
-                  <span className="text-amber-400">
+                  <span className="text-warning">
                     ⚠ Add copilot scope:
                   </span>
-                  <code className="font-mono text-violet-300 bg-secondary px-1.5 py-0.5 rounded">
+                  <code className="font-mono text-primary bg-secondary px-1.5 py-0.5 rounded">
                     {importResult.refresh_command}
                   </code>
                   <button

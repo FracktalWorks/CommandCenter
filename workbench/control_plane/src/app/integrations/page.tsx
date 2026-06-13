@@ -24,8 +24,8 @@ function StatusBadge({ configured }: { configured: boolean }) {
       Connected
     </span>
   ) : (
-    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-500 border border-neutral-700">
-      <span className="w-1.5 h-1.5 rounded-full bg-neutral-600" />
+    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-secondary text-muted-foreground border border-border">
+      <span className="w-1.5 h-1.5 rounded-full bg-muted" />
       Not configured
     </span>
   );
@@ -47,7 +47,7 @@ function AgentBadges({
       {mandatory.map((a) => (
         <span
           key={a.name}
-          className="text-[10px] px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-300 border border-neutral-600/70 font-medium"
+          className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-foreground border border-muted/70 font-medium"
           title="Requires this integration"
         >
           {a.name}
@@ -56,7 +56,7 @@ function AgentBadges({
       {optional.map((a) => (
         <span
           key={a.name}
-          className="text-[10px] px-1.5 py-0.5 rounded bg-neutral-800/60 text-neutral-500 border border-dashed border-neutral-700/60"
+          className="text-[10px] px-1.5 py-0.5 rounded bg-secondary/60 text-muted-foreground border border-dashed border-border/60"
           title="Optional for this agent"
         >
           {a.name}
@@ -110,12 +110,12 @@ function ReconfigureForm({
   };
 
   return (
-    <div className="mt-4 space-y-3 border-t border-neutral-800 pt-4">
+    <div className="mt-4 space-y-3 border-t border-secondary pt-4">
       {integration.env_vars.map((v) => (
         <div key={v.key}>
-          <label className="block text-xs text-neutral-400 mb-1">
+          <label className="block text-xs text-muted-foreground mb-1">
             {v.label}
-            <span className="ml-2 font-mono text-neutral-600 text-xs">({v.key})</span>
+            <span className="ml-2 font-mono text-muted text-xs">({v.key})</span>
           </label>
           <input
             type={v.sensitive ? "password" : "text"}
@@ -126,7 +126,7 @@ function ReconfigureForm({
               setValues((prev) => ({ ...prev, [v.key]: e.target.value }))
             }
             placeholder={`Enter ${v.label}…`}
-            className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-primary transition-colors"
+            className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary transition-colors"
           />
         </div>
       ))}
@@ -143,7 +143,7 @@ function ReconfigureForm({
         </button>
         <button
           onClick={onDone}
-          className="px-4 py-2 rounded-lg border border-neutral-700 hover:bg-neutral-800 text-sm text-neutral-400 transition-colors"
+          className="px-4 py-2 rounded-lg border border-border hover:bg-secondary text-sm text-muted-foreground transition-colors"
         >
           Cancel
         </button>
@@ -201,8 +201,8 @@ function IntegrationCard({
     <div
       className={`rounded-xl border transition-colors ${
         integration.configured
-          ? "border-neutral-700 bg-neutral-900"
-          : "border-neutral-700/60 bg-neutral-900/60"
+          ? "border-border bg-card"
+          : "border-border/60 bg-card/60"
       }`}
     >
       {/* Header row */}
@@ -213,12 +213,12 @@ function IntegrationCard({
         <div className="flex items-center gap-3">
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-medium text-neutral-100">{integration.label}</span>
+              <span className="font-medium text-foreground">{integration.label}</span>
               <StatusBadge configured={integration.configured} />
               {/* "Used for" pills — shown when the integration serves multiple purposes */}
               {(integration.uses ?? []).length > 0 && (
-                <span className="inline-flex items-center gap-1 text-[10px] text-neutral-400">
-                  <span className="text-neutral-600">Used for:</span>
+                <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <span className="text-muted">Used for:</span>
                   {integration.uses!.map((u) => (
                     <span
                       key={u}
@@ -239,7 +239,7 @@ function IntegrationCard({
                 </span>
               )}
             </div>
-            <p className="text-xs text-neutral-500 mt-0.5">{integration.description}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{integration.description}</p>
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
@@ -249,7 +249,7 @@ function IntegrationCard({
               a.optional_integrations?.includes(integration.service)
           ) && (
             <div className="flex items-center gap-1.5">
-              <span className="text-[10px] text-neutral-600 uppercase tracking-wider">Used by</span>
+              <span className="text-[10px] text-muted uppercase tracking-wider">Used by</span>
               <AgentBadges service={integration.service} agents={agents} />
             </div>
           )}
@@ -258,7 +258,7 @@ function IntegrationCard({
               e.stopPropagation();
               setExpanded((v) => !v);
             }}
-            className="text-neutral-600 hover:text-neutral-400 transition-colors text-xs"
+            className="text-muted hover:text-muted-foreground transition-colors text-xs"
           >
             {expanded ? "▲" : "▼"}
           </button>
@@ -267,7 +267,7 @@ function IntegrationCard({
 
       {/* Expanded body */}
       {expanded && (
-        <div className="px-5 pb-5 space-y-4 border-t border-neutral-800">
+        <div className="px-5 pb-5 space-y-4 border-t border-secondary">
           {/* Blocked agents callout */}
           {blockedAgents.length > 0 && (
             <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-amber-800/40 bg-amber-950/30 px-3 py-2.5">
@@ -298,7 +298,7 @@ function IntegrationCard({
             <>
               {/* Setup instructions */}
               {integration.instructions && !reconfiguring && (
-                <pre className="mt-4 text-xs text-neutral-500 bg-neutral-800/60 rounded-lg p-3 whitespace-pre-wrap leading-relaxed">
+                <pre className="mt-4 text-xs text-muted-foreground bg-secondary/60 rounded-lg p-3 whitespace-pre-wrap leading-relaxed">
                   {integration.instructions}
                 </pre>
               )}
@@ -321,7 +321,7 @@ function IntegrationCard({
                       href={integration.docs_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-xs px-3 py-1.5 rounded-lg border border-neutral-700 text-neutral-500 hover:bg-neutral-800 transition-colors"
+                      className="text-xs px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:bg-secondary transition-colors"
                     >
                       Docs
                     </a>
@@ -329,13 +329,13 @@ function IntegrationCard({
                   <button
                     onClick={() => void handleTest()}
                     disabled={testing || !integration.configured}
-                    className="text-xs px-3 py-1.5 rounded-lg border border-neutral-700 text-neutral-400 hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    className="text-xs px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:bg-secondary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
                     {testing ? "Testing…" : "Test connection"}
                   </button>
                   <button
                     onClick={() => setReconfiguring(true)}
-                    className="text-xs px-3 py-1.5 rounded-lg border border-neutral-700 text-neutral-400 hover:bg-neutral-800 transition-colors"
+                    className="text-xs px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:bg-secondary transition-colors"
                   >
                     {integration.configured ? "Update credentials" : "Configure"}
                   </button>
@@ -418,8 +418,8 @@ export default function IntegrationsPage() {
       {/* Page header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-neutral-100">Integrations</h1>
-          <p className="text-sm text-neutral-500 mt-1">
+          <h1 className="text-xl font-bold text-foreground">Integrations</h1>
+          <p className="text-sm text-muted-foreground mt-1">
             Manage credentials for all external services used by your agents.
             Integrations labelled <span className="text-violet-400 font-medium">Models</span> also
             provide LLM access to the tier router.
@@ -428,15 +428,15 @@ export default function IntegrationsPage() {
         </div>
         <button
           onClick={() => void fetchAll()}
-          className="text-xs px-3 py-1.5 rounded-lg border border-neutral-700 text-neutral-400 hover:bg-neutral-800 transition-colors"
+          className="text-xs px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:bg-secondary transition-colors"
         >
           Refresh
         </button>
       </div>
 
       {loading ? (
-        <div className="flex items-center gap-3 text-neutral-500 text-sm py-12 justify-center">
-          <div className="w-4 h-4 border-2 border-neutral-700 border-t-blue-500 rounded-full animate-spin" />
+        <div className="flex items-center gap-3 text-muted-foreground text-sm py-12 justify-center">
+          <div className="w-4 h-4 border-2 border-border border-t-blue-500 rounded-full animate-spin" />
           Loading integrations…
         </div>
       ) : (
@@ -445,7 +445,7 @@ export default function IntegrationsPage() {
           {unconfigured.length > 0 && (
             <section className="space-y-3">
               <div className="flex items-center gap-2">
-                <h2 className="text-sm font-semibold text-neutral-300">
+                <h2 className="text-sm font-semibold text-foreground">
                   Needs setup
                 </h2>
                 <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
@@ -468,7 +468,7 @@ export default function IntegrationsPage() {
           {/* Configured */}
           {configured.length > 0 && (
             <section className="space-y-3">
-              <h2 className="text-sm font-semibold text-neutral-300">
+              <h2 className="text-sm font-semibold text-foreground">
                 Connected ({configured.length})
               </h2>
               <div className="space-y-2">
@@ -485,7 +485,7 @@ export default function IntegrationsPage() {
           )}
 
           {integrations.length === 0 && (
-            <div className="text-center text-neutral-600 text-sm py-16">
+            <div className="text-center text-muted text-sm py-16">
               No integrations found. Add an agent to get started.
             </div>
           )}

@@ -46,24 +46,24 @@ function IntegrationCard({
     <div
       className={`rounded-xl border p-6 space-y-4 transition-colors ${
         saved
-          ? "border-emerald-500 bg-emerald-500/5"
-          : "border-neutral-700 bg-neutral-900"
+          ? "border-success bg-success/5"
+          : "border-border bg-card"
       }`}
     >
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-neutral-100">
+            <span className="font-semibold text-foreground">
               {integration.label}
             </span>
             {saved && (
-              <span className="text-xs text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+              <span className="text-xs text-success bg-success/10 px-2 py-0.5 rounded-full">
                 ✓ Configured
               </span>
             )}
           </div>
-          <p className="text-sm text-neutral-400 mt-0.5">
+          <p className="text-sm text-muted-foreground mt-0.5">
             {integration.description}
           </p>
         </div>
@@ -73,7 +73,7 @@ function IntegrationCard({
               href={integration.setup_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs px-3 py-1.5 rounded-lg border border-blue-500/40 text-blue-400 hover:opacity-90/10 transition-colors"
+              className="text-xs px-3 py-1.5 rounded-lg border border-primary/30 text-primary hover:opacity-90/10 transition-colors"
             >
               Get credentials →
             </a>
@@ -83,7 +83,7 @@ function IntegrationCard({
               href={integration.docs_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs px-3 py-1.5 rounded-lg border border-neutral-600 text-neutral-400 hover:bg-neutral-800 transition-colors"
+              className="text-xs px-3 py-1.5 rounded-lg border border-muted text-muted-foreground hover:bg-secondary transition-colors"
             >
               Docs
             </a>
@@ -93,7 +93,7 @@ function IntegrationCard({
 
       {/* Instructions */}
       {integration.instructions && !saved && (
-        <pre className="text-xs text-neutral-400 bg-neutral-800/60 rounded-lg p-3 whitespace-pre-wrap leading-relaxed">
+        <pre className="text-xs text-muted-foreground bg-secondary/60 rounded-lg p-3 whitespace-pre-wrap leading-relaxed">
           {integration.instructions}
         </pre>
       )}
@@ -103,9 +103,9 @@ function IntegrationCard({
         <div className="space-y-3">
           {integration.env_vars.map((envVar) => (
             <div key={envVar.key}>
-              <label className="block text-xs text-neutral-400 mb-1">
+              <label className="block text-xs text-muted-foreground mb-1">
                 {envVar.label}
-                <span className="ml-2 font-mono text-neutral-500 text-xs">
+                <span className="ml-2 font-mono text-muted-foreground text-xs">
                   ({envVar.key})
                 </span>
               </label>
@@ -116,7 +116,7 @@ function IntegrationCard({
                 value={values[envVar.key] ?? ""}
                 onChange={(e) => onValuesChange(envVar.key, e.target.value)}
                 placeholder={`Enter ${envVar.label}…`}
-                className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-blue-500 transition-colors"
+                className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary transition-colors"
               />
             </div>
           ))}
@@ -125,7 +125,7 @@ function IntegrationCard({
 
       {/* Error */}
       {error && (
-        <div className="text-sm text-red-400 bg-red-500/10 rounded-lg px-3 py-2">
+        <div className="text-sm text-destructive bg-destructive/10 rounded-lg px-3 py-2">
           {error}
         </div>
       )}
@@ -135,8 +135,8 @@ function IntegrationCard({
         <div
           className={`text-sm rounded-lg px-3 py-2 ${
             testResult.ok
-              ? "text-emerald-400 bg-emerald-500/10"
-              : "text-amber-400 bg-amber-500/10"
+              ? "text-success bg-success/10"
+              : "text-warning bg-warning/10"
           }`}
         >
           {testResult.ok ? "✓" : "✗"} {testResult.detail}
@@ -156,7 +156,7 @@ function IntegrationCard({
           <button
             onClick={onTest}
             disabled={!saved && !allFilled || testing}
-            className="px-4 py-2 rounded-lg border border-neutral-600 hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed text-sm text-neutral-300 transition-colors"
+            className="px-4 py-2 rounded-lg border border-muted hover:bg-secondary disabled:opacity-40 disabled:cursor-not-allowed text-sm text-foreground transition-colors"
           >
             {testing ? "Testing…" : "Test"}
           </button>
@@ -169,7 +169,7 @@ function IntegrationCard({
           <button
             onClick={onTest}
             disabled={testing}
-            className="px-4 py-2 rounded-lg border border-neutral-600 hover:bg-neutral-800 disabled:opacity-40 text-sm text-neutral-300 transition-colors"
+            className="px-4 py-2 rounded-lg border border-muted hover:bg-secondary disabled:opacity-40 text-sm text-foreground transition-colors"
           >
             {testing ? "Testing…" : "Re-test connection"}
           </button>
@@ -371,8 +371,8 @@ export default function IntegrationSetup({
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 text-neutral-400">
-        <div className="w-6 h-6 border-2 border-neutral-600 border-t-blue-500 rounded-full animate-spin" />
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
+        <div className="w-6 h-6 border-2 border-muted border-t-primary rounded-full animate-spin" />
         <span className="text-sm">Checking integrations…</span>
       </div>
     );
@@ -381,10 +381,10 @@ export default function IntegrationSetup({
   if (fetchError) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 p-6">
-        <p className="text-red-400 text-sm text-center">{fetchError}</p>
+        <p className="text-destructive text-sm text-center">{fetchError}</p>
         <button
           onClick={() => void fetchStatus()}
-          className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm text-neutral-200 transition-colors"
+          className="px-4 py-2 rounded-lg bg-secondary hover:bg-border text-sm text-foreground transition-colors"
         >
           Retry
         </button>
@@ -396,7 +396,7 @@ export default function IntegrationSetup({
     // Nothing missing — shouldn't normally land here but handle gracefully
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4">
-        <p className="text-emerald-400 text-sm">All integrations are configured.</p>
+        <p className="text-success text-sm">All integrations are configured.</p>
         <button
           onClick={onComplete}
           className="px-4 py-2 rounded-lg bg-primary hover:opacity-90 text-sm text-primary-foreground transition-colors"
@@ -410,12 +410,12 @@ export default function IntegrationSetup({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="px-6 py-5 border-b border-neutral-800">
-        <h2 className="text-lg font-semibold text-neutral-100">
+      <div className="px-6 py-5 border-b border-secondary">
+        <h2 className="text-lg font-semibold text-foreground">
           Set up integrations for{" "}
-          <span className="text-blue-400">{agentName}</span>
+          <span className="text-primary">{agentName}</span>
         </h2>
-        <p className="text-sm text-neutral-400 mt-1">
+        <p className="text-sm text-muted-foreground mt-1">
           This agent needs access to{" "}
           {integrations.length === 1
             ? "1 external service"
@@ -459,8 +459,8 @@ export default function IntegrationSetup({
       </div>
 
       {/* Footer */}
-      <div className="px-6 py-4 border-t border-neutral-800 flex items-center justify-between">
-        <p className="text-xs text-neutral-500">
+      <div className="px-6 py-4 border-t border-secondary flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">
           Credentials are saved to .env on the server. Restart services for
           Docker deployments.
         </p>

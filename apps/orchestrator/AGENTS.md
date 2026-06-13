@@ -38,9 +38,25 @@ and streams chat responses as AG-UI events.
 4. Commits are registered as pending_commit rows for inbox approval
 5. Local-only repos skip push on approval; use git reset HEAD~1 for rejection
 
+### Session continuity and stale-session recovery
+- Copilot SDK session IDs (service_session_id) are stored in-memory
+  (_copilot_session_store) AND in Postgres (chat_session.service_session_id).
+- On each run_agent_stream() call, _get_stored_session_id() looks up the ID;
+  if found, _resume_session() is used so the SDK preserves full history.
+- **Stale session after gateway restart**: When the Copilot CLI process dies,
+  resume_session() raises "Failed to create GitHub Copilot session". The
+  executor catches this via the _run_copilot_attempt() retry loop:
+  1. Detects "session"+"error" in the exception message and a stored session ID.
+  2. Calls _clear_stored_session_id() to NULL the Postgres record.
+  3. Injects prior conversation (messages[], last 20, 300 chars each) as text prefix.
+  4. Retries with session=None, creating a fresh Copilot SDK session.
+  Max 1 retry (_session_retry_attempted flag); second failure surfaces as RUN_ERROR.
+- _clear_stored_session_id() NULLs the Postgres row async via run_in_executor.
+- Model switch mid-thread: detected via _copilot_model_store; forces new session.
+
 ### Streaming event flow
 1. run_agent_stream() creates CommandCenterCopilotAgent patches on loaded agent
-2. agent.run(stream=True) returns AgentResponseUpdate objects
+2. agent.run(stream=True) returns AgentResponseUpdate objects via _run_copilot_attempt()
 3. Each update is translated to AG-UI SSE events (TEXT_MESSAGE_CONTENT, TOOL_CALL_*, etc.)
 4. DETACHED EXECUTION: the gateway wraps the generator in stream_relay.run_detached(),
    which drains it in a background asyncio task pushing all events to Redis

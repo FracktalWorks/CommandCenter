@@ -1344,12 +1344,10 @@ async def run_agent_stream(
                 # (_copilot_session_id found), this block is skipped — the
                 # Copilot SDK already has full history in its session state.
                 #
-                # Edge case not covered: _copilot_session_id exists in
-                # Postgres, but the Copilot SDK process is dead.  In that
-                # rare scenario the new Copilot session also gets only the
-                # current message.  This requires detecting resume_session()
-                # failure inside _stream_updates(), which is a future
-                # enhancement.
+                # Stale session (gateway restart / Copilot CLI death): handled
+                # via _session_retry_attempted in the streaming block below —
+                # on resume failure the run retries with a fresh session and
+                # history injected from messages[].
                 if not _copilot_session_id:
                     _prior = event_payload.get("messages") or []
                     if _prior:
@@ -1456,24 +1454,31 @@ async def run_agent_stream(
                 _msg_id: str | None = None
                 _text_started = False
                 _todo_tracker = _TodoTracker()
+                # Retry state — set to True after a stale-session recovery so
+                # the second attempt is never retried again (max 1 retry).
+                _session_retry_attempted = False
+                _effective_msg = _msg_text
 
-                try:
+                # ── Inner async generator: one Copilot streaming attempt ───
+                # Extracted so the retry loop below can call it twice without
+                # duplicating the ~100-line event-translation body.
+                # _agent_sess=None forces a new Copilot SDK session;
+                # passing a session object resumes an existing one.
+                async def _run_copilot_attempt(
+                    _eff: str, _agent_sess: Any
+                ) -> AsyncIterator[str]:  # type: ignore[return]
+                    nonlocal _msg_id, _text_started, _todo_tracker
                     async with agent:
-                        _run_opts: dict[str, Any] = {}
+                        _run_opts_inner: dict[str, Any] = {}
                         if _is_byok and _byok_provider:
-                            _run_opts["model"] = _byok_model_id
+                            _run_opts_inner["model"] = _byok_model_id
                         elif _final_model_early:
-                            _run_opts["model"] = _final_model_early
-                        # Pass stored session for Copilot SDK continuity
-                        _agent_session = None
-                        if _copilot_session_id:
-                            try:
-                                _agent_session = agent.get_session(_copilot_session_id)
-                            except Exception:  # noqa: BLE001
-                                pass
-                        _stream = agent.run(_msg_text, stream=True,
-                                           options=_run_opts if _run_opts else None,
-                                           session=_agent_session)
+                            _run_opts_inner["model"] = _final_model_early
+                        _stream = agent.run(
+                            _eff, stream=True,
+                            options=_run_opts_inner if _run_opts_inner else None,
+                            session=_agent_sess,
+                        )
                         async for _update in _stream:
                             _upd_role = getattr(_update, "role", None)
                             _upd_role = getattr(_upd_role, "value", _upd_role)
@@ -1602,10 +1607,92 @@ async def run_agent_stream(
                             except Exception:  # noqa: BLE001
                                 _log.exception("executor.store_session_failed")
 
-                except Exception as _exc:  # noqa: BLE001
-                    _log.exception("executor.copilot_maf_stream_error", agent=agent_name)
-                    yield _sse({"type": "RUN_ERROR", "runId": run_id, "message": str(_exc)})
-                    return
+                # ── Retry loop: at most 2 attempts ─────────────────────────
+                # Attempt 0: normal run (may use a stored Copilot session).
+                # Attempt 1 (only if attempt 0 raised a stale-session error):
+                #   cleared stale session + history injected as context.
+                for _attempt in range(2):
+                    _ag_sess: Any = None
+                    if _copilot_session_id and not _session_retry_attempted:
+                        try:
+                            _ag_sess = agent.get_session(_copilot_session_id)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    try:
+                        async for _line in _run_copilot_attempt(_effective_msg, _ag_sess):
+                            yield _line
+                        break  # success — exit retry loop
+                    except Exception as _exc:  # noqa: BLE001
+                        # ── Gap-1 fix: stale Copilot session ─────────────
+                        # After a gateway restart the Copilot CLI process is
+                        # dead, so resume_session() raises
+                        # "Failed to create GitHub Copilot session: ..."
+                        # Detect this, wipe the stale record, inject prior
+                        # conversation history, and retry with a new session.
+                        _is_resume_err = (
+                            not _session_retry_attempted
+                            and bool(_copilot_session_id)
+                            and (
+                                "Failed to create GitHub Copilot session" in str(_exc)
+                                or "resume_session" in str(_exc).lower()
+                                or (
+                                    "session" in str(_exc).lower()
+                                    and "error" in str(_exc).lower()
+                                )
+                            )
+                        )
+                        if not _is_resume_err:
+                            _log.exception(
+                                "executor.copilot_maf_stream_error",
+                                agent=agent_name,
+                            )
+                            yield _sse({"type": "RUN_ERROR", "runId": run_id,
+                                        "message": str(_exc)})
+                            return
+                        # Stale session — clear it and prepare a retry.
+                        _log.warning(
+                            "executor.stale_session_clear",
+                            agent=agent_name,
+                            thread_id=(thread_id or "")[:16],
+                            error=str(_exc)[:120],
+                        )
+                        _session_retry_attempted = True
+                        _copilot_session_id = None  # type: ignore[assignment]
+                        _copilot_session_store.pop(thread_id or "", None)
+                        _clear_stored_session_id(thread_id)
+                        # Inject conversation history so the new session has
+                        # context despite losing the Copilot SDK session.
+                        _msg_base = (
+                            event_payload.get("message")
+                            or event_payload.get("user_query")
+                            or ""
+                        )
+                        _prior_msgs = event_payload.get("messages") or []
+                        if _prior_msgs:
+                            _hist: list[str] = []
+                            for _hm in _prior_msgs[-20:]:
+                                _hr = _hm.get("role", "user")
+                                _hc = (_hm.get("content") or "").strip()
+                                if _hc:
+                                    _hl = "User" if _hr == "user" else "Assistant"
+                                    _hs = _hc if len(_hc) <= 300 else _hc[:300] + "..."
+                                    _hist.append(f"{_hl}: {_hs}")
+                            if _hist:
+                                _effective_msg = (
+                                    "## Prior conversation (for context)\n"
+                                    + "\n".join(_hist)
+                                    + f"\n\n## Current message\n{_msg_base}"
+                                )
+                                _log.debug(
+                                    "executor.session_retry_history_injected",
+                                    agent=agent_name,
+                                    history_turns=len(_hist),
+                                )
+                        # Reset streaming state for a clean second attempt.
+                        _msg_id = None
+                        _text_started = False
+                        _todo_tracker = _TodoTracker()
+                        # continue → next iteration of retry loop
 
                 if _msg_id and _text_started:
                     yield _sse({"type": "TEXT_MESSAGE_END", "messageId": _msg_id})
@@ -2498,6 +2585,38 @@ def _store_session_id(thread_id: str, service_session_id: str) -> None:
                     },
                 )
                 s.commit()
+        import asyncio as _aio
+        _aio.get_event_loop().run_in_executor(None, _write)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _clear_stored_session_id(thread_id: str | None) -> None:
+    """Delete the stored Copilot service_session_id for *thread_id*.
+
+    Called when a resume fails (stale session after gateway restart) so
+    the next request creates a fresh Copilot SDK session instead of
+    retrying a dead service_session_id.
+    """
+    if not thread_id:
+        return
+    _copilot_session_store.pop(thread_id, None)
+    try:
+        from acb_graph import get_session as _db_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+
+        def _write() -> None:
+            with _db_session() as s:
+                s.execute(
+                    text(
+                        "UPDATE chat_session "
+                        "SET service_session_id = NULL, updated_at = now() "
+                        "WHERE id = :id"
+                    ),
+                    {"id": thread_id},
+                )
+                s.commit()
+
         import asyncio as _aio
         _aio.get_event_loop().run_in_executor(None, _write)
     except Exception:  # noqa: BLE001

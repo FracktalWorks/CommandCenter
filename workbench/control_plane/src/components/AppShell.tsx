@@ -27,7 +27,7 @@ import { X, Monitor, Smartphone, MoreHorizontal, LogOut } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useActiveSessions } from "@/hooks/useActiveSessions";
-import { PANES } from "@/lib/nav";
+import { NAV_SECTIONS } from "@/lib/nav";
 
 // ---------------------------------------------------------------------------
 // Mobile drawer context — lets child pages inject content into the hamburger
@@ -173,27 +173,44 @@ function MobileBottomNav({
           <X size={16} />
         </button>
       </div>
-      <nav className="flex flex-col gap-0.5 overflow-y-auto p-2">
-        {PANES.map((p) => {
-          const active = pathname?.startsWith(p.href);
-          return (
-            <Link
-              key={p.href}
-              href={p.href}
-              onClick={close}
-              className={`rounded-lg px-3 py-2.5 transition-colors flex items-center gap-2.5 ${
-                active
-                  ? "bg-zinc-800 text-white"
-                  : "text-zinc-300 hover:bg-zinc-800/50 hover:text-zinc-100"
-              }`}
+      <nav className="flex flex-col overflow-y-auto">
+        {NAV_SECTIONS.map((section) => (
+          <div key={section.id} className="px-2 pt-1 pb-1.5">
+            {/* Section heading */}
+            <div
+              className={
+                section.sub
+                  ? "px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-600"
+                  : "px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500"
+              }
             >
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-zinc-800 text-xs font-semibold text-zinc-400">
-                {p.icon}
-              </span>
-              <span className="text-sm font-medium">{p.label}</span>
-            </Link>
-          );
-        })}
+              {section.label}
+            </div>
+            {/* Section items */}
+            <div className="flex flex-col gap-0.5">
+              {section.items.map((p) => {
+                const active = pathname?.startsWith(p.href);
+                return (
+                  <Link
+                    key={p.href}
+                    href={p.href}
+                    onClick={close}
+                    className={`rounded-lg px-3 py-2.5 transition-colors flex items-center gap-2.5 ${
+                      active
+                        ? "bg-zinc-800 text-white"
+                        : "text-zinc-300 hover:bg-zinc-800/50 hover:text-zinc-100"
+                    }`}
+                  >
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-zinc-800 text-xs font-semibold text-zinc-400">
+                      {p.icon}
+                    </span>
+                    <span className="text-sm font-medium">{p.label}</span>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </nav>
       <div className="mt-auto border-t border-zinc-800 p-3 space-y-2">
         <button

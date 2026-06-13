@@ -1233,6 +1233,26 @@ async def run_agent_stream(
             elif _final_model_early and _agent_runtime == "github-copilot":
                 agent._default_options["model"] = _final_model_early
 
+            # ── Per-message model switching ────────────────────────────
+            # If the user switches models mid-thread, the Copilot SDK
+            # session is bound to the old model.  Invalidate the stored
+            # session so a new one is created with the new model.  The
+            # conversation continuity fallback prepends messages[] history
+            # so the LLM sees full context despite the new session.
+            if (_agent_runtime == "github-copilot"
+                    and _copilot_session_id
+                    and _final_model_early
+                    and thread_id):
+                _prev_model = _copilot_model_store.get(thread_id)
+                if _prev_model and _prev_model != _final_model_early:
+                    _log.info(
+                        "executor.model_switch",
+                        agent=agent_name,
+                        previous=_prev_model,
+                        requested=_final_model_early,
+                    )
+                    _copilot_session_id = None  # force new session
+
             # ── Tier 1: try native MAF AG-UI streaming ──────────────────────
             # Skip Tier 1 for BYOK GitHub Copilot agents — the MAF AG-UI path
             # calls agent.run() which creates a Copilot SDK session without the
@@ -1309,6 +1329,53 @@ async def run_agent_stream(
 
                 _msg_text = event_payload.get("message") or event_payload.get("user_query") or ""
 
+                # ── Conversation continuity fallback ──────────────────────
+                # If no stored Copilot SDK session exists for this thread
+                # (first message, or session record was lost due to gateway
+                # restart / Copilot CLI process death), the Copilot SDK will
+                # create a brand-new session that only sees _msg_text — losing
+                # all prior conversation context.
+                #
+                # As a safety net, prepend recent conversation history from
+                # the payload's messages[] array.  When the session IS alive
+                # (_copilot_session_id found), this block is skipped — the
+                # Copilot SDK already has full history in its session state.
+                #
+                # Edge case not covered: _copilot_session_id exists in
+                # Postgres, but the Copilot SDK process is dead.  In that
+                # rare scenario the new Copilot session also gets only the
+                # current message.  This requires detecting resume_session()
+                # failure inside _stream_updates(), which is a future
+                # enhancement.
+                if not _copilot_session_id:
+                    _prior = event_payload.get("messages") or []
+                    if _prior:
+                        _history_lines: list[str] = []
+                        for m in _prior[-20:]:  # last 10 exchanges
+                            role = m.get("role", "user")
+                            content = (m.get("content") or "").strip()
+                            if not content:
+                                continue
+                            label = (
+                                "User" if role == "user" else "Assistant"
+                            )
+                            short = (
+                                content if len(content) <= 300
+                                else content[:300] + "..."
+                            )
+                            _history_lines.append(f"{label}: {short}")
+                        if _history_lines:
+                            _msg_text = (
+                                "## Prior conversation (for context)\n"
+                                + "\n".join(_history_lines)
+                                + f"\n\n## Current message\n{_msg_text}"
+                            )
+                            _log.debug(
+                                "executor.copilot_context_fallback",
+                                agent=agent_name,
+                                history_turns=len(_history_lines),
+                            )
+
                 # ── Memory context injection (pre-enriched by the route handler) ──
                 _memory_context = event_payload.get("memory_context") or ""
                 if _memory_context:
@@ -1325,14 +1392,42 @@ async def run_agent_stream(
                             )
                             # MAF Agent base class uses "instructions"
                             _opts["instructions"] = _merged
+
                             # GitHubCopilotAgent uses "system_message" in
-                            # a SEPARATE _default_options dict — inject
-                            # there too so _create_session reads it.
+                            # a SEPARATE _default_options dict.  Merge with
+                            # any existing content (tool addendum injected
+                            # earlier by _inject_agent_tools) rather than
+                            # overwriting — otherwise the tool guidance
+                            # addendum that tells the LLM about call_agent,
+                            # web_search, write_artifact, etc. is lost.
                             _copilot_opts = getattr(
                                 agent, "_default_options", None
                             )
                             if isinstance(_copilot_opts, dict):
-                                _copilot_opts["system_message"] = _merged
+                                _existing_copilot = _copilot_opts.get(
+                                    "system_message"
+                                )
+                                if isinstance(_existing_copilot, dict):
+                                    # Preserve mode:'append'; extend content
+                                    _prev = (
+                                        _existing_copilot.get("content")
+                                        or ""
+                                    )
+                                    _copilot_opts["system_message"] = {
+                                        "mode": "append",
+                                        "content": (
+                                            f"{_prev}\n\n{_memory_context}"
+                                        ),
+                                    }
+                                elif isinstance(_existing_copilot, str):
+                                    _copilot_opts["system_message"] = (
+                                        f"{_existing_copilot}\n\n"
+                                        f"{_memory_context}"
+                                    )
+                                else:
+                                    _copilot_opts["system_message"] = (
+                                        _merged
+                                    )
                     except Exception:  # noqa: BLE001
                         pass
 
@@ -1421,8 +1516,16 @@ async def run_agent_stream(
                                     if not _text_started:
                                         _text_started = True
                                         _msg_id = _update.message_id or str(uuid.uuid4())
+                                        _log.info(
+                                            "sse_text_start: msg_id=%s",
+                                            _msg_id[:12],
+                                        )
                                         yield _sse({"type": "TEXT_MESSAGE_START",
                                                     "messageId": _msg_id, "role": "assistant"})
+                                    _log.info(
+                                        "sse_text_delta: len=%d msg_id=%s",
+                                        len(_delta), (_msg_id or "")[:12],
+                                    )
                                     yield _sse({"type": "TEXT_MESSAGE_CONTENT",
                                                 "messageId": _msg_id, "delta": _delta})
                                 elif _ct == "text_reasoning":
@@ -1488,6 +1591,11 @@ async def run_agent_stream(
                                 )
                                 if _last_sid:
                                     _store_session_id(thread_id, _last_sid)
+                                    # Record the model used for this session
+                                    # so future requests can detect switches.
+                                    _copilot_model_store[thread_id] = (
+                                        _final_model_early
+                                    )
                             except Exception:  # noqa: BLE001
                                 _log.exception("executor.store_session_failed")
 
@@ -2329,6 +2437,12 @@ def _build_event_message(
 # In-memory store: thread_id → Copilot service_session_id
 # Survives browser disconnects within the same gateway process.
 _copilot_session_store: dict[str, str] = {}
+
+# Companion store: thread_id → model name used for that session.
+# Used to detect model switches mid-thread so a new Copilot SDK
+# session can be created with the updated model while injecting
+# conversation history from messages[].
+_copilot_model_store: dict[str, str] = {}
 
 
 def _get_stored_session_id(thread_id: str) -> str | None:

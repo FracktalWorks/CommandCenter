@@ -168,25 +168,32 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
 
         # Accumulated assistant text from deltas — used to detect and skip
         # the duplicate full-content ASSISTANT_MESSAGE event at turn end.
-        # Content-based dedup is more reliable than message_id matching
-        # because delta and message events may carry different IDs.
         _accumulated_text: str = ""
-        # Whether we have already emitted any assistant text for this turn.
-        # Guards against duplicate ASSISTANT_MESSAGE events when no deltas
-        # were streamed (e.g. non-streaming fallback within a streaming session).
-        _text_emitted: bool = False
 
         def _on_event(event: SessionEvent) -> None:
             """Translate Copilot SDK events to AgentResponseUpdate objects."""
-            nonlocal _accumulated_text, _text_emitted
+            nonlocal _accumulated_text
             try:
                 t = event.type
                 d = event.data
 
+                # ── Debug: log every event type and content-bearing data ──
+                _dbg_extra: dict[str, Any] = {}
+                _has_delta = getattr(d, "delta_content", None)
+                _has_content = getattr(d, "content", None)
+                if _has_delta:
+                    _dbg_extra["delta_len"] = len(str(_has_delta))
+                if _has_content:
+                    _dbg_extra["content_len"] = len(str(_has_content))
+                _dbg_extra["accum_len"] = len(_accumulated_text)
+                logger.info(
+                    "copilot_event: %s", t.value,
+                    extra=_dbg_extra,
+                )
+
                 if t == SessionEventType.ASSISTANT_MESSAGE_DELTA:
                     if d.delta_content:
                         _accumulated_text += (d.delta_content or "")
-                        _text_emitted = True
                         queue.put_nowait(AgentResponseUpdate(
                             role="assistant",
                             contents=[Content.from_text(d.delta_content)],
@@ -201,7 +208,6 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                     delta = getattr(d, "delta_content", "") or ""
                     if delta:
                         _accumulated_text += delta
-                        _text_emitted = True
                         queue.put_nowait(AgentResponseUpdate(
                             role="assistant",
                             contents=[Content.from_text(delta)],
@@ -319,12 +325,12 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
 
                 elif t == SessionEventType.ASSISTANT_MESSAGE:
                     content = getattr(d, "content", "") or ""
-                    # Skip if text was already delivered via deltas.
-                    # The Copilot SDK fires both ASSISTANT_MESSAGE_DELTA
-                    # (token-by-token) and ASSISTANT_MESSAGE (full content)
-                    # during streaming — emitting both duplicates the reply.
-                    if content and not _text_emitted:
-                        _text_emitted = True
+                    # In streaming mode, ASSISTANT_MESSAGE is always a
+                    # duplicate of the deltas already streamed above.
+                    # Skip it unconditionally when deltas were seen.
+                    # When no deltas fired (non-streaming fallback),
+                    # emit the full message as the sole content source.
+                    if content and not _accumulated_text:
                         queue.put_nowait(AgentResponseUpdate(
                             role="assistant",
                             contents=[Content.from_text(content)],

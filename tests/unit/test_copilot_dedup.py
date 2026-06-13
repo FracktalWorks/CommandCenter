@@ -251,25 +251,35 @@ class TestCopilotMessageDedup:
         assert len(text_updates) == 1
         assert text_updates[0].contents[0].text == "Hello world"
 
-    # ── Test 4: ASSISTANT_STREAMING_DELTA (newer SDK) ─────────────────
+    # ── Test 4: ASSISTANT_STREAMING_DELTA must NOT duplicate deltas ────
 
-    async def test_streaming_delta_handled_and_deduped(
+    async def test_streaming_delta_does_not_duplicate_message_delta(
         self, agent, mock_session
     ):
-        """ASSISTANT_STREAMING_DELTA should work like MESSAGE_DELTA."""
+        """The SDK fires BOTH ASSISTANT_MESSAGE_DELTA and
+        ASSISTANT_STREAMING_DELTA for the same content. Only
+        ASSISTANT_MESSAGE_DELTA must be emitted — STREAMING_DELTA is
+        ignored (matches upstream GitHubCopilotAgent). Handling both was
+        the root cause of the full-response duplication bug."""
         events = [
             _make_event(
-                SessionEventType.ASSISTANT_STREAMING_DELTA,
-                delta_content="Hi",
-            ),
-            _make_event(
-                SessionEventType.ASSISTANT_STREAMING_DELTA,
-                delta_content=" there",
-            ),
-            _make_event(
-                SessionEventType.ASSISTANT_MESSAGE,
-                content="Hi there",
+                SessionEventType.ASSISTANT_MESSAGE_DELTA,
+                delta_content="Hello",
                 message_id="msg-1",
+            ),
+            # Parallel stream of the SAME chunk — must be ignored.
+            _make_event(
+                SessionEventType.ASSISTANT_STREAMING_DELTA,
+                delta_content="Hello",
+            ),
+            _make_event(
+                SessionEventType.ASSISTANT_MESSAGE_DELTA,
+                delta_content=" world",
+                message_id="msg-1",
+            ),
+            _make_event(
+                SessionEventType.ASSISTANT_STREAMING_DELTA,
+                delta_content=" world",
             ),
         ]
         updates = await self._collect_updates(agent, mock_session, events)
@@ -278,8 +288,13 @@ class TestCopilotMessageDedup:
             u for u in updates
             if u.contents and getattr(u.contents[0], "type", None) == "text"
         ]
-        # 2 deltas, 0 full message (skipped because deltas accumulated).
-        assert len(text_updates) == 2
+        # Exactly 2 emissions (from MESSAGE_DELTA only), NOT 4.
+        assert len(text_updates) == 2, (
+            f"STREAMING_DELTA must not duplicate MESSAGE_DELTA; "
+            f"got {len(text_updates)} emissions"
+        )
+        full = "".join(u.contents[0].text for u in text_updates)
+        assert full == "Hello world"
 
     # ── Test 5: Double ASSISTANT_MESSAGE without deltas ───────────────
 
@@ -308,12 +323,14 @@ class TestCopilotMessageDedup:
         # Only the first ASSISTANT_MESSAGE should be emitted.
         assert len(text_updates) == 1
 
-    # ── Test 6: Mixed delta types + ASSISTANT_MESSAGE ─────────────────
+    # ── Test 6: Deltas + STREAMING_DELTA noise + ASSISTANT_MESSAGE ─────
 
-    async def test_mixed_deltas_then_full_message_skipped(
+    async def test_real_world_event_mix_no_duplication(
         self, agent, mock_session
     ):
-        """Both MESSAGE_DELTA and STREAMING_DELTA, then full message → skip."""
+        """Realistic event stream: MESSAGE_DELTAs interleaved with
+        STREAMING_DELTA noise, ended by a full ASSISTANT_MESSAGE.
+        Only the MESSAGE_DELTAs should be emitted — once each."""
         events = [
             _make_event(
                 SessionEventType.ASSISTANT_MESSAGE_DELTA,
@@ -322,8 +339,18 @@ class TestCopilotMessageDedup:
             ),
             _make_event(
                 SessionEventType.ASSISTANT_STREAMING_DELTA,
+                delta_content="Part",
+            ),
+            _make_event(
+                SessionEventType.ASSISTANT_MESSAGE_DELTA,
+                delta_content=" one",
+                message_id="msg-1",
+            ),
+            _make_event(
+                SessionEventType.ASSISTANT_STREAMING_DELTA,
                 delta_content=" one",
             ),
+            # Final full message — duplicates the deltas, must be skipped.
             _make_event(
                 SessionEventType.ASSISTANT_MESSAGE,
                 content="Part one",
@@ -336,5 +363,8 @@ class TestCopilotMessageDedup:
             u for u in updates
             if u.contents and getattr(u.contents[0], "type", None) == "text"
         ]
-        # 2 deltas only (full message skipped).
+        # 2 MESSAGE_DELTAs only (STREAMING_DELTA + full message skipped).
         assert len(text_updates) == 2
+        full = "".join(u.contents[0].text for u in text_updates)
+        assert full == "Part one"
+

@@ -202,18 +202,6 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                             raw_representation=event,
                         ))
 
-                elif t == SessionEventType.ASSISTANT_STREAMING_DELTA:
-                    # Primary streaming delta in newer Copilot SDK versions.
-                    # Handle identically to ASSISTANT_MESSAGE_DELTA.
-                    delta = getattr(d, "delta_content", "") or ""
-                    if delta:
-                        _accumulated_text += delta
-                        queue.put_nowait(AgentResponseUpdate(
-                            role="assistant",
-                            contents=[Content.from_text(delta)],
-                            raw_representation=event,
-                        ))
-
                 elif t == SessionEventType.ASSISTANT_REASONING_DELTA:
                     delta = getattr(d, "delta_content", "") or ""
                     if delta:

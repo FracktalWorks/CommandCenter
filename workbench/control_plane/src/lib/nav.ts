@@ -92,10 +92,10 @@ export const NAV_SECTIONS: NavSection[] = [
         note: "Register · manage · commits · remove",
       },
       {
-        href: "/integrations",
-        label: "Integrations",
+        href: "/apis",
+        label: "APIs",
         icon: "Plug",
-        note: "Connected services · credentials",
+        note: "API connections · credentials · AI discovery",
       },
     ],
   },

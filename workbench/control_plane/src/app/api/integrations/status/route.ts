@@ -38,6 +38,10 @@ export interface IntegrationStatus {
   db_keys?: string[];
   /** Storage source: "encrypted-db" | "env-file" | "none". */
   storage?: string;
+  /** Category for tile grid filtering (e.g. "crm", "email", "core"). */
+  category?: string;
+  /** True when this API was added by the user via AI discovery, not built-in. */
+  is_custom?: boolean;
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {

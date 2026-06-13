@@ -249,6 +249,33 @@ _SETUP_GUIDES: dict[str, dict[str, Any]] = {
 
 
 # ---------------------------------------------------------------------------
+# Service categories — drives tile grid + filter tabs on the frontend
+# ---------------------------------------------------------------------------
+
+_GUIDE_CATEGORIES: dict[str, str] = {
+    "github":         "core",
+    "zoho-crm":       "crm",
+    "apollo":         "prospecting",
+    "google-maps":    "prospecting",
+    "instantly":      "email",
+    "gmail":          "email",
+    "gmail-send":     "email",
+    "clickup":        "productivity",
+    "smtp":           "email",
+    "serpapi":        "search",
+    "apify":          "search",
+    "anymailfinder":  "prospecting",
+    "google-sheets":  "productivity",
+}
+
+
+async def _db_query(sql: str, **params: Any) -> list[dict[str, Any]]:
+    """Execute SQL via the key store's Postgres connection."""
+    from acb_llm.key_store import get_key_store  # noqa: PLC0415
+    return await get_key_store()._execute(sql, **params)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -387,8 +414,8 @@ async def integration_status(
 
     # Determine which services to check
     if agent:
-        from gateway.routes.agent import (_AGENT_REGISTRY,  # noqa: PLC0415
-                                          _load_dynamic_agents)
+        from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
+        from gateway.routes.agent import _load_dynamic_agents
 
         # Search static registry first, then dynamic agents from agents.json
         entry = next((e for e in _AGENT_REGISTRY if e["name"] == agent), None)
@@ -477,8 +504,48 @@ async def integration_status(
                 "missing_keys": missing_keys,
                 "db_keys": db_stored_keys,
                 "storage": storage,
+                "category": _GUIDE_CATEGORIES.get(svc, "custom"),
+                "is_custom": False,
             }
         )
+
+    # Merge user-added custom API definitions from DB
+    try:
+        custom_rows = await _db_query(
+            "SELECT * FROM custom_api_definitions ORDER BY created_at"
+        )
+        for row in custom_rows:
+            svc = row["service_id"]
+            if any(r["service"] == svc for r in result):
+                continue  # skip if service_id conflicts with built-in
+            env_vars = row.get("env_vars") or []
+            configured = bool(
+                env_vars
+                and all(os.getenv(v.get("key", ""), "") for v in env_vars if v.get("key"))
+            )
+            missing = [
+                v["key"] for v in env_vars
+                if not os.getenv(v.get("key", ""), "")
+            ]
+            result.append({
+                "service": svc,
+                "label": row.get("label", svc),
+                "configured": configured,
+                "mandatory": False,
+                "description": row.get("description", ""),
+                "uses": [],
+                "setup_url": row.get("setup_url", ""),
+                "docs_url": row.get("docs_url", ""),
+                "instructions": row.get("instructions", ""),
+                "env_vars": env_vars,
+                "missing_keys": missing,
+                "db_keys": [],
+                "storage": "none" if not configured else "env-file",
+                "category": row.get("category", "custom"),
+                "is_custom": True,
+            })
+    except Exception:
+        pass  # graceful degradation if table doesn't exist yet
 
     return result
 
@@ -500,14 +567,19 @@ async def configure_integrations(
     Only keys present in the allowed list (derived from _SETUP_GUIDES) may
     be written — all others are rejected with 422.
     """
-    # Validate all keys before writing any
-    illegal = [v.key for v in req.vars if v.key not in _ALLOWED_ENV_KEYS]
+    # Validate all keys — allow known keys OR any valid SCREAMING_SNAKE_CASE name
+    # (custom APIs define their own env var names)
+    _env_var_re = re.compile(r"^[A-Z][A-Z0-9_]{1,100}$")
+    illegal = [
+        v.key for v in req.vars
+        if v.key not in _ALLOWED_ENV_KEYS and not _env_var_re.match(v.key)
+    ]
     if illegal:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
-                f"Disallowed env var keys: {illegal}. "
-                f"Permitted: {sorted(_ALLOWED_ENV_KEYS)}"
+                f"Invalid env var key(s): {illegal}. "
+                "Keys must be SCREAMING_SNAKE_CASE (A-Z, 0-9, underscore)."
             ),
         )
 
@@ -754,6 +826,254 @@ async def delete_integration_key(
         "key_name": req.key_name,
         "deleted": True,
     }
+
+
+# ---------------------------------------------------------------------------
+# /integrations/discover — AI-powered API credential schema discovery
+# ---------------------------------------------------------------------------
+
+class DiscoverRequest(BaseModel):
+    query: str  # e.g. "Notion", "Slack", "HubSpot"
+
+
+@router.post("/discover")
+async def discover_api(
+    req: DiscoverRequest,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Use LLM (+ optional web search) to generate an API integration schema.
+
+    The returned definition can be reviewed, then saved via
+    POST /integrations/custom and credentials entered via
+    POST /integrations/configure.
+    """
+    import json as _json  # noqa: PLC0415
+    import litellm as _litellm  # noqa: PLC0415
+
+    if not req.query.strip():
+        raise HTTPException(status_code=400, detail="query cannot be empty")
+
+    query = req.query.strip()
+
+    # 1. Optional web search enhancement via SerpAPI
+    web_context = ""
+    settings_obj = get_settings()
+    serpapi_key = (
+        getattr(settings_obj, "serpapi_api_key", "")
+        or os.getenv("SERPAPI_API_KEY", "")
+    )
+    if serpapi_key:
+        try:
+            async with httpx.AsyncClient(timeout=8) as client:
+                r = await client.get(
+                    "https://serpapi.com/search.json",
+                    params={
+                        "q": f"{query} API developer documentation authentication",
+                        "num": 3,
+                        "api_key": serpapi_key,
+                    },
+                )
+                data = r.json()
+                results = data.get("organic_results", [])[:3]
+                web_context = "\n".join(
+                    f"- {res.get('title', '')}: {res.get('snippet', '')} — "
+                    f"{res.get('link', '')}"
+                    for res in results
+                )
+        except Exception as exc:
+            _log.debug("discover.web_search_failed", error=str(exc))
+
+    # 2. Build LLM prompt
+    web_section = f"\nRelevant search results:\n{web_context}\n" if web_context else ""
+    prompt = (
+        f'You are an API integration expert. Generate a connection definition'
+        f' for "{query}".\n'
+        + web_section
+        + """Return ONLY a valid JSON object with exactly these fields:
+{
+  "service_id": "lowercase-hyphens-only",
+  "label": "Human Readable Name",
+  "category": "crm|email|productivity|search|prospecting|analytics|communication|payments|storage|custom",
+  "description": "One sentence describing what this API does",
+  "setup_url": "https://... URL to get credentials",
+  "docs_url": "https://... URL to API documentation",
+  "instructions": "Numbered steps to get the API key",
+  "env_vars": [
+    {"key": "SERVICE_API_KEY", "label": "API Key", "sensitive": true}
+  ]
+}
+
+Rules:
+- service_id: lowercase, hyphens only, e.g. "notion", "hubspot-crm"
+- env var keys: SCREAMING_SNAKE_CASE, e.g. NOTION_API_TOKEN
+- sensitive=true for secrets/tokens; sensitive=false for URLs/IDs
+- Return ONLY the JSON, no markdown fences, no explanation"""
+    )
+
+    # 3. Call LLM — try models in order of preference
+    _models = [
+        "deepseek/deepseek-chat",
+        "openai/gpt-4o-mini",
+        "gpt-4o-mini",
+        "anthropic/claude-haiku-20240307",
+    ]
+    last_err: Exception | None = None
+    for model in _models:
+        try:
+            resp = await _litellm.acompletion(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=1200,
+            )
+            content = (resp.choices[0].message.content or "").strip()
+            # Strip markdown code fences if present
+            if "```" in content:
+                content = "\n".join(
+                    ln for ln in content.splitlines()
+                    if not ln.strip().startswith("```")
+                ).strip()
+            definition = _json.loads(content)
+            for field in ("service_id", "label", "env_vars"):
+                if not definition.get(field):
+                    raise ValueError(f"Missing field: {field}")
+            _log.info(
+                "integrations.discover",
+                query=query,
+                service_id=definition.get("service_id"),
+                model=model,
+                actor=user.email,
+            )
+            return {
+                "ok": True,
+                "definition": definition,
+                "web_enhanced": bool(web_context),
+                "model": model,
+            }
+        except (_json.JSONDecodeError, ValueError):
+            continue
+        except Exception as exc:
+            last_err = exc
+            continue
+
+    err_detail = str(last_err) if last_err else "No LLM model available"
+    raise HTTPException(status_code=500, detail=f"Discovery failed: {err_detail}")
+
+
+# ---------------------------------------------------------------------------
+# /integrations/custom — CRUD for user-defined API definitions
+# ---------------------------------------------------------------------------
+
+class CustomApiDef(BaseModel):
+    service_id: str
+    label: str
+    category: str = "custom"
+    description: str = ""
+    setup_url: str = ""
+    docs_url: str = ""
+    instructions: str = ""
+    env_vars: list[dict[str, Any]] = []
+
+
+@router.get("/custom")
+async def list_custom_apis(
+    user: UserContext = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    """List all user-defined custom API definitions."""
+    try:
+        rows = await _db_query(
+            "SELECT * FROM custom_api_definitions ORDER BY created_at"
+        )
+        return [
+            {
+                "service_id": r["service_id"],
+                "label": r["label"],
+                "category": r.get("category", "custom"),
+                "description": r.get("description", ""),
+                "setup_url": r.get("setup_url", ""),
+                "docs_url": r.get("docs_url", ""),
+                "instructions": r.get("instructions", ""),
+                "env_vars": r.get("env_vars") or [],
+                "created_at": (
+                    r["created_at"].isoformat() if r.get("created_at") else None
+                ),
+            }
+            for r in rows
+        ]
+    except Exception as exc:
+        raise HTTPException(500, f"DB error: {exc}") from exc
+
+
+@router.post("/custom")
+async def create_custom_api(
+    req: CustomApiDef,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Save a custom API definition (upsert on service_id)."""
+    import json as _json  # noqa: PLC0415
+
+    if not re.match(r"^[a-z][a-z0-9-]{0,60}$", req.service_id):
+        raise HTTPException(
+            400,
+            "service_id must be lowercase letters, numbers, and hyphens.",
+        )
+    try:
+        await _db_query(
+            """
+            INSERT INTO custom_api_definitions
+                (service_id, label, category, description,
+                 setup_url, docs_url, instructions, env_vars)
+            VALUES
+                (:service_id, :label, :category, :description,
+                 :setup_url, :docs_url, :instructions, :env_vars)
+            ON CONFLICT (service_id) DO UPDATE SET
+                label        = :label,
+                category     = :category,
+                description  = :description,
+                setup_url    = :setup_url,
+                docs_url     = :docs_url,
+                instructions = :instructions,
+                env_vars     = :env_vars,
+                updated_at   = now()
+            """,
+            service_id=req.service_id,
+            label=req.label,
+            category=req.category,
+            description=req.description,
+            setup_url=req.setup_url,
+            docs_url=req.docs_url,
+            instructions=req.instructions,
+            env_vars=_json.dumps(req.env_vars),
+        )
+        _log.info(
+            "integrations.custom_created",
+            service_id=req.service_id,
+            actor=user.email,
+        )
+        return {"ok": True, "service_id": req.service_id}
+    except Exception as exc:
+        raise HTTPException(500, f"DB error: {exc}") from exc
+
+
+@router.delete("/custom/{service_id}")
+async def delete_custom_api(
+    service_id: str,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Delete a custom API definition."""
+    try:
+        await _db_query(
+            "DELETE FROM custom_api_definitions WHERE service_id = :service_id",
+            service_id=service_id,
+        )
+        _log.info(
+            "integrations.custom_deleted",
+            service_id=service_id,
+            actor=user.email,
+        )
+        return {"ok": True, "service_id": service_id, "deleted": True}
+    except Exception as exc:
+        raise HTTPException(500, f"DB error: {exc}") from exc
 
 
 @router.get("/test")

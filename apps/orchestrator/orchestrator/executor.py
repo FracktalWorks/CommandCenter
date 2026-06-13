@@ -1516,13 +1516,13 @@ async def run_agent_stream(
                                     if not _text_started:
                                         _text_started = True
                                         _msg_id = _update.message_id or str(uuid.uuid4())
-                                        _log.info(
+                                        _log.debug(
                                             "sse_text_start: msg_id=%s",
                                             _msg_id[:12],
                                         )
                                         yield _sse({"type": "TEXT_MESSAGE_START",
                                                     "messageId": _msg_id, "role": "assistant"})
-                                    _log.info(
+                                    _log.debug(
                                         "sse_text_delta: len=%d msg_id=%s",
                                         len(_delta), (_msg_id or "")[:12],
                                     )

@@ -186,7 +186,7 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                 if _has_content:
                     _dbg_extra["content_len"] = len(str(_has_content))
                 _dbg_extra["accum_len"] = len(_accumulated_text)
-                logger.info(
+                logger.debug(
                     "copilot_event: %s", t.value,
                     extra=_dbg_extra,
                 )
@@ -330,7 +330,10 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                     # Skip it unconditionally when deltas were seen.
                     # When no deltas fired (non-streaming fallback),
                     # emit the full message as the sole content source.
+                    # Set _accumulated_text so a second ASSISTANT_MESSAGE
+                    # for the same turn is also blocked.
                     if content and not _accumulated_text:
+                        _accumulated_text = content
                         queue.put_nowait(AgentResponseUpdate(
                             role="assistant",
                             contents=[Content.from_text(content)],

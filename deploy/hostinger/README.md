@@ -63,6 +63,29 @@ Set at minimum:
 
 Then edit `deploy/hostinger/caddy/Caddyfile` and replace the placeholder hostnames with yours.
 
+## Memory system (Mem0 + Graphiti)
+
+CommandCenter has two memory layers that persist across conversations:
+
+| Layer | Backend | Env var | What it stores |
+|---|---|---|---|
+| **Mem0** (episodic) | Postgres + pgvector | `MEM0_ENABLED=true` | Per-user facts extracted from conversations |
+| **Graphiti** (knowledge graph) | Neo4j | `GRAPHITI_ENABLED=true` | Time-stamped entity relationships and timelines |
+
+Both are enabled by default in the deploy scripts (`--profile core --profile memory`).
+Set the env vars in `/opt/acb/app/.env`:
+
+```bash
+MEM0_ENABLED=true
+GRAPHITI_ENABLED=true
+NEO4J_URL=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=<generate-a-strong-password>
+```
+
+The memory panel appears in the chat sidebar for every agent. The `/memory` page
+(Brain icon in nav) provides a full memory manager with semantic search and deletion.
+
 ## First deploy
 
 ```bash

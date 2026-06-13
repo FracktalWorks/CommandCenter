@@ -24,8 +24,10 @@ import { useActiveSessions } from "@/hooks/useActiveSessions";
 import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 
-// Default agent names that carry persistent Mem0 memory + the CommandCenter persona.
-const MEMORY_AGENTS = new Set(["orchestrator", "default"]);
+// Agent names that receive the CommandCenter persona (general-purpose brain).
+// All agents get persistent Mem0 memory — the panel shows for every agent,
+// and conversations are saved to Mem0 regardless of agent type.
+const PERSONA_AGENTS = new Set(["orchestrator", "default"]);
 
 // CommandCenter persona injected as system context for the default agent.
 const COMMANDCENTER_PERSONA =
@@ -807,13 +809,20 @@ function ChatPageInner() {
         <div className="flex flex-1 flex-col overflow-hidden min-w-0">
 
           {activeSession ? (
-            MEMORY_AGENTS.has(activeSession.agentName) ? (
               <AgentChat
                 key={activeSession.id}
                 agentName={activeSession.agentName}
                 sessionId={activeSession.id}
-                agentDescription="General-purpose AI company brain"
-                persona={COMMANDCENTER_PERSONA}
+                agentDescription={
+                  PERSONA_AGENTS.has(activeSession.agentName)
+                    ? "General-purpose AI company brain"
+                    : undefined
+                }
+                persona={
+                  PERSONA_AGENTS.has(activeSession.agentName)
+                    ? COMMANDCENTER_PERSONA
+                    : undefined
+                }
                 memories={memories.map((m) => m.memory)}
                 memoryUserId={userId}
                 availableAgents={agentList.length > 0 ? agentList : undefined}
@@ -832,28 +841,6 @@ function ChatPageInner() {
                   ]);
                 }}
               />
-            ) : (
-              <AgentChat
-                key={activeSession.id}
-                agentName={activeSession.agentName}
-                sessionId={activeSession.id}
-                availableAgents={agentList.length > 0 ? agentList : undefined}
-                expectedMessageCount={activeSession.messageCount}
-                onActivity={(info) => handleActivity(activeSession.id, info)}
-                onArtifact={(entry: ArtifactEntry) => {
-                  setArtifactUpdates((prev) => [
-                    ...prev,
-                    {
-                      path: entry.path,
-                      name: entry.path.split("/").pop() ?? entry.path,
-                      size: entry.size ?? 0,
-                      modified_at: new Date().toISOString(),
-                      mime_type: "",
-                    } satisfies FileEntry,
-                  ]);
-                }}
-              />
-            )
           ) : (
             <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">
               Select or create a session to start chatting.

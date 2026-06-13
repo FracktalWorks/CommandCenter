@@ -11,9 +11,9 @@ say()  { printf "\n==> %s\n" "$*"; }
 say "Pulling images"
 docker compose -f infra/docker-compose.yml pull
 
-say "Booting stack (core)"
+say "Booting stack (core + memory)"
 set -a && source /opt/acb/app/.env && set +a
-docker compose -f infra/docker-compose.yml --profile core up -d --remove-orphans
+docker compose -f infra/docker-compose.yml --profile core --profile memory up -d --remove-orphans
 
 say "Waiting for healthchecks (up to 90s)"
 deadline=$(( $(date +%s) + 90 ))

@@ -128,12 +128,7 @@ async def memory_status(
             mem0_count = len(memories)
 
     return {
-        "mem0": {
-            "enabled": mem0_enabled,
-            "memory_count": mem0_count,
-        },
-        "graphiti": {
-            "enabled": graphiti_enabled,
-            "neo4j_url": getattr(settings, "neo4j_url", "") if graphiti_enabled else None,
-        },
+        "mem0_enabled": mem0_enabled,
+        "graphiti_enabled": graphiti_enabled,
+        "count": mem0_count,
     }

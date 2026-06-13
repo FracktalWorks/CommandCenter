@@ -54,18 +54,18 @@ function StatusBar({ status, loading }: { status: MemoryStatus | null; loading: 
     <div className="flex flex-wrap gap-3 items-center text-xs">
       <span className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 border ${
         status.mem0_enabled
-          ? "bg-emerald-950/40 border-emerald-700/50 text-emerald-400"
+          ? "bg-success/20 border-success/30 text-success"
           : "bg-secondary border-border text-muted-foreground"
       }`}>
-        <span className={`h-1.5 w-1.5 rounded-full ${status.mem0_enabled ? "bg-emerald-400" : "bg-muted"}`} />
+        <span className={`h-1.5 w-1.5 rounded-full ${status.mem0_enabled ? "bg-success" : "bg-muted"}`} />
         Episodic memory {status.mem0_enabled ? "active" : "inactive"}
       </span>
       <span className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 border ${
         status.graphiti_enabled
-          ? "bg-blue-950/40 border-blue-700/50 text-blue-400"
+          ? "bg-primary/20 border-primary/30 text-primary"
           : "bg-secondary border-border text-muted-foreground"
       }`}>
-        <span className={`h-1.5 w-1.5 rounded-full ${status.graphiti_enabled ? "bg-blue-400" : "bg-muted"}`} />
+        <span className={`h-1.5 w-1.5 rounded-full ${status.graphiti_enabled ? "bg-primary" : "bg-muted"}`} />
         Knowledge graph {status.graphiti_enabled ? "active" : "inactive"}
       </span>
       {status.count !== undefined && (
@@ -94,7 +94,7 @@ function MemoryCard({
     <div
       className={`group relative flex flex-col gap-1.5 rounded-lg border p-4 transition-all ${
         deleting
-          ? "border-red-800/40 bg-red-950/20 opacity-50"
+          ? "border-destructive/20 bg-destructive/10 opacity-50"
           : "border-border bg-card/60 hover:border-primary/30"
       }`}
     >
@@ -122,7 +122,7 @@ function MemoryCard({
         onClick={() => onDelete(memory.id)}
         disabled={deleting}
         title="Delete this memory"
-        className="absolute top-3 right-3 rounded p-1 text-muted-foreground/70 opacity-0 group-hover:opacity-100 hover:bg-red-900/30 hover:text-red-400 transition-all disabled:cursor-not-allowed"
+        className="absolute top-3 right-3 rounded p-1 text-muted-foreground/70 opacity-0 group-hover:opacity-100 hover:bg-destructive/20 hover:text-destructive transition-all disabled:cursor-not-allowed"
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
           <path d="M2 4h12M5 4V2h6v2M6 7v5M10 7v5M3 4l1 9a1 1 0 001 1h6a1 1 0 001-1l1-9" />
@@ -282,7 +282,7 @@ export default function MemoryPage() {
                   <span className="text-xs text-muted-foreground">Delete all {memories.length} memories?</span>
                   <button
                     onClick={handleClearAll}
-                    className="rounded-md px-2.5 py-1.5 text-xs bg-red-900/40 border border-red-700/50 text-red-300 hover:bg-red-900/60 transition-colors"
+                    className="rounded-md px-2.5 py-1.5 text-xs bg-destructive/30 border border-destructive/40 text-destructive-foreground hover:bg-destructive/50 transition-colors"
                   >
                     Confirm
                   </button>
@@ -296,7 +296,7 @@ export default function MemoryPage() {
               ) : (
                 <button
                   onClick={() => setConfirmClear(true)}
-                  className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs text-red-400 border border-red-900/50 hover:border-red-700/50 hover:bg-red-950/30 transition-colors"
+                  className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs text-destructive border border-destructive/40 hover:border-destructive/60 hover:bg-destructive/15 transition-colors"
                 >
                   <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
                     <path d="M2 4h12M5 4V2h6v2M6 7v5M10 7v5M3 4l1 9a1 1 0 001 1h6a1 1 0 001-1l1-9" />
@@ -353,11 +353,11 @@ export default function MemoryPage() {
 
       {/* ── Body ────────────────────────────────────────────────────── */}
       {error && (
-        <div className="mb-4 rounded-lg border border-red-800/50 bg-red-950/30 px-4 py-3 text-sm text-red-300">
+        <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/15 px-4 py-3 text-sm text-destructive-foreground">
           {error}
           <button
             onClick={() => { loadMemories(); setError(null); }}
-            className="ml-3 underline text-red-400 hover:text-red-300"
+            className="ml-3 underline text-destructive hover:opacity-80"
           >
             Retry
           </button>

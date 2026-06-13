@@ -123,8 +123,8 @@ jobs:
 
             echo "==> Skipping deprecated LiteLLM proxy cleanup (already removed)"
 
-            echo "==> Bootstrapping Docker Compose stack"
-            docker compose -f infra/docker-compose.yml --profile core up -d --remove-orphans
+            echo "==> Bootstrapping Docker Compose stack (core + memory)"
+            docker compose -f infra/docker-compose.yml --profile core --profile memory up -d --remove-orphans
 
             echo "==> Waiting for healthchecks (up to 90s)"
             deadline=$(( $(date +%s) + 90 ))

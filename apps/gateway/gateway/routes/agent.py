@@ -583,7 +583,7 @@ async def run_agent_stream_endpoint(
 
     # ── Memory extraction: save conversation facts after the run completes ──
     try:
-        from acb_memory import add_memories_background  # noqa: PLC0415
+        from acb_memory import add_memories_background, add_episode  # noqa: PLC0415
         messages = req.payload.get("messages") or []
         user_msg = req.payload.get("message") or ""
         if user_msg or messages:
@@ -596,6 +596,14 @@ async def run_agent_stream_endpoint(
             if conv:
                 background_tasks.add_task(
                     add_memories_background, user_id, conv, agent_name
+                )
+            # Also populate the bi-temporal knowledge graph (Graphiti)
+            if user_msg:
+                background_tasks.add_task(add_episode,
+                    name=f"agent:{agent_name}:{user_id[:20]}",
+                    content=user_msg[:500],
+                    source_description=f"agent_{agent_name}",
+                    group_id=user_id,
                 )
     except ImportError:
         pass

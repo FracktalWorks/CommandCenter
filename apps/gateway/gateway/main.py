@@ -238,13 +238,20 @@ if _HAS_MAF:
 
             # Post-run memory extraction (fires after response stream closes)
             try:
-                from acb_memory import add_memories_background  # noqa: PLC0415
+                from acb_memory import add_memories_background, add_episode  # noqa: PLC0415
                 if last_user_msg and messages:
                     conv = [
                         {"role": m.get("role", "user"), "content": m.get("content", "")}
                         for m in messages if m.get("content")
                     ]
                     background_tasks.add_task(add_memories_background, user_id, conv)
+                    # Also populate the bi-temporal knowledge graph (Graphiti)
+                    background_tasks.add_task(add_episode,
+                        name=f"chat:{user_id[:20]}",
+                        content=last_user_msg[:500],
+                        source_description="copilot_chat",
+                        group_id=user_id,
+                    )
             except ImportError:
                 pass
 

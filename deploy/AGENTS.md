@@ -16,6 +16,8 @@ Hostinger VPS deployment scripts, Caddy reverse proxy config, and CI/CD pipeline
 ## Conventions
 - Bootstrap installs uv, validates GITHUB_TOKEN, writes acb/acb-gateway/acb-workbench systemd units
 - Deploy pulls latest, rebuilds Docker images, syncs Python deps, restarts gateway + workbench systemd services
+- Docker Compose boots with `--profile core --profile memory` (Postgres, Redis, Neo4j)
+- Neo4j is required for Graphiti bi-temporal knowledge graph (GRAPHITI_ENABLED=true)
 - **LLM routing: gateway /v1/chat/completions reads keys from encrypted Postgres — no separate proxy**
 - Provider keys live in the encrypted `provider_keys` table; seeded from `.env` on first boot
 - Next.js workbench is rebuilt (`npm ci && npm run build`) and restarted on every deploy

@@ -1305,6 +1305,9 @@ async def run_agent_stream(
                 agent._create_session = CommandCenterCopilotAgent._create_session.__get__(
                     agent, type(agent)
                 )
+                agent._resume_session = CommandCenterCopilotAgent._resume_session.__get__(
+                    agent, type(agent)
+                )
                 agent._stream_updates = CommandCenterCopilotAgent._stream_updates.__get__(
                     agent, type(agent)
                 )

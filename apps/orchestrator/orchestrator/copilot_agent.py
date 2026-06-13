@@ -112,6 +112,67 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
 
         return await self._client.create_session(config)
 
+    async def _resume_session(
+        self,
+        session_id: str,
+        streaming: bool,
+    ) -> CopilotSession:
+        """Resume a Copilot session, re-applying the agent's identity.
+
+        The upstream ``_resume_session`` forwards only ``tools``,
+        ``on_permission_request`` and ``mcp_servers`` — it drops
+        ``system_message`` (the agent's instructions / identity),
+        ``provider`` (BYOK routing) and ``model``.  On page refresh or
+        when re-opening an old chat the stored session is resumed, so
+        without these the agent loses its persona and reverts to the
+        generic GitHub Copilot CLI identity.  Re-apply them here so a
+        resumed session behaves identically to a freshly created one.
+        """
+        if not self._client:
+            raise RuntimeError(
+                "GitHub Copilot client not initialized. Call start() first."
+            )
+
+        config: dict[str, Any] = {"streaming": streaming}
+
+        model = self._default_options.get("model") or self._settings.get("model")
+        if model:
+            config["model"] = model
+
+        system_message = self._default_options.get("system_message")
+        if system_message:
+            config["system_message"] = system_message
+
+        if self._tools:
+            config["tools"] = self._prepare_tools(self._tools)
+
+        if self._permission_handler:
+            config["on_permission_request"] = self._permission_handler
+
+        mcp_servers = self._mcp_servers
+        if mcp_servers:
+            config["mcp_servers"] = mcp_servers
+
+        # === BYOK: forward provider config so resumed sessions route correctly
+        provider = self._default_options.get("provider")
+        if provider:
+            config["provider"] = provider
+
+        # === Reasoning: forward effort so thinking deltas keep streaming ===
+        effort = self._default_options.get("reasoning_effort")
+        if effort:
+            config["reasoning_effort"] = effort
+            try:
+                return await self._client.resume_session(session_id, config)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "resume_session failed with reasoning_effort=%s; "
+                    "retrying without", effort,
+                )
+                config.pop("reasoning_effort", None)
+
+        return await self._client.resume_session(session_id, config)
+
     async def _stream_updates(
         self,
         messages=None,

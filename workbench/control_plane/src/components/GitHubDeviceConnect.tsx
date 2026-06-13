@@ -350,7 +350,7 @@ export default function GitHubDeviceConnect({
           <button
             onClick={() => void handleSaveCredentials()}
             disabled={(!tokenInput.trim() && !clientIdInput.trim()) || phase === "saving"}
-            className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium text-white transition-colors"
+            className="w-full py-2 rounded-lg bg-success hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium text-success-foreground transition-colors"
           >
             {phase === "saving" ? "Saving…" : tokenInput.trim() ? "Save & Connect →" : "Save & Continue →"}
           </button>

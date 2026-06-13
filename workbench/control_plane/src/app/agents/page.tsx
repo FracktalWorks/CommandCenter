@@ -885,7 +885,7 @@ function AddAgentModal({
                   onAdded(addedAgent);
                   onClose();
                 }}
-                className="w-full rounded-lg bg-primary px-5 py-2 text-sm font-medium text-white hover:bg-blue-500 transition-colors"
+                className="w-full rounded-lg bg-primary px-5 py-2 text-sm font-medium text-white hover:opacity-90 transition-colors"
               >
                 Done
               </button>
@@ -1332,7 +1332,7 @@ function AgentCard({
                 <button
                   disabled={removing}
                   onClick={handleRemove}
-                  className="rounded px-2 py-1 text-xs bg-red-700 hover:bg-red-600 text-white transition-colors disabled:opacity-50"
+                  className="rounded px-2 py-1 text-xs bg-red-700 hover:bg-destructive text-destructive-foreground transition-colors disabled:opacity-50"
                 >
                   {removing ? "…" : "Yes"}
                 </button>

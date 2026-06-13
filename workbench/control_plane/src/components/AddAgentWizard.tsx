@@ -120,7 +120,7 @@ function IntegrationFormCard({
             href={integration.setup_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs px-3 py-1.5 rounded-lg border border-blue-500/40 text-blue-400 hover:bg-blue-500/10 transition-colors shrink-0"
+            className="text-xs px-3 py-1.5 rounded-lg border border-blue-500/40 text-blue-400 hover:opacity-90/10 transition-colors shrink-0"
           >
             Get credentials →
           </a>
@@ -181,7 +181,7 @@ function IntegrationFormCard({
           <button
             onClick={onSave}
             disabled={!allFilled || state.saving}
-            className="flex-1 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium text-white transition-colors"
+            className="flex-1 py-2 rounded-lg bg-blue-600 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium text-white transition-colors"
           >
             {state.saving ? "Saving…" : "Save & continue"}
           </button>
@@ -655,14 +655,14 @@ export default function AddAgentWizard({
                 {integrations.every((i) => i.configured) ? (
                   <button
                     onClick={onComplete}
-                    className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-medium text-white transition-colors"
+                    className="px-5 py-2 rounded-lg bg-success hover:opacity-90 text-sm font-medium text-success-foreground transition-colors"
                   >
                     Start chatting →
                   </button>
                 ) : (
                   <button
                     onClick={() => setStepIndex(1)}
-                    className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium text-white transition-colors"
+                    className="px-5 py-2 rounded-lg bg-blue-600 hover:opacity-90 text-sm font-medium text-white transition-colors"
                   >
                     Set up integrations →
                   </button>
@@ -686,7 +686,7 @@ export default function AddAgentWizard({
             {currentStep.kind === "done" && (
               <button
                 onClick={onComplete}
-                className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-medium text-white transition-colors"
+                className="px-5 py-2 rounded-lg bg-success hover:opacity-90 text-sm font-medium text-success-foreground transition-colors"
               >
                 Start chatting →
               </button>

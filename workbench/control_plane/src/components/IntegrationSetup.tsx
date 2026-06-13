@@ -73,7 +73,7 @@ function IntegrationCard({
               href={integration.setup_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs px-3 py-1.5 rounded-lg border border-blue-500/40 text-blue-400 hover:bg-blue-500/10 transition-colors"
+              className="text-xs px-3 py-1.5 rounded-lg border border-blue-500/40 text-blue-400 hover:opacity-90/10 transition-colors"
             >
               Get credentials →
             </a>
@@ -149,7 +149,7 @@ function IntegrationCard({
           <button
             onClick={onSave}
             disabled={!allFilled || saving}
-            className="flex-1 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium text-white transition-colors"
+            className="flex-1 py-2 rounded-lg bg-blue-600 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium text-white transition-colors"
           >
             {saving ? "Saving…" : "Save credentials"}
           </button>
@@ -399,7 +399,7 @@ export default function IntegrationSetup({
         <p className="text-emerald-400 text-sm">All integrations are configured.</p>
         <button
           onClick={onComplete}
-          className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm text-white transition-colors"
+          className="px-4 py-2 rounded-lg bg-primary hover:opacity-90 text-sm text-primary-foreground transition-colors"
         >
           Start chatting
         </button>
@@ -467,7 +467,7 @@ export default function IntegrationSetup({
         <button
           onClick={handleComplete}
           disabled={!allSaved}
-          className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium text-white transition-colors"
+          className="px-5 py-2 rounded-lg bg-success hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium text-success-foreground transition-colors"
         >
           {allSaved ? "Start chatting →" : "Configure all integrations to continue"}
         </button>

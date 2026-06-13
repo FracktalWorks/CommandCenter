@@ -407,7 +407,7 @@ function SessionList({
                     key={s.id}
                     className={`group flex items-start justify-between rounded-md px-2.5 py-2 cursor-pointer transition-colors ${
                       s.id === activeId
-                        ? "bg-secondary text-white"
+                        ? "bg-secondary text-sidebar-foreground"
                         : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
                     }`}
                     onClick={() => onSelect(s.id)}

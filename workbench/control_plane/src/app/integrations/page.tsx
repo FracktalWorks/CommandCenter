@@ -137,7 +137,7 @@ function ReconfigureForm({
         <button
           onClick={() => void handleSave()}
           disabled={saving}
-          className="flex-1 py-2 rounded-lg bg-primary hover:bg-blue-500 disabled:opacity-40 text-sm font-medium text-white transition-colors"
+          className="flex-1 py-2 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 text-sm font-medium text-white transition-colors"
         >
           {saving ? "Saving…" : "Save credentials"}
         </button>
@@ -311,7 +311,7 @@ function IntegrationCard({
                       href={integration.setup_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-xs px-3 py-1.5 rounded-lg border border-blue-500/30 text-primary hover:bg-blue-500/10 transition-colors"
+                      className="text-xs px-3 py-1.5 rounded-lg border border-blue-500/30 text-primary hover:opacity-90/10 transition-colors"
                     >
                       Get credentials →
                     </a>

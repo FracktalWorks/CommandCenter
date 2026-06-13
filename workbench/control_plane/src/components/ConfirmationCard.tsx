@@ -66,7 +66,7 @@ export default function ConfirmationCard({
         <button
           onClick={onApprove}
           disabled={disabled}
-          className="text-[12px] px-4 py-1.5 rounded-lg bg-emerald-600 text-white font-medium hover:bg-emerald-500 disabled:opacity-40 transition-colors"
+          className="text-[12px] px-4 py-1.5 rounded-lg bg-success text-success-foreground font-medium hover:bg-emerald-500 disabled:opacity-40 transition-colors"
         >
           ✓ Approve
         </button>

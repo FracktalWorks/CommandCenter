@@ -409,7 +409,7 @@ function TierCard({
             <button
               onClick={handleSave}
               disabled={saving || !selectedModel}
-              className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
+              className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40 transition-colors"
             >
               {saving ? "Saving…" : "Save"}
             </button>
@@ -734,7 +734,7 @@ function ProviderCard({
             <button
               onClick={handleSave}
               disabled={saving || !keyVal.trim()}
-              className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
+              className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40 transition-colors"
             >
               {saving ? "Saving & restarting LiteLLM…" : "Save & apply"}
             </button>
@@ -1112,7 +1112,7 @@ function ModelCatalogue() {
               <button
                 onClick={handleAdd}
                 disabled={adding || !formId.trim() || !formLabel.trim()}
-                className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
+                className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40 transition-colors"
               >
                 {adding ? "Adding…" : "Add to picker"}
               </button>

@@ -105,8 +105,25 @@ const DISCOVER_SUGGESTIONS = [
 ];
 
 // ---------------------------------------------------------------------------
-// ServiceLogo — Clearbit logo with colored-initials fallback
+// ServiceLogo — multi-source logo with colored-initials fallback
 // ---------------------------------------------------------------------------
+
+/**
+ * Build an ordered list of logo URLs to try for a given domain.
+ * Strategy:
+ *  1. Google S2 favicon (sz=128) — always works, CDN-cached, no key needed
+ *  2. Clearbit Logo API — higher quality / better cropped for known brands
+ *  3. DuckDuckGo favicon — tertiary fallback
+ * Falls back to colored initials if all fail.
+ */
+function logoUrls(domain: string): string[] {
+  if (!domain) return [];
+  return [
+    `https://www.google.com/s2/favicons?domain=${domain}&sz=128`,
+    `https://logo.clearbit.com/${domain}`,
+    `https://icons.duckduckgo.com/ip3/${domain}.ico`,
+  ];
+}
 
 function ServiceLogo({
   service,
@@ -122,7 +139,8 @@ function ServiceLogo({
   size?: "sm" | "md" | "lg";
 }) {
   const resolvedDomain = KNOWN_DOMAINS[service ?? ""] ?? domain ?? "";
-  const [imgFailed, setImgFailed] = useState(false);
+  const urls = logoUrls(resolvedDomain);
+  const [urlIdx, setUrlIdx] = useState(0);
 
   const szOuter = size === "sm" ? "w-7 h-7" : size === "lg" ? "w-12 h-12" : "w-10 h-10";
   const szText  = size === "sm" ? "text-[9px]" : size === "lg" ? "text-sm" : "text-xs";
@@ -135,14 +153,17 @@ function ServiceLogo({
     .join("")
     .toUpperCase();
 
-  if (resolvedDomain && !imgFailed) {
+  const currentUrl = urls[urlIdx];
+
+  if (currentUrl) {
     return (
-      <div className={`${szOuter} rounded-lg border ${catCls} flex items-center justify-center overflow-hidden shrink-0 bg-white/5`}>
+      <div className={`${szOuter} rounded-lg border ${catCls} flex items-center justify-center overflow-hidden shrink-0 bg-white dark:bg-white/5`}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={`https://logo.clearbit.com/${resolvedDomain}`}
+          src={currentUrl}
           alt={label}
-          onError={() => setImgFailed(true)}
-          className="w-full h-full object-contain p-1.5"
+          onError={() => setUrlIdx((i) => i + 1)}
+          className="w-full h-full object-contain p-1"
         />
       </div>
     );

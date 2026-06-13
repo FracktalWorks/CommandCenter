@@ -1175,7 +1175,7 @@ function ModelCatalogue() {
             placeholder="Search models…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full mb-3 rounded-md border border-border bg-secondary px-3 py-1.5 text-xs text-foreground placeholder-muted-foreground focus:border-zinc-500 focus:outline-none"
+            className="w-full mb-3 rounded-md border border-border bg-secondary px-3 py-1.5 text-xs text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
           />
 
           {loadingVis ? (

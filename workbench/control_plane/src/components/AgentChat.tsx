@@ -1273,7 +1273,7 @@ function MessageBubble({
           <div className="max-w-[88%] sm:max-w-[78%]">
             <div
               onDoubleClick={() => { setEditText(message.content); setEditing(true); }}
-              className="px-4 py-2.5 text-[13px] sm:text-sm leading-relaxed bg-secondary/90 text-foreground rounded-2xl rounded-tr-md cursor-pointer select-none hover:bg-secondary transition-colors"
+              className="px-4 py-2.5 text-[13px] sm:text-sm leading-relaxed bg-primary/15 text-foreground rounded-2xl rounded-tr-md cursor-pointer select-none hover:bg-primary/20 tech-transition"
               title="Double-click to edit"
             >
               <p className="whitespace-pre-wrap break-words">{message.content}</p>

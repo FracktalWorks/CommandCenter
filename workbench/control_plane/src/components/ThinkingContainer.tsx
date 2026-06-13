@@ -49,7 +49,7 @@ function classifyTool(name: string): {
     return { kind: "run", icon: "▸", label: "Run", borderClass: "border-violet-700/50", dotClass: "bg-violet-400" };
   if (/delegate|spawn|agent|call_agent/.test(n))
     return { kind: "delegate", icon: "🤝", label: "Delegate", borderClass: "border-rose-700/50", dotClass: "bg-rose-400" };
-  return { kind: "other", icon: "⚙️", label: "Tool", borderClass: "border-zinc-700/50", dotClass: "bg-zinc-500" };
+  return { kind: "other", icon: "⚙️", label: "Tool", borderClass: "border-border/50", dotClass: "bg-muted-foreground/50" };
 }
 
 function formatToolName(name: string): string {
@@ -159,7 +159,7 @@ function highlightCommand(cmd: string): React.ReactNode[] {
   const parts = cmd.split(/(\||&&|\|\||;|>>|>|<|2>&1)/g);
   return parts.map((part, i) => {
     if (/^(\||&&|\|\||;|>>|>|<|2>&1)$/.test(part.trim())) {
-      return <span key={i} className="text-zinc-500 mx-0.5">{part}</span>;
+      return <span key={i} className="text-muted-foreground mx-0.5">{part}</span>;
     }
     return <span key={i}>{tokenizeSegment(part, i === 0)}</span>;
   });
@@ -181,7 +181,7 @@ function tokenizeSegment(segment: string, isFirst: boolean): React.ReactNode[] {
       return <span key={j} className="text-amber-300 font-medium">{token} </span>;
     if (POWERSHELL_KEYWORDS.has(token))
       return <span key={j} className="text-sky-300">{token} </span>;
-    return <span key={j} className="text-zinc-200">{token} </span>;
+    return <span key={j} className="text-foreground">{token} </span>;
   });
 }
 
@@ -348,12 +348,12 @@ export default function ThinkingContainer({
   }, [isActive, toolEvents]);
 
   return (
-    <div className="my-2 rounded-lg border border-zinc-700/40 bg-zinc-900/30 overflow-hidden">
+    <div className="my-2 rounded-lg border border-border/40 bg-card/30 overflow-hidden">
       {/* ── Header ─────────────────────────────────────────────────── */}
       <button
         onClick={() => { userToggledRef.current = true; setExpanded((o) => !o); }}
         disabled={!hasContent}
-        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-zinc-800/40 transition-colors disabled:cursor-default"
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-secondary/40 transition-colors disabled:cursor-default"
       >
         <span className="shrink-0 flex items-center justify-center w-4">
           {isActive ? (
@@ -364,28 +364,28 @@ export default function ThinkingContainer({
             <span className="text-emerald-500 text-[10px]">✓</span>
           )}
         </span>
-        <span className={`text-xs font-medium min-w-0 truncate ${isActive ? "chat-shimmer-text" : "text-zinc-400"}`}>
+        <span className={`text-xs font-medium min-w-0 truncate ${isActive ? "chat-shimmer-text" : "text-muted-foreground"}`}>
           {title}
         </span>
         {totalMs !== null && (
-          <span className="shrink-0 text-[10px] text-zinc-600 font-mono">{totalMs}ms</span>
+          <span className="shrink-0 text-[10px] text-muted-foreground font-mono">{totalMs}ms</span>
         )}
         {/* Action kind badges in header */}
         {!isActive && toolEvents.length > 0 && (
           <span className="shrink-0 flex items-center gap-1 ml-1">
             {Array.from(new Set(toolEvents.map((t) => classifyTool(t.name).kind))).map((k) => (
-              <span key={k} className="text-[9px] px-1 py-0.5 rounded border border-zinc-700 text-zinc-500 font-mono uppercase">{k}</span>
+              <span key={k} className="text-[9px] px-1 py-0.5 rounded border border-border text-muted-foreground font-mono uppercase">{k}</span>
             ))}
           </span>
         )}
-        {hasContent && <span className="ml-auto shrink-0 text-zinc-600 text-[10px]">{expanded ? "▲" : "▼"}</span>}
+        {hasContent && <span className="ml-auto shrink-0 text-muted-foreground text-[10px]">{expanded ? "▲" : "▼"}</span>}
       </button>
 
       {/* ── Body: vertical timeline ────────────────────────────────── */}
       {expanded && hasContent && (
         <div
           ref={bodyRef}
-          className={`border-t border-zinc-700/40 chat-fade-in overflow-y-auto ${
+          className={`border-t border-border/40 chat-fade-in overflow-y-auto ${
             isActive ? "max-h-72" : "max-h-[32rem]"
           }`}
         >
@@ -393,7 +393,7 @@ export default function ThinkingContainer({
               Content is indented via ml-8.  Line and dots share the same x=12px axis. */}
           <div className="relative py-2.5">
             {/* Vertical line at x=12px */}
-            <div className="absolute left-[12px] top-2 bottom-2 w-px bg-zinc-700/60" />
+            <div className="absolute left-[12px] top-2 bottom-2 w-px bg-secondary/60" />
 
             <div className="space-y-1.5">
               {/* Chronologically interleaved reasoning + tool timeline
@@ -408,9 +408,9 @@ export default function ThinkingContainer({
                     <div key={`r-${item.blockIndex}`} className="relative">
                       {/* Small muted dot on the timeline axis */}
                       <div className="absolute left-[10px] top-[7px] z-10">
-                        <span className={`block w-1.5 h-1.5 rounded-full ${live ? "bg-zinc-400 chat-pulse-dot" : "bg-zinc-600"}`} />
+                        <span className={`block w-1.5 h-1.5 rounded-full ${live ? "bg-muted-foreground/40 chat-pulse-dot" : "bg-muted"}`} />
                       </div>
-                    <div className="ml-8 mr-3 text-[11.5px] text-zinc-400 leading-relaxed">
+                    <div className="ml-8 mr-3 text-[11.5px] text-muted-foreground leading-relaxed">
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
                         components={{
@@ -418,26 +418,26 @@ export default function ThinkingContainer({
                           code: ({ className, children, ...props }) => {
                             const inline = !className;
                             return inline ? (
-                              <code className="bg-zinc-800/80 text-zinc-300 text-[10.5px] px-1 py-0.5 rounded" {...props}>{children}</code>
+                              <code className="bg-secondary/80 text-foreground text-[10.5px] px-1 py-0.5 rounded" {...props}>{children}</code>
                             ) : (
-                              <code className={`block bg-zinc-800/80 text-zinc-300 text-[10.5px] p-2 rounded overflow-x-auto ${className || ""}`} {...props}>{children}</code>
+                              <code className={`block bg-secondary/80 text-foreground text-[10.5px] p-2 rounded overflow-x-auto ${className || ""}`} {...props}>{children}</code>
                             );
                           },
-                          pre: ({ children }) => <pre className="bg-zinc-900/80 rounded-md overflow-x-auto my-1.5">{children}</pre>,
+                          pre: ({ children }) => <pre className="bg-card/80 rounded-md overflow-x-auto my-1.5">{children}</pre>,
                           ul: ({ children }) => <ul className="list-disc list-inside my-1 space-y-0.5">{children}</ul>,
                           ol: ({ children }) => <ol className="list-decimal list-inside my-1 space-y-0.5">{children}</ol>,
                           li: ({ children }) => <li className="text-[11px]">{children}</li>,
-                          strong: ({ children }) => <strong className="text-zinc-300 font-semibold">{children}</strong>,
+                          strong: ({ children }) => <strong className="text-foreground font-semibold">{children}</strong>,
                           em: ({ children }) => <em className="italic">{children}</em>,
-                          blockquote: ({ children }) => <blockquote className="border-l-2 border-zinc-600 pl-2 my-1 text-zinc-500">{children}</blockquote>,
+                          blockquote: ({ children }) => <blockquote className="border-l-2 border-border pl-2 my-1 text-muted-foreground">{children}</blockquote>,
                           a: ({ href, children }) => <a href={href} className="text-sky-400 underline" target="_blank" rel="noopener">{children}</a>,
-                          h1: ({ children }) => <h1 className="text-[13px] font-bold text-zinc-300 mt-2 mb-1">{children}</h1>,
-                          h2: ({ children }) => <h2 className="text-[12px] font-semibold text-zinc-300 mt-1.5 mb-1">{children}</h2>,
+                          h1: ({ children }) => <h1 className="text-[13px] font-bold text-foreground mt-2 mb-1">{children}</h1>,
+                          h2: ({ children }) => <h2 className="text-[12px] font-semibold text-foreground mt-1.5 mb-1">{children}</h2>,
                         }}
                       >
                         {item.text}
                       </ReactMarkdown>
-                        {live && <span className="inline-block w-[2px] h-[1em] bg-zinc-500 animate-pulse ml-0.5 align-middle rounded-full" />}
+                        {live && <span className="inline-block w-[2px] h-[1em] bg-muted-foreground/50 animate-pulse ml-0.5 align-middle rounded-full" />}
                       </div>
                     </div>
                   );
@@ -473,17 +473,17 @@ export default function ThinkingContainer({
                         onClick={toggle}
                         className="w-full flex items-baseline gap-1.5 text-left group/tool min-w-0"
                       >
-                        <span className={`text-[11.5px] shrink-0 ${isRunning ? "chat-shimmer-text" : "text-zinc-500"}`}>
+                        <span className={`text-[11.5px] shrink-0 ${isRunning ? "chat-shimmer-text" : "text-muted-foreground"}`}>
                           {verb}
                         </span>
-                        <span className={`text-[11px] font-mono truncate min-w-0 px-1 py-px rounded bg-zinc-800/60 border border-zinc-700/40 ${isError ? "text-red-400" : "text-zinc-300"}`}>
+                        <span className={`text-[11px] font-mono truncate min-w-0 px-1 py-px rounded bg-secondary/60 border border-border/40 ${isError ? "text-red-400" : "text-foreground"}`}>
                           {headline}
                         </span>
                         {isError && <span className="text-red-400 text-[10px] shrink-0">✗</span>}
                         {dur !== undefined && dur > 1000 && (
-                          <span className="text-[9px] text-zinc-600 font-mono shrink-0">{(dur / 1000).toFixed(1)}s</span>
+                          <span className="text-[9px] text-muted-foreground font-mono shrink-0">{(dur / 1000).toFixed(1)}s</span>
                         )}
-                        <span className="ml-auto shrink-0 text-zinc-600 text-[9px] opacity-0 group-hover/tool:opacity-100 transition-opacity">
+                        <span className="ml-auto shrink-0 text-muted-foreground text-[9px] opacity-0 group-hover/tool:opacity-100 transition-opacity">
                           {open ? "▴" : "▾"}
                         </span>
                       </button>
@@ -492,20 +492,20 @@ export default function ThinkingContainer({
                       {open && (
                         <div className="mt-1">
                           {style.kind === "run" && (event.args || event.result) ? (
-                            <div className="rounded-md bg-[#0c0c0c] border border-zinc-700/60 overflow-hidden">
+                            <div className="rounded-md bg-[#0c0c0c] border border-border/60 overflow-hidden">
                               {/* Terminal title bar */}
-                              <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-zinc-800 bg-zinc-900/80">
+                              <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-zinc-800 bg-card/80">
                                 <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f56] shrink-0" />
                                 <span className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e] shrink-0" />
                                 <span className="w-2.5 h-2.5 rounded-full bg-[#27c93f] shrink-0" />
-                                <span className="text-[10px] text-zinc-500 ml-2 font-mono tracking-wide">
+                                <span className="text-[10px] text-muted-foreground ml-2 font-mono tracking-wide">
                                   {event.args?.command ? "Terminal" : formatToolName(event.name)}
                                 </span>
                                 {isRunning && (
                                   <span className="text-[9px] text-sky-400 ml-auto animate-pulse font-mono">● running</span>
                                 )}
                                 {dur !== undefined && !isRunning && (
-                                  <span className="text-[9px] text-zinc-600 ml-auto font-mono">{dur}ms</span>
+                                  <span className="text-[9px] text-muted-foreground ml-auto font-mono">{dur}ms</span>
                                 )}
                               </div>
                               {/* Terminal body */}
@@ -513,7 +513,7 @@ export default function ThinkingContainer({
                                 {event.args && (
                                   <div className="flex gap-2 mb-1.5">
                                     <span className="text-emerald-400 shrink-0 select-none font-medium">$</span>
-                                    <span className="text-zinc-200 break-all font-mono text-[11px] leading-relaxed">
+                                    <span className="text-foreground break-all font-mono text-[11px] leading-relaxed">
                                       {highlightCommand(extractCommand(event.args, event.name))}
                                     </span>
                                   </div>
@@ -535,24 +535,24 @@ export default function ThinkingContainer({
                               </div>
                             </div>
                           ) : (
-                            <div className={`rounded-md border-l-2 ${style.borderClass} bg-zinc-900/40 px-2.5 py-1.5`}>
+                            <div className={`rounded-md border-l-2 ${style.borderClass} bg-card/40 px-2.5 py-1.5`}>
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <span className="text-[10px] shrink-0">{style.icon}</span>
-                                <span className="text-[10px] text-zinc-500 font-mono truncate">{formatToolName(event.name)}</span>
-                                {dur !== undefined && <span className="text-[9px] text-zinc-600 font-mono ml-auto shrink-0">{dur}ms</span>}
+                                <span className="text-[10px] text-muted-foreground font-mono truncate">{formatToolName(event.name)}</span>
+                                {dur !== undefined && <span className="text-[9px] text-muted-foreground font-mono ml-auto shrink-0">{dur}ms</span>}
                               </div>
                               {event.args && Object.keys(event.args).length > 0 && (
-                                <div className="text-[10px] text-zinc-600 font-mono mt-1">
+                                <div className="text-[10px] text-muted-foreground font-mono mt-1">
                                   {Object.entries(event.args).map(([k, v]) => (
                                     <span key={k} className="inline-block mr-2">
-                                      <span className="text-zinc-500">{k}:</span>{" "}
-                                      <span className="text-zinc-400">{String(v).slice(0, 80)}</span>
+                                      <span className="text-muted-foreground">{k}:</span>{" "}
+                                      <span className="text-muted-foreground">{String(v).slice(0, 80)}</span>
                                     </span>
                                   ))}
                                 </div>
                               )}
                               {event.result && (
-                                <pre className="text-[10px] text-zinc-500 font-mono mt-1 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
+                                <pre className="text-[10px] text-muted-foreground font-mono mt-1 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
                                   {String(event.result).slice(0, 2000)}
                                 </pre>
                               )}
@@ -561,14 +561,14 @@ export default function ThinkingContainer({
 
                           {/* Sub-agent inline panel */}
                           {event.subAgentName && (
-                            <div className="mt-1.5 rounded border border-zinc-700/60 bg-zinc-950/50 px-2 py-1.5">
+                            <div className="mt-1.5 rounded border border-border/60 bg-zinc-950/50 px-2 py-1.5">
                               <div className="flex items-center gap-1.5 text-[10px]">
                                 <span className="text-sky-400">🤝</span>
                                 <span className="text-sky-400 font-medium">{event.subAgentName}</span>
                                 {event.subAgentActive && <span className="w-1.5 h-1.5 rounded-full bg-sky-400 chat-pulse-dot shrink-0" />}
                               </div>
                               {event.subAgentText && (
-                                <pre className="text-zinc-400 whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed mt-1 max-h-32 overflow-y-auto">
+                                <pre className="text-muted-foreground whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed mt-1 max-h-32 overflow-y-auto">
                                   {event.subAgentText}
                                 </pre>
                               )}
@@ -585,10 +585,10 @@ export default function ThinkingContainer({
               {isActive && toolEvents.every((t) => t.status !== "running") && (
                 <div className="relative">
                   <div className="absolute left-[8px] top-[10px] z-10">
-                    <span className="block w-2.5 h-2.5 rounded-full bg-zinc-500 chat-pulse-dot" />
+                    <span className="block w-2.5 h-2.5 rounded-full bg-muted-foreground/50 chat-pulse-dot" />
                   </div>
-                  <div className="ml-8 mr-3 rounded-md border-l-2 border-zinc-700/50 bg-zinc-900/40 px-2.5 py-1.5">
-                    <span className="text-[11px] text-zinc-500 italic">{workingMsg}…</span>
+                  <div className="ml-8 mr-3 rounded-md border-l-2 border-border/50 bg-card/40 px-2.5 py-1.5">
+                    <span className="text-[11px] text-muted-foreground italic">{workingMsg}…</span>
                   </div>
                 </div>
               )}

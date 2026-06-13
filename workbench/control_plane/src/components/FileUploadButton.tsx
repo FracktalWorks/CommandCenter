@@ -115,7 +115,7 @@ export default function FileUploadButton({
                 ? "text-emerald-400"
                 : state.phase === "error"
                   ? "text-red-400"
-                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
+                  : "text-muted-foreground hover:text-foreground hover:bg-secondary"
           }`}
         >
           {state.phase === "uploading" ? (
@@ -141,7 +141,7 @@ export default function FileUploadButton({
           ? "border-blue-500 bg-blue-500/10"
           : state.phase === "error"
             ? "border-red-700/50 bg-red-950/20"
-            : "border-zinc-700/60 hover:border-zinc-500"
+            : "border-border/60 hover:border-border"
       } ${className}`}
       onDragOver={(e) => {
         e.preventDefault();
@@ -183,7 +183,7 @@ export default function FileUploadButton({
         </div>
       ) : (
         children ?? (
-          <div className="flex items-center justify-center gap-2 py-3 px-4 text-sm text-zinc-500">
+          <div className="flex items-center justify-center gap-2 py-3 px-4 text-sm text-muted-foreground">
             <Paperclip size={16} />
             Drop files here or click to upload
           </div>

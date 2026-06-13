@@ -126,7 +126,7 @@ function CopyButton({ text }: { text: string }) {
           setTimeout(() => setCopied(false), 1500);
         })
       }
-      className="text-[11px] text-zinc-400 hover:text-zinc-100 transition-colors px-2 py-0.5 rounded hover:bg-zinc-600/60 font-mono"
+      className="text-[11px] text-muted-foreground hover:text-foreground transition-colors px-2 py-0.5 rounded hover:bg-secondary/60 font-mono"
     >
       {copied ? "✓ Copied" : "Copy"}
     </button>
@@ -139,18 +139,18 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const isTerminal = TERMINAL_LANGS.has(lang);
 
   return (
-    <div className="my-4 rounded-xl overflow-hidden border border-zinc-700/60 bg-zinc-950">
+    <div className="my-4 rounded-xl overflow-hidden border border-border/60 bg-background">
       {/* Header bar */}
-      <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-800/80 border-b border-zinc-700/60">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-secondary/80 border-b border-border/60">
         {isTerminal ? (
           <div className="flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-red-500/70" />
             <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/70" />
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/70" />
-            <span className="ml-2 text-[11px] text-zinc-500 font-mono">{lang}</span>
+            <span className="ml-2 text-[11px] text-muted-foreground font-mono">{lang}</span>
           </div>
         ) : (
-          <span className="text-[11px] text-zinc-500 font-mono">{lang || "code"}</span>
+          <span className="text-[11px] text-muted-foreground font-mono">{lang || "code"}</span>
         )}
         <CopyButton text={code} />
       </div>
@@ -214,9 +214,9 @@ function ChoiceBlock({
   if (options.length === 0) return null;
 
   return (
-    <div className="my-3 rounded-xl border border-zinc-700/60 bg-zinc-900/50 p-3">
+    <div className="my-3 rounded-xl border border-border/60 bg-card/50 p-3">
       {question && (
-        <div className="text-sm font-medium text-zinc-200 mb-2.5">{question}</div>
+        <div className="text-sm font-medium text-foreground mb-2.5">{question}</div>
       )}
       <div className="flex flex-wrap gap-2">
         {options.map((opt) => {
@@ -233,8 +233,8 @@ function ChoiceBlock({
                 isPicked
                   ? "border-emerald-600/70 bg-emerald-900/40 text-emerald-200"
                   : picked !== null
-                  ? "border-zinc-800 bg-zinc-900/40 text-zinc-600 cursor-not-allowed"
-                  : "border-zinc-700 bg-zinc-800/70 text-zinc-200 hover:border-emerald-600/60 hover:bg-zinc-800"
+                  ? "border-zinc-800 bg-card/40 text-muted-foreground cursor-not-allowed"
+                  : "border-border bg-secondary/70 text-foreground hover:border-emerald-600/60 hover:bg-secondary"
               }`}
             >
               {isPicked && <span className="mr-1.5 text-emerald-400">✓</span>}
@@ -271,7 +271,7 @@ export default function MarkdownMessage({
   const showThinking = isThinkingActive || hasTools || hasReasoning;
 
   return (
-    <div className="text-[12px] sm:text-[13px] text-zinc-200 leading-relaxed min-w-0">
+    <div className="text-[12px] sm:text-[13px] text-foreground leading-relaxed min-w-0">
       {/* Thinking container — groups the whole working phase (reasoning + tool calls + status) */}
       {showThinking && (
         <div className="mb-3">
@@ -290,53 +290,53 @@ export default function MarkdownMessage({
         components={{
           // ── Headings ──
           h1: ({ children }) => (
-            <h1 className="text-[1.1rem] font-bold text-zinc-100 mt-5 mb-3 pb-1 border-b border-zinc-700">
+            <h1 className="text-[1.1rem] font-bold text-foreground mt-5 mb-3 pb-1 border-b border-border">
               {children}
             </h1>
           ),
           h2: ({ children }) => (
-            <h2 className="text-[1rem] font-semibold text-zinc-100 mt-4 mb-2">
+            <h2 className="text-[1rem] font-semibold text-foreground mt-4 mb-2">
               {children}
             </h2>
           ),
           h3: ({ children }) => (
-            <h3 className="text-[0.9rem] font-semibold text-zinc-200 mt-3 mb-1.5">
+            <h3 className="text-[0.9rem] font-semibold text-foreground mt-3 mb-1.5">
               {children}
             </h3>
           ),
           h4: ({ children }) => (
-            <h4 className="text-sm font-semibold text-zinc-300 mt-2 mb-1">
+            <h4 className="text-sm font-semibold text-foreground mt-2 mb-1">
               {children}
             </h4>
           ),
 
           // ── Paragraphs & text ──
           p: ({ children }) => (
-            <p className="mb-3 last:mb-0 text-zinc-200">{children}</p>
+            <p className="mb-3 last:mb-0 text-foreground">{children}</p>
           ),
           strong: ({ children }) => (
-            <strong className="font-semibold text-zinc-100">{children}</strong>
+            <strong className="font-semibold text-foreground">{children}</strong>
           ),
           em: ({ children }) => (
-            <em className="italic text-zinc-300">{children}</em>
+            <em className="italic text-foreground">{children}</em>
           ),
           del: ({ children }) => (
-            <del className="line-through text-zinc-500">{children}</del>
+            <del className="line-through text-muted-foreground">{children}</del>
           ),
 
           // ── Lists ──
           ul: ({ children }) => (
-            <ul className="mb-3 ml-5 space-y-1 list-disc list-outside marker:text-zinc-500">
+            <ul className="mb-3 ml-5 space-y-1 list-disc list-outside marker:text-muted-foreground">
               {children}
             </ul>
           ),
           ol: ({ children }) => (
-            <ol className="mb-3 ml-5 space-y-1 list-decimal list-outside marker:text-zinc-500">
+            <ol className="mb-3 ml-5 space-y-1 list-decimal list-outside marker:text-muted-foreground">
               {children}
             </ol>
           ),
           li: ({ children }) => (
-            <li className="text-zinc-300 pl-0.5">{children}</li>
+            <li className="text-foreground pl-0.5">{children}</li>
           ),
 
           // ── Links ──
@@ -353,7 +353,7 @@ export default function MarkdownMessage({
 
           // ── Blockquote ──
           blockquote: ({ children }) => (
-            <blockquote className="border-l-2 border-zinc-600 pl-4 my-3 text-zinc-400 italic">
+            <blockquote className="border-l-2 border-border pl-4 my-3 text-muted-foreground italic">
               {children}
             </blockquote>
           ),
@@ -370,7 +370,7 @@ export default function MarkdownMessage({
                 src={resolvedSrc}
                 alt={alt ?? ""}
                 {...rest}
-                className="max-w-full max-h-96 rounded-lg my-3 border border-zinc-700/50 object-contain"
+                className="max-w-full max-h-96 rounded-lg my-3 border border-border/50 object-contain"
                 loading="lazy"
               />
             );
@@ -378,26 +378,26 @@ export default function MarkdownMessage({
 
           // ── Tables (GFM) ──
           table: ({ children }) => (
-            <div className="overflow-x-auto my-4 rounded-lg border border-zinc-700/60">
+            <div className="overflow-x-auto my-4 rounded-lg border border-border/60">
               <table className="w-full text-[12px] sm:text-[13px] border-collapse">{children}</table>
             </div>
           ),
           thead: ({ children }) => (
-            <thead className="bg-zinc-800/60">{children}</thead>
+            <thead className="bg-secondary/60">{children}</thead>
           ),
           th: ({ children }) => (
-            <th className="px-4 py-2 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wide border-b border-zinc-700/60">
+            <th className="px-4 py-2 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide border-b border-border/60">
               {children}
             </th>
           ),
           td: ({ children }) => (
-            <td className="px-4 py-2 text-zinc-300 border-b border-zinc-800/60 last:border-b-0">
+            <td className="px-4 py-2 text-foreground border-b border-zinc-800/60 last:border-b-0">
               {children}
             </td>
           ),
 
           // ── HR ──
-          hr: () => <hr className="my-5 border-zinc-700" />,
+          hr: () => <hr className="my-5 border-border" />,
 
           // ── Code (inline + block) ──
           pre: ({ children }) => <>{children}</>,
@@ -417,7 +417,7 @@ export default function MarkdownMessage({
 
             // Inline code
             return (
-              <code className="bg-zinc-800 text-zinc-200 rounded px-1.5 py-0.5 font-mono text-[0.82em] border border-zinc-700/50">
+              <code className="bg-secondary text-foreground rounded px-1.5 py-0.5 font-mono text-[0.82em] border border-border/50">
                 {children}
               </code>
             );

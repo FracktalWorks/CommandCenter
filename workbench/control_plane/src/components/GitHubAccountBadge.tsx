@@ -40,8 +40,8 @@ function ScopePill({ scope, active }: { scope: string; active: boolean }) {
         active
           ? scope === "copilot"
             ? "bg-violet-500/10 text-violet-400 border-violet-500/25"
-            : "bg-zinc-800 text-zinc-400 border-zinc-700"
-          : "bg-zinc-900 text-zinc-700 border-zinc-800 line-through"
+            : "bg-secondary text-muted-foreground border-border"
+          : "bg-card text-muted-foreground/70 border-border line-through"
       }`}
     >
       {scope}
@@ -124,8 +124,8 @@ export default function GitHubAccountBadge({
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 text-xs text-zinc-600 py-2">
-        <div className="w-3 h-3 border border-zinc-700 border-t-zinc-500 rounded-full animate-spin" />
+      <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+        <div className="w-3 h-3 border border-border border-t-zinc-500 rounded-full animate-spin" />
         Checking GitHub…
       </div>
     );
@@ -139,20 +139,20 @@ export default function GitHubAccountBadge({
       {/* Connected account card (shown when GITHUB_TOKEN is set)           */}
       {/* ----------------------------------------------------------------- */}
       {isConfigured && info?.token_login && (
-        <div className="rounded-lg border border-zinc-700 bg-zinc-800/50 px-4 py-3 flex items-start justify-between gap-4">
+        <div className="rounded-lg border border-border bg-secondary/50 px-4 py-3 flex items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               {/* GitHub mark */}
-              <svg viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4 text-zinc-300 shrink-0">
+              <svg viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4 text-foreground shrink-0">
                 <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
               </svg>
-              <span className="text-sm font-medium text-zinc-100">@{info.token_login}</span>
-              <span className="text-[10px] text-zinc-500">connected</span>
+              <span className="text-sm font-medium text-foreground">@{info.token_login}</span>
+              <span className="text-[10px] text-muted-foreground">connected</span>
             </div>
             {/* Scopes */}
             {info.token_scopes.length > 0 && (
               <div className="flex gap-1 flex-wrap mt-2 items-center">
-                <span className="text-[10px] text-zinc-600 mr-1">scopes:</span>
+                <span className="text-[10px] text-muted-foreground mr-1">scopes:</span>
                 {["copilot", "repo"].map((s) => (
                   <ScopePill key={s} scope={s} active={info.token_scopes.includes(s)} />
                 ))}
@@ -177,7 +177,7 @@ export default function GitHubAccountBadge({
           {/* Reconnect button */}
           <button
             onClick={() => setShowDeviceFlow((v) => !v)}
-            className="shrink-0 text-[11px] px-2.5 py-1 rounded border border-zinc-700 text-zinc-400 hover:bg-zinc-800 transition-colors"
+            className="shrink-0 text-[11px] px-2.5 py-1 rounded border border-border text-muted-foreground hover:bg-secondary transition-colors"
           >
             Reconnect
           </button>
@@ -188,19 +188,19 @@ export default function GitHubAccountBadge({
       {/* Refresh-scopes hint (copilot scope missing on configured token)   */}
       {/* ----------------------------------------------------------------- */}
       {isConfigured && info?.token_configured && !info.token_has_copilot && (
-        <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-4 py-3 space-y-2">
-          <p className="text-xs text-zinc-400 font-medium">Add Copilot scope</p>
-          <p className="text-[11px] text-zinc-500">
+        <div className="rounded-lg border border-border bg-card/60 px-4 py-3 space-y-2">
+          <p className="text-xs text-muted-foreground font-medium">Add Copilot scope</p>
+          <p className="text-[11px] text-muted-foreground">
             Run this in your terminal, then click{" "}
-            <span className="text-zinc-300">"Import from GitHub CLI"</span> below to update the stored token:
+            <span className="text-foreground">"Import from GitHub CLI"</span> below to update the stored token:
           </p>
           <div className="flex items-center gap-2">
-            <code className="flex-1 text-[11px] font-mono text-violet-300 bg-zinc-800 px-2 py-1 rounded">
+            <code className="flex-1 text-[11px] font-mono text-violet-300 bg-secondary px-2 py-1 rounded">
               gh auth refresh --scopes copilot,repo
             </code>
             <button
               onClick={() => void handleCopyCmd("gh auth refresh --scopes copilot,repo")}
-              className="shrink-0 text-[10px] px-2 py-1 rounded border border-zinc-700 text-zinc-400 hover:bg-zinc-800 transition-colors"
+              className="shrink-0 text-[10px] px-2 py-1 rounded border border-border text-muted-foreground hover:bg-secondary transition-colors"
             >
               {copiedCmd ? "Copied!" : "Copy"}
             </button>
@@ -215,20 +215,20 @@ export default function GitHubAccountBadge({
         <div
           className={`rounded-lg border px-4 py-3 ${
             info.gh_cli_authenticated
-              ? "border-zinc-700 bg-zinc-800/40"
-              : "border-zinc-800 bg-zinc-900/40"
+              ? "border-border bg-secondary/40"
+              : "border-border bg-card/40"
           }`}
         >
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
-              <p className="text-xs font-medium text-zinc-200">
+              <p className="text-xs font-medium text-foreground">
                 {info.gh_cli_authenticated
                   ? `Import from GitHub CLI ${info.gh_cli_login ? `(@${info.gh_cli_login})` : ""}`
                   : "GitHub CLI detected (not logged in)"}
               </p>
               {info.gh_cli_authenticated ? (
                 <div className="flex gap-1 flex-wrap mt-1.5 items-center">
-                  <span className="text-[10px] text-zinc-600 mr-1">CLI scopes:</span>
+                  <span className="text-[10px] text-muted-foreground mr-1">CLI scopes:</span>
                   {["copilot", "repo"].map((s) => (
                     <ScopePill key={s} scope={s} active={info.gh_cli_scopes.includes(s)} />
                   ))}
@@ -239,8 +239,8 @@ export default function GitHubAccountBadge({
                   )}
                 </div>
               ) : (
-                <p className="text-[11px] text-zinc-600 mt-0.5">
-                  Run <code className="font-mono text-zinc-500">gh auth login</code> first.
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Run <code className="font-mono text-muted-foreground">gh auth login</code> first.
                 </p>
               )}
             </div>
@@ -248,7 +248,7 @@ export default function GitHubAccountBadge({
               <button
                 onClick={() => void handleConnectCli()}
                 disabled={importing}
-                className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 disabled:opacity-40 text-zinc-100 font-medium transition-colors"
+                className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-secondary hover:bg-zinc-600 disabled:opacity-40 text-foreground font-medium transition-colors"
               >
                 {importing ? "Importing…" : isConfigured ? "Re-import" : "Import token"}
               </button>
@@ -271,12 +271,12 @@ export default function GitHubAccountBadge({
                   <span className="text-amber-400">
                     ⚠ Add copilot scope:
                   </span>
-                  <code className="font-mono text-violet-300 bg-zinc-800 px-1.5 py-0.5 rounded">
+                  <code className="font-mono text-violet-300 bg-secondary px-1.5 py-0.5 rounded">
                     {importResult.refresh_command}
                   </code>
                   <button
                     onClick={() => void handleCopyCmd(importResult.refresh_command!)}
-                    className="text-[10px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+                    className="text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:bg-secondary"
                   >
                     {copiedCmd ? "Copied!" : "Copy"}
                   </button>
@@ -291,9 +291,9 @@ export default function GitHubAccountBadge({
       {/* Device-flow fallback / "Reconnect" wizard                         */}
       {/* ----------------------------------------------------------------- */}
       {(!isConfigured || showDeviceFlow) && (
-        <div className={isConfigured ? "border-t border-zinc-800 pt-3 mt-1" : ""}>
+        <div className={isConfigured ? "border-t border-border pt-3 mt-1" : ""}>
           {isConfigured && (
-            <p className="text-[10px] text-zinc-600 mb-2 uppercase tracking-wider">
+            <p className="text-[10px] text-muted-foreground mb-2 uppercase tracking-wider">
               Or reconnect via OAuth device flow
             </p>
           )}

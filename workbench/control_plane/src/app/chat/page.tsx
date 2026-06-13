@@ -124,7 +124,7 @@ function AgentPickerModal({
             Copilot SDK agents
           </div>
           {loading ? (
-            <div className="text-xs text-zinc-600 py-2 text-center">Loading agents…</div>
+            <div className="text-xs text-muted-foreground py-2 text-center">Loading agents…</div>
           ) : (
             <div className="flex flex-col gap-1.5">
               {agents.filter(a => a.agent_runtime === "github-copilot").map((a) => (
@@ -154,7 +154,7 @@ function AgentPickerModal({
                 </div>
               ))}
               {agents.filter(a => a.agent_runtime === "github-copilot").length === 0 && (
-                <div className="text-xs text-zinc-600 py-1">No Copilot SDK agents registered</div>
+                <div className="text-xs text-muted-foreground py-1">No Copilot SDK agents registered</div>
               )}
             </div>
           )}
@@ -166,7 +166,7 @@ function AgentPickerModal({
             MAF agents
           </div>
           {loading ? (
-            <div className="text-xs text-zinc-600 py-2 text-center">Loading agents…</div>
+            <div className="text-xs text-muted-foreground py-2 text-center">Loading agents…</div>
           ) : (
             <div className="flex flex-col gap-1.5 max-h-72 overflow-y-auto">
               {agents.filter(a => a.agent_runtime !== "github-copilot").map((a) => (
@@ -187,11 +187,11 @@ function AgentPickerModal({
                           </span>
                         )}
                         {a.tags.slice(0, 2).map((t) => (
-                          <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-400 whitespace-nowrap">{t}</span>
+                          <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground whitespace-nowrap">{t}</span>
                         ))}
                       </div>
                     </div>
-                    <div className="text-xs text-zinc-500 mt-0.5">{a.description}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">{a.description}</div>
                   </button>
                 </div>
               ))}
@@ -219,11 +219,11 @@ function MemoryPanel({
 }) {
   if (memories.length === 0) {
     return (
-      <div className="mt-4 rounded-md border border-zinc-800 bg-zinc-900/40 p-3">
-        <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+      <div className="mt-4 rounded-md border border-border bg-card/40 p-3">
+        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Memory
         </div>
-        <p className="mt-1.5 text-xs text-zinc-600">
+        <p className="mt-1.5 text-xs text-muted-foreground">
           No memories yet. CommandCenter will learn from your conversations.
         </p>
       </div>
@@ -231,16 +231,16 @@ function MemoryPanel({
   }
 
   return (
-    <div className="mt-4 rounded-md border border-zinc-800 bg-zinc-900/40 p-3">
+    <div className="mt-4 rounded-md border border-border bg-card/40 p-3">
       <div className="mb-2 flex items-center justify-between">
-        <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Memory ({memories.length})
         </div>
         <div className="flex items-center gap-1.5">
           {onRefresh && (
             <button
               onClick={onRefresh}
-              className="text-zinc-600 hover:text-zinc-400 transition-colors"
+              className="text-muted-foreground hover:text-muted-foreground transition-colors"
               title="Refresh memories"
             >
               <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -251,7 +251,7 @@ function MemoryPanel({
           )}
           <a
             href="/memory"
-            className="text-xs text-zinc-600 hover:text-blue-400 transition-colors"
+            className="text-xs text-muted-foreground hover:text-blue-400 transition-colors"
             title="Open full memory manager"
           >
             →
@@ -261,13 +261,13 @@ function MemoryPanel({
       <ul className="flex flex-col gap-1.5 max-h-48 overflow-y-auto">
         {memories.map((m) => (
           <li key={m.id} className="group flex items-start gap-1.5">
-            <span className="mt-0.5 shrink-0 text-zinc-600">•</span>
-            <span className="text-xs text-zinc-400 leading-relaxed flex-1">
+            <span className="mt-0.5 shrink-0 text-muted-foreground">•</span>
+            <span className="text-xs text-muted-foreground leading-relaxed flex-1">
               {m.memory}
             </span>
             <button
               onClick={() => onDelete(m.id)}
-              className="ml-1 shrink-0 text-zinc-700 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity text-xs"
+              className="ml-1 shrink-0 text-muted-foreground/70 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity text-xs"
               title="Delete memory"
             >
               ✕
@@ -347,11 +347,11 @@ function SessionList({
       <div className="flex flex-col gap-1">
         <button
           onClick={onNew}
-          className="mb-2 w-full rounded-md bg-zinc-800 px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 transition-colors"
+          className="mb-2 w-full rounded-md bg-secondary px-3 py-2 text-left text-sm text-foreground hover:bg-secondary transition-colors"
         >
           + New session
         </button>
-        <p className="px-1 text-xs text-zinc-600">No sessions yet.</p>
+        <p className="px-1 text-xs text-muted-foreground">No sessions yet.</p>
       </div>
     );
   }
@@ -360,7 +360,7 @@ function SessionList({
     <div className="flex flex-col gap-1">
       <button
         onClick={onNew}
-        className="mb-2 w-full rounded-md bg-zinc-800 px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700 transition-colors"
+        className="mb-2 w-full rounded-md bg-secondary px-3 py-2 text-left text-sm text-foreground hover:bg-secondary transition-colors"
       >
         + New session
       </button>
@@ -377,8 +377,8 @@ function SessionList({
               onClick={() => toggleAgent(agentName)}
               className={`w-full flex items-center gap-2 rounded-md px-3 py-1.5 text-left transition-colors ${
                 isActiveAgent
-                  ? "bg-zinc-800/60 text-zinc-200"
-                  : "text-zinc-500 hover:bg-zinc-800/40 hover:text-zinc-300"
+                  ? "bg-secondary/60 text-foreground"
+                  : "text-muted-foreground hover:bg-secondary/40 hover:text-foreground"
               }`}
             >
               <span className="text-[10px] transition-transform duration-150" style={{ transform: isCollapsed ? "rotate(-90deg)" : "rotate(0deg)" }}>
@@ -394,21 +394,21 @@ function SessionList({
                   {agentSessions.filter((s) => activeRunIds.has(s.id)).length}
                 </span>
               )}
-              <span className="text-[10px] text-zinc-600 tabular-nums shrink-0">
+              <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
                 {count}
               </span>
             </button>
 
             {/* Sessions for this agent */}
             {!isCollapsed && (
-              <div className="mt-1 ml-2.5 flex flex-col gap-1 border-l border-zinc-800/60 pl-2">
+              <div className="mt-1 ml-2.5 flex flex-col gap-1 border-l border-border/60 pl-2">
                 {agentSessions.map((s) => (
                   <div
                     key={s.id}
                     className={`group flex items-start justify-between rounded-md px-2.5 py-2 cursor-pointer transition-colors ${
                       s.id === activeId
-                        ? "bg-zinc-800 text-white"
-                        : "text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-100"
+                        ? "bg-secondary text-white"
+                        : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
                     }`}
                     onClick={() => onSelect(s.id)}
                   >
@@ -420,11 +420,11 @@ function SessionList({
                         <span className="truncate">{s.title ?? s.name}</span>
                       </div>
                       {s.lastPreview ? (
-                        <div className="truncate text-[10px] leading-snug text-zinc-500">
+                        <div className="truncate text-[10px] leading-snug text-muted-foreground">
                           {s.lastPreview}
                         </div>
                       ) : null}
-                      <div className="text-[10px] leading-snug text-zinc-600">
+                      <div className="text-[10px] leading-snug text-muted-foreground">
                         {s.messageCount > 0 ? `${s.messageCount} msgs` : "New"}
                       </div>
                     </div>
@@ -433,7 +433,7 @@ function SessionList({
                         e.stopPropagation();
                         onDelete(s.id);
                       }}
-                      className="ml-2 mt-0.5 shrink-0 rounded p-0.5 text-zinc-600 hover:text-red-400 transition-colors text-[10px]"
+                      className="ml-2 mt-0.5 shrink-0 rounded p-0.5 text-muted-foreground hover:text-red-400 transition-colors text-[10px]"
                       title="Delete session"
                     >
                       ✕
@@ -650,11 +650,11 @@ function ChatPageInner() {
   // ── Mobile: drawer content builders ────────────────────────────────────
   const conversationsContent = (
     <>
-      <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
-        <div className="text-sm font-semibold text-zinc-200">Conversations</div>
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <div className="text-sm font-semibold text-foreground">Conversations</div>
         <button
           onClick={closeDrawer}
-          className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+          className="rounded-lg p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition"
           aria-label="Close"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -685,11 +685,11 @@ function ChatPageInner() {
 
   const filesContent = (
     <>
-      <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
-        <div className="text-sm font-semibold text-zinc-200">Files</div>
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <div className="text-sm font-semibold text-foreground">Files</div>
         <button
           onClick={closeDrawer}
-          className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+          className="rounded-lg p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition"
           aria-label="Close"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -754,11 +754,11 @@ function ChatPageInner() {
             sessionPanelOpen ? "justify-between px-4 py-3" : "justify-center py-3"
           }`}>
             {sessionPanelOpen && (
-              <div className="text-sm font-semibold text-zinc-200">Conversations</div>
+              <div className="text-sm font-semibold text-sidebar-foreground">Conversations</div>
             )}
             <button
               onClick={() => setSessionPanelOpen((o) => !o)}
-              className="shrink-0 rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
+              className="shrink-0 rounded-lg p-1.5 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground tech-transition"
               title={sessionPanelOpen ? "Collapse conversations" : "Expand conversations"}
             >
               {sessionPanelOpen ? (
@@ -775,7 +775,7 @@ function ChatPageInner() {
 
           {sessionPanelOpen && (
             <div className="flex flex-col flex-1 p-4 overflow-y-auto">
-              <div className="text-xs text-zinc-500 mb-3">Copilot SDK + LiteLLM</div>
+              <div className="text-[10px] text-muted-foreground/60 mb-3 uppercase tracking-wider font-semibold">Sessions</div>
               <SessionList
                 sessions={sessions}
                 activeId={activeSessionId}
@@ -794,7 +794,7 @@ function ChatPageInner() {
                 />
               )}
 
-              <div className="mt-auto pt-6 text-xs text-zinc-600">
+              <div className="mt-auto pt-6 text-[10px] text-muted-foreground/50">
                 Memory persists to Mem0 · Sessions in localStorage
               </div>
             </div>

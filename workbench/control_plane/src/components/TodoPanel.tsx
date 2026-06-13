@@ -54,18 +54,18 @@ export default function TodoPanel({
   if (todos.length === 0) return null;
 
   return (
-    <div className="max-w-3xl mx-auto mb-2 rounded-lg border border-zinc-700/50 bg-zinc-900/70 overflow-hidden">
+    <div className="max-w-3xl mx-auto mb-2 rounded-lg border border-border/50 bg-card/70 overflow-hidden">
       {/* Header */}
       <button
         type="button"
         onClick={() => { userToggledRef.current = true; setExpanded((o) => !o); }}
-        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-zinc-800/40 transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-secondary/40 transition-colors"
       >
-        <span className="text-[10px] text-zinc-500 transition-transform duration-150"
+        <span className="text-[10px] text-muted-foreground transition-transform duration-150"
           style={{ transform: expanded ? "rotate(0deg)" : "rotate(-90deg)" }}>
           ▼
         </span>
-        <span className="text-xs font-semibold text-zinc-300">
+        <span className="text-xs font-semibold text-foreground">
           Todos ({doneCount}/{todos.length})
         </span>
         {running && !allDone && (
@@ -102,10 +102,10 @@ export default function TodoPanel({
                 </span>
                 <span className={
                   done
-                    ? "text-zinc-500"
+                    ? "text-muted-foreground"
                     : active
-                    ? "text-zinc-100 font-medium"
-                    : "text-zinc-400"
+                    ? "text-foreground font-medium"
+                    : "text-muted-foreground"
                 }>
                   {t.title}
                 </span>

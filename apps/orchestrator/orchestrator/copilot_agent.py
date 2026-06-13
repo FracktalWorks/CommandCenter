@@ -166,30 +166,45 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
         # duplicate full-content ASSISTANT_REASONING event at block end.
         _streamed_reasoning_ids: set[str] = set()
 
-        # Message IDs already streamed as deltas — used to skip the
-        # duplicate full-content ASSISTANT_MESSAGE event at turn end.
-        # Without this, the agent reply appears twice in the UI.
-        _streamed_message_ids: set[str] = set()
+        # Accumulated assistant text from deltas — used to detect and skip
+        # the duplicate full-content ASSISTANT_MESSAGE event at turn end.
+        # Content-based dedup is more reliable than message_id matching
+        # because delta and message events may carry different IDs.
+        _accumulated_text: str = ""
+        # Whether we have already emitted any assistant text for this turn.
+        # Guards against duplicate ASSISTANT_MESSAGE events when no deltas
+        # were streamed (e.g. non-streaming fallback within a streaming session).
+        _text_emitted: bool = False
 
         def _on_event(event: SessionEvent) -> None:
             """Translate Copilot SDK events to AgentResponseUpdate objects."""
+            nonlocal _accumulated_text, _text_emitted
             try:
                 t = event.type
                 d = event.data
 
                 if t == SessionEventType.ASSISTANT_MESSAGE_DELTA:
                     if d.delta_content:
-                        _mid = (
-                            getattr(d, "message_id", None)
-                            or getattr(d, "id", None)
-                            or "_default"
-                        )
-                        _streamed_message_ids.add(str(_mid))
+                        _accumulated_text += (d.delta_content or "")
+                        _text_emitted = True
                         queue.put_nowait(AgentResponseUpdate(
                             role="assistant",
                             contents=[Content.from_text(d.delta_content)],
                             response_id=d.message_id,
                             message_id=d.message_id,
+                            raw_representation=event,
+                        ))
+
+                elif t == SessionEventType.ASSISTANT_STREAMING_DELTA:
+                    # Primary streaming delta in newer Copilot SDK versions.
+                    # Handle identically to ASSISTANT_MESSAGE_DELTA.
+                    delta = getattr(d, "delta_content", "") or ""
+                    if delta:
+                        _accumulated_text += delta
+                        _text_emitted = True
+                        queue.put_nowait(AgentResponseUpdate(
+                            role="assistant",
+                            contents=[Content.from_text(delta)],
                             raw_representation=event,
                         ))
 
@@ -304,14 +319,12 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
 
                 elif t == SessionEventType.ASSISTANT_MESSAGE:
                     content = getattr(d, "content", "") or ""
-                    _mid = (
-                        getattr(d, "message_id", None)
-                        or getattr(d, "id", None)
-                        or "_default"
-                    )
-                    # Skip if this message already streamed as deltas —
-                    # emitting it again would duplicate the assistant reply.
-                    if content and str(_mid) not in _streamed_message_ids:
+                    # Skip if text was already delivered via deltas.
+                    # The Copilot SDK fires both ASSISTANT_MESSAGE_DELTA
+                    # (token-by-token) and ASSISTANT_MESSAGE (full content)
+                    # during streaming — emitting both duplicates the reply.
+                    if content and not _text_emitted:
+                        _text_emitted = True
                         queue.put_nowait(AgentResponseUpdate(
                             role="assistant",
                             contents=[Content.from_text(content)],

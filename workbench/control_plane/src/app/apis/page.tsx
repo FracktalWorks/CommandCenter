@@ -11,16 +11,27 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowRight,
+  BarChart2,
   Check,
+  CheckSquare,
   ChevronDown,
   ChevronRight,
+  CreditCard,
   ExternalLink,
+  Globe,
+  HardDrive,
   Loader2,
   Lock,
+  Mail,
+  MessageSquare,
   Plus,
+  Puzzle,
   RefreshCw,
   Search,
+  Settings2,
   Sparkles,
+  Target,
+  Users,
   X,
 } from "lucide-react";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
@@ -105,17 +116,9 @@ const DISCOVER_SUGGESTIONS = [
 ];
 
 // ---------------------------------------------------------------------------
-// ServiceLogo — multi-source logo with colored-initials fallback
+// ServiceLogo — bare logo image with Lucide icon fallback (no box/border)
 // ---------------------------------------------------------------------------
 
-/**
- * Build an ordered list of logo URLs to try for a given domain.
- * Strategy:
- *  1. Google S2 favicon (sz=128) — always works, CDN-cached, no key needed
- *  2. Clearbit Logo API — higher quality / better cropped for known brands
- *  3. DuckDuckGo favicon — tertiary fallback
- * Falls back to colored initials if all fail.
- */
 function logoUrls(domain: string): string[] {
   if (!domain) return [];
   return [
@@ -124,6 +127,20 @@ function logoUrls(domain: string): string[] {
     `https://icons.duckduckgo.com/ip3/${domain}.ico`,
   ];
 }
+
+/** Category → Lucide icon + color for when all logo sources fail */
+const CATEGORY_FALLBACK: Record<string, { Icon: React.ElementType; color: string }> = {
+  core:          { Icon: Settings2,    color: "text-violet-400" },
+  crm:           { Icon: Users,        color: "text-blue-400" },
+  email:         { Icon: Mail,         color: "text-amber-400" },
+  prospecting:   { Icon: Target,       color: "text-emerald-400" },
+  productivity:  { Icon: CheckSquare,  color: "text-cyan-400" },
+  search:        { Icon: Globe,        color: "text-orange-400" },
+  analytics:     { Icon: BarChart2,    color: "text-rose-400" },
+  payments:      { Icon: CreditCard,   color: "text-indigo-400" },
+  communication: { Icon: MessageSquare, color: "text-teal-400" },
+  storage:       { Icon: HardDrive,   color: "text-sky-400" },
+};
 
 function ServiceLogo({
   service,
@@ -142,38 +159,27 @@ function ServiceLogo({
   const urls = logoUrls(resolvedDomain);
   const [urlIdx, setUrlIdx] = useState(0);
 
-  const szOuter = size === "sm" ? "w-7 h-7" : size === "lg" ? "w-12 h-12" : "w-10 h-10";
-  const szText  = size === "sm" ? "text-[9px]" : size === "lg" ? "text-sm" : "text-xs";
-  const catCls  = CAT_COLORS[category] ?? CAT_COLORS.custom;
-
-  const initials = label
-    .split(/[\s\-_()/]+/)
-    .slice(0, 2)
-    .map((w) => w[0] ?? "")
-    .join("")
-    .toUpperCase();
-
+  const px = size === "sm" ? 24 : size === "lg" ? 40 : 32;
   const currentUrl = urls[urlIdx];
 
   if (currentUrl) {
     return (
-      <div className={`${szOuter} rounded-lg border ${catCls} flex items-center justify-center overflow-hidden shrink-0 bg-white dark:bg-white/5`}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={currentUrl}
-          alt={label}
-          onError={() => setUrlIdx((i) => i + 1)}
-          className="w-full h-full object-contain p-1"
-        />
-      </div>
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={currentUrl}
+        alt={label}
+        onError={() => setUrlIdx((i) => i + 1)}
+        width={px}
+        height={px}
+        className="object-contain rounded shrink-0"
+      />
     );
   }
 
-  return (
-    <div className={`${szOuter} rounded-lg border flex items-center justify-center font-bold shrink-0 ${szText} ${catCls}`}>
-      {initials}
-    </div>
-  );
+  const fb = CATEGORY_FALLBACK[category];
+  const FbIcon = fb?.Icon ?? Puzzle;
+  const fbColor = fb?.color ?? "text-muted-foreground";
+  return <FbIcon size={px} className={`${fbColor} shrink-0`} />;
 }
 
 // ---------------------------------------------------------------------------

@@ -14,6 +14,26 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import {
+  AlertTriangle,
+  Bot,
+  CheckSquare,
+  ExternalLink,
+  Filter,
+  FolderOpen,
+  Github,
+  Lightbulb,
+  Loader2,
+  MessageCircle,
+  Package,
+  Plug,
+  Plus,
+  Receipt,
+  RefreshCw,
+  Trash2,
+  TrendingUp,
+  X,
+} from "lucide-react";
 import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { MutationEntry } from "@/app/api/agent/mutations/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
@@ -914,269 +934,318 @@ function AddAgentModal({
 }
 
 // ---------------------------------------------------------------------------
-// Agent card
+
+// ---------------------------------------------------------------------------
+// Agent icons + colors by name
 // ---------------------------------------------------------------------------
 
-function AgentCard({
+const AGENT_ICONS: Record<string, React.ElementType> = {
+  "task-manager": CheckSquare,
+  "sales":        TrendingUp,
+  "delivery":     Package,
+  "triage":       Filter,
+  "reconciler":   RefreshCw,
+  "billing":      Receipt,
+  "strategy":     Lightbulb,
+  "apis-config":  Plug,
+};
+
+const AGENT_COLORS: Record<string, string> = {
+  "task-manager": "text-cyan-400",
+  "sales":        "text-emerald-400",
+  "delivery":     "text-blue-400",
+  "triage":       "text-amber-400",
+  "reconciler":   "text-violet-400",
+  "billing":      "text-indigo-400",
+  "strategy":     "text-orange-400",
+  "apis-config":  "text-primary",
+};
+
+function getAgentIcon(agent: AgentEntry): React.ElementType {
+  return AGENT_ICONS[agent.name] ?? Bot;
+}
+
+function getAgentColor(agent: AgentEntry): string {
+  return AGENT_COLORS[agent.name] ?? "text-muted-foreground";
+}
+
+function agentReadiness(
+  agent: AgentEntry,
+  statuses: IntegrationStatus[]
+): "ready" | "blocked" | "unknown" {
+  const deps = agent.integrations ?? [];
+  if (deps.length === 0) return "ready";
+  if (statuses.length === 0) return "unknown";
+  return deps.some((i) => {
+    const s = statuses.find((x) => x.service === i);
+    return s !== undefined && !s.configured;
+  })
+    ? "blocked"
+    : "ready";
+}
+
+// ---------------------------------------------------------------------------
+// AgentTile — compact grid card
+// ---------------------------------------------------------------------------
+
+function AgentTile({
   agent,
-  onRemove,
-  integrationStatuses,
+  selected,
+  statuses,
+  onClick,
 }: {
   agent: AgentEntry;
-  onRemove: (name: string) => void;
-  integrationStatuses: IntegrationStatus[];
+  selected: boolean;
+  statuses: IntegrationStatus[];
+  onClick: () => void;
 }) {
+  const Icon      = getAgentIcon(agent);
+  const color     = getAgentColor(agent);
+  const readiness = agentReadiness(agent, statuses);
+
+  return (
+    <button
+      onClick={onClick}
+      className={`text-left w-full p-4 rounded-xl border transition-all ${
+        selected
+          ? "border-primary bg-primary/5 ring-1 ring-primary/20"
+          : "border-border bg-card hover:border-primary/40 hover:bg-secondary/30"
+      }`}
+    >
+      <div className="flex items-start justify-between mb-3">
+        <Icon size={28} className={`${color} shrink-0`} />
+        <span
+          className={`w-2 h-2 mt-1 rounded-full shrink-0 ${
+            readiness === "ready"   ? "bg-success" :
+            readiness === "blocked" ? "bg-warning"  : "bg-muted"
+          }`}
+          title={
+            readiness === "ready"   ? "Ready" :
+            readiness === "blocked" ? "Blocked \u2014 needs API connections" : "Unknown"
+          }
+        />
+      </div>
+      <div className="font-medium text-sm text-foreground leading-tight">{agent.name}</div>
+      <div className={`text-[10px] mt-0.5 ${
+        readiness === "ready"   ? "text-success" :
+        readiness === "blocked" ? "text-warning"  : "text-muted-foreground"
+      }`}>
+        {readiness === "ready" ? "\u25cf Ready" :
+         readiness === "blocked" ? "\u26a0 Blocked" : "\u25cb Unknown"}
+      </div>
+      {agent.description && (
+        <p className="text-[10px] text-muted-foreground mt-2 line-clamp-2 leading-relaxed">
+          {agent.description}
+        </p>
+      )}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AgentSidePanel
+// ---------------------------------------------------------------------------
+
+function AgentSidePanel({
+  agent,
+  statuses,
+  onClose,
+  onRemove,
+}: {
+  agent: AgentEntry;
+  statuses: IntegrationStatus[];
+  onClose: () => void;
+  onRemove: (name: string) => void;
+}) {
+  const Icon  = getAgentIcon(agent);
+  const color = getAgentColor(agent);
   const [confirming, setConfirming] = useState(false);
-  const [removing, setRemoving] = useState(false);
+  const [removing, setRemoving]     = useState(false);
+
+  const missingDeps = (agent.integrations ?? []).filter((i) => {
+    const s = statuses.find((x) => x.service === i);
+    return s !== undefined && !s.configured;
+  });
 
   const handleRemove = async () => {
     setRemoving(true);
     try {
-      const res = await fetch(`/api/agent/${encodeURIComponent(agent.name)}`, {
-        method: "DELETE",
-      });
-      if (res.ok) {
-        onRemove(agent.name);
-      } else {
-        const data = await res.json().catch(() => ({}));
-        alert(String(data?.detail ?? data?.error ?? "Failed to remove agent"));
+      const res = await fetch(`/api/agent/${encodeURIComponent(agent.name)}`, { method: "DELETE" });
+      if (res.ok) { onRemove(agent.name); onClose(); }
+      else {
+        const d = await res.json().catch(() => ({}));
+        alert(String(d?.detail ?? d?.error ?? "Failed to remove agent"));
       }
-    } catch {
-      alert("Network error while removing agent");
-    } finally {
-      setRemoving(false);
-      setConfirming(false);
-    }
+    } catch { alert("Network error while removing agent"); }
+    finally { setRemoving(false); setConfirming(false); }
   };
 
-  const repoUrl = agent.repo_url;
-  const repoName = agent.repo_name;
-  const localPath = agent.local_path;
-
   return (
-    <div className="group relative rounded-xl border border-border bg-card/60 p-4 hover:border-primary/30 transition-colors">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-semibold text-foreground truncate">{agent.name}</span>
-            {agent.dynamic && (
-              <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
-                custom
-              </span>
-            )}
-            {localPath && (
-              <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary" title={localPath}>
-                local
-              </span>
-            )}
-            {/* Agent runtime badges */}
-            {agent.agent_runtime === "github-copilot" ? (
-              <>
-                <span className="shrink-0 rounded-full border border-accent/20 bg-accent/10 px-2 py-0.5 text-xs text-accent" title="Microsoft Agent Framework">MAF</span>
-                <span className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-xs text-primary/80" title="GitHub Copilot SDK — shell, file r/w, MCP, native BYOK">Copilot SDK</span>
-              </>
-            ) : (
-              <span className="shrink-0 rounded-full border border-accent/20 bg-accent/10 px-2 py-0.5 text-xs text-accent" title="Microsoft Agent Framework agent">MAF</span>
-            )}
-            <span
-              className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${
-                agent.status === "live"
-                  ? "bg-success/10 text-success"
-                  : "bg-secondary text-muted-foreground"
-              }`}
-            >
-              {agent.status}
-            </span>
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="flex items-start justify-between p-5 border-b border-border shrink-0">
+        <div className="flex items-start gap-3">
+          <Icon size={36} className={`${color} mt-0.5 shrink-0`} />
+          <div>
+            <div className="font-semibold text-foreground text-base">{agent.name}</div>
+            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+              {agent.agent_runtime === "github-copilot" ? (
+                <>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-accent/20 bg-accent/10 text-accent">MAF</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-primary/30 bg-primary/10 text-primary/80">Copilot SDK</span>
+                </>
+              ) : (
+                <span className="text-[10px] px-1.5 py-0.5 rounded border border-accent/20 bg-accent/10 text-accent">MAF</span>
+              )}
+              <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                agent.status === "live" ? "bg-success/10 text-success" : "bg-secondary text-muted-foreground"
+              }`}>{agent.status}</span>
+              {agent.dynamic && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary">custom</span>
+              )}
+            </div>
           </div>
+        </div>
+        <button onClick={onClose} className="text-muted-foreground hover:text-foreground p-1 rounded transition-colors">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
 
-          {agent.description && (
-            <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{agent.description}</p>
-          )}
+      <div className="flex-1 overflow-y-auto p-5 space-y-4">
+        {agent.description && (
+          <p className="text-sm text-muted-foreground leading-relaxed">{agent.description}</p>
+        )}
 
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            {agent.tags?.map((t) => (
-              <span
-                key={t}
-                className="rounded-full bg-secondary px-2 py-0.5 text-xs text-muted-foreground"
-              >
-                {t}
-              </span>
+        {(agent.tags?.length ?? 0) > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {agent.tags!.map((t) => (
+              <span key={t} className="text-xs px-2 py-0.5 rounded-full bg-secondary text-muted-foreground">{t}</span>
             ))}
           </div>
+        )}
 
-          {localPath ? (
-            <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground" title={localPath}>
-              <svg className="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M1 3.5A1.5 1.5 0 012.5 2h3.257c.466 0 .917.18 1.25.503l.69.69A.5.5 0 008.05 3.5H13.5A1.5 1.5 0 0115 5v7.5A1.5 1.5 0 0113.5 14h-11A1.5 1.5 0 011 12.5V3.5z"/>
-              </svg>
-              <span className="truncate">{localPath}</span>
+        {missingDeps.length > 0 && (
+          <div className="flex items-start gap-2 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2.5">
+            <AlertTriangle className="w-3.5 h-3.5 text-warning mt-0.5 shrink-0" />
+            <div className="text-xs text-warning">
+              <span className="font-medium">Agent blocked</span> \u2014 needs{" "}
+              <Link href="/apis" className="underline hover:opacity-80">
+                {missingDeps.map((i) => statuses.find((s) => s.service === i)?.label ?? i).join(", ")}
+              </Link>
             </div>
-          ) : (repoName || repoUrl) ? (
-            <div className="mt-2">
-              <a
-                href={
-                  repoUrl ??
-                  (repoName?.includes("/")
-                    ? `https://github.com/${repoName}`
-                    : `https://github.com/FracktalWorks/${repoName}`)
-                }
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-muted-foreground transition-colors"
-              >
-                <svg className="h-3 w-3" viewBox="0 0 16 16" fill="currentColor">
-                  <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
-                </svg>
-                {repoName ?? repoUrl}
-              </a>
-            </div>
-          ) : null}
+          </div>
+        )}
 
-          {/* Integration badges with live status */}
-          {((agent.integrations?.length ?? 0) > 0 || (agent.optional_integrations?.length ?? 0) > 0) && (
-            <div className="mt-2.5 space-y-1">
-              {/* Mandatory */}
-              {(agent.integrations?.length ?? 0) > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {agent.integrations!.map((i) => {
-                    const intg = integrationStatuses.find((s) => s.service === i);
-                    const configured = intg?.configured;
-                    // null = gateway unreachable / unknown
-                    const state = configured === true ? "ok" : configured === false ? "missing" : "unknown";
-                    return (
-                      <Link
-                        key={i}
-                        href="/integrations"
-                        title={
-                          state === "ok"
-                            ? `${intg?.label ?? i}: connected`
-                            : state === "missing"
-                            ? `${intg?.label ?? i}: not configured — click to set up`
-                            : i
-                        }
-                      >
-                        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium cursor-pointer transition-colors ${
-                          state === "ok"
-                            ? "border-success/20 text-success bg-success/10 hover:bg-success/20"
-                            : state === "missing"
-                            ? "border-destructive/20 text-destructive bg-destructive/10 hover:bg-destructive/20"
-                            : "border-border text-muted-foreground hover:border-border"
-                        }`}>
-                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                            state === "ok" ? "bg-success" : state === "missing" ? "bg-destructive" : "bg-muted"
-                          }`} />
-                          {intg?.label ?? i}
-                          {state === "ok" && <span className="text-success text-[10px]">✓</span>}
-                          {state === "missing" && <span className="text-destructive text-[10px]">!</span>}
-                        </span>
-                      </Link>
-                    );
-                  })}
-                </div>
-              )}
-              {/* Optional */}
-              {(agent.optional_integrations?.length ?? 0) > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {agent.optional_integrations!.map((i) => {
-                    const intg = integrationStatuses.find((s) => s.service === i);
-                    const configured = intg?.configured;
-                    const state = configured === true ? "ok" : configured === false ? "missing" : "unknown";
-                    return (
-                      <Link
-                        key={i}
-                        href="/integrations"
-                        title={`${intg?.label ?? i}: optional${state === "missing" ? " — not configured" : state === "ok" ? " — connected" : ""}`}
-                      >
-                        <span className={`inline-flex items-center gap-1.5 rounded-full border border-dashed px-2 py-0.5 text-xs cursor-pointer transition-colors ${
-                          state === "ok"
-                            ? "border-success/20 text-success hover:bg-success/10"
-                            : "border-border text-muted-foreground hover:border-border"
-                        }`}>
-                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                            state === "ok" ? "bg-success" : "bg-secondary"
-                          }`} />
-                          {intg?.label ?? i}
-                        </span>
-                      </Link>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Blocked warning: any mandatory integration not configured */}
-          {(() => {
-            const missing = (agent.integrations ?? []).filter((i) => {
-              const s = integrationStatuses.find((x) => x.service === i);
-              return s !== undefined && !s.configured;
-            });
-            if (missing.length === 0) return null;
-            const labels = missing.map((i) => integrationStatuses.find((s) => s.service === i)?.label ?? i);
-            return (
-              <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-warning/20 bg-warning/5 px-2.5 py-1.5">
-                <span className="text-warning text-xs">⚠</span>
-                <span className="text-xs text-warning">
-                  Agent is blocked — needs:{" "}
-                  <Link href="/integrations" className="underline hover:text-warning">
-                    {labels.join(", ")}
+        {(agent.integrations?.length ?? 0) > 0 && (
+          <div>
+            <div className="text-[10px] text-muted uppercase tracking-wider mb-1.5">Required APIs</div>
+            <div className="flex flex-wrap gap-1.5">
+              {agent.integrations!.map((i) => {
+                const intg  = statuses.find((s) => s.service === i);
+                const state = intg === undefined ? "unknown" : intg.configured ? "ok" : "missing";
+                return (
+                  <Link key={i} href="/apis">
+                    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium cursor-pointer transition-colors ${
+                      state === "ok"
+                        ? "border-success/20 text-success bg-success/10 hover:bg-success/20"
+                        : state === "missing"
+                        ? "border-warning/20 text-warning bg-warning/5 hover:bg-warning/10"
+                        : "border-border text-muted-foreground"
+                    }`}>
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                        state === "ok" ? "bg-success" : state === "missing" ? "bg-warning" : "bg-muted"
+                      }`} />
+                      {intg?.label ?? i}
+                      {state === "missing" && <ExternalLink className="w-2.5 h-2.5" />}
+                    </span>
                   </Link>
-                </span>
-              </div>
-            );
-          })()}
+                );
+              })}
+            </div>
+          </div>
+        )}
 
-          {/* Pending self-mutation commits — GitHub Copilot agents only */}
-          {agent.agent_runtime === "github-copilot" && (
-            <PendingCommits agentName={agent.name} />
-          )}
-        </div>
+        {(agent.optional_integrations?.length ?? 0) > 0 && (
+          <div>
+            <div className="text-[10px] text-muted uppercase tracking-wider mb-1.5">Optional APIs</div>
+            <div className="flex flex-wrap gap-1.5">
+              {agent.optional_integrations!.map((i) => {
+                const intg = statuses.find((s) => s.service === i);
+                const ok   = intg?.configured === true;
+                return (
+                  <Link key={i} href="/apis">
+                    <span className={`inline-flex items-center gap-1.5 rounded-full border border-dashed px-2.5 py-1 text-xs cursor-pointer transition-colors ${
+                      ok ? "border-success/20 text-success hover:bg-success/10" : "border-border text-muted-foreground hover:bg-secondary"
+                    }`}>
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${ok ? "bg-success" : "bg-muted"}`} />
+                      {intg?.label ?? i}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
-        {/* Action buttons */}
-        <div className="shrink-0 flex flex-col items-end gap-2">
-          {/* Chat shortcut — navigate to chat page */}
-          <Link
-            href={`/chat?agent=${encodeURIComponent(agent.name)}`}
-            className="inline-flex items-center gap-1 rounded-lg border border-border bg-secondary px-2.5 py-1 text-xs text-foreground hover:border-primary/30 hover:bg-secondary transition-colors"
-            title={`Open a chat with ${agent.name}`}
-          >
-            Chat →
-          </Link>
-        </div>
-
-        {/* Remove button — only for user-added (dynamic) agents */}
-        {agent.dynamic && (
-          <div className="shrink-0">
-            {confirming ? (
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs text-muted-foreground">Remove?</span>
-                <button
-                  disabled={removing}
-                  onClick={handleRemove}
-                  className="rounded px-2 py-1 text-xs bg-destructive hover:bg-destructive text-destructive-foreground transition-colors disabled:opacity-50"
-                >
-                  {removing ? "…" : "Yes"}
-                </button>
-                <button
-                  onClick={() => setConfirming(false)}
-                  className="rounded px-2 py-1 text-xs border border-border text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  No
-                </button>
+        {(agent.local_path ?? agent.repo_url ?? agent.repo_name) && (
+          <div>
+            <div className="text-[10px] text-muted uppercase tracking-wider mb-1.5">Source</div>
+            {agent.local_path ? (
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono bg-secondary rounded-lg px-2.5 py-1.5">
+                <FolderOpen className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">{agent.local_path}</span>
               </div>
             ) : (
-              <button
-                onClick={() => setConfirming(true)}
-                className="rounded p-1.5 text-muted-foreground hover:bg-destructive/5 hover:text-destructive transition-colors mt-1"
-                title="Remove agent"
+              <a
+                href={
+                  agent.repo_url ??
+                  (agent.repo_name?.includes("/")
+                    ? `https://github.com/${agent.repo_name}`
+                    : `https://github.com/FracktalWorks/${agent.repo_name}`)
+                }
+                target="_blank" rel="noreferrer"
+                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
               >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </button>
+                <Github className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">{agent.repo_name ?? agent.repo_url}</span>
+                <ExternalLink className="w-2.5 h-2.5 shrink-0 ml-auto" />
+              </a>
             )}
           </div>
         )}
+
+        {agent.agent_runtime === "github-copilot" && (
+          <PendingCommits agentName={agent.name} />
+        )}
+
+        <div className="flex gap-2 pt-2">
+          <Link
+            href={`/chat?agent=${encodeURIComponent(agent.name)}`}
+            className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg bg-primary hover:opacity-90 text-sm font-medium text-primary-foreground transition-colors"
+          >
+            <MessageCircle className="w-4 h-4" /> Chat
+          </Link>
+          {agent.dynamic && (
+            confirming ? (
+              <div className="flex items-center gap-1.5">
+                <button disabled={removing} onClick={() => void handleRemove()}
+                  className="px-3 py-2 rounded-lg bg-destructive text-destructive-foreground text-xs hover:opacity-90 disabled:opacity-50 transition-colors">
+                  {removing ? "\u2026" : "Remove"}
+                </button>
+                <button onClick={() => setConfirming(false)}
+                  className="px-3 py-2 rounded-lg border border-border text-xs text-muted-foreground hover:bg-secondary transition-colors">
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button onClick={() => setConfirming(true)}
+                className="p-2.5 rounded-lg border border-border text-muted-foreground hover:border-destructive/40 hover:text-destructive transition-colors"
+                title="Remove agent">
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1187,111 +1256,138 @@ function AgentCard({
 // ---------------------------------------------------------------------------
 
 export default function AgentsPage() {
-  const [agents, setAgents] = useState<AgentEntry[]>([]);
-  const [integrationStatuses, setIntegrationStatuses] = useState<IntegrationStatus[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showAddModal, setShowAddModal] = useState(false);
+  const [agents, setAgents]     = useState<AgentEntry[]>([]);
+  const [intgs, setIntgs]       = useState<IntegrationStatus[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [filter, setFilter]     = useState<"all" | "builtin" | "custom">("all");
+  const [selected, setSelected] = useState<string | null>(null);
+  const [showAdd, setShowAdd]   = useState(false);
 
-  const loadAgents = useCallback(async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [agentRes, intgRes] = await Promise.all([
+      const [aRes, iRes] = await Promise.all([
         fetch("/api/agent/list"),
         fetch("/api/integrations/status"),
       ]);
-      if (agentRes.ok) setAgents(await agentRes.json());
-      if (intgRes.ok) {
-        const data = await intgRes.json();
-        if (Array.isArray(data)) setIntegrationStatuses(data);
-      }
-    } catch {
-      /* ignore */
-    } finally {
-      setLoading(false);
-    }
+      if (aRes.ok) setAgents(await aRes.json());
+      if (iRes.ok) { const d = await iRes.json(); if (Array.isArray(d)) setIntgs(d); }
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
   }, []);
 
-  useEffect(() => {
-    loadAgents();
-  }, [loadAgents]);
+  useEffect(() => { void load(); }, [load]);
 
-  const handleRemove = (name: string) =>
-    setAgents((prev) => prev.filter((a) => a.name !== name));
+  useEffect(() => {
+    if (!loading && agents.length > 0 && !selected) setSelected(agents[0].name);
+  }, [loading, agents, selected]);
+
+  const handleRemove = (name: string) => {
+    setAgents((p) => p.filter((a) => a.name !== name));
+    if (selected === name) setSelected(null);
+  };
 
   const handleAdded = (agent: AgentEntry) =>
-    setAgents((prev) => [...prev, { ...agent, dynamic: true }]);
+    setAgents((p) => [...p, { ...agent, dynamic: true }]);
 
-  const builtIn = agents.filter((a) => !a.dynamic);
-  const custom = agents.filter((a) => a.dynamic);
+  const filtered = agents.filter((a) =>
+    filter === "builtin" ? !a.dynamic : filter === "custom" ? !!a.dynamic : true
+  );
+  const selectedAgent = selected ? (agents.find((a) => a.name === selected) ?? null) : null;
+  const readyCnt      = agents.filter((a) => agentReadiness(a, intgs) === "ready").length;
+  const blockedCnt    = agents.filter((a) => agentReadiness(a, intgs) === "blocked").length;
+
+  const FILTERS = [
+    { id: "all"     as const, label: "All",      count: agents.length },
+    { id: "builtin" as const, label: "Built-in", count: agents.filter((a) => !a.dynamic).length },
+    { id: "custom"  as const, label: "Custom",   count: agents.filter((a) => !!a.dynamic).length },
+  ];
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
-      {/* Page header */}
-      <div className="mb-8 flex items-center justify-between">
+    <div className="flex flex-col h-full overflow-hidden">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
         <div>
-          <h1 className="text-xl font-semibold text-foreground">Agents</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Manage MAF agents connected to this CommandCenter instance.
+          <h1 className="text-lg font-bold text-foreground">Agents</h1>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {loading
+              ? "Loading\u2026"
+              : `${agents.length} agents \u00b7 ${readyCnt} ready${blockedCnt > 0 ? ` \u00b7 ${blockedCnt} blocked` : ""}`}
           </p>
         </div>
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 transition-colors shrink-0"
-        >
-          <span className="text-base leading-none">+</span>
-          <span className="hidden sm:inline">Add Agent</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => void load()} title="Refresh"
+            className="p-2 rounded-lg border border-border text-muted-foreground hover:bg-secondary transition-colors">
+            <RefreshCw className="w-4 h-4" />
+          </button>
+          <button onClick={() => setShowAdd(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary hover:opacity-90 text-sm font-medium text-primary-foreground transition-colors">
+            <Plus className="w-4 h-4" /><span className="hidden sm:inline">Add Agent</span>
+          </button>
+        </div>
       </div>
 
-      {loading ? (
-        <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
-          Loading agents…
-        </div>
-      ) : (
-        <>
-          {/* Built-in agents */}
-          {builtIn.length > 0 && (
-            <section className="mb-6">
-              <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Built-in ({builtIn.length})
-              </h2>
-              <div className="flex flex-col gap-3">
-                {builtIn.map((a) => (
-                  <AgentCard key={a.name} agent={a} onRemove={handleRemove} integrationStatuses={integrationStatuses} />
-                ))}
-              </div>
-            </section>
+      <div className="flex items-center gap-1 px-4 py-2 border-b border-border shrink-0">
+        {FILTERS.map((f) => (
+          <button key={f.id} onClick={() => setFilter(f.id)}
+            className={`text-xs px-2.5 py-1 rounded-full whitespace-nowrap transition-colors ${
+              filter === f.id
+                ? "bg-primary text-primary-foreground font-medium"
+                : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+            }`}>
+            {f.label} <span className="opacity-60">{f.count}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="flex flex-1 overflow-hidden relative">
+        <div className={`flex-1 p-4 overflow-y-auto ${selectedAgent ? "hidden sm:block sm:min-w-0" : ""}`}>
+          {loading ? (
+            <div className="flex items-center justify-center h-48 gap-3 text-muted-foreground text-sm">
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading agents\u2026
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground text-sm">
+              <p>No {filter !== "all" ? filter : ""} agents found.</p>
+              <button onClick={() => setShowAdd(true)} className="flex items-center gap-1.5 text-xs text-primary hover:opacity-80">
+                <Plus className="w-3.5 h-3.5" /> Add agent
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+              {filtered.map((agent) => (
+                <AgentTile
+                  key={agent.name}
+                  agent={agent}
+                  selected={selected === agent.name}
+                  statuses={intgs}
+                  onClick={() => setSelected(agent.name)}
+                />
+              ))}
+              <button
+                onClick={() => setShowAdd(true)}
+                className="p-4 rounded-xl border-2 border-dashed border-border text-muted-foreground hover:border-primary/40 hover:text-primary hover:bg-primary/5 transition-all flex flex-col items-center justify-center gap-2 min-h-[120px]"
+              >
+                <Plus className="w-5 h-5" /><span className="text-xs">Add Agent</span>
+              </button>
+            </div>
           )}
+        </div>
 
-          {/* Custom agents */}
-          <section>
-            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Custom — from GitHub {custom.length > 0 && `(${custom.length})`}
-            </h2>
-            {custom.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-border p-8 text-center">
-                <p className="text-sm text-muted-foreground">No custom agents yet.</p>
-                <button
-                  onClick={() => setShowAddModal(true)}
-                  className="mt-3 text-sm text-primary hover:text-primary underline"
-                >
-                  Add your first agent →
-                </button>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-3">
-                {custom.map((a) => (
-                  <AgentCard key={a.name} agent={a} onRemove={handleRemove} integrationStatuses={integrationStatuses} />
-                ))}
-              </div>
-            )}
-          </section>
-        </>
-      )}
+        {selectedAgent && (
+          <div className="absolute inset-0 sm:relative sm:inset-auto w-full sm:w-[380px] border-l border-border bg-card shrink-0 flex flex-col overflow-hidden z-10">
+            <AgentSidePanel
+              agent={selectedAgent}
+              statuses={intgs}
+              onClose={() => setSelected(null)}
+              onRemove={handleRemove}
+            />
+          </div>
+        )}
+      </div>
 
-      {showAddModal && (
+      {showAdd && (
         <AddAgentModal
-          onClose={() => setShowAddModal(false)}
+          onClose={() => setShowAdd(false)}
           onAdded={handleAdded}
         />
       )}

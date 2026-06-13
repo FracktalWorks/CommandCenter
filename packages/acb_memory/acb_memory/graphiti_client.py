@@ -26,6 +26,7 @@ Typical usage in an agent:
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any
@@ -73,19 +74,27 @@ class GraphitiClient:
             from graphiti_core.embedder.openai import OpenAIEmbedderConfig  # noqa: PLC0415
             from openai import AsyncOpenAI  # noqa: PLC0415
 
-            # Reuse gateway /v1 (litellm SDK) for both LLM and embeddings so there's
-            # no separate API key or model config needed.
+            # Reuse gateway /v1 (litellm SDK) for both LLM and embeddings so
+            # no separate API key or model config is needed.  The gateway
+            # routes tier aliases → actual providers via config.yaml.
             openai_client = AsyncOpenAI(
                 api_key=litellm_key,
                 base_url=litellm_url,
             )
             llm_client = _GOpenAI(
                 client=openai_client,
-                model="openai/tier1-haiku",
+                model="tier-fast",
             )
+
+            # Embedding model: prefer OpenAI text-embedding-3-small when an
+            # OPENAI_API_KEY is configured; otherwise fall back to Gemini
+            # embedding through the gateway (GEMINI_API_KEY is always set).
+            _embed_model = "text-embedding-3-small"
+            if not os.environ.get("OPENAI_API_KEY", "").strip():
+                _embed_model = "gemini-embedding"
             embedder = OpenAIEmbedder(
                 config=OpenAIEmbedderConfig(
-                    embedding_model="text-embedding-3-small",
+                    embedding_model=_embed_model,
                     api_key=litellm_key,
                     base_url=litellm_url,
                 )

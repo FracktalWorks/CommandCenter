@@ -366,8 +366,8 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      {/* Modal */}
-      <div className="relative flex flex-col w-full max-w-4xl max-h-[90vh] rounded-lg border border-zinc-700 bg-zinc-950 shadow-2xl overflow-hidden mx-4">
+      {/* Modal — full-width on mobile, constrained on desktop. pb-safe protects against iOS rounded corners. */}
+      <div className="relative flex flex-col w-full max-w-4xl max-h-[90vh] sm:rounded-lg border-0 sm:border border-zinc-700 bg-zinc-950 shadow-2xl overflow-hidden sm:mx-4">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3 shrink-0">
           <div className="flex items-center gap-2 min-w-0">
@@ -402,8 +402,8 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
           </div>
         </div>
 
-        {/* Body */}
-        <div className="flex-1 overflow-auto p-6 min-h-0">
+        {/* Body — pb-safe keeps content above iOS home indicator */}
+        <div className="flex-1 overflow-auto p-6 min-h-0 pb-safe">
           {state.status === "loading" && (
             <div className="flex items-center justify-center h-32">
               <div className="text-sm text-zinc-500 animate-pulse">Loading…</div>

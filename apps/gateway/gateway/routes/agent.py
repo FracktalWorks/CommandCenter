@@ -546,16 +546,38 @@ async def run_agent_stream_endpoint(
     # ── Memory enrichment: inject relevant past facts into the agent's context ──
     try:
         from acb_memory import get_memory_context  # noqa: PLC0415
+        from acb_memory import search_entity_timeline  # noqa: PLC0415
         user_msg = (
             req.payload.get("message")
             or req.payload.get("user_query")
             or ""
         )
+        memory_parts: list[str] = []
         if user_msg and user_id != "anonymous":
+            # Mem0: episodic facts from past conversations
             mem_ctx = await get_memory_context(user_id, user_msg)
             if mem_ctx:
-                req.payload["memory_context"] = mem_ctx
-                _log.debug("agent.memory_enriched", agent=agent_name, user=user_id[:20])
+                memory_parts.append(
+                    "## Memory from past conversations\n" + mem_ctx
+                )
+
+            # Graphiti: time-aware facts about entities in the query
+            entity_hint = user_msg[:80]
+            graph_ctx = await search_entity_timeline(
+                entity_hint, user_msg
+            )
+            if graph_ctx:
+                memory_parts.append(
+                    "## Timeline facts from knowledge graph\n" + graph_ctx
+                )
+
+            if memory_parts:
+                req.payload["memory_context"] = "\n\n".join(memory_parts)
+                _log.debug(
+                    "agent.memory_enriched",
+                    agent=agent_name,
+                    user=user_id[:20],
+                )
     except ImportError:
         pass
 

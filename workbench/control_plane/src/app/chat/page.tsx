@@ -133,19 +133,19 @@ function AgentPickerModal({
                     onClick={() => handleAgentClick(a)}
                     className="w-full text-left rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-4 py-3 hover:border-zinc-500 hover:bg-zinc-800 transition-colors"
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-medium text-zinc-100">{a.name}</div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-sky-700/50 bg-sky-900/30 text-sky-300">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                      <div className="text-sm font-medium text-zinc-100 truncate">{a.name}</div>
+                      <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-sky-700/50 bg-sky-900/30 text-sky-300 whitespace-nowrap">
                           Copilot SDK
                         </span>
                         {needsSetupBadge(a) && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-900/40 text-orange-400 border border-orange-700/50">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-900/40 text-orange-400 border border-orange-700/50 whitespace-nowrap">
                             ⚙ Setup needed
                           </span>
                         )}
                         {a.tags.slice(0, 2).map((t) => (
-                          <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-400">{t}</span>
+                          <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-400 whitespace-nowrap">{t}</span>
                         ))}
                       </div>
                     </div>
@@ -175,19 +175,19 @@ function AgentPickerModal({
                     onClick={() => handleAgentClick(a)}
                     className="w-full text-left rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-4 py-3 hover:border-zinc-500 hover:bg-zinc-800 transition-colors"
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-medium text-zinc-100">{a.name}</div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-amber-700/40 bg-amber-900/20 text-amber-400">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                      <div className="text-sm font-medium text-zinc-100 truncate">{a.name}</div>
+                      <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-amber-700/40 bg-amber-900/20 text-amber-400 whitespace-nowrap">
                           MAF
                         </span>
                         {needsSetupBadge(a) && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-900/40 text-orange-400 border border-orange-700/50">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-900/40 text-orange-400 border border-orange-700/50 whitespace-nowrap">
                             ⚙ Setup needed
                           </span>
                         )}
                         {a.tags.slice(0, 2).map((t) => (
-                          <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-400">{t}</span>
+                          <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-400 whitespace-nowrap">{t}</span>
                         ))}
                       </div>
                     </div>
@@ -817,6 +817,7 @@ function ChatPageInner() {
                 memories={memories.map((m) => m.memory)}
                 memoryUserId={userId}
                 availableAgents={agentList.length > 0 ? agentList : undefined}
+                expectedMessageCount={activeSession.messageCount}
                 onActivity={(info) => handleActivity(activeSession.id, info)}
                 onArtifact={(entry: ArtifactEntry) => {
                   setArtifactUpdates((prev) => [
@@ -837,6 +838,7 @@ function ChatPageInner() {
                 agentName={activeSession.agentName}
                 sessionId={activeSession.id}
                 availableAgents={agentList.length > 0 ? agentList : undefined}
+                expectedMessageCount={activeSession.messageCount}
                 onActivity={(info) => handleActivity(activeSession.id, info)}
                 onArtifact={(entry: ArtifactEntry) => {
                   setArtifactUpdates((prev) => [

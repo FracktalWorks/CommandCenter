@@ -198,6 +198,12 @@ interface AgentChatProps {
   }) => void;
   /** Called when the agent writes a file via write_artifact tool. */
   onArtifact?: (entry: ArtifactEntry) => void;
+  /**
+   * Number of messages this session is known to have (from the sidebar list,
+   * sourced from Postgres). Drives the history-loading skeleton when the local
+   * cache is empty but the server still has rows to fetch.
+   */
+  expectedMessageCount?: number;
 }
 
 export default function AgentChat({
@@ -211,6 +217,7 @@ export default function AgentChat({
   memoryUserId,
   onActivity,
   onArtifact,
+  expectedMessageCount,
 }: AgentChatProps) {
   // Active agent / model can change mid-chat (VS Code Copilot style).
   const [currentAgentName, setCurrentAgentName] = useState(agentName);
@@ -297,6 +304,18 @@ export default function AgentChat({
     return parts.length > 0 ? parts.join("\n\n") : undefined;
   }, [persona, memories]);
 
+  // Local cache (localStorage) — instant restore when re-opening a session that
+  // was active in this browser. Empty when the session lives only in Postgres
+  // (cache cleared, a different device, or the first time we open it here).
+  // Drop stale __ERROR__ system messages saved by older builds.
+  const cachedInitial = useMemo(
+    () =>
+      (getMessages(sessionId) as ChatMessage[]).filter(
+        (m) => !(m.role === "system" && m.content.startsWith("__ERROR__")),
+      ),
+    [sessionId],
+  );
+
   const { messages, isLoading, error, sendMessage, stopGeneration, setMessages, recovering } = useAgentChat({
     agentName: currentAgentName,
     threadId: sessionId,
@@ -305,13 +324,16 @@ export default function AgentChat({
     systemContext,
     thinkMode,
     onArtifact,
-    // Load persisted messages so switching sessions restores history instantly
-    // (localStorage cache).  Drop any stale __ERROR__ system messages that may
-    // have been saved by older builds — they should never reappear on reload.
-    initialMessages: (getMessages(sessionId) as ChatMessage[]).filter(
-      (m) => !(m.role === "system" && m.content.startsWith("__ERROR__")),
-    ),
+    // Load persisted messages so switching sessions restores history instantly.
+    initialMessages: cachedInitial,
   });
+
+  // History-loading skeleton: shown only when nothing is cached locally yet the
+  // sidebar tells us this session has prior messages waiting in Postgres. This
+  // avoids flashing the "start a conversation" empty state during the DB fetch.
+  const [loadingHistory, setLoadingHistory] = useState(
+    () => cachedInitial.length === 0 && (expectedMessageCount ?? 0) > 0,
+  );
 
   // On mount, fetch the authoritative message history from Postgres and sync
   // the local state if Postgres has richer data (more messages OR longer content
@@ -344,7 +366,9 @@ export default function AgentChat({
       if (remoteTotalLen > localTotalLen || remoteToolCount > localToolCount) {
         setMessages(remote as ChatMessage[]);
       }
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => {
+      if (!cancelled) setLoadingHistory(false);
+    });
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
@@ -804,7 +828,19 @@ export default function AgentChat({
               </div>
             ) : null;
           })()}
-          {messages.length === 0 && (
+          {loadingHistory && messages.length === 0 && (
+            <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3 text-center">
+              <span className="w-6 h-6 rounded-full border-2 border-zinc-700 border-t-emerald-500 animate-spin" />
+              <div className="text-zinc-300 text-sm font-medium">Loading conversation…</div>
+              <div className="text-zinc-500 text-xs">Fetching your history from the server</div>
+              <div className="w-full max-w-3xl mx-auto space-y-3 pt-6" aria-hidden>
+                <div className="h-12 w-2/3 rounded-2xl bg-zinc-800/60 animate-pulse" />
+                <div className="h-16 w-3/4 rounded-2xl bg-zinc-800/40 animate-pulse ml-auto" />
+                <div className="h-12 w-1/2 rounded-2xl bg-zinc-800/60 animate-pulse" />
+              </div>
+            </div>
+          )}
+          {!loadingHistory && messages.length === 0 && (
             <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3 text-center">
               <div className="w-12 h-12 rounded-2xl bg-zinc-800/80 border border-zinc-700/60 flex items-center justify-center">
                 <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
@@ -870,7 +906,7 @@ export default function AgentChat({
       </div>
 
       {/* ── Input area + VS Code-style bottom bar ─────────────────────── */}
-      <form onSubmit={handleSubmit} className="shrink-0 border-t border-zinc-800/60 bg-zinc-900/50 px-3 sm:px-4 pt-2 pb-2.5">
+      <form onSubmit={handleSubmit} className="shrink-0 border-t border-zinc-800/60 bg-zinc-900/50 px-3 sm:px-4 pt-2 pb-safe-full">
         {/* VS Code-style Todos panel — latest assistant turn's todo list */}
         {(() => {
           for (let i = messages.length - 1; i >= 0; i--) {
@@ -926,7 +962,7 @@ export default function AgentChat({
                       aria-label={SEND_MODE_LABELS[sendMode]}
                       title={`${SEND_MODE_LABELS[sendMode]} (current mode)`}>
                       {sendMode === "send" ? "↑" : sendMode === "queue" ? "⏱" : "⤳"}
-                      <span className="text-[11px]">{SEND_MODE_LABELS[sendMode]}</span>
+                      <span className="text-[11px] hidden sm:inline">{SEND_MODE_LABELS[sendMode]}</span>
                     </button>
                     <button type="button"
                       onClick={() => setShowSendMenu((v) => !v)}
@@ -969,14 +1005,14 @@ export default function AgentChat({
               )}
             </div>
 
-            {/* Row 2: control bar inside the pill */}
-            <div className="flex items-center gap-1 px-2 pb-1.5 text-[11px] text-zinc-500" ref={modelMenuRef}>
+            {/* Row 2: control bar inside the pill — wraps on narrow screens */}
+            <div className="flex items-center gap-1 px-2 pb-1.5 text-[11px] text-zinc-500 flex-wrap" ref={modelMenuRef}>
               {/* Agent selector */}
               <div className="relative">
                 <button onClick={() => setShowAgentMenu((v) => !v)}
                   className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-zinc-700/50 hover:text-zinc-200 transition-colors">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                  <span className="truncate max-w-[90px] font-medium">{currentAgentName}</span>
+                  <span className="truncate max-w-[72px] sm:max-w-[90px] font-medium">{currentAgentName}</span>
                   <span className="text-zinc-600">▾</span>
                 </button>
                 {showAgentMenu && (
@@ -1004,7 +1040,7 @@ export default function AgentChat({
               {/* Model selector */}
               <div className="relative">
                 <button onClick={() => setShowModelMenu((v) => !v)}
-                  className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-zinc-700/50 hover:text-zinc-200 transition-colors truncate max-w-[150px]">
+                  className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-zinc-700/50 hover:text-zinc-200 transition-colors truncate max-w-[110px] sm:max-w-[150px]">
                   <span className="truncate">{currentModelLabel}</span>
                   <span className="text-zinc-600 shrink-0">▾</span>
                 </button>
@@ -1058,7 +1094,7 @@ export default function AgentChat({
                 )}
               </div>
 
-              <span className="ml-auto hidden md:inline text-zinc-600">
+              <span className="ml-auto hidden sm:inline text-zinc-600 text-[10px]">
                 {isLoading && sendMode !== "send" && (
                   <span className="mr-2 text-amber-400">{sendMode === "queue" ? "⏱ Queue" : "⤳ Steer"} mode</span>
                 )}

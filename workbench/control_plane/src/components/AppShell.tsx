@@ -96,8 +96,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       value={{ isOpen: drawerOpen, open: openDrawer, close: closeDrawer }}
     >
       <div className="flex h-screen flex-col overflow-hidden bg-zinc-950">
-        {/* Top app bar — just title + overflow, no hamburger */}
-        <header className="flex h-11 shrink-0 items-center border-b border-zinc-800 bg-zinc-900/80 px-2 backdrop-blur">
+        {/* Top app bar — just title + overflow, no hamburger. Safe-area padded for notch */}
+        <header className="flex h-11 shrink-0 items-center border-b border-zinc-800 bg-zinc-900/80 px-2 backdrop-blur pt-safe">
           {/* Centered title */}
           <Link href="/" className="absolute left-1/2 -translate-x-1/2">
             <span className="text-sm font-semibold tracking-tight text-zinc-100">
@@ -111,10 +111,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        {/* Page content */}
+        {/* Page content — pb-safe protects bottom content from iOS rounded corners */}
         <main className="flex-1 min-h-0 overflow-y-auto">{children}</main>
 
-        {/* Bottom navigation bar — always visible on mobile */}
+        {/* Bottom navigation bar — always visible on mobile. pb-safe lifts it above the iOS home indicator */}
         <MobileBottomNav pathname={pathname} toggleView={toggleView} />
 
         {/* Unified drawer (slide-up panel for bottom-nav tab content) */}
@@ -129,7 +129,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <div className="flex justify-center pt-2 pb-1">
                 <div className="w-10 h-1 rounded-full bg-zinc-700" />
               </div>
-              {drawerContent}
+              <div className="flex-1 min-h-0 overflow-y-auto pb-safe">
+                {drawerContent}
+              </div>
             </aside>
           </div>
         )}
@@ -224,16 +226,16 @@ function MobileBottomNav({
   const isChatPage = pathname?.startsWith("/chat") ?? false;
 
   return (
-    <nav className="shrink-0 border-t border-zinc-800 bg-zinc-900/95 backdrop-blur">
+    <nav className="shrink-0 border-t border-zinc-800 bg-zinc-900/95 backdrop-blur pb-safe">
       <div className="flex items-center justify-around py-1.5 px-2">
         <button
           onClick={() => { open(menuContent); }}
-          className={`flex flex-col items-center gap-0.5 px-4 py-1 rounded-lg transition-colors ${
+          className={`flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors min-w-[56px] ${
             isOpen ? "text-sky-400" : "text-zinc-500 hover:text-zinc-300"
           }`}
         >
-          <MenuIcon size={20} />
-          <span className="text-[9px] font-medium">Menu</span>
+          <MenuIcon size={22} />
+          <span className="text-[10px] font-medium leading-none">Menu</span>
         </button>
         {isChatPage && (
           <>
@@ -242,25 +244,25 @@ function MobileBottomNav({
                 const ev = new CustomEvent("cc-mobile-nav", { detail: "chats" });
                 window.dispatchEvent(ev);
               }}
-              className="relative flex flex-col items-center gap-0.5 px-4 py-1 rounded-lg transition-colors text-zinc-500 hover:text-zinc-300"
+              className="relative flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors text-zinc-500 hover:text-zinc-300 min-w-[56px]"
             >
-              <MessageCircle size={20} />
+              <MessageCircle size={22} />
               {activeCount > 0 && (
-                <span className="absolute -top-0.5 right-1.5 flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-emerald-500 text-[9px] font-bold text-white animate-pulse">
+                <span className="absolute -top-0.5 right-2 flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-emerald-500 text-[9px] font-bold text-white animate-pulse">
                   {activeCount}
                 </span>
               )}
-              <span className="text-[9px] font-medium">Chats</span>
+              <span className="text-[10px] font-medium leading-none">Chats</span>
             </button>
             <button
               onClick={() => {
                 const ev = new CustomEvent("cc-mobile-nav", { detail: "files" });
                 window.dispatchEvent(ev);
               }}
-              className="flex flex-col items-center gap-0.5 px-4 py-1 rounded-lg transition-colors text-zinc-500 hover:text-zinc-300"
+              className="flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors text-zinc-500 hover:text-zinc-300 min-w-[56px]"
             >
-              <FolderOpen size={20} />
-              <span className="text-[9px] font-medium">Files</span>
+              <FolderOpen size={22} />
+              <span className="text-[10px] font-medium leading-none">Files</span>
             </button>
           </>
         )}

@@ -155,3 +155,20 @@ model_list:
       model: openrouter/deepseek/deepseek-r1-0528
       api_key: os.environ/OPENROUTER_API_KEY
       api_base: https://openrouter.ai/api/v1
+
+  # ── Embedding models ──────────────────────────────────────────────────
+  # Mem0 and other memory systems use these via the gateway /v1/embeddings.
+  # No OPENAI_API_KEY required — the gateway routes to the backing provider.
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gemini-embedding
+    litellm_params:
+      model: gemini/text-embedding-004
+      api_key: os.environ/GEMINI_API_KEY
+
+# ── LiteLLM settings ────────────────────────────────────────────────────────
+litellm_settings:
+  drop_params: true
+  set_verbose: false

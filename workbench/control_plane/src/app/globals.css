@@ -32,6 +32,33 @@ body {
   overflow-x: hidden;
 }
 
+/* ── iOS safe-area padding utilities ─────────────────────────────────────
+   viewport-fit=cover is set in layout.tsx viewport export. These utilities
+   let any element add padding that respects the device's safe-area insets
+   (home indicator, notch, rounded corners). Use pb-safe / pt-safe / px-safe
+   on the outermost containers that touch the screen edge.
+   ──────────────────────────────────────────────────────────────────────── */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+.px-safe-l {
+  padding-left: env(safe-area-inset-left, 0px);
+}
+.px-safe-r {
+  padding-right: env(safe-area-inset-right, 0px);
+}
+/* Combine bottom + side insets for elements at the screen's bottom edge. */
+.pb-safe-full {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem);
+}
+/* Minimal safe tap area — use on bottom-stuck interactive elements. */
+.min-safe-bottom {
+  min-height: calc(env(safe-area-inset-bottom, 0px) + 44px);
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    Chat "thinking" UX — mirrors VS Code Copilot's shimmer/working language.
    The shimmer is a flowing gradient sweep across text (NOT a spinner) and is

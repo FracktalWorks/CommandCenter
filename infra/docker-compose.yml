@@ -57,6 +57,31 @@ services:
       timeout: 3s
       retries: 10
 
+  # --- Neo4j — bi-temporal knowledge graph (Graphiti). ──────────────────────
+  # Opt-in via `--profile memory`.  Required when GRAPHITI_ENABLED=true.
+  # Graphiti stores time-stamped entity facts extracted from agent
+  # conversations and ingestion events, enabling queries like:
+  #   "When did Deal X change stage?" / "What is Contact Y's history?"
+  neo4j:
+    image: neo4j:5-community
+    container_name: acb-neo4j
+    <<: *restart
+    profiles: ["memory"]
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-neo4j_dev_change_me}
+      NEO4J_PLUGINS: '["apoc"]'
+    ports:
+      - "7474:7474"   # HTTP
+      - "7687:7687"   # Bolt
+    volumes:
+      - acb-neo4j-data:/data
+      - acb-neo4j-logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p $${NEO4J_PASSWORD:-neo4j_dev_change_me} 'RETURN 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
   # --- LLM routing — handled by litellm Python SDK directly (no proxy container). ---
   # Provider API keys are stored encrypted in Postgres (provider_keys table).
   # See packages/acb_llm/acb_llm/client.py and key_store.py.
@@ -104,3 +129,5 @@ services:
 volumes:
   acb-postgres-data:
   acb-redis-data:
+  acb-neo4j-data:
+  acb-neo4j-logs:

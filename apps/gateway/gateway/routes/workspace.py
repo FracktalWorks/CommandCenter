@@ -536,3 +536,79 @@ async def delete_workspace_file(
         path=path,
     )
     return DeleteResponse(deleted=True, path=path)
+
+
+# ---------------------------------------------------------------------------
+# PUT /workspace/{session_id}/file  — edit/write a file in place
+# ---------------------------------------------------------------------------
+
+class WriteFileRequest(BaseModel):
+    content: str
+    """New file content.  Written as UTF-8 text for text/code files;
+    base64-decodable payloads are written as binary bytes."""
+    encoding: str = "utf-8"
+    """'utf-8' (default — text content), 'base64' (binary content)."""
+
+
+@router.put("/workspace/{session_id}/file")
+async def write_workspace_file(
+    session_id: str,
+    body: WriteFileRequest,
+    path: str = Query(..., description="Relative path within the workspace"),
+    _user: UserContext = Depends(get_current_user),
+) -> FileEntry:
+    """Overwrite or create a file in the workspace.  Directories are
+    created automatically.  Safe — resolves against workspace root only.
+
+    Accepts text (encoding='utf-8') and binary (encoding='base64') content.
+    Returns the updated FileEntry with fresh stat metadata.
+    """
+    import base64  # noqa: PLC0415
+
+    loop = asyncio.get_event_loop()
+    workspace = await loop.run_in_executor(None, _get_workspace_path, session_id)
+    if workspace is None or not workspace.exists():
+        raise HTTPException(
+            status_code=404, detail="Workspace not found for session"
+        )
+
+    file_path = _safe_resolve(workspace, path)
+    # Disallow writing outside .tmp/ and outputs/ for safety; agent-writable
+    # paths are unrestricted (the agent owns the workspace).
+    if not file_path.is_relative_to(workspace):
+        raise HTTPException(
+            status_code=400, detail="Path escapes workspace root"
+        )
+
+    # Create parent directories if needed
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write content
+    if body.encoding == "base64":
+        data = base64.b64decode(body.content)
+        file_path.write_bytes(data)
+    else:
+        file_path.write_text(body.content, encoding="utf-8")
+
+    # Build response
+    stat = file_path.stat()
+    mime, _ = mimetypes.guess_type(file_path.name)
+    rel_path = str(file_path.relative_to(workspace)).replace("\\", "/")
+
+    _log.info(
+        "workspace.file_written",
+        session_id=session_id,
+        path=rel_path,
+        size=stat.st_size,
+    )
+
+    return FileEntry(
+        path=rel_path,
+        name=file_path.name,
+        size=stat.st_size,
+        modified_at=__import__("datetime").datetime.fromtimestamp(
+            stat.st_mtime, tz=__import__("datetime").timezone.utc
+        ).isoformat(),
+        mime_type=mime or "application/octet-stream",
+        is_dir=False,
+    )

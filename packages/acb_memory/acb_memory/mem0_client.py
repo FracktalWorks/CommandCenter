@@ -98,22 +98,20 @@ class MemoryClient:
                 },
                 "history_db_path": "",
             }
-            # Embeddings: Mem0 requires an embedder at init.  Supply a
-            # dummy key when OPENAI_API_KEY is not set so the embedder
-            # initialises.  add() extracts facts via the LLM first, then
-            # attempts embedding — extraction succeeds even if embedding
-            # fails with a dummy key.
-            oai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+            # Embeddings: route through the gateway /v1/embeddings just
+            # like the LLM.  The gateway's LiteLLM tier maps model names
+            # → actual providers — no OPENAI_API_KEY needed here.
+            # Falls back to gemini-embedding when the primary model has
+            # no configured key, or when OPENAI_API_KEY env var is set.
+            _embed_model = "text-embedding-3-small"
+            if not os.environ.get("OPENAI_API_KEY", "").strip():
+                _embed_model = "gemini-embedding"
             config["embedder"] = {
                 "provider": "openai",
                 "config": {
-                    "model": "text-embedding-3-small",
-                    "api_key": oai_key or "sk-dummy-for-init",
-                    "openai_base_url": (
-                        "https://api.openai.com/v1"
-                        if oai_key
-                        else _llm_url
-                    ),
+                    "model": _embed_model,
+                    "api_key": _llm_key,
+                    "openai_base_url": _llm_url,
                 },
             }
 

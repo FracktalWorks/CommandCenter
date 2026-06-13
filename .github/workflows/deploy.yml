@@ -98,6 +98,12 @@ jobs:
           username: ${{ secrets.HOSTINGER_USER }}
           key: ${{ secrets.HOSTINGER_SSH_KEY }}
           port: ${{ secrets.HOSTINGER_SSH_PORT || 22 }}
+          # Absorb intermittent runner↔VPS network blips: allow a long TCP
+          # handshake window and let the command run up to 15 min. The
+          # outer 'retries' on the step (below) re-attempts the whole SSH
+          # connection if the initial dial still times out.
+          timeout: 60s
+          command_timeout: 15m
           script: |
             set -e
             APP_DIR="${APP_DIR:-/opt/acb/app}"

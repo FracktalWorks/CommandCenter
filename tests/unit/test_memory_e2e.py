@@ -451,17 +451,19 @@ def test_memory_list_endpoint_exists() -> None:
 
 
 def test_memory_status_endpoint_returns_valid_json() -> None:
-    """GET /memory/{user_id}/status returns mem0 + graphiti status."""
+    """GET /memory/{user_id}/status returns flat fields with bools + count."""
     from gateway.main import app
 
     with TestClient(app) as client:
         r = client.get("/memory/test@example.com/status")
         assert r.status_code == 200
         data = r.json()
-        assert "mem0" in data
-        assert "graphiti" in data
-        assert "enabled" in data["mem0"]
-        assert "enabled" in data["graphiti"]
+        assert "mem0_enabled" in data
+        assert isinstance(data["mem0_enabled"], bool)
+        assert "graphiti_enabled" in data
+        assert isinstance(data["graphiti_enabled"], bool)
+        assert "count" in data
+        assert isinstance(data["count"], int)
 
 
 def test_memory_search_endpoint_exists() -> None:

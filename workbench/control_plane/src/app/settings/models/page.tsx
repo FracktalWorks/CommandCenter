@@ -72,17 +72,17 @@ interface TestResult {
 // ---------------------------------------------------------------------------
 
 const PROVIDER_COLOURS: Record<string, string> = {
-  gemini:     "bg-blue-500/15 text-blue-400 border-blue-800/40",
-  openai:     "bg-green-500/15 text-green-400 border-green-800/40",
-  anthropic:  "bg-orange-500/15 text-orange-300 border-orange-800/40",
-  openrouter: "bg-rose-500/15 text-rose-300 border-rose-800/40",
-  github:     "bg-sky-500/15 text-sky-300 border-sky-800/40",
-  deepseek:   "bg-cyan-500/15 text-cyan-300 border-cyan-800/40",
-  groq:       "bg-yellow-500/15 text-yellow-300 border-yellow-800/40",
-  mistral:    "bg-indigo-500/15 text-indigo-300 border-indigo-800/40",
-  together:   "bg-teal-500/15 text-teal-300 border-teal-800/40",
-  ollama:     "bg-violet-500/15 text-violet-400 border-violet-800/40",
-  vllm:       "bg-violet-500/15 text-violet-400 border-violet-800/40",
+  gemini:     "bg-blue-500/10 text-blue-600 border-primary/30",
+  openai:     "bg-green-500/10 text-green-600 border-green-500/30",
+  anthropic:  "bg-orange-500/10 text-orange-600 border-orange-500/30",
+  openrouter: "bg-rose-500/10 text-rose-600 border-rose-500/30",
+  github:     "bg-sky-500/10 text-sky-600 border-sky-500/30",
+  deepseek:   "bg-cyan-500/10 text-cyan-600 border-cyan-500/30",
+  groq:       "bg-yellow-500/10 text-yellow-600 border-yellow-500/30",
+  mistral:    "bg-indigo-500/10 text-indigo-600 border-indigo-500/30",
+  together:   "bg-teal-500/10 text-teal-600 border-teal-500/30",
+  ollama:     "bg-violet-500/10 text-violet-600 border-violet-500/30",
+  vllm:       "bg-violet-500/10 text-violet-600 border-violet-500/30",
   unknown:    "bg-secondary text-muted-foreground border-border",
 };
 
@@ -327,14 +327,14 @@ function TierCard({
                   }}
                   className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${
                     selectedProvider === p.id
-                      ? "border-blue-600 bg-blue-600/20 text-blue-300"
+                      ? "border-primary bg-primary/20 text-primary"
                       : "border-border bg-secondary/40 text-muted-foreground hover:border-primary/30"
                   }`}
                 >
                   <span className="mr-1">{PROVIDER_ICONS[p.id] ?? "?"}</span>
                   {p.label}
                   {!p.configured && p.id !== "ollama" && (
-                    <span className="ml-1 text-orange-400">!</span>
+                    <span className="ml-1 text-warning">!</span>
                   )}
                 </button>
               ))}
@@ -347,7 +347,7 @@ function TierCard({
             <select
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
-              className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground focus:border-blue-500 focus:outline-none"
+              className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
             >
               {(currentProvider?.models ?? []).map((m) => (
                 <option key={m} value={m}>{m}</option>
@@ -359,7 +359,7 @@ function TierCard({
               placeholder="Or type a custom model string…"
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
-              className="mt-1.5 w-full rounded-lg border border-border bg-secondary/60 px-3 py-1.5 text-xs text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
+              className="mt-1.5 w-full rounded-lg border border-border bg-secondary/60 px-3 py-1.5 text-xs text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
             />
           </div>
 
@@ -374,14 +374,14 @@ function TierCard({
                 placeholder={selectedProvider === "ollama" ? "http://host.docker.internal:11434" : "http://host.docker.internal:8001/v1"}
                 value={apiBase}
                 onChange={(e) => setApiBase(e.target.value)}
-                className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
+                className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
               />
             </div>
           )}
 
           {/* Provider key hint — links to setup guide */}
           {currentProvider && !currentProvider.configured && !isLocal && (
-            <div className="rounded-lg border border-orange-800/30 bg-orange-950/30 px-3 py-2 text-xs text-orange-300">
+            <div className="rounded-lg border border-warning/30 bg-orange-950/30 px-3 py-2 text-xs text-warning">
               <span className="font-medium">{currentProvider.label}</span> requires{" "}
               <code className="font-mono">{currentProvider.env_var}</code>.{" "}
               {PROVIDER_GUIDES[currentProvider.id] ? (
@@ -389,7 +389,7 @@ function TierCard({
                   href={PROVIDER_GUIDES[currentProvider.id]!.setup_url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="underline underline-offset-2 hover:text-orange-200 transition-colors"
+                  className="underline underline-offset-2 hover:text-warning transition-colors"
                 >
                   Get your API key ↗
                 </a>
@@ -409,7 +409,7 @@ function TierCard({
             <button
               onClick={handleSave}
               disabled={saving || !selectedModel}
-              className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40 transition-colors"
+              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 transition-colors"
             >
               {saving ? "Saving…" : "Save"}
             </button>
@@ -422,7 +422,7 @@ function TierCard({
         <div
           className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
             testResult.success
-              ? "border-green-800/40 bg-green-950/30 text-green-300"
+              ? "border-success/30 bg-success/10 text-success"
               : "border-destructive/20 bg-destructive/5 text-destructive"
           }`}
         >
@@ -607,7 +607,7 @@ function ProviderCard({
           ) : (
             <button
               onClick={() => setEditing((e) => !e)}
-              className="rounded border border-orange-700/50 bg-orange-950/40 px-2 py-0.5 text-xs text-orange-300 hover:bg-orange-900/40 transition-colors"
+              className="rounded border border-orange-700/50 bg-orange-950/40 px-2 py-0.5 text-xs text-warning hover:bg-orange-900/40 transition-colors"
             >
               {editing ? "Cancel" : "Set key →"}
             </button>
@@ -629,7 +629,7 @@ function ProviderCard({
               href={guide.setup_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-md border border-blue-700/50 bg-blue-900/30 px-3 py-1.5 text-xs font-medium text-blue-300 hover:bg-blue-800/40 transition-colors"
+              className="inline-flex items-center gap-1.5 rounded-md border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 transition-colors"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -660,10 +660,10 @@ function ProviderCard({
 
           {/* GitHub Copilot: OAuth device flow (easier than copying a PAT) */}
           {provider.id === "github" && (
-            <div className="rounded-lg border border-sky-800/40 bg-sky-950/20 p-3 space-y-2">
+            <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 space-y-2">
               <div className="flex items-center gap-2">
                 <span className="text-sm">✦</span>
-                <span className="text-xs font-medium text-sky-300">
+                <span className="text-xs font-medium text-primary/80">
                   GitHub OAuth Device Flow
                 </span>
               </div>
@@ -676,21 +676,21 @@ function ProviderCard({
                 <button
                   onClick={startDeviceFlow}
                   disabled={!!deviceStatus && !deviceStatus.includes("Error")}
-                  className="w-full rounded-lg border border-sky-700/50 bg-sky-900/40 px-3 py-2 text-xs font-medium text-sky-300 hover:bg-sky-800/40 transition-colors disabled:opacity-40"
+                  className="w-full rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-medium text-primary/80 hover:bg-primary/10 transition-colors disabled:opacity-40"
                 >
                   {deviceStatus || "Connect with GitHub →"}
                 </button>
               ) : (
                 <div className="space-y-2">
                   <div className="rounded-md bg-background/60 p-3 text-center">
-                    <div className="text-2xl font-bold tracking-[0.3em] text-sky-300 font-mono">
+                    <div className="text-2xl font-bold tracking-[0.3em] text-primary/80 font-mono">
                       {deviceFlow.userCode}
                     </div>
                     <a
                       href={deviceFlow.verificationUri}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="mt-1 inline-block text-[10px] text-sky-400 underline hover:text-sky-200"
+                      className="mt-1 inline-block text-[10px] text-primary/80 underline hover:text-primary/70"
                     >
                       Open {deviceFlow.verificationUri} →
                     </a>
@@ -719,7 +719,7 @@ function ProviderCard({
               onChange={(e) => setKeyVal(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSave()}
               placeholder={`Paste ${provider.env_var}…`}
-              className="w-full rounded-lg border border-border bg-background px-3 py-1.5 pr-14 text-xs text-foreground placeholder-muted-foreground font-mono focus:border-blue-500 focus:outline-none"
+              className="w-full rounded-lg border border-border bg-background px-3 py-1.5 pr-14 text-xs text-foreground placeholder-muted-foreground font-mono focus:border-primary focus:outline-none"
               autoFocus
             />
             <button
@@ -734,7 +734,7 @@ function ProviderCard({
             <button
               onClick={handleSave}
               disabled={saving || !keyVal.trim()}
-              className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40 transition-colors"
+              className="rounded-lg bg-primary px-3 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40 transition-colors"
             >
               {saving ? "Saving & restarting LiteLLM…" : "Save & apply"}
             </button>
@@ -998,7 +998,7 @@ function ModelCatalogue() {
             </p>
             <button
               onClick={() => { setShowForm((v) => !v); setError(null); }}
-              className="rounded-lg border border-blue-700/50 bg-blue-900/30 px-3 py-1.5 text-xs font-medium text-blue-300 hover:bg-blue-800/40 transition-colors shrink-0 ml-3"
+              className="rounded-lg border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 transition-colors shrink-0 ml-3"
             >
               {showForm ? "Cancel" : "+ Add model"}
             </button>
@@ -1013,7 +1013,7 @@ function ModelCatalogue() {
                 <select
                   value={formProvider}
                   onChange={(e) => handleProviderChange(e.target.value)}
-                  className="w-full rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground focus:border-blue-500 focus:outline-none"
+                  className="w-full rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none"
                 >
                   <option value="openrouter">OpenRouter</option>
                   <option value="openai">OpenAI</option>
@@ -1052,7 +1052,7 @@ function ModelCatalogue() {
                       placeholder={availableModels.length > 0 ? "Search models…" : "No models loaded — select a provider first"}
                       value={modelSearch}
                       onChange={(e) => setModelSearch(e.target.value)}
-                      className="w-full rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
+                      className="w-full rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
                     />
                     {availableModels.length > 0 && modelSearch && (
                       <div className="absolute z-10 mt-1 w-full max-h-44 overflow-y-auto rounded-md border border-border bg-card shadow-lg">
@@ -1105,14 +1105,14 @@ function ModelCatalogue() {
                   placeholder="Auto-populated from model name"
                   value={formLabel}
                   onChange={(e) => setFormLabel(e.target.value)}
-                  className="w-full rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
+                  className="w-full rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
                 />
               </div>
               {error && <p className="text-xs text-destructive">{error}</p>}
               <button
                 onClick={handleAdd}
                 disabled={adding || !formId.trim() || !formLabel.trim()}
-                className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-40 transition-colors"
+                className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 transition-colors"
               >
                 {adding ? "Adding…" : "Add to picker"}
               </button>
@@ -1195,7 +1195,7 @@ function ModelCatalogue() {
                   <button
                     onClick={() => toggleHidden(m.id)}
                     disabled={busy === m.id}
-                    className="ml-2 shrink-0 text-muted-foreground hover:text-orange-400 transition-colors disabled:opacity-30"
+                    className="ml-2 shrink-0 text-muted-foreground hover:text-warning transition-colors disabled:opacity-30"
                     title="Hide from picker"
                   >
                     {busy === m.id ? (

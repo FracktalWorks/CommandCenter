@@ -270,7 +270,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
                       <button
                         disabled={!!busy[m.id]}
                         onClick={() => act(m.id!, "approve")}
-                        className="rounded bg-amber-800/50 px-2.5 py-1 text-warning hover:bg-amber-700/60 disabled:opacity-50 transition-colors"
+                        className="rounded bg-warning/10 px-2.5 py-1 text-warning hover:bg-warning/15 disabled:opacity-50 transition-colors"
                       >
                         {busy[m.id] === "approve" ? "Pushing…" : "Push Anyway"}
                       </button>
@@ -284,7 +284,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
                       <button
                         disabled={!!busy[m.id]}
                         onClick={() => act(m.id!, "reject")}
-                        className="rounded bg-destructive/10 px-2.5 py-1 text-destructive hover:bg-red-800/50 disabled:opacity-50 transition-colors"
+                        className="rounded bg-destructive/10 px-2.5 py-1 text-destructive hover:bg-destructive/10 disabled:opacity-50 transition-colors"
                       >
                         {busy[m.id] === "reject" ? "Rejecting…" : "Reject & Discard"}
                       </button>
@@ -305,7 +305,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
                     <button
                       disabled={!!busy[m.id]}
                       onClick={() => act(m.id!, "reject")}
-                      className="rounded bg-destructive/10 px-2.5 py-1 text-destructive hover:bg-red-800/50 disabled:opacity-50 transition-colors"
+                      className="rounded bg-destructive/10 px-2.5 py-1 text-destructive hover:bg-destructive/10 disabled:opacity-50 transition-colors"
                     >
                       {busy[m.id] === "reject" ? "Rejecting…" : "Reject & Discard"}
                     </button>
@@ -669,11 +669,11 @@ function AddAgentModal({
                     <div className="absolute right-2.5 top-2.5 h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                   )}
                   {configLoaded && !configLoading && (
-                    <div className="absolute right-2.5 top-2 text-green-400 text-xs" title="config.json loaded">✓</div>
+                    <div className="absolute right-2.5 top-2 text-success text-xs" title="config.json loaded">✓</div>
                   )}
                 </div>
                 {configLoaded && (
-                  <p className="mt-1 text-xs text-green-500">config.json found — fields auto-filled</p>
+                  <p className="mt-1 text-xs text-success">config.json found — fields auto-filled</p>
                 )}
               </div>
 
@@ -817,20 +817,20 @@ function AddAgentModal({
               <div className="rounded-xl border border-border bg-secondary/60 p-4">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                   <span className="text-sm font-semibold text-foreground">{addedAgent.name}</span>
-                  <span className="shrink-0 rounded-full bg-blue-500/15 px-2 py-0.5 text-xs text-primary">custom</span>
+                  <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">custom</span>
                   {addedAgent.local_path && (
-                    <span className="shrink-0 rounded-full bg-violet-500/15 px-2 py-0.5 text-xs text-violet-400">local</span>
+                    <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">local</span>
                   )}
                   {/* Runtime badges in the success preview */}
                   {addedAgent.agent_runtime === "github-copilot" ? (
                     <>
                       <span className="shrink-0 rounded-full border border-accent/20 bg-accent/10 px-2 py-0.5 text-xs text-accent">MAF</span>
-                      <span className="shrink-0 rounded-full border border-sky-700/50 bg-sky-900/30 px-2 py-0.5 text-xs text-sky-300" title="GitHub Copilot SDK — shell, file r/w, MCP, native BYOK">Copilot SDK</span>
+                      <span className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-xs text-primary/80" title="GitHub Copilot SDK — shell, file r/w, MCP, native BYOK">Copilot SDK</span>
                     </>
                   ) : (
                     <span className="shrink-0 rounded-full border border-accent/20 bg-accent/10 px-2 py-0.5 text-xs text-accent">MAF</span>
                   )}
-                  <span className="shrink-0 rounded-full bg-green-500/15 px-2 py-0.5 text-xs text-green-400">live</span>
+                  <span className="shrink-0 rounded-full bg-success/10 px-2 py-0.5 text-xs text-success">live</span>
                 </div>
                 {addedAgent.description && (
                   <p className="text-xs text-muted-foreground mb-2">{addedAgent.description}</p>
@@ -959,12 +959,12 @@ function ProviderRow({ p }: { p: ProviderInfo }) {
             </span>
           )}
           {p.type === "copilot" && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-400 border border-violet-500/20">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
               via Copilot
             </span>
           )}
           {p.type === "local" && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-primary border border-blue-500/20">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
               local
             </span>
           )}
@@ -1016,7 +1016,7 @@ function ModelAccess({ models }: { models: ModelsStatus | null }) {
           {copilot && (
             <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
               copilot.available
-                ? "bg-violet-500/10 text-violet-400 border-violet-500/20"
+                ? "bg-primary/10 text-primary border-primary/20"
                 : "bg-secondary text-muted-foreground border-border"
             }`}>
               Copilot models: {copilot.available ? "✓ active" : "⚠ needs GITHUB_TOKEN"}
@@ -1040,7 +1040,7 @@ function ModelAccess({ models }: { models: ModelsStatus | null }) {
               <div className="flex items-center justify-between mt-4 mb-1">
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">GitHub Copilot models (included in Copilot subscription)</p>
                 {!copilot.available && (
-                  <Link href="/integrations" className="text-[10px] text-violet-400 hover:text-violet-300 underline shrink-0 ml-2">
+                  <Link href="/integrations" className="text-[10px] text-primary hover:text-primary underline shrink-0 ml-2">
                     Configure in Integrations →
                   </Link>
                 )}
@@ -1054,7 +1054,7 @@ function ModelAccess({ models }: { models: ModelsStatus | null }) {
                     copilot.available ? "bg-secondary/50" : "bg-card/40"
                   }`}>
                     <span className={`font-mono text-xs ${
-                      copilot.available ? "text-violet-300" : "text-muted-foreground"
+                      copilot.available ? "text-primary" : "text-muted-foreground"
                     }`}>
                       {m.alias}
                     </span>
@@ -1080,7 +1080,7 @@ function ModelAccess({ models }: { models: ModelsStatus | null }) {
                 <p className="mt-2 text-[11px] text-muted-foreground">
                   Set <code className="text-muted-foreground">GITHUB_TOKEN</code> (PAT with{" "}
                   <code className="text-muted-foreground">copilot</code> scope) in the{" "}
-                  <Link href="/integrations" className="text-violet-400 hover:text-violet-300 underline">Integrations</Link>{" "}
+                  <Link href="/integrations" className="text-primary hover:text-primary underline">Integrations</Link>{" "}
                   panel to unlock GPT-4o, Claude Sonnet, and o3-mini at no extra per-token cost.
                 </p>
               )}
@@ -1139,12 +1139,12 @@ function AgentCard({
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-semibold text-foreground truncate">{agent.name}</span>
             {agent.dynamic && (
-              <span className="shrink-0 rounded-full bg-blue-500/15 px-2 py-0.5 text-xs text-primary">
+              <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
                 custom
               </span>
             )}
             {localPath && (
-              <span className="shrink-0 rounded-full bg-violet-500/15 px-2 py-0.5 text-xs text-violet-400" title={localPath}>
+              <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary" title={localPath}>
                 local
               </span>
             )}
@@ -1152,7 +1152,7 @@ function AgentCard({
             {agent.agent_runtime === "github-copilot" ? (
               <>
                 <span className="shrink-0 rounded-full border border-accent/20 bg-accent/10 px-2 py-0.5 text-xs text-accent" title="Microsoft Agent Framework">MAF</span>
-                <span className="shrink-0 rounded-full border border-sky-700/50 bg-sky-900/30 px-2 py-0.5 text-xs text-sky-300" title="GitHub Copilot SDK — shell, file r/w, MCP, native BYOK">Copilot SDK</span>
+                <span className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-xs text-primary/80" title="GitHub Copilot SDK — shell, file r/w, MCP, native BYOK">Copilot SDK</span>
               </>
             ) : (
               <span className="shrink-0 rounded-full border border-accent/20 bg-accent/10 px-2 py-0.5 text-xs text-accent" title="Microsoft Agent Framework agent">MAF</span>
@@ -1160,7 +1160,7 @@ function AgentCard({
             <span
               className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${
                 agent.status === "live"
-                  ? "bg-green-500/15 text-green-400"
+                  ? "bg-success/10 text-success"
                   : "bg-secondary text-muted-foreground"
               }`}
             >
@@ -1293,9 +1293,9 @@ function AgentCard({
             if (missing.length === 0) return null;
             const labels = missing.map((i) => integrationStatuses.find((s) => s.service === i)?.label ?? i);
             return (
-              <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-amber-800/40 bg-amber-950/30 px-2.5 py-1.5">
-                <span className="text-amber-400 text-xs">⚠</span>
-                <span className="text-xs text-amber-300">
+              <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-warning/20 bg-warning/5 px-2.5 py-1.5">
+                <span className="text-warning text-xs">⚠</span>
+                <span className="text-xs text-warning">
                   Agent is blocked — needs:{" "}
                   <Link href="/integrations" className="underline hover:text-warning">
                     {labels.join(", ")}
@@ -1457,7 +1457,7 @@ export default function AgentsPage() {
                 <p className="text-sm text-muted-foreground">No custom agents yet.</p>
                 <button
                   onClick={() => setShowAddModal(true)}
-                  className="mt-3 text-sm text-blue-500 hover:text-primary underline"
+                  className="mt-3 text-sm text-primary hover:text-primary underline"
                 >
                   Add your first agent →
                 </button>

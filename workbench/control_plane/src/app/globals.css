@@ -69,8 +69,9 @@
   --popover: hsl(0 0% 100%);
   --popover-foreground: hsl(222.2 84% 4.9%);
 
-  --primary: hsl(198 89% 45%);
-  --primary-foreground: hsl(210 40% 98%);
+  /* Deeper blue in light mode for proper contrast on white buttons */
+  --primary: hsl(198 89% 35%);
+  --primary-foreground: hsl(0 0% 100%);
 
   --secondary: hsl(210 40% 96%);
   --secondary-foreground: hsl(222.2 84% 4.9%);

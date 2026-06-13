@@ -42,7 +42,7 @@ export default function MessageActionBar({
   };
 
   const btn =
-    "text-zinc-500 hover:text-zinc-200 transition-colors px-1 py-0.5 rounded hover:bg-zinc-700/50 text-[10px]";
+    "text-muted-foreground hover:text-foreground tech-transition px-1 py-0.5 rounded hover:bg-secondary text-[10px]";
 
   return (
     <>
@@ -68,7 +68,7 @@ export default function MessageActionBar({
         <>
           <button
             onClick={() => sendVote("up")}
-            className={`${btn} ${vote === "up" ? "text-emerald-400" : ""}`}
+            className={`${btn} ${vote === "up" ? "text-success" : ""}`}
             title="Good response"
             aria-label="Good response"
           >
@@ -76,7 +76,7 @@ export default function MessageActionBar({
           </button>
           <button
             onClick={() => sendVote("down")}
-            className={`${btn} ${vote === "down" ? "text-red-400" : ""}`}
+            className={`${btn} ${vote === "down" ? "text-destructive" : ""}`}
             title="Bad response"
             aria-label="Bad response"
           >

@@ -182,8 +182,8 @@ function NavLink({
       href={pane.href}
       className={`rounded-lg tech-transition px-3 py-2 text-sm ${
         active
-          ? "bg-primary/10 text-primary border-l-[3px] border-primary pl-[9px]"
-          : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground border-l-[3px] border-transparent pl-[9px]"
+          ? "bg-primary/15 text-primary"
+          : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
       }`}
     >
       <div className="flex items-center gap-2.5">

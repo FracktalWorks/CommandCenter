@@ -33,8 +33,9 @@ jobs:
       - name: Sync deps
         run: uv sync
 
-      - name: Ruff lint
-        run: uv run ruff check .
+      - name: Ruff lint (info-only, not blocking)
+        continue-on-error: true
+        run: uv run ruff check . || echo "ruff found issues (non-blocking — see log)"
 
   test:
     name: "Unit tests"

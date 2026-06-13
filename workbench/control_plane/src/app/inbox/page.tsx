@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
@@ -9,7 +9,7 @@ export default function InboxRedirect() {
   const router = useRouter();
   useEffect(() => { router.replace("/agents"); }, [router]);
   return (
-    <div className="flex items-center justify-center h-full text-sm text-zinc-600">
+    <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
       Redirecting to Agents...
     </div>
   );

@@ -23,9 +23,9 @@ function SignInForm() {
 
   return (
     <div className="flex min-h-screen items-center justify-center p-10">
-      <div className="w-full max-w-sm rounded-lg border border-zinc-800 bg-zinc-900 p-8 text-center">
+      <div className="w-full max-w-sm rounded-lg border border-border bg-card p-8 text-center">
         <h1 className="text-xl font-semibold">CommandCenter Control Plane</h1>
-        <p className="mt-2 text-sm text-zinc-400">
+        <p className="mt-2 text-sm text-muted-foreground">
           Sign in with your Fracktal Microsoft 365 account.
         </p>
 
@@ -48,7 +48,7 @@ function SignInForm() {
           {loading ? "Redirecting to Microsoft..." : "Sign in with Microsoft"}
         </button>
 
-        <p className="mt-4 text-xs text-zinc-500">
+        <p className="mt-4 text-xs text-muted-foreground">
           Only <code>@fracktal.in</code> addresses are accepted.
         </p>
       </div>
@@ -61,7 +61,7 @@ export default function SignIn() {
     <Suspense
       fallback={
         <div className="flex min-h-screen items-center justify-center p-10">
-          <div className="text-zinc-400 text-sm">Loading...</div>
+          <div className="text-muted-foreground text-sm">Loading...</div>
         </div>
       }
     >

@@ -1,6 +1,7 @@
 "use client";
 
 import { SessionProvider } from "next-auth/react";
+import { ThemeProvider } from "next-themes";
 import ViewModeProvider from "@/components/ViewModeProvider";
 
 export default function Providers({
@@ -11,7 +12,9 @@ export default function Providers({
 }) {
   return (
     <SessionProvider refetchOnWindowFocus={false}>
-      <ViewModeProvider>{children}</ViewModeProvider>
+      <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
+        <ViewModeProvider>{children}</ViewModeProvider>
+      </ThemeProvider>
     </SessionProvider>
   );
 }

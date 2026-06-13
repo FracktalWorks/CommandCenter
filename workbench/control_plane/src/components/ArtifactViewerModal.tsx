@@ -129,7 +129,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
 
   // plain fallback
   return (
-    <pre className="overflow-x-auto whitespace-pre text-sm font-mono text-zinc-300 leading-relaxed">
+    <pre className="overflow-x-auto whitespace-pre text-sm font-mono text-foreground leading-relaxed">
       {code}
     </pre>
   );
@@ -217,7 +217,7 @@ function PdfViewer({ url }: { url: string }) {
   }
 
   if (!pdf) {
-    return <div className="flex items-center justify-center h-32 text-zinc-500 text-sm animate-pulse">Loading PDF renderer…</div>;
+    return <div className="flex items-center justify-center h-32 text-muted-foreground text-sm animate-pulse">Loading PDF renderer…</div>;
   }
 
   const { Document, Page } = pdf;
@@ -227,7 +227,7 @@ function PdfViewer({ url }: { url: string }) {
       <Document
         file={url}
         onLoadSuccess={({ numPages: n }) => { setNumPages(n); setPage(1); }}
-        loading={<div className="py-8 text-zinc-500 text-sm">Loading PDF…</div>}
+        loading={<div className="py-8 text-muted-foreground text-sm">Loading PDF…</div>}
         error={<div className="py-8 text-red-400 text-sm">Failed to load PDF. Try downloading instead.</div>}
       >
         <Page
@@ -238,11 +238,11 @@ function PdfViewer({ url }: { url: string }) {
         />
       </Document>
       {numPages > 1 && (
-        <div className="flex items-center gap-3 text-sm text-zinc-400">
+        <div className="flex items-center gap-3 text-sm text-muted-foreground">
           <button
             disabled={page <= 1}
             onClick={() => setPage((p) => p - 1)}
-            className="rounded px-2 py-1 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 transition-colors"
+            className="rounded px-2 py-1 bg-secondary hover:bg-secondary disabled:opacity-40 transition-colors"
           >
             ‹ Prev
           </button>
@@ -250,7 +250,7 @@ function PdfViewer({ url }: { url: string }) {
           <button
             disabled={page >= numPages}
             onClick={() => setPage((p) => p + 1)}
-            className="rounded px-2 py-1 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 transition-colors"
+            className="rounded px-2 py-1 bg-secondary hover:bg-secondary disabled:opacity-40 transition-colors"
           >
             Next ›
           </button>
@@ -367,26 +367,26 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       {/* Modal — full-width on mobile, constrained on desktop. pb-safe protects against iOS rounded corners. */}
-      <div className="relative flex flex-col w-full max-w-4xl max-h-[90vh] sm:rounded-lg border-0 sm:border border-zinc-700 bg-zinc-950 shadow-2xl overflow-hidden sm:mx-4">
+      <div className="relative flex flex-col w-full max-w-4xl max-h-[90vh] sm:rounded-lg border-0 sm:border border-border bg-background shadow-2xl overflow-hidden sm:mx-4">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3 shrink-0">
+        <div className="flex items-center justify-between border-b border-border px-4 py-3 shrink-0">
           <div className="flex items-center gap-2 min-w-0">
-            <span className="text-sm font-semibold text-zinc-200 truncate">{entry.name}</span>
-            <span className="text-xs text-zinc-600 truncate hidden sm:block">{entry.path}</span>
-            <span className="text-xs text-zinc-700">· {formatBytes(entry.size)}</span>
+            <span className="text-sm font-semibold text-foreground truncate">{entry.name}</span>
+            <span className="text-xs text-muted-foreground truncate hidden sm:block">{entry.path}</span>
+            <span className="text-xs text-muted-foreground/70">· {formatBytes(entry.size)}</span>
           </div>
           <div className="flex items-center gap-2 shrink-0 ml-3">
             <a
               href={downloadUrl}
               download={entry.name}
-              className="rounded px-2 py-1 text-xs text-zinc-400 bg-zinc-800 hover:bg-zinc-700 hover:text-zinc-200 transition-colors"
+              className="rounded px-2 py-1 text-xs text-muted-foreground bg-secondary hover:bg-secondary hover:text-foreground transition-colors"
             >
               Download
             </a>
             {deletable && (
               <button
                 onClick={handleDelete}
-                className="rounded px-2 py-1 text-xs text-red-400 bg-zinc-800 hover:bg-red-900/60 hover:text-red-300 transition-colors"
+                className="rounded px-2 py-1 text-xs text-red-400 bg-secondary hover:bg-red-900/60 hover:text-red-300 transition-colors"
                 title="Delete file"
               >
                 Delete
@@ -394,7 +394,7 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
             )}
             <button
               onClick={onClose}
-              className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition-colors text-lg leading-none"
+              className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors text-lg leading-none"
               title="Close"
             >
               ×
@@ -406,7 +406,7 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
         <div className="flex-1 overflow-auto p-6 min-h-0 pb-safe">
           {state.status === "loading" && (
             <div className="flex items-center justify-center h-32">
-              <div className="text-sm text-zinc-500 animate-pulse">Loading…</div>
+              <div className="text-sm text-muted-foreground animate-pulse">Loading…</div>
             </div>
           )}
 
@@ -418,18 +418,18 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
 
           {state.status === "markdown" && (
             <div className="prose prose-invert max-w-none
-              prose-headings:font-semibold prose-headings:text-zinc-100
+              prose-headings:font-semibold prose-headings:text-foreground
               prose-h1:text-2xl prose-h2:text-xl prose-h3:text-lg
-              prose-p:text-zinc-300 prose-p:leading-7
+              prose-p:text-foreground prose-p:leading-7
               prose-a:text-blue-400 prose-a:no-underline hover:prose-a:underline
-              prose-strong:text-zinc-200 prose-em:text-zinc-300
-              prose-code:text-sky-300 prose-code:bg-zinc-800 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-sm prose-code:font-mono prose-code:before:content-none prose-code:after:content-none
-              prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-700 prose-pre:text-zinc-300 prose-pre:text-sm
-              prose-blockquote:border-zinc-600 prose-blockquote:text-zinc-400
-              prose-hr:border-zinc-700
-              prose-li:text-zinc-300 prose-li:marker:text-zinc-500
-              prose-table:text-sm prose-thead:border-zinc-700 prose-tbody:border-zinc-800
-              prose-th:text-zinc-300 prose-td:text-zinc-400
+              prose-strong:text-foreground prose-em:text-foreground
+              prose-code:text-sky-300 prose-code:bg-secondary prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-sm prose-code:font-mono prose-code:before:content-none prose-code:after:content-none
+              prose-pre:bg-card prose-pre:border prose-pre:border-border prose-pre:text-foreground prose-pre:text-sm
+              prose-blockquote:border-border prose-blockquote:text-muted-foreground
+              prose-hr:border-border
+              prose-li:text-foreground prose-li:marker:text-muted-foreground
+              prose-table:text-sm prose-thead:border-border prose-tbody:border-border
+              prose-th:text-foreground prose-td:text-muted-foreground
               prose-img:rounded prose-img:mx-auto"
             >
               <ReactMarkdown
@@ -469,7 +469,7 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
           )}
 
           {state.status === "text" && !state.lang && (
-            <pre className="whitespace-pre-wrap text-sm font-mono text-zinc-300 leading-relaxed">
+            <pre className="whitespace-pre-wrap text-sm font-mono text-foreground leading-relaxed">
               {state.content}
             </pre>
           )}
@@ -491,16 +491,16 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
 
           {state.status === "binary" && (
             <div className="flex flex-col gap-3">
-              <p className="text-xs text-zinc-500">
+              <p className="text-xs text-muted-foreground">
                 Binary file — showing first 256 bytes as hex
               </p>
-              <pre className="overflow-x-auto text-xs font-mono text-zinc-400 bg-zinc-900 rounded p-3 leading-relaxed">
+              <pre className="overflow-x-auto text-xs font-mono text-muted-foreground bg-card rounded p-3 leading-relaxed">
                 {state.hex}
               </pre>
               <a
                 href={downloadUrl}
                 download={entry.name}
-                className="self-start rounded px-3 py-1.5 text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors"
+                className="self-start rounded px-3 py-1.5 text-sm bg-secondary hover:bg-secondary text-foreground transition-colors"
               >
                 Download file
               </a>

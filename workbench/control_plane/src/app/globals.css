@@ -6,6 +6,8 @@
    Primary: professional blue  hsl(198 89% 50%)
    Accent:  warm orange       hsl(27 96% 61%)
    Surface: deep blue-gray    hsl(220 13% 8%)
+   
+   Light theme is applied via .light class (next-themes class strategy).
    ──────────────────────────────────────────────────────────────────────── */
 
 :root {
@@ -53,6 +55,53 @@
   --sidebar-accent: hsl(220 13% 13%);
   --sidebar-accent-foreground: hsl(210 40% 98%);
   --sidebar-border: hsl(220 13% 16%);
+  --sidebar-ring: hsl(198 89% 50%);
+}
+
+/* ── Light theme ──────────────────────────────────────────────────────── */
+.light {
+  --background: hsl(0 0% 100%);
+  --foreground: hsl(222.2 84% 4.9%);
+
+  --card: hsl(0 0% 100%);
+  --card-foreground: hsl(222.2 84% 4.9%);
+
+  --popover: hsl(0 0% 100%);
+  --popover-foreground: hsl(222.2 84% 4.9%);
+
+  --primary: hsl(198 89% 45%);
+  --primary-foreground: hsl(210 40% 98%);
+
+  --secondary: hsl(210 40% 96%);
+  --secondary-foreground: hsl(222.2 84% 4.9%);
+
+  --muted: hsl(210 40% 96%);
+  --muted-foreground: hsl(215.4 16.3% 46.9%);
+
+  --accent: hsl(27 96% 61%);
+  --accent-foreground: hsl(210 40% 98%);
+
+  --destructive: hsl(0 84.2% 60.2%);
+  --destructive-foreground: hsl(210 40% 98%);
+
+  --border: hsl(214.3 31.8% 91.4%);
+  --input: hsl(214.3 31.8% 91.4%);
+  --ring: hsl(198 89% 50%);
+
+  --success: hsl(142 76% 47%);
+  --success-foreground: hsl(210 40% 98%);
+
+  --warning: hsl(47 96% 53%);
+  --warning-foreground: hsl(210 40% 98%);
+
+  /* Sidebar — light */
+  --sidebar-background: hsl(0 0% 98%);
+  --sidebar-foreground: hsl(222.2 84% 4.9%);
+  --sidebar-primary: hsl(198 89% 45%);
+  --sidebar-primary-foreground: hsl(210 40% 98%);
+  --sidebar-accent: hsl(210 40% 95%);
+  --sidebar-accent-foreground: hsl(222.2 84% 4.9%);
+  --sidebar-border: hsl(214.3 31.8% 91.4%);
   --sidebar-ring: hsl(198 89% 50%);
 }
 

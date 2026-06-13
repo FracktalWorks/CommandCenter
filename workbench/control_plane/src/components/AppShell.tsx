@@ -27,8 +27,7 @@ import { X, Monitor, Smartphone, MoreHorizontal, LogOut, Command } from "lucide-
 import Sidebar from "@/components/Sidebar";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useActiveSessions } from "@/hooks/useActiveSessions";
-import { NAV_SECTIONS } from "@/lib/nav";
-
+import { NAV_SECTIONS } from "@/lib/nav";import { ThemeToggleMenuItem } from "@/components/ThemeToggle";
 // ---------------------------------------------------------------------------
 // Mobile drawer context — lets child pages inject content into the hamburger
 // drawer without AppShell needing to know about sessions or filters.
@@ -216,6 +215,7 @@ function MobileBottomNav({
         ))}
       </nav>
       <div className="mt-auto border-t border-border p-3 space-y-2">
+        <ThemeToggleMenuItem onClick={close} />
         <button
           onClick={() => { toggleView(); close(); }}
           className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition"
@@ -316,6 +316,7 @@ function OverflowMenu({ toggleView }: { toggleView: () => void }) {
             onClick={() => setOpen(false)}
           />
           <div className="absolute right-0 top-full mt-1 z-50 w-48 rounded-xl border border-border bg-popover py-1 shadow-lg chat-fade-in tech-glass-subtle">
+            <ThemeToggleMenuItem onClick={() => setOpen(false)} />
             <button
               onClick={() => {
                 toggleView();

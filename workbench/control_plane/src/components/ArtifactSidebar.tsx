@@ -109,7 +109,7 @@ function fileIcon(entry: FileEntry) {
     return <FileText size={13} className="shrink-0 text-red-400" />;
   if (["xlsx", "xls", "csv"].includes(ext))
     return <FileSpreadsheet size={13} className="shrink-0 text-emerald-400" />;
-  return <File size={13} className="shrink-0 text-zinc-400" />;
+  return <File size={13} className="shrink-0 text-muted-foreground" />;
 }
 
 // ─── TreeNodeRow ─────────────────────────────────────────────────────────────
@@ -140,13 +140,13 @@ function TreeNodeRow({
     return (
       <div>
         <button
-          className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-xs text-zinc-400 hover:bg-zinc-800 transition-colors"
+          className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-xs text-muted-foreground hover:bg-secondary transition-colors"
           style={{ paddingLeft }}
           onClick={() => setExpanded((e) => !e)}
         >
 
           {expanded ? <ChevronDown size={11} className="shrink-0" /> : <FolderArrow size={11} className="shrink-0" />}
-          <span className="truncate font-medium text-zinc-300">{node.name || "/"}</span>
+          <span className="truncate font-medium text-foreground">{node.name || "/"}</span>
         </button>
         {expanded && children.map((child) => (
           <TreeNodeRow key={child.path} node={child} depth={depth + 1} onFileOpen={onFileOpen} sessionId={sessionId} onDeleteFile={onDeleteFile} />
@@ -176,19 +176,19 @@ function TreeNodeRow({
 
   return (
     <div
-      className="group flex items-center gap-1.5 rounded px-1 py-0.5 text-xs text-zinc-400 hover:bg-zinc-800 cursor-pointer transition-colors"
+      className="group flex items-center gap-1.5 rounded px-1 py-0.5 text-xs text-muted-foreground hover:bg-secondary cursor-pointer transition-colors"
       style={{ paddingLeft: paddingLeft + 14 }}
       onDoubleClick={() => onFileOpen(entry)}
       title={`${entry.path} · ${formatBytes(entry.size)}${deletable ? "\nClick 🗑 to delete" : "\nProtected file"}\nDouble-click to open`}
     >
       {fileIcon(entry)}
       <span className="flex-1 truncate">{entry.name}</span>
-      <span className="shrink-0 text-zinc-600 text-[10px]">{formatBytes(entry.size)}</span>
+      <span className="shrink-0 text-muted-foreground text-[10px]">{formatBytes(entry.size)}</span>
       <a
         href={downloadUrl}
         download={entry.name}
         onClick={(e) => e.stopPropagation()}
-        className="shrink-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-zinc-500 hover:text-blue-400 transition-all p-0.5"
+        className="shrink-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-muted-foreground hover:text-blue-400 transition-all p-0.5"
         title={`Download ${entry.name}`}
       >
         <Download size={12} />
@@ -196,7 +196,7 @@ function TreeNodeRow({
       {deletable && (
         <button
           onClick={handleDelete}
-          className="shrink-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-zinc-500 hover:text-red-400 transition-all p-0.5"
+          className="shrink-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-muted-foreground hover:text-red-400 transition-all p-0.5"
           title={`Delete ${entry.name}`}
         >
           <Trash2 size={12} />
@@ -284,23 +284,23 @@ export default function ArtifactSidebar({
     <aside
       className={
         fullWidth
-          ? "h-full w-full border-l border-zinc-800 bg-zinc-900 flex flex-col"
-          : `shrink-0 border-l border-zinc-800 bg-zinc-900/40 flex flex-col transition-all duration-200 ${
+          ? "h-full w-full border-l border-border bg-card flex flex-col"
+          : `shrink-0 border-l border-border bg-card/40 flex flex-col transition-all duration-200 ${
               open ? "w-64" : "w-10"
             }`
       }
     >
       {/* Header */}
       <div
-        className={`flex items-center border-b border-zinc-800 ${
+        className={`flex items-center border-b border-border ${
           open ? "justify-between px-3 py-2.5" : "justify-center py-2.5"
         }`}
       >
         {open && (
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-zinc-300">Files</span>
+            <span className="text-xs font-semibold text-foreground">Files</span>
             {files.length > 0 && (
-              <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-500">
+              <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
                 {files.length}
               </span>
             )}
@@ -310,7 +310,7 @@ export default function ArtifactSidebar({
           {open && (
             <button
               onClick={fetchTree}
-              className="rounded p-1 text-zinc-600 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
+              className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
               title="Refresh file tree"
             >
               <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
@@ -318,7 +318,7 @@ export default function ArtifactSidebar({
           )}
           <button
             onClick={onToggle}
-            className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
+            className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
             title={open ? "Collapse file browser" : "Expand file browser"}
           >
             {open ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
@@ -330,7 +330,7 @@ export default function ArtifactSidebar({
       {open && (
         <div className="flex flex-col flex-1 overflow-y-auto p-1.5 min-h-0">
           {loading && (
-            <div className="flex items-center gap-1.5 px-2 py-3 text-xs text-zinc-600">
+            <div className="flex items-center gap-1.5 px-2 py-3 text-xs text-muted-foreground">
               <RefreshCw size={11} className="animate-spin" />
               Loading…
             </div>
@@ -338,10 +338,10 @@ export default function ArtifactSidebar({
 
           {!loading && offline && (
             <div className="px-2 py-4 text-center">
-              <p className="text-xs text-zinc-600 leading-relaxed">
+              <p className="text-xs text-muted-foreground leading-relaxed">
                 Gateway offline.
               </p>
-              <p className="text-[10px] text-zinc-700 mt-1">
+              <p className="text-[10px] text-muted-foreground/70 mt-1">
                 Start the backend to browse agent files.
               </p>
             </div>
@@ -349,10 +349,10 @@ export default function ArtifactSidebar({
 
           {!loading && !offline && files.length === 0 && (
             <div className="px-2 py-4 text-center">
-              <p className="text-xs text-zinc-600 leading-relaxed">
+              <p className="text-xs text-muted-foreground leading-relaxed">
                 No files yet.
               </p>
-              <p className="text-[10px] text-zinc-700 mt-1">
+              <p className="text-[10px] text-muted-foreground/70 mt-1">
                 Artifacts appear here as the agent creates them.
               </p>
             </div>
@@ -368,7 +368,7 @@ export default function ArtifactSidebar({
       {!open && (
         <div className="flex flex-1 items-center justify-center">
           <span
-            className="text-[10px] text-zinc-600 font-semibold tracking-widest"
+            className="text-[10px] text-muted-foreground font-semibold tracking-widest"
             style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
           >
             FILES

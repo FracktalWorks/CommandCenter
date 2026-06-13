@@ -870,7 +870,7 @@ export default function AgentChat({
                     <span className="text-[10px] text-muted-foreground/40 font-medium shrink-0">
                       {new Date(msg.timestamp).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
                     </span>
-                    <div className="flex-1 h-px bg-zinc-800" />
+                    <div className="flex-1 h-px bg-secondary" />
                   </div>
                 )}
                 <MessageBubble message={msg} sessionId={sessionId} onChoice={handleChoice}
@@ -923,7 +923,7 @@ export default function AgentChat({
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
             {queuedCount} message{queuedCount > 1 ? "s" : ""} queued
             <button type="button" onClick={() => { queueRef.current = []; setQueuedCount(0); }}
-              className="text-zinc-500 hover:text-zinc-300 underline">clear</button>
+              className="text-muted-foreground hover:text-foreground underline">clear</button>
           </div>
         )}
 
@@ -983,7 +983,7 @@ export default function AgentChat({
                               </span>
                               {m === sendMode && <span className="text-emerald-400 text-[10px]">✓</span>}
                             </div>
-                            <div className="text-zinc-500 mt-0.5 text-[10px]">
+                            <div className="text-muted-foreground mt-0.5 text-[10px]">
                               {m === "send" ? "Send now (queues if busy)"
                                 : m === "queue" ? "Wait for current reply, then send"
                                 : "Interrupt current reply and send now"}
@@ -1065,7 +1065,7 @@ export default function AgentChat({
                 )}
               </div>
 
-              <span className="w-px h-3.5 bg-zinc-700/60 shrink-0" />
+              <span className="w-px h-3.5 bg-secondary/60 shrink-0" />
 
               {/* Thinking mode — compact dropdown (saves space, easier tap on mobile) */}
               <div className="relative">
@@ -1087,18 +1087,18 @@ export default function AgentChat({
                           <span className="font-medium">{tm.label}</span>
                           {thinkMode === tm.mode && <span className="text-emerald-400 text-[10px]">✓</span>}
                         </div>
-                        <div className="text-zinc-500 mt-0.5 text-[10px]">{tm.title}</div>
+                        <div className="text-muted-foreground mt-0.5 text-[10px]">{tm.title}</div>
                       </button>
                     ))}
                   </div>
                 )}
               </div>
 
-              <span className="ml-auto hidden sm:inline text-zinc-600 text-[10px]">
+              <span className="ml-auto hidden sm:inline text-muted-foreground text-[10px]">
                 {isLoading && sendMode !== "send" && (
                   <span className="mr-2 text-amber-400">{sendMode === "queue" ? "⏱ Queue" : "⤳ Steer"} mode</span>
                 )}
-                <kbd className="text-zinc-600">⏎</kbd> send · <kbd className="text-zinc-600">⇧⏎</kbd> newline
+                <kbd className="text-muted-foreground">⏎</kbd> send · <kbd className="text-muted-foreground">⇧⏎</kbd> newline
               </span>
             </div>
           </div>
@@ -1181,7 +1181,7 @@ function MessageBubble({
       }
     }
     return (
-      <div className="text-center text-xs text-zinc-600 italic py-1">
+      <div className="text-center text-xs text-muted-foreground italic py-1">
         {content}
       </div>
     );
@@ -1223,13 +1223,13 @@ function MessageBubble({
         {editing ? (
           /* ═══ Edit mode ═══ */
           <div className="w-full max-w-full sm:max-w-[85%]">
-            <div className="rounded-2xl rounded-tr-sm border-2 border-amber-500/50 bg-zinc-800 shadow-lg shadow-amber-500/5 overflow-hidden">
+            <div className="rounded-2xl rounded-tr-sm border-2 border-amber-500/50 bg-secondary shadow-lg shadow-amber-500/5 overflow-hidden">
               {/* Edit header */}
-              <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-700/60 bg-zinc-800/80">
+              <div className="flex items-center justify-between px-4 py-2 border-b border-border/60 bg-secondary/80">
                 <span className="text-[11px] text-amber-400/80 font-medium">
                   ✏️ Editing message
                 </span>
-                <span className="text-[10px] text-zinc-500 hidden sm:block">
+                <span className="text-[10px] text-muted-foreground hidden sm:block">
                   Enter to send · Esc to cancel · Shift+Enter for new line
                 </span>
               </div>
@@ -1242,25 +1242,25 @@ function MessageBubble({
                   onChange={handleEditInput}
                   onKeyDown={handleEditKeyDown}
                   rows={3}
-                  className="w-full resize-none rounded-xl bg-zinc-900 border border-zinc-600 px-4 py-3 text-[16px] sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-amber-500/60 transition-colors"
+                  className="w-full resize-none rounded-xl bg-card border border-border px-4 py-3 text-[16px] sm:text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-amber-500/60 transition-colors"
                   style={{ minHeight: "60px", maxHeight: "300px" }}
                 />
               </div>
 
               {/* Action buttons */}
-              <div className="flex items-center justify-between px-4 py-2.5 border-t border-zinc-700/60 bg-zinc-800/60">
+              <div className="flex items-center justify-between px-4 py-2.5 border-t border-border/60 bg-secondary/60">
                 <button
                   onClick={() => { setEditing(false); setEditText(message.content); }}
-                  className="text-[12px] px-3 py-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/60 transition-colors"
+                  className="text-[12px] px-3 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
                 >
                   Cancel
                 </button>
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-zinc-500">{editText.length} chars</span>
+                  <span className="text-[10px] text-muted-foreground">{editText.length} chars</span>
                   <button
                     onClick={handleEditSubmit}
                     disabled={!editText.trim()}
-                    className="text-[12px] px-4 py-1.5 rounded-lg bg-zinc-100 text-zinc-900 font-semibold disabled:opacity-30 hover:bg-white transition-colors flex items-center gap-1.5"
+                    className="text-[12px] px-4 py-1.5 rounded-lg bg-primary text-primary-foreground font-semibold disabled:opacity-30 hover:opacity-90 tech-transition flex items-center gap-1.5"
                   >
                     <span>↑</span> Send
                   </button>
@@ -1273,7 +1273,7 @@ function MessageBubble({
           <div className="max-w-[88%] sm:max-w-[78%]">
             <div
               onDoubleClick={() => { setEditText(message.content); setEditing(true); }}
-              className="px-4 py-2.5 text-[13px] sm:text-sm leading-relaxed bg-zinc-700/90 text-zinc-100 rounded-2xl rounded-tr-md cursor-pointer select-none hover:bg-zinc-700 transition-colors"
+              className="px-4 py-2.5 text-[13px] sm:text-sm leading-relaxed bg-secondary/90 text-foreground rounded-2xl rounded-tr-md cursor-pointer select-none hover:bg-secondary transition-colors"
               title="Double-click to edit"
             >
               <p className="whitespace-pre-wrap break-words">{message.content}</p>
@@ -1287,7 +1287,7 @@ function MessageBubble({
                   onEdit={() => { setEditText(message.content); setEditing(true); }}
                 />
               )}
-              <div className="text-[10px] text-zinc-500">{timestamp}</div>
+              <div className="text-[10px] text-muted-foreground">{timestamp}</div>
             </div>
           </div>
         )}
@@ -1337,7 +1337,7 @@ function MessageBubble({
               role="assistant"
             />
           )}
-          <div className="text-[10px] text-zinc-600">{timestamp}</div>
+          <div className="text-[10px] text-muted-foreground">{timestamp}</div>
         </div>
       )}
     </div>

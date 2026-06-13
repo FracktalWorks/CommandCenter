@@ -22,7 +22,7 @@ interface GenerativeUIPanelProps {
 /** Render a primitive/array/object value as compact, readable JSX. */
 function JsonView({ value }: { value: Json }): React.ReactElement {
   if (value === null || value === undefined) {
-    return <span className="text-zinc-600">—</span>;
+    return <span className="text-muted-foreground">—</span>;
   }
   if (Array.isArray(value)) {
     // Array of objects → table; array of primitives → comma list.
@@ -36,7 +36,7 @@ function JsonView({ value }: { value: Json }): React.ReactElement {
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead>
-              <tr className="border-b border-zinc-700 text-zinc-400">
+              <tr className="border-b border-border text-muted-foreground">
                 {cols.map((c) => (
                   <th key={c} className="px-2 py-1 font-medium">
                     {c}
@@ -46,9 +46,9 @@ function JsonView({ value }: { value: Json }): React.ReactElement {
             </thead>
             <tbody>
               {value.map((row, i) => (
-                <tr key={i} className="border-b border-zinc-800/60">
+                <tr key={i} className="border-b border-border/60">
                   {cols.map((c) => (
-                    <td key={c} className="px-2 py-1 align-top text-zinc-200">
+                    <td key={c} className="px-2 py-1 align-top text-foreground">
                       <JsonView value={(row as Record<string, unknown>)[c]} />
                     </td>
                   ))}
@@ -60,7 +60,7 @@ function JsonView({ value }: { value: Json }): React.ReactElement {
       );
     }
     return (
-      <span className="text-zinc-200">
+      <span className="text-foreground">
         {value.map((v) => String(v)).join(", ")}
       </span>
     );
@@ -70,8 +70,8 @@ function JsonView({ value }: { value: Json }): React.ReactElement {
       <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
         {Object.entries(value as Record<string, unknown>).map(([k, v]) => (
           <div key={k} className="contents">
-            <dt className="text-zinc-400">{k}</dt>
-            <dd className="text-zinc-200">
+            <dt className="text-muted-foreground">{k}</dt>
+            <dd className="text-foreground">
               <JsonView value={v} />
             </dd>
           </div>
@@ -79,7 +79,7 @@ function JsonView({ value }: { value: Json }): React.ReactElement {
       </dl>
     );
   }
-  return <span className="text-zinc-200">{String(value)}</span>;
+  return <span className="text-foreground">{String(value)}</span>;
 }
 
 export default function GenerativeUIPanel({
@@ -104,13 +104,13 @@ export default function GenerativeUIPanel({
       {open && (
         <div className="space-y-3 px-3 pb-3">
           {hasState && (
-            <div className="rounded-md bg-zinc-900/50 p-2">
+            <div className="rounded-md bg-card/50 p-2">
               <JsonView value={agentState} />
             </div>
           )}
           {hasCustom &&
             customEvents!.map((ev, i) => (
-              <div key={i} className="rounded-md bg-zinc-900/50 p-2">
+              <div key={i} className="rounded-md bg-card/50 p-2">
                 <div className="mb-1 text-[10px] uppercase tracking-wide text-sky-400/80">
                   {ev.name || "custom"}
                 </div>

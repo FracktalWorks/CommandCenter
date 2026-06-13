@@ -158,10 +158,10 @@ function PendingCommits({ agentName }: { agentName: string }) {
   );
 
   return (
-    <div className="mt-3 border-t border-zinc-800 pt-3">
+    <div className="mt-3 border-t border-border pt-3">
       <button
         onClick={toggle}
-        className="flex items-center gap-2 text-xs text-zinc-500 hover:text-zinc-300 transition-colors w-full text-left"
+        className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors w-full text-left"
       >
         <span className="font-medium">Self-mutation commits</span>
         {pendingCount > 0 && (
@@ -169,8 +169,8 @@ function PendingCommits({ agentName }: { agentName: string }) {
             {pendingCount}
           </span>
         )}
-        {loading && <span className="text-[10px] text-zinc-600">loading…</span>}
-        <span className="ml-auto text-zinc-700">{open ? "▲" : "▼"}</span>
+        {loading && <span className="text-[10px] text-muted-foreground">loading…</span>}
+        <span className="ml-auto text-muted-foreground/70">{open ? "▲" : "▼"}</span>
       </button>
 
       {open && (
@@ -183,7 +183,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
           )}
 
           {fetched && rows.length === 0 && (
-            <p className="text-xs text-zinc-700 italic">No commits yet.</p>
+            <p className="text-xs text-muted-foreground/70 italic">No commits yet.</p>
           )}
 
           {/* Decision-required entries: approve/reject must happen before dismiss */}
@@ -218,18 +218,18 @@ function PendingCommits({ agentName }: { agentName: string }) {
                     {isEvalFailed ? "⚠ Eval failed" : "Awaiting review"}
                   </span>
                   {m.commit_message && (
-                    <span className="font-mono text-zinc-300 line-clamp-1 flex-1">{m.commit_message}</span>
+                    <span className="font-mono text-foreground line-clamp-1 flex-1">{m.commit_message}</span>
                   )}
                 </div>
 
                 {/* SHA + timestamp */}
-                <div className="mt-1 flex items-center gap-3 text-zinc-600">
+                <div className="mt-1 flex items-center gap-3 text-muted-foreground">
                   {m.commit_sha && <span className="font-mono">{m.commit_sha.slice(0, 8)}</span>}
                   <span>{new Date(m.at).toLocaleString("en-IN")}</span>
                 </div>
 
                 {m.test_summary && (
-                  <div className={`mt-1 ${isEvalFailed ? "text-amber-500/80" : "text-zinc-500"}`}>
+                  <div className={`mt-1 ${isEvalFailed ? "text-amber-500/80" : "text-muted-foreground"}`}>
                     {m.test_summary}
                   </div>
                 )}
@@ -245,13 +245,13 @@ function PendingCommits({ agentName }: { agentName: string }) {
                 {m.id && (
                   <button
                     onClick={() => loadDiff(m.id!)}
-                    className="mt-1.5 text-zinc-600 hover:text-zinc-400 underline underline-offset-2"
+                    className="mt-1.5 text-muted-foreground hover:text-muted-foreground underline underline-offset-2"
                   >
                     {expandDiff[m.id] ? "Hide diff" : "Show diff"}
                   </button>
                 )}
                 {m.id && expandDiff[m.id] && diffs[m.id] !== undefined && (
-                  <pre className="mt-2 overflow-x-auto max-h-48 rounded bg-zinc-950 p-2 text-[10px] text-zinc-400 border border-zinc-800 whitespace-pre-wrap">
+                  <pre className="mt-2 overflow-x-auto max-h-48 rounded bg-background p-2 text-[10px] text-muted-foreground border border-border whitespace-pre-wrap">
                     {diffs[m.id] || "(empty diff)"}
                   </pre>
                 )}
@@ -319,7 +319,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
           {terminalRows.length > 0 && (
             <>
               {decisionRows.length > 0 && (
-                <div className="border-t border-zinc-800/60 pt-1 text-[10px] text-zinc-600 uppercase tracking-wide">
+                <div className="border-t border-border/60 pt-1 text-[10px] text-muted-foreground uppercase tracking-wide">
                   History
                 </div>
               )}
@@ -331,7 +331,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
                 return (
                   <div
                     key={key}
-                    className="relative rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 text-xs"
+                    className="relative rounded-lg border border-border bg-card/40 p-3 text-xs"
                   >
                     {/* X = dismiss from view (only for terminal entries) */}
                     <button
@@ -343,7 +343,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
                           : undefined
                       }
                       disabled={!!busy[key]}
-                      className="absolute top-2 right-2 rounded p-0.5 text-zinc-600 hover:bg-zinc-800 hover:text-zinc-400 transition-colors disabled:opacity-30"
+                      className="absolute top-2 right-2 rounded p-0.5 text-muted-foreground hover:bg-secondary hover:text-muted-foreground transition-colors disabled:opacity-30"
                       title="Dismiss"
                     >
                       <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -357,10 +357,10 @@ function PendingCommits({ agentName }: { agentName: string }) {
                           isApproved
                             ? "border-emerald-700/50 bg-emerald-900/30 text-emerald-300"
                             : isRejected
-                            ? "border-zinc-700/50 bg-zinc-800 text-zinc-500"
+                            ? "border-border/50 bg-secondary text-muted-foreground"
                             : m.status === "failed"
                             ? "border-red-700/50 bg-red-900/30 text-red-300"
-                            : "border-zinc-700/50 bg-zinc-800 text-zinc-500"
+                            : "border-border/50 bg-secondary text-muted-foreground"
                         }`}
                       >
                         {isApproved
@@ -372,15 +372,15 @@ function PendingCommits({ agentName }: { agentName: string }) {
                           : m.status}
                       </span>
                       {m.commit_message && (
-                        <span className="font-mono text-zinc-500 line-clamp-1">{m.commit_message}</span>
+                        <span className="font-mono text-muted-foreground line-clamp-1">{m.commit_message}</span>
                       )}
                     </div>
 
-                    <div className="mt-1 flex items-center gap-3 text-zinc-700">
+                    <div className="mt-1 flex items-center gap-3 text-muted-foreground/70">
                       {m.commit_sha && <span className="font-mono">{m.commit_sha.slice(0, 8)}</span>}
                       <span>{new Date(m.at).toLocaleString("en-IN")}</span>
                       {m.reviewed_by && (
-                        <span className="text-zinc-600">
+                        <span className="text-muted-foreground">
                           · {m.reviewed_by.startsWith("cascade:") ? "auto-approved" : m.reviewed_by}
                         </span>
                       )}
@@ -389,13 +389,13 @@ function PendingCommits({ agentName }: { agentName: string }) {
                     {m.id && (
                       <button
                         onClick={() => loadDiff(m.id!)}
-                        className="mt-1.5 text-zinc-700 hover:text-zinc-500 underline underline-offset-2"
+                        className="mt-1.5 text-muted-foreground/70 hover:text-muted-foreground underline underline-offset-2"
                       >
                         {expandDiff[m.id] ? "Hide diff" : "Show diff"}
                       </button>
                     )}
                     {m.id && expandDiff[m.id] && diffs[m.id] !== undefined && (
-                      <pre className="mt-2 overflow-x-auto max-h-48 rounded bg-zinc-950 p-2 text-[10px] text-zinc-400 border border-zinc-800 whitespace-pre-wrap">
+                      <pre className="mt-2 overflow-x-auto max-h-48 rounded bg-background p-2 text-[10px] text-muted-foreground border border-border whitespace-pre-wrap">
                         {diffs[m.id] || "(empty diff)"}
                       </pre>
                     )}
@@ -625,14 +625,14 @@ function AddAgentModal({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl"
+        className="w-full max-w-lg rounded-xl border border-border bg-card shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+        <div className="flex items-center justify-between border-b border-border px-5 py-4">
           <div>
-            <div className="text-sm font-semibold text-zinc-100">Add Agent</div>
-            <div className="text-xs text-zinc-500 mt-0.5">
+            <div className="text-sm font-semibold text-foreground">Add Agent</div>
+            <div className="text-xs text-muted-foreground mt-0.5">
               {step === "form" && "Enter a GitHub repo or a local directory path"}
               {step === "github" && "Connect GitHub to access private repos"}
               {step === "registering" && "Registering agent…"}
@@ -642,7 +642,7 @@ function AddAgentModal({
           </div>
           <button
             onClick={onClose}
-            className="text-zinc-500 hover:text-zinc-300 transition-colors"
+            className="text-muted-foreground hover:text-foreground transition-colors"
           >
             ✕
           </button>
@@ -654,7 +654,7 @@ function AddAgentModal({
           {step === "form" && (
             <div className="flex flex-col gap-4">
               <div>
-                <label className="mb-1 block text-xs font-medium text-zinc-400">
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">
                   GitHub Repo or Local Path <span className="text-red-400">*</span>
                 </label>
                 <div className="relative">
@@ -663,7 +663,7 @@ function AddAgentModal({
                     placeholder="owner/repo  ·  https://github.com/owner/repo  ·  C:\path\to\agent"
                     value={form.repoUrl}
                     onChange={(e) => handleRepoUrlChange(e.target.value)}
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none pr-8"
+                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none pr-8"
                   />
                   {configLoading && (
                     <div className="absolute right-2.5 top-2.5 h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
@@ -679,7 +679,7 @@ function AddAgentModal({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-zinc-400">
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
                     Agent name <span className="text-red-400">*</span>
                   </label>
                   <input
@@ -687,37 +687,37 @@ function AddAgentModal({
                     placeholder="my-agent"
                     value={form.name}
                     onChange={(e) => handleField("name", e.target.value)}
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
                   />
-                  <p className="mt-1 text-xs text-zinc-600">lowercase, hyphens only</p>
+                  <p className="mt-1 text-xs text-muted-foreground">lowercase, hyphens only</p>
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-zinc-400">Tags</label>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Tags</label>
                   <input
                     type="text"
                     placeholder="sales, outbound"
                     value={form.tags}
                     onChange={(e) => handleField("tags", e.target.value)}
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
                   />
-                  <p className="mt-1 text-xs text-zinc-600">comma-separated</p>
+                  <p className="mt-1 text-xs text-muted-foreground">comma-separated</p>
                 </div>
               </div>
 
               <div>
-                <label className="mb-1 block text-xs font-medium text-zinc-400">Description</label>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">Description</label>
                 <input
                   type="text"
                   placeholder="What does this agent do?"
                   value={form.description}
                   onChange={(e) => handleField("description", e.target.value)}
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+                  className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-zinc-400">
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
                     Mandatory integrations
                   </label>
                   <input
@@ -725,11 +725,11 @@ function AddAgentModal({
                     placeholder="zoho-crm, apollo"
                     value={form.integrations}
                     onChange={(e) => handleField("integrations", e.target.value)}
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-zinc-400">
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
                     Optional integrations
                   </label>
                   <input
@@ -737,7 +737,7 @@ function AddAgentModal({
                     placeholder="instantly, smtp"
                     value={form.optionalIntegrations}
                     onChange={(e) => handleField("optionalIntegrations", e.target.value)}
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
                   />
                 </div>
               </div>
@@ -745,7 +745,7 @@ function AddAgentModal({
               <div className="flex justify-end gap-2 pt-1">
                 <button
                   onClick={onClose}
-                  className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 transition-colors"
+                  className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:border-primary/30 hover:text-foreground transition-colors"
                 >
                   Cancel
                 </button>
@@ -764,9 +764,9 @@ function AddAgentModal({
           {/* ── Step: GitHub OAuth ── */}
           {step === "github" && githubStatus && (
             <div>
-              <p className="mb-4 text-sm text-zinc-400">
+              <p className="mb-4 text-sm text-muted-foreground">
                 Connect GitHub so CommandCenter can clone{" "}
-                <span className="font-mono text-zinc-200">{form.repoUrl}</span> and access
+                <span className="font-mono text-foreground">{form.repoUrl}</span> and access
                 private repositories.
               </p>
               <GitHubDeviceConnect
@@ -775,7 +775,7 @@ function AddAgentModal({
               />
               <button
                 onClick={() => doRegister()}
-                className="mt-3 text-xs text-zinc-600 hover:text-zinc-400 underline"
+                className="mt-3 text-xs text-muted-foreground hover:text-muted-foreground underline"
               >
                 Skip — repository is public
               </button>
@@ -787,10 +787,10 @@ function AddAgentModal({
             <div className="flex flex-col items-center gap-4 py-8">
               <div className="h-8 w-8 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
               <div className="text-center">
-                <p className="text-sm text-zinc-300 font-medium">
+                <p className="text-sm text-foreground font-medium">
                   {registerPhase === "saving" ? "Saving agent…" : "Cloning repository…"}
                 </p>
-                <p className="text-xs text-zinc-500 mt-1">
+                <p className="text-xs text-muted-foreground mt-1">
                   {registerPhase === "saving"
                     ? "Writing to the agent registry"
                     : /^([A-Za-z]:[\\/]|\/)/.test(form.repoUrl.trim())
@@ -798,12 +798,12 @@ function AddAgentModal({
                       : `Pulling ${form.repoUrl.trim().split("/").slice(-2).join("/")} in the background`}
                 </p>
               </div>
-              <div className="flex items-center gap-3 text-xs text-zinc-600">
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
                 <span className={registerPhase === "saving" ? "text-blue-400" : "text-emerald-500"}>
                   {registerPhase === "saving" ? "● saving" : "✓ saved"}
                 </span>
-                <span className="text-zinc-700">→</span>
-                <span className={registerPhase === "cloning" ? "text-blue-400" : "text-zinc-600"}>
+                <span className="text-muted-foreground/70">→</span>
+                <span className={registerPhase === "cloning" ? "text-blue-400" : "text-muted-foreground"}>
                   {registerPhase === "cloning" ? "● cloning" : "○ clone"}
                 </span>
               </div>
@@ -814,9 +814,9 @@ function AddAgentModal({
           {step === "done" && addedAgent && (
             <div className="flex flex-col gap-4 py-2">
               {/* Mini agent card preview — same style as AgentCard */}
-              <div className="rounded-xl border border-zinc-700 bg-zinc-800/60 p-4">
+              <div className="rounded-xl border border-border bg-secondary/60 p-4">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
-                  <span className="text-sm font-semibold text-zinc-100">{addedAgent.name}</span>
+                  <span className="text-sm font-semibold text-foreground">{addedAgent.name}</span>
                   <span className="shrink-0 rounded-full bg-blue-500/15 px-2 py-0.5 text-xs text-blue-400">custom</span>
                   {addedAgent.local_path && (
                     <span className="shrink-0 rounded-full bg-violet-500/15 px-2 py-0.5 text-xs text-violet-400">local</span>
@@ -833,31 +833,31 @@ function AddAgentModal({
                   <span className="shrink-0 rounded-full bg-green-500/15 px-2 py-0.5 text-xs text-green-400">live</span>
                 </div>
                 {addedAgent.description && (
-                  <p className="text-xs text-zinc-400 mb-2">{addedAgent.description}</p>
+                  <p className="text-xs text-muted-foreground mb-2">{addedAgent.description}</p>
                 )}
                 {(addedAgent.tags?.length ?? 0) > 0 && (
                   <div className="flex flex-wrap gap-1 mb-2">
                     {addedAgent.tags!.map((t) => (
-                      <span key={t} className="rounded-full bg-zinc-700 px-2 py-0.5 text-xs text-zinc-400">{t}</span>
+                      <span key={t} className="rounded-full bg-secondary px-2 py-0.5 text-xs text-muted-foreground">{t}</span>
                     ))}
                   </div>
                 )}
                 {((addedAgent.integrations?.length ?? 0) > 0 || (addedAgent.optional_integrations?.length ?? 0) > 0) && (
                   <div className="flex flex-wrap gap-1">
                     {addedAgent.integrations?.map((i) => (
-                      <span key={i} className="inline-flex items-center gap-1 rounded-full border border-zinc-600 px-2 py-0.5 text-xs text-zinc-400">
+                      <span key={i} className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">
                         · {i}
                       </span>
                     ))}
                     {addedAgent.optional_integrations?.map((i) => (
-                      <span key={i} className="inline-flex items-center gap-1 rounded-full border border-dashed border-zinc-700 px-2 py-0.5 text-xs text-zinc-500">
+                      <span key={i} className="inline-flex items-center gap-1 rounded-full border border-dashed border-border px-2 py-0.5 text-xs text-muted-foreground">
                         {i}
                       </span>
                     ))}
                   </div>
                 )}
                 {addedAgent.local_path ? (
-                  <div className="mt-2 flex items-center gap-1 text-xs text-zinc-600" title={addedAgent.local_path}>
+                  <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground" title={addedAgent.local_path}>
                     <svg className="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
                       <path d="M1 3.5A1.5 1.5 0 012.5 2h3.257c.466 0 .917.18 1.25.503l.69.69A.5.5 0 008.05 3.5H13.5A1.5 1.5 0 0115 5v7.5A1.5 1.5 0 0113.5 14h-11A1.5 1.5 0 011 12.5V3.5z"/>
                     </svg>
@@ -866,7 +866,7 @@ function AddAgentModal({
                 ) : addedAgent.repo_url ? (
                   <div className="mt-2">
                     <a href={addedAgent.repo_url} target="_blank" rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-xs text-zinc-600 hover:text-zinc-400">
+                      className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-muted-foreground">
                       <svg className="h-3 w-3" viewBox="0 0 16 16" fill="currentColor">
                         <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
                       </svg>
@@ -875,7 +875,7 @@ function AddAgentModal({
                   </div>
                 ) : null}
               </div>
-              <p className="text-xs text-zinc-500 text-center">
+              <p className="text-xs text-muted-foreground text-center">
                 {addedAgent.local_path
                   ? "Agent registered from local path — no cloning needed."
                   : "Repository is being cloned in the background — the agent will be ready shortly."}
@@ -901,7 +901,7 @@ function AddAgentModal({
               <div className="flex justify-end gap-2">
                 <button
                   onClick={() => setStep("form")}
-                  className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 transition-colors"
+                  className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:border-primary/30 hover:text-foreground transition-colors"
                 >
                   Back
                 </button>
@@ -927,10 +927,10 @@ const PROVIDER_ICON: Record<string, string> = {
 
 function ProviderRow({ p }: { p: ProviderInfo }) {
   return (
-    <div className="flex items-center gap-3 py-2 border-b border-zinc-800 last:border-0">
+    <div className="flex items-center gap-3 py-2 border-b border-border last:border-0">
       {/* Icon */}
       <span className={`w-7 h-7 rounded-md flex items-center justify-center text-xs font-bold shrink-0 ${
-        p.available ? "bg-zinc-700 text-zinc-200" : "bg-zinc-800/60 text-zinc-600"
+        p.available ? "bg-secondary text-foreground" : "bg-secondary/60 text-muted-foreground"
       }`}>
         {p.id === "github-copilot" ? (
           <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
@@ -945,7 +945,7 @@ function ProviderRow({ p }: { p: ProviderInfo }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className={`text-sm font-medium ${
-            p.available ? "text-zinc-100" : "text-zinc-500"
+            p.available ? "text-foreground" : "text-muted-foreground"
           }`}>{p.label}</span>
           {p.available ? (
             <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
@@ -953,8 +953,8 @@ function ProviderRow({ p }: { p: ProviderInfo }) {
               Active
             </span>
           ) : (
-            <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-500 border border-zinc-700">
-              <span className="w-1.5 h-1.5 rounded-full bg-zinc-600" />
+            <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground border border-border">
+              <span className="w-1.5 h-1.5 rounded-full bg-muted" />
               Not configured
             </span>
           )}
@@ -969,7 +969,7 @@ function ProviderRow({ p }: { p: ProviderInfo }) {
             </span>
           )}
         </div>
-        <p className="text-[11px] text-zinc-600 mt-0.5 truncate">{p.note}</p>
+        <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{p.note}</p>
       </div>
 
       {/* Tiers */}
@@ -977,8 +977,8 @@ function ProviderRow({ p }: { p: ProviderInfo }) {
         {p.tiers.map((t) => (
           <span key={t} className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
             p.available
-              ? "bg-zinc-800 text-zinc-400 border-zinc-700"
-              : "bg-zinc-900 text-zinc-700 border-zinc-800"
+              ? "bg-secondary text-muted-foreground border-border"
+              : "bg-card text-muted-foreground/70 border-border"
           }`}>
             {t}
           </span>
@@ -998,18 +998,18 @@ function ModelAccess({ models }: { models: ModelsStatus | null }) {
   const activeCount = models.providers.filter((p) => p.available).length;
 
   return (
-    <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/40">
+    <div className="mb-6 rounded-xl border border-border bg-card/40">
       {/* Header — always visible */}
       <button
         className="w-full flex items-center justify-between px-4 py-3 text-left"
         onClick={() => setOpen((v) => !v)}
       >
         <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wider text-zinc-400">LLM Model Access</span>
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">LLM Model Access</span>
           <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
             activeCount > 0
               ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-              : "bg-zinc-800 text-zinc-500 border-zinc-700"
+              : "bg-secondary text-muted-foreground border-border"
           }`}>
             {activeCount}/{models.providers.length} providers active
           </span>
@@ -1017,19 +1017,19 @@ function ModelAccess({ models }: { models: ModelsStatus | null }) {
             <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
               copilot.available
                 ? "bg-violet-500/10 text-violet-400 border-violet-500/20"
-                : "bg-zinc-800 text-zinc-600 border-zinc-700"
+                : "bg-secondary text-muted-foreground border-border"
             }`}>
               Copilot models: {copilot.available ? "✓ active" : "⚠ needs GITHUB_TOKEN"}
             </span>
           )}
         </div>
-        <span className="text-zinc-600 text-xs">{open ? "▲" : "▼"}</span>
+        <span className="text-muted-foreground text-xs">{open ? "▲" : "▼"}</span>
       </button>
 
       {open && (
-        <div className="px-4 pb-4 border-t border-zinc-800">
+        <div className="px-4 pb-4 border-t border-border">
           {/* Direct providers */}
-          <p className="text-[10px] uppercase tracking-wider text-zinc-600 mt-3 mb-1">Direct API keys (tier router)</p>
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mt-3 mb-1">Direct API keys (tier router)</p>
           <div>
             {direct.map((p) => <ProviderRow key={p.id} p={p} />)}
           </div>
@@ -1038,7 +1038,7 @@ function ModelAccess({ models }: { models: ModelsStatus | null }) {
           {copilot && (
             <>
               <div className="flex items-center justify-between mt-4 mb-1">
-                <p className="text-[10px] uppercase tracking-wider text-zinc-600">GitHub Copilot models (included in Copilot subscription)</p>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">GitHub Copilot models (included in Copilot subscription)</p>
                 {!copilot.available && (
                   <Link href="/integrations" className="text-[10px] text-violet-400 hover:text-violet-300 underline shrink-0 ml-2">
                     Configure in Integrations →
@@ -1051,24 +1051,24 @@ function ModelAccess({ models }: { models: ModelsStatus | null }) {
               <div className="mt-2 space-y-1">
                 {models.copilot_models.map((m) => (
                   <div key={m.alias} className={`flex items-center gap-3 rounded-lg px-3 py-2 ${
-                    copilot.available ? "bg-zinc-800/50" : "bg-zinc-900/40"
+                    copilot.available ? "bg-secondary/50" : "bg-card/40"
                   }`}>
                     <span className={`font-mono text-xs ${
-                      copilot.available ? "text-violet-300" : "text-zinc-600"
+                      copilot.available ? "text-violet-300" : "text-muted-foreground"
                     }`}>
                       {m.alias}
                     </span>
                     <span className={`text-xs flex-1 ${
-                      copilot.available ? "text-zinc-300" : "text-zinc-600"
+                      copilot.available ? "text-foreground" : "text-muted-foreground"
                     }`}>
                       {m.label}
                     </span>
-                    <span className="text-[11px] text-zinc-500">{m.description}</span>
+                    <span className="text-[11px] text-muted-foreground">{m.description}</span>
                     {m.suggested_tier && (
                       <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
                         copilot.available
-                          ? "bg-zinc-800 text-zinc-400 border-zinc-700"
-                          : "bg-zinc-900 text-zinc-700 border-zinc-800"
+                          ? "bg-secondary text-muted-foreground border-border"
+                          : "bg-card text-muted-foreground/70 border-border"
                       }`}>
                         → {m.suggested_tier}
                       </span>
@@ -1077,9 +1077,9 @@ function ModelAccess({ models }: { models: ModelsStatus | null }) {
                 ))}
               </div>
               {!copilot.available && (
-                <p className="mt-2 text-[11px] text-zinc-600">
-                  Set <code className="text-zinc-500">GITHUB_TOKEN</code> (PAT with{" "}
-                  <code className="text-zinc-500">copilot</code> scope) in the{" "}
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  Set <code className="text-muted-foreground">GITHUB_TOKEN</code> (PAT with{" "}
+                  <code className="text-muted-foreground">copilot</code> scope) in the{" "}
                   <Link href="/integrations" className="text-violet-400 hover:text-violet-300 underline">Integrations</Link>{" "}
                   panel to unlock GPT-4o, Claude Sonnet, and o3-mini at no extra per-token cost.
                 </p>
@@ -1133,11 +1133,11 @@ function AgentCard({
   const localPath = agent.local_path;
 
   return (
-    <div className="group relative rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 hover:border-zinc-700 transition-colors">
+    <div className="group relative rounded-xl border border-border bg-card/60 p-4 hover:border-primary/30 transition-colors">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-semibold text-zinc-100 truncate">{agent.name}</span>
+            <span className="text-sm font-semibold text-foreground truncate">{agent.name}</span>
             {agent.dynamic && (
               <span className="shrink-0 rounded-full bg-blue-500/15 px-2 py-0.5 text-xs text-blue-400">
                 custom
@@ -1161,7 +1161,7 @@ function AgentCard({
               className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${
                 agent.status === "live"
                   ? "bg-green-500/15 text-green-400"
-                  : "bg-zinc-700 text-zinc-500"
+                  : "bg-secondary text-muted-foreground"
               }`}
             >
               {agent.status}
@@ -1169,14 +1169,14 @@ function AgentCard({
           </div>
 
           {agent.description && (
-            <p className="mt-1 text-xs text-zinc-400 line-clamp-2">{agent.description}</p>
+            <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{agent.description}</p>
           )}
 
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {agent.tags?.map((t) => (
               <span
                 key={t}
-                className="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-500"
+                className="rounded-full bg-secondary px-2 py-0.5 text-xs text-muted-foreground"
               >
                 {t}
               </span>
@@ -1184,7 +1184,7 @@ function AgentCard({
           </div>
 
           {localPath ? (
-            <div className="mt-2 flex items-center gap-1 text-xs text-zinc-600" title={localPath}>
+            <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground" title={localPath}>
               <svg className="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
                 <path d="M1 3.5A1.5 1.5 0 012.5 2h3.257c.466 0 .917.18 1.25.503l.69.69A.5.5 0 008.05 3.5H13.5A1.5 1.5 0 0115 5v7.5A1.5 1.5 0 0113.5 14h-11A1.5 1.5 0 011 12.5V3.5z"/>
               </svg>
@@ -1201,7 +1201,7 @@ function AgentCard({
                 }
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1 text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-muted-foreground transition-colors"
               >
                 <svg className="h-3 w-3" viewBox="0 0 16 16" fill="currentColor">
                   <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
@@ -1239,10 +1239,10 @@ function AgentCard({
                             ? "border-emerald-700/50 text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20"
                             : state === "missing"
                             ? "border-red-700/50 text-red-400 bg-red-500/10 hover:bg-red-500/20"
-                            : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
+                            : "border-border text-muted-foreground hover:border-border"
                         }`}>
                           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                            state === "ok" ? "bg-emerald-400" : state === "missing" ? "bg-red-400" : "bg-zinc-600"
+                            state === "ok" ? "bg-emerald-400" : state === "missing" ? "bg-red-400" : "bg-muted"
                           }`} />
                           {intg?.label ?? i}
                           {state === "ok" && <span className="text-emerald-600 text-[10px]">✓</span>}
@@ -1269,10 +1269,10 @@ function AgentCard({
                         <span className={`inline-flex items-center gap-1.5 rounded-full border border-dashed px-2 py-0.5 text-xs cursor-pointer transition-colors ${
                           state === "ok"
                             ? "border-emerald-700/40 text-emerald-600 hover:bg-emerald-500/10"
-                            : "border-zinc-700 text-zinc-600 hover:border-zinc-600"
+                            : "border-border text-muted-foreground hover:border-border"
                         }`}>
                           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                            state === "ok" ? "bg-emerald-600" : "bg-zinc-700"
+                            state === "ok" ? "bg-emerald-600" : "bg-secondary"
                           }`} />
                           {intg?.label ?? i}
                         </span>
@@ -1316,7 +1316,7 @@ function AgentCard({
           {/* Chat shortcut — navigate to chat page */}
           <Link
             href={`/chat?agent=${encodeURIComponent(agent.name)}`}
-            className="inline-flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1 text-xs text-zinc-300 hover:border-zinc-500 hover:bg-zinc-700 transition-colors"
+            className="inline-flex items-center gap-1 rounded-lg border border-border bg-secondary px-2.5 py-1 text-xs text-foreground hover:border-primary/30 hover:bg-secondary transition-colors"
             title={`Open a chat with ${agent.name}`}
           >
             Chat →
@@ -1328,7 +1328,7 @@ function AgentCard({
           <div className="shrink-0">
             {confirming ? (
               <div className="flex items-center gap-1.5">
-                <span className="text-xs text-zinc-500">Remove?</span>
+                <span className="text-xs text-muted-foreground">Remove?</span>
                 <button
                   disabled={removing}
                   onClick={handleRemove}
@@ -1338,7 +1338,7 @@ function AgentCard({
                 </button>
                 <button
                   onClick={() => setConfirming(false)}
-                  className="rounded px-2 py-1 text-xs border border-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
+                  className="rounded px-2 py-1 text-xs border border-border text-muted-foreground hover:text-foreground transition-colors"
                 >
                   No
                 </button>
@@ -1346,7 +1346,7 @@ function AgentCard({
             ) : (
               <button
                 onClick={() => setConfirming(true)}
-                className="rounded p-1.5 text-zinc-500 hover:bg-red-900/30 hover:text-red-400 transition-colors mt-1"
+                className="rounded p-1.5 text-muted-foreground hover:bg-red-900/30 hover:text-red-400 transition-colors mt-1"
                 title="Remove agent"
               >
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1411,8 +1411,8 @@ export default function AgentsPage() {
       {/* Page header */}
       <div className="mb-8 flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-zinc-100">Agents</h1>
-          <p className="mt-1 text-sm text-zinc-500">
+          <h1 className="text-xl font-semibold text-foreground">Agents</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
             Manage MAF agents connected to this CommandCenter instance.
           </p>
         </div>
@@ -1426,7 +1426,7 @@ export default function AgentsPage() {
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-16 text-zinc-600 text-sm">
+        <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
           Loading agents…
         </div>
       ) : (
@@ -1436,7 +1436,7 @@ export default function AgentsPage() {
           {/* Built-in agents */}
           {builtIn.length > 0 && (
             <section className="mb-6">
-              <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-600">
+              <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Built-in ({builtIn.length})
               </h2>
               <div className="flex flex-col gap-3">
@@ -1449,12 +1449,12 @@ export default function AgentsPage() {
 
           {/* Custom agents */}
           <section>
-            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-600">
+            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
               Custom — from GitHub {custom.length > 0 && `(${custom.length})`}
             </h2>
             {custom.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-zinc-800 p-8 text-center">
-                <p className="text-sm text-zinc-500">No custom agents yet.</p>
+              <div className="rounded-xl border border-dashed border-border p-8 text-center">
+                <p className="text-sm text-muted-foreground">No custom agents yet.</p>
                 <button
                   onClick={() => setShowAddModal(true)}
                   className="mt-3 text-sm text-blue-500 hover:text-blue-400 underline"

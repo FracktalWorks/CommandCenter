@@ -29,7 +29,7 @@ export default function AgentStatusBar({
   const overflow = sorted.length - shown.length;
 
   return (
-    <div className="shrink-0 flex items-center gap-3 px-5 py-1.5 border-b border-zinc-800 bg-zinc-900/40 text-xs">
+    <div className="shrink-0 flex items-center gap-3 px-5 py-1.5 border-b border-border bg-card/40 text-xs">
       {/* Active agent */}
       <div className="flex items-center gap-1.5 shrink-0">
         <span
@@ -37,14 +37,14 @@ export default function AgentStatusBar({
             isActive ? "bg-sky-400 chat-pulse-dot" : "bg-emerald-500"
           }`}
         />
-        <span className="text-zinc-300 font-medium">{agentName}</span>
-        <span className="text-zinc-600">{isActive ? "working" : "ready"}</span>
+        <span className="text-foreground font-medium">{agentName}</span>
+        <span className="text-muted-foreground">{isActive ? "working" : "ready"}</span>
       </div>
 
       {/* Integration dots */}
       {shown.length > 0 && (
         <>
-          <div className="w-px h-3 bg-zinc-800" />
+          <div className="w-px h-3 bg-secondary" />
           <div className="flex items-center gap-2 min-w-0 overflow-hidden">
             {shown.map((s) => (
               <span
@@ -59,13 +59,13 @@ export default function AgentStatusBar({
                     s.configured ? "bg-emerald-500" : "bg-red-500"
                   }`}
                 />
-                <span className="text-zinc-500 truncate max-w-[100px]">
+                <span className="text-muted-foreground truncate max-w-[100px]">
                   {s.label ?? s.service}
                 </span>
               </span>
             ))}
             {overflow > 0 && (
-              <span className="text-zinc-600 shrink-0">+{overflow}</span>
+              <span className="text-muted-foreground shrink-0">+{overflow}</span>
             )}
           </div>
         </>

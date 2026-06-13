@@ -49,12 +49,12 @@ export default function ConfirmationCard({
       {(detail || context) && (
         <div className="px-4 py-3 space-y-2">
           {detail && (
-            <p className="text-[12px] sm:text-[13px] text-zinc-300 leading-relaxed">
+            <p className="text-[12px] sm:text-[13px] text-foreground leading-relaxed">
               {detail}
             </p>
           )}
           {context && (
-            <pre className="text-[11px] text-zinc-500 bg-zinc-900/60 rounded-lg p-2.5 overflow-x-auto whitespace-pre-wrap max-h-32 overflow-y-auto">
+            <pre className="text-[11px] text-muted-foreground bg-card/60 rounded-lg p-2.5 overflow-x-auto whitespace-pre-wrap max-h-32 overflow-y-auto">
               {context}
             </pre>
           )}
@@ -73,11 +73,11 @@ export default function ConfirmationCard({
         <button
           onClick={onReject}
           disabled={disabled}
-          className="text-[12px] px-4 py-1.5 rounded-lg bg-zinc-700 text-zinc-300 hover:bg-zinc-600 disabled:opacity-40 transition-colors"
+          className="text-[12px] px-4 py-1.5 rounded-lg bg-secondary text-foreground hover:bg-secondary disabled:opacity-40 transition-colors"
         >
           ✕ Reject
         </button>
-        <span className="text-[10px] text-zinc-600 ml-auto">
+        <span className="text-[10px] text-muted-foreground ml-auto">
           Agent is waiting for your decision
         </span>
       </div>

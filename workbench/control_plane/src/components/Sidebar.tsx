@@ -7,6 +7,7 @@ import { useSession, signOut } from "next-auth/react";
 import { ChevronLeft, ChevronRight, LogOut, Command } from "lucide-react";
 import { NAV_SECTIONS, type NavPane, type NavSection } from "@/lib/nav";
 import { resolveIcon } from "@/lib/icons";
+import ThemeToggle from "@/components/ThemeToggle";
 
 // ---------------------------------------------------------------------------
 // Sidebar — sectioned navigation (Apps / Configure / Build)
@@ -80,6 +81,7 @@ export default function Sidebar() {
               >
                 <LogOut size={14} />
               </button>
+              <ThemeToggle />
             </div>
           ) : session === undefined ? (
             <div className="text-[11px] text-muted-foreground">Loading session…</div>

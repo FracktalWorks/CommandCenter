@@ -83,7 +83,7 @@ const PROVIDER_COLOURS: Record<string, string> = {
   together:   "bg-teal-500/15 text-teal-300 border-teal-800/40",
   ollama:     "bg-violet-500/15 text-violet-400 border-violet-800/40",
   vllm:       "bg-violet-500/15 text-violet-400 border-violet-800/40",
-  unknown:    "bg-zinc-700 text-zinc-400 border-zinc-700",
+  unknown:    "bg-secondary text-muted-foreground border-border",
 };
 
 const PROVIDER_ICONS: Record<string, string> = {
@@ -265,12 +265,12 @@ function TierCard({
   const colour = PROVIDER_COLOURS[tier.provider] ?? PROVIDER_COLOURS.unknown;
 
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
+    <div className="rounded-xl border border-border bg-card/60 p-5">
       {/* Header */}
       <div className="flex items-start justify-between gap-3 mb-4">
         <div>
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-zinc-100">{tier.label}</span>
+            <span className="text-sm font-semibold text-foreground">{tier.label}</span>
             {tier.provider_configured ? (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-400 border border-green-800/40">
                 ● Live
@@ -281,19 +281,19 @@ function TierCard({
               </span>
             )}
           </div>
-          <p className="mt-0.5 text-xs text-zinc-500">{tier.description}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{tier.description}</p>
         </div>
         <div className="flex gap-2 shrink-0">
           <button
             onClick={handleTest}
             disabled={testing || !tier.provider_configured}
-            className="rounded px-2.5 py-1 text-xs border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 disabled:opacity-40 transition-colors"
+            className="rounded px-2.5 py-1 text-xs border border-border text-muted-foreground hover:text-foreground hover:border-primary/30 disabled:opacity-40 transition-colors"
           >
             {testing ? "Testing…" : "Test"}
           </button>
           <button
             onClick={() => { setEditing((e) => !e); setTestResult(null); }}
-            className="rounded px-2.5 py-1 text-xs border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 transition-colors"
+            className="rounded px-2.5 py-1 text-xs border border-border text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors"
           >
             {editing ? "Cancel" : "Edit"}
           </button>
@@ -307,7 +307,7 @@ function TierCard({
             <span>{PROVIDER_ICONS[tier.provider] ?? "?"}</span>
             {tier.provider}
           </span>
-          <span className="font-mono text-xs text-zinc-300 truncate">{tier.model}</span>
+          <span className="font-mono text-xs text-foreground truncate">{tier.model}</span>
         </div>
       )}
 
@@ -316,7 +316,7 @@ function TierCard({
         <div className="space-y-3 mt-1">
           {/* Provider selector */}
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-zinc-400">Provider</label>
+            <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Provider</label>
             <div className="flex flex-wrap gap-2">
               {providers.map((p) => (
                 <button
@@ -328,7 +328,7 @@ function TierCard({
                   className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${
                     selectedProvider === p.id
                       ? "border-blue-600 bg-blue-600/20 text-blue-300"
-                      : "border-zinc-700 bg-zinc-800/40 text-zinc-400 hover:border-zinc-500"
+                      : "border-border bg-secondary/40 text-muted-foreground hover:border-primary/30"
                   }`}
                 >
                   <span className="mr-1">{PROVIDER_ICONS[p.id] ?? "?"}</span>
@@ -343,11 +343,11 @@ function TierCard({
 
           {/* Model selector */}
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-zinc-400">Model</label>
+            <label className="mb-1.5 block text-xs font-medium text-muted-foreground">Model</label>
             <select
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 focus:border-blue-500 focus:outline-none"
+              className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground focus:border-blue-500 focus:outline-none"
             >
               {(currentProvider?.models ?? []).map((m) => (
                 <option key={m} value={m}>{m}</option>
@@ -359,14 +359,14 @@ function TierCard({
               placeholder="Or type a custom model string…"
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
-              className="mt-1.5 w-full rounded-lg border border-zinc-700 bg-zinc-800/60 px-3 py-1.5 text-xs text-zinc-300 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+              className="mt-1.5 w-full rounded-lg border border-border bg-secondary/60 px-3 py-1.5 text-xs text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
             />
           </div>
 
           {/* api_base for local models */}
           {isLocal && (
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-zinc-400">
+              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
                 API Base URL
               </label>
               <input
@@ -374,7 +374,7 @@ function TierCard({
                 placeholder={selectedProvider === "ollama" ? "http://host.docker.internal:11434" : "http://host.docker.internal:8001/v1"}
                 value={apiBase}
                 onChange={(e) => setApiBase(e.target.value)}
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+                className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
               />
             </div>
           )}
@@ -402,7 +402,7 @@ function TierCard({
           <div className="flex justify-end gap-2 pt-1">
             <button
               onClick={() => setEditing(false)}
-              className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+              className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
             >
               Cancel
             </button>
@@ -428,7 +428,7 @@ function TierCard({
         >
           <span className="font-medium mr-2">{testResult.success ? "✓ OK" : "✗ Failed"}</span>
           <span className="font-mono">{testResult.response}</span>
-          <span className="ml-2 text-zinc-500">{testResult.latency_ms}ms</span>
+          <span className="ml-2 text-muted-foreground">{testResult.latency_ms}ms</span>
         </div>
       )}
     </div>
@@ -567,7 +567,7 @@ function ProviderCard({
                 <>
                   <button
                     onClick={() => { setEditing((e) => !e); setConfirmDiscard(false); }}
-                    className="text-[10px] text-zinc-500 hover:text-zinc-300 underline underline-offset-2 transition-colors"
+                    className="text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
                   >
                     {editing ? "cancel" : "update key"}
                   </button>
@@ -583,7 +583,7 @@ function ProviderCard({
                       <button
                         onClick={() => setConfirmDiscard(false)}
                         disabled={discarding}
-                        className="text-[10px] text-zinc-500 hover:text-zinc-300 underline underline-offset-2 transition-colors"
+                        className="text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
                       >
                         cancel
                       </button>
@@ -601,9 +601,9 @@ function ProviderCard({
               )}
             </>
           ) : provider.id === "ollama" ? (
-            <span className="text-xs text-zinc-500">● Pull model to use</span>
+            <span className="text-xs text-muted-foreground">● Pull model to use</span>
           ) : provider.id === "vllm" ? (
-            <span className="text-xs text-zinc-500">● Set base URL in tier</span>
+            <span className="text-xs text-muted-foreground">● Set base URL in tier</span>
           ) : (
             <button
               onClick={() => setEditing((e) => !e)}
@@ -622,7 +622,7 @@ function ProviderCard({
 
       {/* Setup panel — shown only when editing (user clicked "Set key →" or "update key") */}
       {editing && guide && (
-        <div className="mt-3 rounded-lg border border-zinc-700/50 bg-zinc-900/60 p-3 space-y-3">
+        <div className="mt-3 rounded-lg border border-border/50 bg-card/60 p-3 space-y-3">
           {/* Quick-start links */}
           <div className="flex items-center gap-3">
             <a
@@ -640,7 +640,7 @@ function ProviderCard({
               href={guide.docs_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs text-zinc-500 hover:text-zinc-300 underline underline-offset-2 transition-colors"
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
             >
               View docs ↗
             </a>
@@ -649,8 +649,8 @@ function ProviderCard({
           {/* Step-by-step instructions */}
           <ol className="space-y-1">
             {guide.instructions.map((step, i) => (
-              <li key={i} className="flex items-start gap-2 text-xs text-zinc-400">
-                <span className="shrink-0 w-4 h-4 rounded-full bg-zinc-700 text-zinc-400 flex items-center justify-center text-[9px] font-semibold mt-0.5">
+              <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
+                <span className="shrink-0 w-4 h-4 rounded-full bg-secondary text-muted-foreground flex items-center justify-center text-[9px] font-semibold mt-0.5">
                   {i + 1}
                 </span>
                 {step}
@@ -667,7 +667,7 @@ function ProviderCard({
                   GitHub OAuth Device Flow
                 </span>
               </div>
-              <p className="text-[11px] text-zinc-400 leading-relaxed">
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
                 No token copying needed — enter a short code on GitHub and this
                 server authenticates automatically.
               </p>
@@ -682,7 +682,7 @@ function ProviderCard({
                 </button>
               ) : (
                 <div className="space-y-2">
-                  <div className="rounded-md bg-zinc-950/60 p-3 text-center">
+                  <div className="rounded-md bg-background/60 p-3 text-center">
                     <div className="text-2xl font-bold tracking-[0.3em] text-sky-300 font-mono">
                       {deviceFlow.userCode}
                     </div>
@@ -695,15 +695,15 @@ function ProviderCard({
                       Open {deviceFlow.verificationUri} →
                     </a>
                   </div>
-                  <p className="text-[10px] text-zinc-500 text-center">
+                  <p className="text-[10px] text-muted-foreground text-center">
                     {deviceStatus}
                   </p>
                 </div>
               )}
 
-              <div className="text-[10px] text-zinc-600 border-t border-zinc-800 pt-2">
+              <div className="text-[10px] text-muted-foreground border-t border-border pt-2">
                 Or paste a{" "}
-                <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-400">
+                <a href="https://github.com/settings/tokens" target="_blank" rel="noopener noreferrer" className="underline hover:text-muted-foreground">
                   Personal Access Token
                 </a>{" "}
                 below:
@@ -719,12 +719,12 @@ function ProviderCard({
               onChange={(e) => setKeyVal(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSave()}
               placeholder={`Paste ${provider.env_var}…`}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 pr-14 text-xs text-zinc-100 placeholder-zinc-600 font-mono focus:border-blue-500 focus:outline-none"
+              className="w-full rounded-lg border border-border bg-background px-3 py-1.5 pr-14 text-xs text-foreground placeholder-muted-foreground font-mono focus:border-blue-500 focus:outline-none"
               autoFocus
             />
             <button
               onClick={() => setShow((s) => !s)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-zinc-500 hover:text-zinc-300"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground hover:text-foreground"
             >
               {show ? "hide" : "show"}
             </button>
@@ -741,13 +741,13 @@ function ProviderCard({
             <button
               onClick={() => { setEditing(false); setKeyVal(""); setKeyError(null); }}
               disabled={saving}
-              className="rounded-lg border border-zinc-700 px-3 py-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-40 transition-colors"
+              className="rounded-lg border border-border px-3 py-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors"
             >
               Cancel
             </button>
           </div>
           {saving && (
-            <p className="text-[10px] text-zinc-500">
+            <p className="text-[10px] text-muted-foreground">
               Writing key to <code className="font-mono">infra/.env</code> and restarting LiteLLM (~25s)…
             </p>
           )}
@@ -773,13 +773,13 @@ function ProviderCard({
             <button
               onClick={() => { setConfirmDiscard(false); setKeyError(null); }}
               disabled={discarding}
-              className="rounded-lg border border-zinc-700 px-3 py-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-40 transition-colors"
+              className="rounded-lg border border-border px-3 py-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors"
             >
               Cancel
             </button>
           </div>
           {discarding && (
-            <p className="text-[10px] text-zinc-500">
+            <p className="text-[10px] text-muted-foreground">
               Removing key from <code className="font-mono">infra/.env</code> and restarting LiteLLM (~25s)…
             </p>
           )}
@@ -963,15 +963,15 @@ function ModelCatalogue() {
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
+    <div className="rounded-xl border border-border bg-card/60 p-5">
       {/* Tabs */}
-      <div className="flex items-center gap-0.5 mb-4 p-0.5 rounded-lg bg-zinc-800/50 w-fit">
+      <div className="flex items-center gap-0.5 mb-4 p-0.5 rounded-lg bg-secondary/50 w-fit">
         <button
           onClick={() => setTab("added")}
           className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
             tab === "added"
-              ? "bg-zinc-700 text-zinc-100"
-              : "text-zinc-500 hover:text-zinc-300"
+              ? "bg-secondary text-foreground"
+              : "text-muted-foreground hover:text-foreground"
           }`}
         >
           Added Models
@@ -980,8 +980,8 @@ function ModelCatalogue() {
           onClick={() => setTab("visibility")}
           className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
             tab === "visibility"
-              ? "bg-zinc-700 text-zinc-100"
-              : "text-zinc-500 hover:text-zinc-300"
+              ? "bg-secondary text-foreground"
+              : "text-muted-foreground hover:text-foreground"
           }`}
         >
           Model Visibility
@@ -992,7 +992,7 @@ function ModelCatalogue() {
       {tab === "added" && (
         <>
           <div className="flex items-center justify-between mb-3">
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-muted-foreground">
               Add models from your configured providers to make them available in the chat
               picker. Only models you add here (plus Copilot SDK models) appear.
             </p>
@@ -1006,14 +1006,14 @@ function ModelCatalogue() {
 
           {/* Add form */}
           {showForm && (
-            <div className="mb-4 rounded-lg border border-zinc-700 bg-zinc-800/60 p-3 space-y-2">
+            <div className="mb-4 rounded-lg border border-border bg-secondary/60 p-3 space-y-2">
               {/* Provider selector */}
               <div>
-                <label className="block text-xs font-medium text-zinc-400 mb-1">Provider</label>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">Provider</label>
                 <select
                   value={formProvider}
                   onChange={(e) => handleProviderChange(e.target.value)}
-                  className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 focus:border-blue-500 focus:outline-none"
+                  className="w-full rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground focus:border-blue-500 focus:outline-none"
                 >
                   <option value="openrouter">OpenRouter</option>
                   <option value="openai">OpenAI</option>
@@ -1030,17 +1030,17 @@ function ModelCatalogue() {
 
               {/* Model selector */}
               <div>
-                <label className="block text-xs font-medium text-zinc-400 mb-1">Model</label>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">Model</label>
                 {loadingModels ? (
-                  <div className="text-xs text-zinc-500 py-1.5">Fetching models…</div>
+                  <div className="text-xs text-muted-foreground py-1.5">Fetching models…</div>
                 ) : formId ? (
                   <div className="flex items-center gap-2">
-                    <span className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 font-mono truncate">
+                    <span className="flex-1 rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground font-mono truncate">
                       {formId}
                     </span>
                     <button
                       onClick={() => { setFormId(""); setFormLabel(""); }}
-                      className="text-zinc-500 hover:text-zinc-300 text-xs shrink-0"
+                      className="text-muted-foreground hover:text-foreground text-xs shrink-0"
                     >
                       ✕
                     </button>
@@ -1052,10 +1052,10 @@ function ModelCatalogue() {
                       placeholder={availableModels.length > 0 ? "Search models…" : "No models loaded — select a provider first"}
                       value={modelSearch}
                       onChange={(e) => setModelSearch(e.target.value)}
-                      className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+                      className="w-full rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
                     />
                     {availableModels.length > 0 && modelSearch && (
-                      <div className="absolute z-10 mt-1 w-full max-h-44 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-lg">
+                      <div className="absolute z-10 mt-1 w-full max-h-44 overflow-y-auto rounded-md border border-border bg-card shadow-lg">
                         {availableModels
                           .filter((m) =>
                             !modelSearch ||
@@ -1067,10 +1067,10 @@ function ModelCatalogue() {
                             <button
                               key={m.id}
                               onClick={() => handleModelSelect(m.id, m.label)}
-                              className="w-full text-left px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition-colors flex items-center justify-between"
+                              className="w-full text-left px-3 py-1.5 text-xs text-foreground hover:bg-secondary hover:text-foreground transition-colors flex items-center justify-between"
                             >
                               <span className="truncate">{m.label}</span>
-                              <span className="text-[10px] text-zinc-500 font-mono ml-2 shrink-0 truncate max-w-[40%]">
+                              <span className="text-[10px] text-muted-foreground font-mono ml-2 shrink-0 truncate max-w-[40%]">
                                 {m.id}
                               </span>
                             </button>
@@ -1078,15 +1078,15 @@ function ModelCatalogue() {
                       </div>
                     )}
                     {availableModels.length > 0 && !modelSearch && (
-                      <div className="absolute z-10 mt-1 w-full max-h-44 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-lg">
+                      <div className="absolute z-10 mt-1 w-full max-h-44 overflow-y-auto rounded-md border border-border bg-card shadow-lg">
                         {availableModels.slice(0, 50).map((m) => (
                           <button
                             key={m.id}
                             onClick={() => handleModelSelect(m.id, m.label)}
-                            className="w-full text-left px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 transition-colors flex items-center justify-between"
+                            className="w-full text-left px-3 py-1.5 text-xs text-foreground hover:bg-secondary hover:text-foreground transition-colors flex items-center justify-between"
                           >
                             <span className="truncate">{m.label}</span>
-                            <span className="text-[10px] text-zinc-500 font-mono ml-2 shrink-0 truncate max-w-[40%]">
+                            <span className="text-[10px] text-muted-foreground font-mono ml-2 shrink-0 truncate max-w-[40%]">
                               {m.id}
                             </span>
                           </button>
@@ -1099,13 +1099,13 @@ function ModelCatalogue() {
 
               {/* Display label */}
               <div>
-                <label className="block text-xs font-medium text-zinc-400 mb-1">Display label</label>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">Display label</label>
                 <input
                   type="text"
                   placeholder="Auto-populated from model name"
                   value={formLabel}
                   onChange={(e) => setFormLabel(e.target.value)}
-                  className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 focus:border-blue-500 focus:outline-none"
+                  className="w-full rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground placeholder-muted-foreground focus:border-blue-500 focus:outline-none"
                 />
               </div>
               {error && <p className="text-xs text-red-400">{error}</p>}
@@ -1127,9 +1127,9 @@ function ModelCatalogue() {
 
           {/* Custom model list */}
           {loadingCust ? (
-            <div className="text-xs text-zinc-600 py-2">Loading…</div>
+            <div className="text-xs text-muted-foreground py-2">Loading…</div>
           ) : customModels.length === 0 ? (
-            <div className="text-xs text-zinc-500 italic py-2">
+            <div className="text-xs text-muted-foreground italic py-2">
               No custom models yet. Click "+ Add model" to add one.
             </div>
           ) : (
@@ -1137,20 +1137,20 @@ function ModelCatalogue() {
               {customModels.map((m) => (
                 <div
                   key={m.id}
-                  className="flex items-center justify-between rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-2 text-xs"
+                  className="flex items-center justify-between rounded-lg border border-border/60 bg-secondary/40 px-3 py-2 text-xs"
                 >
                   <div className="min-w-0">
-                    <div className="font-medium text-zinc-200 truncate">{m.label}</div>
-                    <div className="font-mono text-zinc-500 text-[10px] truncate">{m.id}</div>
+                    <div className="font-medium text-foreground truncate">{m.label}</div>
+                    <div className="font-mono text-muted-foreground text-[10px] truncate">{m.id}</div>
                   </div>
                   <div className="flex items-center gap-2 ml-3 shrink-0">
-                    <span className="text-[9px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-500">
+                    <span className="text-[9px] px-1.5 py-0.5 rounded border border-border text-muted-foreground">
                       {m.provider}
                     </span>
                     <button
                       onClick={() => handleRemove(m.id)}
                       disabled={removing === m.id}
-                      className="text-zinc-600 hover:text-red-400 transition-colors disabled:opacity-40"
+                      className="text-muted-foreground hover:text-red-400 transition-colors disabled:opacity-40"
                       title="Remove"
                     >
                       {removing === m.id ? "…" : "✕"}
@@ -1166,7 +1166,7 @@ function ModelCatalogue() {
       {/* ── Tab: All Models (visibility manager) ────────────────────────────── */}
       {tab === "visibility" && (
         <>
-          <p className="text-xs text-zinc-500 mb-3">
+          <p className="text-xs text-muted-foreground mb-3">
             Toggle visibility for each model. Hidden models won&apos;t appear in the chat picker.
           </p>
 
@@ -1175,27 +1175,27 @@ function ModelCatalogue() {
             placeholder="Search models…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full mb-3 rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:border-zinc-500 focus:outline-none"
+            className="w-full mb-3 rounded-md border border-border bg-secondary px-3 py-1.5 text-xs text-foreground placeholder-muted-foreground focus:border-zinc-500 focus:outline-none"
           />
 
           {loadingVis ? (
-            <div className="text-xs text-zinc-600 py-2">Loading…</div>
+            <div className="text-xs text-muted-foreground py-2">Loading…</div>
           ) : (
             <div className="space-y-1 max-h-80 overflow-y-auto">
               {/* Visible models */}
               {visibleModels.map((m) => (
                 <div
                   key={m.id}
-                  className="flex items-center justify-between rounded-md border border-zinc-700/40 bg-zinc-800/30 px-3 py-1.5 text-xs group"
+                  className="flex items-center justify-between rounded-md border border-border/40 bg-secondary/30 px-3 py-1.5 text-xs group"
                 >
                   <div className="min-w-0">
-                    <span className="text-zinc-200 truncate">{m.label}</span>
-                    <span className="ml-2 text-zinc-600 text-[10px] font-mono truncate">{m.group}</span>
+                    <span className="text-foreground truncate">{m.label}</span>
+                    <span className="ml-2 text-muted-foreground text-[10px] font-mono truncate">{m.group}</span>
                   </div>
                   <button
                     onClick={() => toggleHidden(m.id)}
                     disabled={busy === m.id}
-                    className="ml-2 shrink-0 text-zinc-500 hover:text-orange-400 transition-colors disabled:opacity-30"
+                    className="ml-2 shrink-0 text-muted-foreground hover:text-orange-400 transition-colors disabled:opacity-30"
                     title="Hide from picker"
                   >
                     {busy === m.id ? (
@@ -1210,22 +1210,22 @@ function ModelCatalogue() {
               {/* Hidden models */}
               {hiddenModels.length > 0 && (
                 <>
-                  <div className="pt-3 pb-1.5 text-[10px] text-zinc-500 uppercase tracking-wide px-1">
+                  <div className="pt-3 pb-1.5 text-[10px] text-muted-foreground uppercase tracking-wide px-1">
                     Hidden — {hiddenModels.length} model{hiddenModels.length !== 1 ? "s" : ""}
                   </div>
                   {hiddenModels.map((m) => (
                     <div
                       key={m.id}
-                      className="flex items-center justify-between rounded-md border border-zinc-700/20 bg-zinc-900/40 px-3 py-1.5 text-xs opacity-60 hover:opacity-80 transition-opacity"
+                      className="flex items-center justify-between rounded-md border border-border/20 bg-card/40 px-3 py-1.5 text-xs opacity-60 hover:opacity-80 transition-opacity"
                     >
                       <div className="min-w-0">
-                        <span className="text-zinc-400 truncate">{m.label}</span>
-                        <span className="ml-2 text-zinc-600 text-[10px] font-mono truncate">{m.group}</span>
+                        <span className="text-muted-foreground truncate">{m.label}</span>
+                        <span className="ml-2 text-muted-foreground text-[10px] font-mono truncate">{m.group}</span>
                       </div>
                       <button
                         onClick={() => toggleHidden(m.id)}
                         disabled={busy === m.id}
-                        className="ml-2 shrink-0 text-zinc-500 hover:text-emerald-400 transition-colors disabled:opacity-30"
+                        className="ml-2 shrink-0 text-muted-foreground hover:text-emerald-400 transition-colors disabled:opacity-30"
                         title="Show in picker"
                       >
                         {busy === m.id ? (
@@ -1240,7 +1240,7 @@ function ModelCatalogue() {
               )}
 
               {visibleModels.length === 0 && hiddenModels.length === 0 && (
-                <div className="text-xs text-zinc-500 italic py-1">
+                <div className="text-xs text-muted-foreground italic py-1">
                   {query ? "No models match your search." : "No models loaded. Add models in the My Models tab."}
                 </div>
               )}
@@ -1335,8 +1335,8 @@ export default function ModelsPage() {
       {/* Page header */}
       <div className="mb-8 flex items-start justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-zinc-100">LLM Models</h1>
-          <p className="mt-1 text-sm text-zinc-500">
+          <h1 className="text-xl font-semibold text-foreground">LLM Models</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
             Configure which model handles each routing tier and manage provider API keys.
           </p>
         </div>
@@ -1355,20 +1355,20 @@ export default function ModelsPage() {
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center py-16 text-zinc-600 text-sm">
+        <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
           Loading model config…
         </div>
       ) : loadError ? (
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-8 text-center">
+        <div className="rounded-xl border border-border bg-card/60 p-8 text-center">
           <p className="text-sm text-red-400 mb-2">Failed to load config</p>
-          <p className="text-xs text-zinc-500 mb-4">{loadError}</p>
-          <p className="text-xs text-zinc-600">
+          <p className="text-xs text-muted-foreground mb-4">{loadError}</p>
+          <p className="text-xs text-muted-foreground">
             Make sure the gateway is running:{" "}
             <code className="font-mono">uv run uvicorn gateway.main:app --reload --port 8000</code>
           </p>
           <button
             onClick={loadConfig}
-            className="mt-4 rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+            className="mt-4 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
             Retry
           </button>
@@ -1377,7 +1377,7 @@ export default function ModelsPage() {
         <>
           {/* Tier cards */}
           <section className="mb-8">
-            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-600">
+            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
               Routing Tiers
             </h2>
             <div className="flex flex-col gap-3">
@@ -1394,7 +1394,7 @@ export default function ModelsPage() {
 
           {/* Provider status */}
           <section className="mb-8">
-            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-600">
+            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
               Provider Status
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -1439,7 +1439,7 @@ export default function ModelsPage() {
                 ));
               })()}
             </div>
-            <p className="mt-3 text-xs text-zinc-600">
+            <p className="mt-3 text-xs text-muted-foreground">
               Keys are stored encrypted in the Postgres database. Ollama models are
               auto-detected from your local instance — no manual setup needed.
             </p>
@@ -1447,7 +1447,7 @@ export default function ModelsPage() {
 
           {/* Model catalogue — combined Custom Models + Visibility */}
           <section className="mb-8">
-            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-zinc-600">
+            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
               Model Catalogue
             </h2>
             <ModelCatalogue />

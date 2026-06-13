@@ -176,9 +176,17 @@ jobs:
       - name: Health check
         run: |
           GATEWAY_URL="${GATEWAY_URL:-https://api.commandcenter.fracktal.in}"
-          echo "Hitting $GATEWAY_URL/health ..."
-          curl -fsS --max-time 10 "$GATEWAY_URL/health" || {
-            echo "Health check failed — gateway may still be starting"
-            exit 1
-          }
-          echo "Gateway is healthy"
+          echo "Hitting $GATEWAY_URL/health (with retries for cold start)..."
+          # Services may still be warming up right after deploy (systemd
+          # restart + Next.js rebuild). Retry for up to ~60s before failing.
+          for attempt in $(seq 1 12); do
+            if curl -fsS --max-time 10 "$GATEWAY_URL/health"; then
+              echo ""
+              echo "Gateway is healthy (attempt $attempt)"
+              exit 0
+            fi
+            echo "attempt $attempt/12 failed — retrying in 5s..."
+            sleep 5
+          done
+          echo "Health check failed after 12 attempts (~60s)"
+          exit 1

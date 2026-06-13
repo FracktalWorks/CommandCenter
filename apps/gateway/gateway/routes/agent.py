@@ -80,6 +80,7 @@ _KNOWN_AGENTS: frozenset[str] = frozenset(
         "triage",
         "reconciler",
         "strategy",
+        "apis-config",
     ]
 )
 
@@ -155,6 +156,20 @@ _AGENT_REGISTRY: list[dict] = [
         "agent_runtime": "maf",
         "integrations": [],
         "optional_integrations": [],
+    },
+    {
+        "name": "apis-config",
+        "description": (
+            "API Configuration Assistant — discovers any API by name, "
+            "finds its documentation via web search, and guides you "
+            "through credential setup step by step."
+        ),
+        "tags": ["configuration", "apis", "setup", "admin"],
+        "status": "live",
+        "agent_runtime": "maf",
+        "local_path": "apps/agent-apis-config",
+        "integrations": [],
+        "optional_integrations": ["serpapi"],
     },
 ]
 

@@ -883,18 +883,26 @@ async def discover_api(
         except Exception as exc:
             _log.debug("discover.web_search_failed", error=str(exc))
 
-    # 2. Build LLM prompt
+    # 2. Build LLM prompt — request array to support multi-API companies
     web_section = f"\nRelevant search results:\n{web_context}\n" if web_context else ""
     prompt = (
-        f'You are an API integration expert. Generate a connection definition'
-        f' for "{query}".\n'
+        f'You are an API integration expert. The user wants to connect to: "{query}".\n'
         + web_section
-        + """Return ONLY a valid JSON object with exactly these fields:
+        + r"""Return ONLY a valid JSON array of 1-6 relevant API integration definitions.
+
+Rules for the query:
+- If the query is a specific product ("Notion", "Stripe") → return 1-2 results
+- If it is a company with multiple APIs ("Google", "Microsoft", "Atlassian", "Meta")
+  → return their major distinct APIs (e.g. Google: Sheets, Maps, Gmail, Drive, Calendar)
+- Include only genuinely distinct APIs that require separate credentials
+
+Each item in the array must have EXACTLY these fields:
 {
-  "service_id": "lowercase-hyphens-only",
+  "service_id": "lowercase-hyphens, e.g. google-sheets",
   "label": "Human Readable Name",
   "category": "crm|email|productivity|search|prospecting|analytics|communication|payments|storage|custom",
-  "description": "One sentence describing what this API does",
+  "description": "One sentence what this API does",
+  "domain": "main domain for logo, e.g. sheets.google.com or notion.so",
   "setup_url": "https://... URL to get credentials",
   "docs_url": "https://... URL to API documentation",
   "instructions": "Numbered steps to get the API key",
@@ -903,11 +911,10 @@ async def discover_api(
   ]
 }
 
-Rules:
-- service_id: lowercase, hyphens only, e.g. "notion", "hubspot-crm"
-- env var keys: SCREAMING_SNAKE_CASE, e.g. NOTION_API_TOKEN
-- sensitive=true for secrets/tokens; sensitive=false for URLs/IDs
-- Return ONLY the JSON, no markdown fences, no explanation"""
+- env var keys: SCREAMING_SNAKE_CASE, e.g. NOTION_API_TOKEN, GOOGLE_SHEETS_SA_JSON_PATH
+- sensitive=true for secrets/tokens; sensitive=false for plain URLs/IDs
+- domain: base domain only, no https://, used for logo fetching
+- Return ONLY the JSON array, no markdown fences, no extra text"""
     )
 
     # 3. Call LLM — try models in order of preference
@@ -924,7 +931,7 @@ Rules:
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=1200,
+                max_tokens=2400,
             )
             content = (resp.choices[0].message.content or "").strip()
             # Strip markdown code fences if present
@@ -933,20 +940,31 @@ Rules:
                     ln for ln in content.splitlines()
                     if not ln.strip().startswith("```")
                 ).strip()
-            definition = _json.loads(content)
-            for field in ("service_id", "label", "env_vars"):
-                if not definition.get(field):
-                    raise ValueError(f"Missing field: {field}")
+            parsed = _json.loads(content)
+            # Accept both array and single-object responses
+            if isinstance(parsed, dict):
+                parsed = [parsed]
+            if not isinstance(parsed, list) or not parsed:
+                raise ValueError("Expected a non-empty JSON array")
+            # Validate each item
+            results: list[dict[str, Any]] = []
+            for item in parsed:
+                if item.get("service_id") and item.get("label") and item.get("env_vars"):
+                    results.append(item)
+            if not results:
+                raise ValueError("No valid API definitions in response")
             _log.info(
                 "integrations.discover",
                 query=query,
-                service_id=definition.get("service_id"),
+                count=len(results),
+                service_ids=[r.get("service_id") for r in results],
                 model=model,
                 actor=user.email,
             )
             return {
                 "ok": True,
-                "definition": definition,
+                "results": results,
+                "query": query,
                 "web_enhanced": bool(web_context),
                 "model": model,
             }

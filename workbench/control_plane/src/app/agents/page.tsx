@@ -18,6 +18,7 @@ import {
   AlertTriangle,
   Bot,
   CheckSquare,
+  ChevronRight,
   ExternalLink,
   Filter,
   FolderOpen,

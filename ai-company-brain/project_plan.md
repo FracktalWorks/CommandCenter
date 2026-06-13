@@ -523,3 +523,23 @@ This gives a working file browser + viewer for files already on disk, without th
 9. ~~**Copilot SDK within MAF with BYOK**~~ — **RESOLVED (2026-06-10).** `agent-framework-github-copilot` 1.0.0rc1 relaxed the SDK dependency to `<2,>=1.0.0`. The Copilot SDK direct path has been removed from `executor.py`. All `github-copilot` agents now run through `CommandCenterCopilotAgent` (MAF subclass) with BYOK via `default_options["provider"]`. Copilot SDK features (shell, file r/w, MCP servers) are available for BYOK sessions through the unified MAF abstraction. All Copilot SDK event types (reasoning, tool progress, partial results) flow through MAF to the frontend. See `system_architecture.md` §13.3.
 10. **MAF agent local git tracking** — pure MAF agents without GitHub repos now get automatic local git initialisation in the cache directory. Enables version control, commit tracking, mutation sandbox compatibility, and rollback without external dependencies. See `system_architecture.md` §13.4.
 11. **Mutation layer agent context** — the mutation sandbox now receives the failing agent's purpose (`instructions.md`), skill descriptions, and trigger event context, not just the error message. This enables smarter, context-aware fixes that preserve the agent's persona and domain behaviour.
+
+---
+
+## Nice to Have / Future
+
+These features are acknowledged as valuable but are not currently scheduled.
+
+### 1. AI-Powered Integration Code Generation (apis-config agent upgrade)
+
+The `apis-config` agent currently discovers API credentials and auto-generates credential schemas. A future upgrade would extend it to **generate full integration code**:
+- **Ingestion client** — async HTTP client with auth, rate limiting, and pagination (e.g. `ingestion/sources/notion/client.py`)
+- **Normaliser** — maps API objects to the entity graph (`person`, `task`, `project`, etc.)
+- **Sync script** — scheduled data pull job (e.g. `scripts/notion_sync.py`)
+- **Webhook receiver** — real-time event ingestion
+- **Agent tools** — MAF-callable functions exposed to specialist agents (e.g. `search_notion_pages()`)
+- **Settings fields** — typed config entries in `acb_common/settings.py`
+
+The agent would use web search to fetch API docs, generate boilerplate via LLM, commit to a new skill repo (`skill-{name}-sync`), and wire the tools into the agent ecosystem. Credentials would continue to flow through the encrypted Integration Registry — no secrets in generated code.
+
+**Prerequisites:** robust code-generation quality from the underlying LLM; automated eval gate for generated repos; human review before enabling in production.

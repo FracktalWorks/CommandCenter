@@ -301,3 +301,24 @@ The Control Plane is a thin Next.js browser UI. It grows with each level but is 
 4. **WhatsApp community read posture** — confirm Meta TOS interpretation for the agent reading group messages as a participant.
 7. **OAuth provider registration** — ClickUp, Zoho, and Google OAuth apps must be registered with `redirect_uri` pointing to the production VPS hostname. Decide: one shared OAuth app per service (org-level) or per-operator fine-grained tokens? Affects credential scope, token isolation, and audit granularity.
 8. **Cloud sandbox GitHub token model** — use a single org-level GitHub App installation token (auto-rotated every hour) or per-operator fine-grained PAT? The former is simpler operationally; the latter gives per-user audit trails for every agent action taken.
+
+---
+
+## 14. Future Enhancements (Nice to Have)
+
+### 14.1 AI-Powered Integration Code Generation
+
+The `apis-config` agent (L2) handles credential discovery today. A future upgrade would enable it to **generate full integration code** — the 6-file stack needed to fully integrate any REST API into CommandCenter:
+
+| File | Purpose |
+|---|---|
+| `ingestion/sources/{name}/client.py` | Async HTTP client with auth, pagination, rate limiting |
+| `ingestion/sources/{name}/normaliser.py` | Maps API objects → entity graph (`person`, `task`, `customer`, etc.) |
+| `scripts/{name}_sync.py` | Scheduled data pull / reconciliation job |
+| `ingestion/sources/{name}/webhook.py` | Real-time event receiver |
+| `skills/{name}-sync/skills.py` | MAF-callable tools for specialist agents |
+| Settings fields in `acb_common/settings.py` | Typed credential config |
+
+The flow: operator says *"integrate Notion"* → agent web-searches docs → LLM generates all 6 files → commits to `skill-notion-sync` repo → runs eval CI gate → registers tools in the agent ecosystem. All credentials continue through the encrypted Integration Registry — zero secrets in generated code.
+
+**Dependencies:** LLM code-generation fidelity; automated eval gate for generated repos; human approval before production activation. Not scheduled — deferred until L3+ (post agent ecosystem maturity).

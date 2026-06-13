@@ -640,11 +640,11 @@ function AddAgentModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/70"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg rounded-xl border border-border bg-card shadow-2xl"
+        className="w-full max-w-lg rounded-t-xl sm:rounded-xl border-t sm:border border-border bg-card shadow-2xl max-h-[92vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -696,7 +696,7 @@ function AddAgentModal({
                 )}
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1 block text-xs font-medium text-muted-foreground">
                     Agent name <span className="text-destructive">*</span>
@@ -734,7 +734,7 @@ function AddAgentModal({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1 block text-xs font-medium text-muted-foreground">
                     Mandatory integrations
@@ -1305,9 +1305,9 @@ export default function AgentsPage() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
+      <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-border shrink-0">
         <div>
-          <h1 className="text-lg font-bold text-foreground">Agents</h1>
+          <h1 className="text-base sm:text-lg font-bold text-foreground">Agents</h1>
           <p className="text-xs text-muted-foreground mt-0.5">
             {loading
               ? "Loading\u2026"
@@ -1326,10 +1326,10 @@ export default function AgentsPage() {
         </div>
       </div>
 
-      <div className="flex items-center gap-1 px-4 py-2 border-b border-border shrink-0">
+      <div className="flex items-center gap-1 px-3 sm:px-4 py-2 border-b border-border shrink-0 overflow-x-auto scrollbar-hide">
         {FILTERS.map((f) => (
           <button key={f.id} onClick={() => setFilter(f.id)}
-            className={`text-xs px-2.5 py-1 rounded-full whitespace-nowrap transition-colors ${
+            className={`text-xs px-2.5 py-1 rounded-full whitespace-nowrap shrink-0 transition-colors ${
               filter === f.id
                 ? "bg-primary text-primary-foreground font-medium"
                 : "text-muted-foreground hover:text-foreground hover:bg-secondary"
@@ -1375,6 +1375,15 @@ export default function AgentsPage() {
 
         {selectedAgent && (
           <div className="absolute inset-0 sm:relative sm:inset-auto w-full sm:w-[380px] border-l border-border bg-card shrink-0 flex flex-col overflow-hidden z-10">
+            {/* Mobile back button */}
+            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border bg-background/50 sm:hidden">
+              <button
+                onClick={() => setSelected(null)}
+                className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ChevronRight className="w-4 h-4 rotate-180" /> Back to list
+              </button>
+            </div>
             <AgentSidePanel
               agent={selectedAgent}
               statuses={intgs}

@@ -515,9 +515,9 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
   const current = configQueue[configIdx];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm"
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-background/80 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="w-full max-w-xl bg-card border border-border rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="w-full max-w-xl bg-card border-t sm:border border-border rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh] sm:max-h-[90vh]">
 
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
@@ -582,7 +582,7 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
                   Select the APIs you want to add. You can pick multiple at once.
                 </p>
               )}
-              <div className={`grid gap-3 ${results.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
+              <div className={`grid gap-3 ${results.length === 1 ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-2"}`}>
                 {results.map((r) => {
                   const isSel = selected.has(r.service_id);
                   return (
@@ -826,6 +826,15 @@ export default function ApisPage() {
 
         {selectedApi && (
           <div className="absolute inset-0 sm:relative sm:inset-auto w-full sm:w-[380px] border-l border-border bg-card shrink-0 flex flex-col overflow-hidden z-10">
+            {/* Mobile back button */}
+            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border bg-background/50 sm:hidden">
+              <button
+                onClick={() => setSelected(null)}
+                className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ChevronRight className="w-4 h-4 rotate-180" /> Back to list
+              </button>
+            </div>
             <ApiSidePanel api={selectedApi} agents={agents} onClose={() => setSelected(null)} onRefresh={() => void fetchAll()} />
           </div>
         )}

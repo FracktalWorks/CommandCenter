@@ -517,6 +517,7 @@ function ChatPageInner() {
 
   // Load sessions from localStorage on mount.
   // If ?agent=<name> is in the URL, immediately open a new session for that agent.
+  // If no sessions exist, show the agent picker — never default to any agent.
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     const agentParam = searchParams?.get("agent");
@@ -534,10 +535,9 @@ function ChatPageInner() {
         setActiveSessionId(fresh.id);
       }
     } else if (existing.length === 0) {
-      const fresh = createSession();
-      upsertSession(fresh);
-      setSessions([fresh]);
-      setActiveSessionId(fresh.id);
+      // No sessions yet — show the agent picker so the user explicitly
+      // chooses which agent to talk to instead of defaulting blindly.
+      setShowPicker(true);
     } else {
       setSessions(existing);
       setActiveSessionId(existing[0].id);
@@ -617,10 +617,10 @@ function ChatPageInner() {
         if (remaining.length > 0) {
           setActiveSessionId(remaining[0].id);
         } else {
-          const fresh = createSession();
-          upsertSession(fresh);
-          setSessions([fresh]);
-          setActiveSessionId(fresh.id);
+          // All sessions gone — show the agent picker instead of
+          // silently defaulting to the orchestrator.
+          setActiveSessionId("");
+          setShowPicker(true);
         }
       }
     },
@@ -842,8 +842,14 @@ function ChatPageInner() {
                 }}
               />
           ) : (
-            <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">
-              Select or create a session to start chatting.
+            <div className="flex flex-1 flex-col items-center justify-center gap-4 text-muted-foreground">
+              <div className="text-sm">Choose an agent to start chatting</div>
+              <button
+                onClick={handleNewSession}
+                className="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
+              >
+                + New session
+              </button>
             </div>
           )}
         </div>

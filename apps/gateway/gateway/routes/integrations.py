@@ -848,6 +848,7 @@ async def discover_api(
     POST /integrations/configure.
     """
     import json as _json  # noqa: PLC0415
+
     import litellm as _litellm  # noqa: PLC0415
 
     if not req.query.strip():

@@ -598,7 +598,8 @@ async def run_agent_stream_endpoint(
 
     # ── Memory extraction: save conversation facts after the run completes ──
     try:
-        from acb_memory import add_memories_background, add_episode  # noqa: PLC0415
+        from acb_memory import (add_episode,  # noqa: PLC0415
+                                add_memories_background)
         messages = req.payload.get("messages") or []
         user_msg = req.payload.get("message") or ""
         if user_msg or messages:
@@ -699,12 +700,9 @@ async def reconnect_agent_stream(
     """
     import json as _json
 
-    from orchestrator.stream_relay import (  # noqa: PLC0415
-        is_active,
-        replay_events,
-        stream_exists,
-        subscribe_events,
-    )
+    from orchestrator.stream_relay import (is_active,  # noqa: PLC0415
+                                           replay_events, stream_exists,
+                                           subscribe_events)
 
     _log.info(
         "agent.reconnect_request",

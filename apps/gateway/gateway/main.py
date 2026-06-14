@@ -18,7 +18,8 @@ _log = get_logger("gateway")
 # running asyncio event loop.  Importing here (module level, before uvicorn
 # starts the loop) avoids the deadlock entirely.
 try:
-    from orchestrator.agents import build_orchestrator_agent as _build_orchestrator_agent
+    from orchestrator.agents import \
+        build_orchestrator_agent as _build_orchestrator_agent
     _HAS_MAF = True
 except ImportError:
     _HAS_MAF = False
@@ -59,8 +60,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             if not _gh:
                 return
             os.environ.setdefault("GITHUB_TOKEN", _gh)
-            from copilot import CopilotClient as _CC  # noqa: PLC0415
             import time as _t  # noqa: PLC0415
+
+            from copilot import CopilotClient as _CC  # noqa: PLC0415
             _c = _CC(options={"github_token": _gh}); await _c.start()
             try:
                 _m = await _c.list_models()
@@ -146,10 +148,11 @@ def _apply_thinking_mode(opts: dict, think_mode: str) -> None:
 
 if _HAS_MAF:
     try:
-        from agent_framework_ag_ui import AGUIRequest as _AGUIRequest
-        from ag_ui.encoder import EventEncoder as _EventEncoder
         from ag_ui.core.events import RunErrorEvent as _RunErrorEvent
-        from agent_framework.ag_ui import AgentFrameworkAgent as _AgentFrameworkAgent
+        from ag_ui.encoder import EventEncoder as _EventEncoder
+        from agent_framework.ag_ui import \
+            AgentFrameworkAgent as _AgentFrameworkAgent
+        from agent_framework_ag_ui import AGUIRequest as _AGUIRequest
 
         @app.post("/copilot/chat", tags=["AG-UI"], response_model=None)
         async def copilot_chat(
@@ -158,10 +161,8 @@ if _HAS_MAF:
             user: UserContext = Depends(get_current_user),
         ) -> StreamingResponse:
             """MAF orchestrator: per-request agent with Mem0+Graphiti memory injection."""
-            from orchestrator.agents import (
-                build_orchestrator_agent,
-                enrich_instructions_with_memory,
-            )
+            from orchestrator.agents import (build_orchestrator_agent,
+                                             enrich_instructions_with_memory)
 
             user_id: str = getattr(user, "email", "") or "anonymous"
             input_data = request_body.model_dump(exclude_none=True)
@@ -219,10 +220,9 @@ if _HAS_MAF:
 
             async def relayed_generator():
                 import json as _json  # noqa: PLC0415
+
                 from orchestrator.stream_relay import (  # noqa: PLC0415
-                    get_detached_task,
-                    run_detached,
-                )
+                    get_detached_task, run_detached)
                 try:
                     async for evt in run_detached(
                         _thread_id, event_generator(), tee=True
@@ -239,7 +239,8 @@ if _HAS_MAF:
 
             # Post-run memory extraction (fires after response stream closes)
             try:
-                from acb_memory import add_memories_background, add_episode  # noqa: PLC0415
+                from acb_memory import (add_episode,  # noqa: PLC0415
+                                        add_memories_background)
                 if last_user_msg and messages:
                     conv = [
                         {"role": m.get("role", "user"), "content": m.get("content", "")}
@@ -533,6 +534,7 @@ _COPILOT_MODELS_STATIC = [
 ]
 
 import time as _time
+
 _copilot_models_cache: dict = {"data": None, "ts": 0.0}
 _COPILOT_MODELS_CACHE_TTL = 300
 
@@ -595,13 +597,15 @@ async def pull(req: PullRequest, _user: UserContext = Depends(get_current_user))
     import asyncio
     import uuid
 
-    from acb_llm.guardrails import CITATION_RE  # local import to avoid cold-start cost
+    from acb_llm.guardrails import \
+        CITATION_RE  # local import to avoid cold-start cost
 
     trace_id = uuid.uuid4().hex
     user_id: str = req.user_email or getattr(_user, "email", "") or "anonymous"
     _log.info("pull.received", query=req.query, user=user_id, trace_id=trace_id)
     try:
-        from orchestrator.agents import build_orchestrator_agent, enrich_instructions_with_memory
+        from orchestrator.agents import (build_orchestrator_agent,
+                                         enrich_instructions_with_memory)
         agent = build_orchestrator_agent(with_history=False)
         # Inject Mem0 + Graphiti context for this user + query (no-op if disabled)
         enriched = await enrich_instructions_with_memory(agent, user_id, req.query)
@@ -619,7 +623,8 @@ async def pull(req: PullRequest, _user: UserContext = Depends(get_current_user))
     citations = sorted({m.group(0) for m in CITATION_RE.finditer(text)})
     # Background: extract facts from this exchange into Mem0
     try:
-        from acb_memory import add_memories_background, add_episode  # noqa: PLC0415
+        from acb_memory import (add_episode,  # noqa: PLC0415
+                                add_memories_background)
         messages = [
             {"role": "user", "content": req.query},
             {"role": "assistant", "content": text},

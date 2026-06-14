@@ -328,11 +328,14 @@ export default function AgentChat({
     initialMessages: cachedInitial,
   });
 
-  // History-loading skeleton: shown only when nothing is cached locally yet the
-  // sidebar tells us this session has prior messages waiting in Postgres. This
-  // avoids flashing the "start a conversation" empty state during the DB fetch.
+  // History-loading state: always true when the sidebar says this session has
+  // prior messages.  When localStorage has cached messages we show them right
+  // away with a subtle "syncing…" banner; when nothing is cached we show a
+  // skeleton until the DB fetch completes.  This avoids both the blank "start
+  // a conversation" empty state and the jarring silent update when richer DB
+  // messages replace the local cache.
   const [loadingHistory, setLoadingHistory] = useState(
-    () => cachedInitial.length === 0 && (expectedMessageCount ?? 0) > 0,
+    () => (expectedMessageCount ?? 0) > 0,
   );
 
   // On mount, fetch the authoritative message history from Postgres and sync
@@ -840,6 +843,14 @@ export default function AgentChat({
               </div>
             </div>
           )}
+          {/* Subtle syncing banner — messages are visible (from localStorage) but
+              the richer DB versions are still loading in the background. */}
+          {loadingHistory && messages.length > 0 && (
+            <div className="flex items-center justify-center gap-2 py-2 px-4 mx-auto mb-1 rounded-lg border border-border/50 bg-card/60 text-[11px] text-muted-foreground animate-fade-in">
+              <span className="w-3 h-3 rounded-full border-2 border-muted border-t-primary animate-spin" />
+              <span>Syncing your history…</span>
+            </div>
+          )}
           {!loadingHistory && messages.length === 0 && (
             <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3 text-center">
               <div className="w-12 h-12 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center tech-glow">
@@ -1007,35 +1018,38 @@ export default function AgentChat({
 
             {/* Row 2: control bar inside the pill — wraps on narrow screens */}
             <div className="flex items-center gap-1 px-2 pb-1.5 text-[11px] text-muted-foreground flex-wrap" ref={modelMenuRef}>
-              {/* Agent selector */}
-              <div className="relative">
-                <button onClick={() => setShowAgentMenu((v) => !v)}
-                  className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-secondary hover:text-foreground tech-transition">
-                  <span className="w-1.5 h-1.5 rounded-full bg-success shrink-0" />
-                  <span className="truncate max-w-[72px] sm:max-w-[90px] font-medium">{currentAgentName}</span>
-                  <span className="text-muted-foreground/50">▾</span>
-                </button>
-                {showAgentMenu && (
-                  <div className="absolute bottom-full left-0 mb-1.5 w-64 rounded-lg border border-border bg-popover shadow-xl z-50 py-1 tech-glass-subtle"
-                    onMouseLeave={() => setShowAgentMenu(false)}>
-                    {agents.length === 0 ? (
-                      <div className="px-3 py-2 text-xs text-muted-foreground">No agents available</div>
-                    ) : (
-                      agents.map((a) => (
-                        <button key={a.name} onClick={() => handleSwitchAgent(a)}
-                          className={`w-full text-left px-3 py-1.5 text-xs hover:bg-secondary tech-transition ${a.name === currentAgentName ? "text-foreground bg-secondary/60" : "text-muted-foreground"}`}>
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="font-medium">{a.name}</span>
-                            {a.name === currentAgentName && <span className="text-emerald-400 text-[10px]">✓</span>}
-                          </div>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
+              {/* Agent selector — only the orchestrator can switch agents mid-session.
+                  Specialised agents lock you into their session for clean history. */}
+              {isOrchestrator && (
+                <div className="relative">
+                  <button onClick={() => setShowAgentMenu((v) => !v)}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-secondary hover:text-foreground tech-transition">
+                    <span className="w-1.5 h-1.5 rounded-full bg-success shrink-0" />
+                    <span className="truncate max-w-[72px] sm:max-w-[90px] font-medium">{currentAgentName}</span>
+                    <span className="text-muted-foreground/50">▾</span>
+                  </button>
+                  {showAgentMenu && (
+                    <div className="absolute bottom-full left-0 mb-1.5 w-64 rounded-lg border border-border bg-popover shadow-xl z-50 py-1 tech-glass-subtle"
+                      onMouseLeave={() => setShowAgentMenu(false)}>
+                      {agents.length === 0 ? (
+                        <div className="px-3 py-2 text-xs text-muted-foreground">No agents available</div>
+                      ) : (
+                        agents.map((a) => (
+                          <button key={a.name} onClick={() => handleSwitchAgent(a)}
+                            className={`w-full text-left px-3 py-1.5 text-xs hover:bg-secondary tech-transition ${a.name === currentAgentName ? "text-foreground bg-secondary/60" : "text-muted-foreground"}`}>
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="font-medium">{a.name}</span>
+                              {a.name === currentAgentName && <span className="text-emerald-400 text-[10px]">✓</span>}
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
-              <span className="w-px h-3.5 bg-border shrink-0" />
+              {isOrchestrator && <span className="w-px h-3.5 bg-border shrink-0" />}
 
               {/* Model selector */}
               <div className="relative">

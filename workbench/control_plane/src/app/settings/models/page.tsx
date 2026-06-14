@@ -159,7 +159,7 @@ export default function ModelsPage() {
       setEnabledIds(enabled);
     } catch { /* ok */ } finally { setLoadingModels(false); }
   }, [configuredProviderIds]);
-  useEffect(() => { if (tab === "models") { loadModelsTab(); loadCacheInfo(); } }, [tab, loadModelsTab, loadCacheInfo]);
+  useEffect(() => { if (tab === "models" || tab === "tiers") { loadModelsTab(); } if (tab === "models") loadCacheInfo(); }, [tab, loadModelsTab, loadCacheInfo]);
 
   // ── Tab 2: Refresh models from live provider APIs ───────────────────────
   const handleRefreshModels = useCallback(async () => {
@@ -235,6 +235,9 @@ export default function ModelsPage() {
     return result;
   }, [providerModels]);
 
+  // All enabled models (unfiltered) — used by Tiers tab
+  const allEnabledModels = useMemo(() => allProviderModels.filter((m) => enabledIds.has(m.id)), [allProviderModels, enabledIds]);
+  // Enabled models filtered for the Models tab display
   const enabledModels = allProviderModels.filter((m) => enabledIds.has(m.id) && (modelProvFilter === "all" || m.provider === modelProvFilter) && (!mq || m.label.toLowerCase().includes(mq) || m.id.toLowerCase().includes(mq)));
   const disabledModels = allProviderModels.filter((m) => !enabledIds.has(m.id) && (modelProvFilter === "all" || m.provider === modelProvFilter) && (!mq || m.label.toLowerCase().includes(mq) || m.id.toLowerCase().includes(mq)));
 
@@ -457,99 +460,172 @@ export default function ModelsPage() {
           )}
 
           {/* ═══════════════════════════════════════════════════════════════
-              TAB 3: TIERS
+              TAB 3: TIERS — assign enabled models to routing tiers
               ═══════════════════════════════════════════════════════════════ */}
           {tab === "tiers" && config && (
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              <div>
-                <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 mb-2">Chat Tiers</div>
-                <div className="space-y-1.5">
-                  {config.tiers.map((tier) => {
-                    const td = ALL_TIERS.find((t) => t.id === tier.tier_name);
-                    const isEditing = editingTier === tier.tier_name;
-                    const colour = PROVIDER_COLOURS[tier.provider] ?? PROVIDER_COLOURS.unknown;
-                    return (
-                      <div key={tier.tier_name} className="rounded-lg border border-border bg-card/60 overflow-hidden tech-transition">
-                        <button onClick={() => { if (!isEditing) { setEditingTier(tier.tier_name); setEditModel(tier.model); setEditProvider(tier.provider); setEditApiBase(""); setTestResult(null); } }}
-                          className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-secondary/30 tech-transition">
-                          <span className="text-base shrink-0">{td?.icon ?? "●"}</span>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs font-medium text-foreground">{td?.label ?? tier.tier_name}</span>
-                              {tier.provider_configured ? (
-                                <span className="text-[9px] px-1 py-0.5 rounded-full bg-success/10 text-success border border-success/20">Live</span>
-                              ) : (
-                                <span className="text-[9px] px-1 py-0.5 rounded-full bg-muted text-muted-foreground border border-border">No key</span>
+            <div className="flex-1 overflow-y-auto">
+              {/* Hint when no models are enabled */}
+              {allEnabledModels.length === 0 && !loadingModels && (
+                <div className="mx-4 mt-4 rounded-lg border border-warning/25 bg-warning/5 px-4 py-3 text-xs text-warning/80">
+                  ⚠ No models enabled. Go to the <button onClick={() => setTab("models")} className="underline hover:text-warning tech-transition">Models tab</button> and turn on models with the eye icon before assigning tiers.
+                </div>
+              )}
+
+              <div className="p-4 space-y-5">
+                {/* Chat Tiers */}
+                <div>
+                  <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 mb-3">Chat Tiers</div>
+                  <div className="space-y-2">
+                    {config.tiers.map((tier) => {
+                      const td = ALL_TIERS.find((t) => t.id === tier.tier_name);
+                      const isEditing = editingTier === tier.tier_name;
+                      const isTesting = testingTier === tier.tier_name;
+                      // Is the tier's current model in the enabled list?
+                      const currentEnabled = allEnabledModels.find((m) => m.id === tier.model);
+                      const modelNotInEnabled = allEnabledModels.length > 0 && !currentEnabled;
+                      const colour = PROVIDER_COLOURS[tier.provider] ?? PROVIDER_COLOURS.unknown;
+
+                      return (
+                        <div key={tier.tier_name} className={`rounded-xl border bg-card overflow-hidden tech-transition ${
+                          isEditing ? "border-primary/40" : modelNotInEnabled ? "border-warning/30" : "border-border"
+                        }`}>
+                          {/* Compact header row */}
+                          <button
+                            onClick={() => {
+                              if (isEditing) { setEditingTier(null); setTestResult(null); }
+                              else { setEditingTier(tier.tier_name); setEditModel(tier.model); setEditProvider(tier.provider); setEditApiBase(""); setTestResult(null); }
+                            }}
+                            className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-secondary/20 tech-transition"
+                          >
+                            <span className="text-xl shrink-0">{td?.icon ?? "●"}</span>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-sm font-semibold text-foreground">{td?.label ?? tier.tier_name}</span>
+                                {tier.provider_configured ? (
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-success/10 text-success border border-success/20 font-medium">Live</span>
+                                ) : (
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground border border-border">No key</span>
+                                )}
+                                {modelNotInEnabled && (
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-warning/10 text-warning border border-warning/20">⚠ Model not enabled</span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-medium ${colour}`}>
+                                  <span>{PROVIDER_ICONS[tier.provider] ?? "?"}</span>{tier.provider}
+                                </span>
+                                <span className="font-mono text-[10px] text-muted-foreground truncate max-w-[200px]">{tier.model}</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleTestTier(tier.tier_name); }}
+                                disabled={isTesting || !tier.provider_configured}
+                                className="rounded-lg border border-border px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:border-primary/30 disabled:opacity-40 tech-transition"
+                              >{isTesting ? "…" : "Test"}</button>
+                              <svg className={`w-4 h-4 text-muted-foreground/40 tech-transition ${isEditing ? "rotate-90" : ""}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                <path d="M6 3l5 5-5 5" />
+                              </svg>
+                            </div>
+                          </button>
+
+                          {testResult && editingTier === null && testingTier === null && tier.tier_name === (config.tiers.find((t) => t.tier_name === tier.tier_name)?.tier_name) && (
+                            <div className={`mx-4 mb-3 rounded-md border px-3 py-1.5 text-[10px] ${testResult.ok ? "border-success/30 bg-success/10 text-success" : "border-destructive/20 bg-destructive/5 text-destructive"}`}>
+                              {testResult.ok ? "✓" : "✗"} {testResult.text} · {testResult.ms}ms
+                            </div>
+                          )}
+
+                          {/* Expanded edit panel */}
+                          {isEditing && (
+                            <div className="border-t border-border bg-secondary/10 p-4 space-y-3">
+                              {/* Model picker — only enabled models */}
+                              <div>
+                                <label className="text-[11px] font-medium text-muted-foreground">
+                                  Model
+                                  {allEnabledModels.length === 0 && <span className="ml-1.5 text-warning">(no models enabled — go to Models tab first)</span>}
+                                </label>
+                                {loadingModels ? (
+                                  <div className="mt-2 text-xs text-muted-foreground flex items-center gap-2">
+                                    <span className="w-3 h-3 rounded-full border-2 border-muted border-t-primary animate-spin" />Loading enabled models…
+                                  </div>
+                                ) : allEnabledModels.length === 0 ? (
+                                  <div className="mt-2 rounded-lg border border-warning/20 bg-warning/5 p-2.5 text-[11px] text-warning/80">
+                                    Enable models in the <button onClick={() => { setEditingTier(null); setTab("models"); }} className="underline">Models tab</button> first.
+                                  </div>
+                                ) : (
+                                  <div className="mt-2 space-y-1 max-h-48 overflow-y-auto">
+                                    {allEnabledModels.map((m) => (
+                                      <button
+                                        key={m.id}
+                                        onClick={() => { setEditModel(m.id); setEditProvider(m.provider); }}
+                                        className={`w-full flex items-center justify-between rounded-lg border px-3 py-2 text-left tech-transition ${
+                                          editModel === m.id
+                                            ? "border-primary bg-primary/10"
+                                            : "border-border hover:border-primary/40 hover:bg-secondary/30"
+                                        }`}
+                                      >
+                                        <div className="min-w-0">
+                                          <div className="text-xs font-medium text-foreground truncate">{m.label}</div>
+                                          <div className="text-[9px] text-muted-foreground font-mono truncate">{m.id}</div>
+                                        </div>
+                                        <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                          <span className={`text-[9px] px-1.5 py-0.5 rounded border ${PROVIDER_COLOURS[m.provider] ?? PROVIDER_COLOURS.unknown}`}>{m.provider}</span>
+                                          {editModel === m.id && <span className="text-primary text-[10px]">&#10003;</span>}
+                                        </div>
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Local base URL for ollama/vllm */}
+                              {(editProvider === "ollama" || editProvider === "vllm") && (
+                                <div>
+                                  <label className="text-[11px] font-medium text-muted-foreground">Base URL</label>
+                                  <input type="text" value={editApiBase} onChange={(e) => setEditApiBase(e.target.value)}
+                                    placeholder={editProvider === "ollama" ? "http://localhost:11434/v1" : "http://localhost:8000/v1"}
+                                    className="w-full mt-1 rounded-lg border border-border bg-card px-3 py-2 text-xs text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none" />
+                                </div>
+                              )}
+
+                              {/* Actions */}
+                              <div className="flex items-center gap-2 pt-1">
+                                <button
+                                  onClick={() => handleSaveTier(tier.tier_name, editModel, (editProvider === "ollama" || editProvider === "vllm") ? editApiBase || undefined : undefined)}
+                                  disabled={savingTier || !editModel}
+                                  className="rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 tech-transition"
+                                >{savingTier ? "Saving…" : "Save"}</button>
+                                <button onClick={() => { setEditingTier(null); setTestResult(null); }}
+                                  className="rounded-lg border border-border px-4 py-2 text-xs text-muted-foreground hover:text-foreground tech-transition"
+                                >Cancel</button>
+                              </div>
+
+                              {testResult && (
+                                <div className={`rounded-md border px-3 py-1.5 text-[10px] ${testResult.ok ? "border-success/30 bg-success/10 text-success" : "border-destructive/20 bg-destructive/5 text-destructive"}`}>
+                                  {testResult.ok ? "✓" : "✗"} {testResult.text} · {testResult.ms}ms
+                                </div>
                               )}
                             </div>
-                            <div className="flex items-center gap-1.5 mt-0.5">
-                              <span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${colour}`}>
-                                <span className="text-[10px]">{PROVIDER_ICONS[tier.provider] ?? "?"}</span>{tier.provider}
-                              </span>
-                              <span className="font-mono text-[10px] text-muted-foreground truncate">{tier.model}</span>
-                            </div>
-                          </div>
-                          <span className="text-muted-foreground/40"><ChevronRight /></span>
-                        </button>
-                        {isEditing && (
-                          <div className="border-t border-border px-3 py-3 space-y-2 bg-secondary/20">
-                            <div><label className="text-[10px] font-medium text-muted-foreground">Provider</label>
-                              <div className="flex flex-wrap gap-1.5 mt-1">
-                                {config.providers.map((p) => (
-                                  <button key={p.id} onClick={() => { setEditProvider(p.id); setEditModel(p.models[0] ?? ""); }}
-                                    className={`rounded-md border px-2 py-1 text-[10px] tech-transition ${editProvider === p.id ? "border-primary bg-primary/20 text-primary" : "border-border bg-secondary/40 text-muted-foreground hover:border-primary/30"}`}>
-                                    {PROVIDER_ICONS[p.id] ?? "?"} {p.label}
-                                    {!p.configured && p.id !== "ollama" && <span className="ml-0.5 text-warning">!</span>}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                            <div><label className="text-[10px] font-medium text-muted-foreground">Model</label>
-                              <div className="flex gap-2 mt-1">
-                                <select value={editModel} onChange={(e) => setEditModel(e.target.value)}
-                                  className="flex-1 rounded-md border border-border bg-card px-2 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none">
-                                  {config.providers.find((p) => p.id === editProvider)?.models.map((m) => <option key={m} value={m}>{m}</option>)}
-                                  {(!config.providers.find((p) => p.id === editProvider) || config.providers.find((p) => p.id === editProvider)!.models.length === 0) && <option value={editModel}>{editModel}</option>}
-                                </select>
-                              </div>
-                            </div>
-                            {(editProvider === "ollama" || editProvider === "vllm") && (
-                              <div><label className="text-[10px] font-medium text-muted-foreground">Base URL</label>
-                                <input type="text" value={editApiBase} onChange={(e) => setEditApiBase(e.target.value)}
-                                  placeholder={editProvider === "ollama" ? "http://localhost:11434/v1" : "http://localhost:8000/v1"}
-                                  className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none mt-1" />
-                              </div>
-                            )}
-                            <div className="flex items-center gap-2 pt-1">
-                              <button onClick={() => handleSaveTier(tier.tier_name, editModel, (editProvider === "ollama" || editProvider === "vllm") ? editApiBase || undefined : undefined)}
-                                disabled={savingTier || !editModel}
-                                className="rounded-lg bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 tech-transition">{savingTier ? "Saving…" : "Save"}</button>
-                              <button onClick={() => handleTestTier(tier.tier_name)} disabled={testingTier === tier.tier_name || !tier.provider_configured}
-                                className="rounded-lg border border-border px-3 py-1.5 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-40 tech-transition">{testingTier === tier.tier_name ? "…" : "Test"}</button>
-                              <button onClick={() => setEditingTier(null)} className="rounded-lg text-[11px] text-muted-foreground hover:text-foreground tech-transition ml-auto">Cancel</button>
-                            </div>
-                            {testResult && (
-                              <div className={`rounded-md border px-2 py-1 text-[10px] ${testResult.ok ? "border-success/30 bg-success/10 text-success" : "border-destructive/20 bg-destructive/5 text-destructive"}`}>
-                                {testResult.ok ? "✓" : "✗"} {testResult.text} · {testResult.ms}ms
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-              <div>
-                <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 mb-2">Additional Capabilities</div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {ALL_TIERS.filter((td) => td.cat !== "chat").map((td) => (
-                    <div key={td.id} className="rounded-lg border border-border/40 bg-card/30 p-3 opacity-60">
-                      <div className="text-base mb-1">{td.icon}</div>
-                      <div className="text-[11px] font-medium text-muted-foreground">{td.label}</div>
-                      <div className="text-[9px] text-muted-foreground mt-0.5">Coming soon</div>
-                    </div>
-                  ))}
+
+                {/* Additional Capabilities */}
+                <div>
+                  <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 mb-3">Additional Capabilities</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {ALL_TIERS.filter((td) => td.cat !== "chat").map((td) => (
+                      <div key={td.id} className="rounded-xl border border-border/40 bg-card/30 p-4 opacity-60 text-center">
+                        <div className="text-2xl mb-2">{td.icon}</div>
+                        <div className="text-xs font-medium text-muted-foreground">{td.label}</div>
+                        <div className="text-[9px] text-muted-foreground/60 mt-1">{td.desc}</div>
+                        <div className="mt-2 text-[9px] px-2 py-0.5 rounded-full bg-secondary text-muted-foreground inline-block">Coming soon</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>

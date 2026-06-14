@@ -4,7 +4,7 @@
 FastAPI application services: gateway, orchestrator, ingestion, reconciler.
 
 ## Services
-- gateway/ -- FastAPI entry point, AG-UI chat, agent routes, OAuth, integration credential management (DB-backed, encrypted at rest)
+- gateway/ -- FastAPI entry point, AG-UI chat, agent routes, OAuth, integration credential management (DB-backed, encrypted at rest), MCP server registry, plugin registry
 - orchestrator/ -- Agent execution engine, mutation layer, MAF integration
 - ingestion/ -- ClickUp/Zoho webhook receivers, MCP servers
 - reconciler/ -- Nightly source-of-truth diff and escalation

@@ -16,6 +16,7 @@ GET  /integrations/test?service={name}
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -1197,6 +1198,365 @@ async def _run_test(service: str, settings: Any) -> dict[str, Any]:
             return {"ok": False, "detail": f"Status {resp.status_code}: {resp.text[:200]}"}
 
     return {"ok": False, "detail": f"No test defined for service '{service}'."}
+
+
+# ---------------------------------------------------------------------------
+# MCP Server Registry — CRUD + connection test
+# ---------------------------------------------------------------------------
+
+class McpServerRequest(BaseModel):
+    name: str
+    label: str = ""
+    description: str = ""
+    transport: str = "http-sse"  # "stdio" | "http-sse"
+    command: str | None = None   # stdio only
+    url: str | None = None       # http-sse only
+    env_vars: dict[str, str] = {}
+    headers: dict[str, str] = {}
+    agent_scope: list[str] = ["*"]
+    enabled: bool = True
+
+
+@router.get("/mcp", summary="List registered MCP servers")
+async def list_mcp_servers(
+    user: UserContext = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    """Return all MCP servers (enabled + disabled)."""
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        with get_session() as s:
+            rows = s.execute(
+                "SELECT name, label, description, transport, command, url, "
+                "env_vars, headers, agent_scope, enabled, created_at, updated_at "
+                "FROM mcp_servers ORDER BY created_at"
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for r in rows:
+            result.append({
+                "name": r[0], "label": r[1], "description": r[2],
+                "transport": r[3], "command": r[4], "url": r[5],
+                "env_vars": r[6] or {}, "headers": r[7] or {},
+                "agent_scope": r[8] or ["*"], "enabled": r[9],
+                "created_at": str(r[10]) if r[10] else None,
+                "updated_at": str(r[11]) if r[11] else None,
+            })
+        return result
+    except Exception as exc:
+        _log.warning("mcp.list_failed", error=str(exc))
+        raise HTTPException(500, f"DB error: {exc}") from exc
+
+
+@router.post("/mcp", status_code=status.HTTP_201_CREATED, summary="Register or update an MCP server")
+async def register_mcp_server(
+    req: McpServerRequest,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Add or update an MCP server configuration."""
+    if not re.match(r"^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$", req.name):
+        raise HTTPException(
+            422,
+            "MCP server name must be 2-50 lowercase letters, digits, "
+            "or hyphens.",
+        )
+    if req.transport == "stdio" and not req.command:
+        raise HTTPException(422, "stdio transport requires a 'command'.")
+    if req.transport == "http-sse" and not req.url:
+        raise HTTPException(422, "http-sse transport requires a 'url'.")
+
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        with get_session() as s:
+            s.execute(
+                """INSERT INTO mcp_servers (name, label, description, transport, command, url,
+                   env_vars, headers, agent_scope, enabled, updated_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,now())
+                   ON CONFLICT (name) DO UPDATE SET
+                   label=EXCLUDED.label, description=EXCLUDED.description,
+                   transport=EXCLUDED.transport, command=EXCLUDED.command,
+                   url=EXCLUDED.url, env_vars=EXCLUDED.env_vars,
+                   headers=EXCLUDED.headers, agent_scope=EXCLUDED.agent_scope,
+                   enabled=EXCLUDED.enabled, updated_at=now()""",
+                (req.name, req.label or req.name, req.description,
+                 req.transport, req.command, req.url,
+                 json.dumps(req.env_vars), json.dumps(req.headers),
+                 json.dumps(req.agent_scope), req.enabled),
+            )
+            s.commit()
+        _log.info("mcp.registered", name=req.name, actor=user.email)
+        return {"ok": True, "name": req.name}
+    except Exception as exc:
+        _log.warning("mcp.register_failed", name=req.name, error=str(exc))
+        raise HTTPException(500, f"DB error: {exc}") from exc
+
+
+@router.delete("/mcp/{name}", summary="Remove an MCP server")
+async def remove_mcp_server(
+    name: str,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Delete an MCP server from the registry."""
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        with get_session() as s:
+            result = s.execute(
+                "DELETE FROM mcp_servers WHERE name = %s", (name,)
+            )
+            s.commit()
+            if result.rowcount == 0:
+                raise HTTPException(404, f"MCP server '{name}' not found.")
+        _log.info("mcp.removed", name=name, actor=user.email)
+        return {"ok": True, "deleted": name}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"DB error: {exc}") from exc
+
+
+@router.post("/mcp/test", summary="Test connectivity to an MCP server")
+async def test_mcp_server(
+    req: McpServerRequest,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Perform a lightweight connectivity check for an MCP server.
+
+    For http-sse: makes a GET to the URL to verify reachability.
+    For stdio: checks that the command is executable.
+    Returns {ok, detail}.
+    """
+    if req.transport == "http-sse" and req.url:
+        try:
+            headers = dict(req.headers)
+            headers.setdefault("Accept", "application/json")
+            async with httpx.AsyncClient(timeout=8) as client:
+                resp = await client.get(req.url, headers=headers)
+                if resp.status_code < 500:
+                    return {"ok": True, "detail": f"Server reachable (HTTP {resp.status_code})."}
+                return {"ok": False, "detail": f"Server returned HTTP {resp.status_code}."}
+        except httpx.ConnectError:
+            return {"ok": False, "detail": f"Could not connect to {req.url}."}
+        except Exception as exc:
+            return {"ok": False, "detail": str(exc)}
+    if req.transport == "stdio" and req.command:
+        import shutil  # noqa: PLC0415
+        exe = (req.command or "").split()[0]
+        if shutil.which(exe):
+            return {"ok": True, "detail": f"Command '{exe}' found on PATH."}
+        return {"ok": False, "detail": f"Command '{exe}' not found on PATH."}
+    return {"ok": False, "detail": "No URL or command to test."}
+
+
+# ---------------------------------------------------------------------------
+# Plugin Registry — install from manifest URL, list, remove
+# ---------------------------------------------------------------------------
+
+class PluginInstallRequest(BaseModel):
+    manifest_url: str
+
+
+@router.get("/plugins", summary="List installed plugins")
+async def list_plugins(
+    user: UserContext = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    """Return all installed plugins."""
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        with get_session() as s:
+            rows = s.execute(
+                "SELECT id, name, label, description, manifest_url, openapi_url, "
+                "logo_url, auth_type, auth_config, manifest, openapi_spec, "
+                "tools_generated, enabled, version, created_at, updated_at "
+                "FROM plugins ORDER BY created_at"
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for r in rows:
+            result.append({
+                "id": str(r[0]), "name": r[1], "label": r[2],
+                "description": r[3], "manifest_url": r[4],
+                "openapi_url": r[5], "logo_url": r[6],
+                "auth_type": r[7], "auth_config": r[8] or {},
+                "manifest": r[9] or {}, "openapi_spec": r[10] or {},
+                "tools_generated": r[11] or [],
+                "enabled": r[12], "version": r[13],
+                "created_at": str(r[14]) if r[14] else None,
+                "updated_at": str(r[15]) if r[15] else None,
+            })
+        return result
+    except Exception as exc:
+        _log.warning("plugins.list_failed", error=str(exc))
+        raise HTTPException(500, f"DB error: {exc}") from exc
+
+
+@router.post("/plugins/install", status_code=status.HTTP_201_CREATED,
+             summary="Install a plugin from a manifest URL")
+async def install_plugin(
+    req: PluginInstallRequest,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Fetch the plugin manifest + OpenAPI spec from a URL and register it.
+
+    The manifest URL should point to an ai-plugin.json file.
+    The OpenAPI spec URL is read from the manifest's ``api.url`` field.
+    """
+    manifest_url = req.manifest_url.strip()
+    if not manifest_url.startswith(("https://", "http://")):
+        raise HTTPException(422, "Manifest URL must start with http:// or https://.")
+
+    # 1. Fetch the manifest
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            manifest_resp = await client.get(manifest_url, headers={"Accept": "application/json"})
+            if manifest_resp.status_code != 200:
+                raise HTTPException(422, f"Failed to fetch manifest: HTTP {manifest_resp.status_code}")
+            manifest: dict[str, Any] = manifest_resp.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(422, f"Failed to fetch manifest: {exc}") from exc
+
+    # 2. Validate required fields
+    plugin_name = (manifest.get("name_for_model") or manifest.get("name") or "").strip()
+    if not plugin_name:
+        raise HTTPException(422, "Manifest missing 'name_for_model' or 'name' field.")
+
+    label = (manifest.get("name_for_human") or plugin_name).strip()
+    description = (manifest.get("description_for_model") or manifest.get("description_for_human") or "").strip()
+    auth_type = (manifest.get("auth", {}) or {}).get("type", "none")
+    api_url = (manifest.get("api", {}) or {}).get("url", "")
+    logo_url = (manifest.get("logo_url") or "").strip()
+    version = (manifest.get("schema_version") or "0.0.0").strip()
+
+    # 3. Fetch OpenAPI spec if provided
+    openapi_spec: dict[str, Any] = {}
+    tools_generated: list[dict[str, Any]] = []
+    if api_url:
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                spec_resp = await client.get(api_url, headers={"Accept": "application/json, application/yaml"})
+                if spec_resp.status_code == 200:
+                    content_type = spec_resp.headers.get("content-type", "")
+                    if "yaml" in content_type:
+                        import yaml  # noqa: PLC0415
+                        openapi_spec = yaml.safe_load(spec_resp.text) or {}
+                    else:
+                        openapi_spec = spec_resp.json()
+                    # Generate tool definitions from OpenAPI paths
+                    tools_generated = _openapi_to_tool_defs(plugin_name, openapi_spec)
+        except Exception as exc:
+            _log.warning("plugins.openapi_fetch_failed", name=plugin_name, error=str(exc))
+
+    # 4. Store in DB
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        with get_session() as s:
+            s.execute(
+                """INSERT INTO plugins (name, label, description, manifest_url, openapi_url,
+                   logo_url, auth_type, auth_config, manifest, openapi_spec,
+                   tools_generated, enabled, version, updated_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,
+                           %s::jsonb,%s,%s,now())
+                   ON CONFLICT (name) DO UPDATE SET
+                   label=EXCLUDED.label, description=EXCLUDED.description,
+                   manifest_url=EXCLUDED.manifest_url, openapi_url=EXCLUDED.openapi_url,
+                   logo_url=EXCLUDED.logo_url, auth_type=EXCLUDED.auth_type,
+                   auth_config=EXCLUDED.auth_config, manifest=EXCLUDED.manifest,
+                   openapi_spec=EXCLUDED.openapi_spec,
+                   tools_generated=EXCLUDED.tools_generated,
+                   enabled=EXCLUDED.enabled, version=EXCLUDED.version,
+                   updated_at=now()""",
+                (plugin_name, label, description, manifest_url, api_url,
+                 logo_url, auth_type, json.dumps(manifest.get("auth", {}) or {}),
+                 json.dumps(manifest), json.dumps(openapi_spec),
+                 json.dumps(tools_generated), True, version),
+            )
+            s.commit()
+        _log.info("plugin.installed", name=plugin_name, actor=user.email)
+        return {
+            "ok": True, "name": plugin_name, "label": label,
+            "tools_count": len(tools_generated),
+            "auth_type": auth_type,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"DB error: {exc}") from exc
+
+
+@router.delete("/plugins/{plugin_id}", summary="Remove an installed plugin")
+async def remove_plugin(
+    plugin_id: str,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Delete a plugin from the registry."""
+    try:
+        import uuid as _uuid  # noqa: PLC0415
+        pid = _uuid.UUID(plugin_id)
+    except ValueError:
+        raise HTTPException(422, "Invalid plugin ID format.") from None
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        with get_session() as s:
+            result = s.execute("DELETE FROM plugins WHERE id = %s", (pid,))
+            s.commit()
+            if result.rowcount == 0:
+                raise HTTPException(404, f"Plugin '{plugin_id}' not found.")
+        _log.info("plugin.removed", id=plugin_id, actor=user.email)
+        return {"ok": True, "deleted": plugin_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"DB error: {exc}") from exc
+
+
+def _openapi_to_tool_defs(plugin_name: str, spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """Convert OpenAPI paths to CommandCenter tool definitions.
+
+    Each operation becomes a tool the agent can call.  Returns a list of
+    dicts with {name, description, parameters (JSON Schema), method, path}.
+    """
+    tools: list[dict[str, Any]] = []
+    paths = spec.get("paths", {}) if isinstance(spec, dict) else {}
+    for path_url, methods in paths.items():
+        if not isinstance(methods, dict):
+            continue
+        for method, op in methods.items():
+            if not isinstance(op, dict) or method not in ("get", "post", "put", "delete", "patch"):
+                continue
+            op_id = op.get("operationId", f"{method}_{path_url.strip('/').replace('/', '_')}")
+            tool_name = f"{plugin_name}_{op_id}".lower().replace("-", "_")[:64]
+            summary = op.get("summary", "") or op.get("description", "") or op_id
+            description = f"{summary} — {method.upper()} {path_url}"
+            # Build JSON Schema for parameters
+            params_schema: dict[str, Any] = {"type": "object", "properties": {}, "required": []}
+            for param in op.get("parameters", []) or []:
+                pname = param.get("name", "")
+                pdesc = param.get("description", "")
+                pschema = param.get("schema", {"type": "string"})
+                params_schema["properties"][pname] = {
+                    "description": pdesc, **pschema,
+                }
+                if param.get("required"):
+                    params_schema["required"].append(pname)
+            # Request body as a single "body" param
+            if op.get("requestBody"):
+                rb = op["requestBody"]
+                rb_desc = (rb.get("description") or "Request body")
+                content = (rb.get("content", {}) or {})
+                json_content = content.get("application/json", {})
+                rb_schema = json_content.get("schema", {"type": "object"})
+                params_schema["properties"]["body"] = {
+                    "description": rb_desc, **rb_schema,
+                }
+                if rb.get("required"):
+                    params_schema["required"].append("body")
+
+            tools.append({
+                "name": tool_name,
+                "description": description,
+                "parameters": params_schema,
+                "method": method.upper(),
+                "path": path_url,
+            })
+    return tools
 
 
 # ---------------------------------------------------------------------------

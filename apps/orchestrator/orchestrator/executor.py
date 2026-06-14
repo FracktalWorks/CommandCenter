@@ -262,6 +262,40 @@ When to save vs. let the platform handle it:
     automatically extracts memories after each run. Active save is for
     high-signal facts you want to guarantee are captured.
 
+### Workspace folders & file writing
+Your workspace has three folders.  ONLY files in these folders are visible to
+the operator in the Files Viewer sidebar:
+
+  - **outputs/** — DEFAULT for all agent-generated files (reports, scripts,
+    spreadsheets, PDFs, images, exports, etc.).  ``write_artifact`` auto-places
+    files here unless you specify otherwise.
+  - **inputs/** — User-uploaded files and attachments.  Read from here, do NOT
+    write here unless the user explicitly asks you to modify an uploaded file.
+  - **agent-data/** — Permanent reference data, templates, catalogues, and
+    knowledge that makes you better at your job.  If you discover or generate
+    information worth reusing across sessions, save it here.
+
+- **write_artifact(path, content, encoding?)** — Write a file to the workspace.
+  If *path* doesn't start with ``inputs/``, ``outputs/``, or ``agent-data/``,
+  the file is automatically placed in ``outputs/``.  Accepts text (default
+  UTF-8) or raw bytes (set ``encoding=None``).
+
+  **CRITICAL — embed the download link:**  The tool returns a ``download_url``
+  field.  You MUST include a clickable link in your response text so the
+  operator can download the file.  Example pattern:
+
+  ```
+  result = await write_artifact("q2_report.md", report_markdown)
+  # Then in your reply, write:
+  # Here is the report: [📄 Download Q2 Report]({result["download_url"]})
+  ```
+
+  For multiple files, list each with its download link:
+  ```
+  - [📄 Sales Report]({result1["download_url"]})
+  - [📊 Chart (PNG)]({result2["download_url"]})
+  ```
+
 ### Self-improvement & committing
 When you make changes to your own repository (new skills, bug fixes, improvements
 to agents.py or prompts), you MUST commit those changes using git so they can be
@@ -462,6 +496,81 @@ def _inject_agent_tools(agents: list[Any]) -> None:
                 opts.tools = existing
         except Exception:  # noqa: BLE001
             pass
+
+
+async def _inject_mcp_servers(agent: Any, agent_name: str) -> None:
+    """Query the MCP server registry and inject matching servers into the agent.
+
+    Reads the ``mcp_servers`` Postgres table, resolves any credential
+    references through the Integration Registry, and merges the MCP
+    server config into ``agent._default_options["mcp_servers"]``.
+
+    Only servers whose ``agent_scope`` includes ``"*"`` or the current
+    agent name are injected.
+
+    Best-effort: failures are silently swallowed so MCP issues never
+    block agent execution.
+    """
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        with get_session() as s:
+            rows = s.execute(
+                "SELECT name, transport, command, url, env_vars, headers, "
+                "agent_scope FROM mcp_servers WHERE enabled = true"
+            ).fetchall()
+    except Exception:  # noqa: BLE001
+        return  # Table may not exist yet — skip gracefully
+
+    mcp_config: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        name, transport, command, url, env_vars, headers, scope = r
+        # Check agent scope
+        scope_list: list = scope if isinstance(scope, list) else (
+            scope if isinstance(scope, str) else ["*"]
+        )
+        if isinstance(scope_list, str):
+            scope_list = [scope_list]
+        if "*" not in scope_list and agent_name not in scope_list:
+            continue
+
+        entry: dict[str, Any] = {"transport": transport}
+        if transport == "stdio" and command:
+            entry["command"] = command
+            # Resolve env var values from Integration Registry
+            resolved_env: dict[str, str] = {}
+            raw_env = env_vars or {}
+            for k, v in (raw_env if isinstance(raw_env, dict) else {}).items():
+                resolved_env[k] = str(v)
+            if resolved_env:
+                entry["env"] = resolved_env
+        elif transport == "http-sse" and url:
+            entry["url"] = url
+            raw_headers = headers or {}
+            resolved_headers: dict[str, str] = {}
+            for k, v in (raw_headers if isinstance(raw_headers, dict) else {}).items():
+                resolved_headers[k] = str(v)
+            if resolved_headers:
+                entry["headers"] = resolved_headers
+        else:
+            continue
+
+        mcp_config[name] = entry
+
+    if not mcp_config:
+        return
+
+    # Merge into agent's default_options
+    try:
+        opts = getattr(agent, "_default_options", None)
+        if isinstance(opts, dict):
+            existing = opts.get("mcp_servers") or {}
+            if isinstance(existing, dict):
+                existing.update(mcp_config)
+            else:
+                existing = mcp_config
+            opts["mcp_servers"] = existing
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class AgentRunError(Exception):
@@ -948,6 +1057,27 @@ async def run_agent(
 
             agents = loaded.build_agents()
             _inject_agent_tools(agents)  # inject call_agent / call_agent_background
+
+            # Set write_artifact context + ensure visible workspace dirs exist.
+            try:
+                from acb_skills.write_artifact import \
+                    _WRITE_ARTIFACT_CONTEXT  # noqa: PLC0415
+                _WRITE_ARTIFACT_CONTEXT["session_id"] = thread_id or run_id
+                _WRITE_ARTIFACT_CONTEXT["workspace_root"] = str(loaded.agent_dir)
+                _WRITE_ARTIFACT_CONTEXT["gateway_url"] = str(
+                    getattr(settings, "gateway_base_url", "http://127.0.0.1:8000")
+                )
+                _WRITE_ARTIFACT_CONTEXT["gateway_token"] = str(
+                    getattr(settings, "litellm_master_key", "")
+                    or getattr(settings, "gateway_internal_token",
+                               "sk-local-dev-change-me")
+                )
+                _ws_root = loaded.agent_dir
+                for _d in ("inputs", "outputs", "agent-data"):
+                    (_ws_root / _d).mkdir(parents=True, exist_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
+
             final_state = await _run_with_maf_agent(
                 agents,
                 agent_name=agent_name,
@@ -1185,6 +1315,9 @@ async def run_agent_stream(
             _inject_integrations_to_env(integrations)
             agents = loaded.build_agents()
             _inject_agent_tools(agents)  # inject call_agent / call_agent_background
+            # Inject MCP servers from the registry into every agent at runtime
+            for _a in agents:
+                await _inject_mcp_servers(_a, agent_name)
 
             # Set write_artifact context so the tool knows which session to
             # report files to and where the workspace root lives.
@@ -1200,6 +1333,13 @@ async def run_agent_stream(
                     getattr(settings, "litellm_master_key", "")
                     or getattr(settings, "gateway_internal_token", "sk-local-dev-change-me")
                 )
+
+                # Ensure the three visible workspace directories exist so the
+                # Files Viewer sidebar shows them even before the agent writes
+                # its first artefact.
+                _ws_root = loaded.agent_dir
+                for _d in ("inputs", "outputs", "agent-data"):
+                    (_ws_root / _d).mkdir(parents=True, exist_ok=True)
             except Exception:  # noqa: BLE001
                 pass
 

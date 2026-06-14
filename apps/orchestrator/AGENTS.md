@@ -14,8 +14,8 @@ and streams chat responses as AG-UI events.
 
 ## Local Contracts
 
-1. executor.py is the single entry point for agent execution (streaming and batch)
-2. copilot_agent.py provides CommandCenterCopilotAgent -- the MAF wrapper for Copilot SDK agents with BYOK
+1. executor.py is the single entry point for agent execution (streaming and batch). Injects platform tools, MCP server config from the registry, and integration credentials at runtime.
+2. copilot_agent.py provides CommandCenterCopilotAgent -- the MAF wrapper for Copilot SDK agents with BYOK + MCP server forwarding
 3. agents.py exports build_orchestrator_agent() -- the main orchestrator MAF Agent
 4. mutation.py handles Self_Mutation_Node -- spawns Docker sandbox on agent failure
 5. stream_relay.py buffers all SSE events to Redis Streams for fire-and-forget chat with live reconnection

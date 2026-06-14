@@ -17,7 +17,7 @@ webhook receivers, OAuth callbacks, and the Control Plane API.
 2. routes/agent.py -- /agent/run, /agent/run/stream (detached: agent survives client disconnect), /agent/run/{thread_id}/reconnect (replay + live follow), /agent/webhook, agent CRUD, mutation inbox (approve/reject)
 3. routes/chat.py -- Chat history CRUD (Postgres-backed sessions and messages) + GET /chat/active-sessions (Redis cc:active:* scan for running agents)
 4. routes/oauth.py -- OAuth authorize->callback->refresh for Zoho/ClickUp/Google
-5. routes/integrations.py -- Integration Registry management
+5. routes/integrations.py — Integration Registry management, MCP server CRUD, Plugin install/remove
 6. routes/memory.py -- Memory search and management endpoints
 7. routes/settings.py -- LLM settings, model config
 8. agents.json -- Dynamic agent registry (persisted alongside pyproject.toml)
@@ -52,8 +52,9 @@ webhook receivers, OAuth callbacks, and the Control Plane API.
   cc:stream:{tid} keeps growing; reconnect endpoint replays to RUN_FINISHED
   (E2E: uv run python scripts/_test_reconnect_e2e.py <agent> "<prompt>")
 - Active sessions: GET /chat/active-sessions lists running thread IDs
-- Workspace files: GET /agent/workspace/{id} lists files; .tmp/ and outputs/ are visible
+- Workspace files: GET /agent/workspace/{id} lists files; only inputs/, outputs/, and agent-data/ are visible to the frontend user (agent source code is hidden)
 - File download: GET /agent/workspace/{id}/file?path= serves raw bytes (50 MB cap)
+- Global artifacts: GET /agent/artifacts?agent=&category= lists all files from all agent workspaces; GET /agent/artifacts/file?agent=&path= serves raw bytes
 - All endpoints require auth (Bearer token + optional X-User-Email/X-User-Role)
 - Identity chain: Next.js → Bearer + user headers → deps.py resolves real UserContext
 - Chat sessions scoped by user.email; fallback to "default" for anonymous/internal calls

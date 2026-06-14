@@ -1137,7 +1137,7 @@ function AgentSidePanel({
             <AlertTriangle className="w-3.5 h-3.5 text-warning mt-0.5 shrink-0" />
             <div className="text-xs text-warning">
               <span className="font-medium">Agent blocked</span> \u2014 needs{" "}
-              <Link href="/apis" className="underline hover:opacity-80">
+              <Link href="/integrations" className="underline hover:opacity-80">
                 {missingDeps.map((i) => statuses.find((s) => s.service === i)?.label ?? i).join(", ")}
               </Link>
             </div>
@@ -1146,13 +1146,13 @@ function AgentSidePanel({
 
         {(agent.integrations?.length ?? 0) > 0 && (
           <div>
-            <div className="text-[10px] text-muted uppercase tracking-wider mb-1.5">Required APIs</div>
+            <div className="text-[10px] text-muted uppercase tracking-wider mb-1.5">Required Integrations</div>
             <div className="flex flex-wrap gap-1.5">
               {agent.integrations!.map((i) => {
                 const intg  = statuses.find((s) => s.service === i);
                 const state = intg === undefined ? "unknown" : intg.configured ? "ok" : "missing";
                 return (
-                  <Link key={i} href="/apis">
+                  <Link key={i} href="/integrations">
                     <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium cursor-pointer transition-colors ${
                       state === "ok"
                         ? "border-success/20 text-success bg-success/10 hover:bg-success/20"
@@ -1175,13 +1175,13 @@ function AgentSidePanel({
 
         {(agent.optional_integrations?.length ?? 0) > 0 && (
           <div>
-            <div className="text-[10px] text-muted uppercase tracking-wider mb-1.5">Optional APIs</div>
+            <div className="text-[10px] text-muted uppercase tracking-wider mb-1.5">Optional Integrations</div>
             <div className="flex flex-wrap gap-1.5">
               {agent.optional_integrations!.map((i) => {
                 const intg = statuses.find((s) => s.service === i);
                 const ok   = intg?.configured === true;
                 return (
-                  <Link key={i} href="/apis">
+                  <Link key={i} href="/integrations">
                     <span className={`inline-flex items-center gap-1.5 rounded-full border border-dashed px-2.5 py-1 text-xs cursor-pointer transition-colors ${
                       ok ? "border-success/20 text-success hover:bg-success/10" : "border-border text-muted-foreground hover:bg-secondary"
                     }`}>

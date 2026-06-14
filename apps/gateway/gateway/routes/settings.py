@@ -773,18 +773,24 @@ async def set_copilot_model(
 # Legacy keys: "custom" is treated as an alias for "enabled".
 # ---------------------------------------------------------------------------
 
-def _custom_models_path() -> Path:
-    """Locate infra/custom_models.json next to infra/litellm/config.yaml."""
+def _enabled_models_path() -> Path:
+    """Locate infra/enabled_models.json (or legacy custom_models.json)."""
     try:
-        return _infra_dir() / "custom_models.json"
+        infra = _infra_dir()
+        new_path = infra / "enabled_models.json"
+        old_path = infra / "custom_models.json"
+        # Migrate legacy file on first access
+        if not new_path.exists() and old_path.exists():
+            old_path.rename(new_path)
+        return new_path
     except FileNotFoundError:
-        return Path.cwd() / "custom_models.json"
+        return Path.cwd() / "enabled_models.json"
 
 
 def _load_catalogue() -> dict[str, object]:
     """Load model catalogue: {enabled: [...], hidden: [...]}."""
     import json  # noqa: PLC0415
-    p = _custom_models_path()
+    p = _enabled_models_path()
     if not p.exists():
         return {"enabled": [], "hidden": []}
     try:
@@ -800,7 +806,9 @@ def _load_catalogue() -> dict[str, object]:
             enabled = data.get("enabled") or data.get("custom") or []
             return {
                 "enabled": enabled if isinstance(enabled, list) else [],
-                "hidden": data.get("hidden", []) if isinstance(data, dict) else [],
+                "hidden": (
+                    data.get("hidden", []) if isinstance(data, dict) else []
+                ),
             }
         return {"enabled": [], "hidden": []}
     except Exception:  # noqa: BLE001
@@ -809,7 +817,7 @@ def _load_catalogue() -> dict[str, object]:
 
 def _save_catalogue(catalogue: dict[str, object]) -> None:
     import json  # noqa: PLC0415
-    p = _custom_models_path()
+    p = _enabled_models_path()
     p.write_text(json.dumps(catalogue, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
@@ -853,7 +861,7 @@ class EnabledModelAddRequest(BaseModel):
 CustomModelAddRequest = EnabledModelAddRequest
 
 
-@router.get("/llm/custom-models")
+@router.get("/llm/enabled-models")
 async def list_enabled_models(
     _user: UserContext = Depends(get_current_user),
 ) -> dict[str, object]:
@@ -911,7 +919,7 @@ async def add_custom_model(
     return EnabledModelEntry(**entry)
 
 
-@router.delete("/llm/custom-models/{model_id:path}", status_code=200)
+@router.delete("/llm/enabled-models/{model_id:path}", status_code=200)
 async def remove_enabled_model(
     model_id: str,
     _user: UserContext = Depends(get_current_user),

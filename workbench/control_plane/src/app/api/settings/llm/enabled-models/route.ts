@@ -1,6 +1,6 @@
 /**
- * GET  /api/settings/llm/custom-models   — list user-defined model entries
- * POST /api/settings/llm/custom-models   — add a custom model
+ * GET  /api/settings/llm/enabled-models   — list enabled model entries
+ * POST /api/settings/llm/enabled-models   — enable a model
  */
 import { NextRequest, NextResponse } from "next/server";
 
@@ -17,7 +17,7 @@ const HEADERS = {
 
 export async function GET(): Promise<NextResponse> {
   try {
-    const r = await fetch(`${GATEWAY}/settings/llm/custom-models`, {
+    const r = await fetch(`${GATEWAY}/settings/llm/enabled-models`, {
       headers: HEADERS,
       signal: AbortSignal.timeout(4_000),
     });
@@ -31,7 +31,7 @@ export async function GET(): Promise<NextResponse> {
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const body = await req.json();
   try {
-    const r = await fetch(`${GATEWAY}/settings/llm/custom-models`, {
+    const r = await fetch(`${GATEWAY}/settings/llm/enabled-models`, {
       method: "POST",
       headers: HEADERS,
       body: JSON.stringify(body),

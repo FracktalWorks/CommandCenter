@@ -1,5 +1,5 @@
 /**
- * DELETE /api/settings/llm/custom-models/[id] — remove a custom model entry
+ * DELETE /api/settings/llm/enabled-models/[id] — disable a model
  */
 import { NextRequest, NextResponse } from "next/server";
 
@@ -17,7 +17,7 @@ export async function DELETE(
   const modelId = decodeURIComponent(id);
   try {
     const r = await fetch(
-      `${GATEWAY}/settings/llm/custom-models/${encodeURIComponent(modelId)}`,
+      `${GATEWAY}/settings/llm/enabled-models/${encodeURIComponent(modelId)}`,
       {
         method: "DELETE",
         headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },

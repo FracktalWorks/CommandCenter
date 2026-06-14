@@ -147,7 +147,7 @@ export default function ModelsPage() {
 
       let enabled = new Set<string>();
       try {
-        const custRes = await fetch("/api/settings/llm/custom-models");
+        const custRes = await fetch("/api/settings/llm/enabled-models");
         if (custRes.ok) {
           const custData = await custRes.json();
           const list = Array.isArray(custData) ? custData : ((custData as { custom?: { id: string }[] }).custom ?? []);
@@ -182,10 +182,10 @@ export default function ModelsPage() {
     setBusyModel(m.id);
     try {
       if (enabledIds.has(m.id)) {
-        await fetch(`/api/settings/llm/custom-models/${encodeURIComponent(m.id)}`, { method: "DELETE" });
+        await fetch(`/api/settings/llm/enabled-models/${encodeURIComponent(m.id)}`, { method: "DELETE" });
         setEnabledIds((prev) => { const s = new Set(prev); s.delete(m.id); return s; });
       } else {
-        await fetch("/api/settings/llm/custom-models", {
+        await fetch("/api/settings/llm/enabled-models", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: m.id, label: m.label, provider: m.provider }),

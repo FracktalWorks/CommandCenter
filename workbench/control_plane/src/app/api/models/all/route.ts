@@ -163,7 +163,7 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
   let enabledModels: { id: string; label: string; provider: string; group: string }[] = [];
   const hiddenSet = new Set<string>();
   try {
-    const cr = await fetch(`${GATEWAY_URL}/settings/llm/custom-models`, {
+    const cr = await fetch(`${GATEWAY_URL}/settings/llm/enabled-models`, {
       headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
       signal: AbortSignal.timeout(3_000),
     });

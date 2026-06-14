@@ -967,7 +967,312 @@ async def unhide_model(
 
 
 # ---------------------------------------------------------------------------
-# GET /settings/llm/provider-models — list models for a provider with capabilities
+# Provider model cache
+# Structure of infra/provider_models_cache.json:
+#   {
+#     "openrouter": {
+#       "fetched_at": "2026-06-14T10:00:00Z",
+#       "models": [{id, label, provider, vision, audio, reasoning,
+#                   context_window, max_output, desc}, ...]
+#     },
+#     ...
+#   }
+# ---------------------------------------------------------------------------
+
+_CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7 days
+
+
+def _models_cache_path() -> Path:
+    try:
+        return _infra_dir() / "provider_models_cache.json"
+    except FileNotFoundError:
+        return Path.cwd() / "provider_models_cache.json"
+
+
+def _load_models_cache() -> dict[str, Any]:
+    import json  # noqa: PLC0415
+    p = _models_cache_path()
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_models_cache(cache: dict[str, Any]) -> None:
+    import json  # noqa: PLC0415
+    p = _models_cache_path()
+    p.write_text(
+        json.dumps(cache, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _cache_entry_fresh(entry: dict[str, Any]) -> bool:
+    """True if the cache entry was fetched within _CACHE_TTL_SECONDS."""
+    import datetime  # noqa: PLC0415
+    fetched_at = entry.get("fetched_at", "")
+    if not fetched_at:
+        return False
+    try:
+        ts = datetime.datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+        now = datetime.datetime.now(datetime.timezone.utc)
+        return (now - ts).total_seconds() < _CACHE_TTL_SECONDS
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _model_info_from_caps(model_id: str, provider: str) -> ModelInfo:
+    """Build a ModelInfo from _MODEL_CAPABILITIES, falling back to bare defaults."""
+    caps = _MODEL_CAPABILITIES.get(model_id, {})
+    return ModelInfo(
+        id=model_id,
+        label=caps.get("label", model_id.split("/")[-1]),
+        provider=provider,
+        vision=caps.get("vision", False),
+        audio=caps.get("audio", False),
+        reasoning=caps.get("reasoning", False),
+        context_window=caps.get("context_window", 0),
+        max_output=caps.get("max_output", 0),
+        desc=caps.get("desc", ""),
+    )
+
+
+# ── Per-provider live fetch functions ────────────────────────────────────────
+
+async def _fetch_openrouter(key: str | None) -> list[ModelInfo]:
+    """Fetch all models from OpenRouter — no auth required, key adds rate limits."""
+    import datetime  # noqa: PLC0415
+    headers: dict[str, str] = {}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(
+                "https://openrouter.ai/api/v1/models",
+                headers=headers,
+            )
+            r.raise_for_status()
+            data = r.json().get("data", [])
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("openrouter.fetch_failed", error=str(exc))
+        return []
+
+    result: list[ModelInfo] = []
+    for m in data:
+        mid = f"openrouter/{m.get('id', '').lstrip('openrouter/')}"
+        name: str = m.get("name", mid.split("/")[-1])
+        # Strip common "Provider: " prefixes from display names
+        for prefix in ("OpenRouter: ", "openrouter: "):
+            name = name.removeprefix(prefix)
+        ctx = int(m.get("context_length") or 0)
+        arch = m.get("architecture") or {}
+        inp_mod: list[str] = arch.get("input_modalities") or []
+        vision = "image" in inp_mod
+        audio = "audio" in inp_mod
+        # Heuristic reasoning flag
+        lid = mid.lower()
+        reasoning = any(
+            x in lid
+            for x in ("r1", "reasoner", "thinking", "o3", "o1-", "deepseek-r")
+        )
+        # Check static caps first (more accurate)
+        caps = _MODEL_CAPABILITIES.get(mid, {})
+        result.append(ModelInfo(
+            id=mid,
+            label=caps.get("label", name),
+            provider="openrouter",
+            vision=caps.get("vision", vision),
+            audio=caps.get("audio", audio),
+            reasoning=caps.get("reasoning", reasoning),
+            context_window=caps.get("context_window", ctx),
+            max_output=caps.get("max_output", 0),
+            desc=caps.get("desc", m.get("description", "")[:120]),
+        ))
+    return result
+
+
+async def _fetch_openai_compat(
+    provider: str,
+    base_url: str,
+    api_key: str,
+    prefix: str,
+    auth_header: str = "Authorization",
+    auth_scheme: str = "Bearer",
+    extra_headers: dict[str, str] | None = None,
+) -> list[ModelInfo]:
+    """Fetch models from any OpenAI-compatible endpoint."""
+    hdrs: dict[str, str] = {auth_header: f"{auth_scheme} {api_key}"}
+    if extra_headers:
+        hdrs.update(extra_headers)
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(f"{base_url}/models", headers=hdrs)
+            r.raise_for_status()
+            data = r.json().get("data", [])
+    except Exception as exc:  # noqa: BLE001
+        _log.warning(f"{provider}.fetch_failed", error=str(exc))
+        return []
+
+    result: list[ModelInfo] = []
+    for m in data:
+        raw_id: str = m.get("id", "")
+        # Skip empty or ownership-only entries
+        if not raw_id or ":" in raw_id:
+            continue
+        mid = f"{prefix}{raw_id}"
+        result.append(_model_info_from_caps(mid, provider))
+    return result
+
+
+async def _fetch_gemini(api_key: str) -> list[ModelInfo]:
+    """Fetch models from Google Generative Language API."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                "https://generativelanguage.googleapis.com/v1beta/models",
+                params={"key": api_key, "pageSize": 100},
+            )
+            r.raise_for_status()
+            data = r.json().get("models", [])
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("gemini.fetch_failed", error=str(exc))
+        return []
+
+    result: list[ModelInfo] = []
+    for m in data:
+        name: str = m.get("name", "")  # "models/gemini-2.0-flash"
+        raw = name.removeprefix("models/")
+        if not raw:
+            continue
+        # Only include generative models
+        methods: list[str] = m.get("supportedGenerationMethods", [])
+        if "generateContent" not in methods:
+            continue
+        mid = f"gemini/{raw}"
+        ctx = int(m.get("inputTokenLimit") or 0)
+        out = int(m.get("outputTokenLimit") or 0)
+        caps = _MODEL_CAPABILITIES.get(mid, {})
+        result.append(ModelInfo(
+            id=mid,
+            label=caps.get("label", m.get("displayName", raw)),
+            provider="gemini",
+            vision=caps.get("vision", False),
+            audio=caps.get("audio", False),
+            reasoning=caps.get("reasoning", False),
+            context_window=caps.get("context_window", ctx),
+            max_output=caps.get("max_output", out),
+            desc=caps.get("desc", m.get("description", "")[:120]),
+        ))
+    return result
+
+
+async def _fetch_anthropic(api_key: str) -> list[ModelInfo]:
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                "https://api.anthropic.com/v1/models",
+                headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            )
+            r.raise_for_status()
+            data = r.json().get("data", [])
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("anthropic.fetch_failed", error=str(exc))
+        return []
+
+    result: list[ModelInfo] = []
+    for m in data:
+        raw = m.get("id", "")
+        if not raw:
+            continue
+        mid = f"anthropic/{raw}"
+        result.append(_model_info_from_caps(mid, "anthropic"))
+    return result
+
+
+async def _fetch_ollama(base_url: str) -> list[ModelInfo]:
+    url = base_url.rstrip("/")
+    # Try the /api/tags endpoint (Ollama native)
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f"{url}/api/tags")
+            r.raise_for_status()
+            data = r.json().get("models", [])
+    except Exception:  # noqa: BLE001
+        return []
+
+    result: list[ModelInfo] = []
+    for m in data:
+        raw = m.get("name", "")
+        if not raw:
+            continue
+        mid = f"ollama/{raw}"
+        result.append(_model_info_from_caps(mid, "ollama"))
+    return result
+
+
+async def _fetch_live_models(
+    provider: str,
+    api_key: str | None = None,
+    api_base: str | None = None,
+) -> list[ModelInfo]:
+    """Dispatch to the right live-fetch function per provider."""
+    if provider == "openrouter":
+        return await _fetch_openrouter(api_key)
+
+    if provider == "gemini" and api_key:
+        return await _fetch_gemini(api_key)
+
+    if provider == "anthropic" and api_key:
+        return await _fetch_anthropic(api_key)
+
+    if provider == "openai" and api_key:
+        return await _fetch_openai_compat(
+            "openai", "https://api.openai.com/v1", api_key, "openai/",
+        )
+
+    if provider == "deepseek" and api_key:
+        return await _fetch_openai_compat(
+            "deepseek", "https://api.deepseek.com/v1", api_key, "deepseek/",
+        )
+
+    if provider == "groq" and api_key:
+        return await _fetch_openai_compat(
+            "groq", "https://api.groq.com/openai/v1", api_key, "groq/",
+        )
+
+    if provider == "mistral" and api_key:
+        return await _fetch_openai_compat(
+            "mistral", "https://api.mistral.ai/v1", api_key, "mistral/",
+        )
+
+    if provider == "together" and api_key:
+        return await _fetch_openai_compat(
+            "together",
+            "https://api.together.xyz/v1",
+            api_key,
+            "together_ai/",
+        )
+
+    if provider == "ollama":
+        base = api_base or "http://localhost:11434"
+        return await _fetch_ollama(base)
+
+    # github / vllm / unknown — fall back to static list
+    return []
+
+
+def _static_models_for_provider(provider: str) -> list[ModelInfo]:
+    """Return static ModelInfo list from _PROVIDER_MODELS."""
+    return [
+        _model_info_from_caps(mid, provider)
+        for mid in _PROVIDER_MODELS.get(provider, [])
+    ]
+
+
+# ---------------------------------------------------------------------------
+# GET /settings/llm/provider-models — return cached (or static fallback) models
 # ---------------------------------------------------------------------------
 
 @router.get("/llm/provider-models", response_model=list[ModelInfo])
@@ -975,25 +1280,172 @@ async def list_provider_models(
     provider: str,
     _user: UserContext = Depends(get_current_user),
 ) -> list[ModelInfo]:
-    """Return all known models for a provider with capability metadata.
+    """Return models for a provider.
 
-    Combines the static model list (_PROVIDER_MODELS) with capability
-    metadata (_MODEL_CAPABILITIES) to give the frontend rich model info.
-    Unknown models return with empty capabilities.
+    Checks the on-disk cache first.  If the cache entry is stale or missing,
+    falls back to the static list so the UI is never empty.  Use the refresh
+    endpoint to populate / update the cache.
     """
-    models = _PROVIDER_MODELS.get(provider, [])
-    result: list[ModelInfo] = []
-    for model_id in models:
-        caps = _MODEL_CAPABILITIES.get(model_id, {})
-        result.append(ModelInfo(
-            id=model_id,
-            label=caps.get("label", model_id.split("/")[-1]),
+    cache = _load_models_cache()
+    entry = cache.get(provider, {})
+    if entry and _cache_entry_fresh(entry):
+        raw = entry.get("models", [])
+        return [ModelInfo(**m) for m in raw]
+
+    # Cache miss / stale → serve static list (UI never empty)
+    return _static_models_for_provider(provider)
+
+
+class RefreshRequest(BaseModel):
+    providers: list[str] | None = None  # None = all configured
+
+
+class RefreshResult(BaseModel):
+    provider: str
+    count: int
+    fetched_at: str
+    error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# POST /settings/llm/provider-models/refresh — fetch live models from APIs
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/llm/provider-models/refresh",
+    response_model=list[RefreshResult],
+)
+async def refresh_provider_models(
+    req: RefreshRequest,
+    _user: UserContext = Depends(get_current_user),
+) -> list[RefreshResult]:
+    """Fetch the latest model list from each configured provider and cache it.
+
+    Pass ``providers`` to refresh only specific providers, or omit / pass
+    ``null`` to refresh all configured ones.  Results are written to
+    infra/provider_models_cache.json and returned immediately.
+    """
+    import datetime  # noqa: PLC0415
+
+    # Determine which providers to refresh
+    to_refresh: list[str] = req.providers or list(_PROVIDER_ENV_MAP.keys())
+    # Always include openrouter (no key required)
+    if "openrouter" not in to_refresh:
+        to_refresh.append("openrouter")
+
+    cache = _load_models_cache()
+    results: list[RefreshResult] = []
+
+    for provider in to_refresh:
+        # Resolve API key from env
+        env_var = _PROVIDER_ENV_MAP.get(provider, "")
+        api_key: str | None = None
+        if env_var:
+            api_key = os.environ.get(env_var, "").strip() or None
+            if not api_key:
+                try:
+                    api_key = (
+                        getattr(get_settings(), env_var.lower(), "") or ""
+                    ).strip() or None
+                except Exception:  # noqa: BLE001
+                    pass
+
+        # Skip providers that need a key but don't have one (except openrouter)
+        if provider != "openrouter" and provider not in ("ollama", "vllm") and not api_key:
+            results.append(RefreshResult(
+                provider=provider,
+                count=0,
+                fetched_at=datetime.datetime.now(
+                    datetime.timezone.utc
+                ).isoformat(),
+                error="No API key configured",
+            ))
+            continue
+
+        fetched_at = datetime.datetime.now(
+            datetime.timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            models = await _fetch_live_models(provider, api_key)
+        except Exception as exc:  # noqa: BLE001
+            models = []
+            _log.warning(
+                "provider_models.refresh_failed",
+                provider=provider,
+                error=str(exc),
+            )
+            results.append(RefreshResult(
+                provider=provider,
+                count=0,
+                fetched_at=fetched_at,
+                error=str(exc),
+            ))
+            continue
+
+        if not models:
+            # Live fetch returned nothing — keep previous cache entry if any
+            prev = cache.get(provider, {})
+            results.append(RefreshResult(
+                provider=provider,
+                count=len(prev.get("models", [])),
+                fetched_at=fetched_at,
+                error="No models returned from API",
+            ))
+            continue
+
+        cache[provider] = {
+            "fetched_at": fetched_at,
+            "models": [m.model_dump() for m in models],
+        }
+        results.append(RefreshResult(
             provider=provider,
-            vision=caps.get("vision", False),
-            audio=caps.get("audio", False),
-            reasoning=caps.get("reasoning", False),
-            context_window=caps.get("context_window", 0),
-            max_output=caps.get("max_output", 0),
-            desc=caps.get("desc", ""),
+            count=len(models),
+            fetched_at=fetched_at,
         ))
-    return result
+        _log.info(
+            "provider_models.refreshed",
+            provider=provider,
+            count=len(models),
+        )
+
+    _save_models_cache(cache)
+    return results
+
+
+# ---------------------------------------------------------------------------
+# GET /settings/llm/provider-models/cache-info — metadata about the cache
+# ---------------------------------------------------------------------------
+
+class CacheInfo(BaseModel):
+    provider: str
+    fetched_at: str | None
+    count: int
+    fresh: bool
+
+
+@router.get(
+    "/llm/provider-models/cache-info",
+    response_model=list[CacheInfo],
+)
+async def get_cache_info(
+    _user: UserContext = Depends(get_current_user),
+) -> list[CacheInfo]:
+    """Return cache metadata (last-fetched timestamp, model count, freshness)."""
+    cache = _load_models_cache()
+    result: list[CacheInfo] = []
+    for provider in list(_PROVIDER_ENV_MAP.keys()) + ["openrouter"]:
+        entry = cache.get(provider, {})
+        result.append(CacheInfo(
+            provider=provider,
+            fetched_at=entry.get("fetched_at"),
+            count=len(entry.get("models", [])),
+            fresh=_cache_entry_fresh(entry),
+        ))
+    # Deduplicate (openrouter may appear twice)
+    seen: set[str] = set()
+    deduped: list[CacheInfo] = []
+    for c in result:
+        if c.provider not in seen:
+            seen.add(c.provider)
+            deduped.append(c)
+    return deduped

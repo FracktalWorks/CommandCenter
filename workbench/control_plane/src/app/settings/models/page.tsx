@@ -67,6 +67,10 @@ export default function ModelsPage() {
   const [modelProvFilter, setModelProvFilter] = useState<string>("all");
   const [busyModel, setBusyModel] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<ModelInfo | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [cacheInfo, setCacheInfo] = useState<Record<string, string | null>>({});
+  // lastSynced: most recent fetched_at across all cached providers
+  const [lastSynced, setLastSynced] = useState<string | null>(null);
 
   // ── Tab 3: Editing tier ──────────────────────────────────────────────────
   const [editingTier, setEditingTier] = useState<string | null>(null);
@@ -104,6 +108,24 @@ export default function ModelsPage() {
   const connCount = mergedProviders.filter((p) => p.configured).length;
 
   // ── Tab 2: Load models from EACH configured provider ─────────────────────
+  // Load cache-info (last-synced timestamps)
+  const loadCacheInfo = useCallback(async () => {
+    try {
+      const r = await fetch("/api/settings/llm/provider-models/refresh");
+      if (r.ok) {
+        const data: { provider: string; fetched_at: string | null; count: number; fresh: boolean }[] = await r.json();
+        const map: Record<string, string | null> = {};
+        let newest: string | null = null;
+        data.forEach((d) => {
+          map[d.provider] = d.fetched_at;
+          if (d.fetched_at && (!newest || d.fetched_at > newest)) newest = d.fetched_at;
+        });
+        setCacheInfo(map);
+        setLastSynced(newest);
+      }
+    } catch { /* ok */ }
+  }, []);
+
   const loadModelsTab = useCallback(async () => {
     const configured = configuredProviderIds;
     if (configured.length === 0) { setProviderModels(new Map()); setEnabledIds(new Set()); setLoadingModels(false); return; }
@@ -137,7 +159,23 @@ export default function ModelsPage() {
       setEnabledIds(enabled);
     } catch { /* ok */ } finally { setLoadingModels(false); }
   }, [configuredProviderIds]);
-  useEffect(() => { if (tab === "models") loadModelsTab(); }, [tab, loadModelsTab]);
+  useEffect(() => { if (tab === "models") { loadModelsTab(); loadCacheInfo(); } }, [tab, loadModelsTab, loadCacheInfo]);
+
+  // ── Tab 2: Refresh models from live provider APIs ───────────────────────
+  const handleRefreshModels = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      // Refresh only configured providers
+      const body = configuredProviderIds.length > 0 ? { providers: configuredProviderIds } : {};
+      await fetch("/api/settings/llm/provider-models/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      await loadModelsTab();
+      await loadCacheInfo();
+    } finally { setRefreshing(false); }
+  }, [configuredProviderIds, loadModelsTab, loadCacheInfo]);
 
   // ── Tab 2: Toggle model enabled/disabled (add/remove from LiteLLM custom-models) ─
   const toggleEnabled = async (m: ModelInfo) => {
@@ -310,7 +348,7 @@ export default function ModelsPage() {
           {tab === "models" && (
             <div className="flex-1 flex overflow-hidden">
               <div className="flex-1 overflow-y-auto">
-                {/* Filter pills */}
+                {/* Filter pills + refresh */}
                 <div className="px-4 pt-3 pb-2 flex items-center gap-1.5 flex-wrap">
                   <button onClick={() => setModelProvFilter("all")}
                     className={`px-2.5 py-1 rounded-full text-[11px] font-medium tech-transition ${modelProvFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}>All</button>
@@ -320,6 +358,22 @@ export default function ModelsPage() {
                       {pid} <span className="opacity-50">{(providerModels.get(pid) ?? []).length}</span>
                     </button>
                   ))}
+                  {/* Refresh button + last-synced */}
+                  <div className="ml-auto flex items-center gap-2 shrink-0">
+                    {lastSynced && (
+                      <span className="text-[9px] text-muted-foreground hidden sm:inline" title={new Date(lastSynced).toLocaleString()}>
+                        Synced {new Date(lastSynced).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                      </span>
+                    )}
+                    <button onClick={handleRefreshModels} disabled={refreshing || configuredProviderIds.length === 0}
+                      className="flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:border-primary/30 disabled:opacity-40 tech-transition"
+                      title="Fetch latest models from all configured providers">
+                      <svg className={`w-3 h-3 ${refreshing ? "animate-spin" : ""}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <path d="M14 8A6 6 0 1 1 8 2" /><path d="M14 2v4h-4" />
+                      </svg>
+                      {refreshing ? "Syncing…" : "Refresh"}
+                    </button>
+                  </div>
                 </div>
                 <div className="px-4 pb-2">
                   <div className="relative">
@@ -334,7 +388,13 @@ export default function ModelsPage() {
                   ) : configuredProviderIds.length === 0 ? (
                     <div className="text-center py-12 text-xs text-muted-foreground">Connect a provider in the Providers tab first.</div>
                   ) : allProviderModels.length === 0 ? (
-                    <div className="text-center py-12 text-xs text-muted-foreground">No models returned from configured providers.</div>
+                    <div className="text-center py-12 text-xs text-muted-foreground space-y-2">
+                      <p>No models loaded yet.</p>
+                      <button onClick={handleRefreshModels} disabled={refreshing}
+                        className="rounded-lg border border-border px-3 py-1.5 text-xs text-foreground hover:border-primary/30 tech-transition disabled:opacity-40">
+                        {refreshing ? "Fetching…" : "Fetch models from providers →"}
+                      </button>
+                    </div>
                   ) : (
                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
                       {enabledModels.map((m) => (

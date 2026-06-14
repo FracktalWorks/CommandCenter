@@ -267,22 +267,33 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
       runtime: "litellm" as ModelRuntime,
       group: m.group,
     })),
-    // Custom models added by the user that aren't in the built-in LITELLM_MODELS list
-    // (e.g. models fetched via the refresh and enabled in the Models tab).
+    // Custom models from the enabled list that aren't already covered above.
+    // Normalise the group name: use the provider label rather than whatever
+    // raw string was stored (old "Add model" form used "Custom — X" prefixes).
     ...customModels
       .filter(
         (m) =>
           !hiddenSet.has(m.id) &&
           !tierModels.some((t) => t.id === m.id) &&
           !litellmModels.some((b) => b.id === m.id) &&
-          !LITELLM_MODELS.some((b) => b.id === m.id), // not a known built-in
+          !LITELLM_MODELS.some((b) => b.id === m.id),
       )
-      .map((m) => ({
-        id: m.id,
-        label: m.label,
-        runtime: "litellm" as ModelRuntime,
-        group: m.group || `${m.provider}`,
-      })),
+      .map((m) => {
+        // Strip legacy "Custom — X" / "Custom - X" prefixes and derive a clean group
+        const providerLabel: Record<string, string> = {
+          gemini: "Gemini", openai: "OpenAI", anthropic: "Anthropic",
+          openrouter: "OpenRouter", github: "GitHub Copilot", groq: "Groq",
+          deepseek: "DeepSeek", mistral: "Mistral", together: "Together AI",
+          ollama: "Ollama", vllm: "vLLM",
+        };
+        const cleanGroup = providerLabel[m.provider] ?? m.provider;
+        return {
+          id: m.id,
+          label: m.label,
+          runtime: "litellm" as ModelRuntime,
+          group: cleanGroup,
+        };
+      }),
   ];
 
   return NextResponse.json({

@@ -217,40 +217,50 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
 
   // ── Build model list ─────────────────────────────────────────────────────
   //
-  // Priority order:
-  //   1. Tier aliases (tier1/tier2/tier3) — always shown, they route to whatever
-  //      is currently configured in the gateway regardless of any key check.
-  //   2. GitHub Copilot SDK models — separate execution path, shown when GITHUB_TOKEN set.
-  //   3. Enabled LiteLLM models — models the user has explicitly enabled via
-  //      Settings → Models → eye icon (stored in custom_models.json "custom" array).
-  //      If the user hasn't enabled any models yet, fall back to showing all
-  //      models for configured providers (backward compat / first-time setup).
+  // The picker contains exactly three categories:
   //
+  //   1. Tier aliases  — tier1/tier2/tier3, always shown.  These are routing
+  //      shortcuts that go through whatever provider is configured on the
+  //      gateway, not pinned models.  They work even with no models enabled.
+  //
+  //   2. GitHub Copilot SDK models  — shown only when GITHUB_TOKEN is set.
+  //      These use a completely different execution path (Copilot CLI) and
+  //      are not LiteLLM models.
+  //
+  //   3. User-enabled models  — exactly the models the user turned on via
+  //      Settings → Models → eye icon (stored in infra/enabled_models.json).
+  //      Nothing else.  The LITELLM_MODELS built-in list is only used as a
+  //      display-label lookup — it never adds models to the picker on its own.
+  //
+  const providerLabel: Record<string, string> = {
+    gemini: "Gemini", openai: "OpenAI", anthropic: "Anthropic",
+    openrouter: "OpenRouter", github: "GitHub Copilot", groq: "Groq",
+    deepseek: "DeepSeek", mistral: "Mistral", together: "Together AI",
+    ollama: "Ollama", vllm: "vLLM",
+  };
+
+  // Tier routing aliases — always present regardless of what's enabled.
   const tierModels = LITELLM_MODELS.filter((m) => m.provider === null);
 
-  // enabledModels contains models the user turned on via Settings → Models.
-  const enabledIds = new Set(enabledModels.map((m) => m.id));
-
-  // Fallback: if no models have been explicitly enabled yet, treat all
-  // configured-provider models as enabled so the picker isn't empty.
-  const noExplicitEnabled = enabledModels.length === 0;
-  const litellmModels = noExplicitEnabled
-    ? LITELLM_MODELS.filter(
-        (m) => m.provider !== null && configured.has(m.provider) && !hiddenSet.has(m.id),
-      )
-    : LITELLM_MODELS.filter(
-        (m) => m.provider !== null && enabledIds.has(m.id) && !hiddenSet.has(m.id),
-      );
+  // Resolve label/group for an enabled model: prefer the built-in LITELLM_MODELS
+  // entry for accurate labels, fall back to what's stored in enabled_models.json.
+  const resolveModel = (em: { id: string; label: string; provider: string }) => {
+    const builtin = LITELLM_MODELS.find((b) => b.id === em.id);
+    return {
+      id: em.id,
+      label: builtin?.label ?? em.label,
+      runtime: "litellm" as ModelRuntime,
+      group: builtin?.group ?? providerLabel[em.provider] ?? em.provider,
+    };
+  };
 
   const models: UnifiedModel[] = [
-    // Tier routing aliases — always present
+    // ① Tier routing aliases — always present
     ...tierModels.map((m) => ({
-      id: m.id,
-      label: m.label,
-      runtime: "litellm" as ModelRuntime,
-      group: m.group,
+      id: m.id, label: m.label, runtime: "litellm" as ModelRuntime, group: m.group,
     })),
-    // GitHub Copilot SDK group — only shown when GITHUB_TOKEN is set
+
+    // ② GitHub Copilot SDK group — separate execution path, shown when token is set
     ...(configured.has("github")
       ? copilotModels
           .filter((m) => !hiddenSet.has(m.id))
@@ -262,42 +272,25 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
             model_picker_enabled: (m as { id: string; label: string; model_picker_enabled?: boolean }).model_picker_enabled ?? false,
           }))
       : []),
-    // User-enabled LiteLLM models (from built-in list, filtered by enabledIds)
-    ...litellmModels.map((m) => ({
-      id: m.id,
-      label: m.label,
-      runtime: "litellm" as ModelRuntime,
-      group: m.group,
-    })),
-    // Enabled models from the user's list that aren't already covered above.
+
+    // ③ User-enabled models — the only source for LiteLLM models.
+    //    If the user hasn't enabled anything yet, nothing extra appears here
+    //    (the tier aliases above are always sufficient to start chatting).
     ...enabledModels
-      .filter(
-        (m) =>
-          !hiddenSet.has(m.id) &&
-          !tierModels.some((t) => t.id === m.id) &&
-          !litellmModels.some((b) => b.id === m.id) &&
-          !LITELLM_MODELS.some((b) => b.id === m.id),
-      )
-      .map((m) => {
-        // Strip legacy "Custom — X" / "Custom - X" prefixes and derive a clean group
-        const providerLabel: Record<string, string> = {
-          gemini: "Gemini", openai: "OpenAI", anthropic: "Anthropic",
-          openrouter: "OpenRouter", github: "GitHub Copilot", groq: "Groq",
-          deepseek: "DeepSeek", mistral: "Mistral", together: "Together AI",
-          ollama: "Ollama", vllm: "vLLM",
-        };
-        const cleanGroup = providerLabel[m.provider] ?? m.provider;
-        return {
-          id: m.id,
-          label: m.label,
-          runtime: "litellm" as ModelRuntime,
-          group: cleanGroup,
-        };
-      }),
+      .filter((m) => !hiddenSet.has(m.id) && !tierModels.some((t) => t.id === m.id))
+      .map(resolveModel),
   ];
 
+  // Deduplicate by id (in case both the enabled list and Copilot list have the same id)
+  const seen = new Set<string>();
+  const deduped = models.filter((m) => {
+    if (seen.has(m.id)) return false;
+    seen.add(m.id);
+    return true;
+  });
+
   return NextResponse.json({
-    models,
+    models: deduped,
     source,
     configured_providers: Array.from(configured),
   });

@@ -230,7 +230,7 @@ export default function ModelsPage() {
       )}
 
       {/* Tabs */}
-      <div className="flex items-center gap-0.5 px-4 sm:px-6 py-2 border-b border-border shrink-0">
+      <div className="flex items-center gap-0.5 px-4 sm:px-6 pt-3 pb-3 border-b border-border shrink-0">
         <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-secondary/50">
           {(["providers", "models", "tiers"] as const).map((t) => (
             <button key={t} onClick={() => { setTab(t); setSelectedProvider(null); setEditingTier(null); }}

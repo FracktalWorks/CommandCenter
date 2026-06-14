@@ -1383,14 +1383,13 @@ export default function AgentsPage() {
 
         {selectedAgent && (
           <>
-            {/* Mobile: bottom sheet with backdrop — sits above content, below bottom nav */}
-            <div className="sm:hidden fixed inset-0 z-40">
-              <div className="absolute inset-0 bg-black/60" onClick={() => setSelected(null)} />
-              <aside className="absolute inset-x-0 bottom-14 flex max-h-[calc(100%-7rem)] flex-col rounded-t-2xl border-t border-border bg-card shadow-2xl chat-fade-in">
-                <div className="flex justify-center pt-2 pb-1 shrink-0">
-                  <div className="w-10 h-1 rounded-full bg-muted-foreground/30" />
-                </div>
-                <div className="flex items-center justify-between px-4 pb-2 border-b border-border shrink-0">
+            {/* Mobile: slide-in side panel from the right */}
+            <div className="sm:hidden fixed inset-0 z-40 pointer-events-none">
+              {/* Backdrop — tappable to dismiss */}
+              <div className="absolute inset-0 bg-black/60 pointer-events-auto" onClick={() => setSelected(null)} />
+              {/* Panel slides in from right — 85% width */}
+              <aside className="absolute top-0 right-0 bottom-0 w-[85%] max-w-[360px] border-l border-border bg-card shadow-2xl flex flex-col pointer-events-auto chat-fade-in">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
                   <div className="flex items-center gap-2 min-w-0">
                     {(() => {
                       const Icon = getAgentIcon(selectedAgent);
@@ -1399,7 +1398,7 @@ export default function AgentsPage() {
                     })()}
                     <span className="text-sm font-semibold truncate">{selectedAgent.name}</span>
                   </div>
-                  <button onClick={() => setSelected(null)} className="p-1 rounded-md hover:bg-secondary text-muted-foreground shrink-0">
+                  <button onClick={() => setSelected(null)} className="p-1.5 rounded-md hover:bg-secondary text-muted-foreground shrink-0">
                     <X size={16} />
                   </button>
                 </div>

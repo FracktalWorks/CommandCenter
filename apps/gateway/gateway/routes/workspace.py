@@ -735,6 +735,7 @@ def _discover_agent_workspaces() -> dict[str, Path]:
 def _walk_agent_artifacts(
     agent_name: str,
     workspace: Path,
+    *,
     category_filter: str | None = None,
 ) -> list[ArtifactEntry]:
     """Walk the visible workspace dirs for a single agent and return

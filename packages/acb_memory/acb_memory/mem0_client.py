@@ -70,11 +70,11 @@ class MemoryClient:
             litellm_key: str = settings.litellm_master_key
 
             # Use the gateway's /v1/chat/completions endpoint (LiteLLM tiers).
-            # tier-fast = DeepSeek, tier-balanced = Gemini Flash, etc.
+            # Uses tier-balanced (DeepSeek on VPS) — reliable, fast, cheap.
             # No OPENAI_API_KEY needed — the gateway handles routing.
             _llm_url = litellm_url.rstrip("/") + "/v1"
             _llm_key = litellm_key
-            _llm_model = "tier-fast"
+            _llm_model = "deepseek/deepseek-chat"
 
             config: dict[str, Any] = {
                 "vector_store": {

@@ -165,10 +165,10 @@ body {
 }
 
 .tech-glass-subtle {
-  background: hsl(220 13% 10% / 0.5);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid hsl(220 13% 16% / 0.6);
+  background: hsl(220 13% 10% / 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid hsl(220 13% 16% / 0.8);
 }
 
 .tech-glow {

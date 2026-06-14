@@ -193,7 +193,7 @@ function TreeNodeRow({
         href={downloadUrl}
         download={entry.name}
         onClick={(e) => e.stopPropagation()}
-        className="shrink-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-muted-foreground hover:text-blue-400 transition-all p-0.5"
+        className="shrink-0 text-muted-foreground hover:text-blue-400 transition-all p-0.5"
         title={`Download ${entry.name}`}
       >
         <Download size={12} />
@@ -201,7 +201,7 @@ function TreeNodeRow({
       {deletable && (
         <button
           onClick={handleDelete}
-          className="shrink-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-muted-foreground hover:text-red-400 transition-all p-0.5"
+          className="shrink-0 text-muted-foreground hover:text-red-400 transition-all p-0.5"
           title={`Delete ${entry.name}`}
         >
           <Trash2 size={12} />

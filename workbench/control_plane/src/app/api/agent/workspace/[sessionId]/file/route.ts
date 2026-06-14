@@ -81,3 +81,72 @@ export async function GET(
     return NextResponse.json({ error: String(err) }, { status: 503 });
   }
 }
+
+export async function PUT(
+  req: NextRequest,
+  { params }: { params: Promise<{ sessionId: string }> },
+): Promise<NextResponse> {
+  try {
+    const { sessionId } = await params;
+    const filePath = req.nextUrl.searchParams.get("path");
+    if (!filePath) {
+      return NextResponse.json({ error: "Missing ?path= query parameter" }, { status: 400 });
+    }
+
+    const body = await req.json();
+    const upstream = new URL(`${GATEWAY_URL}/agent/workspace/${sessionId}/file`);
+    upstream.searchParams.set("path", filePath);
+
+    const res = await fetch(upstream.toString(), {
+      method: "PUT",
+      headers: {
+        ...(await buildGatewayHeaders()),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      return NextResponse.json({ error: err }, { status: res.status });
+    }
+
+    const data = await res.json();
+    return NextResponse.json(data, { status: res.status });
+  } catch (err) {
+    return NextResponse.json({ error: String(err) }, { status: 503 });
+  }
+}
+
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ sessionId: string }> },
+): Promise<NextResponse> {
+  try {
+    const { sessionId } = await params;
+    const filePath = req.nextUrl.searchParams.get("path");
+    if (!filePath) {
+      return NextResponse.json({ error: "Missing ?path= query parameter" }, { status: 400 });
+    }
+
+    const upstream = new URL(`${GATEWAY_URL}/agent/workspace/${sessionId}/file`);
+    upstream.searchParams.set("path", filePath);
+
+    const res = await fetch(upstream.toString(), {
+      method: "DELETE",
+      headers: await buildGatewayHeaders(),
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      return NextResponse.json({ error: err }, { status: res.status });
+    }
+
+    const data = await res.json();
+    return NextResponse.json(data, { status: res.status });
+  } catch (err) {
+    return NextResponse.json({ error: String(err) }, { status: 503 });
+  }
+}

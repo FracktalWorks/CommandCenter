@@ -3,15 +3,19 @@
 Auto-injected into every agent alongside ``web_search`` and ``call_agent``.
 
 The tool:
-1. Writes the file under ``{workspace_root}/{path}`` (creating parent dirs).
-2. Computes a SHA-256 hash of the content.
-3. Emits an AG-UI ``CUSTOM`` event ``artifact_created`` / ``artifact_updated``
+1. Defaults to the ``outputs/`` directory when no visible workspace dir
+   (``inputs/``, ``outputs/``, ``agent-data/``) is specified in the path.
+2. Writes the file under ``{workspace_root}/{path}`` (creating parent dirs).
+3. Computes a SHA-256 hash of the content.
+4. Emits an AG-UI ``CUSTOM`` event ``artifact_created`` / ``artifact_updated``
    so the Control Plane sidebar updates in real time.
-4. PATCHes the gateway to register the workspace root on the session (first write).
+5. PATCHes the gateway to register the workspace root on the session.
+6. Returns a ``download_url`` the agent SHOULD embed in its text response.
 
 Usage by agents:
-    result = await write_artifact("reports/summary.md", "# Sales Summary\\n...")
-    result = await write_artifact("scripts/ingest.py", code_bytes, encoding=None)
+    result = await write_artifact("summary.md", "# Sales Summary\\n...")
+    # File lands in outputs/summary.md (auto-prefixed)
+    # Agent outputs: [📄 Download summary.md]({download_url})
 """
 from __future__ import annotations
 
@@ -35,9 +39,28 @@ before each agent run::
 The executor clears this after each run.
 """
 
+# Visible workspace dirs — files written outside these are hidden in the UI.
+_VISIBLE_DIRS = frozenset({"inputs", "outputs", "agent-data"})
+
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _normalise_path(path: str) -> str:
+    """Strip leading slashes/dots and ensure the path lives in a visible dir.
+
+    If *path* doesn't start with ``inputs/``, ``outputs/``, or ``agent-data/``,
+    it is automatically prefixed with ``outputs/`` so the file appears in the
+    Files Viewer sidebar.
+    """
+    clean = path.replace("\\", "/").lstrip("/.")
+    # Already in a visible dir — use as-is.
+    for d in _VISIBLE_DIRS:
+        if clean == d or clean.startswith(d + "/"):
+            return clean
+    # Default: write to outputs/
+    return f"outputs/{clean}"
 
 
 async def write_artifact(
@@ -52,9 +75,21 @@ async def write_artifact(
     PDF, image, or any other file that the operator should be able to view or
     download from the Control Plane.
 
+    Files are automatically placed in ``outputs/`` unless you specify
+    ``inputs/`` (user-provided files) or ``agent-data/`` (reference data).
+
+    After calling this, **embed the returned ``download_url`` in your text
+    response** so the operator can click to download.  Example::
+
+        result = await write_artifact("q2_report.md", report_markdown)
+        # In your response text, include:
+        # [📄 Download Q2 Report]({result["download_url"]})
+
     Args:
-        path:     Relative file path within the workspace, e.g.
-                  ``"reports/q2_summary.md"`` or ``"scripts/ingest.py"``.
+        path:     Relative file path, e.g. ``"summary.md"`` or
+                  ``"reports/q2_summary.md"``.  If the path does not start
+                  with ``inputs/``, ``outputs/``, or ``agent-data/``, it is
+                  automatically placed in ``outputs/``.
                   Parent directories are created automatically.
         content:  File content — either a ``str`` (written with *encoding*)
                   or ``bytes`` (written as-is; set *encoding* to ``None``).
@@ -62,17 +97,10 @@ async def write_artifact(
                   Pass ``None`` when *content* is already ``bytes``.
 
     Returns:
-        ``{"path": str, "size": int, "sha256": str}``
+        ``{"path": str, "size": int, "sha256": str, "download_url": str}``
 
-    Examples:
-        # Markdown report
-        await write_artifact("reports/summary.md", "# Summary\\n...")
-
-        # Python script
-        await write_artifact("scripts/fetch_leads.py", python_code)
-
-        # Raw bytes (PDF, image, etc.)
-        await write_artifact("exports/report.pdf", pdf_bytes, encoding=None)
+        *download_url* is a relative URL suitable for a clickable markdown
+        link, e.g. ``/api/agent/workspace/{session}/file?path=outputs/x.md``.
     """
     import asyncio  # noqa: PLC0415
 
@@ -88,8 +116,8 @@ async def write_artifact(
         _WRITE_ARTIFACT_CONTEXT["workspace_root"] = workspace_root
 
     root = Path(workspace_root)
-    # Sanitise path — strip leading slashes/dots to prevent traversal
-    clean_path = path.replace("\\", "/").lstrip("/.")
+    # Normalise path and auto-prefix with outputs/ if needed
+    clean_path = _normalise_path(path)
     target = root / clean_path
 
     # Ensure parent directory exists
@@ -107,6 +135,12 @@ async def write_artifact(
 
     mime, _ = mimetypes.guess_type(target.name)
     mime = mime or "application/octet-stream"
+
+    # Build download URL (relative path — works from the frontend chat UI).
+    download_url = (
+        f"/api/agent/workspace/{session_id}/file"
+        f"?path={clean_path}"
+    ) if session_id else None
 
     # Build artifact entry
     artifact = {
@@ -130,7 +164,10 @@ async def write_artifact(
         gateway_token=gateway_token,
     ))
 
-    return {"path": clean_path, "size": size, "sha256": digest}
+    result: dict = {"path": clean_path, "size": size, "sha256": digest}
+    if download_url:
+        result["download_url"] = download_url
+    return result
 
 
 async def _notify(

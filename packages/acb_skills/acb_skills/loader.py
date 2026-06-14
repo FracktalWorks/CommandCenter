@@ -866,7 +866,12 @@ def load_agent(
 
     # Resolve the GitHub repo name.
     # Priority: explicit kwarg → default "agent-{name}"
+    # When repo_name contains "/" it is an "org/repo" slug — extract the org
+    # so agents from external GitHub orgs (e.g. vjvarada/agent-startup-guru)
+    # are cloned from the correct org instead of the default github_org.
     agent_repo = repo_name or f"agent-{agent_name}"
+    if repo_name and "/" in repo_name:
+        org, agent_repo = repo_name.split("/", 1)
     agent_dir = _ensure_repo(
         agent_repo,
         org=org,

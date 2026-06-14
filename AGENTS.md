@@ -88,9 +88,11 @@ failure via isolated Copilot SDK sandboxes.
 - CI/CD via GitHub Actions: deploy.yml (push-to-deploy on main), pr-check.yml (lint+test on PRs)
 - Deploy target: Hostinger KVM 4 VPS (Ubuntu 24.04 + Docker)
 - Agent-generated artefacts (images, reports, PDFs) MUST be written to
-  `.tmp/` or `outputs/` within the agent workspace so the Control Plane
-  file browser and inline chat cards can discover them.  The workspace
-  API exposes these directories but hides other dot-prefixed dirs.
+  `inputs/`, `outputs/`, or `agent-data/` within the agent workspace so the
+  Control Plane file browser and inline chat cards can discover them.  These
+  three directories are the only ones visible in the Files Viewer sidebar;
+  all other workspace files are hidden from the frontend user.  The workspace
+  API exposes these directories but hides other paths.
 
 ## Package Versions (as of 2026-06-10)
 

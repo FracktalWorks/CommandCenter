@@ -25,6 +25,9 @@ interface ArtifactViewerModalProps {
   entry: FileEntry;
   onClose: () => void;
   onDelete?: (entry: FileEntry) => void;
+  /** Optional override for the file URL — used by the global artifacts
+   *  browser where there is no session workspace. */
+  downloadUrl?: string;
 }
 
 type ViewerState =
@@ -262,14 +265,24 @@ function PdfViewer({ url }: { url: string }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelete }: ArtifactViewerModalProps) {
+export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelete, downloadUrl: externalDownloadUrl }: ArtifactViewerModalProps) {
   const [state, setState] = useState<ViewerState>({ status: "loading" });
+  const [editing, setEditing] = useState(false);
+  const [editContent, setEditContent] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
   const blobUrlRef = useRef<string | null>(null);
+
+  // Determine if this file type supports inline editing.
+  const kind = classify(entry);
+  const editable = kind === "markdown" || kind === "code" || kind === "text";
+  const isMarkdown = kind === "markdown";
 
   // Build the file URL and load content
   useEffect(() => {
     let cancelled = false;
-    const fileUrl = `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`;
+    const fileUrl = externalDownloadUrl
+      ?? `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`;
     const kind = classify(entry);
 
     // Revoke any previous blob URL
@@ -316,6 +329,8 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
           } else {
             setState({ status: "text", content: text });
           }
+          // Pre-populate edit buffer with raw content.
+          setEditContent(text);
         }
       } catch (err) {
         if (!cancelled) setState({ status: "error", message: String(err) });
@@ -342,8 +357,12 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
 
-  const downloadUrl = `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`;
-  const deletable = entry.path.startsWith(".tmp/") || entry.path.startsWith("outputs/");
+  const downloadUrl = externalDownloadUrl
+    ?? `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`;
+  const deletable =
+    entry.path.startsWith("inputs/") ||
+    entry.path.startsWith("outputs/") ||
+    entry.path.startsWith("agent-data/");
 
   const handleDelete = async () => {
     if (!confirm(`Delete "${entry.name}"?\n\nThis cannot be undone.`)) return;
@@ -357,6 +376,56 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
       onClose();
     } catch (err) {
       alert(`Failed to delete: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const handleStartEdit = () => {
+    // Grab raw content from current state.
+    if (state.status === "markdown" || state.status === "text") {
+      setEditContent(state.content);
+    }
+    setEditing(true);
+    setShowPreview(false);
+  };
+
+  const handleCancelEdit = () => {
+    setEditing(false);
+    setShowPreview(false);
+  };
+
+  const handleTogglePreview = () => {
+    setShowPreview((p) => !p);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch(
+        `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: editContent, encoding: "utf-8" }),
+        }
+      );
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`HTTP ${res.status}: ${err}`);
+      }
+      // Refresh state with new content.
+      const kind = classify(entry);
+      if (kind === "markdown") {
+        setState({ status: "markdown", content: editContent });
+      } else if (kind === "code") {
+        setState({ status: "text", content: editContent, lang: langFromExt(getExt(entry.name)) });
+      } else {
+        setState({ status: "text", content: editContent });
+      }
+      setEditing(false);
+    } catch (err) {
+      alert(`Failed to save: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -376,21 +445,64 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
             <span className="text-xs text-muted-foreground/70">· {formatBytes(entry.size)}</span>
           </div>
           <div className="flex items-center gap-2 shrink-0 ml-3">
-            <a
-              href={downloadUrl}
-              download={entry.name}
-              className="rounded px-2 py-1 text-xs text-muted-foreground bg-secondary hover:bg-secondary hover:text-foreground transition-colors"
-            >
-              Download
-            </a>
-            {deletable && (
-              <button
-                onClick={handleDelete}
-                className="rounded px-2 py-1 text-xs text-red-400 bg-secondary hover:bg-red-900/60 hover:text-red-300 transition-colors"
-                title="Delete file"
-              >
-                Delete
-              </button>
+            {editing ? (
+              <>
+                {isMarkdown && (
+                  <button
+                    onClick={handleTogglePreview}
+                    className={`rounded px-2 py-1 text-xs transition-colors ${
+                      showPreview
+                        ? "text-amber-400 bg-amber-900/40 hover:bg-amber-900/60"
+                        : "text-purple-400 bg-secondary hover:bg-purple-900/40 hover:text-purple-300"
+                    }`}
+                    title={showPreview ? "Hide preview" : "Show live preview"}
+                  >
+                    {showPreview ? "Hide Preview" : "Preview"}
+                  </button>
+                )}
+                <button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="rounded px-2 py-1 text-xs text-emerald-400 bg-secondary hover:bg-emerald-900/60 hover:text-emerald-300 transition-colors disabled:opacity-50"
+                >
+                  {saving ? "Saving…" : "Save"}
+                </button>
+                <button
+                  onClick={handleCancelEdit}
+                  disabled={saving}
+                  className="rounded px-2 py-1 text-xs text-muted-foreground bg-secondary hover:bg-secondary hover:text-foreground transition-colors"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                <a
+                  href={downloadUrl}
+                  download={entry.name}
+                  className="rounded px-2 py-1 text-xs text-muted-foreground bg-secondary hover:bg-secondary hover:text-foreground transition-colors"
+                >
+                  Download
+                </a>
+                {editable && (
+                  <button
+                    onClick={handleStartEdit}
+                    className="rounded px-2 py-1 text-xs text-blue-400 bg-secondary hover:bg-blue-900/60 hover:text-blue-300 transition-colors"
+                    title="Edit file"
+                  >
+                    Edit
+                  </button>
+                )}
+                {deletable && (
+                  <button
+                    onClick={handleDelete}
+                    className="rounded px-2 py-1 text-xs text-red-400 bg-secondary hover:bg-red-900/60 hover:text-red-300 transition-colors"
+                    title="Delete file"
+                  >
+                    Delete
+                  </button>
+                )}
+              </>
             )}
             <button
               onClick={onClose}
@@ -404,6 +516,91 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
 
         {/* Body — pb-safe keeps content above iOS home indicator */}
         <div className="flex-1 overflow-auto p-6 min-h-0 pb-safe">
+          {editing ? (
+            isMarkdown && showPreview ? (
+              /* ═══ Markdown split view: editor (left) + live preview (right) ═══ */
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-full min-h-[45vh]">
+                {/* Left: raw markdown editor */}
+                <div className="flex flex-col min-h-0">
+                  <div className="text-[10px] text-muted-foreground mb-1.5 font-medium uppercase tracking-wide">
+                    Markdown Source
+                  </div>
+                  <textarea
+                    value={editContent}
+                    onChange={(e) => setEditContent(e.target.value)}
+                    className="flex-1 min-h-[35vh] resize-none rounded border border-border bg-card p-4 text-sm font-mono text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    spellCheck={false}
+                    placeholder="Edit markdown…"
+                  />
+                </div>
+                {/* Right: live rendered preview */}
+                <div className="flex flex-col min-h-0 overflow-auto">
+                  <div className="text-[10px] text-muted-foreground mb-1.5 font-medium uppercase tracking-wide">
+                    Rendered Preview
+                  </div>
+                  <div className="flex-1 rounded border border-border bg-card/60 p-4 overflow-auto prose prose-invert max-w-none
+                    prose-headings:font-semibold prose-headings:text-foreground
+                    prose-h1:text-xl prose-h2:text-lg prose-h3:text-base
+                    prose-p:text-foreground prose-p:leading-7 prose-p:text-sm
+                    prose-a:text-blue-400 prose-a:no-underline hover:prose-a:underline
+                    prose-strong:text-foreground prose-em:text-foreground
+                    prose-code:text-sky-300 prose-code:bg-secondary prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:font-mono prose-code:before:content-none prose-code:after:content-none
+                    prose-pre:bg-card prose-pre:border prose-pre:border-border prose-pre:text-foreground prose-pre:text-xs
+                    prose-blockquote:border-border prose-blockquote:text-muted-foreground
+                    prose-hr:border-border
+                    prose-li:text-foreground prose-li:marker:text-muted-foreground prose-li:text-sm
+                    prose-table:text-xs prose-thead:border-border prose-tbody:border-border
+                    prose-th:text-foreground prose-td:text-muted-foreground
+                    prose-img:rounded prose-img:mx-auto prose-img:max-w-full"
+                  >
+                    {editContent.trim() ? (
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        rehypePlugins={[rehypeRaw]}
+                        components={{
+                          img({ src, alt, ...rest }) {
+                            const rawSrc = typeof src === "string" ? src : "";
+                            const resolvedSrc = resolveMediaSrc(rawSrc, sessionId, entry.path);
+                            // eslint-disable-next-line @next/next/no-img-element
+                            return <img src={resolvedSrc} alt={alt ?? ""} {...rest} className="max-w-full rounded" />;
+                          },
+                          a({ href, children, ...rest }) {
+                            const isExternal = href?.startsWith("http");
+                            return (
+                              <a
+                                href={href}
+                                target={isExternal ? "_blank" : undefined}
+                                rel={isExternal ? "noreferrer noopener" : undefined}
+                                {...rest}
+                              >
+                                {children}
+                              </a>
+                            );
+                          },
+                        }}
+                      >
+                        {editContent}
+                      </ReactMarkdown>
+                    ) : (
+                      <p className="text-muted-foreground text-sm italic">
+                        Start typing to see a live preview…
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* ═══ Plain textarea (non-markdown or preview off) ═══ */
+              <textarea
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+                className="w-full h-full min-h-[40vh] resize-y rounded border border-border bg-card p-4 text-sm font-mono text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+                spellCheck={false}
+                placeholder={isMarkdown ? "Edit markdown…  Click Preview to see rendered output." : "Edit file content…"}
+              />
+            )
+          ) : (
+            <>
           {state.status === "loading" && (
             <div className="flex items-center justify-center h-32">
               <div className="text-sm text-muted-foreground animate-pulse">Loading…</div>
@@ -505,6 +702,8 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
                 Download file
               </a>
             </div>
+          )}
+            </>
           )}
         </div>
       </div>

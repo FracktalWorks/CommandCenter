@@ -871,6 +871,12 @@ export default function AgentChat({
 
           {messages.map((msg, i) => {
             const prevMsg = i > 0 ? messages[i - 1] : null;
+            // Find the preceding user message for retry (walk back to the
+            // most recent user message before this assistant message).
+            const prevUserMsg =
+              msg.role === "assistant"
+                ? [...messages.slice(0, i)].reverse().find((m) => m.role === "user")
+                : null;
             const showDateDivider = prevMsg &&
               new Date(msg.timestamp).toDateString() !== new Date(prevMsg.timestamp).toDateString();
             return (
@@ -886,7 +892,8 @@ export default function AgentChat({
                 )}
                 <MessageBubble message={msg} sessionId={sessionId} onChoice={handleChoice}
                   onFileOpen={(entry) => setViewerEntry(entry)}
-                  onResend={(content) => { submitText(content); }} />
+                  onResend={(content) => { submitText(content); }}
+                  onRetry={prevUserMsg ? () => { submitText(prevUserMsg.content); } : undefined} />
               </div>
             );
           })}
@@ -1141,12 +1148,14 @@ function MessageBubble({
   onChoice,
   onFileOpen,
   onResend,
+  onRetry,
 }: {
   message: ChatMessage;
   sessionId: string;
   onChoice?: (choice: string) => void;
   onFileOpen?: (entry: FileEntry) => void;
   onResend?: (content: string) => void;
+  onRetry?: () => void;
 }) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
@@ -1292,7 +1301,7 @@ function MessageBubble({
             >
               <p className="whitespace-pre-wrap break-words">{message.content}</p>
             </div>
-            <div className="flex items-center justify-end gap-2 mt-1 pr-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+            <div className="flex items-center justify-end gap-2 mt-1 pr-0.5 opacity-100 transition-opacity">
               {message.content.trim() && (
                 <MessageActionBar
                   content={message.content}
@@ -1343,12 +1352,13 @@ function MessageBubble({
         customEvents={message.customEvents}
       />
       {!message.streaming && (
-        <div className="flex items-center gap-2 mt-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-2 mt-1.5 opacity-100 transition-opacity">
           {message.content.trim() && (
             <MessageActionBar
               content={message.content}
               messageId={message.id}
               role="assistant"
+              onRetry={onRetry}
             />
           )}
           <div className="text-[10px] text-muted-foreground">{timestamp}</div>

@@ -29,11 +29,16 @@ import {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Files in .tmp/ and outputs/ are user/agent-generated and safe to delete.
- *  Everything else (agent source, configs, skills) is protected. */
+/** Files in inputs/, outputs/, and agent-data/ are user/agent-generated
+ *  and safe to delete from the Files Viewer.  Everything else (agent
+ *  source, configs, skills) is hidden from the UI entirely. */
 function isDeletable(entry: FileEntry): boolean {
   const p = entry.path;
-  return p.startsWith(".tmp/") || p.startsWith("outputs/");
+  return (
+    p.startsWith("inputs/") ||
+    p.startsWith("outputs/") ||
+    p.startsWith("agent-data/")
+  );
 }
 
 export interface FileEntry {

@@ -70,6 +70,12 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: "LayoutDashboard",
         note: "Company overview",
       },
+      {
+        href: "/artifacts",
+        label: "Artifacts",
+        icon: "FolderOpen",
+        note: "All agent files · inputs · outputs · data",
+      },
     ],
   },
 
@@ -92,10 +98,10 @@ export const NAV_SECTIONS: NavSection[] = [
         note: "Register · manage · commits · remove",
       },
       {
-        href: "/apis",
-        label: "APIs",
+        href: "/integrations",
+        label: "Integrations",
         icon: "Plug",
-        note: "API connections · credentials · AI discovery",
+        note: "APIs · MCP servers · plugins",
       },
     ],
   },

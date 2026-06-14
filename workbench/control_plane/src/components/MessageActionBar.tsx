@@ -2,10 +2,9 @@
 
 /**
  * MessageActionBar — per-message actions shown inline with the timestamp
- * underneath each message bubble. Visibility is controlled by the parent
- * (hover-revealed on desktop).
+ * underneath each message bubble.  Always visible (no hover-reveal).
  *
- * Copy | Edit (user only) | 👍 👎 (assistant only)
+ * Copy | Edit (user only) | Retry (assistant only) | 👍 👎 (assistant only)
  */
 
 import { useState } from "react";
@@ -15,6 +14,7 @@ interface MessageActionBarProps {
   messageId: string;
   role: "user" | "assistant";
   onEdit?: () => void;
+  onRetry?: () => void;
 }
 
 export default function MessageActionBar({
@@ -22,6 +22,7 @@ export default function MessageActionBar({
   messageId,
   role,
   onEdit,
+  onRetry,
 }: MessageActionBarProps) {
   const [copied, setCopied] = useState(false);
   const [vote, setVote] = useState<"up" | "down" | null>(null);
@@ -60,6 +61,18 @@ export default function MessageActionBar({
           aria-label="Edit message"
         >
           Edit
+        </button>
+      )}
+
+      {/* Retry — assistant messages only */}
+      {role === "assistant" && onRetry && (
+        <button
+          onClick={onRetry}
+          className={btn}
+          title="Retry"
+          aria-label="Retry response"
+        >
+          Retry
         </button>
       )}
 

@@ -8,6 +8,11 @@ GET  /agent/workspace/{session_id}
 
 GET  /agent/workspace/{session_id}/file?path=<rel_path>
     Returns the raw file bytes (streamed).  50 MB cap.
+
+GET  /agent/artifacts?agent=<name>&category=<inputs|outputs|agent-data>
+    Global artifact browser — lists all files from all agent workspaces
+    across the three visible directories.  Supports filtering by agent
+    name and category (folder).  Response: { "artifacts": [ArtifactEntry] }
     Use Content-Disposition: inline for browser display.
 
 DELETE /agent/workspace/{session_id}/file?path=<rel_path>
@@ -175,50 +180,80 @@ def _safe_resolve(root: Path, rel: str) -> Path:
     return resolved
 
 
-# Directories that are ALWAYS visible in the workspace file tree even if
-# they start with "." or are common cache names.  Agents write artefacts to
-# .tmp/ and outputs/; those must be browseable + downloadable from the chat UI.
-_ALWAYS_VISIBLE_DIRS = frozenset({".tmp", "outputs"})
+# The three workspace directories that are visible in the Files Viewer sidebar.
+# Agents read/write artefacts to inputs/, outputs/, and agent-data/ — ONLY
+# these directories (and their contents) are exposed to the frontend user.
+# All other files (agent source, configs, skills, .github/, etc.) remain
+# accessible to the agent itself but are hidden from the chat UI.
+_VISIBLE_WORKSPACE_DIRS = frozenset({"inputs", "outputs", "agent-data"})
 
-# Directories explicitly excluded from the file tree.
+# Directories explicitly excluded from traversal within the visible workspace
+# dirs (cache / tooling noise).
 _EXCLUDED_DIRS = frozenset({"__pycache__", "node_modules", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache"})
 
+
+def _ensure_workspace_dirs(root: Path) -> None:
+    """Create inputs/, outputs/, and agent-data/ if they don't exist yet."""
+    for d in _VISIBLE_WORKSPACE_DIRS:
+        (root / d).mkdir(parents=True, exist_ok=True)
+
+
 def _walk_tree(root: Path) -> list[FileEntry]:
-    """Walk the workspace directory and return a flat list of FileEntry objects."""
+    """Walk ONLY the visible workspace directories and return a flat list of
+    FileEntry objects.
+
+    Only ``inputs/``, ``outputs/``, and ``agent-data/`` are traversed.
+    All other top-level files and directories are intentionally hidden from
+    the frontend user (but remain accessible to the agent itself).
+    """
     entries: list[FileEntry] = []
     try:
-        for dirpath, dirnames, filenames in os.walk(root):
-            # Skip hidden / cache directories but keep agent artefact dirs.
-            dirnames[:] = [
-                d
-                for d in dirnames
-                if d in _ALWAYS_VISIBLE_DIRS
-                or (not d.startswith(".") and d not in _EXCLUDED_DIRS)
-            ]
-            dp = Path(dirpath)
-            rel_dir = dp.relative_to(root)
+        _ensure_workspace_dirs(root)
 
-            for fname in sorted(filenames):
-                fpath = dp / fname
-                try:
-                    stat = fpath.stat()
-                    rel_path = str((rel_dir / fname)).replace("\\", "/")
-                    mime, _ = mimetypes.guess_type(fname)
-                    entries.append(FileEntry(
-                        path=rel_path,
-                        name=fname,
-                        size=stat.st_size,
-                        modified_at=__import__("datetime").datetime.fromtimestamp(
-                            stat.st_mtime, tz=__import__("datetime").timezone.utc
-                        ).isoformat(),
-                        mime_type=mime or "application/octet-stream",
-                        is_dir=False,
-                    ))
-                except OSError:
-                    continue
+        for visible_dir in sorted(_VISIBLE_WORKSPACE_DIRS):
+            dir_path = root / visible_dir
+            if not dir_path.is_dir():
+                continue
+
+            for dirpath, dirnames, filenames in os.walk(dir_path):
+                # Skip cache / tooling noise directories.
+                dirnames[:] = [
+                    d for d in dirnames
+                    if not d.startswith(".") and d not in _EXCLUDED_DIRS
+                ]
+                dp = Path(dirpath)
+                rel_dir = dp.relative_to(root)
+
+                for fname in sorted(filenames):
+                    fpath = dp / fname
+                    try:
+                        stat = fpath.stat()
+                        rel_path = str((rel_dir / fname)).replace("\\", "/")
+                        mime, _ = mimetypes.guess_type(fname)
+                        entries.append(FileEntry(
+                            path=rel_path,
+                            name=fname,
+                            size=stat.st_size,
+                            modified_at=__import__("datetime").datetime.fromtimestamp(
+                                stat.st_mtime, tz=__import__("datetime").timezone.utc
+                            ).isoformat(),
+                            mime_type=mime or "application/octet-stream",
+                            is_dir=False,
+                        ))
+                    except OSError:
+                        continue
     except Exception as exc:
         _log.warning("workspace.walk_failed", root=str(root), error=str(exc))
     return entries
+
+
+def _is_visible_workspace_path(rel_path: str) -> bool:
+    """Check whether *rel_path* is within one of the visible workspace dirs."""
+    clean = rel_path.replace("\\", "/").lstrip("/")
+    return any(
+        clean == d or clean.startswith(d + "/")
+        for d in _VISIBLE_WORKSPACE_DIRS
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -431,13 +466,14 @@ async def upload_files(
                    "Start a chat with an agent first.",
         )
 
-    tmp_dir = workspace / ".tmp"
+    # Upload to inputs/ (visible workspace directory) — not .tmp/
+    upload_dir = workspace / "inputs"
     try:
-        tmp_dir.mkdir(parents=True, exist_ok=True)
+        upload_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Cannot create .tmp directory: {exc}",
+            detail=f"Cannot create inputs directory: {exc}",
         ) from exc
 
     uploaded: list[FileEntry] = []
@@ -462,11 +498,11 @@ async def upload_files(
             )
 
         # Avoid overwrites: append (1), (2), etc.
-        dest = tmp_dir / safe_name
+        dest = upload_dir / safe_name
         counter = 1
         stem, ext2 = Path(safe_name).stem, Path(safe_name).suffix
         while dest.exists():
-            dest = tmp_dir / f"{stem} ({counter}){ext2}"
+            dest = upload_dir / f"{stem} ({counter}){ext2}"
             counter += 1
 
         # Write
@@ -529,6 +565,14 @@ async def delete_workspace_file(
             status_code=400, detail="Cannot delete directories"
         )
 
+    # Only allow deletion of files within the visible workspace dirs.
+    rel = str(file_path.relative_to(workspace)).replace("\\", "/")
+    if not _is_visible_workspace_path(rel):
+        raise HTTPException(
+            status_code=400,
+            detail="Deletion is restricted to inputs/, outputs/, and agent-data/.",
+        )
+
     file_path.unlink()
     _log.info(
         "workspace.file_deleted",
@@ -573,11 +617,18 @@ async def write_workspace_file(
         )
 
     file_path = _safe_resolve(workspace, path)
-    # Disallow writing outside .tmp/ and outputs/ for safety; agent-writable
-    # paths are unrestricted (the agent owns the workspace).
+    # Only allow writes within the visible workspace dirs (inputs/, outputs/,
+    # agent-data/).  The agent itself can write anywhere, but the frontend
+    # user is restricted to the three visible folders.
     if not file_path.is_relative_to(workspace):
         raise HTTPException(
             status_code=400, detail="Path escapes workspace root"
+        )
+    rel = str(file_path.relative_to(workspace)).replace("\\", "/")
+    if not _is_visible_workspace_path(rel):
+        raise HTTPException(
+            status_code=400,
+            detail="Writes are restricted to inputs/, outputs/, and agent-data/.",
         )
 
     # Create parent directories if needed
@@ -611,4 +662,215 @@ async def write_workspace_file(
         ).isoformat(),
         mime_type=mime or "application/octet-stream",
         is_dir=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Global artifact browser — lists files from ALL agent workspaces
+# ---------------------------------------------------------------------------
+
+class ArtifactEntry(BaseModel):
+    agent_name: str
+    path: str           # relative to workspace root
+    name: str
+    size: int
+    modified_at: str
+    mime_type: str
+    category: str       # "inputs" | "outputs" | "agent-data"
+
+
+class ArtifactListResponse(BaseModel):
+    artifacts: list[ArtifactEntry]
+
+
+def _discover_agent_workspaces() -> dict[str, Path]:
+    """Return a dict of {agent_name: workspace_path} for all known agents.
+
+    Discovery sources (in order):
+    1. Dynamic agent registry (agents.json) — local_path entries.
+    2. Clone-cache directory — {agents_clone_dir}/repos/*.
+    """
+    workspaces: dict[str, Path] = {}
+
+    # ── 1. Dynamic registry (local_path overrides) ──────────────────────
+    try:
+        import json as _json  # noqa: PLC0415
+        agents_file = Path(__file__).resolve()
+        for _ in range(8):
+            agents_file = agents_file.parent
+            if (agents_file / "pyproject.toml").exists():
+                agents_file = agents_file / "agents.json"
+                break
+        if agents_file.exists() and agents_file.name == "agents.json":
+            entries = _json.loads(agents_file.read_text(encoding="utf-8"))
+            for entry in entries:
+                name = entry.get("name")
+                lp = entry.get("local_path")
+                if name and lp:
+                    p = Path(lp)
+                    if p.exists():
+                        workspaces[name] = p
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── 2. Clone-cache directory ────────────────────────────────────────
+    try:
+        from acb_common import get_settings  # noqa: PLC0415
+        settings = get_settings()
+        clone_root = Path(
+            getattr(settings, "agents_clone_dir", "/tmp/acb_agents")
+        ) / "repos"
+        if clone_root.is_dir():
+            for child in clone_root.iterdir():
+                if child.is_dir() and not child.name.startswith("."):
+                    # Don't override local_path entries.
+                    if child.name not in workspaces:
+                        workspaces[child.name] = child
+    except Exception:  # noqa: BLE001
+        pass
+
+    return workspaces
+
+
+def _walk_agent_artifacts(
+    agent_name: str,
+    workspace: Path,
+    *,
+    category_filter: str | None = None,
+) -> list[ArtifactEntry]:
+    """Walk the visible workspace dirs for a single agent and return
+    ArtifactEntry objects."""
+    entries: list[ArtifactEntry] = []
+    categories = (
+        [category_filter]
+        if category_filter and category_filter in _VISIBLE_WORKSPACE_DIRS
+        else sorted(_VISIBLE_WORKSPACE_DIRS)
+    )
+
+    for cat in categories:
+        cat_dir = workspace / cat
+        if not cat_dir.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(cat_dir):
+            dirnames[:] = [
+                d for d in dirnames
+                if not d.startswith(".") and d not in _EXCLUDED_DIRS
+            ]
+            dp = Path(dirpath)
+            rel_dir = dp.relative_to(workspace)
+            for fname in sorted(filenames):
+                fpath = dp / fname
+                try:
+                    stat = fpath.stat()
+                    rel_path = str((rel_dir / fname)).replace("\\", "/")
+                    mime, _ = mimetypes.guess_type(fname)
+                    entries.append(ArtifactEntry(
+                        agent_name=agent_name,
+                        path=rel_path,
+                        name=fname,
+                        size=stat.st_size,
+                        modified_at=__import__("datetime").datetime.fromtimestamp(
+                            stat.st_mtime,
+                            tz=__import__("datetime").timezone.utc,
+                        ).isoformat(),
+                        mime_type=mime or "application/octet-stream",
+                        category=cat,
+                    ))
+                except OSError:
+                    continue
+
+    return entries
+
+
+@router.get("/artifacts", response_model=ArtifactListResponse)
+async def get_artifacts(
+    agent: str | None = Query(None, description="Filter by agent name"),
+    category: str | None = Query(
+        None, description="Filter: 'inputs', 'outputs', or 'agent-data'"
+    ),
+    _user: UserContext = Depends(get_current_user),
+) -> ArtifactListResponse:
+    """Global artifact browser — lists files from ALL agent workspaces.
+
+    Returns every file across ``inputs/``, ``outputs/``, and ``agent-data/``
+    for every known agent.  Supports optional filtering by agent name and
+    category.
+    """
+    import asyncio as _asyncio  # noqa: PLC0415
+    loop = _asyncio.get_event_loop()
+
+    # Validate category filter early
+    if category and category not in _VISIBLE_WORKSPACE_DIRS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid category. Must be one of: "
+                   f"{', '.join(sorted(_VISIBLE_WORKSPACE_DIRS))}.",
+        )
+
+    workspaces = await loop.run_in_executor(None, _discover_agent_workspaces)
+
+    # Filter by agent if requested
+    if agent:
+        ws = workspaces.get(agent)
+        if ws is None:
+            return ArtifactListResponse(artifacts=[])
+        workspaces = {agent: ws}
+
+    all_artifacts: list[ArtifactEntry] = []
+    for ag_name, ws_path in sorted(workspaces.items()):
+        batch = await loop.run_in_executor(
+            None,
+            _walk_agent_artifacts,
+            ag_name,
+            ws_path,
+            category,
+        )
+        all_artifacts.extend(batch)
+
+    return ArtifactListResponse(artifacts=all_artifacts)
+
+
+@router.get("/artifacts/file")
+async def get_artifact_file(
+    agent: str = Query(..., description="Agent name"),
+    path: str = Query(..., description="Relative path within the workspace"),
+    _user: UserContext = Depends(get_current_user),
+) -> StreamingResponse:
+    """Stream a single file from any agent's workspace (global artifact view)."""
+    import asyncio as _asyncio  # noqa: PLC0415
+    loop = _asyncio.get_event_loop()
+    workspaces = await loop.run_in_executor(None, _discover_agent_workspaces)
+    workspace = workspaces.get(agent)
+    if workspace is None or not workspace.exists():
+        raise HTTPException(
+            status_code=404, detail=f"Agent workspace not found: {agent}"
+        )
+
+    file_path = _safe_resolve(workspace, path)
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    file_size = file_path.stat().st_size
+    if file_size > _MAX_FILE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({file_size} bytes). "
+                   f"Maximum is {_MAX_FILE_BYTES} bytes.",
+        )
+
+    mime, _ = mimetypes.guess_type(file_path.name)
+    media_type = mime or "application/octet-stream"
+
+    def _iter_file():
+        with open(file_path, "rb") as f:
+            while chunk := f.read(65536):
+                yield chunk
+
+    return StreamingResponse(
+        _iter_file(),
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{file_path.name}"',
+            "Content-Length": str(file_size),
+        },
     )

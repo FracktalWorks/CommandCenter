@@ -20,6 +20,7 @@ import {
   Wrench,
   PlusSquare,
   Zap,
+  FolderOpen,
   type LucideIcon,
 } from "lucide-react";
 
@@ -36,6 +37,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Wrench,
   PlusSquare,
   Zap,
+  FolderOpen,
 };
 
 /** Returns the Lucide component for a given icon name, or Zap as fallback. */

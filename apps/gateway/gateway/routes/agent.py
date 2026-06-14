@@ -461,8 +461,8 @@ async def register_agent(
         def _eager_clone(agent_name: str, repo_slug: str) -> None:
             try:
                 from acb_skills.loader import load_agent  # noqa: PLC0415
-                repo_portion = repo_slug.split("/")[-1] if "/" in repo_slug else repo_slug
-                with load_agent(agent_name, repo_name=repo_portion):
+                # Pass the full org/repo slug — load_agent splits when needed
+                with load_agent(agent_name, repo_name=repo_slug):
                     pass
                 _log.info("agent.eager_clone_done", name=agent_name)
             except Exception as exc:  # noqa: BLE001

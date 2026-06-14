@@ -51,7 +51,7 @@ Remove stale or contradictory text immediately.
 Organisation: Fracktal Works
 Project: CommandCenter v2 -- Headless, self-mutating agent orchestration platform
 Runtime: Unified MAF (Microsoft Agent Framework). No LangGraph. No deepagents. No n8n.
-Last updated: 2026-06-13
+Last updated: 2026-06-14
 
 ## Purpose
 

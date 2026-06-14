@@ -558,6 +558,14 @@ async def run_agent_stream_endpoint(
     run_id = req.run_id or str(uuid.uuid4())
     user_id: str = getattr(user, "email", "") or "anonymous"
 
+    # ── Set user context for memory tools (remember / save_memory / etc.) ──
+    try:
+        from acb_skills.memory_tools import \
+            _set_memory_user_id  # noqa: PLC0415
+        _set_memory_user_id(user_id)
+    except ImportError:
+        pass
+
     # ── Memory enrichment: inject relevant past facts into the agent's context ──
     try:
         from acb_memory import get_memory_context  # noqa: PLC0415

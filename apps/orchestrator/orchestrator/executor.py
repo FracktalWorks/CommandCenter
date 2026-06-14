@@ -237,6 +237,31 @@ CommandCenter platform and are available to you in every session:
 - **fetch_page(url, max_chars=8000)** — Fetch any public web page as clean text
   via Jina Reader. Use when you have a specific URL to read.
 
+### Memory & knowledge graph (active read/write)
+These tools give you direct access to CommandCenter's persistent memory systems.
+Use them to maintain continuity across conversations and build up knowledge over time.
+
+- **remember(query)** — Search episodic memory for past facts about the current
+  user. Call BEFORE making claims about user preferences, history, or context.
+  Example: `remember("Vijay's reporting preferences")`
+- **recall_timeline(entity_name, query)** — Search the bi-temporal knowledge graph
+  for time-stamped facts about an entity (deal, person, project, company).
+  Use for "when did X happen?" or "what's the history of Y?" questions.
+  Example: `recall_timeline("ABC Corp", "deal stage changes and follow-ups")`
+- **save_memory(fact)** — Persist a single important fact about the current user
+  to episodic memory. Future conversations will automatically recall this.
+  Example: `save_memory("Vijay prefers weekly Monday reports in bullet format")`
+- **save_episode(name, content, source?)** — Record a time-stamped episode in the
+  knowledge graph. Graphiti extracts entities, relationships, and timestamps.
+  Example: `save_episode("Deal closed", "ABC Corp signed ₹50L PO", source="agent-sales")`
+
+When to save vs. let the platform handle it:
+  - **Actively save** when you learn a NEW fact the user explicitly shares, or
+    when a significant event occurs (deal stage change, meeting outcome, etc.).
+  - **Trust the platform** for routine conversation turns — the gateway
+    automatically extracts memories after each run. Active save is for
+    high-signal facts you want to guarantee are captured.
+
 ### Self-improvement & committing
 When you make changes to your own repository (new skills, bug fixes, improvements
 to agents.py or prompts), you MUST commit those changes using git so they can be
@@ -318,6 +343,22 @@ def _inject_agent_tools(agents: list[Any]) -> None:
         _extra_tools = _extra_tools + [write_artifact]
     except ImportError:
         pass
+
+    # Memory tools — active read/write to Mem0 + Graphiti knowledge graph.
+    # Gives agents the ability to query past facts and persist new knowledge
+    # on demand, rather than relying solely on passive context injection.
+    try:
+        from acb_skills.memory_tools import (
+            remember,
+            recall_timeline,
+            save_memory,
+            save_episode,
+        )
+        _extra_tools = _extra_tools + [
+            remember, recall_timeline, save_memory, save_episode,
+        ]
+    except ImportError:
+        pass  # acb_memory not installed — skip gracefully
 
     for agent in agents:
         injected = False

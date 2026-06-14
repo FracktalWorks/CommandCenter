@@ -4,7 +4,7 @@
 Reusable Python packages shared across all CommandCenter services.
 
 ## Packages
-- acb_skills/ -- Agent loading, skill management, tool injection
+- acb_skills/ -- Agent loading, skill management, tool injection (agent_tools, web_tools, memory_tools, write_artifact, integrations, loader, registry)
 - acb_llm/ -- LiteLLM integration, unified credential store (LLM + integration keys), model routing
 - acb_memory/ -- Mem0 and Graphiti memory providers
 - acb_graph/ -- Postgres entity graph (SQLAlchemy sessions)

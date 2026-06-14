@@ -58,6 +58,17 @@ and streams chat responses as AG-UI events.
 1. run_agent_stream() creates CommandCenterCopilotAgent patches on loaded agent
 2. agent.run(stream=True) returns AgentResponseUpdate objects via _run_copilot_attempt()
 3. Each update is translated to AG-UI SSE events (TEXT_MESSAGE_CONTENT, TOOL_CALL_*, etc.)
+
+### Injected tools (auto-available to all agents)
+The executor's _inject_agent_tools() patches every loaded agent with cross-cutting
+tools so no agent repo needs to declare them:
+- call_agent / call_agents_parallel / call_agent_background  (agent_tools.py)
+- web_search / fetch_page                                  (web_tools.py)
+- write_artifact                                           (write_artifact.py)
+- remember / recall_timeline / save_memory / save_episode   (memory_tools.py)
+Injection targets: _tools (GitHubCopilotAgent), tools (MAF Agent), _default_options.tools (legacy).
+Tool guidance is appended to _default_options.system_message via _build_injected_tools_addendum().
+User context (_set_memory_user_id) is set by gateway route agent.py before each run.
 4. DETACHED EXECUTION: the gateway wraps the generator in stream_relay.run_detached(),
    which drains it in a background asyncio task pushing all events to Redis
    (cc:stream:{thread_id}). The HTTP response is just a Redis subscriber --

@@ -69,9 +69,14 @@ class GraphitiClient:
 
         try:
             from graphiti_core import Graphiti  # noqa: PLC0415
-            from graphiti_core.llm_client.openai_client import OpenAIClient as _GOpenAI  # noqa: PLC0415
-            from graphiti_core.embedder.openai import OpenAIEmbedder  # noqa: PLC0415
-            from graphiti_core.embedder.openai import OpenAIEmbedderConfig  # noqa: PLC0415
+            from graphiti_core.llm_client.config import \
+                LLMConfig  # noqa: PLC0415
+            from graphiti_core.llm_client.openai_client import \
+                OpenAIClient as _GOpenAI  # noqa: PLC0415
+            from graphiti_core.embedder.openai import \
+                OpenAIEmbedder  # noqa: PLC0415
+            from graphiti_core.embedder.openai import \
+                OpenAIEmbedderConfig  # noqa: PLC0415
             from openai import AsyncOpenAI  # noqa: PLC0415
 
             # Reuse gateway /v1 (litellm SDK) for both LLM and embeddings so
@@ -82,8 +87,12 @@ class GraphitiClient:
                 base_url=litellm_url,
             )
             llm_client = _GOpenAI(
+                config=LLMConfig(
+                    api_key=litellm_key,
+                    model="tier-fast",
+                    base_url=litellm_url,
+                ),
                 client=openai_client,
-                model="tier-fast",
             )
 
             # Embedding model: prefer OpenAI text-embedding-3-small when an

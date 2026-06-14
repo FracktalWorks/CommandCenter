@@ -8,6 +8,15 @@ cd "$APP_DIR"
 
 say()  { printf "\n==> %s\n" "$*"; }
 
+# ── Preserve runtime agent registry ───────────────────────────────────────
+# agents.json is mutated by the Control Plane UI (Add Agent).  If the caller
+# did a `git reset --hard` before this script, the runtime registrations
+# would be lost.  Restore from a pre-reset backup when available.
+if [ -s /tmp/acb-agents.json.bak ]; then
+  cp /tmp/acb-agents.json.bak apps/gateway/agents.json
+  say "Restored runtime agents.json ($(wc -l < apps/gateway/agents.json) lines)"
+fi
+
 say "Pulling images"
 docker compose -f infra/docker-compose.yml pull
 

@@ -212,12 +212,42 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
     }
   }
 
-  // ── Build model list — filter by provider key + hidden list ─────────────
-  const litellmModels = LITELLM_MODELS.filter(
-    (m) => (m.provider === null || configured.has(m.provider)) && !hiddenSet.has(m.id)
-  );
+  // ── Build model list ─────────────────────────────────────────────────────
+  //
+  // Priority order:
+  //   1. Tier aliases (tier1/tier2/tier3) — always shown, they route to whatever
+  //      is currently configured in the gateway regardless of any key check.
+  //   2. GitHub Copilot SDK models — separate execution path, shown when GITHUB_TOKEN set.
+  //   3. Enabled LiteLLM models — models the user has explicitly enabled via
+  //      Settings → Models → eye icon (stored in custom_models.json "custom" array).
+  //      If the user hasn't enabled any models yet, fall back to showing all
+  //      models for configured providers (backward compat / first-time setup).
+  //
+  const tierModels = LITELLM_MODELS.filter((m) => m.provider === null);
+
+  // Build the enabled set from customModels (the "custom" array in custom_models.json).
+  // These are the models the user explicitly turned on from the Models settings tab.
+  const enabledIds = new Set(customModels.map((m) => m.id));
+
+  // Fallback: if no models have been explicitly enabled yet, treat all
+  // configured-provider models as enabled so the picker isn't empty.
+  const noExplicitEnabled = customModels.length === 0;
+  const litellmModels = noExplicitEnabled
+    ? LITELLM_MODELS.filter(
+        (m) => m.provider !== null && configured.has(m.provider) && !hiddenSet.has(m.id),
+      )
+    : LITELLM_MODELS.filter(
+        (m) => m.provider !== null && enabledIds.has(m.id) && !hiddenSet.has(m.id),
+      );
 
   const models: UnifiedModel[] = [
+    // Tier routing aliases — always present
+    ...tierModels.map((m) => ({
+      id: m.id,
+      label: m.label,
+      runtime: "litellm" as ModelRuntime,
+      group: m.group,
+    })),
     // GitHub Copilot SDK group — only shown when GITHUB_TOKEN is set
     ...(configured.has("github")
       ? copilotModels
@@ -230,32 +260,30 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
             model_picker_enabled: (m as { id: string; label: string; model_picker_enabled?: boolean }).model_picker_enabled ?? false,
           }))
       : []),
-    // LiteLLM group — tiers always shown, provider-specific models gated by key
+    // User-enabled LiteLLM models (from built-in list, filtered by enabledIds)
     ...litellmModels.map((m) => ({
       id: m.id,
       label: m.label,
       runtime: "litellm" as ModelRuntime,
       group: m.group,
     })),
-    // User-defined custom models — always shown (user added them intentionally),
-    // hidden filter still applies so explicitly hidden ones stay hidden.
-    // Deduplicate: skip custom models whose id already appears in the built-in list.
+    // Custom models added by the user that aren't in the built-in LITELLM_MODELS list
+    // (e.g. models fetched via the refresh and enabled in the Models tab).
     ...customModels
-      .filter((m) => !hiddenSet.has(m.id) && !litellmModels.some((b) => b.id === m.id))
+      .filter(
+        (m) =>
+          !hiddenSet.has(m.id) &&
+          !tierModels.some((t) => t.id === m.id) &&
+          !litellmModels.some((b) => b.id === m.id) &&
+          !LITELLM_MODELS.some((b) => b.id === m.id), // not a known built-in
+      )
       .map((m) => ({
         id: m.id,
         label: m.label,
         runtime: "litellm" as ModelRuntime,
-        group: m.group || `Custom — ${m.provider}`,
+        group: m.group || `${m.provider}`,
       })),
   ];
-
-  // Always include at least the tiers so the picker is never empty
-  if (models.length === 0) {
-    LITELLM_MODELS.filter((m) => m.provider === null).forEach((m) =>
-      models.push({ id: m.id, label: m.label, runtime: "litellm", group: m.group })
-    );
-  }
 
   return NextResponse.json({
     models,

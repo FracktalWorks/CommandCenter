@@ -835,7 +835,7 @@ export default function ApisPage() {
                 </div>
                 <div className="flex items-center justify-between px-4 pb-2 border-b border-border shrink-0">
                   <div className="flex items-center gap-2">
-                    <ServiceLogo service={selectedApi.service} size={20} />
+                    <ServiceLogo service={selectedApi.service} label={selectedApi.label ?? selectedApi.service} size="sm" />
                     <span className="text-sm font-semibold">{selectedApi.label ?? selectedApi.service}</span>
                   </div>
                   <button onClick={() => setSelected(null)} className="p-1 rounded-md hover:bg-secondary text-muted-foreground">

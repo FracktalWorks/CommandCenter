@@ -35,12 +35,16 @@ export interface TestResult {
   latency_ms: number;
 }
 
-export interface CustomModel {
+/** A model that has been enabled by the user via Settings → Models. */
+export interface EnabledModel {
   id: string;
   label: string;
   provider: string;
   group: string;
 }
+
+/** @deprecated Use EnabledModel */
+export type CustomModel = EnabledModel;
 
 export interface VisibleModel {
   id: string;

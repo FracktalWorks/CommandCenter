@@ -157,11 +157,10 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
     if (process.env.VLLM_BASE_URL?.trim())       configured.add("vllm");
   }
 
-  // ── Fetch custom models + hidden list from the gateway ───────────────────
-  // These are stored in infra/custom_models.json and managed via
-  // Settings → Models.  Custom models are merged into the picker; hidden
-  // model IDs are removed from all groups (built-in + custom).
-  let customModels: { id: string; label: string; provider: string; group: string }[] = [];
+  // ── Fetch enabled models + hidden list from the gateway ─────────────────
+  // Stored in infra/custom_models.json.  "enabled" = models turned on via
+  // Settings → Models eye icon.  "hidden" = legacy suppression list.
+  let enabledModels: { id: string; label: string; provider: string; group: string }[] = [];
   const hiddenSet = new Set<string>();
   try {
     const cr = await fetch(`${GATEWAY_URL}/settings/llm/custom-models`, {
@@ -170,14 +169,18 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
     });
     if (cr.ok) {
       const data = (await cr.json()) as
-        | { custom?: { id: string; label: string; provider: string; group: string }[]; hidden?: string[] }
+        | { enabled?: { id: string; label: string; provider: string; group: string }[];
+            custom?: { id: string; label: string; provider: string; group: string }[];
+            hidden?: string[] }
         | { id: string; label: string; provider: string; group: string }[];
-      // Support both old (plain array) and new (object with custom+hidden) shapes
       if (Array.isArray(data)) {
-        customModels = data;
+        enabledModels = data;
       } else {
-        customModels = data.custom ?? [];
-        for (const id of data.hidden ?? []) hiddenSet.add(id);
+        // Prefer "enabled", fall back to legacy "custom" key
+        enabledModels = (data as { enabled?: typeof enabledModels; custom?: typeof enabledModels }).enabled
+          ?? (data as { custom?: typeof enabledModels }).custom
+          ?? [];
+        for (const id of (data as { hidden?: string[] }).hidden ?? []) hiddenSet.add(id);
       }
     }
   } catch (_e) {
@@ -225,13 +228,12 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
   //
   const tierModels = LITELLM_MODELS.filter((m) => m.provider === null);
 
-  // Build the enabled set from customModels (the "custom" array in custom_models.json).
-  // These are the models the user explicitly turned on from the Models settings tab.
-  const enabledIds = new Set(customModels.map((m) => m.id));
+  // enabledModels contains models the user turned on via Settings → Models.
+  const enabledIds = new Set(enabledModels.map((m) => m.id));
 
   // Fallback: if no models have been explicitly enabled yet, treat all
   // configured-provider models as enabled so the picker isn't empty.
-  const noExplicitEnabled = customModels.length === 0;
+  const noExplicitEnabled = enabledModels.length === 0;
   const litellmModels = noExplicitEnabled
     ? LITELLM_MODELS.filter(
         (m) => m.provider !== null && configured.has(m.provider) && !hiddenSet.has(m.id),
@@ -267,10 +269,8 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
       runtime: "litellm" as ModelRuntime,
       group: m.group,
     })),
-    // Custom models from the enabled list that aren't already covered above.
-    // Normalise the group name: use the provider label rather than whatever
-    // raw string was stored (old "Add model" form used "Custom — X" prefixes).
-    ...customModels
+    // Enabled models from the user's list that aren't already covered above.
+    ...enabledModels
       .filter(
         (m) =>
           !hiddenSet.has(m.id) &&

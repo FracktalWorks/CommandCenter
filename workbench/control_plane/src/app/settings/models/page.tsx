@@ -177,7 +177,7 @@ export default function ModelsPage() {
     } finally { setRefreshing(false); }
   }, [configuredProviderIds, loadModelsTab, loadCacheInfo]);
 
-  // ── Tab 2: Toggle model enabled/disabled (add/remove from LiteLLM custom-models) ─
+  // ── Tab 2: Toggle model enabled/disabled (───────────────────────────────────────
   const toggleEnabled = async (m: ModelInfo) => {
     setBusyModel(m.id);
     try {

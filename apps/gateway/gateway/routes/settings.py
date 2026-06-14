@@ -767,7 +767,10 @@ async def set_copilot_model(
 
 
 # ---------------------------------------------------------------------------
-# Custom model catalogue  — user-managed entries stored in infra/custom_models.json
+# Enabled model catalogue — models the user has turned on via Settings → Models.
+# Stored in infra/custom_models.json (filename kept for backward compat).
+# JSON structure: {"enabled": [...], "hidden": [...]}
+# Legacy keys: "custom" is treated as an alias for "enabled".
 # ---------------------------------------------------------------------------
 
 def _custom_models_path() -> Path:
@@ -778,41 +781,30 @@ def _custom_models_path() -> Path:
         return Path.cwd() / "custom_models.json"
 
 
-def _load_custom_models() -> list[dict[str, str]]:
-    p = _custom_models_path()
-    if not p.exists():
-        return []
-    try:
-        import json  # noqa: PLC0415
-        data = json.loads(p.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
-    except Exception:  # noqa: BLE001
-        return []
-
-
-def _save_custom_models(models: list[dict[str, str]]) -> None:
-    import json  # noqa: PLC0415
-    p = _custom_models_path()
-    p.write_text(json.dumps(models, indent=2, ensure_ascii=False), encoding="utf-8")
-
-
 def _load_catalogue() -> dict[str, object]:
-    """Load custom_models.json as a dict with 'custom' and 'hidden' lists."""
+    """Load model catalogue: {enabled: [...], hidden: [...]}."""
     import json  # noqa: PLC0415
     p = _custom_models_path()
     if not p.exists():
-        return {"custom": [], "hidden": []}
+        return {"enabled": [], "hidden": []}
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-        # Support legacy format (plain list = custom models only)
+        # Support all legacy shapes:
+        #  - plain list  (very old format)
+        #  - {"custom": [...], "hidden": [...]}  (pre-2026-06 format)
+        #  - {"enabled": [...], "hidden": [...]}  (current format)
         if isinstance(data, list):
-            return {"custom": data, "hidden": []}
-        return {
-            "custom": data.get("custom", []) if isinstance(data, dict) else [],
-            "hidden": data.get("hidden", []) if isinstance(data, dict) else [],
-        }
+            return {"enabled": data, "hidden": []}
+        if isinstance(data, dict):
+            # Prefer "enabled"; fall back to legacy "custom" key
+            enabled = data.get("enabled") or data.get("custom") or []
+            return {
+                "enabled": enabled if isinstance(enabled, list) else [],
+                "hidden": data.get("hidden", []) if isinstance(data, dict) else [],
+            }
+        return {"enabled": [], "hidden": []}
     except Exception:  # noqa: BLE001
-        return {"custom": [], "hidden": []}
+        return {"enabled": [], "hidden": []}
 
 
 def _save_catalogue(catalogue: dict[str, object]) -> None:
@@ -821,41 +813,56 @@ def _save_catalogue(catalogue: dict[str, object]) -> None:
     p.write_text(json.dumps(catalogue, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-# Keep old helpers working for backward compat
-def _load_custom_models() -> list[dict[str, str]]:
+def _load_enabled_models() -> list[dict[str, str]]:
     cat = _load_catalogue()
-    raw = cat.get("custom", [])
+    raw = cat.get("enabled", [])
     return raw if isinstance(raw, list) else []  # type: ignore[return-value]
 
 
-def _save_custom_models(models: list[dict[str, str]]) -> None:
+def _save_enabled_models(models: list[dict[str, str]]) -> None:
     cat = _load_catalogue()
-    cat["custom"] = models  # type: ignore[assignment]
+    cat["enabled"] = models  # type: ignore[assignment]
+    # Remove legacy "custom" key if present
+    cat.pop("custom", None)  # type: ignore[attr-defined]
     _save_catalogue(cat)
 
 
-class CustomModelEntry(BaseModel):
+# Keep alias so any other code that calls _load_custom_models() still works
+_load_custom_models = _load_enabled_models
+_save_custom_models = _save_enabled_models
+
+
+class EnabledModelEntry(BaseModel):
     id: str        # LiteLLM model string, e.g. "openrouter/qwen/qwen3.8-preview"
     label: str     # display name in the picker
     provider: str  # "gemini" | "openrouter" | "anthropic" | ...
-    group: str = ""  # optional group label override (defaults to "Custom — {provider}")
+    group: str = ""
 
 
-class CustomModelAddRequest(BaseModel):
+# Backward-compat alias
+CustomModelEntry = EnabledModelEntry
+
+
+class EnabledModelAddRequest(BaseModel):
     id: str
     label: str
     provider: str
     group: str = ""
 
 
+CustomModelAddRequest = EnabledModelAddRequest
+
+
 @router.get("/llm/custom-models")
-async def list_custom_models(
+async def list_enabled_models(
     _user: UserContext = Depends(get_current_user),
 ) -> dict[str, object]:
-    """Return custom models and the hidden model list."""
+    """Return enabled models and the hidden model list."""
     cat = _load_catalogue()
+    enabled_raw = cat.get("enabled") or cat.get("custom") or []
     return {
-        "custom": [CustomModelEntry(**m) for m in (cat.get("custom") or [])],
+        "custom": [EnabledModelEntry(**m) for m in enabled_raw],  # keep "custom" key for frontend compat
+        "enabled": [EnabledModelEntry(**m) for m in enabled_raw],
         "hidden": cat.get("hidden") or [],
     }
 
@@ -878,13 +885,20 @@ async def add_custom_model(
     if not req.label.strip():
         raise HTTPException(status_code=400, detail="label cannot be empty")
 
-    models = _load_custom_models()
+    models = _load_enabled_models()
     # Prevent duplicates
     if any(m["id"] == model_id for m in models):
-        raise HTTPException(status_code=409, detail=f"Model {model_id!r} already in custom list")
+        raise HTTPException(status_code=409, detail=f"Model {model_id!r} already enabled")
 
     provider = req.provider.strip() or _provider_from_model(model_id)
-    group = req.group.strip() or f"Custom — {provider.title()}"
+    # Derive clean group name from provider slug — no "Custom" prefix
+    provider_labels: dict[str, str] = {
+        "gemini": "Gemini", "openai": "OpenAI", "anthropic": "Anthropic",
+        "openrouter": "OpenRouter", "github": "GitHub Copilot", "groq": "Groq",
+        "deepseek": "DeepSeek", "mistral": "Mistral", "together": "Together AI",
+        "ollama": "Ollama", "vllm": "vLLM",
+    }
+    group = req.group.strip() or provider_labels.get(provider, provider)
     entry: dict[str, str] = {
         "id": model_id,
         "label": req.label.strip(),
@@ -892,24 +906,24 @@ async def add_custom_model(
         "group": group,
     }
     models.append(entry)
-    _save_custom_models(models)
-    _log.info("settings.llm.custom_model_added", id=model_id, actor=_user.email)
-    return CustomModelEntry(**entry)
+    _save_enabled_models(models)
+    _log.info("settings.llm.model_enabled", id=model_id, actor=_user.email)
+    return EnabledModelEntry(**entry)
 
 
 @router.delete("/llm/custom-models/{model_id:path}", status_code=200)
-async def remove_custom_model(
+async def remove_enabled_model(
     model_id: str,
     _user: UserContext = Depends(get_current_user),
 ) -> dict[str, str]:
-    """Remove a custom model entry by its LiteLLM model ID."""
-    models = _load_custom_models()
+    """Disable a model by removing it from the enabled list."""
+    models = _load_enabled_models()
     new_models = [m for m in models if m["id"] != model_id]
     if len(new_models) == len(models):
-        raise HTTPException(status_code=404, detail=f"Model {model_id!r} not found in custom list")
-    _save_custom_models(new_models)
-    _log.info("settings.llm.custom_model_removed", id=model_id, actor=_user.email)
-    return {"deleted": model_id}
+        raise HTTPException(status_code=404, detail=f"Model {model_id!r} not in enabled list")
+    _save_enabled_models(new_models)
+    _log.info("settings.llm.model_disabled", id=model_id, actor=_user.email)
+    return {"disabled": model_id}
 
 
 # ---------------------------------------------------------------------------

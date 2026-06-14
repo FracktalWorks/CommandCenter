@@ -222,53 +222,57 @@ export default function ModelsPage() {
       ) : (
         <div className="flex-1 overflow-hidden flex">
           {/* ══════════════════════════════════════════════════════════════════
-              TAB 1: PROVIDERS (tile grid + slide-in detail)
+              TAB 1: PROVIDERS (tile grid + slide-in side panel)
               ══════════════════════════════════════════════════════════════ */}
           {tab === "providers" && (
-            <div className="flex-1 overflow-y-auto">
-              <div className="px-4 pt-3 pb-2 flex items-center gap-2 flex-wrap">
-                <div className="flex items-center gap-1">
-                  {([["all","All"],["connected","Connected"],["unset","Not set up"]] as const).map(([id, label]) => (
-                    <button key={id} onClick={() => setProvFilter(id)}
-                      className={`px-2.5 py-1 rounded-full text-[11px] font-medium tech-transition ${providerFilter === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <div className="relative flex-1 min-w-[140px] max-w-[220px] ml-auto">
-                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"><SearchIcon /></span>
-                  <input type="text" placeholder="Search…" value={providerSearch} onChange={(e) => setProviderSearch(e.target.value)}
-                    className="w-full rounded-md border border-border bg-card pl-8 pr-3 py-1.5 text-[11px] text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none" />
-                </div>
-              </div>
-              <div className="p-4">
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                  {filteredProviders.map((p) => {
-                    const colour = PROVIDER_COLOURS[p.id] ?? PROVIDER_COLOURS.unknown;
-                    return (
-                      <button key={p.id} onClick={() => setSelectedProvider(selectedProvider === p.id ? null : p.id)}
-                        className={`text-left w-full p-3 rounded-xl border tech-transition ${
-                          selectedProvider === p.id ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-card hover:border-primary/40 hover:bg-secondary/30"
-                        }`}>
-                        <div className="flex items-start justify-between mb-2">
-                          <span className="text-lg shrink-0">{PROVIDER_ICONS[p.id] ?? "?"}</span>
-                          <span className={`w-2 h-2 mt-1 rounded-full shrink-0 ${p.configured ? "bg-success" : "bg-muted"}`} />
-                        </div>
-                        <div className="font-medium text-xs text-foreground leading-tight truncate">{p.label}</div>
-                        <div className={`text-[10px] mt-0.5 ${p.configured ? "text-success" : "text-muted-foreground"}`}>
-                          {p.configured ? "● Connected" : p.id === "ollama" || p.id === "vllm" ? "○ Local" : "○ No key"}
-                        </div>
-                        {p.env_var && <div className="text-[9px] text-muted-foreground font-mono mt-1 truncate opacity-60">{p.env_var}</div>}
+            <div className="flex-1 flex overflow-hidden">
+              {/* Main grid area */}
+              <div className="flex-1 overflow-y-auto">
+                <div className="px-4 pt-3 pb-2 flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-1">
+                    {([["all","All"],["connected","Connected"],["unset","Not set up"]] as const).map(([id, label]) => (
+                      <button key={id} onClick={() => setProvFilter(id)}
+                        className={`px-2.5 py-1 rounded-full text-[11px] font-medium tech-transition ${providerFilter === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}>
+                        {label}
                       </button>
-                    );
-                  })}
+                    ))}
+                  </div>
+                  <div className="relative flex-1 min-w-[140px] max-w-[220px] ml-auto">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"><SearchIcon /></span>
+                    <input type="text" placeholder="Search…" value={providerSearch} onChange={(e) => setProviderSearch(e.target.value)}
+                      className="w-full rounded-md border border-border bg-card pl-8 pr-3 py-1.5 text-[11px] text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none" />
+                  </div>
                 </div>
-                {filteredProviders.length === 0 && (
-                  <div className="text-center py-12 text-xs text-muted-foreground">No providers match your filter.</div>
-                )}
+                <div className="p-4">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                    {filteredProviders.map((p) => {
+                      return (
+                        <button key={p.id} onClick={() => setSelectedProvider(selectedProvider === p.id ? null : p.id)}
+                          className={`text-left w-full p-3 rounded-xl border tech-transition ${
+                            selectedProvider === p.id ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-card hover:border-primary/40 hover:bg-secondary/30"
+                          }`}>
+                          <div className="flex items-start justify-between mb-2">
+                            <span className="text-lg shrink-0">{PROVIDER_ICONS[p.id] ?? "?"}</span>
+                            <span className={`w-2 h-2 mt-1 rounded-full shrink-0 ${p.configured ? "bg-success" : "bg-muted"}`} />
+                          </div>
+                          <div className="font-medium text-xs text-foreground leading-tight truncate">{p.label}</div>
+                          <div className={`text-[10px] mt-0.5 ${p.configured ? "text-success" : "text-muted-foreground"}`}>
+                            {p.configured ? "● Connected" : p.id === "ollama" || p.id === "vllm" ? "○ Local" : "○ No key"}
+                          </div>
+                          {p.env_var && <div className="text-[9px] text-muted-foreground font-mono mt-1 truncate opacity-60">{p.env_var}</div>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {filteredProviders.length === 0 && (
+                    <div className="text-center py-12 text-xs text-muted-foreground">No providers match your filter.</div>
+                  )}
+                </div>
               </div>
+
+              {/* Desktop: slide-in side panel (APIs-style) */}
               {selectedProvider && selectedProvData && (
-                <div className="border-t border-border bg-card/80 px-4 py-4 space-y-3">
+                <div className="hidden sm:flex w-[380px] border-l border-border bg-card shrink-0 flex-col overflow-hidden animate-fade-in">
                   <ProviderDetail
                     provider={selectedProvData}
                     guide={guide}
@@ -277,6 +281,23 @@ export default function ModelsPage() {
                     onKeyDiscard={() => handleKeyDiscard(selectedProvData.id)}
                     onClose={() => setSelectedProvider(null)}
                   />
+                </div>
+              )}
+
+              {/* Mobile: bottom slide-up panel (APIs-style) */}
+              {selectedProvider && selectedProvData && (
+                <div className="sm:hidden fixed inset-0 z-40 pointer-events-none">
+                  <div className="absolute inset-0 bg-black/50 pointer-events-auto" onClick={() => setSelectedProvider(null)} />
+                  <aside className="absolute inset-x-0 bottom-14 pointer-events-auto flex max-h-[55%] flex-col rounded-t-2xl border-t border-border bg-card shadow-2xl chat-fade-in">
+                    <ProviderDetail
+                      provider={selectedProvData}
+                      guide={guide}
+                      copilotScopeOk={selectedProvData.id === "github" ? copilotScopeOk : undefined}
+                      onKeySet={(key) => handleKeySet(selectedProvData.id, key)}
+                      onKeyDiscard={() => handleKeyDiscard(selectedProvData.id)}
+                      onClose={() => setSelectedProvider(null)}
+                    />
+                  </aside>
                 </div>
               )}
             </div>
@@ -503,91 +524,134 @@ function ProviderDetail({ provider, guide, copilotScopeOk, onKeySet, onKeyDiscar
   const colour = PROVIDER_COLOURS[provider.id] ?? PROVIDER_COLOURS.unknown;
 
   return (
-    <div className={`rounded-xl border px-4 py-3 ${colour}`}>
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <span className="text-lg">{PROVIDER_ICONS[provider.id] ?? "?"}</span>
-          <div>
-            <div className="text-sm font-medium">{provider.label}</div>
-            {provider.env_var && <div className="text-[10px] font-mono opacity-60">{provider.env_var}</div>}
+    <>
+      {/* Panel header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className="text-lg shrink-0">{PROVIDER_ICONS[provider.id] ?? "?"}</span>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-foreground truncate">{provider.label}</div>
+            <div className="flex items-center gap-2 mt-0.5">
+              {provider.env_var && <span className="text-[9px] font-mono text-muted-foreground truncate">{provider.env_var}</span>}
+              <span className={`text-[10px] font-medium ${provider.configured ? "text-success" : "text-muted-foreground"}`}>
+                {provider.configured ? "● Configured" : provider.id === "ollama" || provider.id === "vllm" ? "○ Local" : "○ No key"}
+              </span>
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 shrink-0">
           {provider.configured && !isLocal && (
-            <>
-              {!confirmDiscard ? (
-                <button onClick={() => setConfirmDiscard(true)} className="text-[10px] text-destructive/70 hover:text-destructive underline underline-offset-2 tech-transition">discard key</button>
-              ) : (
-                <span className="flex items-center gap-1">
-                  <button onClick={handleDiscard} disabled={discarding} className="rounded border border-destructive/20 bg-destructive/5 px-2 py-0.5 text-[10px] text-destructive hover:bg-destructive/10 tech-transition disabled:opacity-40">{discarding ? "…" : "Confirm discard"}</button>
-                  <button onClick={() => setConfirmDiscard(false)} disabled={discarding} className="text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2 tech-transition">cancel</button>
-                </span>
-              )}
-            </>
+            !confirmDiscard ? (
+              <button onClick={() => setConfirmDiscard(true)} className="text-[10px] text-destructive/70 hover:text-destructive underline underline-offset-2 tech-transition">discard</button>
+            ) : (
+              <span className="flex items-center gap-1">
+                <button onClick={handleDiscard} disabled={discarding} className="rounded border border-destructive/20 bg-destructive/5 px-2 py-0.5 text-[10px] text-destructive hover:bg-destructive/10 tech-transition disabled:opacity-40">{discarding ? "…" : "Confirm"}</button>
+                <button onClick={() => setConfirmDiscard(false)} disabled={discarding} className="text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2 tech-transition">cancel</button>
+              </span>
+            )
           )}
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-sm">✕</button>
+          <button onClick={onClose} className="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground tech-transition">
+            <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+          </button>
         </div>
       </div>
 
-      {provider.id === "github" && provider.configured && copilotScopeOk === false && (
-        <div className="mb-2 rounded-lg border border-warning/25 bg-warning/5 p-2 text-[10px]">
-          <span className="text-warning font-medium">⚠ Copilot scope missing</span> — your token may lack the <code className="font-mono bg-secondary px-1 rounded">copilot</code> permission.{" "}
-          <details className="inline"><summary className="text-primary cursor-pointer hover:underline">Fix steps</summary>
-            <ol className="mt-1 space-y-0.5 pl-3 text-muted-foreground">
-              <li>Go to <a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener noreferrer" className="underline">github.com/settings/tokens</a></li>
-              <li>Generate a fine-grained token with <strong>Copilot → Read-only</strong></li>
-              <li>Paste the new token below</li>
-            </ol>
-          </details>
-        </div>
-      )}
-
-      {guide && !isLocal && <p className="text-xs opacity-70 mb-2">{guide.description}</p>}
-
-      {!provider.configured || !isLocal ? (
-        <div className="space-y-2">
-          {guide && (
-            <a href={guide.setup_url} target="_blank" rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1 text-[10px] font-medium text-primary hover:bg-primary/20 tech-transition">
-              Get API key ↗
-            </a>
-          )}
-          <div className="relative">
-            <input type={show ? "text" : "password"} value={keyVal} onChange={(e) => setKeyVal(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSave()}
-              placeholder={`Paste ${provider.env_var}…`}
-              className="w-full rounded-lg border border-border bg-background px-3 py-1.5 pr-14 text-xs text-foreground placeholder-muted-foreground font-mono focus:border-primary focus:outline-none" />
-            <button onClick={() => setShow((s) => !s)} className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground hover:text-foreground">{show ? "hide" : "show"}</button>
+      {/* Panel body — scrollable */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {/* Copilot scope warning */}
+        {provider.id === "github" && provider.configured && copilotScopeOk === false && (
+          <div className="rounded-lg border border-warning/25 bg-warning/5 p-2.5 text-[10px] space-y-1">
+            <span className="text-warning font-medium">⚠ Copilot scope missing</span>
+            <p className="text-muted-foreground">Your token may lack the <code className="font-mono bg-secondary px-1 rounded">copilot</code> permission.</p>
+            <details><summary className="text-primary cursor-pointer hover:underline text-[10px]">How to fix</summary>
+              <ol className="mt-1 space-y-0.5 pl-3 text-muted-foreground">
+                <li>Go to <a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener noreferrer" className="underline">github.com/settings/tokens</a></li>
+                <li>Generate a fine-grained token with <strong>Copilot → Read-only</strong></li>
+                <li>Paste the new token below</li>
+              </ol>
+            </details>
           </div>
-          {err && <p className="text-[10px] text-destructive">{err}</p>}
-          <div className="flex gap-2">
-            <button onClick={handleSave} disabled={saving || !keyVal.trim()}
-              className="rounded-lg bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 tech-transition">{saving ? "Saving & restarting…" : "Save & apply"}</button>
-          </div>
-          {saving && <p className="text-[9px] text-muted-foreground">Writing key and restarting LiteLLM (~25s)…</p>}
+        )}
 
-          {provider.id === "github" && (
-            <div className="rounded-lg border border-primary/20 bg-primary/5 p-2 space-y-1.5">
-              <div className="flex items-center gap-1.5"><span className="text-xs">✦</span><span className="text-[10px] font-medium text-primary/80">GitHub OAuth</span></div>
-              {!deviceFlow ? (
-                <button onClick={startDeviceFlow} disabled={!!deviceStatus && !deviceStatus.includes("Error")}
-                  className="w-full rounded-lg border border-primary/30 bg-primary/10 px-2 py-1.5 text-[10px] font-medium text-primary/80 hover:bg-primary/20 tech-transition disabled:opacity-40">{deviceStatus || "Connect with GitHub →"}</button>
-              ) : (
-                <div className="text-center space-y-1">
-                  <div className="text-xl font-bold tracking-[0.3em] text-primary/80 font-mono">{deviceFlow.userCode}</div>
-                  <a href={deviceFlow.verificationUri} target="_blank" rel="noopener noreferrer" className="text-[10px] text-primary/80 underline">Open {deviceFlow.verificationUri} →</a>
-                  <p className="text-[9px] text-muted-foreground">{deviceStatus}</p>
-                </div>
-              )}
+        {/* Description + setup link */}
+        {guide && !isLocal && (
+          <>
+            <p className="text-xs text-muted-foreground leading-relaxed">{guide.description}</p>
+            <div className="flex items-center gap-2">
+              <a href={guide.setup_url} target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1 text-[10px] font-medium text-primary hover:bg-primary/20 tech-transition">
+                Get API key ↗
+              </a>
+              <a href={guide.docs_url} target="_blank" rel="noopener noreferrer"
+                className="text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2 tech-transition">
+                Docs ↗
+              </a>
             </div>
-          )}
-        </div>
-      ) : null}
+          </>
+        )}
 
-      {confirmDiscard && (
-        <div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/5 p-2 space-y-1.5">
-          <p className="text-[10px] text-destructive">This will remove the key and disconnect the provider. Tiers using it will fall back.</p>
-        </div>
-      )}
-    </div>
+        {/* Key input (only for non-local or unconfigured) */}
+        {!provider.configured || !isLocal ? (
+          <div className="space-y-2">
+            {/* Step-by-step instructions */}
+            {guide && !isLocal && (
+              <ol className="space-y-1">
+                {guide.instructions.map((step, i) => (
+                  <li key={i} className="flex items-start gap-2 text-[10px] text-muted-foreground">
+                    <span className="shrink-0 w-3.5 h-3.5 rounded-full bg-secondary text-muted-foreground flex items-center justify-center text-[8px] font-semibold mt-0.5">{i + 1}</span>
+                    {step}
+                  </li>
+                ))}
+              </ol>
+            )}
+
+            <div className="relative">
+              <input type={show ? "text" : "password"} value={keyVal} onChange={(e) => setKeyVal(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSave()}
+                placeholder={`Paste ${provider.env_var}…`}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 pr-14 text-xs text-foreground placeholder-muted-foreground font-mono focus:border-primary focus:outline-none" />
+              <button onClick={() => setShow((s) => !s)} className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground hover:text-foreground">{show ? "hide" : "show"}</button>
+            </div>
+            {err && <p className="text-[10px] text-destructive">{err}</p>}
+            <button onClick={handleSave} disabled={saving || !keyVal.trim()}
+              className="w-full rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 tech-transition">{saving ? "Saving & restarting LiteLLM…" : "Save & apply key"}</button>
+            {saving && <p className="text-[9px] text-muted-foreground text-center">Writing key and restarting (~25s)…</p>}
+
+            {/* GitHub device flow */}
+            {provider.id === "github" && (
+              <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 space-y-2">
+                <div className="flex items-center gap-1.5"><span className="text-xs">✦</span><span className="text-[10px] font-medium text-primary/80">GitHub OAuth Device Flow</span></div>
+                <p className="text-[10px] text-muted-foreground">No token copying — enter a code on GitHub to authenticate automatically.</p>
+                {!deviceFlow ? (
+                  <button onClick={startDeviceFlow} disabled={!!deviceStatus && !deviceStatus.includes("Error")}
+                    className="w-full rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-[10px] font-medium text-primary/80 hover:bg-primary/20 tech-transition disabled:opacity-40">{deviceStatus || "Connect with GitHub →"}</button>
+                ) : (
+                  <div className="text-center space-y-1.5">
+                    <div className="text-2xl font-bold tracking-[0.3em] text-primary/80 font-mono">{deviceFlow.userCode}</div>
+                    <a href={deviceFlow.verificationUri} target="_blank" rel="noopener noreferrer" className="text-[10px] text-primary/80 underline block">Open {deviceFlow.verificationUri} →</a>
+                    <p className="text-[9px] text-muted-foreground">{deviceStatus}</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
+          /* Already configured — show status */
+          <div className="rounded-lg border border-success/20 bg-success/5 p-3 text-center">
+            <p className="text-xs text-success font-medium">✓ Connected</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">Key is set and LiteLLM has access to this provider.</p>
+          </div>
+        )}
+
+        {/* Discard confirmation */}
+        {confirmDiscard && (
+          <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 space-y-2">
+            <p className="text-[10px] text-destructive">This will remove the key and disconnect the provider. Tiers using it will fall back to the next available.</p>
+            <button onClick={handleDiscard} disabled={discarding}
+              className="w-full rounded-lg bg-destructive px-3 py-2 text-xs font-medium text-destructive-foreground hover:opacity-90 disabled:opacity-40 tech-transition">{discarding ? "Removing key & restarting…" : "Yes, discard key"}</button>
+            {discarding && <p className="text-[9px] text-muted-foreground text-center">Removing key and restarting (~25s)…</p>}
+          </div>
+        )}
+      </div>
+    </>
   );
 }

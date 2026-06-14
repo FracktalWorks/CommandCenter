@@ -1122,7 +1122,7 @@ function PluginsTab() {
 
   const handleDelete = async (id: string) => {
     try {
-      await fetch(`/api/integrations/plugins?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      await fetch(`/api/integrations/plugins/${encodeURIComponent(id)}`, { method: "DELETE" });
       setPlugins((p) => p.filter((pl) => pl.id !== id));
     } catch { /* non-fatal */ }
   };

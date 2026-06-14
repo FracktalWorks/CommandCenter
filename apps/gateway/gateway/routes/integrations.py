@@ -28,6 +28,7 @@ from acb_auth import UserContext, UserRole, get_current_user, require_role
 from acb_common import get_logger, get_settings
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import text
 
 _log = get_logger("gateway.integrations")
 
@@ -1226,9 +1227,9 @@ async def list_mcp_servers(
         from acb_graph import get_session  # noqa: PLC0415
         with get_session() as s:
             rows = s.execute(
-                "SELECT name, label, description, transport, command, url, "
+                text("SELECT name, label, description, transport, command, url, "
                 "env_vars, headers, agent_scope, enabled, created_at, updated_at "
-                "FROM mcp_servers ORDER BY created_at"
+                "FROM mcp_servers ORDER BY created_at")
             ).fetchall()
         result: list[dict[str, Any]] = []
         for r in rows:
@@ -1267,7 +1268,7 @@ async def register_mcp_server(
         from acb_graph import get_session  # noqa: PLC0415
         with get_session() as s:
             s.execute(
-                """INSERT INTO mcp_servers (name, label, description, transport, command, url,
+                text("""INSERT INTO mcp_servers (name, label, description, transport, command, url,
                    env_vars, headers, agent_scope, enabled, updated_at)
                    VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,now())
                    ON CONFLICT (name) DO UPDATE SET
@@ -1275,7 +1276,7 @@ async def register_mcp_server(
                    transport=EXCLUDED.transport, command=EXCLUDED.command,
                    url=EXCLUDED.url, env_vars=EXCLUDED.env_vars,
                    headers=EXCLUDED.headers, agent_scope=EXCLUDED.agent_scope,
-                   enabled=EXCLUDED.enabled, updated_at=now()""",
+                   enabled=EXCLUDED.enabled, updated_at=now()"""),
                 (req.name, req.label or req.name, req.description,
                  req.transport, req.command, req.url,
                  json.dumps(req.env_vars), json.dumps(req.headers),
@@ -1299,7 +1300,7 @@ async def remove_mcp_server(
         from acb_graph import get_session  # noqa: PLC0415
         with get_session() as s:
             result = s.execute(
-                "DELETE FROM mcp_servers WHERE name = %s", (name,)
+                text("DELETE FROM mcp_servers WHERE name = :name"), {"name": name},
             )
             s.commit()
             if result.rowcount == 0:
@@ -1362,10 +1363,10 @@ async def list_plugins(
         from acb_graph import get_session  # noqa: PLC0415
         with get_session() as s:
             rows = s.execute(
-                "SELECT id, name, label, description, manifest_url, openapi_url, "
+                text("SELECT id, name, label, description, manifest_url, openapi_url, "
                 "logo_url, auth_type, auth_config, manifest, openapi_spec, "
                 "tools_generated, enabled, version, created_at, updated_at "
-                "FROM plugins ORDER BY created_at"
+                "FROM plugins ORDER BY created_at")
             ).fetchall()
         result: list[dict[str, Any]] = []
         for r in rows:
@@ -1449,7 +1450,7 @@ async def install_plugin(
         from acb_graph import get_session  # noqa: PLC0415
         with get_session() as s:
             s.execute(
-                """INSERT INTO plugins (name, label, description, manifest_url, openapi_url,
+                text("""INSERT INTO plugins (name, label, description, manifest_url, openapi_url,
                    logo_url, auth_type, auth_config, manifest, openapi_spec,
                    tools_generated, enabled, version, updated_at)
                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,
@@ -1462,7 +1463,7 @@ async def install_plugin(
                    openapi_spec=EXCLUDED.openapi_spec,
                    tools_generated=EXCLUDED.tools_generated,
                    enabled=EXCLUDED.enabled, version=EXCLUDED.version,
-                   updated_at=now()""",
+                   updated_at=now()"""),
                 (plugin_name, label, description, manifest_url, api_url,
                  logo_url, auth_type, json.dumps(manifest.get("auth", {}) or {}),
                  json.dumps(manifest), json.dumps(openapi_spec),
@@ -1495,7 +1496,7 @@ async def remove_plugin(
     try:
         from acb_graph import get_session  # noqa: PLC0415
         with get_session() as s:
-            result = s.execute("DELETE FROM plugins WHERE id = %s", (pid,))
+            result = s.execute(text("DELETE FROM plugins WHERE id = :id"), {"id": pid})
             s.commit()
             if result.rowcount == 0:
                 raise HTTPException(404, f"Plugin '{plugin_id}' not found.")

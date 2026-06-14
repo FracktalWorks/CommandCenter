@@ -513,10 +513,11 @@ async def _inject_mcp_servers(agent: Any, agent_name: str) -> None:
     """
     try:
         from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
         with get_session() as s:
             rows = s.execute(
-                "SELECT name, transport, command, url, env_vars, headers, "
-                "agent_scope FROM mcp_servers WHERE enabled = true"
+                text("SELECT name, transport, command, url, env_vars, headers, "
+                "agent_scope FROM mcp_servers WHERE enabled = true")
             ).fetchall()
     except Exception:  # noqa: BLE001
         return  # Table may not exist yet — skip gracefully
@@ -619,11 +620,16 @@ async def _run_sub_agent_streaming(
         entry = next((e for e in _all if e["name"] == agent_name), None)
         if entry:
             raw = entry.get("repo_name") or ""
-            _repo_name = raw.split("/")[-1] if raw else None
+            # Pass the full org/repo slug — load_agent splits it when needed
+            _repo_name = raw if raw else None
             _local_path = entry.get("local_path")
             _runtime = entry.get("agent_runtime", "maf")
     except (ImportError, Exception):  # noqa: BLE001
         pass
+
+    # Initialised before try so the finally block always has access
+    # even when load_agent() or build_agents() raises early.
+    _saved_artifact_ctx: dict[str, str] = {}
 
     try:
         with load_agent(agent_name, run_id=run_id, repo_name=_repo_name, local_path=_local_path) as loaded:
@@ -643,6 +649,36 @@ async def _run_sub_agent_streaming(
                 for _a in agents:
                     if hasattr(_a, "_permission_handler") and _a._permission_handler is None:
                         _a._permission_handler = _PH.approve_all
+            except Exception:  # noqa: BLE001
+                pass
+
+            # ── Set working directory for Copilot SDK sub-agents ──────────
+            # The Copilot SDK CLI defaults to the gateway process CWD
+            # unless working_directory is explicitly set.  Without this,
+            # shell commands, file reads, AGENTS.md, and skill resolution
+            # all happen in the wrong directory.
+            _sub_agent_dir = str(loaded.agent_dir)
+            if (
+                _runtime == "github-copilot"
+                and hasattr(agent, "_default_options")
+                and agent._default_options is not None
+            ):
+                agent._default_options["working_directory"] = _sub_agent_dir
+
+            # ── Point write_artifact at sub-agent's own workspace ────────
+            # Save orchestrator's context, switch to sub-agent workspace so
+            # artifacts land in the sub-agent's repo (visible in the Files
+            # sidebar).  Restored after sub-agent completes.
+            try:
+                from acb_skills.write_artifact import \
+                    _WRITE_ARTIFACT_CONTEXT  # noqa: PLC0415
+                for _k in ("workspace_root", "session_id"):
+                    _saved_artifact_ctx[_k] = _WRITE_ARTIFACT_CONTEXT.get(
+                        _k, ""
+                    )
+                _WRITE_ARTIFACT_CONTEXT["workspace_root"] = _sub_agent_dir
+                # session_id stays as orchestrator's so download URLs
+                # resolve correctly in the parent chat window.
             except Exception:  # noqa: BLE001
                 pass
 
@@ -772,6 +808,18 @@ async def _run_sub_agent_streaming(
             "error": str(exc),
         })
         return f"Sub-task to {agent_name!r} failed: {exc}"
+    finally:
+        # Restore orchestrator's artifact context so subsequent tool calls
+        # (including write_artifact) target the correct workspace.
+        if _saved_artifact_ctx:
+            try:
+                from acb_skills.write_artifact import \
+                    _WRITE_ARTIFACT_CONTEXT  # noqa: PLC0415
+                for _key, _val in _saved_artifact_ctx.items():
+                    if _val:
+                        _WRITE_ARTIFACT_CONTEXT[_key] = _val
+            except Exception:  # noqa: BLE001
+                pass
 
 
 async def _get_current_head(agent_dir: str) -> str:
@@ -1004,8 +1052,8 @@ async def run_agent(
             if _registry_entry:
                 raw_repo = _registry_entry.get("repo_name") or ""
                 # repo_name may be stored as "owner/repo" (full slug from registration)
-                # or just "repo". load_agent expects only the repo portion.
-                _registry_repo_name = raw_repo.split("/")[-1] if raw_repo else None
+                # or just "repo". Pass the full slug — load_agent splits when needed.
+                _registry_repo_name = raw_repo if raw_repo else None
                 _registry_local_path = _registry_entry.get("local_path")
         except ImportError:
             pass
@@ -1077,6 +1125,24 @@ async def run_agent(
                     (_ws_root / _d).mkdir(parents=True, exist_ok=True)
             except Exception:  # noqa: BLE001
                 pass
+
+            # ── Set working directory for Copilot SDK agents ────────────
+            # The Copilot SDK CLI defaults to the gateway CWD unless
+            # working_directory is explicitly set.  Point it at the agent's
+            # cloned repo so shell commands, file I/O, AGENTS.md, and
+            # skill resolution all work correctly.
+            if _is_copilot_agent:
+                for _ag in agents:
+                    try:
+                        if (
+                            hasattr(_ag, "_default_options")
+                            and _ag._default_options is not None
+                        ):
+                            _ag._default_options["working_directory"] = (
+                                _agent_dir
+                            )
+                    except Exception:  # noqa: BLE001
+                        pass
 
             final_state = await _run_with_maf_agent(
                 agents,
@@ -1291,7 +1357,8 @@ async def run_agent_stream(
         entry = next((e for e in _all if e["name"] == agent_name), None)
         if entry:
             raw = entry.get("repo_name") or ""
-            _registry_repo_name = raw.split("/")[-1] if raw else None
+            # Pass the full org/repo slug — load_agent splits when needed
+            _registry_repo_name = raw if raw else None
             _registry_local_path = entry.get("local_path")
             _agent_runtime = entry.get("agent_runtime", "maf")
     except ImportError:
@@ -1413,6 +1480,25 @@ async def run_agent_stream(
                 )
             elif _final_model_early and _agent_runtime == "github-copilot":
                 agent._default_options["model"] = _final_model_early
+
+            # ── Set working directory for Copilot SDK agents ────────────
+            # The Copilot SDK CLI defaults to the gateway CWD unless
+            # working_directory is explicitly set.  Point it at the agent's
+            # cloned repo so shell commands, file I/O, AGENTS.md, and
+            # skill resolution all work correctly.
+            if _agent_runtime == "github-copilot":
+                _stream_agent_dir = str(loaded.agent_dir)
+                for _ag in agents:
+                    try:
+                        if (
+                            hasattr(_ag, "_default_options")
+                            and _ag._default_options is not None
+                        ):
+                            _ag._default_options[
+                                "working_directory"
+                            ] = _stream_agent_dir
+                    except Exception:  # noqa: BLE001
+                        pass
 
             # ── Per-message model switching ────────────────────────────
             # If the user switches models mid-thread, the Copilot SDK

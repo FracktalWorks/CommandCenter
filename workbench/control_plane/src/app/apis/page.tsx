@@ -743,7 +743,9 @@ export default function ApisPage() {
   }, [fetchAll]);
 
   useEffect(() => {
-    if (!loading && apis.length > 0 && !selected)
+    // Only auto-select first API on desktop (sm+). On mobile, keep the grid clean.
+    const isDesktop = typeof window !== "undefined" && window.innerWidth >= 640;
+    if (!loading && apis.length > 0 && !selected && isDesktop)
       setSelected((apis.find((a) => !a.configured) ?? apis[0]).service);
   }, [loading, apis, selected]);
 

@@ -1287,7 +1287,9 @@ export default function AgentsPage() {
   useEffect(() => { void load(); }, [load]);
 
   useEffect(() => {
-    if (!loading && agents.length > 0 && !selected) setSelected(agents[0].name);
+    // Only auto-select first agent on desktop (sm+). On mobile, keep the grid clean.
+    const isDesktop = typeof window !== "undefined" && window.innerWidth >= 640;
+    if (!loading && agents.length > 0 && !selected && isDesktop) setSelected(agents[0].name);
   }, [loading, agents, selected]);
 
   const handleRemove = (name: string) => {

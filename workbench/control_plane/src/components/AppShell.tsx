@@ -94,7 +94,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <MobileDrawerCtx.Provider
       value={{ isOpen: drawerOpen, open: openDrawer, close: closeDrawer }}
     >
-      <div className="flex h-screen flex-col overflow-hidden bg-background">
+      <div className="flex flex-col overflow-hidden bg-background" style={{ height: "100dvh" }}>
         {/* Top app bar — just title + overflow, no hamburger. Safe-area padded for notch */}
         <header className="flex h-11 shrink-0 items-center border-b border-border bg-card/80 px-2 backdrop-blur pt-safe">
           {/* Centered title */}
@@ -114,10 +114,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </header>
 
         {/* Page content — pb-safe protects bottom content from iOS rounded corners */}
-        <main className="flex-1 min-h-0 overflow-y-auto">{children}</main>
+        <main className="flex-1 min-h-0 overflow-y-auto pb-14">{children}</main>
 
-        {/* Bottom navigation bar — always visible on mobile. pb-safe lifts it above the iOS home indicator */}
-        <MobileBottomNav pathname={pathname} toggleView={toggleView} />
+        {/* Bottom navigation bar — fixed at viewport bottom, never scrolls. pb-safe lifts it above the iOS home indicator */}
+        <div className="fixed bottom-0 inset-x-0 z-50 border-t border-border bg-card/90 backdrop-blur pb-safe">
+          <MobileBottomNavInner pathname={pathname} toggleView={toggleView} />
+        </div>
 
         {/* Unified drawer (slide-up panel for bottom-nav tab content) */}
         {drawerOpen && (
@@ -149,7 +151,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 import { MessageCircle, FolderOpen, Menu as MenuIcon } from "lucide-react";
 import { resolveIcon } from "@/lib/icons";
 
-function MobileBottomNav({
+function MobileBottomNavInner({
   pathname,
   toggleView,
 }: {
@@ -246,8 +248,7 @@ function MobileBottomNav({
   const isChatPage = pathname?.startsWith("/chat") ?? false;
 
   return (
-    <nav className="shrink-0 border-t border-border bg-card/90 backdrop-blur pb-safe">
-      <div className="flex items-center justify-around py-1.5 px-2">
+    <nav className="flex items-center justify-around py-1.5 px-2">
         <button
           onClick={() => { open(menuContent); }}
           className={`flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors min-w-[56px] ${
@@ -286,7 +287,6 @@ function MobileBottomNav({
             </button>
           </>
         )}
-      </div>
     </nav>
   );
 }

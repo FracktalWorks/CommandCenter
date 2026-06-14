@@ -515,7 +515,7 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
   const current = configQueue[configIdx];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-background/80 backdrop-blur-sm"
+    <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-4 bg-background/80 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="w-full max-w-xl bg-card border-t sm:border border-border rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh] sm:max-h-[90vh]">
 
@@ -799,7 +799,7 @@ export default function ApisPage() {
 
       {/* Grid + Side panel */}
       <div className="flex flex-1 overflow-hidden relative">
-        <div className={`flex-1 p-4 overflow-y-auto ${selectedApi ? "hidden sm:block sm:min-w-0" : ""}`}>
+        <div className={`flex-1 p-4 overflow-y-auto ${selectedApi ? "sm:min-w-0" : ""}`}>
           {loading ? (
             <div className="flex items-center justify-center h-48 gap-3 text-muted-foreground text-sm">
               <Loader2 className="w-4 h-4 animate-spin" /> Loading API connections…
@@ -825,18 +825,33 @@ export default function ApisPage() {
         </div>
 
         {selectedApi && (
-          <div className="absolute inset-0 sm:relative sm:inset-auto w-full sm:w-[380px] border-l border-border bg-card shrink-0 flex flex-col overflow-hidden z-10">
-            {/* Mobile back button */}
-            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border bg-background/50 sm:hidden">
-              <button
-                onClick={() => setSelected(null)}
-                className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <ChevronRight className="w-4 h-4 rotate-180" /> Back to list
-              </button>
+          <>
+            {/* Mobile: bottom sheet with backdrop — sits above content, below bottom nav */}
+            <div className="sm:hidden fixed inset-0 z-40">
+              <div className="absolute inset-0 bg-black/60" onClick={() => setSelected(null)} />
+              <aside className="absolute inset-x-0 bottom-14 flex max-h-[calc(100%-7rem)] flex-col rounded-t-2xl border-t border-border bg-card shadow-2xl chat-fade-in">
+                <div className="flex justify-center pt-2 pb-1 shrink-0">
+                  <div className="w-10 h-1 rounded-full bg-muted-foreground/30" />
+                </div>
+                <div className="flex items-center justify-between px-4 pb-2 border-b border-border shrink-0">
+                  <div className="flex items-center gap-2">
+                    <ServiceLogo service={selectedApi.service} size={20} />
+                    <span className="text-sm font-semibold">{selectedApi.label ?? selectedApi.service}</span>
+                  </div>
+                  <button onClick={() => setSelected(null)} className="p-1 rounded-md hover:bg-secondary text-muted-foreground">
+                    <X size={16} />
+                  </button>
+                </div>
+                <div className="flex-1 min-h-0 overflow-y-auto">
+                  <ApiSidePanel api={selectedApi} agents={agents} onClose={() => setSelected(null)} onRefresh={() => void fetchAll()} />
+                </div>
+              </aside>
             </div>
-            <ApiSidePanel api={selectedApi} agents={agents} onClose={() => setSelected(null)} onRefresh={() => void fetchAll()} />
-          </div>
+            {/* Desktop: side panel */}
+            <div className="hidden sm:flex w-[380px] border-l border-border bg-card shrink-0 flex-col overflow-hidden">
+              <ApiSidePanel api={selectedApi} agents={agents} onClose={() => setSelected(null)} onRefresh={() => void fetchAll()} />
+            </div>
+          </>
         )}
       </div>
 

@@ -1348,7 +1348,7 @@ export default function AgentsPage() {
       </div>
 
       <div className="flex flex-1 overflow-hidden relative">
-        <div className={`flex-1 p-4 overflow-y-auto ${selectedAgent ? "hidden sm:block sm:min-w-0" : ""}`}>
+        <div className={`flex-1 p-4 overflow-y-auto ${selectedAgent ? "sm:min-w-0" : ""}`}>
           {loading ? (
             <div className="flex items-center justify-center h-48 gap-3 text-muted-foreground text-sm">
               <Loader2 className="w-4 h-4 animate-spin" /> Loading agents\u2026
@@ -1382,23 +1382,47 @@ export default function AgentsPage() {
         </div>
 
         {selectedAgent && (
-          <div className="absolute inset-0 sm:relative sm:inset-auto w-full sm:w-[380px] border-l border-border bg-card shrink-0 flex flex-col overflow-hidden z-10">
-            {/* Mobile back button */}
-            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border bg-background/50 sm:hidden">
-              <button
-                onClick={() => setSelected(null)}
-                className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <ChevronRight className="w-4 h-4 rotate-180" /> Back to list
-              </button>
+          <>
+            {/* Mobile: bottom sheet with backdrop — sits above content, below bottom nav */}
+            <div className="sm:hidden fixed inset-0 z-40">
+              <div className="absolute inset-0 bg-black/60" onClick={() => setSelected(null)} />
+              <aside className="absolute inset-x-0 bottom-14 flex max-h-[calc(100%-7rem)] flex-col rounded-t-2xl border-t border-border bg-card shadow-2xl chat-fade-in">
+                <div className="flex justify-center pt-2 pb-1 shrink-0">
+                  <div className="w-10 h-1 rounded-full bg-muted-foreground/30" />
+                </div>
+                <div className="flex items-center justify-between px-4 pb-2 border-b border-border shrink-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {(() => {
+                      const Icon = getAgentIcon(selectedAgent);
+                      const color = getAgentColor(selectedAgent);
+                      return <Icon size={20} className={color} />;
+                    })()}
+                    <span className="text-sm font-semibold truncate">{selectedAgent.label ?? selectedAgent.name}</span>
+                  </div>
+                  <button onClick={() => setSelected(null)} className="p-1 rounded-md hover:bg-secondary text-muted-foreground shrink-0">
+                    <X size={16} />
+                  </button>
+                </div>
+                <div className="flex-1 min-h-0 overflow-y-auto">
+                  <AgentSidePanel
+                    agent={selectedAgent}
+                    statuses={intgs}
+                    onClose={() => setSelected(null)}
+                    onRemove={handleRemove}
+                  />
+                </div>
+              </aside>
             </div>
-            <AgentSidePanel
-              agent={selectedAgent}
-              statuses={intgs}
-              onClose={() => setSelected(null)}
-              onRemove={handleRemove}
-            />
-          </div>
+            {/* Desktop: side panel */}
+            <div className="hidden sm:flex w-[380px] border-l border-border bg-card shrink-0 flex-col overflow-hidden">
+              <AgentSidePanel
+                agent={selectedAgent}
+                statuses={intgs}
+                onClose={() => setSelected(null)}
+                onRemove={handleRemove}
+              />
+            </div>
+          </>
         )}
       </div>
 

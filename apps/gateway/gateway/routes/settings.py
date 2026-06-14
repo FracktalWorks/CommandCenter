@@ -218,6 +218,8 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     "deepseek": [
         "deepseek/deepseek-chat",
         "deepseek/deepseek-reasoner",
+        "deepseek/deepseek-v4-pro",
+        "deepseek/deepseek-v4-flash",
     ],
     "openrouter": [
         "openrouter/anthropic/claude-opus-4-5",
@@ -317,8 +319,10 @@ _MODEL_CAPABILITIES: dict[str, dict[str, Any]] = {
     "anthropic/claude-3-7-sonnet-latest":{"label": "Claude 3.7 Sonnet",   "vision": True, "audio": False, "reasoning": True,  "context_window": 200_000, "max_output": 16384, "desc": "Previous-gen — extended thinking support"},
 
     # DeepSeek
-    "deepseek/deepseek-chat":     {"label": "DeepSeek-V3",    "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192,  "desc": "General-purpose chat — strong coding and reasoning"},
-    "deepseek/deepseek-reasoner": {"label": "DeepSeek-R1",    "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 8192,  "desc": "Deep reasoning — chain-of-thought for complex problems"},
+    "deepseek/deepseek-chat":      {"label": "DeepSeek-V3",       "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192,  "desc": "General-purpose chat — strong coding and reasoning"},
+    "deepseek/deepseek-reasoner":  {"label": "DeepSeek-R1",       "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 8192,  "desc": "Deep reasoning — chain-of-thought for complex problems"},
+    "deepseek/deepseek-v4-pro":   {"label": "DeepSeek-V4 Pro",   "vision": True,  "audio": False, "reasoning": True,  "context_window": 262_144, "max_output": 32768, "desc": "Latest flagship — MoE architecture, vision, 256K context"},
+    "deepseek/deepseek-v4-flash": {"label": "DeepSeek-V4 Flash", "vision": True,  "audio": False, "reasoning": False, "context_window": 262_144, "max_output": 16384, "desc": "Fast V4 variant — vision support, great for daily tasks"},
 
     # Groq
     "groq/llama-3.3-70b-versatile":    {"label": "Llama 3.3 70B",      "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192, "desc": "Meta's latest 70B — strong general-purpose model"},
@@ -353,6 +357,36 @@ _MODEL_CAPABILITIES: dict[str, dict[str, Any]] = {
     "openai/Qwen/Qwen3-8B-Instruct":             {"label": "Qwen 3 8B",       "vision": False, "audio": False, "reasoning": False, "context_window": 32768,  "max_output": 4096,  "desc": "Self-hosted Qwen 3 — multilingual, strong coding"},
     "openai/meta-llama/Llama-3.1-8B-Instruct":   {"label": "Llama 3.1 8B",    "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 4096,  "desc": "Self-hosted Llama — reliable general-purpose model"},
     "openai/mistralai/Mistral-7B-Instruct-v0.3": {"label": "Mistral 7B v0.3",  "vision": False, "audio": False, "reasoning": False, "context_window": 32768,  "max_output": 4096,  "desc": "Self-hosted Mistral — efficient, fast inference"},
+
+    # ── OpenRouter models ─────────────────────────────────────────────────
+    "openrouter/anthropic/claude-opus-4-5":    {"label": "Claude Opus 4.5 (OR)",   "vision": True,  "audio": False, "reasoning": True,  "context_window": 200_000, "max_output": 32768, "desc": "Most capable Claude via OpenRouter"},
+    "openrouter/anthropic/claude-sonnet-4-5":  {"label": "Claude Sonnet 4.5 (OR)", "vision": True,  "audio": False, "reasoning": True,  "context_window": 200_000, "max_output": 16384, "desc": "Best balance Claude via OpenRouter"},
+    "openrouter/openai/gpt-4o":                {"label": "GPT-4o (OR)",             "vision": True,  "audio": True,  "reasoning": False, "context_window": 128_000, "max_output": 16384, "desc": "Flagship OpenAI multimodal via OpenRouter"},
+    "openrouter/openai/o3-mini":               {"label": "o3-mini (OR)",            "vision": False, "audio": False, "reasoning": True,  "context_window": 200_000, "max_output": 100_000, "desc": "Reasoning specialist via OpenRouter"},
+    "openrouter/google/gemini-2.5-pro":        {"label": "Gemini 2.5 Pro (OR)",    "vision": True,  "audio": True,  "reasoning": True,  "context_window": 2_097_152, "max_output": 65536, "desc": "Most capable Gemini via OpenRouter"},
+    "openrouter/google/gemini-2.5-flash":      {"label": "Gemini 2.5 Flash (OR)",  "vision": True,  "audio": True,  "reasoning": False, "context_window": 1_048_576, "max_output": 8192, "desc": "Fast multimodal Gemini via OpenRouter"},
+    "openrouter/meta-llama/llama-4-maverick":  {"label": "Llama 4 Maverick (OR)",  "vision": False, "audio": False, "reasoning": False, "context_window": 1_048_576, "max_output": 8192, "desc": "Meta's latest open model via OpenRouter"},
+    "openrouter/deepseek/deepseek-r1":         {"label": "DeepSeek-R1 (OR)",       "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 8192, "desc": "Deep reasoning via OpenRouter"},
+    "openrouter/deepseek/deepseek-r1-0528":    {"label": "DeepSeek-R1 0528 (OR)",  "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 8192, "desc": "Latest R1 iteration via OpenRouter"},
+    "openrouter/deepseek/deepseek-chat-v3-0324":{"label": "DeepSeek-V3 0324 (OR)", "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192, "desc": "Latest V3 iteration via OpenRouter"},
+    "openrouter/deepseek/deepseek-chat":       {"label": "DeepSeek-V3 (OR)",       "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192, "desc": "General purpose via OpenRouter"},
+    "openrouter/deepseek/deepseek-v4-pro":    {"label": "DeepSeek-V4 Pro (OR)",   "vision": True,  "audio": False, "reasoning": True,  "context_window": 262_144, "max_output": 32768, "desc": "Latest V4 flagship via OpenRouter — MoE, vision, 256K ctx"},
+    "openrouter/deepseek/deepseek-v4-flash":  {"label": "DeepSeek-V4 Flash (OR)", "vision": True,  "audio": False, "reasoning": False, "context_window": 262_144, "max_output": 16384, "desc": "Fast V4 variant via OpenRouter — vision support"},
+    "openrouter/qwen/qwen3.7-max":            {"label": "Qwen 3.7 Max (OR)",      "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 8192, "desc": "Alibaba's most capable — reasoning, multilingual"},
+    "openrouter/qwen/qwen3.7-plus":           {"label": "Qwen 3.7 Plus (OR)",     "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192, "desc": "Strong mid-tier Qwen via OpenRouter"},
+    "openrouter/qwen/qwen3.6-plus":           {"label": "Qwen 3.6 Plus (OR)",     "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192, "desc": "Previous-gen Qwen via OpenRouter"},
+    "openrouter/qwen/qwen3.5-flash-02-23":    {"label": "Qwen 3.5 Flash (OR)",    "vision": False, "audio": False, "reasoning": False, "context_window": 32768,  "max_output": 4096, "desc": "Fast budget Qwen via OpenRouter"},
+    "openrouter/moonshotai/kimi-k2.6":        {"label": "Kimi K2.6 (OR)",         "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 8192, "desc": "Latest Kimi — strong reasoning, long context"},
+    "openrouter/moonshotai/kimi-k2-thinking": {"label": "Kimi K2 Thinking (OR)",  "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 32768, "desc": "Kimi with extended thinking via OpenRouter"},
+    "openrouter/moonshotai/kimi-k2.5":        {"label": "Kimi K2.5 (OR)",         "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 8192, "desc": "Previous-gen Kimi via OpenRouter"},
+    "openrouter/qwen/qwen3-235b-a22b":        {"label": "Qwen 3 235B (OR)",       "vision": False, "audio": False, "reasoning": True,  "context_window": 32768,  "max_output": 8192, "desc": "Massive MoE Qwen via OpenRouter"},
+
+    # ── Together AI models ────────────────────────────────────────────────
+    "together_ai/meta-llama/Llama-3-70b-chat-hf":       {"label": "Llama 3 70B (Together)",    "vision": False, "audio": False, "reasoning": False, "context_window": 8192,  "max_output": 4096, "desc": "Meta Llama 3 70B via Together AI"},
+    "together_ai/meta-llama/Llama-3-8b-chat-hf":        {"label": "Llama 3 8B (Together)",     "vision": False, "audio": False, "reasoning": False, "context_window": 8192,  "max_output": 4096, "desc": "Meta Llama 3 8B via Together AI"},
+    "together_ai/Qwen/Qwen2.5-72B-Instruct-Turbo":      {"label": "Qwen 2.5 72B (Together)",   "vision": False, "audio": False, "reasoning": False, "context_window": 32768, "max_output": 4096, "desc": "Alibaba Qwen 72B via Together AI"},
+    "together_ai/mistralai/Mistral-7B-Instruct-v0.3":   {"label": "Mistral 7B (Together)",     "vision": False, "audio": False, "reasoning": False, "context_window": 32768, "max_output": 4096, "desc": "Mistral 7B via Together AI"},
+    "together_ai/deepseek-ai/DeepSeek-R1":              {"label": "DeepSeek-R1 (Together)",    "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 8192, "desc": "DeepSeek reasoning via Together AI"},
 }
 
 _TIER_LABELS: dict[str, dict[str, str]] = {

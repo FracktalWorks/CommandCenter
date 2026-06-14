@@ -289,6 +289,72 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     ],
 }
 
+# ── Model capability metadata ─────────────────────────────────────────────
+# Provides human-readable labels and capability flags for known models.
+# Used by the /provider-models endpoint to enrich the model list.
+_MODEL_CAPABILITIES: dict[str, dict[str, Any]] = {
+    # Google Gemini
+    "gemini/gemini-2.5-flash-lite": {"label": "Gemini 2.5 Flash Lite", "vision": True, "audio": False, "reasoning": False, "context_window": 1_048_576, "max_output": 8192, "desc": "Fastest Gemini — lightweight tasks, classification, quick chat"},
+    "gemini/gemini-2.5-flash":      {"label": "Gemini 2.5 Flash",      "vision": True, "audio": True,  "reasoning": False, "context_window": 1_048_576, "max_output": 8192, "desc": "Fast multimodal model — good for daily work, image understanding"},
+    "gemini/gemini-2.5-pro":        {"label": "Gemini 2.5 Pro",        "vision": True, "audio": True,  "reasoning": True,  "context_window": 2_097_152, "max_output": 65536, "desc": "Most capable Gemini — complex reasoning, long context, multimodal"},
+    "gemini/gemini-2.0-flash":      {"label": "Gemini 2.0 Flash",      "vision": True, "audio": True,  "reasoning": False, "context_window": 1_048_576, "max_output": 8192, "desc": "Previous-gen fast multimodal model"},
+    "gemini/gemini-1.5-pro":        {"label": "Gemini 1.5 Pro",        "vision": True, "audio": True,  "reasoning": False, "context_window": 2_097_152, "max_output": 8192, "desc": "Previous-gen — very long context window"},
+
+    # OpenAI
+    "openai/gpt-4o-mini": {"label": "GPT-4o Mini",  "vision": True,  "audio": False, "reasoning": False, "context_window": 128_000, "max_output": 16384, "desc": "Fast, affordable — daily tasks, chat, light reasoning"},
+    "openai/gpt-4o":      {"label": "GPT-4o",       "vision": True,  "audio": True,  "reasoning": False, "context_window": 128_000, "max_output": 16384, "desc": "Flagship multimodal — vision, audio, strong reasoning"},
+    "openai/gpt-4.1":     {"label": "GPT-4.1",      "vision": True,  "audio": False, "reasoning": False, "context_window": 1_048_576, "max_output": 32768, "desc": "Latest GPT-4 — very long context, coding-optimised"},
+    "openai/gpt-4.1-mini":{"label": "GPT-4.1 Mini", "vision": True,  "audio": False, "reasoning": False, "context_window": 1_048_576, "max_output": 16384, "desc": "Smaller GPT-4.1 — fast with long context"},
+    "openai/o3-mini":     {"label": "o3-mini",      "vision": False, "audio": False, "reasoning": True,  "context_window": 200_000, "max_output": 100_000, "desc": "Reasoning specialist — maths, code, logic, STEM"},
+    "openai/o3":          {"label": "o3",           "vision": True,  "audio": False, "reasoning": True,  "context_window": 200_000, "max_output": 100_000, "desc": "Most capable reasoning model — vision + deep thought"},
+
+    # Anthropic
+    "anthropic/claude-opus-4-5":        {"label": "Claude Opus 4.5",      "vision": True, "audio": False, "reasoning": True,  "context_window": 200_000, "max_output": 32768, "desc": "Most capable Claude — complex analysis, writing, code"},
+    "anthropic/claude-sonnet-4-5":      {"label": "Claude Sonnet 4.5",    "vision": True, "audio": False, "reasoning": True,  "context_window": 200_000, "max_output": 16384, "desc": "Best balance — strong reasoning, fast, cost-effective"},
+    "anthropic/claude-haiku-4-5":       {"label": "Claude Haiku 4.5",     "vision": True, "audio": False, "reasoning": False, "context_window": 200_000, "max_output": 8192,  "desc": "Fastest Claude — quick tasks, chat, triage"},
+    "anthropic/claude-opus-4":          {"label": "Claude Opus 4",        "vision": True, "audio": False, "reasoning": True,  "context_window": 200_000, "max_output": 32768, "desc": "Previous-gen Opus — still very capable"},
+    "anthropic/claude-sonnet-4":        {"label": "Claude Sonnet 4",      "vision": True, "audio": False, "reasoning": True,  "context_window": 200_000, "max_output": 16384, "desc": "Previous-gen Sonnet — strong all-rounder"},
+    "anthropic/claude-3-7-sonnet-latest":{"label": "Claude 3.7 Sonnet",   "vision": True, "audio": False, "reasoning": True,  "context_window": 200_000, "max_output": 16384, "desc": "Previous-gen — extended thinking support"},
+
+    # DeepSeek
+    "deepseek/deepseek-chat":     {"label": "DeepSeek-V3",    "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192,  "desc": "General-purpose chat — strong coding and reasoning"},
+    "deepseek/deepseek-reasoner": {"label": "DeepSeek-R1",    "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 8192,  "desc": "Deep reasoning — chain-of-thought for complex problems"},
+
+    # Groq
+    "groq/llama-3.3-70b-versatile":    {"label": "Llama 3.3 70B",      "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192, "desc": "Meta's latest 70B — strong general-purpose model"},
+    "groq/llama-3.1-8b-instant":        {"label": "Llama 3.1 8B",       "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192, "desc": "Ultra-fast 8B — simple tasks, classification"},
+    "groq/llama-3.1-70b-versatile":     {"label": "Llama 3.1 70B",      "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192, "desc": "Solid 70B — good balance of speed and quality"},
+    "groq/mixtral-8x7b-32768":          {"label": "Mixtral 8x7B",       "vision": False, "audio": False, "reasoning": False, "context_window": 32768,  "max_output": 4096, "desc": "Mistral MoE — efficient for its size"},
+    "groq/gemma2-9b-it":                {"label": "Gemma 2 9B",         "vision": False, "audio": False, "reasoning": False, "context_window": 8192,   "max_output": 4096, "desc": "Google's lightweight model — fast and efficient"},
+    "groq/moonshotai/kimi-k2-instruct": {"label": "Kimi K2",            "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 8192, "desc": "Moonshot AI — strong reasoning, long context"},
+
+    # Mistral
+    "mistral/mistral-small-latest":  {"label": "Mistral Small",  "vision": False, "audio": False, "reasoning": False, "context_window": 32768, "max_output": 4096,  "desc": "Lightweight — fast, affordable, good for simple tasks"},
+    "mistral/mistral-medium-latest": {"label": "Mistral Medium", "vision": False, "audio": False, "reasoning": False, "context_window": 32768, "max_output": 8192,  "desc": "Mid-tier — good balance for most tasks"},
+    "mistral/mistral-large-latest":  {"label": "Mistral Large",  "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 32768, "desc": "Most capable Mistral — complex reasoning, long context"},
+    "mistral/codestral-latest":      {"label": "Codestral",      "vision": False, "audio": False, "reasoning": False, "context_window": 32768, "max_output": 8192,  "desc": "Code-specialised — fill-in-the-middle, code generation"},
+
+    # GitHub Copilot
+    "github/gpt-4o-mini":   {"label": "GPT-4o Mini (Copilot)",   "vision": True,  "audio": False, "reasoning": False, "context_window": 128_000, "max_output": 16384, "desc": "Fast GPT-4o via Copilot — no extra cost with subscription"},
+    "github/gpt-4o":        {"label": "GPT-4o (Copilot)",        "vision": True,  "audio": False, "reasoning": False, "context_window": 128_000, "max_output": 16384, "desc": "Full GPT-4o via Copilot — vision, strong reasoning"},
+    "github/claude-sonnet":  {"label": "Claude Sonnet (Copilot)", "vision": True,  "audio": False, "reasoning": True,  "context_window": 200_000, "max_output": 16384, "desc": "Claude via Copilot — vision + extended thinking"},
+    "github/o3-mini":        {"label": "o3-mini (Copilot)",      "vision": False, "audio": False, "reasoning": True,  "context_window": 200_000, "max_output": 100_000, "desc": "Reasoning model via Copilot — STEM, logic, code"},
+    "github/o1":             {"label": "o1 (Copilot)",           "vision": True,  "audio": False, "reasoning": True,  "context_window": 200_000, "max_output": 100_000, "desc": "Deep reasoning via Copilot — hardest problems"},
+
+    # Ollama local
+    "ollama/llama3.2":    {"label": "Llama 3.2",     "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 4096,  "desc": "Meta's latest small model — local inference"},
+    "ollama/llama3.1:8b": {"label": "Llama 3.1 8B",  "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 4096,  "desc": "Efficient 8B — runs well on consumer hardware"},
+    "ollama/qwen2.5:7b":  {"label": "Qwen 2.5 7B",   "vision": False, "audio": False, "reasoning": False, "context_window": 32768,  "max_output": 4096,  "desc": "Alibaba's Qwen — strong multilingual, coding"},
+    "ollama/mistral:7b":  {"label": "Mistral 7B",     "vision": False, "audio": False, "reasoning": False, "context_window": 32768,  "max_output": 4096,  "desc": "Classic Mistral — efficient, good for local use"},
+    "ollama/phi4":        {"label": "Phi-4",          "vision": False, "audio": False, "reasoning": True,  "context_window": 16384,  "max_output": 4096,  "desc": "Microsoft's small reasoning model — surprisingly capable"},
+    "ollama/gemma3:4b":   {"label": "Gemma 3 4B",     "vision": False, "audio": False, "reasoning": False, "context_window": 8192,   "max_output": 4096,  "desc": "Google's tiny model — ultra-lightweight local inference"},
+
+    # vLLM default models
+    "openai/Qwen/Qwen3-8B-Instruct":             {"label": "Qwen 3 8B",       "vision": False, "audio": False, "reasoning": False, "context_window": 32768,  "max_output": 4096,  "desc": "Self-hosted Qwen 3 — multilingual, strong coding"},
+    "openai/meta-llama/Llama-3.1-8B-Instruct":   {"label": "Llama 3.1 8B",    "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 4096,  "desc": "Self-hosted Llama — reliable general-purpose model"},
+    "openai/mistralai/Mistral-7B-Instruct-v0.3": {"label": "Mistral 7B v0.3",  "vision": False, "audio": False, "reasoning": False, "context_window": 32768,  "max_output": 4096,  "desc": "Self-hosted Mistral — efficient, fast inference"},
+}
+
 _TIER_LABELS: dict[str, dict[str, str]] = {
     "tier-fast":      {"id": "tier1", "label": "Tier 1 — Fast / Cheap", "description": "Triage, classification, quick routing"},
     "tier-balanced":  {"id": "tier2", "label": "Tier 2 — Balanced",     "description": "Structured extraction, drafting, summaries"},
@@ -373,6 +439,19 @@ class ProviderInfo(BaseModel):
     configured: bool
     env_var: str
     models: list[str]
+
+
+class ModelInfo(BaseModel):
+    """A single model entry returned by the provider-models endpoint."""
+    id: str
+    label: str
+    provider: str
+    vision: bool = False
+    audio: bool = False
+    reasoning: bool = False
+    context_window: int = 0
+    max_output: int = 0
+    desc: str = ""
 
 
 class LLMConfig(BaseModel):
@@ -851,3 +930,36 @@ async def unhide_model(
     _save_catalogue(cat)
     _log.info("settings.llm.model_unhidden", id=model_id, actor=_user.email)
     return {"unhidden": model_id}
+
+
+# ---------------------------------------------------------------------------
+# GET /settings/llm/provider-models — list models for a provider with capabilities
+# ---------------------------------------------------------------------------
+
+@router.get("/llm/provider-models", response_model=list[ModelInfo])
+async def list_provider_models(
+    provider: str,
+    _user: UserContext = Depends(get_current_user),
+) -> list[ModelInfo]:
+    """Return all known models for a provider with capability metadata.
+
+    Combines the static model list (_PROVIDER_MODELS) with capability
+    metadata (_MODEL_CAPABILITIES) to give the frontend rich model info.
+    Unknown models return with empty capabilities.
+    """
+    models = _PROVIDER_MODELS.get(provider, [])
+    result: list[ModelInfo] = []
+    for model_id in models:
+        caps = _MODEL_CAPABILITIES.get(model_id, {})
+        result.append(ModelInfo(
+            id=model_id,
+            label=caps.get("label", model_id.split("/")[-1]),
+            provider=provider,
+            vision=caps.get("vision", False),
+            audio=caps.get("audio", False),
+            reasoning=caps.get("reasoning", False),
+            context_window=caps.get("context_window", 0),
+            max_output=caps.get("max_output", 0),
+            desc=caps.get("desc", ""),
+        ))
+    return result

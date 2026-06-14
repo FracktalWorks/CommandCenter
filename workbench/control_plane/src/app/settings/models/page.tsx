@@ -11,7 +11,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { LLMConfig, ProviderInfo } from "@/lib/model-types";
+import type { LLMConfig, ProviderInfo, ModelInfo } from "@/lib/model-types";
 import { PROVIDER_GUIDES, PROVIDER_COLOURS, PROVIDER_ICONS } from "@/lib/model-types";
 
 // ── Icons ───────────────────────────────────────────────────────────────────
@@ -59,13 +59,14 @@ export default function ModelsPage() {
   const [providerSearch, setProviderSearch] = useState("");
   const [providerFilter, setProvFilter] = useState<"all" | "connected" | "unset">("all");
 
-  // ── Tab 2: Models — key change: ALL models start disabled (not in LiteLLM) ─
-  const [providerModels, setProviderModels] = useState<Map<string, { id: string; label: string }[]>>(new Map());
-  const [enabledIds, setEnabledIds] = useState<Set<string>>(new Set()); // models added to LiteLLM (custom-models)
+  // ── Tab 2: Models — ALL models start disabled. Click for detail panel. ─
+  const [providerModels, setProviderModels] = useState<Map<string, ModelInfo[]>>(new Map());
+  const [enabledIds, setEnabledIds] = useState<Set<string>>(new Set());
   const [loadingModels, setLoadingModels] = useState(true);
   const [modelSearch, setModelSearch] = useState("");
   const [modelProvFilter, setModelProvFilter] = useState<string>("all");
   const [busyModel, setBusyModel] = useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = useState<ModelInfo | null>(null);
 
   // ── Tab 3: Editing tier ──────────────────────────────────────────────────
   const [editingTier, setEditingTier] = useState<string | null>(null);
@@ -108,23 +109,20 @@ export default function ModelsPage() {
     if (configured.length === 0) { setProviderModels(new Map()); setEnabledIds(new Set()); setLoadingModels(false); return; }
     setLoadingModels(true);
     try {
-      // Fetch available models from each configured provider + currently enabled custom models
       const providerFetches = configured.map(async (pid) => {
         try {
           const r = await fetch(`/api/settings/llm/provider-models?provider=${encodeURIComponent(pid)}`);
           if (r.ok) {
-            const data = await r.json();
-            const models = Array.isArray(data) ? data as { id: string; label: string }[] : [];
-            return { provider: pid, models };
+            const data: ModelInfo[] = await r.json();
+            return { provider: pid, models: Array.isArray(data) ? data : [] };
           }
-        } catch { /* skip unavailable provider */ }
-        return { provider: pid, models: [] };
+        } catch { /* skip */ }
+        return { provider: pid, models: [] as ModelInfo[] };
       });
       const results = await Promise.all(providerFetches);
-      const newMap = new Map<string, { id: string; label: string }[]>();
+      const newMap = new Map<string, ModelInfo[]>();
       results.forEach(({ provider, models }) => newMap.set(provider, models));
 
-      // Fetch which models are currently enabled (in custom-models = added to LiteLLM)
       let enabled = new Set<string>();
       try {
         const custRes = await fetch("/api/settings/llm/custom-models");
@@ -142,21 +140,19 @@ export default function ModelsPage() {
   useEffect(() => { if (tab === "models") loadModelsTab(); }, [tab, loadModelsTab]);
 
   // ── Tab 2: Toggle model enabled/disabled (add/remove from LiteLLM custom-models) ─
-  const toggleEnabled = async (modelId: string, modelLabel: string, provider: string) => {
-    setBusyModel(modelId);
+  const toggleEnabled = async (m: ModelInfo) => {
+    setBusyModel(m.id);
     try {
-      if (enabledIds.has(modelId)) {
-        // Disable: remove from LiteLLM custom-models
-        await fetch(`/api/settings/llm/custom-models/${encodeURIComponent(modelId)}`, { method: "DELETE" });
-        setEnabledIds((prev) => { const s = new Set(prev); s.delete(modelId); return s; });
+      if (enabledIds.has(m.id)) {
+        await fetch(`/api/settings/llm/custom-models/${encodeURIComponent(m.id)}`, { method: "DELETE" });
+        setEnabledIds((prev) => { const s = new Set(prev); s.delete(m.id); return s; });
       } else {
-        // Enable: add to LiteLLM custom-models
         await fetch("/api/settings/llm/custom-models", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: modelId, label: modelLabel, provider }),
+          body: JSON.stringify({ id: m.id, label: m.label, provider: m.provider }),
         });
-        setEnabledIds((prev) => new Set([...prev, modelId]));
+        setEnabledIds((prev) => new Set([...prev, m.id]));
       }
     } finally { setBusyModel(null); }
   };
@@ -195,12 +191,9 @@ export default function ModelsPage() {
 
   // ── Tab 2: Derived model lists ───────────────────────────────────────────
   const mq = modelSearch.trim().toLowerCase();
-  // Flatten all provider models into a single list tagged with provider
   const allProviderModels = useMemo(() => {
-    const result: { id: string; label: string; provider: string }[] = [];
-    providerModels.forEach((models, pid) => {
-      models.forEach((m) => result.push({ ...m, provider: pid }));
-    });
+    const result: ModelInfo[] = [];
+    providerModels.forEach((models) => { models.forEach((m) => result.push(m)); });
     return result;
   }, [providerModels]);
 
@@ -312,80 +305,94 @@ export default function ModelsPage() {
           )}
 
           {/* ═══════════════════════════════════════════════════════════════
-              TAB 2: MODELS — per-provider models, ALL start disabled, eye = enable in LiteLLM
+              TAB 2: MODELS — per-provider models, click for detail panel
               ═══════════════════════════════════════════════════════════════ */}
           {tab === "models" && (
-            <div className="flex-1 overflow-y-auto">
-              {/* Filter pills — by provider name, not model group */}
-              <div className="px-4 pt-3 pb-2 flex items-center gap-1.5 flex-wrap">
-                <button onClick={() => setModelProvFilter("all")}
-                  className={`px-2.5 py-1 rounded-full text-[11px] font-medium tech-transition ${modelProvFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}>All</button>
-                {configuredProviderIds.map((pid) => (
-                  <button key={pid} onClick={() => setModelProvFilter(pid)}
-                    className={`px-2.5 py-1 rounded-full text-[11px] font-medium tech-transition ${modelProvFilter === pid ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}>
-                    {pid} <span className="opacity-50">{(providerModels.get(pid) ?? []).length}</span>
-                  </button>
-                ))}
-              </div>
-
-              <div className="px-4 pb-2">
-                <div className="relative">
-                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"><SearchIcon /></span>
-                  <input type="text" placeholder="Search models…" value={modelSearch} onChange={(e) => setModelSearch(e.target.value)}
-                    className="w-full rounded-md border border-border bg-card pl-8 pr-3 py-1.5 text-[11px] text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none" />
+            <div className="flex-1 flex overflow-hidden">
+              <div className="flex-1 overflow-y-auto">
+                {/* Filter pills */}
+                <div className="px-4 pt-3 pb-2 flex items-center gap-1.5 flex-wrap">
+                  <button onClick={() => setModelProvFilter("all")}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-medium tech-transition ${modelProvFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}>All</button>
+                  {configuredProviderIds.map((pid) => (
+                    <button key={pid} onClick={() => setModelProvFilter(pid)}
+                      className={`px-2.5 py-1 rounded-full text-[11px] font-medium tech-transition ${modelProvFilter === pid ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}>
+                      {pid} <span className="opacity-50">{(providerModels.get(pid) ?? []).length}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="px-4 pb-2">
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"><SearchIcon /></span>
+                    <input type="text" placeholder="Search models…" value={modelSearch} onChange={(e) => setModelSearch(e.target.value)}
+                      className="w-full rounded-md border border-border bg-card pl-8 pr-3 py-1.5 text-[11px] text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none" />
+                  </div>
+                </div>
+                <div className="p-4 pt-0">
+                  {loadingModels ? (
+                    <div className="flex items-center justify-center py-12 text-xs text-muted-foreground"><span className="w-4 h-4 rounded-full border-2 border-muted border-t-primary animate-spin mr-2" />Loading…</div>
+                  ) : configuredProviderIds.length === 0 ? (
+                    <div className="text-center py-12 text-xs text-muted-foreground">Connect a provider in the Providers tab first.</div>
+                  ) : allProviderModels.length === 0 ? (
+                    <div className="text-center py-12 text-xs text-muted-foreground">No models returned from configured providers.</div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+                      {enabledModels.map((m) => (
+                        <div key={m.id} className="flex items-center justify-between rounded-lg border border-success/20 bg-success/5 px-3 py-2 text-xs group">
+                          <button onClick={() => setSelectedModel(m)} className="min-w-0 flex-1 text-left">
+                            <div className="text-foreground font-medium truncate text-[11px] hover:text-primary tech-transition">{m.label}</div>
+                            <div className="flex items-center gap-1.5 mt-0.5">
+                              <span className="text-[9px] px-1 py-0.5 rounded border border-border text-muted-foreground truncate">{m.provider}</span>
+                            </div>
+                          </button>
+                          <button onClick={(e) => { e.stopPropagation(); toggleEnabled(m); }} disabled={busyModel === m.id}
+                            className="ml-1.5 shrink-0 text-success hover:text-warning tech-transition disabled:opacity-30 opacity-0 group-hover:opacity-100" title="Disable">
+                            {busyModel === m.id ? <span className="text-[9px]">…</span> : <EyeIcon />}
+                          </button>
+                        </div>
+                      ))}
+                      {disabledModels.length > 0 && enabledModels.length > 0 && (
+                        <div className="col-span-full pt-2 pb-1 flex items-center gap-2">
+                          <div className="flex-1 h-px bg-border" />
+                          <span className="text-[9px] text-muted-foreground font-medium shrink-0">NOT ENABLED ({disabledModels.length})</span>
+                          <div className="flex-1 h-px bg-border" />
+                        </div>
+                      )}
+                      {disabledModels.map((m) => (
+                        <div key={m.id} className="flex items-center justify-between rounded-lg border border-border/30 bg-secondary/15 px-3 py-2 text-xs opacity-55 hover:opacity-100 tech-transition group">
+                          <button onClick={() => setSelectedModel(m)} className="min-w-0 flex-1 text-left">
+                            <div className="text-muted-foreground font-medium truncate text-[11px] hover:text-foreground tech-transition">{m.label}</div>
+                            <div className="flex items-center gap-1.5 mt-0.5">
+                              <span className="text-[9px] px-1 py-0.5 rounded border border-border/50 text-muted-foreground truncate">{m.provider}</span>
+                            </div>
+                          </button>
+                          <button onClick={(e) => { e.stopPropagation(); toggleEnabled(m); }} disabled={busyModel === m.id}
+                            className="ml-1.5 shrink-0 text-muted-foreground hover:text-success tech-transition disabled:opacity-30 opacity-0 group-hover:opacity-100" title="Enable">
+                            {busyModel === m.id ? <span className="text-[9px]">…</span> : <EyeOffIcon />}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 
-              <div className="p-4 pt-0">
-                {loadingModels ? (
-                  <div className="flex items-center justify-center py-12 text-xs text-muted-foreground"><span className="w-4 h-4 rounded-full border-2 border-muted border-t-primary animate-spin mr-2" />Loading provider models…</div>
-                ) : configuredProviderIds.length === 0 ? (
-                  <div className="text-center py-12 text-xs text-muted-foreground">Connect a provider in the Providers tab first.</div>
-                ) : allProviderModels.length === 0 ? (
-                  <div className="text-center py-12 text-xs text-muted-foreground">No models returned from configured providers. Check provider keys.</div>
-                ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-                    {/* Enabled models (in LiteLLM, visible in CommandCenter) */}
-                    {enabledModels.map((m) => (
-                      <div key={m.id} className="flex items-center justify-between rounded-lg border border-success/20 bg-success/5 px-3 py-2 text-xs hover:border-success/40 tech-transition">
-                        <div className="min-w-0 flex-1">
-                          <div className="text-foreground font-medium truncate text-[11px]">{m.label}</div>
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            <span className="text-[9px] px-1 py-0.5 rounded border border-border text-muted-foreground truncate">{m.provider}</span>
-                          </div>
-                        </div>
-                        <button onClick={() => toggleEnabled(m.id, m.label, m.provider)} disabled={busyModel === m.id}
-                          className="ml-1.5 shrink-0 text-success hover:text-warning tech-transition disabled:opacity-30" title="Disable — remove from CommandCenter">
-                          {busyModel === m.id ? <span className="text-[9px]">…</span> : <EyeIcon />}
-                        </button>
-                      </div>
-                    ))}
-
-                    {/* Disabled models (not in LiteLLM, hidden from CommandCenter) */}
-                    {disabledModels.length > 0 && enabledModels.length > 0 && (
-                      <div className="col-span-full pt-2 pb-1 flex items-center gap-2">
-                        <div className="flex-1 h-px bg-border" />
-                        <span className="text-[9px] text-muted-foreground font-medium shrink-0">NOT ENABLED ({disabledModels.length})</span>
-                        <div className="flex-1 h-px bg-border" />
-                      </div>
-                    )}
-                    {disabledModels.map((m) => (
-                      <div key={m.id} className="flex items-center justify-between rounded-lg border border-border/30 bg-secondary/15 px-3 py-2 text-xs opacity-55 hover:opacity-100 tech-transition">
-                        <div className="min-w-0 flex-1">
-                          <div className="text-muted-foreground font-medium truncate text-[11px]">{m.label}</div>
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            <span className="text-[9px] px-1 py-0.5 rounded border border-border/50 text-muted-foreground truncate">{m.provider}</span>
-                          </div>
-                        </div>
-                        <button onClick={() => toggleEnabled(m.id, m.label, m.provider)} disabled={busyModel === m.id}
-                          className="ml-1.5 shrink-0 text-muted-foreground hover:text-success tech-transition disabled:opacity-30" title="Enable — add to CommandCenter">
-                          {busyModel === m.id ? <span className="text-[9px]">…</span> : <EyeOffIcon />}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+              {/* Desktop: model detail side panel */}
+              {selectedModel && (
+                <div className="hidden sm:flex w-[380px] border-l border-border bg-card shrink-0 flex-col overflow-hidden animate-fade-in">
+                  <ModelDetailPanel model={selectedModel} enabled={enabledIds.has(selectedModel.id)} busy={busyModel === selectedModel.id}
+                    onToggle={() => toggleEnabled(selectedModel)} onClose={() => setSelectedModel(null)} />
+                </div>
+              )}
+              {selectedModel && (
+                <div className="sm:hidden fixed inset-0 z-40 pointer-events-none">
+                  <div className="absolute inset-0 bg-black/50 pointer-events-auto" onClick={() => setSelectedModel(null)} />
+                  <aside className="absolute inset-x-0 bottom-14 pointer-events-auto flex max-h-[55%] flex-col rounded-t-2xl border-t border-border bg-card shadow-2xl chat-fade-in">
+                    <ModelDetailPanel model={selectedModel} enabled={enabledIds.has(selectedModel.id)} busy={busyModel === selectedModel.id}
+                      onToggle={() => toggleEnabled(selectedModel)} onClose={() => setSelectedModel(null)} />
+                  </aside>
+                </div>
+              )}
             </div>
           )}
 
@@ -643,6 +650,98 @@ function ProviderDetail({ provider, guide, copilotScopeOk, onKeySet, onKeyDiscar
             <button onClick={handleDiscard} disabled={discarding}
               className="w-full rounded-lg bg-destructive px-3 py-2 text-xs font-medium text-destructive-foreground hover:opacity-90 disabled:opacity-40 tech-transition">{discarding ? "Removing key & restarting…" : "Yes, discard key"}</button>
             {discarding && <p className="text-[9px] text-muted-foreground text-center">Removing key and restarting (~25s)…</p>}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ModelDetailPanel — side panel showing model capabilities
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function ModelDetailPanel({ model, enabled, busy, onToggle, onClose }: {
+  model: ModelInfo;
+  enabled: boolean;
+  busy: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+}) {
+  const fmtCtx = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(0)}K` : String(n);
+  const fmtOut = (n: number) => n >= 1_000 ? `${(n / 1_000).toFixed(0)}K` : String(n);
+
+  const caps: { icon: string; label: string; active: boolean }[] = [
+    { icon: "👁", label: "Vision", active: model.vision },
+    { icon: "🎤", label: "Audio", active: model.audio },
+    { icon: "🧠", label: "Reasoning", active: model.reasoning },
+  ];
+
+  return (
+    <>
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-foreground truncate">{model.label}</div>
+          <div className="flex items-center gap-2 mt-0.5">
+            <span className="text-[9px] px-1.5 py-0.5 rounded border border-border text-muted-foreground">{model.provider}</span>
+            <span className="font-mono text-[10px] text-muted-foreground truncate">{model.id}</span>
+          </div>
+        </div>
+        <button onClick={onClose} className="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground tech-transition shrink-0 ml-2">
+          <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+        </button>
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* Description */}
+        {model.desc && (
+          <p className="text-xs text-muted-foreground leading-relaxed">{model.desc}</p>
+        )}
+
+        {/* Enable/disable button */}
+        <button onClick={onToggle} disabled={busy}
+          className={`w-full rounded-lg px-3 py-2 text-xs font-medium tech-transition disabled:opacity-40 ${
+            enabled
+              ? "border border-success/20 bg-success/5 text-success hover:bg-success/10"
+              : "bg-primary text-primary-foreground hover:opacity-90"
+          }`}>
+          {busy ? "…" : enabled ? "✓ Enabled — click to disable" : "Enable in CommandCenter"}
+        </button>
+
+        {/* Capabilities */}
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 mb-2">Capabilities</div>
+          <div className="grid grid-cols-3 gap-2">
+            {caps.map((c) => (
+              <div key={c.label} className={`rounded-lg border p-2 text-center ${c.active ? "border-primary/30 bg-primary/5" : "border-border/40 bg-secondary/20 opacity-40"}`}>
+                <div className="text-base mb-0.5">{c.icon}</div>
+                <div className={`text-[10px] font-medium ${c.active ? "text-foreground" : "text-muted-foreground"}`}>{c.label}</div>
+                <div className="text-[9px] text-muted-foreground mt-0.5">{c.active ? "✓" : "—"}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Context & output */}
+        {(model.context_window > 0 || model.max_output > 0) && (
+          <div>
+            <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 mb-2">Specs</div>
+            <div className="grid grid-cols-2 gap-2">
+              {model.context_window > 0 && (
+                <div className="rounded-lg border border-border/60 bg-card px-3 py-2">
+                  <div className="text-[9px] text-muted-foreground">Context window</div>
+                  <div className="text-xs font-mono font-medium text-foreground mt-0.5">{fmtCtx(model.context_window)} tokens</div>
+                </div>
+              )}
+              {model.max_output > 0 && (
+                <div className="rounded-lg border border-border/60 bg-card px-3 py-2">
+                  <div className="text-[9px] text-muted-foreground">Max output</div>
+                  <div className="text-xs font-mono font-medium text-foreground mt-0.5">{fmtOut(model.max_output)} tokens</div>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

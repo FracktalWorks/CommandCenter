@@ -48,6 +48,19 @@ export interface VisibleModel {
   group: string;
 }
 
+/** Model with capability metadata returned by /api/settings/llm/provider-models */
+export interface ModelInfo {
+  id: string;
+  label: string;
+  provider: string;
+  vision: boolean;
+  audio: boolean;
+  reasoning: boolean;
+  context_window: number;
+  max_output: number;
+  desc: string;
+}
+
 // ---------------------------------------------------------------------------
 // Provider colour map
 // ---------------------------------------------------------------------------

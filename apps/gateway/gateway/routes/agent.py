@@ -175,11 +175,64 @@ _AGENT_REGISTRY: list[dict] = [
 
 
 # ---------------------------------------------------------------------------
-# Dynamic (user-registered) agent persistence
+# Dynamic (user-registered) agent persistence — Postgres-backed.
+# Survives git reset --hard, deploys, and reboots.
+# Falls back to agents.json on first read for backward-compatible migration.
 # ---------------------------------------------------------------------------
 
+def _load_dynamic_agents() -> list[dict]:
+    """Return user-registered agents from the dynamic_agents Postgres table.
+
+    On first call after migration, imports any existing agents.json data
+    into the DB so nothing is lost.
+    """
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+        with get_session() as s:
+            rows = s.execute(
+                text(
+                    "SELECT name, description, tags, status, agent_runtime, "
+                    "repo_url, repo_name, local_path, integrations, "
+                    "optional_integrations FROM dynamic_agents ORDER BY name"
+                )
+            ).fetchall()
+        if rows:
+            return [
+                {
+                    "name": r[0], "description": r[1],
+                    "tags": r[2] if isinstance(r[2], list) else [],
+                    "status": r[3], "agent_runtime": r[4],
+                    "repo_url": r[5], "repo_name": r[6],
+                    "local_path": r[7],
+                    "integrations": r[8] if isinstance(r[8], list) else [],
+                    "optional_integrations": r[9] if isinstance(r[9], list) else [],
+                    "dynamic": True,
+                }
+                for r in rows
+            ]
+        # ── Migration path: import from legacy agents.json ──────────────
+        return _migrate_from_file()
+    except Exception:  # noqa: BLE001
+        return _migrate_from_file()
+
+
+def _migrate_from_file() -> list[dict]:
+    """One-time import from agents.json.  Writes to DB on success."""
+    try:
+        path = _get_agents_file()
+        if not path.exists():
+            return []
+        agents: list[dict] = json.loads(path.read_text(encoding="utf-8"))
+        if agents:
+            _save_dynamic_agents(agents)  # persist to DB
+        return agents
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _get_agents_file() -> Path:
-    """Locate agents.json at the project root (alongside .env and pyproject.toml)."""
+    """Locate agents.json for backward-compatible migration reads."""
     candidate = Path(__file__).resolve()
     for _ in range(8):
         candidate = candidate.parent
@@ -188,39 +241,82 @@ def _get_agents_file() -> Path:
     return Path.cwd() / "agents.json"
 
 
-def _load_dynamic_agents() -> list[dict]:
-    """Return the list of user-registered agents from agents.json."""
-    path = _get_agents_file()
-    if not path.exists():
-        return []
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return []
-
-
 def _save_dynamic_agents(agents: list[dict]) -> None:
-    """Write the dynamic agent list back to agents.json."""
-    path = _get_agents_file()
-    path.write_text(json.dumps(agents, indent=2, ensure_ascii=False), encoding="utf-8")
+    """Write the dynamic agent list to the dynamic_agents Postgres table."""
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+        import json as _json
+        with get_session() as s:
+            for a in agents:
+                s.execute(
+                    text(
+                        "INSERT INTO dynamic_agents "
+                        "(name, description, tags, status, agent_runtime, "
+                        "repo_url, repo_name, local_path, integrations, "
+                        "optional_integrations, updated_at) "
+                        "VALUES (:n,:d,:t::jsonb,:s,:r,:ru,:rn,:lp,"
+                        ":i::jsonb,:oi::jsonb,now()) "
+                        "ON CONFLICT (name) DO UPDATE SET "
+                        "description=EXCLUDED.description, "
+                        "tags=EXCLUDED.tags, "
+                        "status=EXCLUDED.status, "
+                        "agent_runtime=EXCLUDED.agent_runtime, "
+                        "repo_url=EXCLUDED.repo_url, "
+                        "repo_name=EXCLUDED.repo_name, "
+                        "local_path=EXCLUDED.local_path, "
+                        "integrations=EXCLUDED.integrations, "
+                        "optional_integrations=EXCLUDED.optional_integrations, "
+                        "updated_at=now()"
+                    ),
+                    {
+                        "n": a["name"], "d": a.get("description", ""),
+                        "t": _json.dumps(a.get("tags", [])),
+                        "s": a.get("status", "live"),
+                        "r": a.get("agent_runtime", "maf"),
+                        "ru": a.get("repo_url"),
+                        "rn": a.get("repo_name"),
+                        "lp": a.get("local_path"),
+                        "i": _json.dumps(a.get("integrations", [])),
+                        "oi": _json.dumps(a.get("optional_integrations", [])),
+                    },
+                )
+            s.commit()
+    except Exception:
+        # Fallback: write to agents.json so data is not lost if DB is down
+        try:
+            path = _get_agents_file()
+            path.write_text(
+                json.dumps(agents, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _validate_agent_name(name: str) -> str:
     """Reject agent names not in the static or dynamic allowlist."""
     safe = name.lower().strip()
-    if safe not in _KNOWN_AGENTS:
-        # Also accept dynamically registered agents and static registry entries
-        registry_names = {a["name"] for a in _AGENT_REGISTRY}
-        dynamic_names = {a["name"] for a in _load_dynamic_agents()}
-        if safe not in registry_names and safe not in dynamic_names:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    f"Unknown agent {name!r}. "
-                    f"Static allowed: {sorted(_KNOWN_AGENTS)}"
-                ),
-            )
-    return safe
+    # Strip optional 'agent-' prefix so 'agent-project-manager' matches 'project-manager'
+    if safe.startswith("agent-"):
+        safe_no_prefix = safe[len("agent-"):]
+    else:
+        safe_no_prefix = safe
+
+    # Check all sources: known agents, registry, dynamic (UI-registered)
+    registry_names = {a["name"] for a in _AGENT_REGISTRY}
+    dynamic_names = {a["name"] for a in _load_dynamic_agents()}
+    all_allowed = _KNOWN_AGENTS | registry_names | dynamic_names
+
+    if safe not in all_allowed and safe_no_prefix not in all_allowed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Unknown agent {name!r}. "
+                f"Registered: {sorted(all_allowed)}"
+            ),
+        )
+    return safe if safe in all_allowed else safe_no_prefix
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +557,7 @@ async def register_agent(
         def _eager_clone(agent_name: str, repo_slug: str) -> None:
             try:
                 from acb_skills.loader import load_agent  # noqa: PLC0415
+
                 # Pass the full org/repo slug — load_agent splits when needed
                 with load_agent(agent_name, repo_name=repo_slug):
                     pass
@@ -606,8 +703,8 @@ async def run_agent_stream_endpoint(
 
     # ── Memory extraction: save conversation facts after the run completes ──
     try:
-        from acb_memory import (add_episode,  # noqa: PLC0415
-                                add_memories_background)
+        from acb_memory import add_episode  # noqa: PLC0415
+        from acb_memory import add_memories_background
         messages = req.payload.get("messages") or []
         user_msg = req.payload.get("message") or ""
         if user_msg or messages:
@@ -708,8 +805,8 @@ async def reconnect_agent_stream(
     """
     import json as _json
 
-    from orchestrator.stream_relay import (is_active,  # noqa: PLC0415
-                                           replay_events, stream_exists,
+    from orchestrator.stream_relay import is_active  # noqa: PLC0415
+    from orchestrator.stream_relay import (replay_events, stream_exists,
                                            subscribe_events)
 
     _log.info(

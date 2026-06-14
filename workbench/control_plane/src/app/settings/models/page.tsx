@@ -3,14 +3,15 @@
 /**
  * /settings/models — LLM Model Configuration
  *
- * Three-tab layout with compact card design (Agents/APIs style):
- *   1. Providers — compact tiles, click to expand key setup
- *   2. Models — all models from configured providers, filter by group, toggle visibility
+ * Three-tab layout:
+ *   1. Providers — compact tiles, click → slide-in side panel for key setup
+ *   2. Models — all models from configured providers, ALL start hidden,
+ *      click eye icon to enable in LiteLLM. Filter by provider.
  *   3. Tiers — compact rows, expand to edit model assignment
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { LLMConfig, ProviderInfo, VisibleModel } from "@/lib/model-types";
+import type { LLMConfig, ProviderInfo } from "@/lib/model-types";
 import { PROVIDER_GUIDES, PROVIDER_COLOURS, PROVIDER_ICONS } from "@/lib/model-types";
 
 // ── Icons ───────────────────────────────────────────────────────────────────
@@ -58,9 +59,9 @@ export default function ModelsPage() {
   const [providerSearch, setProviderSearch] = useState("");
   const [providerFilter, setProvFilter] = useState<"all" | "connected" | "unset">("all");
 
-  // ── Tab 2: Models ────────────────────────────────────────────────────────
-  const [allModels, setAllModels] = useState<VisibleModel[]>([]);
-  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
+  // ── Tab 2: Models — key change: ALL models start disabled (not in LiteLLM) ─
+  const [providerModels, setProviderModels] = useState<Map<string, { id: string; label: string }[]>>(new Map());
+  const [enabledIds, setEnabledIds] = useState<Set<string>>(new Set()); // models added to LiteLLM (custom-models)
   const [loadingModels, setLoadingModels] = useState(true);
   const [modelSearch, setModelSearch] = useState("");
   const [modelProvFilter, setModelProvFilter] = useState<string>("all");
@@ -88,17 +89,79 @@ export default function ModelsPage() {
   }, []);
   useEffect(() => { loadConfig(); }, [loadConfig]);
 
+  // ── Derived: merged providers ────────────────────────────────────────────
+  const mergedProviders = useMemo(() => {
+    if (!config) return [] as ProviderInfo[];
+    const gatewayIds = new Set(config.providers.map((p) => p.id));
+    const extra: ProviderInfo[] = (Object.keys(PROVIDER_GUIDES) as Array<keyof typeof PROVIDER_GUIDES>)
+      .filter((id) => !gatewayIds.has(id as string))
+      .map((id) => ({ id: id as string, label: STATIC_LABELS[id as string] ?? (id as string), configured: false, env_var: STATIC_ENV[id as string] ?? "", models: [] }));
+    return [...config.providers, ...extra];
+  }, [config]);
+
+  const configuredProviderIds = useMemo(() => mergedProviders.filter((p) => p.configured).map((p) => p.id), [mergedProviders]);
+  const connCount = mergedProviders.filter((p) => p.configured).length;
+
+  // ── Tab 2: Load models from EACH configured provider ─────────────────────
   const loadModelsTab = useCallback(async () => {
+    const configured = configuredProviderIds;
+    if (configured.length === 0) { setProviderModels(new Map()); setEnabledIds(new Set()); setLoadingModels(false); return; }
     setLoadingModels(true);
     try {
-      const [modRes, hidRes] = await Promise.all([fetch("/api/models/all"), fetch("/api/settings/llm/hidden-models")]);
-      if (modRes.ok) { const d = await modRes.json(); setAllModels((d as { models?: VisibleModel[] }).models ?? []); }
-      if (hidRes.ok) { const h = await hidRes.json(); setHiddenIds(new Set(Array.isArray(h) ? h : [])); }
+      // Fetch available models from each configured provider + currently enabled custom models
+      const providerFetches = configured.map(async (pid) => {
+        try {
+          const r = await fetch(`/api/settings/llm/provider-models?provider=${encodeURIComponent(pid)}`);
+          if (r.ok) {
+            const data = await r.json();
+            const models = Array.isArray(data) ? data as { id: string; label: string }[] : [];
+            return { provider: pid, models };
+          }
+        } catch { /* skip unavailable provider */ }
+        return { provider: pid, models: [] };
+      });
+      const results = await Promise.all(providerFetches);
+      const newMap = new Map<string, { id: string; label: string }[]>();
+      results.forEach(({ provider, models }) => newMap.set(provider, models));
+
+      // Fetch which models are currently enabled (in custom-models = added to LiteLLM)
+      let enabled = new Set<string>();
+      try {
+        const custRes = await fetch("/api/settings/llm/custom-models");
+        if (custRes.ok) {
+          const custData = await custRes.json();
+          const list = Array.isArray(custData) ? custData : ((custData as { custom?: { id: string }[] }).custom ?? []);
+          enabled = new Set(list.map((m: { id: string }) => m.id));
+        }
+      } catch { /* ok */ }
+
+      setProviderModels(newMap);
+      setEnabledIds(enabled);
     } catch { /* ok */ } finally { setLoadingModels(false); }
-  }, []);
+  }, [configuredProviderIds]);
   useEffect(() => { if (tab === "models") loadModelsTab(); }, [tab, loadModelsTab]);
 
-  // ── Handlers ─────────────────────────────────────────────────────────────
+  // ── Tab 2: Toggle model enabled/disabled (add/remove from LiteLLM custom-models) ─
+  const toggleEnabled = async (modelId: string, modelLabel: string, provider: string) => {
+    setBusyModel(modelId);
+    try {
+      if (enabledIds.has(modelId)) {
+        // Disable: remove from LiteLLM custom-models
+        await fetch(`/api/settings/llm/custom-models/${encodeURIComponent(modelId)}`, { method: "DELETE" });
+        setEnabledIds((prev) => { const s = new Set(prev); s.delete(modelId); return s; });
+      } else {
+        // Enable: add to LiteLLM custom-models
+        await fetch("/api/settings/llm/custom-models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: modelId, label: modelLabel, provider }),
+        });
+        setEnabledIds((prev) => new Set([...prev, modelId]));
+      }
+    } finally { setBusyModel(null); }
+  };
+
+  // ── Handlers (providers, tiers) ──────────────────────────────────────────
   const handleKeySet = async (prov: string, key: string) => {
     const res = await fetch("/api/settings/llm/key", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: prov, api_key: key }) });
     if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(String(err?.detail ?? "Save failed")); }
@@ -129,23 +192,20 @@ export default function ModelsPage() {
     } catch (err) { setTestResult({ ok: false, text: String(err), ms: 0 }); }
     finally { setTestingTier(null); }
   };
-  const toggleHidden = async (id: string) => {
-    setBusyModel(id);
-    try {
-      if (hiddenIds.has(id)) { await fetch(`/api/settings/llm/hidden-models/${encodeURIComponent(id)}`, { method: "DELETE" }); setHiddenIds((prev) => { const s = new Set(prev); s.delete(id); return s; }); }
-      else { await fetch("/api/settings/llm/hidden-models", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) }); setHiddenIds((prev) => new Set([...prev, id])); }
-    } finally { setBusyModel(null); }
-  };
 
-  // ── Derived data ─────────────────────────────────────────────────────────
-  const mergedProviders = useMemo(() => {
-    if (!config) return [] as ProviderInfo[];
-    const gatewayIds = new Set(config.providers.map((p) => p.id));
-    const extra: ProviderInfo[] = (Object.keys(PROVIDER_GUIDES) as Array<keyof typeof PROVIDER_GUIDES>)
-      .filter((id) => !gatewayIds.has(id as string))
-      .map((id) => ({ id: id as string, label: STATIC_LABELS[id as string] ?? (id as string), configured: false, env_var: STATIC_ENV[id as string] ?? "", models: [] }));
-    return [...config.providers, ...extra];
-  }, [config]);
+  // ── Tab 2: Derived model lists ───────────────────────────────────────────
+  const mq = modelSearch.trim().toLowerCase();
+  // Flatten all provider models into a single list tagged with provider
+  const allProviderModels = useMemo(() => {
+    const result: { id: string; label: string; provider: string }[] = [];
+    providerModels.forEach((models, pid) => {
+      models.forEach((m) => result.push({ ...m, provider: pid }));
+    });
+    return result;
+  }, [providerModels]);
+
+  const enabledModels = allProviderModels.filter((m) => enabledIds.has(m.id) && (modelProvFilter === "all" || m.provider === modelProvFilter) && (!mq || m.label.toLowerCase().includes(mq) || m.id.toLowerCase().includes(mq)));
+  const disabledModels = allProviderModels.filter((m) => !enabledIds.has(m.id) && (modelProvFilter === "all" || m.provider === modelProvFilter) && (!mq || m.label.toLowerCase().includes(mq) || m.id.toLowerCase().includes(mq)));
 
   const filteredProviders = useMemo(() => mergedProviders.filter((p) => {
     if (providerFilter === "connected") return p.configured;
@@ -153,32 +213,6 @@ export default function ModelsPage() {
     if (providerSearch) return p.label.toLowerCase().includes(providerSearch.toLowerCase()) || p.id.toLowerCase().includes(providerSearch.toLowerCase());
     return true;
   }), [mergedProviders, providerFilter, providerSearch]);
-
-  const configuredProviderIds = useMemo(() => mergedProviders.filter((p) => p.configured).map((p) => p.id), [mergedProviders]);
-  const connCount = mergedProviders.filter((p) => p.configured).length;
-
-  // ── Tab 2: filter models by actual model group (not provider ID) ─────────
-  const mq = modelSearch.trim().toLowerCase();
-  // Extract actual model groups from the API data for filter pills
-  const modelGroups = useMemo(() => {
-    const groups = new Map<string, number>();
-    allModels.forEach((m) => groups.set(m.group, (groups.get(m.group) ?? 0) + 1));
-    return Array.from(groups.entries()).sort(([, a], [, b]) => b - a);
-  }, [allModels]);
-  // Only show models from groups matching configured providers
-  const configuredModelGroups = useMemo(() => {
-    const ids = configuredProviderIds.map((x) => x.toLowerCase());
-    const hasNonCopilot = ids.some((id) => id !== "github");
-    return new Set(modelGroups.filter(([g]) => {
-      const gl = g.toLowerCase();
-      if (gl === "copilot sdk" || gl === "github") return ids.includes("github");
-      // Any LiteLLM or tier group — show when any non-Copilot provider is configured
-      if (hasNonCopilot && (gl.includes("litellm") || gl.includes("tier") || ids.includes(gl) || ids.some((id) => gl.includes(id)))) return true;
-      return ids.includes(gl) || ids.some((id) => gl.includes(id));
-    }).map(([g]) => g));
-  }, [configuredProviderIds, modelGroups]);
-  const visibleModels = allModels.filter((m) => configuredModelGroups.has(m.group) && !hiddenIds.has(m.id) && (modelProvFilter === "all" || m.group === modelProvFilter) && (!mq || m.label.toLowerCase().includes(mq) || m.id.toLowerCase().includes(mq)));
-  const hiddenModelsList = allModels.filter((m) => configuredModelGroups.has(m.group) && hiddenIds.has(m.id) && (modelProvFilter === "all" || m.group === modelProvFilter) && (!mq || m.label.toLowerCase().includes(mq) || m.id.toLowerCase().includes(mq)));
 
   const selectedProvData = mergedProviders.find((p) => p.id === selectedProvider);
   const guide = selectedProvider ? (PROVIDER_GUIDES[selectedProvider] ?? undefined) : undefined;
@@ -196,7 +230,6 @@ export default function ModelsPage() {
         </div>
       </div>
 
-      {/* Save feedback toast */}
       {saveMsg && (
         <div className={`shrink-0 mx-4 mt-2 rounded-lg border px-3 py-1.5 text-xs ${saveMsg.ok ? "border-success/20 bg-success/5 text-success" : "border-destructive/20 bg-destructive/5 text-destructive"}`}>
           {saveMsg.ok ? "✓ " : "✗ "}{saveMsg.text}
@@ -221,20 +254,17 @@ export default function ModelsPage() {
         <div className="flex-1 flex items-center justify-center"><div className="text-center"><p className="text-sm text-destructive mb-2">Failed to load config</p><p className="text-xs text-muted-foreground mb-4">{loadError}</p><button onClick={loadConfig} className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground tech-transition">Retry</button></div></div>
       ) : (
         <div className="flex-1 overflow-hidden flex">
-          {/* ══════════════════════════════════════════════════════════════════
-              TAB 1: PROVIDERS (tile grid + slide-in side panel)
-              ══════════════════════════════════════════════════════════════ */}
+          {/* ═══════════════════════════════════════════════════════════════
+              TAB 1: PROVIDERS
+              ═══════════════════════════════════════════════════════════ */}
           {tab === "providers" && (
             <div className="flex-1 flex overflow-hidden">
-              {/* Main grid area */}
               <div className="flex-1 overflow-y-auto">
                 <div className="px-4 pt-3 pb-2 flex items-center gap-2 flex-wrap">
                   <div className="flex items-center gap-1">
                     {([["all","All"],["connected","Connected"],["unset","Not set up"]] as const).map(([id, label]) => (
                       <button key={id} onClick={() => setProvFilter(id)}
-                        className={`px-2.5 py-1 rounded-full text-[11px] font-medium tech-transition ${providerFilter === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}>
-                        {label}
-                      </button>
+                        className={`px-2.5 py-1 rounded-full text-[11px] font-medium tech-transition ${providerFilter === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}>{label}</button>
                     ))}
                   </div>
                   <div className="relative flex-1 min-w-[140px] max-w-[220px] ml-auto">
@@ -245,80 +275,59 @@ export default function ModelsPage() {
                 </div>
                 <div className="p-4">
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                    {filteredProviders.map((p) => {
-                      return (
-                        <button key={p.id} onClick={() => setSelectedProvider(selectedProvider === p.id ? null : p.id)}
-                          className={`text-left w-full p-3 rounded-xl border tech-transition ${
-                            selectedProvider === p.id ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-card hover:border-primary/40 hover:bg-secondary/30"
-                          }`}>
-                          <div className="flex items-start justify-between mb-2">
-                            <span className="text-lg shrink-0">{PROVIDER_ICONS[p.id] ?? "?"}</span>
-                            <span className={`w-2 h-2 mt-1 rounded-full shrink-0 ${p.configured ? "bg-success" : "bg-muted"}`} />
-                          </div>
-                          <div className="font-medium text-xs text-foreground leading-tight truncate">{p.label}</div>
-                          <div className={`text-[10px] mt-0.5 ${p.configured ? "text-success" : "text-muted-foreground"}`}>
-                            {p.configured ? "● Connected" : p.id === "ollama" || p.id === "vllm" ? "○ Local" : "○ No key"}
-                          </div>
-                          {p.env_var && <div className="text-[9px] text-muted-foreground font-mono mt-1 truncate opacity-60">{p.env_var}</div>}
-                        </button>
-                      );
-                    })}
+                    {filteredProviders.map((p) => (
+                      <button key={p.id} onClick={() => setSelectedProvider(selectedProvider === p.id ? null : p.id)}
+                        className={`text-left w-full p-3 rounded-xl border tech-transition ${selectedProvider === p.id ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-card hover:border-primary/40 hover:bg-secondary/30"}`}>
+                        <div className="flex items-start justify-between mb-2">
+                          <span className="text-lg shrink-0">{PROVIDER_ICONS[p.id] ?? "?"}</span>
+                          <span className={`w-2 h-2 mt-1 rounded-full shrink-0 ${p.configured ? "bg-success" : "bg-muted"}`} />
+                        </div>
+                        <div className="font-medium text-xs text-foreground leading-tight truncate">{p.label}</div>
+                        <div className={`text-[10px] mt-0.5 ${p.configured ? "text-success" : "text-muted-foreground"}`}>
+                          {p.configured ? "● Connected" : p.id === "ollama" || p.id === "vllm" ? "○ Local" : "○ No key"}
+                        </div>
+                        {p.env_var && <div className="text-[9px] text-muted-foreground font-mono mt-1 truncate opacity-60">{p.env_var}</div>}
+                      </button>
+                    ))}
                   </div>
-                  {filteredProviders.length === 0 && (
-                    <div className="text-center py-12 text-xs text-muted-foreground">No providers match your filter.</div>
-                  )}
+                  {filteredProviders.length === 0 && <div className="text-center py-12 text-xs text-muted-foreground">No providers match your filter.</div>}
                 </div>
               </div>
-
-              {/* Desktop: slide-in side panel (APIs-style) */}
               {selectedProvider && selectedProvData && (
                 <div className="hidden sm:flex w-[380px] border-l border-border bg-card shrink-0 flex-col overflow-hidden animate-fade-in">
-                  <ProviderDetail
-                    provider={selectedProvData}
-                    guide={guide}
-                    copilotScopeOk={selectedProvData.id === "github" ? copilotScopeOk : undefined}
-                    onKeySet={(key) => handleKeySet(selectedProvData.id, key)}
-                    onKeyDiscard={() => handleKeyDiscard(selectedProvData.id)}
-                    onClose={() => setSelectedProvider(null)}
-                  />
+                  <ProviderDetail provider={selectedProvData} guide={guide} copilotScopeOk={selectedProvData.id === "github" ? copilotScopeOk : undefined}
+                    onKeySet={(key) => handleKeySet(selectedProvData.id, key)} onKeyDiscard={() => handleKeyDiscard(selectedProvData.id)} onClose={() => setSelectedProvider(null)} />
                 </div>
               )}
-
-              {/* Mobile: bottom slide-up panel (APIs-style) */}
               {selectedProvider && selectedProvData && (
                 <div className="sm:hidden fixed inset-0 z-40 pointer-events-none">
                   <div className="absolute inset-0 bg-black/50 pointer-events-auto" onClick={() => setSelectedProvider(null)} />
                   <aside className="absolute inset-x-0 bottom-14 pointer-events-auto flex max-h-[55%] flex-col rounded-t-2xl border-t border-border bg-card shadow-2xl chat-fade-in">
-                    <ProviderDetail
-                      provider={selectedProvData}
-                      guide={guide}
-                      copilotScopeOk={selectedProvData.id === "github" ? copilotScopeOk : undefined}
-                      onKeySet={(key) => handleKeySet(selectedProvData.id, key)}
-                      onKeyDiscard={() => handleKeyDiscard(selectedProvData.id)}
-                      onClose={() => setSelectedProvider(null)}
-                    />
+                    <ProviderDetail provider={selectedProvData} guide={guide} copilotScopeOk={selectedProvData.id === "github" ? copilotScopeOk : undefined}
+                      onKeySet={(key) => handleKeySet(selectedProvData.id, key)} onKeyDiscard={() => handleKeyDiscard(selectedProvData.id)} onClose={() => setSelectedProvider(null)} />
                   </aside>
                 </div>
               )}
             </div>
           )}
 
-          {/* ══════════════════════════════════════════════════════════════════
-              TAB 2: MODELS — all models from configured providers, filter by group, toggle visibility
-              ══════════════════════════════════════════════════════════════ */}
+          {/* ═══════════════════════════════════════════════════════════════
+              TAB 2: MODELS — per-provider models, ALL start disabled, eye = enable in LiteLLM
+              ═══════════════════════════════════════════════════════════════ */}
           {tab === "models" && (
             <div className="flex-1 overflow-y-auto">
-              {/* Filter pills — use actual model groups from the API */}
+              {/* Filter pills — by provider name, not model group */}
               <div className="px-4 pt-3 pb-2 flex items-center gap-1.5 flex-wrap">
                 <button onClick={() => setModelProvFilter("all")}
                   className={`px-2.5 py-1 rounded-full text-[11px] font-medium tech-transition ${modelProvFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}>All</button>
-                {modelGroups.filter(([g]) => configuredModelGroups.has(g)).map(([group, count]) => (
-                  <button key={group} onClick={() => setModelProvFilter(group)}
-                    className={`px-2.5 py-1 rounded-full text-[11px] font-medium tech-transition ${modelProvFilter === group ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}>{group} <span className="opacity-50">{count}</span></button>
+                {configuredProviderIds.map((pid) => (
+                  <button key={pid} onClick={() => setModelProvFilter(pid)}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-medium tech-transition ${modelProvFilter === pid ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}>
+                    {pid} <span className="opacity-50">{(providerModels.get(pid) ?? []).length}</span>
+                  </button>
                 ))}
               </div>
 
-              {/* Search */}
               <div className="px-4 pb-2">
                 <div className="relative">
                   <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"><SearchIcon /></span>
@@ -327,43 +336,51 @@ export default function ModelsPage() {
                 </div>
               </div>
 
-              {/* Model grid — eye icon always visible */}
               <div className="p-4 pt-0">
                 {loadingModels ? (
-                  <div className="flex items-center justify-center py-12 text-xs text-muted-foreground"><span className="w-4 h-4 rounded-full border-2 border-muted border-t-primary animate-spin mr-2" />Loading models…</div>
-                ) : (visibleModels.length === 0 && hiddenModelsList.length === 0) ? (
-                  <div className="text-center py-12 text-xs text-muted-foreground">
-                    {configuredProviderIds.length === 0 ? "Connect a provider in the Providers tab first." : "No models found for configured providers."}
-                  </div>
+                  <div className="flex items-center justify-center py-12 text-xs text-muted-foreground"><span className="w-4 h-4 rounded-full border-2 border-muted border-t-primary animate-spin mr-2" />Loading provider models…</div>
+                ) : configuredProviderIds.length === 0 ? (
+                  <div className="text-center py-12 text-xs text-muted-foreground">Connect a provider in the Providers tab first.</div>
+                ) : allProviderModels.length === 0 ? (
+                  <div className="text-center py-12 text-xs text-muted-foreground">No models returned from configured providers. Check provider keys.</div>
                 ) : (
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-                    {visibleModels.map((m) => (
-                      <div key={m.id} className="flex items-center justify-between rounded-lg border border-border/60 bg-card px-3 py-2 text-xs hover:border-primary/30 tech-transition">
+                    {/* Enabled models (in LiteLLM, visible in CommandCenter) */}
+                    {enabledModels.map((m) => (
+                      <div key={m.id} className="flex items-center justify-between rounded-lg border border-success/20 bg-success/5 px-3 py-2 text-xs hover:border-success/40 tech-transition">
                         <div className="min-w-0 flex-1">
                           <div className="text-foreground font-medium truncate text-[11px]">{m.label}</div>
-                          <div className="text-muted-foreground text-[9px] font-mono truncate">{m.group}</div>
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <span className="text-[9px] px-1 py-0.5 rounded border border-border text-muted-foreground truncate">{m.provider}</span>
+                          </div>
                         </div>
-                        <button onClick={() => toggleHidden(m.id)} disabled={busyModel === m.id}
-                          className="ml-1.5 shrink-0 text-muted-foreground hover:text-warning tech-transition disabled:opacity-30"
-                          title="Hide from picker">{busyModel === m.id ? <span className="text-[9px]">…</span> : <EyeIcon />}</button>
+                        <button onClick={() => toggleEnabled(m.id, m.label, m.provider)} disabled={busyModel === m.id}
+                          className="ml-1.5 shrink-0 text-success hover:text-warning tech-transition disabled:opacity-30" title="Disable — remove from CommandCenter">
+                          {busyModel === m.id ? <span className="text-[9px]">…</span> : <EyeIcon />}
+                        </button>
                       </div>
                     ))}
-                    {hiddenModelsList.length > 0 && (
+
+                    {/* Disabled models (not in LiteLLM, hidden from CommandCenter) */}
+                    {disabledModels.length > 0 && enabledModels.length > 0 && (
                       <div className="col-span-full pt-2 pb-1 flex items-center gap-2">
                         <div className="flex-1 h-px bg-border" />
-                        <span className="text-[9px] text-muted-foreground font-medium shrink-0">HIDDEN ({hiddenModelsList.length})</span>
+                        <span className="text-[9px] text-muted-foreground font-medium shrink-0">NOT ENABLED ({disabledModels.length})</span>
                         <div className="flex-1 h-px bg-border" />
                       </div>
                     )}
-                    {hiddenModelsList.map((m) => (
-                      <div key={m.id} className="flex items-center justify-between rounded-lg border border-border/30 bg-secondary/20 px-3 py-2 text-xs opacity-60 hover:opacity-100 tech-transition">
+                    {disabledModels.map((m) => (
+                      <div key={m.id} className="flex items-center justify-between rounded-lg border border-border/30 bg-secondary/15 px-3 py-2 text-xs opacity-55 hover:opacity-100 tech-transition">
                         <div className="min-w-0 flex-1">
                           <div className="text-muted-foreground font-medium truncate text-[11px]">{m.label}</div>
-                          <div className="text-muted-foreground text-[9px] font-mono truncate">{m.group}</div>
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <span className="text-[9px] px-1 py-0.5 rounded border border-border/50 text-muted-foreground truncate">{m.provider}</span>
+                          </div>
                         </div>
-                        <button onClick={() => toggleHidden(m.id)} disabled={busyModel === m.id}
-                          className="ml-1.5 shrink-0 text-muted-foreground hover:text-success tech-transition disabled:opacity-30"
-                          title="Show in picker">{busyModel === m.id ? <span className="text-[9px]">…</span> : <EyeOffIcon />}</button>
+                        <button onClick={() => toggleEnabled(m.id, m.label, m.provider)} disabled={busyModel === m.id}
+                          className="ml-1.5 shrink-0 text-muted-foreground hover:text-success tech-transition disabled:opacity-30" title="Enable — add to CommandCenter">
+                          {busyModel === m.id ? <span className="text-[9px]">…</span> : <EyeOffIcon />}
+                        </button>
                       </div>
                     ))}
                   </div>
@@ -372,9 +389,9 @@ export default function ModelsPage() {
             </div>
           )}
 
-          {/* ══════════════════════════════════════════════════════════════════
-              TAB 3: TIERS (compact rows, expand to edit)
-              ══════════════════════════════════════════════════════════════ */}
+          {/* ═══════════════════════════════════════════════════════════════
+              TAB 3: TIERS
+              ═══════════════════════════════════════════════════════════════ */}
           {tab === "tiers" && config && (
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
               <div>
@@ -442,8 +459,7 @@ export default function ModelsPage() {
                                 className="rounded-lg bg-primary px-3 py-1.5 text-[11px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 tech-transition">{savingTier ? "Saving…" : "Save"}</button>
                               <button onClick={() => handleTestTier(tier.tier_name)} disabled={testingTier === tier.tier_name || !tier.provider_configured}
                                 className="rounded-lg border border-border px-3 py-1.5 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-40 tech-transition">{testingTier === tier.tier_name ? "…" : "Test"}</button>
-                              <button onClick={() => setEditingTier(null)}
-                                className="rounded-lg text-[11px] text-muted-foreground hover:text-foreground tech-transition ml-auto">Cancel</button>
+                              <button onClick={() => setEditingTier(null)} className="rounded-lg text-[11px] text-muted-foreground hover:text-foreground tech-transition ml-auto">Cancel</button>
                             </div>
                             {testResult && (
                               <div className={`rounded-md border px-2 py-1 text-[10px] ${testResult.ok ? "border-success/30 bg-success/10 text-success" : "border-destructive/20 bg-destructive/5 text-destructive"}`}>
@@ -478,7 +494,7 @@ export default function ModelsPage() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ProviderDetail — inline key setup panel
+// ProviderDetail — side panel for key setup
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function ProviderDetail({ provider, guide, copilotScopeOk, onKeySet, onKeyDiscard, onClose }: {
@@ -521,11 +537,8 @@ function ProviderDetail({ provider, guide, copilotScopeOk, onKeySet, onKeyDiscar
     } catch (e) { setDeviceStatus(`Error: ${String(e)}`); setDeviceFlow(null); }
   };
 
-  const colour = PROVIDER_COLOURS[provider.id] ?? PROVIDER_COLOURS.unknown;
-
   return (
     <>
-      {/* Panel header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
         <div className="flex items-center gap-2.5 min-w-0">
           <span className="text-lg shrink-0">{PROVIDER_ICONS[provider.id] ?? "?"}</span>
@@ -555,10 +568,7 @@ function ProviderDetail({ provider, guide, copilotScopeOk, onKeySet, onKeyDiscar
           </button>
         </div>
       </div>
-
-      {/* Panel body — scrollable */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {/* Copilot scope warning */}
         {provider.id === "github" && provider.configured && copilotScopeOk === false && (
           <div className="rounded-lg border border-warning/25 bg-warning/5 p-2.5 text-[10px] space-y-1">
             <span className="text-warning font-medium">⚠ Copilot scope missing</span>
@@ -572,39 +582,28 @@ function ProviderDetail({ provider, guide, copilotScopeOk, onKeySet, onKeyDiscar
             </details>
           </div>
         )}
-
-        {/* Description + setup link */}
         {guide && !isLocal && (
           <>
             <p className="text-xs text-muted-foreground leading-relaxed">{guide.description}</p>
             <div className="flex items-center gap-2">
               <a href={guide.setup_url} target="_blank" rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1 text-[10px] font-medium text-primary hover:bg-primary/20 tech-transition">
-                Get API key ↗
-              </a>
+                className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1 text-[10px] font-medium text-primary hover:bg-primary/20 tech-transition">Get API key ↗</a>
               <a href={guide.docs_url} target="_blank" rel="noopener noreferrer"
-                className="text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2 tech-transition">
-                Docs ↗
-              </a>
+                className="text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2 tech-transition">Docs ↗</a>
             </div>
           </>
         )}
-
-        {/* Key input (only for non-local or unconfigured) */}
         {!provider.configured || !isLocal ? (
           <div className="space-y-2">
-            {/* Step-by-step instructions */}
             {guide && !isLocal && (
               <ol className="space-y-1">
                 {guide.instructions.map((step, i) => (
                   <li key={i} className="flex items-start gap-2 text-[10px] text-muted-foreground">
-                    <span className="shrink-0 w-3.5 h-3.5 rounded-full bg-secondary text-muted-foreground flex items-center justify-center text-[8px] font-semibold mt-0.5">{i + 1}</span>
-                    {step}
+                    <span className="shrink-0 w-3.5 h-3.5 rounded-full bg-secondary text-muted-foreground flex items-center justify-center text-[8px] font-semibold mt-0.5">{i + 1}</span>{step}
                   </li>
                 ))}
               </ol>
             )}
-
             <div className="relative">
               <input type={show ? "text" : "password"} value={keyVal} onChange={(e) => setKeyVal(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSave()}
                 placeholder={`Paste ${provider.env_var}…`}
@@ -615,8 +614,6 @@ function ProviderDetail({ provider, guide, copilotScopeOk, onKeySet, onKeyDiscar
             <button onClick={handleSave} disabled={saving || !keyVal.trim()}
               className="w-full rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 tech-transition">{saving ? "Saving & restarting LiteLLM…" : "Save & apply key"}</button>
             {saving && <p className="text-[9px] text-muted-foreground text-center">Writing key and restarting (~25s)…</p>}
-
-            {/* GitHub device flow */}
             {provider.id === "github" && (
               <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 space-y-2">
                 <div className="flex items-center gap-1.5"><span className="text-xs">✦</span><span className="text-[10px] font-medium text-primary/80">GitHub OAuth Device Flow</span></div>
@@ -635,14 +632,11 @@ function ProviderDetail({ provider, guide, copilotScopeOk, onKeySet, onKeyDiscar
             )}
           </div>
         ) : (
-          /* Already configured — show status */
           <div className="rounded-lg border border-success/20 bg-success/5 p-3 text-center">
             <p className="text-xs text-success font-medium">✓ Connected</p>
             <p className="text-[10px] text-muted-foreground mt-0.5">Key is set and LiteLLM has access to this provider.</p>
           </div>
         )}
-
-        {/* Discard confirmation */}
         {confirmDiscard && (
           <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 space-y-2">
             <p className="text-[10px] text-destructive">This will remove the key and disconnect the provider. Tiers using it will fall back to the next available.</p>

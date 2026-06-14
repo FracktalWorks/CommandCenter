@@ -1397,7 +1397,7 @@ export default function AgentsPage() {
                       const color = getAgentColor(selectedAgent);
                       return <Icon size={20} className={color} />;
                     })()}
-                    <span className="text-sm font-semibold truncate">{selectedAgent.label ?? selectedAgent.name}</span>
+                    <span className="text-sm font-semibold truncate">{selectedAgent.name}</span>
                   </div>
                   <button onClick={() => setSelected(null)} className="p-1 rounded-md hover:bg-secondary text-muted-foreground shrink-0">
                     <X size={16} />

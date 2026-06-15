@@ -7,6 +7,7 @@
  *   .md                 → react-markdown + remark-gfm
  *   .py .ts .js .sh … → shiki syntax highlighter
  *   .pdf                → react-pdf (pdfjs-dist)
+ *   .docx               → mammoth.js (converted to HTML)
  *   .png .jpg .svg …   → <img> with zoom
  *   .csv .txt .log      → plain preformatted text
  *   other               → hex-dump excerpt + download button
@@ -37,6 +38,7 @@ type ViewerState =
   | { status: "markdown"; content: string }
   | { status: "image"; url: string }
   | { status: "pdf"; url: string }
+  | { status: "docx"; html: string }
   | { status: "binary"; hex: string; filename: string };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -55,12 +57,13 @@ const CODE_EXTS = new Set([
 const IMAGE_EXTS = new Set(["png","jpg","jpeg","gif","webp","svg","ico","bmp","tiff"]);
 const TEXT_EXTS  = new Set(["txt","log","csv","tsv","rst","ini","cfg","conf","env"]);
 
-function classify(entry: FileEntry): "markdown" | "code" | "image" | "pdf" | "text" | "binary" {
+function classify(entry: FileEntry): "markdown" | "code" | "image" | "pdf" | "docx" | "text" | "binary" {
   const ext = getExt(entry.name);
   if (ext === "md" || ext === "mdx")  return "markdown";
   if (CODE_EXTS.has(ext))              return "code";
   if (IMAGE_EXTS.has(ext))             return "image";
   if (ext === "pdf" || entry.mime_type === "application/pdf") return "pdf";
+  if (ext === "docx" || entry.mime_type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "docx";
   if (TEXT_EXTS.has(ext) || entry.mime_type.startsWith("text/")) return "text";
   return "binary";
 }
@@ -317,6 +320,18 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
         if (kind === "binary") {
           const buf = await res.arrayBuffer();
           if (!cancelled) setState({ status: "binary", hex: toHex(buf), filename: entry.name });
+          return;
+        }
+
+        if (kind === "docx") {
+          const buf = await res.arrayBuffer();
+          try {
+            const mammoth = await import("mammoth");
+            const result = await mammoth.convertToHtml({ arrayBuffer: buf });
+            if (!cancelled) setState({ status: "docx", html: result.value });
+          } catch (convErr) {
+            if (!cancelled) setState({ status: "error", message: `DOCX conversion failed: ${String(convErr)}` });
+          }
           return;
         }
 
@@ -684,6 +699,13 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
 
           {state.status === "pdf" && (
             <PdfViewer url={state.url} />
+          )}
+
+          {state.status === "docx" && (
+            <div
+              className="prose prose-sm prose-invert max-w-none dark:prose-invert overflow-x-auto"
+              dangerouslySetInnerHTML={{ __html: state.html }}
+            />
           )}
 
           {state.status === "binary" && (

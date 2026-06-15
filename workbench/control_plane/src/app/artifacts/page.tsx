@@ -4,8 +4,8 @@
  * Artifacts — global file browser for all agent-generated files.
  *
  * Shows every file in inputs/, outputs/, and agent-data/ across all
- * known agent workspaces.  Card-grid layout with list toggle, group-by-agent,
- * category chip filters, search, and sort.
+ * known agent workspaces.  Card-grid, list, and folder-tree views,
+ * group-by-agent, category chip filters, search, and sort.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -14,6 +14,7 @@ import {
   Download,
   Eye,
   FolderOpen,
+  FolderClosed,
   File,
   FileCode,
   FileText,
@@ -28,6 +29,7 @@ import {
   Sparkles,
   RefreshCw,
   Bot,
+  FolderTree,
 } from "lucide-react";
 import ArtifactViewerModal from "@/components/ArtifactViewerModal";
 import type { FileEntry } from "@/components/ArtifactSidebar";
@@ -42,14 +44,49 @@ interface ArtifactEntry {
   modified_at: string;
   mime_type: string;
   category: "inputs" | "outputs" | "agent-data";
+  is_dir?: boolean;
 }
 
 interface AgentOption {
   name: string;
 }
 
-type ViewMode = "grid" | "list";
+type ViewMode = "grid" | "list" | "tree";
 type SortKey = "newest" | "oldest" | "name" | "largest" | "smallest";
+
+// ─── Tree node ────────────────────────────────────────────────────────────
+
+interface TreeNode {
+  name: string;
+  path: string;
+  isDir: boolean;
+  entry?: ArtifactEntry;
+  children: Map<string, TreeNode>;
+}
+
+function buildTree(artifacts: ArtifactEntry[]): TreeNode {
+  const root: TreeNode = { name: "", path: "", isDir: true, children: new Map() };
+  for (const a of artifacts) {
+    const parts = a.path.split("/");
+    let node = root;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (!node.children.has(part)) {
+        const isDir = i < parts.length - 1 || a.is_dir === true;
+        node.children.set(part, {
+          name: part,
+          path: parts.slice(0, i + 1).join("/"),
+          isDir,
+          entry: isDir ? undefined : a,
+          children: new Map(),
+        });
+      }
+      node = node.children.get(part)!;
+    }
+    if (!node.isDir && node.entry === undefined) node.entry = a;
+  }
+  return root;
+}
 
 // ─── Agent color palette (deterministic from name) ────────────────────────
 
@@ -129,7 +166,8 @@ function isImage(entry: ArtifactEntry): boolean {
 function toFileEntry(a: ArtifactEntry): FileEntry {
   return {
     path: a.path, name: a.name, size: a.size,
-    modified_at: a.modified_at, mime_type: a.mime_type, is_dir: false,
+    modified_at: a.modified_at, mime_type: a.mime_type,
+    is_dir: a.is_dir ?? false,
   };
 }
 
@@ -268,6 +306,120 @@ function FileListRow({
   );
 }
 
+// ─── Tree view components ─────────────────────────────────────────────────
+
+/** Sort tree children: dirs first, then alphabetically */
+function treeSort(a: TreeNode, b: TreeNode): number {
+  if (a.isDir && !b.isDir) return -1;
+  if (!a.isDir && b.isDir) return 1;
+  return a.name.localeCompare(b.name);
+}
+
+function treeFileIcon(entry: ArtifactEntry) {
+  const ext = entry.name.split(".").pop()?.toLowerCase() ?? "";
+  const mime = entry.mime_type;
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "ico"].includes(ext) || mime.startsWith("image/"))
+    return <FileImage size={13} className="shrink-0 text-purple-400" />;
+  if (["py", "ts", "tsx", "js", "jsx", "sh", "yaml", "yml", "toml", "json", "sql", "rs", "go", "java"].includes(ext))
+    return <FileCode size={13} className="shrink-0 text-blue-400" />;
+  if (["md", "txt", "log", "rst"].includes(ext) || mime.startsWith("text/"))
+    return <FileText size={13} className="shrink-0 text-green-400" />;
+  if (["pdf"].includes(ext) || mime === "application/pdf")
+    return <FileText size={13} className="shrink-0 text-red-400" />;
+  if (["docx", "doc"].includes(ext))
+    return <FileText size={13} className="shrink-0 text-cyan-400" />;
+  if (["xlsx", "xls", "csv"].includes(ext))
+    return <FileSpreadsheet size={13} className="shrink-0 text-emerald-400" />;
+  return <File size={13} className="shrink-0 text-muted-foreground" />;
+}
+
+function ArtifactTreeNode({
+  node,
+  depth,
+  onView,
+  onDownload,
+}: {
+  node: TreeNode;
+  depth: number;
+  onView: (a: ArtifactEntry) => void;
+  onDownload: (a: ArtifactEntry) => void;
+}) {
+  const [expanded, setExpanded] = useState(depth < 1);
+  const paddingLeft = 8 + depth * 14;
+
+  if (node.isDir) {
+    const children = Array.from(node.children.values()).sort(treeSort);
+    const isCategory = depth === 0;
+    const meta = CATEGORY_META[node.name];
+    return (
+      <div>
+        <button
+          className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-xs hover:bg-secondary transition-colors ${isCategory ? "text-foreground font-semibold" : "text-muted-foreground"}`}
+          style={{ paddingLeft }}
+          onClick={() => setExpanded((e) => !e)}
+        >
+          {expanded
+            ? <ChevronDown size={11} className="shrink-0" />
+            : <ChevronRight size={11} className="shrink-0" />}
+          {expanded
+            ? <FolderOpen size={isCategory ? 14 : 13} className={`shrink-0 ${isCategory ? "text-amber-400" : "text-muted-foreground"}`} />
+            : <FolderClosed size={isCategory ? 14 : 13} className={`shrink-0 ${isCategory ? "text-amber-400" : "text-muted-foreground"}`} />}
+          <span className="truncate">
+            {isCategory && meta ? <>{meta.emoji} {meta.label}</> : node.name}
+          </span>
+          {!isCategory && (
+            <span className="text-[10px] text-muted-foreground/60 ml-1">
+              {children.filter((c) => !c.isDir).length} files
+            </span>
+          )}
+        </button>
+        {expanded && children.map((child) => (
+          <ArtifactTreeNode
+            key={child.path}
+            node={child}
+            depth={depth + 1}
+            onView={onView}
+            onDownload={onDownload}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  // File node
+  const entry = node.entry!;
+  const isDocx = entry.name.toLowerCase().endsWith(".docx");
+
+  return (
+    <div
+      className="group flex items-center gap-1.5 rounded px-1 py-0.5 text-xs text-muted-foreground hover:bg-secondary cursor-pointer transition-colors"
+      style={{ paddingLeft: paddingLeft + 14 }}
+      onClick={() => onView(entry)}
+      title={`${entry.path}\nAgent: ${entry.agent_name}\n${formatBytes(entry.size)}\nClick to view`}
+    >
+      {treeFileIcon(entry)}
+      <span className="flex-1 truncate">{entry.name}</span>
+      {/* Agent badge */}
+      <span
+        className="shrink-0 text-[9px] px-1.5 py-0.5 rounded-full bg-secondary/60 text-muted-foreground truncate max-w-[80px]"
+        title={entry.agent_name}
+      >
+        {entry.agent_name}
+      </span>
+      <span className="shrink-0 text-[10px] text-muted-foreground/50 tabular-nums">
+        {isDocx ? "DOCX" : formatBytes(entry.size)}
+      </span>
+      <button
+        onClick={(e) => { e.stopPropagation(); onDownload(entry); }}
+        className="shrink-0 p-0.5 text-muted-foreground hover:text-blue-400 opacity-0 group-hover:opacity-100 transition-all"
+        title="Download"
+      >
+        <Download size={11} />
+      </button>
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────
 
 export default function ArtifactsPage() {
@@ -277,7 +429,7 @@ export default function ArtifactsPage() {
   const [agents, setAgents] = useState<AgentOption[]>([]);
 
   // UI state
-  const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  const [viewMode, setViewMode] = useState<ViewMode>("tree");
   const [sortKey, setSortKey] = useState<SortKey>("newest");
   const [groupByAgent, setGroupByAgent] = useState(false);
 
@@ -329,6 +481,9 @@ export default function ArtifactsPage() {
   const processed = useMemo(() => {
     let list = [...artifacts];
 
+    // Exclude directories from grid/list views
+    list = list.filter((a) => !a.is_dir);
+
     // Client-side search
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -354,6 +509,31 @@ export default function ArtifactsPage() {
     return list;
   }, [artifacts, searchQuery, sortKey]);
 
+  // ── Tree data (includes directories) ─────────────────────────────────
+  const { treeData, treeFiltered } = useMemo(() => {
+    // For tree view, apply search filter across all entries (incl. dirs)
+    let filtered = artifacts;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      // Keep entries that match, plus their parent directories
+      const matchingPaths = new Set<string>();
+      for (const a of artifacts) {
+        if (a.name.toLowerCase().includes(q) ||
+            a.path.toLowerCase().includes(q) ||
+            a.agent_name.toLowerCase().includes(q)) {
+          matchingPaths.add(a.path);
+          // Add all ancestor paths
+          const parts = a.path.split("/");
+          for (let i = 1; i < parts.length; i++) {
+            matchingPaths.add(parts.slice(0, i).join("/"));
+          }
+        }
+      }
+      filtered = artifacts.filter((a) => matchingPaths.has(a.path));
+    }
+    return { treeData: buildTree(filtered), treeFiltered: filtered };
+  }, [artifacts, searchQuery]);
+
   // ── Group by agent ────────────────────────────────────────────────────
   const grouped = useMemo(() => {
     if (!groupByAgent) return null;
@@ -368,16 +548,19 @@ export default function ArtifactsPage() {
 
   // ── Stats ─────────────────────────────────────────────────────────────
   const stats = useMemo(() => ({
-    total: artifacts.length,
-    inputs: artifacts.filter((a) => a.category === "inputs").length,
-    outputs: artifacts.filter((a) => a.category === "outputs").length,
-    data: artifacts.filter((a) => a.category === "agent-data").length,
-    totalSize: artifacts.reduce((s, a) => s + a.size, 0),
+    total: artifacts.filter((a) => !a.is_dir).length,
+    dirs: artifacts.filter((a) => a.is_dir).length,
+    inputs: artifacts.filter((a) => a.category === "inputs" && !a.is_dir).length,
+    outputs: artifacts.filter((a) => a.category === "outputs" && !a.is_dir).length,
+    data: artifacts.filter((a) => a.category === "agent-data" && !a.is_dir).length,
+    totalSize: artifacts.reduce((s, a) => s + (a.is_dir ? 0 : a.size), 0),
   }), [artifacts]);
 
   const clearFilters = () => { setAgentFilter(""); setCategoryFilter(""); setSearchQuery(""); };
   const hasFilters = !!(agentFilter || categoryFilter || searchQuery);
-  const isFiltered = processed.length !== artifacts.length;
+  const isFiltered = searchQuery
+    ? treeFiltered.filter((a) => !a.is_dir).length !== artifacts.filter((a) => !a.is_dir).length
+    : processed.length !== artifacts.filter((a) => !a.is_dir).length;
 
   const makeFileUrl = (a: ArtifactEntry) =>
     `/api/agent/artifacts/file?agent=${encodeURIComponent(a.agent_name)}&path=${encodeURIComponent(a.path)}`;
@@ -472,17 +655,19 @@ export default function ArtifactsPage() {
             <option value="smallest">Smallest first</option>
           </select>
 
-          {/* Group by agent */}
-          <button
-            onClick={() => setGroupByAgent((g) => !g)}
-            className={`rounded-lg border px-2.5 py-1.5 text-[11px] tech-transition flex items-center gap-1.5 ${
-              groupByAgent
-                ? "border-primary/40 bg-primary/10 text-primary"
-                : "border-border bg-secondary text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <Bot size={13} /> Group
-          </button>
+          {/* Group by agent — only in grid/list */}
+          {viewMode !== "tree" && (
+            <button
+              onClick={() => setGroupByAgent((g) => !g)}
+              className={`rounded-lg border px-2.5 py-1.5 text-[11px] tech-transition flex items-center gap-1.5 ${
+                groupByAgent
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-border bg-secondary text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Bot size={13} /> Group
+            </button>
+          )}
 
           <div className="flex-1" />
 
@@ -505,6 +690,11 @@ export default function ArtifactsPage() {
           {/* View toggle */}
           <div className="flex items-center rounded-lg border border-border bg-secondary p-0.5">
             <button
+              onClick={() => setViewMode("tree")}
+              className={`rounded-md p-1.5 tech-transition ${viewMode === "tree" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+              title="Folder tree view"
+            ><FolderTree size={14} /></button>
+            <button
               onClick={() => setViewMode("grid")}
               className={`rounded-md p-1.5 tech-transition ${viewMode === "grid" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
               title="Grid view"
@@ -525,7 +715,7 @@ export default function ArtifactsPage() {
 
         {isFiltered && (
           <p className="mt-2 text-[10px] text-muted-foreground">
-            Showing {processed.length} of {artifacts.length} files
+            Showing {viewMode === "tree" ? treeFiltered.filter((a) => !a.is_dir).length : processed.length} of {stats.total} files
           </p>
         )}
       </div>
@@ -554,10 +744,14 @@ export default function ArtifactsPage() {
         )}
 
         {/* Empty */}
-        {!loading && !error && processed.length === 0 && (
+        {!loading && !error && (
+          viewMode === "tree"
+            ? treeFiltered.filter((a) => !a.is_dir).length === 0
+            : processed.length === 0
+        ) && (
           <div className="flex flex-col items-center justify-center h-64 gap-4">
             <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-secondary/50">
-              {artifacts.length === 0 ? (
+              {artifacts.filter((a) => !a.is_dir).length === 0 ? (
                 <Sparkles size={28} className="text-muted-foreground/40" />
               ) : (
                 <Search size={28} className="text-muted-foreground/40" />
@@ -565,15 +759,15 @@ export default function ArtifactsPage() {
             </div>
             <div className="text-center">
               <p className="text-sm font-medium text-foreground">
-                {artifacts.length === 0 ? "No artifacts yet" : "No matching files"}
+                {artifacts.filter((a) => !a.is_dir).length === 0 ? "No artifacts yet" : "No matching files"}
               </p>
               <p className="text-xs text-muted-foreground mt-1 max-w-xs">
-                {artifacts.length === 0
+                {artifacts.filter((a) => !a.is_dir).length === 0
                   ? "Files will appear here automatically as agents create reports, exports, and data files."
                   : "Try adjusting your filters or search query."}
               </p>
             </div>
-            {artifacts.length === 0 && (
+            {artifacts.filter((a) => !a.is_dir).length === 0 && (
               <div className="flex items-center gap-3 mt-2 text-[11px] text-muted-foreground/60">
                 <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-blue-400" /> inputs/</span>
                 <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> outputs/</span>
@@ -583,8 +777,23 @@ export default function ArtifactsPage() {
           </div>
         )}
 
-        {/* Content */}
-        {!loading && processed.length > 0 && (
+        {/* Content — Tree view */}
+        {!loading && viewMode === "tree" && treeFiltered.filter((a) => !a.is_dir).length > 0 && (
+          <div className="flex-1 overflow-auto p-2">
+            {Array.from(treeData.children.values()).sort(treeSort).map((node) => (
+              <ArtifactTreeNode
+                key={node.path}
+                node={node}
+                depth={0}
+                onView={openViewer}
+                onDownload={(a) => window.open(makeFileUrl(a), "_blank")}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Content — Grid / List */}
+        {!loading && viewMode !== "tree" && processed.length > 0 && (
           <div className="p-4 sm:p-6">
             {grouped ? (
               /* ── Grouped by agent ──────────────────────────────────── */

@@ -517,7 +517,12 @@ async def get_agent_config(
 async def list_agents(
     user: UserContext = Depends(get_current_user),
 ) -> list[dict]:
-    """Return the merged static + dynamic agent registry."""
+    """Return the merged static + dynamic agent registry.
+
+    Includes ``behind_by`` (int) for GitHub Copilot agents: the number of
+    commits the local clone is behind the remote.  Zero or absent means
+    up-to-date.  Non-blocking — git operations time out after 5 s.
+    """
     dynamic = _load_dynamic_agents()
     dynamic_names = {a["name"] for a in dynamic}
     # Static agents not overridden by dynamic entries come first
@@ -530,10 +535,30 @@ async def list_agents(
         if not a.get("agent_runtime"):
             a["agent_runtime"] = (
                 "github-copilot"
-                if (a.get("repo_name") or a.get("repo_url")) and not a.get("local_path")
+                if (a.get("repo_name") or a.get("repo_url"))
+                and not a.get("local_path")
                 else "maf"
             )
-    return static + dynamic
+    merged = static + dynamic
+
+    # ── Git status: how many commits behind is each agent's clone? ─────
+    settings = get_settings()
+    agents_clone_dir = getattr(
+        settings, "agents_clone_dir", "/tmp/acb_agents"
+    )
+    repos_root = Path(agents_clone_dir) / "repos"
+
+    for a in merged:
+        if a.get("agent_runtime") != "github-copilot":
+            continue
+        clone_path = repos_root / a["name"]
+        if not (clone_path / ".git").is_dir():
+            continue
+        behind = await _git_behind_count(str(clone_path))
+        if behind > 0:
+            a["behind_by"] = behind
+
+    return merged
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Register an agent from a GitHub repo")
@@ -1733,6 +1758,51 @@ async def dismiss_mutation_event(
 # ---------------------------------------------------------------------------
 # Git helpers for the approve endpoint
 # ---------------------------------------------------------------------------
+
+async def _git_behind_count(clone_dir: str) -> int:
+    """Return how many commits the local clone is behind origin/HEAD.
+
+    Runs ``git fetch`` first (5 s timeout) to get the latest remote state,
+    then ``git rev-list --count HEAD..origin/HEAD``.
+
+    Returns 0 on any error (clone missing, no remote, fetch timeout, etc.)
+    so the UI never breaks on a stale count.
+    """
+    import asyncio  # noqa: PLC0415
+
+    # Quick check: does this clone even have a remote?
+    rc = await _git_exec(clone_dir, ["remote", "get-url", "origin"])
+    if rc != 0:
+        return 0
+
+    # Fetch latest (short timeout — non-blocking for the UI)
+    try:
+        fetch_proc = await asyncio.create_subprocess_exec(
+            "git", "fetch", "origin",
+            cwd=clone_dir,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(fetch_proc.communicate(), timeout=5)
+    except (TimeoutError, Exception):
+        return 0  # fetch timed out — return 0, don't block the response
+
+    # Count commits we're behind
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "rev-list", "--count", "HEAD..origin/HEAD",
+            cwd=clone_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        if proc.returncode == 0:
+            return int(out.decode(errors="replace").strip() or "0")
+    except (ValueError, TimeoutError, Exception):
+        pass
+
+    return 0
+
 
 async def _git_exec(cwd: str, args: list[str]) -> int:
     """Run a git command, return the return code."""

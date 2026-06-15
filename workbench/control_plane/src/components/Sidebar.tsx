@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { ChevronLeft, ChevronRight, LogOut, Command } from "lucide-react";
 import { NAV_SECTIONS, type NavPane, type NavSection } from "@/lib/nav";
@@ -18,6 +18,36 @@ export default function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const { data: session } = useSession();
+  const [agentUpdateCount, setAgentUpdateCount] = useState(0);
+
+  // Poll agent list for behind_by counts — shows "N updates" badge on Agents
+  useEffect(() => {
+    let alive = true;
+    const check = async () => {
+      try {
+        const res = await fetch("/api/agent/list", {
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!res.ok || !alive) return;
+        const agents = await res.json();
+        if (!Array.isArray(agents) || !alive) return;
+        const count = agents.reduce(
+          (sum: number, a: any) =>
+            sum + (typeof a.behind_by === "number" && a.behind_by > 0 ? 1 : 0),
+          0,
+        );
+        if (alive) setAgentUpdateCount(count);
+      } catch {
+        // Gateway down — keep last known count
+      }
+    };
+    check();
+    const interval = setInterval(check, 60_000); // refresh every minute
+    return () => {
+      alive = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   return (
     <aside
@@ -57,6 +87,7 @@ export default function Sidebar() {
             section={section}
             pathname={pathname}
             collapsed={collapsed}
+            agentUpdateCount={agentUpdateCount}
           />
         ))}
       </nav>
@@ -102,17 +133,25 @@ function NavSectionBlock({
   section,
   pathname,
   collapsed,
+  agentUpdateCount = 0,
 }: {
   section: NavSection;
   pathname: string | null;
   collapsed: boolean;
+  agentUpdateCount?: number;
 }) {
   if (collapsed) {
     return (
       <div>
         <div className="flex flex-col gap-1 p-2">
           {section.items.map((p) => (
-            <NavLink key={p.href} pane={p} pathname={pathname} collapsed />
+            <NavLink
+              key={p.href}
+              pane={p}
+              pathname={pathname}
+              collapsed
+              badge={p.href === "/agents" && agentUpdateCount > 0 ? agentUpdateCount : undefined}
+            />
           ))}
         </div>
         <div className="mx-3 border-t border-sidebar-border/50" />
@@ -136,7 +175,12 @@ function NavSectionBlock({
       {/* Section items */}
       <div className="flex flex-col gap-0.5">
         {section.items.map((p) => (
-          <NavLink key={p.href} pane={p} pathname={pathname} />
+          <NavLink
+            key={p.href}
+            pane={p}
+            pathname={pathname}
+            badge={p.href === "/agents" && agentUpdateCount > 0 ? agentUpdateCount : undefined}
+          />
         ))}
       </div>
     </div>
@@ -151,10 +195,12 @@ function NavLink({
   pane,
   pathname,
   collapsed = false,
+  badge,
 }: {
   pane: NavPane;
   pathname: string | null;
   collapsed?: boolean;
+  badge?: number;
 }) {
   const active = pathname?.startsWith(pane.href);
   const Icon = resolveIcon(pane.icon);
@@ -165,13 +211,18 @@ function NavLink({
         key={pane.href}
         href={pane.href}
         title={pane.label}
-        className={`rounded-lg tech-transition flex items-center justify-center p-2.5 ${
+        className={`rounded-lg tech-transition flex items-center justify-center p-2.5 relative ${
           active
             ? "bg-primary/15 text-primary"
             : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
         }`}
       >
         <Icon size={18} strokeWidth={active ? 2.5 : 2} />
+        {badge !== undefined && badge > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[8px] font-bold text-white">
+            {badge > 9 ? "9+" : badge}
+          </span>
+        )}
       </Link>
     );
   }
@@ -189,6 +240,11 @@ function NavLink({
       <div className="flex items-center gap-2.5">
         <Icon size={16} strokeWidth={active ? 2.5 : 2} />
         <span className="font-medium text-[13px]">{pane.label}</span>
+        {badge !== undefined && badge > 0 && (
+          <span className="ml-auto rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
+            {badge}
+          </span>
+        )}
       </div>
       <div className="ml-[26px] text-[11px] text-muted-foreground/60 leading-tight mt-0.5">{pane.note}</div>
     </Link>

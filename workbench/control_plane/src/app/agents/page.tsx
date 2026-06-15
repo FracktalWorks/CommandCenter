@@ -1021,16 +1021,24 @@ function AgentTile({
   const Icon      = getAgentIcon(agent);
   const color     = getAgentColor(agent);
   const readiness = agentReadiness(agent, statuses);
+  const behindBy  = (agent as any).behind_by as number | undefined;
 
   return (
     <button
       onClick={onClick}
-      className={`text-left w-full p-4 rounded-xl border transition-all ${
+      className={`text-left w-full p-4 rounded-xl border transition-all relative ${
         selected
           ? "border-primary bg-primary/5 ring-1 ring-primary/20"
           : "border-border bg-card hover:border-primary/40 hover:bg-secondary/30"
       }`}
     >
+      {/* Update available badge */}
+      {behindBy && behindBy > 0 && (
+        <span className="absolute -top-1.5 -right-1.5 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white shadow-md animate-pulse">
+          {behindBy} update{behindBy !== 1 ? "s" : ""}
+        </span>
+      )}
+
       <div className="flex items-start justify-between mb-3">
         <Icon size={28} className={`${color} shrink-0`} />
         <span

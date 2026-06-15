@@ -53,6 +53,8 @@ export interface AgentEntry {
   repo_url?: string;
   local_path?: string;
   dynamic?: boolean;
+  /** Number of commits the local clone is behind origin (0 = up-to-date) */
+  behind_by?: number;
 }
 
 export async function GET(): Promise<NextResponse> {

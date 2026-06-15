@@ -29,8 +29,6 @@ import {
   Sparkles,
   RefreshCw,
   Bot,
-  ChevronLeft,
-  Home,
 } from "lucide-react";
 import ArtifactViewerModal from "@/components/ArtifactViewerModal";
 import type { FileEntry } from "@/components/ArtifactSidebar";
@@ -379,10 +377,19 @@ export default function ArtifactsPage() {
     return list;
   }, [artifacts, searchQuery, sortKey, fileTypeFilter]);
 
+  // ── Explorer items for current directory ─────────────────────────────
+  // Uses filtered files + all directory entries so filters apply to files
+  // but folder structure is preserved.
   const explorerItems = useMemo(() => {
     if (!selectedAgent) return [];
-    return buildExplorerItems(artifacts, selectedAgent, currentPath);
-  }, [artifacts, selectedAgent, currentPath]);
+
+    // Combine: filtered files + all directory entries (dirs are never filtered out)
+    const filteredFilePaths = new Set(filteredFiles.map((f) => f.path));
+    const combined = artifacts.filter(
+      (a) => a.agent_name === selectedAgent && (a.is_dir || filteredFilePaths.has(a.path))
+    );
+    return buildExplorerItems(combined, selectedAgent, currentPath);
+  }, [artifacts, filteredFiles, selectedAgent, currentPath]);
 
   const stats = useMemo(() => ({
     total: artifacts.filter((a) => !a.is_dir).length,
@@ -412,7 +419,7 @@ export default function ArtifactsPage() {
             <div>
               <h1 className="text-lg font-semibold text-foreground">Artifacts</h1>
               <p className="text-[11px] text-muted-foreground">
-                {selectedAgent ? `Browsing ${selectedAgent}` : `${availableAgents.length} agent${availableAgents.length !== 1 ? "s" : ""} · ${stats.total} files`}
+                {`${availableAgents.length} agent${availableAgents.length !== 1 ? "s" : ""} · ${stats.total} files`}
               </p>
             </div>
           </div>
@@ -424,12 +431,6 @@ export default function ArtifactsPage() {
         {/* Stats */}
         <div className="flex items-center gap-2 mb-3 text-[11px] text-muted-foreground">
           <span className="font-semibold text-foreground">{stats.total}</span> files · {formatBytes(stats.totalSize)}
-          {selectedAgent && (
-            <button onClick={() => { setSelectedAgent(null); setCurrentPath(null); }}
-              className="text-blue-400 hover:text-blue-300 ml-2 text-[10px]">
-              ← Back to all agents
-            </button>
-          )}
         </div>
 
         {/* Toolbar */}
@@ -470,17 +471,6 @@ export default function ArtifactsPage() {
             )}
           </div>
 
-          {selectedAgent && (
-            <div className="flex items-center rounded-lg border border-border bg-secondary p-0.5">
-              <button onClick={() => setViewMode("grid")}
-                className={`rounded-md p-1.5 tech-transition ${viewMode === "grid" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-                title="Grid view"><LayoutGrid size={14} /></button>
-              <button onClick={() => setViewMode("list")}
-                className={`rounded-md p-1.5 tech-transition ${viewMode === "list" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-                title="List view"><List size={14} /></button>
-            </div>
-          )}
-
           {hasFilters && (
             <button onClick={clearFilters} className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition flex items-center gap-1">
               <X size={11} /> Clear
@@ -514,98 +504,107 @@ export default function ArtifactsPage() {
           </div>
         )}
 
-        {/* ── Agent browser ──────────────────────────────────────────── */}
-        {!loading && !selectedAgent && availableAgents.length > 0 && (
-          <div className="p-4 sm:p-6">
-            <p className="text-xs text-muted-foreground mb-3 uppercase tracking-wider font-semibold">Agents</p>
-            <div className="flex flex-col gap-2">
-              {availableAgents.map((name) => {
-                const fileCount = artifacts.filter((a) => a.agent_name === name && !a.is_dir).length;
-                const accent = agentAccent(name);
-                return (
+        {/* ── Agent cards (accordion) ─────────────────────────────── */}
+        {!loading && availableAgents.length > 0 && (
+          <div className="p-4 sm:p-6 flex flex-col gap-3">
+            {availableAgents.map((name) => {
+              const isOpen = selectedAgent === name;
+              const agentFiles = artifacts.filter((a) => a.agent_name === name && !a.is_dir);
+              const accent = agentAccent(name);
+              const items = isOpen ? explorerItems : [];
+              return (
+                <div key={name} className={`rounded-xl border border-border overflow-hidden ${isOpen ? "shadow-md" : ""}`}>
+                  {/* Agent header */}
                   <button
-                    key={name}
-                    onClick={() => { setSelectedAgent(name); setCurrentPath(null); }}
-                    className={`flex items-center gap-3 px-4 py-3 rounded-xl border border-border bg-card hover:border-primary/20 hover:shadow-md tech-transition text-left border-l-2 ${accent}`}
+                    onClick={() => {
+                      if (isOpen) { setSelectedAgent(null); setCurrentPath(null); }
+                      else { setSelectedAgent(name); setCurrentPath(null); }
+                    }}
+                    className={`w-full flex items-center gap-3 px-4 py-3 bg-card hover:bg-secondary/40 tech-transition text-left border-l-2 ${accent}`}
                   >
+                    {isOpen ? <ChevronDown size={15} className="text-muted-foreground shrink-0" /> : <ChevronRight size={15} className="text-muted-foreground shrink-0" />}
                     <Bot size={16} className="text-muted-foreground shrink-0" />
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium text-foreground truncate">{name}</div>
-                      <div className="text-[11px] text-muted-foreground">{fileCount} file{fileCount !== 1 ? "s" : ""}</div>
+                      <div className="text-[11px] text-muted-foreground">{agentFiles.length} file{agentFiles.length !== 1 ? "s" : ""}</div>
                     </div>
-                    <ChevronRight size={16} className="text-muted-foreground shrink-0" />
                   </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
-        {/* ── Explorer view ──────────────────────────────────────────── */}
-        {!loading && selectedAgent && (
-          <div className="flex flex-col h-full">
-            {/* Breadcrumb */}
-            <div className="shrink-0 flex items-center gap-1.5 px-4 py-2.5 border-b border-border bg-secondary/20">
-              <button onClick={() => { setSelectedAgent(null); setCurrentPath(null); }}
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors" title="All agents">
-                <Home size={14} />
-              </button>
-              <ChevronRight size={12} className="text-muted-foreground" />
-              <button onClick={() => setCurrentPath(null)}
-                className={`text-xs px-1.5 py-0.5 rounded transition-colors ${!currentPath ? "font-semibold text-foreground bg-secondary" : "text-blue-400 hover:text-blue-300 hover:bg-secondary"}`}>
-                {selectedAgent}
-              </button>
-              {currentPath && currentPath.split("/").map((seg, i, arr) => (
-                <span key={i} className="flex items-center gap-1.5">
-                  <ChevronRight size={12} className="text-muted-foreground" />
-                  {i === arr.length - 1 ? (
-                    <span className="text-xs font-semibold text-foreground px-1.5 py-0.5 rounded bg-secondary">{seg}</span>
-                  ) : (
-                    <button onClick={() => setCurrentPath(arr.slice(0, i + 1).join("/"))}
-                      className="text-xs text-blue-400 hover:text-blue-300 hover:bg-secondary px-1.5 py-0.5 rounded transition-colors">
-                      {seg}
-                    </button>
-                  )}
-                </span>
-              ))}
-              <span className="text-[10px] text-muted-foreground ml-2">
-                {explorerItems.filter((i) => !i.isDir).length} files · {explorerItems.filter((i) => i.isDir).length} folders
-              </span>
-            </div>
+                  {/* Expanded content */}
+                  {isOpen && (
+                    <div className="border-t border-border">
+                      {/* Breadcrumb */}
+                      <div className="flex items-center gap-1.5 px-4 py-2.5 bg-secondary/20 border-b border-border">
+                        <button onClick={() => setCurrentPath(null)}
+                          className={`text-xs px-1.5 py-0.5 rounded transition-colors ${!currentPath ? "font-semibold text-foreground bg-secondary" : "text-blue-400 hover:text-blue-300 hover:bg-secondary"}`}>
+                          {name}
+                        </button>
+                        {currentPath && currentPath.split("/").map((seg, i, arr) => (
+                          <span key={i} className="flex items-center gap-1.5">
+                            <ChevronRight size={12} className="text-muted-foreground" />
+                            {i === arr.length - 1 ? (
+                              <span className="text-xs font-semibold text-foreground px-1.5 py-0.5 rounded bg-secondary">{seg}</span>
+                            ) : (
+                              <button onClick={() => setCurrentPath(arr.slice(0, i + 1).join("/"))}
+                                className="text-xs text-blue-400 hover:text-blue-300 hover:bg-secondary px-1.5 py-0.5 rounded transition-colors">
+                                {seg}
+                              </button>
+                            )}
+                          </span>
+                        ))}
+                        <span className="text-[10px] text-muted-foreground ml-2">
+                          {items.filter((i) => !i.isDir).length} files · {items.filter((i) => i.isDir).length} folders
+                        </span>
+                        <div className="flex-1" />
+                        {/* View toggle inside agent card */}
+                        <div className="flex items-center rounded-md border border-border/60 bg-secondary/40 p-0.5">
+                          <button onClick={() => setViewMode("grid")}
+                            className={`rounded p-1 tech-transition ${viewMode === "grid" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                            title="Grid view"><LayoutGrid size={12} /></button>
+                          <button onClick={() => setViewMode("list")}
+                            className={`rounded p-1 tech-transition ${viewMode === "list" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                            title="List view"><List size={12} /></button>
+                        </div>
+                      </div>
 
-            {/* Content */}
-            <div className="flex-1 overflow-auto p-3">
-              {explorerItems.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-32 gap-2 text-muted-foreground">
-                  <FolderOpen size={24} className="opacity-30" />
-                  <p className="text-xs">This folder is empty</p>
-                </div>
-              ) : viewMode === "grid" ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                  {explorerItems.map((item, i) =>
-                    item.isDir ? (
-                      <FolderCard key={item.path} item={item} index={i}
-                        onNavigate={() => setCurrentPath(item.path)} />
-                    ) : (
-                      <FileCard key={item.path} artifact={item.entry!} index={i}
-                        onView={() => openViewer(item.entry!)} />
-                    )
+                      {/* Files + folders */}
+                      <div className="p-3 max-h-[60vh] overflow-auto">
+                        {items.length === 0 ? (
+                          <div className="flex flex-col items-center justify-center h-24 gap-2 text-muted-foreground">
+                            <FolderOpen size={20} className="opacity-30" />
+                            <p className="text-xs">This folder is empty</p>
+                          </div>
+                        ) : viewMode === "grid" ? (
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+                            {items.map((item, i) =>
+                              item.isDir ? (
+                                <FolderCard key={item.path} item={item} index={i}
+                                  onNavigate={() => setCurrentPath(item.path)} />
+                              ) : (
+                                <FileCard key={item.path} artifact={item.entry!} index={i}
+                                  onView={() => openViewer(item.entry!)} />
+                              )
+                            )}
+                          </div>
+                        ) : (
+                          <div className="rounded-lg border border-border overflow-hidden bg-card">
+                            <div className="hidden sm:grid grid-cols-[1fr_100px_100px] gap-x-3 px-4 py-2 bg-secondary/40 border-b border-border text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                              <span>Name</span><span>Size</span><span>Modified</span>
+                            </div>
+                            {items.map((item, i) => (
+                              <ListRow key={item.path} item={item} index={i}
+                                onNavigate={() => setCurrentPath(item.path)}
+                                onView={() => item.entry && openViewer(item.entry)}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   )}
                 </div>
-              ) : (
-                <div className="rounded-xl border border-border overflow-hidden bg-card">
-                  <div className="hidden sm:grid grid-cols-[1fr_100px_100px] gap-x-3 px-4 py-2.5 bg-secondary/40 border-b border-border text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                    <span>Name</span><span>Size</span><span>Modified</span>
-                  </div>
-                  {explorerItems.map((item, i) => (
-                    <ListRow key={item.path} item={item} index={i}
-                      onNavigate={() => setCurrentPath(item.path)}
-                      onView={() => item.entry && openViewer(item.entry)}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
+              );
+            })}
           </div>
         )}
       </div>

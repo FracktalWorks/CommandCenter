@@ -510,11 +510,12 @@ async def list_agents(
     dynamic_names = {a["name"] for a in dynamic}
     # Static agents not overridden by dynamic entries come first
     static = [a for a in _AGENT_REGISTRY if a["name"] not in dynamic_names]
-    # Back-fill agent_runtime for legacy dynamic entries that predate the field.
-    # Rule: only entries registered FROM a GitHub repo URL are "github-copilot";
-    # everything else (local path, unknown) is plain MAF.
+    # Back-fill agent_runtime for legacy dynamic entries that predate the field
+    # or have NULL in the DB column.  Rule: only entries registered FROM a
+    # GitHub repo URL are "github-copilot"; everything else (local path,
+    # unknown) is plain MAF.
     for a in dynamic:
-        if "agent_runtime" not in a:
+        if not a.get("agent_runtime"):
             a["agent_runtime"] = (
                 "github-copilot"
                 if (a.get("repo_name") or a.get("repo_url")) and not a.get("local_path")
@@ -595,12 +596,17 @@ async def register_agent(
             headers: dict[str, str] = {"Accept": "application/vnd.github.raw+json"}
             if gh_token:
                 headers["Authorization"] = f"token {gh_token}"
+            last_status: int = 0
             try:
                 async with httpx.AsyncClient(timeout=8) as client:
                     cfg = {}
                     for branch in ("main", "master", "HEAD"):
-                        url = f"https://raw.githubusercontent.com/{repo_name}/{branch}/config.json"
+                        url = (
+                            "https://raw.githubusercontent.com"
+                            f"/{repo_name}/{branch}/config.json"
+                        )
                         resp = await client.get(url, headers=headers)
+                        last_status = resp.status_code
                         if resp.status_code == 200:
                             try:
                                 cfg = resp.json()
@@ -610,11 +616,35 @@ async def register_agent(
                     if cfg:
                         description = description or cfg.get("description", "")
                         tags = tags or cfg.get("tags", [])
-                        integrations = integrations or cfg.get("integrations", [])
-                        optional_integrations = optional_integrations or cfg.get("optional_integrations", [])
-                        _log.info("agent.config_fetched", name=req.name, repo=repo_name)
+                        integrations = integrations or cfg.get(
+                            "integrations", []
+                        )
+                        optional_integrations = (
+                            optional_integrations
+                            or cfg.get("optional_integrations", [])
+                        )
+                        _log.info(
+                            "agent.config_fetched",
+                            name=req.name,
+                            repo=repo_name,
+                        )
+                    elif last_status in (403, 404):
+                        _log.warning(
+                            "agent.config_not_found_or_forbidden",
+                            name=req.name,
+                            repo=repo_name,
+                            status=last_status,
+                            hint=(
+                                "Repo may be private or the GitHub token "
+                                "may not have access to this organisation."
+                            ),
+                        )
             except Exception as exc:  # noqa: BLE001
-                _log.warning("agent.config_fetch_failed", name=req.name, error=str(exc))
+                _log.warning(
+                    "agent.config_fetch_failed",
+                    name=req.name,
+                    error=str(exc),
+                )
 
     # agent_runtime: only agents registered FROM a GitHub repo URL run via the
     # GitHub Copilot SDK (GitHubCopilotAgent). Local-path agents are plain MAF.

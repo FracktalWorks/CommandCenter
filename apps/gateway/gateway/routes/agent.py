@@ -561,6 +561,113 @@ async def list_agents(
     return merged
 
 
+@router.post("/{name}/pull", summary="Pull latest commits for an agent's local clone")
+async def pull_agent(
+    name: str,
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Pull the latest commits from origin into the agent's local clone.
+
+    Runs ``git pull --rebase`` (via ``_pull_latest``) so local pending
+    commits are preserved on top of the updated remote.  Returns the
+    before/after HEAD SHAs and how many commits were pulled.
+    """
+    import asyncio  # noqa: PLC0415
+
+    agent_name = _validate_agent_name(name)
+    settings = get_settings()
+    agents_clone_dir = getattr(
+        settings, "agents_clone_dir", "/tmp/acb_agents"
+    )
+    clone_path = Path(agents_clone_dir) / "repos" / agent_name
+
+    if not (clone_path / ".git").is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No local clone found for {agent_name!r}. "
+                   f"Run the agent once to create it.",
+        )
+
+    # Capture HEAD before pull
+    head_before = ""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "rev-parse", "HEAD",
+            cwd=str(clone_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        if proc.returncode == 0:
+            head_before = out.decode(errors="replace").strip()
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Pull latest
+    try:
+        from acb_skills.loader import _pull_latest  # noqa: PLC0415
+        _pull_latest(clone_path)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"git pull failed: {exc}",
+        ) from exc
+
+    # Capture HEAD after pull
+    head_after = ""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "rev-parse", "HEAD",
+            cwd=str(clone_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        if proc.returncode == 0:
+            head_after = out.decode(errors="replace").strip()
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Count how many new commits were pulled
+    pulled_count = 0
+    if head_before and head_after and head_before != head_after:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "rev-list", "--count",
+                f"{head_before}..{head_after}",
+                cwd=str(clone_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            if proc.returncode == 0:
+                pulled_count = int(
+                    out.decode(errors="replace").strip() or "0"
+                )
+        except (ValueError, Exception):  # noqa: BLE001
+            pass
+
+    # Re-check behind_by for the response
+    behind_after = await _git_behind_count(str(clone_path))
+
+    _log.info(
+        "agent.pulled",
+        agent=agent_name,
+        head_before=head_before[:8],
+        head_after=head_after[:8],
+        pulled=pulled_count,
+        still_behind=behind_after,
+    )
+
+    return {
+        "agent": agent_name,
+        "pulled": pulled_count,
+        "behind_by": behind_after,
+        "head_before": head_before[:8] if head_before else None,
+        "head_after": head_after[:8] if head_after else None,
+    }
+
+
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Register an agent from a GitHub repo")
 async def register_agent(
     req: RegisterAgentRequest,

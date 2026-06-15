@@ -1012,16 +1012,34 @@ function AgentTile({
   selected,
   statuses,
   onClick,
+  onRefresh,
 }: {
   agent: AgentEntry;
   selected: boolean;
   statuses: IntegrationStatus[];
   onClick: () => void;
+  onRefresh?: () => void;
 }) {
   const Icon      = getAgentIcon(agent);
   const color     = getAgentColor(agent);
   const readiness = agentReadiness(agent, statuses);
   const behindBy  = (agent as any).behind_by as number | undefined;
+  const [pulling, setPulling] = useState(false);
+
+  const handlePull = async (e: React.MouseEvent) => {
+    e.stopPropagation(); // don't select the tile
+    setPulling(true);
+    try {
+      await fetch(`/api/agent/${encodeURIComponent(agent.name)}/pull`, {
+        method: "POST",
+      });
+      onRefresh?.();
+    } catch {
+      // silently fail — badge will update on next poll
+    } finally {
+      setPulling(false);
+    }
+  };
 
   return (
     <button
@@ -1032,11 +1050,16 @@ function AgentTile({
           : "border-border bg-card hover:border-primary/40 hover:bg-secondary/30"
       }`}
     >
-      {/* Update available badge */}
+      {/* Update available badge — clickable to pull */}
       {behindBy && behindBy > 0 && (
-        <span className="absolute -top-1.5 -right-1.5 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white shadow-md animate-pulse">
-          {behindBy} update{behindBy !== 1 ? "s" : ""}
-        </span>
+        <button
+          onClick={handlePull}
+          disabled={pulling}
+          className="absolute -top-1.5 -right-1.5 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white shadow-md hover:bg-amber-600 disabled:opacity-60 transition-colors cursor-pointer"
+          title={`Pull ${behindBy} update${behindBy !== 1 ? "s" : ""}`}
+        >
+          {pulling ? "Pulling…" : `${behindBy} update${behindBy !== 1 ? "s" : ""}`}
+        </button>
       )}
 
       <div className="flex items-start justify-between mb-3">
@@ -1078,16 +1101,34 @@ function AgentSidePanel({
   statuses,
   onClose,
   onRemove,
+  onRefresh,
 }: {
   agent: AgentEntry;
   statuses: IntegrationStatus[];
   onClose: () => void;
   onRemove: (name: string) => void;
+  onRefresh?: () => void;
 }) {
   const Icon  = getAgentIcon(agent);
   const color = getAgentColor(agent);
   const [confirming, setConfirming] = useState(false);
   const [removing, setRemoving]     = useState(false);
+  const [pulling, setPulling]       = useState(false);
+  const behindBy = (agent as any).behind_by as number | undefined;
+
+  const handlePull = async () => {
+    setPulling(true);
+    try {
+      await fetch(`/api/agent/${encodeURIComponent(agent.name)}/pull`, {
+        method: "POST",
+      });
+      onRefresh?.();
+    } catch {
+      // silently fail
+    } finally {
+      setPulling(false);
+    }
+  };
 
   const missingDeps = (agent.integrations ?? []).filter((i) => {
     const s = statuses.find((x) => x.service === i);
@@ -1241,6 +1282,18 @@ function AgentSidePanel({
           </div>
         )}
 
+        {/* Pull updates button — shown when clone is behind remote */}
+        {behindBy && behindBy > 0 && (
+          <button
+            onClick={handlePull}
+            disabled={pulling}
+            className="flex items-center justify-center gap-2 w-full rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs font-medium text-amber-600 hover:bg-amber-500/20 disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${pulling ? "animate-spin" : ""}`} />
+            {pulling ? "Pulling…" : `Pull ${behindBy} update${behindBy !== 1 ? "s" : ""}`}
+          </button>
+        )}
+
         {/* Show pending commits for ALL agents — any agent can have
             self-mutation commits awaiting review, not just github-copilot. */}
         <PendingCommits agentName={agent.name} />
@@ -1390,6 +1443,7 @@ export default function AgentsPage() {
                   selected={selected === agent.name}
                   statuses={intgs}
                   onClick={() => setSelected(agent.name)}
+                  onRefresh={load}
                 />
               ))}
               <button
@@ -1427,6 +1481,7 @@ export default function AgentsPage() {
                     statuses={intgs}
                     onClose={() => setSelected(null)}
                     onRemove={handleRemove}
+                    onRefresh={load}
                   />
                 </div>
               </aside>
@@ -1438,6 +1493,7 @@ export default function AgentsPage() {
                 statuses={intgs}
                 onClose={() => setSelected(null)}
                 onRemove={handleRemove}
+                onRefresh={load}
               />
             </div>
           </>

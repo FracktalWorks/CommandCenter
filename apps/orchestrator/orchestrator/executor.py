@@ -879,14 +879,20 @@ async def _detect_agent_commits(
 ) -> None:
     """After a GitHub Copilot agent run, register any new commits for inbox approval.
 
-    Two detection modes:
-    - ``since_sha`` provided (preferred): detects ALL commits since that SHA,
-      whether pushed or not (``git log {since_sha}..HEAD``).
-    - No ``since_sha``: falls back to local-only detection
-      (``git log origin/HEAD..HEAD``), which misses commits that were pushed.
+    Detection strategy (layered — catches orphaned commits from prior runs):
 
-    Only called for ``agent_runtime == "github-copilot"``; MAF agents don't
-    commit to the repo during a run.
+    1. **Since-sha scan**: detects commits made during THIS run
+       (``git log {since_sha}..HEAD``).  This catches all new commits
+       whether pushed or not.
+    2. **Catch-up scan** (always runs): detects local-only commits that
+       were missed by prior runs (``git log origin/HEAD..HEAD``).  This
+       recovers commits orphaned by a previous detection failure, DB
+       outage, or gateway restart.
+    3. Both scans are deduplicated against ``pending_commit.commit_sha``
+       so no commit is ever registered twice.
+
+    Only called for ``agent_runtime == "github-copilot"``; MAF agents
+    don't commit to the repo during a run.
 
     Non-fatal — any subprocess or DB error is logged and swallowed.
     """
@@ -894,80 +900,114 @@ async def _detect_agent_commits(
         return
 
     try:
-        if since_sha:
-            # Detect all new commits since before the run (even if already pushed)
-            git_range = f"{since_sha}..HEAD"
-            proc = await asyncio.create_subprocess_exec(
-                "git", "log", git_range, "--format=%H|%s",
-                cwd=agent_dir,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
-            if proc.returncode != 0:
-                return
-        else:
-            # Fallback: only local-only commits (misses pushed ones)
-            proc = await asyncio.create_subprocess_exec(
-                "git", "log", "origin/HEAD..HEAD", "--format=%H|%s",
-                cwd=agent_dir,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=10)
-            if proc.returncode != 0:
-                err = stderr_bytes.decode(errors="replace")
-                if "unknown revision" in err or "ambiguous argument" in err:
-                    for base in ("origin/main", "origin/master"):
-                        proc2 = await asyncio.create_subprocess_exec(
-                            "git", "log", f"{base}..HEAD", "--format=%H|%s",
-                            cwd=agent_dir,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.DEVNULL,
-                        )
-                        out2, _ = await asyncio.wait_for(proc2.communicate(), timeout=10)
-                        if proc2.returncode == 0:
-                            stdout_bytes = out2
-                            break
-                    else:
-                        return
-                else:
-                    return
-
-        lines = stdout_bytes.decode(errors="replace").strip().splitlines()
-        if not lines:
-            return  # nothing new — agent didn't commit during this run
-
-        _log.info(
-            "executor.agent_commits_detected",
-            agent=agent_name,
-            run_id=run_id,
-            count=len(lines),
-        )
-
-        from orchestrator.mutation import _git_diff  # noqa: PLC0415
-        from orchestrator.mutation import _register_pending_commit
-
-        # Load existing commit SHAs for this agent so we don't double-register.
+        # ── Load existing commit SHAs for dedup ─────────────────────────
         _existing_shas: set[str] = set()
         try:
             from acb_graph import get_session as _gs  # noqa: PLC0415
             from sqlalchemy import text as _txt  # noqa: PLC0415
             with _gs() as _s:
                 _rows = _s.execute(
-                    _txt("SELECT commit_sha FROM pending_commit WHERE agent_name = :a"),
+                    _txt(
+                        "SELECT commit_sha FROM pending_commit "
+                        "WHERE agent_name = :a"
+                    ),
                     {"a": agent_name},
                 ).fetchall()
                 _existing_shas = {r[0] for r in _rows}
         except Exception:  # noqa: BLE001
             pass
 
-        for raw_line in lines:
+        all_lines: list[str] = []
+
+        # ── Phase 1: since-sha scan (this run's commits) ────────────────
+        if since_sha:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "log", f"{since_sha}..HEAD", "--format=%H|%s",
+                cwd=agent_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(), timeout=10,
+            )
+            if proc.returncode == 0:
+                phase1 = stdout_bytes.decode(errors="replace").strip()
+                if phase1:
+                    all_lines.extend(phase1.splitlines())
+                    _log.info(
+                        "executor.commits_since_sha",
+                        agent=agent_name, count=len(phase1.splitlines()),
+                    )
+            else:
+                _log.debug(
+                    "executor.since_sha_failed",
+                    agent=agent_name,
+                    stderr=stderr_bytes.decode(errors="replace")[:200],
+                )
+
+        # ── Phase 2: catch-up scan (orphaned from prior runs) ───────────
+        # Scans the last 50 commits in the repo and registers any that
+        # are missing from pending_commit.  This recovers commits that were
+        # missed by a previous detection attempt (silent exception, DB
+        # outage, gateway restart) OR were pushed before the push guard
+        # was installed.  Capped at 50 to keep it fast; older history is
+        # assumed already reviewed or irrelevant.
+        catchup_proc = await asyncio.create_subprocess_exec(
+            "git", "log", "HEAD", "-n", "50", "--format=%H|%s",
+            cwd=agent_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        catchup_out, _ = await asyncio.wait_for(
+            catchup_proc.communicate(), timeout=10,
+        )
+        if catchup_proc.returncode == 0:
+            catchup_text = catchup_out.decode(errors="replace").strip()
+            if catchup_text:
+                # Merge with Phase 1, dedup by SHA, skip already-registered
+                seen = {ln.split("|", 1)[0].strip() for ln in all_lines}
+                new_from_catchup = 0
+                for ln in catchup_text.splitlines():
+                    sha = ln.split("|", 1)[0].strip()
+                    if (
+                        sha and sha not in seen
+                        and sha not in _existing_shas
+                    ):
+                        all_lines.append(ln)
+                        seen.add(sha)
+                        new_from_catchup += 1
+                if new_from_catchup:
+                    _log.info(
+                        "executor.commits_catchup",
+                        agent=agent_name,
+                        new_count=new_from_catchup,
+                        hint=(
+                            "Recovered orphaned commits from prior runs "
+                            "(pushed before guard or missed by detector)."
+                        ),
+                    )
+
+        if not all_lines:
+            return  # nothing new
+
+        _log.info(
+            "executor.agent_commits_detected",
+            agent=agent_name,
+            run_id=run_id,
+            count=len(all_lines),
+        )
+
+        from orchestrator.mutation import _git_diff  # noqa: PLC0415
+        from orchestrator.mutation import _register_pending_commit
+
+        for raw_line in all_lines:
             parts = raw_line.split("|", 1)
             commit_sha = parts[0].strip()
-            commit_message = parts[1].strip() if len(parts) > 1 else commit_sha[:8]
+            commit_message = (
+                parts[1].strip() if len(parts) > 1 else commit_sha[:8]
+            )
             if not commit_sha or commit_sha in _existing_shas:
-                continue  # skip already-registered commits
+                continue
 
             # Capture the diff for inline review
             diff_text = await _git_diff(agent_dir, commit_sha)
@@ -989,8 +1029,11 @@ async def _detect_agent_commits(
                 target=f"agent:{agent_name}",
                 payload={
                     "run_id": run_id,
-                    "commit_count": len(lines),
-                    "commits": [ln.split("|", 1)[0].strip()[:12] for ln in lines],
+                    "commit_count": len(all_lines),
+                    "commits": [
+                        ln.split("|", 1)[0].strip()[:12]
+                        for ln in all_lines
+                    ],
                 },
             )
         )

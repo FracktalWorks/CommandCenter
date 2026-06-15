@@ -120,7 +120,7 @@ class Settings(BaseSettings):
     # Model must be available in whichever provider is active.
     # Also controls the model injected into GitHubCopilotAgent Tier-1.5 runs.
     # Valid values (Copilot API): gpt-4o, gpt-4o-mini, claude-sonnet-4-5, o3-mini, o1
-    copilot_chat_model: str = "claude-sonnet-4-5"  # e.g. gpt-4o, claude-sonnet-4-5, o3-mini
+    copilot_chat_model: str = ""  # Override in .env, otherwise agent model_tier is used
 
     # ---------------------------------------------------------------------------
     # OAuth 2.0 authorization-code flow (M2.6) — Integration token exchange.

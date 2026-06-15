@@ -208,11 +208,14 @@ def _load_dynamic_agents() -> list[dict]:
         if rows:
             return [
                 {
-                    "name": r[0], "description": r[1],
+                    "name": (r[0] or "").strip(),
+                    "description": (r[1] or "").strip(),
                     "tags": r[2] if isinstance(r[2], list) else [],
-                    "status": r[3], "agent_runtime": r[4],
-                    "repo_url": r[5], "repo_name": r[6],
-                    "local_path": r[7],
+                    "status": (r[3] or "live").strip(),
+                    "agent_runtime": (r[4] or "maf").strip(),
+                    "repo_url": (r[5] or "").strip() or None,
+                    "repo_name": (r[6] or "").strip() or None,
+                    "local_path": (r[7] or "").strip() or None,
                     "integrations": r[8] if isinstance(r[8], list) else [],
                     "optional_integrations": (
                         r[9] if isinstance(r[9], list) else []
@@ -293,6 +296,14 @@ def _sync_file_into_db() -> None:
         pass  # Best-effort; DB is the authority
 
 
+def _strip_agent_strings(a: dict) -> dict:
+    """Return a copy of the agent dict with all top-level string values stripped."""
+    return {
+        k: (v.strip() if isinstance(v, str) else v)
+        for k, v in a.items()
+    }
+
+
 def _migrate_from_file() -> list[dict]:
     """One-time import from agents.json.  Writes to DB on success."""
     try:
@@ -300,6 +311,7 @@ def _migrate_from_file() -> list[dict]:
         if not path.exists():
             return []
         agents: list[dict] = json.loads(path.read_text(encoding="utf-8"))
+        agents = [_strip_agent_strings(a) for a in agents]
         if agents:
             _save_dynamic_agents(agents)  # persist to DB
         return agents

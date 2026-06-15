@@ -13,12 +13,12 @@ model_list:
       api_key: os.environ/DEEPSEEK_API_KEY
   - model_name: tier-balanced
     litellm_params:
-      model: gemini/gemini-2.5-flash
-      api_key: os.environ/GEMINI_API_KEY
+      model: deepseek/deepseek-v4-pro
+      api_key: os.environ/DEEPSEEK_API_KEY
   - model_name: tier-powerful
     litellm_params:
-      model: gemini/gemini-2.5-pro
-      api_key: os.environ/GEMINI_API_KEY
+      model: deepseek/deepseek-v4-pro
+      api_key: os.environ/DEEPSEEK_API_KEY
 
   # ── Copilot entries (github/… prefix for BYOK routing) ──────────────────
   - model_name: copilot/gpt-4o-mini

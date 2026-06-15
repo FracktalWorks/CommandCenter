@@ -22,29 +22,90 @@ _log = get_logger("settings")
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 # ---------------------------------------------------------------------------
-# Locate infra/litellm/config.yaml relative to the repo root
+# Locate infra/litellm/config.yaml relative to the repo root.
+# Tier overrides (changed via the Settings UI) are stored separately in
+# tier_overrides.yaml so they survive git deploys.
 # ---------------------------------------------------------------------------
 
-def _config_path() -> Path:
+def _repo_root() -> Path:
+    """Walk up from this file to find the repo root (where pyproject.toml lives)."""
     here = Path(__file__).resolve()
-    # Walk up until we find infra/litellm/config.yaml
     for parent in here.parents:
-        candidate = parent / "infra" / "litellm" / "config.yaml"
-        if candidate.exists():
-            return candidate
-    raise FileNotFoundError("infra/litellm/config.yaml not found from %s" % here)
+        if (parent / "pyproject.toml").exists():
+            return parent
+    raise FileNotFoundError("Repo root not found from %s" % here)
+
+
+def _config_path() -> Path:
+    candidate = _repo_root() / "infra" / "litellm" / "config.yaml"
+    if candidate.exists():
+        return candidate
+    raise FileNotFoundError("infra/litellm/config.yaml not found")
+
+
+def _tier_overrides_path() -> Path:
+    return _repo_root() / "infra" / "litellm" / "tier_overrides.yaml"
 
 
 def _load_config() -> dict[str, Any]:
+    """Load base config.yaml, then merge tier overrides on top."""
     path = _config_path()
     with path.open() as f:
-        return yaml.safe_load(f) or {}
+        cfg: dict[str, Any] = yaml.safe_load(f) or {}
+
+    # Merge tier overrides (survives git deploys)
+    overrides_path = _tier_overrides_path()
+    if overrides_path.exists():
+        try:
+            with overrides_path.open() as f:
+                overrides: dict[str, Any] = yaml.safe_load(f) or {}
+            if overrides and "model_list" in overrides:
+                override_models = {
+                    e["model_name"]: e
+                    for e in overrides["model_list"]
+                }
+                base_list = cfg.get("model_list", [])
+                for i, entry in enumerate(base_list):
+                    name = entry.get("model_name", "")
+                    if name in override_models:
+                        base_list[i] = override_models[name]
+                cfg["model_list"] = base_list
+        except Exception:  # noqa: BLE001
+            pass
+
+    return cfg
 
 
-def _save_config(cfg: dict[str, Any]) -> None:
-    path = _config_path()
-    with path.open("w") as f:
-        yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+def _save_tier_override(tier_name: str, entry: dict[str, Any]) -> None:
+    """Write a single tier override to tier_overrides.yaml (not config.yaml).
+
+    This file is NOT tracked by git, so Settings UI changes survive deploys.
+    """
+    overrides_path = _tier_overrides_path()
+    existing: dict[str, Any] = {"model_list": []}
+    if overrides_path.exists():
+        try:
+            with overrides_path.open() as f:
+                existing = yaml.safe_load(f) or {"model_list": []}
+        except Exception:  # noqa: BLE001
+            pass
+
+    model_list: list[dict] = existing.get("model_list", [])
+    # Replace or append the tier entry
+    replaced = False
+    for i, e in enumerate(model_list):
+        if e.get("model_name") == tier_name:
+            model_list[i] = entry
+            replaced = True
+            break
+    if not replaced:
+        model_list.append(entry)
+
+    existing["model_list"] = model_list
+    overrides_path.parent.mkdir(parents=True, exist_ok=True)
+    with overrides_path.open("w") as f:
+        yaml.dump(existing, f, default_flow_style=False,
+                  allow_unicode=True, sort_keys=False)
 
 
 def _infra_dir() -> Path:
@@ -607,7 +668,8 @@ async def update_tier(
     if not updated:
         raise HTTPException(status_code=404, detail=f"Tier {req.tier_name} not found in config")
 
-    _save_config(cfg)
+    # Write to tier_overrides.yaml (NOT config.yaml) so changes survive git deploys
+    _save_tier_override(req.tier_name, entry)
     _log.info("settings.llm.tier_updated", tier=req.tier_name, model=req.model, actor=_user.email)
 
     # Restart LiteLLM so the new config takes effect immediately

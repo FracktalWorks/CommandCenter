@@ -677,6 +677,7 @@ class ArtifactEntry(BaseModel):
     modified_at: str
     mime_type: str
     category: str       # "inputs" | "outputs" | "agent-data"
+    is_dir: bool = False
 
 
 class ArtifactListResponse(BaseModel):
@@ -738,7 +739,7 @@ def _walk_agent_artifacts(
     category_filter: str | None = None,
 ) -> list[ArtifactEntry]:
     """Walk the visible workspace dirs for a single agent and return
-    ArtifactEntry objects."""
+    ArtifactEntry objects (both files and directories)."""
     entries: list[ArtifactEntry] = []
     categories = (
         [category_filter]
@@ -750,6 +751,26 @@ def _walk_agent_artifacts(
         cat_dir = workspace / cat
         if not cat_dir.is_dir():
             continue
+
+        # Add the category root directory itself
+        try:
+            stat = cat_dir.stat()
+            entries.append(ArtifactEntry(
+                agent_name=agent_name,
+                path=cat,
+                name=cat,
+                size=0,
+                modified_at=__import__("datetime").datetime.fromtimestamp(
+                    stat.st_mtime,
+                    tz=__import__("datetime").timezone.utc,
+                ).isoformat(),
+                mime_type="inode/directory",
+                category=cat,
+                is_dir=True,
+            ))
+        except OSError:
+            pass
+
         for dirpath, dirnames, filenames in os.walk(cat_dir):
             dirnames[:] = [
                 d for d in dirnames
@@ -757,6 +778,30 @@ def _walk_agent_artifacts(
             ]
             dp = Path(dirpath)
             rel_dir = dp.relative_to(workspace)
+
+            # Yield sub-directory entries
+            for dname in sorted(dirnames):
+                try:
+                    dpath = dp / dname
+                    dstat = dpath.stat()
+                    rel_dpath = str((rel_dir / dname)).replace("\\", "/")
+                    entries.append(ArtifactEntry(
+                        agent_name=agent_name,
+                        path=rel_dpath,
+                        name=dname,
+                        size=0,
+                        modified_at=__import__("datetime").datetime.fromtimestamp(
+                            dstat.st_mtime,
+                            tz=__import__("datetime").timezone.utc,
+                        ).isoformat(),
+                        mime_type="inode/directory",
+                        category=cat,
+                        is_dir=True,
+                    ))
+                except OSError:
+                    continue
+
+            # Yield file entries
             for fname in sorted(filenames):
                 fpath = dp / fname
                 try:
@@ -774,6 +819,7 @@ def _walk_agent_artifacts(
                         ).isoformat(),
                         mime_type=mime or "application/octet-stream",
                         category=cat,
+                        is_dir=False,
                     ))
                 except OSError:
                     continue

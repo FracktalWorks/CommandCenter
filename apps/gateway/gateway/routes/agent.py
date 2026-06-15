@@ -183,12 +183,20 @@ _AGENT_REGISTRY: list[dict] = [
 def _load_dynamic_agents() -> list[dict]:
     """Return user-registered agents from the dynamic_agents Postgres table.
 
+    On every call, also imports any agents found in agents.json that are
+    missing from the database — this ensures agents registered while Postgres
+    was temporarily unavailable eventually sync into the DB.
+
     On first call after migration, imports any existing agents.json data
     into the DB so nothing is lost.
     """
     try:
         from acb_graph import get_session  # noqa: PLC0415
         from sqlalchemy import text  # noqa: PLC0415
+
+        # ── Always sync agents.json → DB for missing agents ─────────────
+        _sync_file_into_db()
+
         with get_session() as s:
             rows = s.execute(
                 text(
@@ -206,15 +214,78 @@ def _load_dynamic_agents() -> list[dict]:
                     "repo_url": r[5], "repo_name": r[6],
                     "local_path": r[7],
                     "integrations": r[8] if isinstance(r[8], list) else [],
-                    "optional_integrations": r[9] if isinstance(r[9], list) else [],
+                    "optional_integrations": (
+                        r[9] if isinstance(r[9], list) else []
+                    ),
                     "dynamic": True,
                 }
                 for r in rows
             ]
-        # ── Migration path: import from legacy agents.json ──────────────
+        # DB empty — import everything from file
         return _migrate_from_file()
     except Exception:  # noqa: BLE001
         return _migrate_from_file()
+
+
+def _sync_file_into_db() -> None:
+    """Read agents.json and upsert any entries not yet in the DB.
+
+    Does NOT delete DB entries that are absent from the file — the DB is
+    the authority.  This only fills in missing agents so a file-only write
+    (e.g. Postgres temporarily unavailable during registration) eventually
+    makes it into the database.
+    """
+    try:
+        path = _get_agents_file()
+        if not path.exists():
+            return
+        file_agents: list[dict] = json.loads(path.read_text(encoding="utf-8"))
+        if not file_agents:
+            return
+
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+        import json as _json  # noqa: PLC0415
+
+        with get_session() as s:
+            # Get names already in DB
+            existing = {
+                r[0] for r in s.execute(
+                    text("SELECT name FROM dynamic_agents")
+                ).fetchall()
+            }
+            # Upsert any file agents missing from DB
+            for a in file_agents:
+                if a.get("name") in existing:
+                    continue
+                s.execute(
+                    text(
+                        "INSERT INTO dynamic_agents "
+                        "(name, description, tags, status, agent_runtime, "
+                        "repo_url, repo_name, local_path, integrations, "
+                        "optional_integrations, updated_at) "
+                        "VALUES (:n,:d,:t::jsonb,:s,:r,:ru,:rn,:lp,"
+                        ":i::jsonb,:oi::jsonb,now()) "
+                        "ON CONFLICT (name) DO NOTHING"
+                    ),
+                    {
+                        "n": a["name"],
+                        "d": a.get("description", ""),
+                        "t": _json.dumps(a.get("tags", [])),
+                        "s": a.get("status", "live"),
+                        "r": a.get("agent_runtime", "maf"),
+                        "ru": a.get("repo_url"),
+                        "rn": a.get("repo_name"),
+                        "lp": a.get("local_path"),
+                        "i": _json.dumps(a.get("integrations", [])),
+                        "oi": _json.dumps(
+                            a.get("optional_integrations", [])
+                        ),
+                    },
+                )
+            s.commit()
+    except Exception:
+        pass  # Best-effort; DB is the authority
 
 
 def _migrate_from_file() -> list[dict]:

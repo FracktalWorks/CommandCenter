@@ -215,19 +215,25 @@ def _refresh_remote_auth(repo_dir: Path, org: str, repo_name: str, token: str | 
 
 
 def _pull_latest(repo_dir: Path) -> None:
-    """Pull the latest commits from origin.
+    """Pull the latest commits from origin while preserving local commits.
 
     Strategy (in order):
-    1. Fast-forward only (``git pull --ff-only``) — clean, no conflicts possible.
-    2. If that fails (diverged history or local commits), fetch + reset hard to
-       ``origin/HEAD`` — takes upstream as authoritative.  Local uncommitted
-       changes are stashed first and dropped afterward (they are agent-generated
-       and will be re-applied on the next mutation run).
 
-    The pull is always non-fatal — if all strategies fail, the run proceeds with
-    the cached clone and logs a warning.
+    1. Fast-forward only (``git pull --ff-only``) — clean, no conflicts.
+    2. If that fails AND there are NO local-only commits (i.e. our HEAD
+       equals origin/HEAD), stash uncommitted changes, reset hard to
+       ``origin/HEAD``, drop stash.  This cleans up leftover agent
+       workspace dirt without losing anything of value.
+    3. If there ARE local-only commits (pending approval), try
+       ``git pull --rebase`` which replays our local commits on top of
+       the latest remote HEAD.  If rebase hits a merge conflict,
+       auto-resolve with ``--ours`` (our pending commits take priority).
+    4. If all strategies fail, the run proceeds with the cached clone
+       and logs a warning — we never destroy pending commits.
+
+    The pull is always non-fatal.
     """
-    # Step 1 — fast-forward
+    # Step 1 — fast-forward (best case: no divergence)
     result = _run_git(["pull", "--ff-only"], cwd=repo_dir, timeout=30)
     if result.returncode == 0:
         return
@@ -236,13 +242,10 @@ def _pull_latest(repo_dir: Path) -> None:
         "loader.pull_ff_failed",
         repo=repo_dir.name,
         stderr=result.stderr.strip()[:200],
-        hint="Falling back to fetch+reset strategy.",
+        hint="Checking for local-only commits before falling back.",
     )
 
-    # Step 2 — stash any local changes so reset --hard is safe
-    stash_result = _run_git(["stash", "--include-untracked", "-m", "commandcenter-auto-stash"], cwd=repo_dir, timeout=15)
-    stashed = stash_result.returncode == 0 and "No local changes" not in stash_result.stdout
-
+    # ── Fetch origin so we can compare HEAD positions ──────────────────
     fetch_result = _run_git(["fetch", "origin"], cwd=repo_dir, timeout=30)
     if fetch_result.returncode != 0:
         _log.warning(
@@ -251,9 +254,83 @@ def _pull_latest(repo_dir: Path) -> None:
             stderr=fetch_result.stderr.strip()[:200],
             hint="Using cached clone.",
         )
-        if stashed:
-            _run_git(["stash", "pop"], cwd=repo_dir, timeout=15)
         return
+
+    # ── Detect local-only (unpushed) commits ───────────────────────────
+    # git rev-list origin/HEAD..HEAD lists commits we have that origin doesn't.
+    # If there are any, we MUST NOT hard-reset — that would destroy pending
+    # mutation commits awaiting approval.
+    has_local_commits = False
+    try:
+        rev_list_result = _run_git(
+            ["rev-list", "--count", "origin/HEAD..HEAD"],
+            cwd=repo_dir, timeout=10,
+        )
+        if rev_list_result.returncode == 0 and rev_list_result.stdout.strip() not in ("", "0"):
+            count = int(rev_list_result.stdout.strip())
+            if count > 0:
+                has_local_commits = True
+                _log.info(
+                    "loader.local_commits_detected",
+                    repo=repo_dir.name,
+                    count=count,
+                    hint="Preserving pending commits — using rebase instead of reset.",
+                )
+    except (ValueError, Exception):
+        pass  # Can't determine — proceed cautiously
+
+    if has_local_commits:
+        # ── Step 3: Rebase local commits on top of origin/HEAD ─────────
+        # This replays our pending commits onto the latest remote code.
+        # If conflicts arise, auto-resolve with --ours (our changes win).
+        rebase_result = _run_git(
+            ["rebase", "origin/HEAD"],
+            cwd=repo_dir, timeout=60,
+        )
+        if rebase_result.returncode == 0:
+            _log.info("loader.pull_rebase_ok", repo=repo_dir.name)
+            return
+
+        # Rebase conflict — auto-resolve with ours
+        _log.warning(
+            "loader.pull_rebase_conflict",
+            repo=repo_dir.name,
+            stderr=rebase_result.stderr.strip()[:200],
+            hint="Auto-resolving with checkout --ours.",
+        )
+        _run_git(["checkout", "--ours", "."], cwd=repo_dir, timeout=15)
+        _run_git(["add", "-A"], cwd=repo_dir, timeout=15)
+        continue_result = _run_git(
+            ["rebase", "--continue"],
+            cwd=repo_dir, timeout=30,
+        )
+        if continue_result.returncode == 0:
+            _log.info(
+                "loader.pull_rebase_conflict_resolved",
+                repo=repo_dir.name,
+                hint="Conflicts auto-resolved with --ours; pending commits preserved.",
+            )
+            return
+
+        # Rebase failed even after conflict resolution — abort and keep
+        # the local state intact.
+        _run_git(["rebase", "--abort"], cwd=repo_dir, timeout=15)
+        _log.warning(
+            "loader.pull_rebase_aborted",
+            repo=repo_dir.name,
+            stderr=continue_result.stderr.strip()[:200],
+            hint="Rebase failed; using cached clone with pending commits.",
+        )
+        return
+
+    # ── Step 2: No local commits — safe to hard-reset ──────────────────
+    # Stash uncommitted changes (workspace dirt from a failed sandbox run),
+    # reset to origin/HEAD, drop the stash.
+    stash_result = _run_git(
+        ["stash", "--include-untracked", "-m", "commandcenter-auto-stash"],
+        cwd=repo_dir, timeout=15,
+    )
+    stashed = stash_result.returncode == 0 and "No local changes" not in stash_result.stdout
 
     reset_result = _run_git(["reset", "--hard", "origin/HEAD"], cwd=repo_dir, timeout=15)
     if reset_result.returncode != 0:
@@ -267,9 +344,8 @@ def _pull_latest(repo_dir: Path) -> None:
             _run_git(["stash", "pop"], cwd=repo_dir, timeout=15)
         return
 
-    # Stash is intentionally dropped — agent-generated local changes should
-    # be committed (via pending_commit) before pulling; any leftover stash is
-    # an artifact of a rejected commit or failed sandbox run.
+    # Stash dropped — uncommitted workspace dirt is discarded (it will be
+    # regenerated on the next mutation run if needed).
     if stashed:
         _run_git(["stash", "drop"], cwd=repo_dir, timeout=10)
 

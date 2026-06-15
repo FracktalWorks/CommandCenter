@@ -25,7 +25,6 @@ import {
   List,
   ChevronDown,
   ChevronRight,
-  Clock,
   Sparkles,
   RefreshCw,
   Bot,
@@ -431,11 +430,10 @@ export default function ArtifactsPage() {
   // UI state
   const [viewMode, setViewMode] = useState<ViewMode>("tree");
   const [sortKey, setSortKey] = useState<SortKey>("newest");
-  const [groupByAgent, setGroupByAgent] = useState(false);
 
   // Filters
   const [agentFilter, setAgentFilter] = useState<string>("");
-  const [categoryFilter, setCategoryFilter] = useState<string>("");
+  const [fileTypeFilter, setFileTypeFilter] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState("");
 
   // Viewer
@@ -457,7 +455,6 @@ export default function ArtifactsPage() {
     try {
       const params = new URLSearchParams();
       if (agentFilter) params.set("agent", agentFilter);
-      if (categoryFilter) params.set("category", categoryFilter);
       const res = await fetch(`/api/agent/artifacts?${params.toString()}`);
       if (res.status === 503 || res.status === 502) {
         setError("Gateway offline. Start the backend to browse artifacts.");
@@ -473,7 +470,7 @@ export default function ArtifactsPage() {
     } catch (e) {
       setError(String(e)); setArtifacts([]);
     } finally { setLoading(false); }
-  }, [agentFilter, categoryFilter]);
+  }, [agentFilter]);
 
   useEffect(() => { fetchArtifacts(); }, [fetchArtifacts]);
 
@@ -483,6 +480,22 @@ export default function ArtifactsPage() {
 
     // Exclude directories from grid/list views
     list = list.filter((a) => !a.is_dir);
+
+    // Client-side file type filter
+    if (fileTypeFilter) {
+      list = list.filter((a) => {
+        const ext = a.name.split(".").pop()?.toLowerCase() ?? "";
+        const mime = a.mime_type;
+        switch (fileTypeFilter) {
+          case "document": return ["md", "docx", "doc", "pdf", "txt", "rst", "log"].includes(ext) || mime.startsWith("text/") || mime === "application/pdf" || mime.includes("wordprocessing");
+          case "spreadsheet": return ["csv", "xlsx", "xls", "tsv"].includes(ext);
+          case "image": return ["png", "jpg", "jpeg", "gif", "webp", "svg", "ico"].includes(ext) || mime.startsWith("image/");
+          case "code": return ["py", "ts", "tsx", "js", "jsx", "sh", "yaml", "yml", "toml", "json", "sql", "rs", "go", "java", "html", "css", "xml"].includes(ext);
+          case "other": return !["md", "docx", "doc", "pdf", "txt", "rst", "log", "csv", "xlsx", "xls", "tsv", "png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "py", "ts", "tsx", "js", "jsx", "sh", "yaml", "yml", "toml", "json", "sql", "rs", "go", "java", "html", "css", "xml"].includes(ext);
+          default: return true;
+        }
+      });
+    }
 
     // Client-side search
     if (searchQuery.trim()) {
@@ -507,7 +520,7 @@ export default function ArtifactsPage() {
     });
 
     return list;
-  }, [artifacts, searchQuery, sortKey]);
+  }, [artifacts, searchQuery, sortKey, fileTypeFilter]);
 
   // ── Tree data (includes directories) ─────────────────────────────────
   const { treeData, treeFiltered } = useMemo(() => {
@@ -534,9 +547,8 @@ export default function ArtifactsPage() {
     return { treeData: buildTree(filtered), treeFiltered: filtered };
   }, [artifacts, searchQuery]);
 
-  // ── Group by agent ────────────────────────────────────────────────────
-  const grouped = useMemo(() => {
-    if (!groupByAgent) return null;
+  // ── Always grouped by agent ─────────────────────────────────────────
+  const agentGroups = useMemo(() => {
     const map = new Map<string, ArtifactEntry[]>();
     for (const a of processed) {
       const list = map.get(a.agent_name) ?? [];
@@ -544,61 +556,17 @@ export default function ArtifactsPage() {
       map.set(a.agent_name, list);
     }
     return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [processed, groupByAgent]);
-
-  // ── Folder groups (for grid/list view) ──────────────────────────────
-  interface FolderGroupEntry {
-    folderName: string;
-    folderPath: string;
-    files: ArtifactEntry[];
-  }
-
-  const folderGroups = useMemo(() => {
-    // Build a tree of folders from file paths, then flatten into groups
-    const folderMap = new Map<string, ArtifactEntry[]>();
-    for (const a of processed) {
-      // Extract the directory path (everything before the filename)
-      const lastSlash = a.path.lastIndexOf("/");
-      const dirPath = lastSlash > 0 ? a.path.substring(0, lastSlash) : a.category;
-      const list = folderMap.get(dirPath) ?? [];
-      list.push(a);
-      folderMap.set(dirPath, list);
-    }
-    // Sort folders alphabetically, category roots first
-    const entries: FolderGroupEntry[] = [];
-    for (const [folderPath, files] of folderMap) {
-      // Display name: just the folder name (last segment)
-      const segments = folderPath.split("/");
-      const folderName = segments.length > 1
-        ? segments.slice(1).join(" / ")
-        : folderPath;
-      entries.push({ folderName, folderPath, files });
-    }
-    // Sort: category root folders first, then alphabetically
-    entries.sort((a, b) => {
-      const aRoot = a.folderPath.split("/")[0];
-      const bRoot = b.folderPath.split("/")[0];
-      if (aRoot !== bRoot) return aRoot.localeCompare(bRoot);
-      return a.folderPath.localeCompare(b.folderPath);
-    });
-    return entries;
   }, [processed]);
 
   // ── Stats ─────────────────────────────────────────────────────────────
   const stats = useMemo(() => ({
     total: artifacts.filter((a) => !a.is_dir).length,
-    dirs: artifacts.filter((a) => a.is_dir).length,
-    inputs: artifacts.filter((a) => a.category === "inputs" && !a.is_dir).length,
-    outputs: artifacts.filter((a) => a.category === "outputs" && !a.is_dir).length,
-    data: artifacts.filter((a) => a.category === "agent-data" && !a.is_dir).length,
     totalSize: artifacts.reduce((s, a) => s + (a.is_dir ? 0 : a.size), 0),
   }), [artifacts]);
 
-  const clearFilters = () => { setAgentFilter(""); setCategoryFilter(""); setSearchQuery(""); };
-  const hasFilters = !!(agentFilter || categoryFilter || searchQuery);
-  const isFiltered = searchQuery
-    ? treeFiltered.filter((a) => !a.is_dir).length !== artifacts.filter((a) => !a.is_dir).length
-    : processed.length !== artifacts.filter((a) => !a.is_dir).length;
+  const clearFilters = () => { setAgentFilter(""); setFileTypeFilter(""); setSearchQuery(""); };
+  const hasFilters = !!(agentFilter || fileTypeFilter || searchQuery);
+  const isFiltered = processed.length !== artifacts.filter((a) => !a.is_dir).length;
 
   const makeFileUrl = (a: ArtifactEntry) =>
     `/api/agent/artifacts/file?agent=${encodeURIComponent(a.agent_name)}&path=${encodeURIComponent(a.path)}`;
@@ -635,40 +603,25 @@ export default function ArtifactsPage() {
         {/* Stats pills */}
         <div className="flex flex-wrap items-center gap-1.5 mb-3">
           <span className="text-[11px] text-muted-foreground mr-1">
-            <span className="font-semibold text-foreground">{stats.total}</span> files
+            <span className="font-semibold text-foreground">{stats.total}</span> files · {formatBytes(stats.totalSize)}
           </span>
-          <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
-            📥 {stats.inputs}
-          </span>
-          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            📤 {stats.outputs}
-          </span>
-          <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20">
-            🧠 {stats.data}
-          </span>
-          <span className="text-[11px] text-muted-foreground">· {formatBytes(stats.totalSize)}</span>
         </div>
 
         {/* Toolbar */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Category chip toggle */}
-          <div className="flex items-center gap-1 bg-secondary/60 rounded-lg p-0.5">
-            {(["", "inputs", "outputs", "agent-data"] as const).map((cat) => {
-              const active = categoryFilter === cat || (!cat && !categoryFilter);
-              const meta = cat ? CATEGORY_META[cat] : null;
-              return (
-                <button
-                  key={cat}
-                  onClick={() => setCategoryFilter(cat)}
-                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium tech-transition ${
-                    active ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {cat ? `${meta!.emoji} ${meta!.label}` : "All"}
-                </button>
-              );
-            })}
-          </div>
+          {/* File type filter */}
+          <select
+            value={fileTypeFilter}
+            onChange={(e) => setFileTypeFilter(e.target.value)}
+            className="rounded-lg border border-border bg-secondary px-3 py-1.5 text-[11px] text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+          >
+            <option value="">All file types</option>
+            <option value="document">📄 Documents (.md, .docx, .pdf, .txt)</option>
+            <option value="spreadsheet">📊 Spreadsheets (.csv, .xlsx)</option>
+            <option value="image">🖼️ Images (.png, .jpg, .svg)</option>
+            <option value="code">💻 Code (.py, .ts, .json, .yaml)</option>
+            <option value="other">📦 Other</option>
+          </select>
 
           {/* Agent filter */}
           <select
@@ -692,20 +645,6 @@ export default function ArtifactsPage() {
             <option value="largest">Largest first</option>
             <option value="smallest">Smallest first</option>
           </select>
-
-          {/* Group by agent — only in grid/list */}
-          {viewMode !== "tree" && (
-            <button
-              onClick={() => setGroupByAgent((g) => !g)}
-              className={`rounded-lg border px-2.5 py-1.5 text-[11px] tech-transition flex items-center gap-1.5 ${
-                groupByAgent
-                  ? "border-primary/40 bg-primary/10 text-primary"
-                  : "border-border bg-secondary text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <Bot size={13} /> Group
-            </button>
-          )}
 
           <div className="flex-1" />
 
@@ -753,7 +692,7 @@ export default function ArtifactsPage() {
 
         {isFiltered && (
           <p className="mt-2 text-[10px] text-muted-foreground">
-            Showing {viewMode === "tree" ? treeFiltered.filter((a) => !a.is_dir).length : processed.length} of {stats.total} files
+            Showing {processed.length} of {stats.total} files
           </p>
         )}
       </div>
@@ -830,54 +769,21 @@ export default function ArtifactsPage() {
           </div>
         )}
 
-        {/* Content — Grid / List */}
-        {!loading && viewMode !== "tree" && processed.length > 0 && (
+        {/* Content — Grid / List (always grouped by agent) */}
+        {!loading && viewMode !== "tree" && agentGroups.length > 0 && (
           <div className="p-4 sm:p-6">
-            {grouped ? (
-              /* ── Grouped by agent ──────────────────────────────────── */
-              <div className="flex flex-col gap-6">
-                {grouped.map(([agentName, files]) => (
-                  <AgentGroup
-                    key={agentName}
-                    agentName={agentName}
-                    files={files}
-                    viewMode={viewMode}
-                    onView={openViewer}
-                    makeFileUrl={makeFileUrl}
-                  />
-                ))}
-              </div>
-            ) : viewMode === "grid" ? (
-              /* ── Grid (folder-grouped) ─────────────────────────── */
-              <div className="flex flex-col gap-4">
-                {folderGroups.map((group) => (
-                  <FolderGroup
-                    key={group.folderPath}
-                    folderName={group.folderName}
-                    folderPath={group.folderPath}
-                    files={group.files}
-                    viewMode="grid"
-                    onView={openViewer}
-                    makeFileUrl={makeFileUrl}
-                  />
-                ))}
-              </div>
-            ) : (
-              /* ── List (folder-grouped) ─────────────────────────── */
-              <div className="flex flex-col gap-4">
-                {folderGroups.map((group) => (
-                  <FolderGroup
-                    key={group.folderPath}
-                    folderName={group.folderName}
-                    folderPath={group.folderPath}
-                    files={group.files}
-                    viewMode="list"
-                    onView={openViewer}
-                    makeFileUrl={makeFileUrl}
-                  />
-                ))}
-              </div>
-            )}
+            <div className="flex flex-col gap-5">
+              {agentGroups.map(([agentName, files]) => (
+                <AgentArtifactGroup
+                  key={agentName}
+                  agentName={agentName}
+                  files={files}
+                  viewMode={viewMode === "grid" ? "grid" : "list"}
+                  onView={openViewer}
+                  makeFileUrl={makeFileUrl}
+                />
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -896,9 +802,40 @@ export default function ArtifactsPage() {
   );
 }
 
-// ─── Agent group (collapsible) ─────────────────────────────────────────────
+// ─── Agent artifact group (collapsible, with folder drill-down) ────────────
 
-function AgentGroup({
+/** Group files by their immediate parent folder within an agent. */
+function groupFilesByFolder(files: ArtifactEntry[]): Map<string, ArtifactEntry[]> {
+  const map = new Map<string, ArtifactEntry[]>();
+  for (const f of files) {
+    const lastSlash = f.path.lastIndexOf("/");
+    const dir = lastSlash > 0 ? f.path.substring(0, lastSlash) : f.category;
+    const list = map.get(dir) ?? [];
+    list.push(f);
+    map.set(dir, list);
+  }
+  return map;
+}
+
+/** Sorted folder entries from a folder map. */
+function sortedFolders(map: Map<string, ArtifactEntry[]>): [string, ArtifactEntry[]][] {
+  return Array.from(map.entries()).sort(([a], [b]) => {
+    // Category roots first (inputs, outputs, agent-data)
+    const aRoot = a.split("/")[0];
+    const bRoot = b.split("/")[0];
+    if (aRoot !== bRoot) return aRoot.localeCompare(bRoot);
+    return a.localeCompare(b);
+  });
+}
+
+function folderMeta(path: string): { emoji: string; accent: string } {
+  const root = path.split("/")[0];
+  if (root === "inputs") return { emoji: "📥", accent: "border-blue-500 bg-blue-500/10 text-blue-400" };
+  if (root === "outputs") return { emoji: "📤", accent: "border-emerald-500 bg-emerald-500/10 text-emerald-400" };
+  return { emoji: "🧠", accent: "border-purple-500 bg-purple-500/10 text-purple-400" };
+}
+
+function AgentArtifactGroup({
   agentName,
   files,
   viewMode,
@@ -907,132 +844,149 @@ function AgentGroup({
 }: {
   agentName: string;
   files: ArtifactEntry[];
-  viewMode: ViewMode;
-  onView: (a: ArtifactEntry) => void;
-  makeFileUrl: (a: ArtifactEntry) => string;
-}) {
-  const [expanded, setExpanded] = useState(true);
-  const accent = agentAccent(agentName);
-  const accentBg = accent.replace("border-l-", "bg-");
-
-  return (
-    <div className="rounded-xl border border-border overflow-hidden">
-      <button
-        onClick={() => setExpanded((e) => !e)}
-        className={`w-full flex items-center gap-3 px-4 py-3 bg-secondary/30 hover:bg-secondary/50 tech-transition border-l-2 ${accent}`}
-      >
-        {expanded ? <ChevronDown size={15} className="text-muted-foreground" /> : <ChevronRight size={15} className="text-muted-foreground" />}
-        <div className={`w-2 h-2 rounded-full ${accentBg}`} />
-        <span className="text-sm font-medium text-foreground">{agentName}</span>
-        <span className="text-[11px] text-muted-foreground">{files.length} file{files.length !== 1 ? "s" : ""}</span>
-      </button>
-      {expanded && (
-        <div className="p-3">
-          {viewMode === "grid" ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-              {files.map((a, i) => (
-                <FileCard
-                  key={`${a.agent_name}:${a.path}`}
-                  artifact={a} index={i}
-                  onView={() => onView(a)}
-                  onDownload={() => window.open(makeFileUrl(a), "_blank")}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-lg border border-border overflow-hidden">
-              <div className="hidden sm:grid grid-cols-[1fr_120px_90px_90px_100px] gap-x-3 px-4 py-2 bg-secondary/30 border-b border-border text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                <span>File</span><span>Agent</span><span>Type</span><span>Size</span><span>Modified</span>
-              </div>
-              {files.map((a, i) => (
-                <FileListRow
-                  key={`${a.agent_name}:${a.path}`}
-                  artifact={a} index={i}
-                  onView={() => onView(a)}
-                  onDownload={() => window.open(makeFileUrl(a), "_blank")}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Folder group (collapsible) ────────────────────────────────────────────
-
-/** Get the category colour accent for a folder path (inputs=blue, outputs=emerald, agent-data=purple). */
-function folderAccent(folderPath: string): { accent: string; accentBg: string } {
-  const root = folderPath.split("/")[0];
-  if (root === "inputs") return { accent: "border-l-blue-500", accentBg: "bg-blue-500" };
-  if (root === "outputs") return { accent: "border-l-emerald-500", accentBg: "bg-emerald-500" };
-  return { accent: "border-l-purple-500", accentBg: "bg-purple-500" };
-}
-
-function folderIcon(folderPath: string) {
-  const root = folderPath.split("/")[0];
-  if (root === "inputs") return "📥";
-  if (root === "outputs") return "📤";
-  return "🧠";
-}
-
-function FolderGroup({
-  folderName,
-  folderPath,
-  files,
-  viewMode,
-  onView,
-  makeFileUrl,
-}: {
-  folderName: string;
-  folderPath: string;
-  files: ArtifactEntry[];
   viewMode: "grid" | "list";
   onView: (a: ArtifactEntry) => void;
   makeFileUrl: (a: ArtifactEntry) => string;
 }) {
   const [expanded, setExpanded] = useState(true);
-  const { accent } = folderAccent(folderPath);
-  const emoji = folderIcon(folderPath);
+  const accent = agentAccent(agentName);
+
+  // Breadcrumb: which folder is "drilled into" — null means top-level
+  const [drillPath, setDrillPath] = useState<string | null>(null);
+
+  const folderMap = groupFilesByFolder(files);
+  const folders = sortedFolders(folderMap);
+
+  // When drilled into a folder, only show files in that folder
+  const visibleFiles = drillPath
+    ? (folderMap.get(drillPath) ?? [])
+    : files;
+
+  // Sublayout: if drilled into a folder, show breadcrumb + files only
+  const isDrilled = drillPath !== null;
 
   return (
     <div className="rounded-xl border border-border overflow-hidden">
+      {/* Agent header */}
       <button
         onClick={() => setExpanded((e) => !e)}
-        className={`w-full flex items-center gap-2 px-4 py-2.5 bg-secondary/30 hover:bg-secondary/50 tech-transition border-l-2 ${accent}`}
+        className={`w-full flex items-center gap-3 px-4 py-3 bg-secondary/30 hover:bg-secondary/50 tech-transition border-l-2 ${accent}`}
       >
-        {expanded ? <ChevronDown size={13} className="text-muted-foreground" /> : <ChevronRight size={13} className="text-muted-foreground" />}
-        <span className="text-sm">{emoji}</span>
-        <span className="text-xs font-medium text-foreground truncate">{folderName}</span>
-        <span className="text-[10px] text-muted-foreground">{files.length} file{files.length !== 1 ? "s" : ""}</span>
+        {expanded ? <ChevronDown size={15} className="text-muted-foreground" /> : <ChevronRight size={15} className="text-muted-foreground" />}
+        <Bot size={14} className="text-muted-foreground" />
+        <span className="text-sm font-medium text-foreground">{agentName}</span>
+        <span className="text-[11px] text-muted-foreground">{files.length} file{files.length !== 1 ? "s" : ""}</span>
       </button>
+
       {expanded && (
-        <div className="p-2">
-          {viewMode === "grid" ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-              {files.map((a, i) => (
-                <FileCard
-                  key={`${a.agent_name}:${a.path}`}
-                  artifact={a} index={i}
-                  onView={() => onView(a)}
-                  onDownload={() => window.open(makeFileUrl(a), "_blank")}
-                />
+        <div className="p-3">
+          {/* Breadcrumb when drilled into a folder */}
+          {isDrilled && (
+            <div className="flex items-center gap-1.5 mb-3 px-1">
+              <button
+                onClick={() => setDrillPath(null)}
+                className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+              >
+                {agentName}
+              </button>
+              {drillPath!.split("/").map((seg, i, arr) => (
+                <span key={i} className="flex items-center gap-1.5">
+                  <ChevronRight size={10} className="text-muted-foreground" />
+                  {i === arr.length - 1 ? (
+                    <span className="text-xs font-medium text-foreground">
+                      {folderMeta(drillPath!).emoji} {seg}
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => setDrillPath(arr.slice(0, i + 1).join("/"))}
+                      className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                    >
+                      {seg}
+                    </button>
+                  )}
+                </span>
               ))}
+              <span className="text-[10px] text-muted-foreground ml-1">
+                {visibleFiles.length} file{visibleFiles.length !== 1 ? "s" : ""}
+              </span>
             </div>
-          ) : (
-            <div className="rounded-lg border border-border overflow-hidden">
-              <div className="hidden sm:grid grid-cols-[1fr_120px_90px_90px_100px] gap-x-3 px-3 py-1.5 bg-secondary/20 border-b border-border text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                <span>File</span><span>Agent</span><span>Type</span><span>Size</span><span>Modified</span>
+          )}
+
+          {/* Drilled-in view: just show files */}
+          {isDrilled ? (
+            viewMode === "grid" ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+                {visibleFiles.map((a, i) => (
+                  <FileCard key={`${a.agent_name}:${a.path}`} artifact={a} index={i}
+                    onView={() => onView(a)} onDownload={() => window.open(makeFileUrl(a), "_blank")} />
+                ))}
               </div>
-              {files.map((a, i) => (
-                <FileListRow
-                  key={`${a.agent_name}:${a.path}`}
-                  artifact={a} index={i}
-                  onView={() => onView(a)}
-                  onDownload={() => window.open(makeFileUrl(a), "_blank")}
-                />
-              ))}
+            ) : (
+              <div className="rounded-lg border border-border overflow-hidden">
+                <div className="hidden sm:grid grid-cols-[1fr_90px_80px_100px] gap-x-3 px-3 py-1.5 bg-secondary/20 border-b border-border text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                  <span>File</span><span>Type</span><span>Size</span><span>Modified</span>
+                </div>
+                {visibleFiles.map((a, i) => (
+                  <FileListRow key={`${a.agent_name}:${a.path}`} artifact={a} index={i}
+                    onView={() => onView(a)} onDownload={() => window.open(makeFileUrl(a), "_blank")} />
+                ))}
+              </div>
+            )
+          ) : (
+            /* Top-level: show folder groups */
+            <div className="flex flex-col gap-2">
+              {folders.map(([folderPath, folderFiles]) => {
+                const meta = folderMeta(folderPath);
+                const displayName = folderPath.includes("/")
+                  ? folderPath.split("/").slice(1).join(" / ")
+                  : folderPath;
+                return (
+                  <div key={folderPath}
+                    className="rounded-lg border border-border/60 overflow-hidden hover:border-primary/20 tech-transition cursor-pointer"
+                    onDoubleClick={() => setDrillPath(folderPath)}
+                  >
+                    <div className={`flex items-center gap-2 px-3 py-2 bg-secondary/20 border-l-2 ${meta.accent.split(" ")[0]}`}>
+                      <FolderClosed size={13} className="text-muted-foreground shrink-0" />
+                      <span className="text-xs font-medium text-foreground truncate">{meta.emoji} {displayName}</span>
+                      <span className="text-[10px] text-muted-foreground ml-auto">{folderFiles.length} file{folderFiles.length !== 1 ? "s" : ""}</span>
+                    </div>
+                    <div className="px-2 py-1.5">
+                      {viewMode === "grid" ? (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                          {folderFiles.slice(0, 4).map((a, i) => (
+                            <FileCard key={`${a.agent_name}:${a.path}`} artifact={a} index={i}
+                              onView={() => onView(a)} onDownload={() => window.open(makeFileUrl(a), "_blank")} />
+                          ))}
+                          {folderFiles.length > 4 && (
+                            <div
+                              className="flex items-center justify-center rounded-lg border border-dashed border-border/50 bg-secondary/20 text-[11px] text-muted-foreground hover:text-foreground hover:border-primary/30 cursor-pointer transition-colors min-h-[100px]"
+                              onDoubleClick={(e) => { e.stopPropagation(); setDrillPath(folderPath); }}
+                            >
+                              +{folderFiles.length - 4} more
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        /* List: show truncated + "view all" */
+                        <div>
+                          {folderFiles.slice(0, 3).map((a, i) => (
+                            <FileListRow key={`${a.agent_name}:${a.path}`} artifact={a} index={i}
+                              onView={() => onView(a)} onDownload={() => window.open(makeFileUrl(a), "_blank")} />
+                          ))}
+                          {folderFiles.length > 3 && (
+                            <div
+                              className="px-3 py-1.5 text-[11px] text-blue-400 hover:text-blue-300 cursor-pointer transition-colors"
+                              onDoubleClick={(e) => { e.stopPropagation(); setDrillPath(folderPath); }}
+                            >
+                              + {folderFiles.length - 3} more files in {displayName} — double-click to browse
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

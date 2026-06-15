@@ -477,6 +477,97 @@ def _build_runtime_fix_prompt(telemetry: dict[str, Any]) -> str:
     )
 
 
+async def _stash_pull_before_mutation(
+    agent_dir: str, agent_name: str,
+) -> None:
+    """Stash → pull (rebase) → pop stash to sync the agent clone before mutation.
+
+    This ensures the sandbox fixes code on the latest upstream version, avoiding
+    merge conflicts when the operator later approves and pushes.  Local-only
+    commits (from prior mutation runs awaiting approval) are preserved via
+    rebase instead of reset --hard.
+
+    Non-fatal: if the pull fails, the sandbox runs on the current clone as-is.
+    """
+    import asyncio
+
+    async def _git(args: list[str]) -> tuple[int, str, str]:
+        proc = await asyncio.create_subprocess_exec(
+            "git", *args,
+            cwd=agent_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=30)
+        return proc.returncode, out.decode(errors="replace"), err.decode(errors="replace")
+
+    # 1. Stash any uncommitted changes so pull is clean
+    rc, stdout, stderr = await _git([
+        "stash", "--include-untracked",
+        "-m", "commandcenter-mutation-auto-stash",
+    ])
+    stashed = rc == 0 and "No local changes" not in stdout
+    if stashed:
+        _log.info("mutation.stashed_changes", agent=agent_name)
+
+    # 2. Fetch latest from origin
+    rc, _, stderr = await _git(["fetch", "origin"])
+    if rc != 0:
+        _log.warning(
+            "mutation.fetch_failed",
+            agent=agent_name,
+            stderr=stderr[:200],
+        )
+        if stashed:
+            await _git(["stash", "pop"])
+        return
+
+    # 3. Rebase local commits on top of origin/HEAD (preserves pending commits)
+    rc, _, stderr = await _git(["rebase", "origin/HEAD"])
+    if rc == 0:
+        _log.info("mutation.rebase_ok", agent=agent_name)
+    else:
+        # Rebase conflict — auto-resolve with ours, then continue
+        _log.warning(
+            "mutation.rebase_conflict",
+            agent=agent_name,
+            stderr=stderr[:200],
+            hint="Auto-resolving with checkout --ours.",
+        )
+        await _git(["checkout", "--ours", "."])
+        await _git(["add", "-A"])
+        rc2, _, err2 = await _git(["rebase", "--continue"])
+        if rc2 != 0:
+            await _git(["rebase", "--abort"])
+            _log.warning(
+                "mutation.rebase_aborted",
+                agent=agent_name,
+                stderr=err2[:200],
+                hint="Running sandbox on current clone state.",
+            )
+            if stashed:
+                await _git(["stash", "pop"])
+            return
+        _log.info(
+            "mutation.rebase_conflict_resolved",
+            agent=agent_name,
+            hint="Conflicts auto-resolved with --ours.",
+        )
+
+    # 4. Pop the stash so the sandbox sees any workspace changes
+    if stashed:
+        rc, _, stderr = await _git(["stash", "pop"])
+        if rc != 0:
+            _log.warning(
+                "mutation.stash_pop_failed",
+                agent=agent_name,
+                stderr=stderr[:200],
+                hint="Stashed changes may be lost — sandbox will see clean tree.",
+            )
+
+    _log.info("mutation.clone_synced", agent=agent_name)
+
+
 async def _run_mutation_sandbox(
     agent_name: str,
     run_id: str,
@@ -520,6 +611,13 @@ async def _run_mutation_sandbox(
             prompt=_build_mutation_prompt(telemetry),
         )
         return False, "", "", "", None
+
+    # ── Ensure the agent clone is up-to-date before sandbox runs ─────────
+    # Stash → pull → pop stash so the sandbox works on latest code.  This
+    # prevents the sandbox from fixing an already-fixed issue and avoids
+    # merge conflicts when the operator later approves and pushes.
+    if agent_dir:
+        await _stash_pull_before_mutation(agent_dir, agent_name)
 
     prompt = _build_mutation_prompt(telemetry)
 

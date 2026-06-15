@@ -34,9 +34,13 @@ and streams chat responses as AG-UI events.
 ### Modifying the mutation layer
 1. mutation.py contains attempt_self_mutation() and prompt builders
 2. Agent purpose context (instructions.md, skills, trigger) is assembled in _build_telemetry()
-3. The Docker sandbox runs mutation_runner.py with MUTATION_PROMPT env var
-4. Commits are registered as pending_commit rows for inbox approval
-5. Local-only repos skip push on approval; use git reset HEAD~1 for rejection
+3. _stash_pull_before_mutation() syncs the clone (stash → fetch → rebase → pop stash)
+   before the Docker sandbox runs, preventing stale-code fixes and merge conflicts
+4. The Docker sandbox runs mutation_runner.py with MUTATION_PROMPT env var
+5. Commits are registered as pending_commit rows for inbox approval
+6. Local-only repos skip push on approval; use git reset HEAD~1 for rejection
+7. _pull_latest() in acb_skills.loader preserves local-only commits (pending approval)
+   via rebase instead of destructive reset --hard
 
 ### Session continuity and stale-session recovery
 - Copilot SDK session IDs (service_session_id) are stored in-memory

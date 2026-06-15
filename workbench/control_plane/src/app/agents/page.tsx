@@ -1233,9 +1233,9 @@ function AgentSidePanel({
           </div>
         )}
 
-        {agent.agent_runtime === "github-copilot" && (
-          <PendingCommits agentName={agent.name} />
-        )}
+        {/* Show pending commits for ALL agents — any agent can have
+            self-mutation commits awaiting review, not just github-copilot. */}
+        <PendingCommits agentName={agent.name} />
 
         <div className="flex gap-2 pt-2">
           <Link

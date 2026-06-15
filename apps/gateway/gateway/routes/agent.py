@@ -1360,34 +1360,42 @@ async def approve_pending_commit(
         await remote_proc.communicate()
         has_remote = remote_proc.returncode == 0
 
+        new_sha: str | None = None
         if has_remote:
             # Push.  If the fast-forward fails, rebase and retry.
-            push_ok = await _git_push_with_rebase(clone_dir, commit_sha)
+            push_ok, new_sha = await _git_push_with_rebase(clone_dir, commit_sha)
             if not push_ok:
                 raise HTTPException(
                     status_code=500,
                     detail="git push failed after rebase — check gateway logs",
                 )
+            # If rebase changed the commit SHA, update it in the DB so the
+            # row stays consistent (diff URL, cascade, and future audits
+            # all reference this SHA).
+            effective_sha = new_sha or commit_sha
             _log.info("mutation.commit_pushed",
-                      agent=row.agent_name, commit_sha=commit_sha[:8])
+                      agent=row.agent_name, commit_sha=effective_sha[:8])
         else:
+            effective_sha = commit_sha
             _log.info(
                 "mutation.commit_kept_local",
                 agent=row.agent_name,
-                commit_sha=commit_sha[:8],
+                commit_sha=effective_sha[:8],
                 hint="Local-only repo — no remote to push to. Commit kept.",
             )
 
         reviewer = getattr(user, "sub", None) or getattr(user, "email", "unknown")
         with get_session() as sess:
-            sess.execute(
-                text(
-                    "UPDATE pending_commit "
-                    "SET status = 'approved', reviewed_by = :by, reviewed_at = now() "
-                    "WHERE id = :id"
-                ),
-                {"id": commit_id, "by": reviewer},
+            update_sql = (
+                "UPDATE pending_commit "
+                "SET status = 'approved', reviewed_by = :by, reviewed_at = now()"
             )
+            params: dict = {"id": commit_id, "by": reviewer}
+            if new_sha and new_sha != commit_sha:
+                update_sql += ", commit_sha = :new_sha"
+                params["new_sha"] = new_sha
+            update_sql += " WHERE id = :id"
+            sess.execute(text(update_sql), params)
             sess.commit()
 
         # ── Cascade: auto-approve any other pending commits for the same agent
@@ -1407,9 +1415,11 @@ async def approve_pending_commit(
                 ).fetchall()
 
             for other in others:
-                # is_ancestor returns 0 when other_sha IS an ancestor of approved_sha
+                # is_ancestor returns 0 when other_sha IS an ancestor
+                # of the effective (post-rebase) SHA
                 anc_proc = await asyncio.create_subprocess_exec(
-                    "git", "merge-base", "--is-ancestor", other.commit_sha, commit_sha,
+                    "git", "merge-base", "--is-ancestor",
+                    other.commit_sha, effective_sha,
                     cwd=clone_dir,
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.DEVNULL,
@@ -1423,7 +1433,8 @@ async def approve_pending_commit(
                     sess.execute(
                         text(
                             "UPDATE pending_commit "
-                            "SET status = 'approved', reviewed_by = :by, reviewed_at = now() "
+                            "SET status = 'approved',"
+                            " reviewed_by = :by, reviewed_at = now() "
                             "WHERE id = ANY(:ids)"
                         ),
                         {"by": f"cascade:{reviewer}", "ids": cascade_ids},
@@ -1432,7 +1443,7 @@ async def approve_pending_commit(
                 _log.info(
                     "mutation.cascade_approved",
                     agent=row.agent_name,
-                    approved_sha=commit_sha,
+                    approved_sha=effective_sha,
                     cascade_count=len(cascade_ids),
                 )
         except Exception as _cascade_exc:  # noqa: BLE001
@@ -1446,7 +1457,7 @@ async def approve_pending_commit(
                 target=f"agent:{row.agent_name}",
                 payload={
                     "pending_commit_id": commit_id,
-                    "commit_sha": commit_sha,
+                    "commit_sha": effective_sha,
                     "run_id": row.run_id,
                 },
             )
@@ -1454,13 +1465,13 @@ async def approve_pending_commit(
         _log.info(
             "mutation.commit_approved",
             agent=row.agent_name,
-            commit_sha=commit_sha,
+            commit_sha=effective_sha,
             reviewer=reviewer,
             cascade=len(cascade_ids),
         )
         return {
             "status": "approved",
-            "commit_sha": commit_sha,
+            "commit_sha": effective_sha,
             "cascade_approved": len(cascade_ids),
         }
 
@@ -1737,7 +1748,9 @@ async def _git_exec(cwd: str, args: list[str]) -> int:
     return proc.returncode
 
 
-async def _git_push_with_rebase(clone_dir: str, commit_sha: str | None = None) -> bool:
+async def _git_push_with_rebase(
+    clone_dir: str, commit_sha: str | None = None,
+) -> tuple[bool, str | None]:
     """Push a specific commit (or HEAD) to the remote default branch.
 
     ``commit_sha``: if given, push exactly this commit — not the full branch
@@ -1745,12 +1758,14 @@ async def _git_push_with_rebase(clone_dir: str, commit_sha: str | None = None) -
     not B or C (which may not yet be approved).  When approving the tip commit
     all ancestors are pushed automatically by git.
 
-    Returns True on success, False on unrecoverable failure.
+    Returns ``(success, new_commit_sha)``.  ``new_commit_sha`` is the HEAD SHA
+    after rebase (may differ from the input if rebase was needed).  Callers
+    MUST update ``pending_commit.commit_sha`` when this changes.
     """
     import asyncio  # noqa: PLC0415
 
-    # Discover the remote's default branch (HEAD branch from `git remote show origin`).
-    # Falls back to "master" then "main" if detection fails.
+    # Discover the remote's default branch (HEAD branch from
+    # `git remote show origin`).  Falls back to "master" then "main".
     remote_branch = "master"
     try:
         rb_proc = await asyncio.create_subprocess_exec(
@@ -1772,7 +1787,7 @@ async def _git_push_with_rebase(clone_dir: str, commit_sha: str | None = None) -
     push_src = commit_sha if commit_sha else "HEAD"
     push_target = f"{push_src}:{remote_branch}"
 
-    # First attempt
+    # First attempt — fast-forward
     proc = await asyncio.create_subprocess_exec(
         "git", "push", "origin", push_target,
         cwd=clone_dir,
@@ -1781,15 +1796,18 @@ async def _git_push_with_rebase(clone_dir: str, commit_sha: str | None = None) -
     )
     _, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=60)
     if proc.returncode == 0:
-        return True
+        return True, commit_sha  # SHA unchanged on clean fast-forward
 
     stderr = stderr_bytes.decode(errors="replace")
-    _log.warning("mutation.push_rejected", remote_branch=remote_branch, reason=stderr[:300])
+    _log.warning(
+        "mutation.push_rejected",
+        remote_branch=remote_branch, reason=stderr[:300],
+    )
 
     # Fetch + rebase on top of the remote branch, then retry.
     fetch_rc = await _git_exec(clone_dir, ["fetch", "origin"])
     if fetch_rc != 0:
-        return False
+        return False, None
 
     rebase_proc = await asyncio.create_subprocess_exec(
         "git", "rebase", f"origin/{remote_branch}",
@@ -1810,11 +1828,29 @@ async def _git_push_with_rebase(clone_dir: str, commit_sha: str | None = None) -
         await _git_exec(clone_dir, ["add", "-A"])
         await _git_exec(clone_dir, ["rebase", "--continue"])
 
-    # After rebase the SHA of our commit changes; find the new HEAD
-    new_head = push_src
-    if commit_sha:
-        # After rebase our commit is no longer at commit_sha — use HEAD
-        new_head = "HEAD"
+    # After rebase the SHA of our commit changes — read the new HEAD SHA
+    # so the caller can update the pending_commit row.
+    new_sha: str | None = None
+    try:
+        sha_proc = await asyncio.create_subprocess_exec(
+            "git", "rev-parse", "HEAD",
+            cwd=clone_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        sha_out, _ = await asyncio.wait_for(sha_proc.communicate(), timeout=10)
+        if sha_proc.returncode == 0:
+            new_sha = sha_out.decode(errors="replace").strip()
+            _log.info(
+                "mutation.rebase_new_sha",
+                old_sha=(commit_sha or "HEAD")[:8],
+                new_sha=new_sha[:8],
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Push the new HEAD (which includes our rebased commit)
+    new_head = new_sha if new_sha else "HEAD"
     push_target_retry = f"{new_head}:{remote_branch}"
 
     retry_proc = await asyncio.create_subprocess_exec(
@@ -1824,7 +1860,8 @@ async def _git_push_with_rebase(clone_dir: str, commit_sha: str | None = None) -
         stderr=asyncio.subprocess.DEVNULL,
     )
     await asyncio.wait_for(retry_proc.communicate(), timeout=60)
-    return retry_proc.returncode == 0
+    success = retry_proc.returncode == 0
+    return success, new_sha if success else None
 
 
 @router.post("/webhook/{source}", status_code=status.HTTP_202_ACCEPTED)

@@ -28,12 +28,21 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 # ---------------------------------------------------------------------------
 
 def _repo_root() -> Path:
-    """Walk up from this file to find the repo root (where pyproject.toml lives)."""
+    """Walk up from this file to find the workspace root (pyproject.toml with [tool.uv.workspace]).
+
+    Must skip sub-package pyproject.toml files (e.g. apps/gateway/pyproject.toml)
+    and only stop at the monorepo root that contains infra/, .env, etc.
+    """
     here = Path(__file__).resolve()
     for parent in here.parents:
-        if (parent / "pyproject.toml").exists():
-            return parent
-    raise FileNotFoundError("Repo root not found from %s" % here)
+        pyproject = parent / "pyproject.toml"
+        if pyproject.exists():
+            try:
+                if "[tool.uv.workspace]" in pyproject.read_text(encoding="utf-8"):
+                    return parent
+            except OSError:
+                pass
+    raise FileNotFoundError("Workspace root not found from %s" % here)
 
 
 def _config_path() -> Path:

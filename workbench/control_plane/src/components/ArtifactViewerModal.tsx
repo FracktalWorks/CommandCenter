@@ -29,6 +29,10 @@ interface ArtifactViewerModalProps {
   /** Optional override for the file URL — used by the global artifacts
    *  browser where there is no session workspace. */
   downloadUrl?: string;
+  /** Optional override for the save (PUT) URL. */
+  saveUrl?: string;
+  /** Optional override for the delete URL. */
+  deleteUrl?: string;
 }
 
 type ViewerState =
@@ -268,7 +272,7 @@ function PdfViewer({ url }: { url: string }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelete, downloadUrl: externalDownloadUrl }: ArtifactViewerModalProps) {
+export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelete, downloadUrl: externalDownloadUrl, saveUrl: externalSaveUrl, deleteUrl: externalDeleteUrl }: ArtifactViewerModalProps) {
   const [state, setState] = useState<ViewerState>({ status: "loading" });
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
@@ -375,17 +379,18 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
   const downloadUrl = externalDownloadUrl
     ?? `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`;
   const deletable =
-    entry.path.startsWith("inputs/") ||
-    entry.path.startsWith("outputs/") ||
-    entry.path.startsWith("agent-data/");
+    !externalDownloadUrl && (
+      entry.path.startsWith("inputs/") ||
+      entry.path.startsWith("outputs/") ||
+      entry.path.startsWith("agent-data/")
+    );
 
   const handleDelete = async () => {
     if (!confirm(`Delete "${entry.name}"?\n\nThis cannot be undone.`)) return;
     try {
-      const res = await fetch(
-        `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`,
-        { method: "DELETE" }
-      );
+      const delUrl = externalDeleteUrl
+        ?? `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`;
+      const res = await fetch(delUrl, { method: "DELETE" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       onDelete?.(entry);
       onClose();
@@ -415,14 +420,13 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
   const handleSave = async () => {
     setSaving(true);
     try {
-      const res = await fetch(
-        `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: editContent, encoding: "utf-8" }),
-        }
-      );
+      const saveUrl = externalSaveUrl
+        ?? `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`;
+      const res = await fetch(saveUrl, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: editContent, encoding: "utf-8" }),
+      });
       if (!res.ok) {
         const err = await res.text();
         throw new Error(`HTTP ${res.status}: ${err}`);

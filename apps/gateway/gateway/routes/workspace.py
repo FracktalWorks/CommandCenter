@@ -128,45 +128,68 @@ def _get_workspace_path(session_id: str) -> Path | None:
 def _resolve_agent_workspace(agent_name: str) -> Path | None:
     """Return the workspace directory for a named agent.
 
-    Checks the dynamic agent registry first (for local_path overrides),
-    then falls back to the clone-cache convention.
+    Checks (in order):
+    1. Static agent registry (``_AGENT_REGISTRY``) for ``local_path`` overrides.
+    2. Dynamic agent registry (Postgres-backed) for ``local_path`` entries.
+    3. Clone-cache convention: ``{agents_clone_dir}/repos/{agent_name}``.
     """
     try:
         from acb_common import get_settings  # noqa: PLC0415
 
-        # Check dynamic registry for local_path override
+        # ── 1. Static registry (in-code _AGENT_REGISTRY) ──────────────────
         try:
-            import json  # noqa: PLC0415
-            from pathlib import Path as _Path  # noqa: PLC0415
-
-            agents_file = _Path(__file__).resolve()
-            for _ in range(8):
-                agents_file = agents_file.parent
-                if (agents_file / "pyproject.toml").exists():
-                    agents_file = agents_file / "agents.json"
+            from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
+            for entry in _AGENT_REGISTRY:
+                if entry.get("name") == agent_name:
+                    lp = entry.get("local_path")
+                    if lp:
+                        p = Path(lp)
+                        if p.exists():
+                            return p
                     break
-
-            if agents_file.exists() and agents_file.name == "agents.json":
-                entries = json.loads(agents_file.read_text(encoding="utf-8"))
-                for entry in entries:
-                    if entry.get("name") == agent_name:
-                        lp = entry.get("local_path")
-                        if lp:
-                            p = Path(lp)
-                            return p if p.exists() else None
-                        break
         except Exception:  # noqa: BLE001
             pass
 
-        # Fallback: clone-cache convention  {agents_clone_dir}/repos/{agent_name}
+        # ── 2. Dynamic registry (Postgres-backed) ─────────────────────────
+        try:
+            from gateway.routes.agent import \
+                _load_dynamic_agents  # noqa: PLC0415
+            for entry in _load_dynamic_agents():
+                if entry.get("name") == agent_name:
+                    lp = entry.get("local_path")
+                    if lp:
+                        p = Path(lp)
+                        if p.exists():
+                            return p
+                    # For GitHub-registered agents, the clone dir
+                    # follows the clone-cache convention checked below.
+                    break
+        except Exception:  # noqa: BLE001
+            pass
+
+        # ── 3. Clone-cache convention ─────────────────────────────────────
         settings = get_settings()
-        clone_root = Path(getattr(settings, "agents_clone_dir", "/tmp/acb_agents")) / "repos"
-        candidate = clone_root / agent_name
-        if candidate.exists():
-            return candidate
+        clone_root = (
+            Path(getattr(settings, "agents_clone_dir", "/tmp/acb_agents"))
+            / "repos"
+        )
+        # Try exact agent_name first; also try with "agent-" prefix stripped
+        # since clone directories may use either convention.
+        candidates = [clone_root / agent_name]
+        if agent_name.startswith("agent-"):
+            candidates.append(clone_root / agent_name[len("agent-"):])
+        else:
+            candidates.append(clone_root / f"agent-{agent_name}")
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
 
     except Exception as exc:
-        _log.warning("workspace.agent_resolve_failed", agent=agent_name, error=str(exc))
+        _log.warning(
+            "workspace.agent_resolve_failed",
+            agent=agent_name,
+            error=str(exc),
+        )
     return None
 
 
@@ -688,12 +711,41 @@ def _discover_agent_workspaces() -> dict[str, Path]:
     """Return a dict of {agent_name: workspace_path} for all known agents.
 
     Discovery sources (in order):
-    1. Dynamic agent registry (agents.json) — local_path entries.
-    2. Clone-cache directory — {agents_clone_dir}/repos/*.
+    1. Static agent registry (``_AGENT_REGISTRY``) — local_path entries.
+    2. Dynamic agent registry (Postgres-backed) — local_path entries.
+    3. Agents.json file — local_path entries (legacy fallback).
+    4. Clone-cache directory — {agents_clone_dir}/repos/*.
     """
     workspaces: dict[str, Path] = {}
 
-    # ── 1. Dynamic registry (local_path overrides) ──────────────────────
+    # ── 1. Static registry (in-code _AGENT_REGISTRY) ──────────────────────
+    try:
+        from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
+        for entry in _AGENT_REGISTRY:
+            name = entry.get("name")
+            lp = entry.get("local_path")
+            if name and lp:
+                p = Path(lp)
+                if p.exists():
+                    workspaces[name] = p
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── 2. Dynamic registry (Postgres-backed) ─────────────────────────────
+    try:
+        from gateway.routes.agent import \
+            _load_dynamic_agents  # noqa: PLC0415
+        for entry in _load_dynamic_agents():
+            name = entry.get("name")
+            lp = entry.get("local_path")
+            if name and lp:
+                p = Path(lp)
+                if p.exists() and name not in workspaces:
+                    workspaces[name] = p
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── 3. Agents.json file (legacy fallback) ─────────────────────────────
     try:
         import json as _json  # noqa: PLC0415
         agents_file = Path(__file__).resolve()
@@ -707,14 +759,14 @@ def _discover_agent_workspaces() -> dict[str, Path]:
             for entry in entries:
                 name = entry.get("name")
                 lp = entry.get("local_path")
-                if name and lp:
+                if name and lp and name not in workspaces:
                     p = Path(lp)
                     if p.exists():
                         workspaces[name] = p
     except Exception:  # noqa: BLE001
         pass
 
-    # ── 2. Clone-cache directory ────────────────────────────────────────
+    # ── 4. Clone-cache directory ────────────────────────────────────────
     try:
         from acb_common import get_settings  # noqa: PLC0415
         settings = get_settings()
@@ -918,4 +970,80 @@ async def get_artifact_file(
             "Content-Disposition": f'inline; filename="{file_path.name}"',
             "Content-Length": str(file_size),
         },
+    )
+
+
+@router.put("/artifacts/file")
+async def write_artifact_file(
+    agent: str = Query(..., description="Agent name"),
+    path: str = Query(..., description="Relative path within the workspace"),
+    body: WriteFileRequest = ...,
+    _user: UserContext = Depends(get_current_user),
+) -> ArtifactEntry:
+    """Overwrite a file in any agent's workspace (global artifact view).
+
+    Uses the same agent-workspace discovery as GET /artifacts/file.
+    Accepts text (encoding='utf-8') and binary (encoding='base64') content.
+    Returns the updated ArtifactEntry with fresh stat metadata.
+    """
+    import asyncio as _asyncio  # noqa: PLC0415
+    import base64  # noqa: PLC0415
+    loop = _asyncio.get_event_loop()
+
+    workspaces = await loop.run_in_executor(None, _discover_agent_workspaces)
+    workspace = workspaces.get(agent)
+    if workspace is None or not workspace.exists():
+        raise HTTPException(
+            status_code=404, detail=f"Agent workspace not found: {agent}"
+        )
+
+    file_path = _safe_resolve(workspace, path)
+    # Restrict writes to visible workspace dirs
+    rel = str(file_path.relative_to(workspace)).replace("\\", "/")
+    if not _is_visible_workspace_path(rel):
+        raise HTTPException(
+            status_code=400,
+            detail="Writes are restricted to inputs/, outputs/, and agent-data/.",
+        )
+
+    # Create parent directories if needed
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write content
+    if body.encoding == "base64":
+        data = base64.b64decode(body.content)
+        file_path.write_bytes(data)
+    else:
+        file_path.write_text(body.content, encoding="utf-8")
+
+    # Build response
+    stat = file_path.stat()
+    mime, _ = mimetypes.guess_type(file_path.name)
+    rel_path = str(file_path.relative_to(workspace)).replace("\\", "/")
+
+    # Determine category from path
+    cat = "agent-data"
+    for c in _VISIBLE_WORKSPACE_DIRS:
+        if rel_path.startswith(c + "/") or rel_path == c:
+            cat = c
+            break
+
+    _log.info(
+        "workspace.artifact_file_written",
+        agent=agent,
+        path=rel_path,
+        size=stat.st_size,
+    )
+
+    return ArtifactEntry(
+        agent_name=agent,
+        path=rel_path,
+        name=file_path.name,
+        size=stat.st_size,
+        modified_at=__import__("datetime").datetime.fromtimestamp(
+            stat.st_mtime, tz=__import__("datetime").timezone.utc
+        ).isoformat(),
+        mime_type=mime or "application/octet-stream",
+        category=cat,
+        is_dir=False,
     )

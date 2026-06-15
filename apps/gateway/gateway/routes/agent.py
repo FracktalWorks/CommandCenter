@@ -258,6 +258,11 @@ def _sync_file_into_db() -> None:
             for a in file_agents:
                 if a.get("name") in existing:
                     continue
+                # Validate name before inserting — only accept well-formed slugs
+                aname = a.get("name", "")
+                if not aname or not re.match(r"^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$", aname):
+                    _log.warning("agent.sync_skipped_invalid_name", name=aname)
+                    continue
                 s.execute(
                     text(
                         "INSERT INTO dynamic_agents "
@@ -366,7 +371,11 @@ def _save_dynamic_agents(agents: list[dict]) -> None:
 
 
 def _validate_agent_name(name: str) -> str:
-    """Reject agent names not in the static or dynamic allowlist."""
+    """Reject agent names not in the static or dynamic allowlist.
+
+    Performs case-insensitive matching against the registry so names
+    stored with mixed case in the DB still resolve correctly.
+    """
     safe = name.lower().strip()
     # Strip optional 'agent-' prefix so 'agent-project-manager' matches 'project-manager'
     if safe.startswith("agent-"):
@@ -374,20 +383,25 @@ def _validate_agent_name(name: str) -> str:
     else:
         safe_no_prefix = safe
 
-    # Check all sources: known agents, registry, dynamic (UI-registered)
-    registry_names = {a["name"] for a in _AGENT_REGISTRY}
-    dynamic_names = {a["name"] for a in _load_dynamic_agents()}
-    all_allowed = _KNOWN_AGENTS | registry_names | dynamic_names
+    # Build case-insensitive lookup maps
+    registry_names = {a["name"].lower(): a["name"] for a in _AGENT_REGISTRY}
+    dynamic_names = {a["name"].lower(): a["name"] for a in _load_dynamic_agents()}
+    known_lower = {n.lower() for n in _KNOWN_AGENTS}
+    all_allowed_lower = known_lower | set(registry_names.keys()) | set(dynamic_names.keys())
 
-    if safe not in all_allowed and safe_no_prefix not in all_allowed:
+    if safe not in all_allowed_lower and safe_no_prefix not in all_allowed_lower:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
                 f"Unknown agent {name!r}. "
-                f"Registered: {sorted(all_allowed)}"
+                f"Registered: {sorted(all_allowed_lower)}"
             ),
         )
-    return safe if safe in all_allowed else safe_no_prefix
+
+    # Return the canonical (DB-stored) name to preserve original casing
+    if safe in all_allowed_lower:
+        return registry_names.get(safe) or dynamic_names.get(safe) or safe
+    return registry_names.get(safe_no_prefix) or dynamic_names.get(safe_no_prefix) or safe_no_prefix
 
 
 # ---------------------------------------------------------------------------

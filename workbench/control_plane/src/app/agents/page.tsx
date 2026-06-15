@@ -571,6 +571,17 @@ function AddAgentModal({
   const handleFormSubmit = async () => {
     if (!form.repoUrl.trim() || !form.name.trim()) return;
 
+    // Validate agent name format (must match backend: 2-50 lowercase alphanumeric + hyphens)
+    const nameRegex = /^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$/;
+    if (!nameRegex.test(form.name.trim())) {
+      setErrorMsg(
+        "Agent name must be 2-50 lowercase letters, digits, or hyphens " +
+        "(no spaces, no leading/trailing hyphens)."
+      );
+      setStep("error");
+      return;
+    }
+
     // Check GitHub connection status
     try {
       const res = await fetch("/api/integrations/status");

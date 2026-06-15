@@ -849,6 +849,7 @@ export default function ArtifactsPage() {
           sessionId="artifacts"
           entry={viewerEntry}
           downloadUrl={viewerUrl}
+          saveUrl={viewerUrl}
           onClose={() => setViewerEntry(null)}
         />
       )}

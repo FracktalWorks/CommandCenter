@@ -1,6 +1,7 @@
 /**
  * GET /api/agent/artifacts/file?agent=<name>&path=<rel_path>
- * Proxy raw file bytes for the global artifact browser.
+ * PUT /api/agent/artifacts/file?agent=<name>&path=<rel_path>
+ * Proxy for the global artifact browser — read and write individual files.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
@@ -73,6 +74,44 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     if (contentLength) headers["Content-Length"] = contentLength;
 
     return new NextResponse(res.body, { status: 200, headers });
+  } catch (err) {
+    return NextResponse.json({ error: String(err) }, { status: 503 });
+  }
+}
+
+export async function PUT(req: NextRequest): Promise<NextResponse> {
+  try {
+    const agent = req.nextUrl.searchParams.get("agent");
+    const filePath = req.nextUrl.searchParams.get("path");
+    if (!agent || !filePath) {
+      return NextResponse.json(
+        { error: "Missing ?agent= and ?path= query parameters" },
+        { status: 400 }
+      );
+    }
+
+    const body = await req.json();
+
+    const upstream = new URL(`${GATEWAY_URL}/agent/artifacts/file`);
+    upstream.searchParams.set("agent", agent);
+    upstream.searchParams.set("path", filePath);
+
+    const res = await fetch(upstream.toString(), {
+      method: "PUT",
+      headers: {
+        ...(await buildGatewayHeaders()),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      return NextResponse.json({ error: err }, { status: res.status });
+    }
+
+    const data = await res.json();
+    return NextResponse.json(data);
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 503 });
   }

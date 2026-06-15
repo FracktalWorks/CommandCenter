@@ -3,6 +3,8 @@
  * PATCH  /api/agent/[name]
  *
  * Proxies to the corresponding FastAPI gateway endpoints.
+ * Name validation is handled by the backend — the proxy just
+ * encodes and forwards.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -15,8 +17,12 @@ const INTERNAL_TOKEN =
   process.env.LITELLM_MASTER_KEY ??
   "sk-local-dev-change-me";
 
+/** Reject names that are empty or contain path separators (safety only). */
 function validateName(name: string): boolean {
-  return /^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$/.test(name);
+  if (!name || name.trim().length === 0) return false;
+  // Reject path traversal / separators
+  if (name.includes("/") || name.includes("\\") || name.includes("..")) return false;
+  return true;
 }
 
 export async function DELETE(

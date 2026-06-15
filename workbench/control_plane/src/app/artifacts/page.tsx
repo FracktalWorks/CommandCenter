@@ -546,6 +546,44 @@ export default function ArtifactsPage() {
     return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [processed, groupByAgent]);
 
+  // ── Folder groups (for grid/list view) ──────────────────────────────
+  interface FolderGroupEntry {
+    folderName: string;
+    folderPath: string;
+    files: ArtifactEntry[];
+  }
+
+  const folderGroups = useMemo(() => {
+    // Build a tree of folders from file paths, then flatten into groups
+    const folderMap = new Map<string, ArtifactEntry[]>();
+    for (const a of processed) {
+      // Extract the directory path (everything before the filename)
+      const lastSlash = a.path.lastIndexOf("/");
+      const dirPath = lastSlash > 0 ? a.path.substring(0, lastSlash) : a.category;
+      const list = folderMap.get(dirPath) ?? [];
+      list.push(a);
+      folderMap.set(dirPath, list);
+    }
+    // Sort folders alphabetically, category roots first
+    const entries: FolderGroupEntry[] = [];
+    for (const [folderPath, files] of folderMap) {
+      // Display name: just the folder name (last segment)
+      const segments = folderPath.split("/");
+      const folderName = segments.length > 1
+        ? segments.slice(1).join(" / ")
+        : folderPath;
+      entries.push({ folderName, folderPath, files });
+    }
+    // Sort: category root folders first, then alphabetically
+    entries.sort((a, b) => {
+      const aRoot = a.folderPath.split("/")[0];
+      const bRoot = b.folderPath.split("/")[0];
+      if (aRoot !== bRoot) return aRoot.localeCompare(bRoot);
+      return a.folderPath.localeCompare(b.folderPath);
+    });
+    return entries;
+  }, [processed]);
+
   // ── Stats ─────────────────────────────────────────────────────────────
   const stats = useMemo(() => ({
     total: artifacts.filter((a) => !a.is_dir).length,
@@ -810,31 +848,32 @@ export default function ArtifactsPage() {
                 ))}
               </div>
             ) : viewMode === "grid" ? (
-              /* ── Grid ──────────────────────────────────────────────── */
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-                {processed.map((a, i) => (
-                  <FileCard
-                    key={`${a.agent_name}:${a.path}`}
-                    artifact={a}
-                    index={i}
-                    onView={() => openViewer(a)}
-                    onDownload={() => window.open(makeFileUrl(a), "_blank")}
+              /* ── Grid (folder-grouped) ─────────────────────────── */
+              <div className="flex flex-col gap-4">
+                {folderGroups.map((group) => (
+                  <FolderGroup
+                    key={group.folderPath}
+                    folderName={group.folderName}
+                    folderPath={group.folderPath}
+                    files={group.files}
+                    viewMode="grid"
+                    onView={openViewer}
+                    makeFileUrl={makeFileUrl}
                   />
                 ))}
               </div>
             ) : (
-              /* ── List / Table ──────────────────────────────────────── */
-              <div className="rounded-xl border border-border overflow-hidden bg-card">
-                <div className="hidden sm:grid grid-cols-[1fr_120px_90px_90px_100px] gap-x-3 px-4 py-2.5 bg-secondary/40 border-b border-border text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                  <span>File</span><span>Agent</span><span>Type</span><span>Size</span><span>Modified</span>
-                </div>
-                {processed.map((a, i) => (
-                  <FileListRow
-                    key={`${a.agent_name}:${a.path}`}
-                    artifact={a}
-                    index={i}
-                    onView={() => openViewer(a)}
-                    onDownload={() => window.open(makeFileUrl(a), "_blank")}
+              /* ── List (folder-grouped) ─────────────────────────── */
+              <div className="flex flex-col gap-4">
+                {folderGroups.map((group) => (
+                  <FolderGroup
+                    key={group.folderPath}
+                    folderName={group.folderName}
+                    folderPath={group.folderPath}
+                    files={group.files}
+                    viewMode="list"
+                    onView={openViewer}
+                    makeFileUrl={makeFileUrl}
                   />
                 ))}
               </div>
@@ -903,6 +942,87 @@ function AgentGroup({
           ) : (
             <div className="rounded-lg border border-border overflow-hidden">
               <div className="hidden sm:grid grid-cols-[1fr_120px_90px_90px_100px] gap-x-3 px-4 py-2 bg-secondary/30 border-b border-border text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                <span>File</span><span>Agent</span><span>Type</span><span>Size</span><span>Modified</span>
+              </div>
+              {files.map((a, i) => (
+                <FileListRow
+                  key={`${a.agent_name}:${a.path}`}
+                  artifact={a} index={i}
+                  onView={() => onView(a)}
+                  onDownload={() => window.open(makeFileUrl(a), "_blank")}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Folder group (collapsible) ────────────────────────────────────────────
+
+/** Get the category colour accent for a folder path (inputs=blue, outputs=emerald, agent-data=purple). */
+function folderAccent(folderPath: string): { accent: string; accentBg: string } {
+  const root = folderPath.split("/")[0];
+  if (root === "inputs") return { accent: "border-l-blue-500", accentBg: "bg-blue-500" };
+  if (root === "outputs") return { accent: "border-l-emerald-500", accentBg: "bg-emerald-500" };
+  return { accent: "border-l-purple-500", accentBg: "bg-purple-500" };
+}
+
+function folderIcon(folderPath: string) {
+  const root = folderPath.split("/")[0];
+  if (root === "inputs") return "📥";
+  if (root === "outputs") return "📤";
+  return "🧠";
+}
+
+function FolderGroup({
+  folderName,
+  folderPath,
+  files,
+  viewMode,
+  onView,
+  makeFileUrl,
+}: {
+  folderName: string;
+  folderPath: string;
+  files: ArtifactEntry[];
+  viewMode: "grid" | "list";
+  onView: (a: ArtifactEntry) => void;
+  makeFileUrl: (a: ArtifactEntry) => string;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const { accent } = folderAccent(folderPath);
+  const emoji = folderIcon(folderPath);
+
+  return (
+    <div className="rounded-xl border border-border overflow-hidden">
+      <button
+        onClick={() => setExpanded((e) => !e)}
+        className={`w-full flex items-center gap-2 px-4 py-2.5 bg-secondary/30 hover:bg-secondary/50 tech-transition border-l-2 ${accent}`}
+      >
+        {expanded ? <ChevronDown size={13} className="text-muted-foreground" /> : <ChevronRight size={13} className="text-muted-foreground" />}
+        <span className="text-sm">{emoji}</span>
+        <span className="text-xs font-medium text-foreground truncate">{folderName}</span>
+        <span className="text-[10px] text-muted-foreground">{files.length} file{files.length !== 1 ? "s" : ""}</span>
+      </button>
+      {expanded && (
+        <div className="p-2">
+          {viewMode === "grid" ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+              {files.map((a, i) => (
+                <FileCard
+                  key={`${a.agent_name}:${a.path}`}
+                  artifact={a} index={i}
+                  onView={() => onView(a)}
+                  onDownload={() => window.open(makeFileUrl(a), "_blank")}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-border overflow-hidden">
+              <div className="hidden sm:grid grid-cols-[1fr_120px_90px_90px_100px] gap-x-3 px-3 py-1.5 bg-secondary/20 border-b border-border text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
                 <span>File</span><span>Agent</span><span>Type</span><span>Size</span><span>Modified</span>
               </div>
               {files.map((a, i) => (

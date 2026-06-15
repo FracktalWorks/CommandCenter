@@ -1809,24 +1809,58 @@ async def _git_push_with_rebase(
     if fetch_rc != 0:
         return False, None
 
-    rebase_proc = await asyncio.create_subprocess_exec(
-        "git", "rebase", f"origin/{remote_branch}",
-        cwd=clone_dir,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env={**__import__("os").environ, "GIT_SEQUENCE_EDITOR": "true"},
-    )
-    _, rebase_err = await asyncio.wait_for(rebase_proc.communicate(), timeout=60)
-    if rebase_proc.returncode != 0:
-        # Rebase hit conflicts — auto-resolve by taking ours
-        _log.warning(
-            "mutation.rebase_conflict",
-            hint="auto-resolving with checkout --ours",
-            stderr=rebase_err.decode(errors="replace")[:200],
+    # ── Stash uncommitted changes so rebase has a clean tree ──────────
+    # Agent runs often leave modified files (memory DBs, outputs, etc.)
+    # that block git rebase.  Stash them, rebase, then pop.
+    stash_rc = await _git_exec(clone_dir, [
+        "stash", "--include-untracked",
+        "-m", "commandcenter-approve-auto-stash",
+    ])
+    stashed = stash_rc == 0
+
+    rebase_ok = False
+    try:
+        rebase_proc = await asyncio.create_subprocess_exec(
+            "git", "rebase", f"origin/{remote_branch}",
+            cwd=clone_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env={**__import__("os").environ,
+                 "GIT_SEQUENCE_EDITOR": "true"},
         )
-        await _git_exec(clone_dir, ["checkout", "--ours", "."])
-        await _git_exec(clone_dir, ["add", "-A"])
-        await _git_exec(clone_dir, ["rebase", "--continue"])
+        _, rebase_err = await asyncio.wait_for(
+            rebase_proc.communicate(), timeout=60,
+        )
+        if rebase_proc.returncode == 0:
+            rebase_ok = True
+        else:
+            # Rebase hit merge conflicts — auto-resolve with ours
+            _log.warning(
+                "mutation.rebase_conflict",
+                hint="auto-resolving with checkout --ours",
+                stderr=rebase_err.decode(errors="replace")[:200],
+            )
+            await _git_exec(clone_dir, ["checkout", "--ours", "."])
+            await _git_exec(clone_dir, ["add", "-A"])
+            rc2 = await _git_exec(
+                clone_dir, ["rebase", "--continue"],
+            )
+            if rc2 == 0:
+                rebase_ok = True
+            else:
+                # Rebase is broken — abort and let the caller handle
+                await _git_exec(clone_dir, ["rebase", "--abort"])
+                _log.error(
+                    "mutation.rebase_failed",
+                    hint="Could not rebase even after conflict resolution.",
+                )
+    finally:
+        # Pop the stash regardless of rebase outcome
+        if stashed:
+            await _git_exec(clone_dir, ["stash", "pop"])
+
+    if not rebase_ok:
+        return False, None
 
     # After rebase the SHA of our commit changes — read the new HEAD SHA
     # so the caller can update the pending_commit row.

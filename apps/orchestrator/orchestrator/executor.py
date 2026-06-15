@@ -685,9 +685,13 @@ async def _run_sub_agent_streaming(
             text_parts: list[str] = []
 
             if _runtime == "github-copilot" and hasattr(agent, "run"):
-                # Resolve model from configured default (copilot_chat_model).
+                # Resolve model with priority:
+                #   1. copilot_chat_model (global setting)
+                #   2. Agent's model_tier from config.json
                 _model = (
                     getattr(settings, "copilot_chat_model", "") or ""
+                ).strip() or (
+                    loaded.config.get("model_tier") or ""
                 ).strip()
 
                 if _model:
@@ -1443,11 +1447,23 @@ async def run_agent_stream(
             # BYOK provider must be configured on the agent before any MAF
             # streaming path runs — otherwise the Copilot SDK session will
             # reject the unknown model name.
+            #
+            # Model priority:
+            #   1. Request ``model`` parameter (explicit user override)
+            #   2. Global ``copilot_chat_model`` setting (env / .env)
+            #   3. Agent's ``model_tier`` from config.json (per-agent default)
             _requested_model_early = (model or "").strip()
             _configured_model_early = (
                 getattr(settings, "copilot_chat_model", "") or ""
             ).strip()
-            _final_model_early = _requested_model_early or _configured_model_early
+            _agent_model_tier = (
+                loaded.config.get("model_tier") or ""
+            ).strip()
+            _final_model_early = (
+                _requested_model_early
+                or _configured_model_early
+                or _agent_model_tier
+            )
             _is_byok_early = bool(
                 _final_model_early
                 and (

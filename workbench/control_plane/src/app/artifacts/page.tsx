@@ -1,11 +1,12 @@
 "use client";
 
 /**
- * Artifacts — global file browser for all agent-generated files.
+ * Artifacts — file explorer for all agent-generated files.
  *
- * Shows every file in inputs/, outputs/, and agent-data/ across all
- * known agent workspaces.  Card-grid, list, and folder-tree views,
- * group-by-agent, category chip filters, search, and sort.
+ * Agents are the top-level folders.  Inside each agent, files and folders
+ * are shown together like a file explorer (Google Drive / VS Code style).
+ * Double-click a folder to navigate in; breadcrumbs let you navigate back.
+ * Grid / List views change how the current directory's contents appear.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -28,7 +29,8 @@ import {
   Sparkles,
   RefreshCw,
   Bot,
-  FolderTree,
+  ChevronLeft,
+  Home,
 } from "lucide-react";
 import ArtifactViewerModal from "@/components/ArtifactViewerModal";
 import type { FileEntry } from "@/components/ArtifactSidebar";
@@ -50,44 +52,10 @@ interface AgentOption {
   name: string;
 }
 
-type ViewMode = "grid" | "list" | "tree";
+type ViewMode = "grid" | "list";
 type SortKey = "newest" | "oldest" | "name" | "largest" | "smallest";
 
-// ─── Tree node ────────────────────────────────────────────────────────────
-
-interface TreeNode {
-  name: string;
-  path: string;
-  isDir: boolean;
-  entry?: ArtifactEntry;
-  children: Map<string, TreeNode>;
-}
-
-function buildTree(artifacts: ArtifactEntry[]): TreeNode {
-  const root: TreeNode = { name: "", path: "", isDir: true, children: new Map() };
-  for (const a of artifacts) {
-    const parts = a.path.split("/");
-    let node = root;
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      if (!node.children.has(part)) {
-        const isDir = i < parts.length - 1 || a.is_dir === true;
-        node.children.set(part, {
-          name: part,
-          path: parts.slice(0, i + 1).join("/"),
-          isDir,
-          entry: isDir ? undefined : a,
-          children: new Map(),
-        });
-      }
-      node = node.children.get(part)!;
-    }
-    if (!node.isDir && node.entry === undefined) node.entry = a;
-  }
-  return root;
-}
-
-// ─── Agent color palette (deterministic from name) ────────────────────────
+// ─── Agent colour palette ─────────────────────────────────────────────────
 
 const AGENT_COLORS = [
   "border-l-blue-500",
@@ -129,63 +97,115 @@ function formatRelative(iso: string): string {
     const days = Math.floor(hrs / 24);
     if (days < 7) return `${days}d ago`;
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  } catch {
-    return iso;
-  }
+  } catch { return iso; }
 }
 
-const CATEGORY_META: Record<string, { label: string; emoji: string; color: string }> = {
-  inputs:     { label: "Inputs",     emoji: "📥", color: "text-blue-400 bg-blue-500/10 border-blue-500/30" },
-  outputs:    { label: "Outputs",    emoji: "📤", color: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30" },
-  "agent-data": { label: "Agent Data", emoji: "🧠", color: "text-purple-400 bg-purple-500/10 border-purple-500/30" },
-};
-
-function fileIconEl(entry: ArtifactEntry, size = 18) {
+function fileIconEl(entry: ArtifactEntry | { name: string; mime_type: string; is_dir?: boolean }, size = 16) {
+  if ((entry as ArtifactEntry).is_dir) {
+    return <FolderClosed size={size} className="shrink-0 text-amber-400" />;
+  }
   const ext = entry.name.split(".").pop()?.toLowerCase() ?? "";
   const mime = entry.mime_type;
-  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "ico"].includes(ext) || mime.startsWith("image/"))
+  if (["png","jpg","jpeg","gif","webp","svg","ico"].includes(ext) || mime.startsWith("image/"))
     return <FileImage size={size} className="shrink-0 text-purple-400" />;
-  if (["py", "ts", "tsx", "js", "jsx", "sh", "yaml", "yml", "toml", "json", "sql", "rs", "go", "java"].includes(ext))
+  if (["py","ts","tsx","js","jsx","sh","yaml","yml","toml","json","sql","rs","go","java"].includes(ext))
     return <FileCode size={size} className="shrink-0 text-blue-400" />;
-  if (["md", "txt", "log", "rst"].includes(ext) || mime.startsWith("text/"))
+  if (["md","txt","log","rst"].includes(ext) || mime.startsWith("text/"))
     return <FileText size={size} className="shrink-0 text-green-400" />;
   if (["pdf"].includes(ext) || mime === "application/pdf")
     return <FileText size={size} className="shrink-0 text-red-400" />;
-  if (["xlsx", "xls", "csv"].includes(ext))
+  if (["docx","doc"].includes(ext))
+    return <FileText size={size} className="shrink-0 text-cyan-400" />;
+  if (["xlsx","xls","csv"].includes(ext))
     return <FileSpreadsheet size={size} className="shrink-0 text-emerald-400" />;
   return <File size={size} className="shrink-0 text-muted-foreground" />;
 }
 
 function isImage(entry: ArtifactEntry): boolean {
   const ext = entry.name.split(".").pop()?.toLowerCase() ?? "";
-  return ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)
-    || entry.mime_type.startsWith("image/");
+  return ["png","jpg","jpeg","gif","webp","svg"].includes(ext) || entry.mime_type.startsWith("image/");
 }
 
 function toFileEntry(a: ArtifactEntry): FileEntry {
-  return {
-    path: a.path, name: a.name, size: a.size,
-    modified_at: a.modified_at, mime_type: a.mime_type,
-    is_dir: a.is_dir ?? false,
-  };
+  return { path: a.path, name: a.name, size: a.size, modified_at: a.modified_at, mime_type: a.mime_type, is_dir: a.is_dir ?? false };
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────
+// ─── Explorer items (files + folders together) ────────────────────────────
 
-function FileCard({
-  artifact,
-  onView,
-  onDownload,
-  index,
-}: {
-  artifact: ArtifactEntry;
-  onView: () => void;
-  onDownload: () => void;
-  index: number;
-}) {
+interface ExplorerItem {
+  name: string;
+  path: string;
+  isDir: boolean;
+  entry?: ArtifactEntry;
+  count?: number;
+}
+
+/** Build the list of items (files + folders) for a given path within an agent. */
+function buildExplorerItems(
+  artifacts: ArtifactEntry[],
+  agentName: string,
+  currentPath: string | null,
+): ExplorerItem[] {
+  const agentFiles = artifacts.filter((a) => a.agent_name === agentName);
+  const prefix = currentPath ? currentPath + "/" : "";
+
+  // Map: direct-child-name -> { isDir, entry?, fileCount }
+  const directChildren = new Map<string, { isDir: boolean; entry?: ArtifactEntry; count: number }>();
+
+  for (const a of agentFiles) {
+    if (!a.path.startsWith(prefix)) continue;
+    const rest = a.path.slice(prefix.length);
+    const slashIdx = rest.indexOf("/");
+
+    if (a.is_dir) {
+      const dirName = slashIdx > 0 ? rest.substring(0, slashIdx) : rest;
+      if (!directChildren.has(dirName)) {
+        directChildren.set(dirName, { isDir: true, count: 0 });
+      }
+    } else if (slashIdx > 0) {
+      const dirName = rest.substring(0, slashIdx);
+      const existing = directChildren.get(dirName);
+      if (existing) { existing.count++; }
+      else { directChildren.set(dirName, { isDir: true, count: 1 }); }
+    } else {
+      directChildren.set(rest, { isDir: false, entry: a, count: 0 });
+    }
+  }
+
+  // Recount from dir entries
+  for (const a of agentFiles) {
+    if (!a.is_dir) continue;
+    if (!a.path.startsWith(prefix)) continue;
+    const rest = a.path.slice(prefix.length);
+    const slashIdx = rest.indexOf("/");
+    const dirName = slashIdx > 0 ? rest.substring(0, slashIdx) : rest;
+    let count = 0;
+    for (const f of agentFiles) {
+      if (!f.is_dir && f.path.startsWith(a.path + "/")) count++;
+    }
+    if (directChildren.has(dirName)) {
+      directChildren.get(dirName)!.count = Math.max(directChildren.get(dirName)!.count, count);
+    }
+  }
+
+  const items: ExplorerItem[] = [];
+  for (const [name, info] of directChildren) {
+    items.push({ name, path: prefix ? prefix + name : name, isDir: info.isDir, entry: info.entry, count: info.count });
+  }
+
+  items.sort((a, b) => {
+    if (a.isDir && !b.isDir) return -1;
+    if (!a.isDir && b.isDir) return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  return items;
+}
+
+// ─── File Card (grid) ─────────────────────────────────────────────────────
+
+function FileCard({ artifact, onView, index }: { artifact: ArtifactEntry; onView: () => void; index: number }) {
   const [imgError, setImgError] = useState(false);
-  const accent = agentAccent(artifact.agent_name);
-  const meta = CATEGORY_META[artifact.category];
   const showThumb = isImage(artifact) && !imgError;
 
   return (
@@ -195,226 +215,84 @@ function FileCard({
       onClick={onView}
       title={`${artifact.name}\n${artifact.path}\nClick to view`}
     >
-      {/* Category color accent — left edge */}
-      <div className={`absolute left-0 top-0 bottom-0 w-0.5 ${accent.replace("border-l-", "bg-")}`} />
-
-      {/* Thumbnail area */}
       <div className="flex items-center justify-center h-28 bg-secondary/40 border-b border-border/50">
         {showThumb ? (
           <img
             src={`/api/agent/artifacts/file?agent=${encodeURIComponent(artifact.agent_name)}&path=${encodeURIComponent(artifact.path)}`}
-            alt={artifact.name}
-            className="max-w-full max-h-full object-contain p-2"
-            onError={() => setImgError(true)}
-            loading="lazy"
+            alt={artifact.name} className="max-w-full max-h-full object-contain p-2"
+            onError={() => setImgError(true)} loading="lazy"
           />
         ) : (
           <div className="flex flex-col items-center gap-1.5 text-muted-foreground/50">
             {fileIconEl(artifact, 32)}
-            <span className="text-[10px] font-mono uppercase tracking-wider">
-              {artifact.name.split(".").pop() ?? "file"}
-            </span>
+            <span className="text-[10px] font-mono uppercase tracking-wider">{artifact.name.split(".").pop() ?? "file"}</span>
           </div>
         )}
       </div>
-
-      {/* Card body */}
       <div className="p-3">
-        <p className="text-xs font-medium text-foreground truncate leading-tight mb-1" title={artifact.name}>
-          {artifact.name}
-        </p>
+        <p className="text-xs font-medium text-foreground truncate leading-tight mb-1" title={artifact.name}>{artifact.name}</p>
         <div className="flex items-center justify-between">
           <span className="text-[10px] text-muted-foreground">{formatBytes(artifact.size)}</span>
-          <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${meta.color}`}>
-            {meta.emoji}
-          </span>
-        </div>
-        <div className="flex items-center justify-between mt-1.5">
-          <span className="text-[10px] text-muted-foreground/70 truncate max-w-[100px]" title={artifact.agent_name}>
-            {artifact.agent_name}
-          </span>
           <span className="text-[10px] text-muted-foreground/50">{formatRelative(artifact.modified_at)}</span>
         </div>
       </div>
-
-      {/* Hover overlay actions */}
       <div className="absolute inset-0 bg-background/80 opacity-0 group-hover:opacity-100 tech-transition flex items-center justify-center gap-3">
-        <button
-          onClick={(e) => { e.stopPropagation(); onView(); }}
-          className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition shadow-lg"
-        >
+        <button onClick={(e) => { e.stopPropagation(); onView(); }} className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition shadow-lg">
           <Eye size={13} /> View
         </button>
-        <button
-          onClick={(e) => { e.stopPropagation(); onDownload(); }}
-          className="flex items-center gap-1.5 rounded-lg bg-secondary px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary/80 tech-transition shadow-lg"
-        >
-          <Download size={13} /> Download
-        </button>
       </div>
     </div>
   );
 }
 
-function FileListRow({
-  artifact,
-  onView,
-  onDownload,
-  index,
-}: {
-  artifact: ArtifactEntry;
-  onView: () => void;
-  onDownload: () => void;
-  index: number;
-}) {
-  const accent = agentAccent(artifact.agent_name);
-  const meta = CATEGORY_META[artifact.category];
+// ─── Folder Card (grid) ───────────────────────────────────────────────────
 
+function FolderCard({ item, onNavigate, index }: { item: ExplorerItem; onNavigate: () => void; index: number }) {
   return (
     <div
-      className={`grid grid-cols-[1fr_90px_70px_70px_80px] sm:grid-cols-[1fr_120px_90px_90px_100px] gap-x-3 gap-y-1 px-4 py-2.5 border-b border-border/40 last:border-b-0 hover:bg-secondary/20 tech-transition cursor-pointer border-l-2 ${accent} animate-fade-in`}
-      style={{ animationDelay: `${Math.min(index * 25, 500)}ms` }}
-      onClick={onView}
+      className="group relative rounded-xl border border-border bg-card hover:border-amber-500/30 hover:shadow-lg tech-transition overflow-hidden animate-fade-in cursor-pointer"
+      style={{ animationDelay: `${Math.min(index * 40, 600)}ms` }}
+      onDoubleClick={onNavigate}
+      title={`${item.name}\nDouble-click to open`}
+    >
+      <div className="flex items-center justify-center h-28 bg-amber-500/5 border-b border-border/30">
+        <FolderClosed size={40} className="text-amber-400/70" />
+      </div>
+      <div className="p-3">
+        <p className="text-xs font-medium text-foreground truncate leading-tight mb-1">{item.name}</p>
+        <span className="text-[10px] text-muted-foreground">{item.count ?? 0} file{(item.count ?? 0) !== 1 ? "s" : ""}</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── List Row ─────────────────────────────────────────────────────────────
+
+function ListRow({ item, onNavigate, onView, index }: {
+  item: ExplorerItem; onNavigate: () => void; onView: () => void; index: number;
+}) {
+  return (
+    <div
+      className="grid grid-cols-[1fr_80px_80px] sm:grid-cols-[1fr_100px_100px] gap-x-3 px-4 py-2 border-b border-border/40 last:border-b-0 hover:bg-secondary/20 tech-transition cursor-pointer animate-fade-in"
+      style={{ animationDelay: `${Math.min(index * 20, 400)}ms` }}
+      onDoubleClick={item.isDir ? onNavigate : undefined}
+      onClick={item.isDir ? undefined : onView}
     >
       <div className="flex items-center gap-2.5 min-w-0">
-        {fileIconEl(artifact, 16)}
+        {item.isDir
+          ? <FolderClosed size={15} className="shrink-0 text-amber-400" />
+          : fileIconEl(item.entry ?? { name: item.name, mime_type: "" }, 15)}
         <div className="min-w-0">
-          <div className="truncate text-xs font-medium text-foreground">{artifact.name}</div>
-          <div className="truncate text-[10px] text-muted-foreground">{artifact.path}</div>
+          <div className="truncate text-xs font-medium text-foreground">{item.name}</div>
+          {!item.isDir && <div className="truncate text-[10px] text-muted-foreground">{item.path}</div>}
         </div>
       </div>
-      <div className="flex items-center text-[11px] text-muted-foreground truncate" title={artifact.agent_name}>
-        {artifact.agent_name}
+      <div className="flex items-center text-[11px] text-muted-foreground tabular-nums">
+        {item.isDir ? `${item.count ?? 0} files` : item.entry ? formatBytes(item.entry.size) : ""}
       </div>
-      <div className="flex items-center">
-        <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${meta.color}`}>{meta.emoji}</span>
+      <div className="flex items-center text-[10px] text-muted-foreground/60">
+        {item.isDir ? "" : item.entry ? formatRelative(item.entry.modified_at) : ""}
       </div>
-      <div className="flex items-center text-[11px] text-muted-foreground tabular-nums">{formatBytes(artifact.size)}</div>
-      <div className="flex items-center justify-between gap-1">
-        <span className="text-[10px] text-muted-foreground/60">{formatRelative(artifact.modified_at)}</span>
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 tech-transition">
-          <button onClick={(e) => { e.stopPropagation(); onView(); }} className="p-1 rounded hover:bg-secondary" title="View">
-            <Eye size={12} />
-          </button>
-          <button onClick={(e) => { e.stopPropagation(); onDownload(); }} className="p-1 rounded hover:bg-secondary" title="Download">
-            <Download size={12} />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Tree view components ─────────────────────────────────────────────────
-
-/** Sort tree children: dirs first, then alphabetically */
-function treeSort(a: TreeNode, b: TreeNode): number {
-  if (a.isDir && !b.isDir) return -1;
-  if (!a.isDir && b.isDir) return 1;
-  return a.name.localeCompare(b.name);
-}
-
-function treeFileIcon(entry: ArtifactEntry) {
-  const ext = entry.name.split(".").pop()?.toLowerCase() ?? "";
-  const mime = entry.mime_type;
-  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "ico"].includes(ext) || mime.startsWith("image/"))
-    return <FileImage size={13} className="shrink-0 text-purple-400" />;
-  if (["py", "ts", "tsx", "js", "jsx", "sh", "yaml", "yml", "toml", "json", "sql", "rs", "go", "java"].includes(ext))
-    return <FileCode size={13} className="shrink-0 text-blue-400" />;
-  if (["md", "txt", "log", "rst"].includes(ext) || mime.startsWith("text/"))
-    return <FileText size={13} className="shrink-0 text-green-400" />;
-  if (["pdf"].includes(ext) || mime === "application/pdf")
-    return <FileText size={13} className="shrink-0 text-red-400" />;
-  if (["docx", "doc"].includes(ext))
-    return <FileText size={13} className="shrink-0 text-cyan-400" />;
-  if (["xlsx", "xls", "csv"].includes(ext))
-    return <FileSpreadsheet size={13} className="shrink-0 text-emerald-400" />;
-  return <File size={13} className="shrink-0 text-muted-foreground" />;
-}
-
-function ArtifactTreeNode({
-  node,
-  depth,
-  onView,
-  onDownload,
-}: {
-  node: TreeNode;
-  depth: number;
-  onView: (a: ArtifactEntry) => void;
-  onDownload: (a: ArtifactEntry) => void;
-}) {
-  const [expanded, setExpanded] = useState(depth < 1);
-  const paddingLeft = 8 + depth * 14;
-
-  if (node.isDir) {
-    const children = Array.from(node.children.values()).sort(treeSort);
-    const isCategory = depth === 0;
-    const meta = CATEGORY_META[node.name];
-    return (
-      <div>
-        <button
-          className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-xs hover:bg-secondary transition-colors ${isCategory ? "text-foreground font-semibold" : "text-muted-foreground"}`}
-          style={{ paddingLeft }}
-          onClick={() => setExpanded((e) => !e)}
-        >
-          {expanded
-            ? <ChevronDown size={11} className="shrink-0" />
-            : <ChevronRight size={11} className="shrink-0" />}
-          {expanded
-            ? <FolderOpen size={isCategory ? 14 : 13} className={`shrink-0 ${isCategory ? "text-amber-400" : "text-muted-foreground"}`} />
-            : <FolderClosed size={isCategory ? 14 : 13} className={`shrink-0 ${isCategory ? "text-amber-400" : "text-muted-foreground"}`} />}
-          <span className="truncate">
-            {isCategory && meta ? <>{meta.emoji} {meta.label}</> : node.name}
-          </span>
-          {!isCategory && (
-            <span className="text-[10px] text-muted-foreground/60 ml-1">
-              {children.filter((c) => !c.isDir).length} files
-            </span>
-          )}
-        </button>
-        {expanded && children.map((child) => (
-          <ArtifactTreeNode
-            key={child.path}
-            node={child}
-            depth={depth + 1}
-            onView={onView}
-            onDownload={onDownload}
-          />
-        ))}
-      </div>
-    );
-  }
-
-  // File node
-  const entry = node.entry!;
-  const isDocx = entry.name.toLowerCase().endsWith(".docx");
-
-  return (
-    <div
-      className="group flex items-center gap-1.5 rounded px-1 py-0.5 text-xs text-muted-foreground hover:bg-secondary cursor-pointer transition-colors"
-      style={{ paddingLeft: paddingLeft + 14 }}
-      onClick={() => onView(entry)}
-      title={`${entry.path}\nAgent: ${entry.agent_name}\n${formatBytes(entry.size)}\nClick to view`}
-    >
-      {treeFileIcon(entry)}
-      <span className="flex-1 truncate">{entry.name}</span>
-      {/* Agent badge */}
-      <span
-        className="shrink-0 text-[9px] px-1.5 py-0.5 rounded-full bg-secondary/60 text-muted-foreground truncate max-w-[80px]"
-        title={entry.agent_name}
-      >
-        {entry.agent_name}
-      </span>
-      <span className="shrink-0 text-[10px] text-muted-foreground/50 tabular-nums">
-        {isDocx ? "DOCX" : formatBytes(entry.size)}
-      </span>
-      <button
-        onClick={(e) => { e.stopPropagation(); onDownload(entry); }}
-        className="shrink-0 p-0.5 text-muted-foreground hover:text-blue-400 opacity-0 group-hover:opacity-100 transition-all"
-        title="Download"
-      >
-        <Download size={11} />
-      </button>
     </div>
   );
 }
@@ -427,20 +305,18 @@ export default function ArtifactsPage() {
   const [error, setError] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentOption[]>([]);
 
-  // UI state
-  const [viewMode, setViewMode] = useState<ViewMode>("tree");
-  const [sortKey, setSortKey] = useState<SortKey>("newest");
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [currentPath, setCurrentPath] = useState<string | null>(null);
 
-  // Filters
+  const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  const [sortKey, setSortKey] = useState<SortKey>("newest");
   const [agentFilter, setAgentFilter] = useState<string>("");
   const [fileTypeFilter, setFileTypeFilter] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Viewer
   const [viewerEntry, setViewerEntry] = useState<FileEntry | null>(null);
   const [viewerUrl, setViewerUrl] = useState("");
 
-  // ── Fetch agent list ──────────────────────────────────────────────────
   useEffect(() => {
     fetch("/api/agent/list")
       .then((r) => r.json())
@@ -448,117 +324,66 @@ export default function ArtifactsPage() {
       .catch(() => {});
   }, []);
 
-  // ── Fetch artifacts ───────────────────────────────────────────────────
   const fetchArtifacts = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     try {
       const params = new URLSearchParams();
       if (agentFilter) params.set("agent", agentFilter);
       const res = await fetch(`/api/agent/artifacts?${params.toString()}`);
       if (res.status === 503 || res.status === 502) {
-        setError("Gateway offline. Start the backend to browse artifacts.");
-        setArtifacts([]); return;
+        setError("Gateway offline."); setArtifacts([]); return;
       }
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-        setError(err.error ?? `HTTP ${res.status}`);
-        setArtifacts([]); return;
-      }
+      if (!res.ok) { setError(`HTTP ${res.status}`); setArtifacts([]); return; }
       const data = await res.json();
       setArtifacts(Array.isArray(data.artifacts) ? data.artifacts : []);
-    } catch (e) {
-      setError(String(e)); setArtifacts([]);
-    } finally { setLoading(false); }
+    } catch (e) { setError(String(e)); setArtifacts([]); }
+    finally { setLoading(false); }
   }, [agentFilter]);
 
   useEffect(() => { fetchArtifacts(); }, [fetchArtifacts]);
 
-  // ── Sort & filter ─────────────────────────────────────────────────────
-  const processed = useMemo(() => {
-    let list = [...artifacts];
+  const availableAgents = useMemo(() => {
+    return Array.from(new Set(artifacts.map((a) => a.agent_name))).sort();
+  }, [artifacts]);
 
-    // Exclude directories from grid/list views
-    list = list.filter((a) => !a.is_dir);
-
-    // Client-side file type filter
+  const filteredFiles = useMemo(() => {
+    let list = artifacts.filter((a) => !a.is_dir);
     if (fileTypeFilter) {
       list = list.filter((a) => {
         const ext = a.name.split(".").pop()?.toLowerCase() ?? "";
         const mime = a.mime_type;
         switch (fileTypeFilter) {
-          case "document": return ["md", "docx", "doc", "pdf", "txt", "rst", "log"].includes(ext) || mime.startsWith("text/") || mime === "application/pdf" || mime.includes("wordprocessing");
-          case "spreadsheet": return ["csv", "xlsx", "xls", "tsv"].includes(ext);
-          case "image": return ["png", "jpg", "jpeg", "gif", "webp", "svg", "ico"].includes(ext) || mime.startsWith("image/");
-          case "code": return ["py", "ts", "tsx", "js", "jsx", "sh", "yaml", "yml", "toml", "json", "sql", "rs", "go", "java", "html", "css", "xml"].includes(ext);
-          case "other": return !["md", "docx", "doc", "pdf", "txt", "rst", "log", "csv", "xlsx", "xls", "tsv", "png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "py", "ts", "tsx", "js", "jsx", "sh", "yaml", "yml", "toml", "json", "sql", "rs", "go", "java", "html", "css", "xml"].includes(ext);
+          case "document": return ["md","docx","doc","pdf","txt","rst","log"].includes(ext) || mime.startsWith("text/") || mime === "application/pdf";
+          case "spreadsheet": return ["csv","xlsx","xls","tsv"].includes(ext);
+          case "image": return ["png","jpg","jpeg","gif","webp","svg","ico"].includes(ext) || mime.startsWith("image/");
+          case "code": return ["py","ts","tsx","js","jsx","sh","yaml","yml","toml","json","sql","rs","go","java","html","css","xml"].includes(ext);
+          case "other": return !["md","docx","doc","pdf","txt","rst","log","csv","xlsx","xls","tsv","png","jpg","jpeg","gif","webp","svg","ico","py","ts","tsx","js","jsx","sh","yaml","yml","toml","json","sql","rs","go","java","html","css","xml"].includes(ext);
           default: return true;
         }
       });
     }
-
-    // Client-side search
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      list = list.filter((a) =>
-        a.name.toLowerCase().includes(q) ||
-        a.path.toLowerCase().includes(q) ||
-        a.agent_name.toLowerCase().includes(q)
-      );
+      list = list.filter((a) => a.name.toLowerCase().includes(q) || a.path.toLowerCase().includes(q) || a.agent_name.toLowerCase().includes(q));
     }
-
-    // Sort
     list.sort((a, b) => {
       switch (sortKey) {
         case "newest": return new Date(b.modified_at).getTime() - new Date(a.modified_at).getTime();
         case "oldest": return new Date(a.modified_at).getTime() - new Date(b.modified_at).getTime();
-        case "name":   return a.name.localeCompare(b.name);
-        case "largest":  return b.size - a.size;
+        case "name": return a.name.localeCompare(b.name);
+        case "largest": return b.size - a.size;
         case "smallest": return a.size - b.size;
         default: return 0;
       }
     });
-
     return list;
   }, [artifacts, searchQuery, sortKey, fileTypeFilter]);
 
-  // ── Tree data (includes directories) ─────────────────────────────────
-  const { treeData, treeFiltered } = useMemo(() => {
-    // For tree view, apply search filter across all entries (incl. dirs)
-    let filtered = artifacts;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      // Keep entries that match, plus their parent directories
-      const matchingPaths = new Set<string>();
-      for (const a of artifacts) {
-        if (a.name.toLowerCase().includes(q) ||
-            a.path.toLowerCase().includes(q) ||
-            a.agent_name.toLowerCase().includes(q)) {
-          matchingPaths.add(a.path);
-          // Add all ancestor paths
-          const parts = a.path.split("/");
-          for (let i = 1; i < parts.length; i++) {
-            matchingPaths.add(parts.slice(0, i).join("/"));
-          }
-        }
-      }
-      filtered = artifacts.filter((a) => matchingPaths.has(a.path));
-    }
-    return { treeData: buildTree(filtered), treeFiltered: filtered };
-  }, [artifacts, searchQuery]);
+  const explorerItems = useMemo(() => {
+    if (!selectedAgent) return [];
+    return buildExplorerItems(artifacts, selectedAgent, currentPath);
+  }, [artifacts, selectedAgent, currentPath]);
 
-  // ── Always grouped by agent ─────────────────────────────────────────
-  const agentGroups = useMemo(() => {
-    const map = new Map<string, ArtifactEntry[]>();
-    for (const a of processed) {
-      const list = map.get(a.agent_name) ?? [];
-      list.push(a);
-      map.set(a.agent_name, list);
-    }
-    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [processed]);
-
-  // ── Stats ─────────────────────────────────────────────────────────────
   const stats = useMemo(() => ({
     total: artifacts.filter((a) => !a.is_dir).length,
     totalSize: artifacts.reduce((s, a) => s + (a.is_dir ? 0 : a.size), 0),
@@ -566,7 +391,6 @@ export default function ArtifactsPage() {
 
   const clearFilters = () => { setAgentFilter(""); setFileTypeFilter(""); setSearchQuery(""); };
   const hasFilters = !!(agentFilter || fileTypeFilter || searchQuery);
-  const isFiltered = processed.length !== artifacts.filter((a) => !a.is_dir).length;
 
   const makeFileUrl = (a: ArtifactEntry) =>
     `/api/agent/artifacts/file?agent=${encodeURIComponent(a.agent_name)}&path=${encodeURIComponent(a.path)}`;
@@ -576,11 +400,10 @@ export default function ArtifactsPage() {
     setViewerEntry(toFileEntry(a));
   };
 
-  // ── Render ────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full">
       {/* ═══ Header ══════════════════════════════════════════════════════ */}
-      <div className="shrink-0 border-b border-border px-4 sm:px-6 py-5">
+      <div className="shrink-0 border-b border-border px-4 sm:px-6 py-4">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15">
@@ -588,57 +411,47 @@ export default function ArtifactsPage() {
             </div>
             <div>
               <h1 className="text-lg font-semibold text-foreground">Artifacts</h1>
-              <p className="text-[11px] text-muted-foreground">All files from all agents</p>
+              <p className="text-[11px] text-muted-foreground">
+                {selectedAgent ? `Browsing ${selectedAgent}` : `${availableAgents.length} agent${availableAgents.length !== 1 ? "s" : ""} · ${stats.total} files`}
+              </p>
             </div>
           </div>
-          <button
-            onClick={fetchArtifacts}
-            className="rounded-lg p-2 text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
-            title="Refresh"
-          >
+          <button onClick={fetchArtifacts} className="rounded-lg p-2 text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition" title="Refresh">
             <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
           </button>
         </div>
 
-        {/* Stats pills */}
-        <div className="flex flex-wrap items-center gap-1.5 mb-3">
-          <span className="text-[11px] text-muted-foreground mr-1">
-            <span className="font-semibold text-foreground">{stats.total}</span> files · {formatBytes(stats.totalSize)}
-          </span>
+        {/* Stats */}
+        <div className="flex items-center gap-2 mb-3 text-[11px] text-muted-foreground">
+          <span className="font-semibold text-foreground">{stats.total}</span> files · {formatBytes(stats.totalSize)}
+          {selectedAgent && (
+            <button onClick={() => { setSelectedAgent(null); setCurrentPath(null); }}
+              className="text-blue-400 hover:text-blue-300 ml-2 text-[10px]">
+              ← Back to all agents
+            </button>
+          )}
         </div>
 
         {/* Toolbar */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* File type filter */}
-          <select
-            value={fileTypeFilter}
-            onChange={(e) => setFileTypeFilter(e.target.value)}
-            className="rounded-lg border border-border bg-secondary px-3 py-1.5 text-[11px] text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-          >
+          <select value={fileTypeFilter} onChange={(e) => setFileTypeFilter(e.target.value)}
+            className="rounded-lg border border-border bg-secondary px-3 py-1.5 text-[11px] text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50">
             <option value="">All file types</option>
-            <option value="document">📄 Documents (.md, .docx, .pdf, .txt)</option>
-            <option value="spreadsheet">📊 Spreadsheets (.csv, .xlsx)</option>
-            <option value="image">🖼️ Images (.png, .jpg, .svg)</option>
-            <option value="code">💻 Code (.py, .ts, .json, .yaml)</option>
+            <option value="document">📄 Documents</option>
+            <option value="spreadsheet">📊 Spreadsheets</option>
+            <option value="image">🖼️ Images</option>
+            <option value="code">💻 Code</option>
             <option value="other">📦 Other</option>
           </select>
 
-          {/* Agent filter */}
-          <select
-            value={agentFilter}
-            onChange={(e) => setAgentFilter(e.target.value)}
-            className="rounded-lg border border-border bg-secondary px-3 py-1.5 text-[11px] text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-          >
+          <select value={agentFilter} onChange={(e) => setAgentFilter(e.target.value)}
+            className="rounded-lg border border-border bg-secondary px-3 py-1.5 text-[11px] text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50">
             <option value="">All agents</option>
             {agents.map((a) => <option key={a.name} value={a.name}>{a.name}</option>)}
           </select>
 
-          {/* Sort */}
-          <select
-            value={sortKey}
-            onChange={(e) => setSortKey(e.target.value as SortKey)}
-            className="rounded-lg border border-border bg-secondary px-3 py-1.5 text-[11px] text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-          >
+          <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)}
+            className="rounded-lg border border-border bg-secondary px-3 py-1.5 text-[11px] text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50">
             <option value="newest">Newest first</option>
             <option value="oldest">Oldest first</option>
             <option value="name">Name A–Z</option>
@@ -648,40 +461,25 @@ export default function ArtifactsPage() {
 
           <div className="flex-1" />
 
-          {/* Search */}
           <div className="relative w-full sm:w-56">
             <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <input
-              type="text" value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search files…"
-              className="w-full rounded-lg border border-border bg-secondary pl-8 pr-8 py-1.5 text-[11px] text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-            />
+            <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search files…"
+              className="w-full rounded-lg border border-border bg-secondary pl-8 pr-8 py-1.5 text-[11px] text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50" />
             {searchQuery && (
-              <button onClick={() => setSearchQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                <X size={12} />
-              </button>
+              <button onClick={() => setSearchQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"><X size={12} /></button>
             )}
           </div>
 
-          {/* View toggle */}
-          <div className="flex items-center rounded-lg border border-border bg-secondary p-0.5">
-            <button
-              onClick={() => setViewMode("tree")}
-              className={`rounded-md p-1.5 tech-transition ${viewMode === "tree" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-              title="Folder tree view"
-            ><FolderTree size={14} /></button>
-            <button
-              onClick={() => setViewMode("grid")}
-              className={`rounded-md p-1.5 tech-transition ${viewMode === "grid" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-              title="Grid view"
-            ><LayoutGrid size={14} /></button>
-            <button
-              onClick={() => setViewMode("list")}
-              className={`rounded-md p-1.5 tech-transition ${viewMode === "list" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-              title="List view"
-            ><List size={14} /></button>
-          </div>
+          {selectedAgent && (
+            <div className="flex items-center rounded-lg border border-border bg-secondary p-0.5">
+              <button onClick={() => setViewMode("grid")}
+                className={`rounded-md p-1.5 tech-transition ${viewMode === "grid" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                title="Grid view"><LayoutGrid size={14} /></button>
+              <button onClick={() => setViewMode("list")}
+                className={`rounded-md p-1.5 tech-transition ${viewMode === "list" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                title="List view"><List size={14} /></button>
+            </div>
+          )}
 
           {hasFilters && (
             <button onClick={clearFilters} className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition flex items-center gap-1">
@@ -689,307 +487,135 @@ export default function ArtifactsPage() {
             </button>
           )}
         </div>
-
-        {isFiltered && (
-          <p className="mt-2 text-[10px] text-muted-foreground">
-            Showing {processed.length} of {stats.total} files
-          </p>
-        )}
       </div>
 
       {/* ═══ Content ══════════════════════════════════════════════════════ */}
       <div className="flex-1 overflow-auto">
-        {/* Loading */}
         {loading && (
           <div className="flex flex-col items-center justify-center h-48 gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary">
-              <RefreshCw size={18} className="animate-spin text-muted-foreground" />
-            </div>
+            <RefreshCw size={18} className="animate-spin text-muted-foreground" />
             <p className="text-sm text-muted-foreground animate-pulse">Loading artifacts…</p>
           </div>
         )}
 
-        {/* Error */}
         {error && !loading && (
           <div className="flex flex-col items-center justify-center h-48 gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/10">
-              <X size={18} className="text-red-400" />
-            </div>
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/10"><X size={18} className="text-red-400" /></div>
             <p className="text-sm text-red-400">{error}</p>
             <button onClick={fetchArtifacts} className="text-xs text-muted-foreground hover:text-foreground underline">Retry</button>
           </div>
         )}
 
-        {/* Empty */}
-        {!loading && !error && (
-          viewMode === "tree"
-            ? treeFiltered.filter((a) => !a.is_dir).length === 0
-            : processed.length === 0
-        ) && (
+        {!loading && !error && filteredFiles.length === 0 && availableAgents.length === 0 && (
           <div className="flex flex-col items-center justify-center h-64 gap-4">
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-secondary/50">
-              {artifacts.filter((a) => !a.is_dir).length === 0 ? (
-                <Sparkles size={28} className="text-muted-foreground/40" />
-              ) : (
-                <Search size={28} className="text-muted-foreground/40" />
-              )}
-            </div>
-            <div className="text-center">
-              <p className="text-sm font-medium text-foreground">
-                {artifacts.filter((a) => !a.is_dir).length === 0 ? "No artifacts yet" : "No matching files"}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1 max-w-xs">
-                {artifacts.filter((a) => !a.is_dir).length === 0
-                  ? "Files will appear here automatically as agents create reports, exports, and data files."
-                  : "Try adjusting your filters or search query."}
-              </p>
-            </div>
-            {artifacts.filter((a) => !a.is_dir).length === 0 && (
-              <div className="flex items-center gap-3 mt-2 text-[11px] text-muted-foreground/60">
-                <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-blue-400" /> inputs/</span>
-                <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> outputs/</span>
-                <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-purple-400" /> agent-data/</span>
-              </div>
-            )}
+            <Sparkles size={28} className="text-muted-foreground/40" />
+            <p className="text-sm font-medium text-foreground">No artifacts yet</p>
+            <p className="text-xs text-muted-foreground mt-1 max-w-xs">Files appear here as agents create them.</p>
           </div>
         )}
 
-        {/* Content — Tree view */}
-        {!loading && viewMode === "tree" && treeFiltered.filter((a) => !a.is_dir).length > 0 && (
-          <div className="flex-1 overflow-auto p-2">
-            {Array.from(treeData.children.values()).sort(treeSort).map((node) => (
-              <ArtifactTreeNode
-                key={node.path}
-                node={node}
-                depth={0}
-                onView={openViewer}
-                onDownload={(a) => window.open(makeFileUrl(a), "_blank")}
-              />
-            ))}
-          </div>
-        )}
-
-        {/* Content — Grid / List (always grouped by agent) */}
-        {!loading && viewMode !== "tree" && agentGroups.length > 0 && (
+        {/* ── Agent browser ──────────────────────────────────────────── */}
+        {!loading && !selectedAgent && availableAgents.length > 0 && (
           <div className="p-4 sm:p-6">
-            <div className="flex flex-col gap-5">
-              {agentGroups.map(([agentName, files]) => (
-                <AgentArtifactGroup
-                  key={agentName}
-                  agentName={agentName}
-                  files={files}
-                  viewMode={viewMode === "grid" ? "grid" : "list"}
-                  onView={openViewer}
-                  makeFileUrl={makeFileUrl}
-                />
-              ))}
+            <p className="text-xs text-muted-foreground mb-3 uppercase tracking-wider font-semibold">Agents</p>
+            <div className="flex flex-col gap-2">
+              {availableAgents.map((name) => {
+                const fileCount = artifacts.filter((a) => a.agent_name === name && !a.is_dir).length;
+                const accent = agentAccent(name);
+                return (
+                  <button
+                    key={name}
+                    onClick={() => { setSelectedAgent(name); setCurrentPath(null); }}
+                    className={`flex items-center gap-3 px-4 py-3 rounded-xl border border-border bg-card hover:border-primary/20 hover:shadow-md tech-transition text-left border-l-2 ${accent}`}
+                  >
+                    <Bot size={16} className="text-muted-foreground shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-foreground truncate">{name}</div>
+                      <div className="text-[11px] text-muted-foreground">{fileCount} file{fileCount !== 1 ? "s" : ""}</div>
+                    </div>
+                    <ChevronRight size={16} className="text-muted-foreground shrink-0" />
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
-      </div>
 
-      {/* ═══ Viewer modal ════════════════════════════════════════════════ */}
-      {viewerEntry && (
-        <ArtifactViewerModal
-          sessionId="artifacts"
-          entry={viewerEntry}
-          downloadUrl={viewerUrl}
-          saveUrl={viewerUrl}
-          onClose={() => setViewerEntry(null)}
-        />
-      )}
-    </div>
-  );
-}
-
-// ─── Agent artifact group (collapsible, with folder drill-down) ────────────
-
-/** Group files by their immediate parent folder within an agent. */
-function groupFilesByFolder(files: ArtifactEntry[]): Map<string, ArtifactEntry[]> {
-  const map = new Map<string, ArtifactEntry[]>();
-  for (const f of files) {
-    const lastSlash = f.path.lastIndexOf("/");
-    const dir = lastSlash > 0 ? f.path.substring(0, lastSlash) : f.category;
-    const list = map.get(dir) ?? [];
-    list.push(f);
-    map.set(dir, list);
-  }
-  return map;
-}
-
-/** Sorted folder entries from a folder map. */
-function sortedFolders(map: Map<string, ArtifactEntry[]>): [string, ArtifactEntry[]][] {
-  return Array.from(map.entries()).sort(([a], [b]) => {
-    // Category roots first (inputs, outputs, agent-data)
-    const aRoot = a.split("/")[0];
-    const bRoot = b.split("/")[0];
-    if (aRoot !== bRoot) return aRoot.localeCompare(bRoot);
-    return a.localeCompare(b);
-  });
-}
-
-function folderMeta(path: string): { emoji: string; accent: string } {
-  const root = path.split("/")[0];
-  if (root === "inputs") return { emoji: "📥", accent: "border-blue-500 bg-blue-500/10 text-blue-400" };
-  if (root === "outputs") return { emoji: "📤", accent: "border-emerald-500 bg-emerald-500/10 text-emerald-400" };
-  return { emoji: "🧠", accent: "border-purple-500 bg-purple-500/10 text-purple-400" };
-}
-
-function AgentArtifactGroup({
-  agentName,
-  files,
-  viewMode,
-  onView,
-  makeFileUrl,
-}: {
-  agentName: string;
-  files: ArtifactEntry[];
-  viewMode: "grid" | "list";
-  onView: (a: ArtifactEntry) => void;
-  makeFileUrl: (a: ArtifactEntry) => string;
-}) {
-  const [expanded, setExpanded] = useState(true);
-  const accent = agentAccent(agentName);
-
-  // Breadcrumb: which folder is "drilled into" — null means top-level
-  const [drillPath, setDrillPath] = useState<string | null>(null);
-
-  const folderMap = groupFilesByFolder(files);
-  const folders = sortedFolders(folderMap);
-
-  // When drilled into a folder, only show files in that folder
-  const visibleFiles = drillPath
-    ? (folderMap.get(drillPath) ?? [])
-    : files;
-
-  // Sublayout: if drilled into a folder, show breadcrumb + files only
-  const isDrilled = drillPath !== null;
-
-  return (
-    <div className="rounded-xl border border-border overflow-hidden">
-      {/* Agent header */}
-      <button
-        onClick={() => setExpanded((e) => !e)}
-        className={`w-full flex items-center gap-3 px-4 py-3 bg-secondary/30 hover:bg-secondary/50 tech-transition border-l-2 ${accent}`}
-      >
-        {expanded ? <ChevronDown size={15} className="text-muted-foreground" /> : <ChevronRight size={15} className="text-muted-foreground" />}
-        <Bot size={14} className="text-muted-foreground" />
-        <span className="text-sm font-medium text-foreground">{agentName}</span>
-        <span className="text-[11px] text-muted-foreground">{files.length} file{files.length !== 1 ? "s" : ""}</span>
-      </button>
-
-      {expanded && (
-        <div className="p-3">
-          {/* Breadcrumb when drilled into a folder */}
-          {isDrilled && (
-            <div className="flex items-center gap-1.5 mb-3 px-1">
-              <button
-                onClick={() => setDrillPath(null)}
-                className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
-              >
-                {agentName}
+        {/* ── Explorer view ──────────────────────────────────────────── */}
+        {!loading && selectedAgent && (
+          <div className="flex flex-col h-full">
+            {/* Breadcrumb */}
+            <div className="shrink-0 flex items-center gap-1.5 px-4 py-2.5 border-b border-border bg-secondary/20">
+              <button onClick={() => { setSelectedAgent(null); setCurrentPath(null); }}
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors" title="All agents">
+                <Home size={14} />
               </button>
-              {drillPath!.split("/").map((seg, i, arr) => (
+              <ChevronRight size={12} className="text-muted-foreground" />
+              <button onClick={() => setCurrentPath(null)}
+                className={`text-xs px-1.5 py-0.5 rounded transition-colors ${!currentPath ? "font-semibold text-foreground bg-secondary" : "text-blue-400 hover:text-blue-300 hover:bg-secondary"}`}>
+                {selectedAgent}
+              </button>
+              {currentPath && currentPath.split("/").map((seg, i, arr) => (
                 <span key={i} className="flex items-center gap-1.5">
-                  <ChevronRight size={10} className="text-muted-foreground" />
+                  <ChevronRight size={12} className="text-muted-foreground" />
                   {i === arr.length - 1 ? (
-                    <span className="text-xs font-medium text-foreground">
-                      {folderMeta(drillPath!).emoji} {seg}
-                    </span>
+                    <span className="text-xs font-semibold text-foreground px-1.5 py-0.5 rounded bg-secondary">{seg}</span>
                   ) : (
-                    <button
-                      onClick={() => setDrillPath(arr.slice(0, i + 1).join("/"))}
-                      className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
-                    >
+                    <button onClick={() => setCurrentPath(arr.slice(0, i + 1).join("/"))}
+                      className="text-xs text-blue-400 hover:text-blue-300 hover:bg-secondary px-1.5 py-0.5 rounded transition-colors">
                       {seg}
                     </button>
                   )}
                 </span>
               ))}
-              <span className="text-[10px] text-muted-foreground ml-1">
-                {visibleFiles.length} file{visibleFiles.length !== 1 ? "s" : ""}
+              <span className="text-[10px] text-muted-foreground ml-2">
+                {explorerItems.filter((i) => !i.isDir).length} files · {explorerItems.filter((i) => i.isDir).length} folders
               </span>
             </div>
-          )}
 
-          {/* Drilled-in view: just show files */}
-          {isDrilled ? (
-            viewMode === "grid" ? (
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-                {visibleFiles.map((a, i) => (
-                  <FileCard key={`${a.agent_name}:${a.path}`} artifact={a} index={i}
-                    onView={() => onView(a)} onDownload={() => window.open(makeFileUrl(a), "_blank")} />
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-lg border border-border overflow-hidden">
-                <div className="hidden sm:grid grid-cols-[1fr_90px_80px_100px] gap-x-3 px-3 py-1.5 bg-secondary/20 border-b border-border text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                  <span>File</span><span>Type</span><span>Size</span><span>Modified</span>
+            {/* Content */}
+            <div className="flex-1 overflow-auto p-3">
+              {explorerItems.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-32 gap-2 text-muted-foreground">
+                  <FolderOpen size={24} className="opacity-30" />
+                  <p className="text-xs">This folder is empty</p>
                 </div>
-                {visibleFiles.map((a, i) => (
-                  <FileListRow key={`${a.agent_name}:${a.path}`} artifact={a} index={i}
-                    onView={() => onView(a)} onDownload={() => window.open(makeFileUrl(a), "_blank")} />
-                ))}
-              </div>
-            )
-          ) : (
-            /* Top-level: show folder groups */
-            <div className="flex flex-col gap-2">
-              {folders.map(([folderPath, folderFiles]) => {
-                const meta = folderMeta(folderPath);
-                const displayName = folderPath.includes("/")
-                  ? folderPath.split("/").slice(1).join(" / ")
-                  : folderPath;
-                return (
-                  <div key={folderPath}
-                    className="rounded-lg border border-border/60 overflow-hidden hover:border-primary/20 tech-transition cursor-pointer"
-                    onDoubleClick={() => setDrillPath(folderPath)}
-                  >
-                    <div className={`flex items-center gap-2 px-3 py-2 bg-secondary/20 border-l-2 ${meta.accent.split(" ")[0]}`}>
-                      <FolderClosed size={13} className="text-muted-foreground shrink-0" />
-                      <span className="text-xs font-medium text-foreground truncate">{meta.emoji} {displayName}</span>
-                      <span className="text-[10px] text-muted-foreground ml-auto">{folderFiles.length} file{folderFiles.length !== 1 ? "s" : ""}</span>
-                    </div>
-                    <div className="px-2 py-1.5">
-                      {viewMode === "grid" ? (
-                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                          {folderFiles.slice(0, 4).map((a, i) => (
-                            <FileCard key={`${a.agent_name}:${a.path}`} artifact={a} index={i}
-                              onView={() => onView(a)} onDownload={() => window.open(makeFileUrl(a), "_blank")} />
-                          ))}
-                          {folderFiles.length > 4 && (
-                            <div
-                              className="flex items-center justify-center rounded-lg border border-dashed border-border/50 bg-secondary/20 text-[11px] text-muted-foreground hover:text-foreground hover:border-primary/30 cursor-pointer transition-colors min-h-[100px]"
-                              onDoubleClick={(e) => { e.stopPropagation(); setDrillPath(folderPath); }}
-                            >
-                              +{folderFiles.length - 4} more
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        /* List: show truncated + "view all" */
-                        <div>
-                          {folderFiles.slice(0, 3).map((a, i) => (
-                            <FileListRow key={`${a.agent_name}:${a.path}`} artifact={a} index={i}
-                              onView={() => onView(a)} onDownload={() => window.open(makeFileUrl(a), "_blank")} />
-                          ))}
-                          {folderFiles.length > 3 && (
-                            <div
-                              className="px-3 py-1.5 text-[11px] text-blue-400 hover:text-blue-300 cursor-pointer transition-colors"
-                              onDoubleClick={(e) => { e.stopPropagation(); setDrillPath(folderPath); }}
-                            >
-                              + {folderFiles.length - 3} more files in {displayName} — double-click to browse
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
+              ) : viewMode === "grid" ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                  {explorerItems.map((item, i) =>
+                    item.isDir ? (
+                      <FolderCard key={item.path} item={item} index={i}
+                        onNavigate={() => setCurrentPath(item.path)} />
+                    ) : (
+                      <FileCard key={item.path} artifact={item.entry!} index={i}
+                        onView={() => openViewer(item.entry!)} />
+                    )
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-border overflow-hidden bg-card">
+                  <div className="hidden sm:grid grid-cols-[1fr_100px_100px] gap-x-3 px-4 py-2.5 bg-secondary/40 border-b border-border text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                    <span>Name</span><span>Size</span><span>Modified</span>
                   </div>
-                );
-              })}
+                  {explorerItems.map((item, i) => (
+                    <ListRow key={item.path} item={item} index={i}
+                      onNavigate={() => setCurrentPath(item.path)}
+                      onView={() => item.entry && openViewer(item.entry)}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
+      </div>
+
+      {viewerEntry && (
+        <ArtifactViewerModal
+          sessionId="artifacts" entry={viewerEntry}
+          downloadUrl={viewerUrl} saveUrl={viewerUrl}
+          onClose={() => setViewerEntry(null)}
+        />
       )}
     </div>
   );

@@ -54,8 +54,13 @@ const LITELLM_BASE_URL =
   process.env.LITELLM_BASE_URL ??
   "http://127.0.0.1:8080/v1";
 
-// Resolve repo path once at module load — must be absolute.
-const REPO_PATH = path.resolve(process.env.CCWORKBENCH_REPO_PATH ?? process.cwd());
+// Resolve repo path at module load. Using a statically-scoped default avoids
+// Turbopack tracing the entire project tree during build.
+const _default = path.join(
+  /*turbopackIgnore: true*/ process.cwd(),
+  "../..",
+);
+const REPO_PATH = path.resolve(process.env.CCWORKBENCH_REPO_PATH ?? _default);
 
 // All model calls go through the CC gateway LiteLLM endpoint — this gives
 // access to every configured provider (Copilot, DeepSeek, Groq, OpenRouter…)

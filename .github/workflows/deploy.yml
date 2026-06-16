@@ -168,6 +168,8 @@ jobs:
             cd "$APP_DIR/workbench/control_plane"
             if [ -f package-lock.json ] || [ -f package.json ]; then
               npm ci --prefer-offline 2>/dev/null || npm install
+              # Clean build avoids stale client-reference-manifest errors (Next.js Turbopack)
+              rm -rf .next
               npm run build
             fi
             sudo systemctl restart acb-workbench

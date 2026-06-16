@@ -269,7 +269,7 @@ function MemoryPanel({
             </span>
             <button
               onClick={() => onDelete(m.id)}
-              className="ml-1 shrink-0 text-muted-foreground/70 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity text-xs"
+              className="ml-1 shrink-0 text-muted-foreground/50 hover:text-red-400 transition-colors text-xs"
               title="Delete memory"
             >
               ✕

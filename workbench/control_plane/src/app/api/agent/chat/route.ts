@@ -345,6 +345,11 @@ async function translateAndPersistStream(
  * AFTER the agent stream completes.  This runs after translateAndPersistStream
  * has accumulated the complete assistant response, so Mem0 sees both sides
  * of the conversation.
+ *
+ * Extraction is skipped ONLY when there is genuinely nothing to save
+ * (no userId AND no conversation content).  Tool-only agents that produce
+ * minimal text are still captured — Mem0 can extract facts from tool
+ * results embedded in the assistant message or from the conversation history.
  */
 async function extractMemories(
   userId: string,
@@ -353,20 +358,47 @@ async function extractMemories(
   history: ChatMessage[],
   agentName: string,
 ): Promise<void> {
-  if (!assistantContent.trim() || !userId) return;
-  try {
-    const conv: Array<{ role: string; content: string }> = [];
-    for (const m of history) {
-      if (m.role === "user" || m.role === "assistant") {
-        conv.push({ role: m.role, content: m.content });
-      }
+  if (!userId) {
+    console.warn("[memory] extractMemories skipped — no userId resolved (auth may be misconfigured)");
+    return;
+  }
+
+  // Build the conversation — include history + current user message + assistant.
+  const conv: Array<{ role: string; content: string }> = [];
+  for (const m of history) {
+    if (m.role === "user" || m.role === "assistant") {
+      conv.push({ role: m.role, content: m.content });
     }
-    if (userMessage) {
+  }
+  if (userMessage) {
+    // Avoid duplicating the current user message if it's already in history.
+    const alreadyInHistory = conv.some(
+      (m) => m.role === "user" && m.content === userMessage,
+    );
+    if (!alreadyInHistory) {
       conv.push({ role: "user", content: userMessage });
     }
+  }
+  if (assistantContent.trim()) {
     conv.push({ role: "assistant", content: assistantContent });
+  }
 
-    await fetch(
+  // Guard: need at least one user→assistant exchange to extract facts.
+  const hasUser = conv.some((m) => m.role === "user");
+  const hasAssistant = conv.some((m) => m.role === "assistant");
+  if (!hasUser || conv.length === 0) {
+    console.warn("[memory] extractMemories skipped — no user messages in conversation");
+    return;
+  }
+  // Allow extraction even when assistantContent is empty (tool-only agents
+  // may have nothing to say but the conversation history is still valuable).
+  if (!hasAssistant && conv.length < 2) {
+    console.warn("[memory] extractMemories skipped — conversation too short for fact extraction");
+    return;
+  }
+
+  try {
+    const res = await fetch(
       `${GATEWAY_URL}/memory/${encodeURIComponent(userId)}/add`,
       {
         method: "POST",
@@ -375,11 +407,16 @@ async function extractMemories(
           Authorization: `Bearer ${INTERNAL_TOKEN}`,
         },
         body: JSON.stringify({ messages: conv, agent_id: agentName }),
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(15000),
       },
     );
-  } catch {
-    // Best-effort: never break the main flow for memory failures
+    if (!res.ok) {
+      console.warn(
+        `[memory] extractMemories gateway returned ${res.status} for agent=${agentName} user=${userId.slice(0, 20)}`,
+      );
+    }
+  } catch (err) {
+    console.warn("[memory] extractMemories fetch failed:", (err as Error).message);
   }
 }
 

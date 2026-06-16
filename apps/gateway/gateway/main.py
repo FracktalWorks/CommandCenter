@@ -167,6 +167,14 @@ if _HAS_MAF:
             user_id: str = getattr(user, "email", "") or "anonymous"
             input_data = request_body.model_dump(exclude_none=True)
 
+            # ── Set user context for memory tools (remember / save_memory / etc.) ──
+            try:
+                from acb_skills.memory_tools import \
+                    _set_memory_user_id  # noqa: PLC0415
+                _set_memory_user_id(user_id)
+            except ImportError:
+                pass
+
             # Extract the last user message so memory search is query-focused
             messages = input_data.get("messages", [])
             last_user_msg: str = next(

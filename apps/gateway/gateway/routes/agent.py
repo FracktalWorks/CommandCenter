@@ -961,30 +961,28 @@ async def run_agent_stream_endpoint(
         pass
 
     # ── Memory extraction: save conversation facts after the run completes ──
+    # NOTE: Mem0 episodic extraction is handled by the Next.js route
+    # (/api/agent/chat) which captures the FULL conversation INCLUDING the
+    # assistant's response streamed back.  The gateway only has access to
+    # the request payload (user messages + history) BEFORE the agent runs,
+    # so a background task here would save an incomplete conversation and
+    # produce poor-quality memory facts.
+    #
+    # Graphiti knowledge-graph ingestion is still done here because it
+    # operates on entity mentions in the user's query — it doesn't need
+    # the assistant's response.
     try:
         from acb_memory import add_episode  # noqa: PLC0415
-        from acb_memory import add_memories_background
-        messages = req.payload.get("messages") or []
+
         user_msg = req.payload.get("message") or ""
-        if user_msg or messages:
-            conv = list(messages) if messages else []
-            if user_msg and not any(
-                m.get("role") == "user" and m.get("content") == user_msg
-                for m in conv
-            ):
-                conv.append({"role": "user", "content": user_msg})
-            if conv:
-                background_tasks.add_task(
-                    add_memories_background, user_id, conv, agent_name
-                )
-            # Also populate the bi-temporal knowledge graph (Graphiti)
-            if user_msg:
-                background_tasks.add_task(add_episode,
-                    name=f"agent:{agent_name}:{user_id[:20]}",
-                    content=user_msg[:500],
-                    source_description=f"agent_{agent_name}",
-                    group_id=user_id,
-                )
+        if user_msg and user_id != "anonymous":
+            background_tasks.add_task(
+                add_episode,
+                name=f"agent:{agent_name}:{user_id[:20]}",
+                content=user_msg[:500],
+                source_description=f"agent_{agent_name}",
+                group_id=user_id,
+            )
     except ImportError:
         pass
 

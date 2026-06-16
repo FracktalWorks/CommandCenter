@@ -53,11 +53,12 @@ _log = get_logger("orchestrator.agents")
 _PULL_INSTRUCTIONS = """\
 You are the AI Company Brain orchestrator for Fracktal Works.
 
-You have two categories of tools:
+You have three categories of tools:
 
 RETRIEVAL TOOLS (use for broad company data questions):
 - retrieve_entity_context: search projects, tasks, deals, people
 - retrieve_sales_context: Zoho pipeline, customer health, deal stages
+- search_timeline: time-stamped facts about entities (deal stage changes, action history)
 
 SPECIALIST AGENT TOOLS (use when the request is clearly in one agent's domain):
 - Each registered agent appears as a tool named after it (e.g. agent_sales_assistant, task_manager).
@@ -68,6 +69,22 @@ CREATION / IMPROVEMENT TOOLS:
 - spawn_copilot_agent: when the user asks to CREATE, BUILD, or FIX any skill, script, or automation.
 - delegate_to_agent: fallback for explicit named delegation when the specialist tool is unavailable.
 
+MEMORY TOOLS (active read/write — maintain continuity across conversations):
+- remember(query): search episodic memory for past facts about the current user.
+  Call BEFORE making claims about user preferences, history, or context.
+- recall_timeline(entity_name, query): search the knowledge graph for time-stamped
+  facts about an entity (deal, person, project, company).
+- save_memory(fact): persist a single important fact about the current user to
+  episodic memory. Future conversations will automatically recall this.
+- save_episode(name, content, source?): record a time-stamped episode in the
+  knowledge graph (deal stage change, meeting outcome, milestone reached).
+  Graphiti extracts entities, relationships, and timestamps automatically.
+
+When to actively save vs. let the platform handle it:
+  - Actively save when the user explicitly shares a NEW preference, or when a
+    significant event occurs (deal closed, meeting outcome, key decision).
+  - Trust the platform for routine turns — it auto-extracts memories after each run.
+
 Rules:
 1. For data questions: call retrieve_entity_context or retrieve_sales_context FIRST.
 2. For specialist work: call the matching specialist tool directly — the tool description
@@ -77,6 +94,7 @@ Rules:
 5. Every factual claim from retrieval must cite [entity:uuid] tokens exactly as returned.
 6. Never expose raw SQL, internal UUIDs outside of citations, or stack traces.
 7. Be concise. Bullet points for lists.
+8. Call remember() before making claims about user preferences — verify, don't assume.
 """
 
 # ---------------------------------------------------------------------------
@@ -402,6 +420,22 @@ def build_orchestrator_agent(
     # Build the instructions; append memory context when present.
     instructions = _PULL_INSTRUCTIONS
 
+    # Memory tools — active read/write to Mem0 + Graphiti knowledge graph.
+    # Gives the orchestrator the same memory capabilities that injected
+    # tools provide to named agents via executor._inject_agent_tools().
+    try:
+        from acb_skills.memory_tools import (  # noqa: PLC0415
+            remember,
+            recall_timeline as _recall_timeline_tool,
+            save_memory,
+            save_episode,
+        )
+        _memory_tools: list[Any] = [
+            remember, _recall_timeline_tool, save_memory, save_episode,
+        ]
+    except ImportError:
+        _memory_tools = []
+
     # Core tools always present
     core_tools: list[Any] = [
         retrieve_entity_context,
@@ -409,7 +443,7 @@ def build_orchestrator_agent(
         search_timeline,
         spawn_copilot_agent,
         delegate_to_agent,
-    ]
+    ] + _memory_tools
 
     # Dynamic specialist tools — each registered agent becomes a callable FunctionTool.
     # The LLM routes to the right one from the description alone.

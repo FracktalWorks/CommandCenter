@@ -117,12 +117,12 @@ function MemoryCard({
         </div>
       </div>
 
-      {/* delete button — always visible on hover */}
+      {/* delete button — always visible */}
       <button
         onClick={() => onDelete(memory.id)}
         disabled={deleting}
         title="Delete this memory"
-        className="absolute top-3 right-3 rounded p-1 text-muted-foreground/70 opacity-0 group-hover:opacity-100 hover:bg-destructive/20 hover:text-destructive transition-all disabled:cursor-not-allowed"
+        className="absolute top-3 right-3 rounded p-1 text-muted-foreground/60 hover:bg-destructive/20 hover:text-destructive transition-all disabled:cursor-not-allowed"
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
           <path d="M2 4h12M5 4V2h6v2M6 7v5M10 7v5M3 4l1 9a1 1 0 001 1h6a1 1 0 001-1l1-9" />

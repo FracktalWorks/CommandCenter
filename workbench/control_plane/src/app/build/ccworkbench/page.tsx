@@ -357,10 +357,6 @@ export default function CCWorkbenchPage() {
     setInput("");
     setLoading(true);
 
-    // Touch session updatedAt
-    setSessions((prev) => { const next = prev.map((s) => s.id === activeId ? { ...s, updatedAt: Date.now() } : s); saveSessions(next); return next; });
-    dbPatchSession(activeId, {});
-
     const history = [...messages, userMsg].map((m) => ({ role: m.role, content: m.content }));
     const ctrl = new AbortController();
     abortRef.current = ctrl;

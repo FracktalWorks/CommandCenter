@@ -35,9 +35,13 @@ interface Message {
 
 const TOOL_LABELS: Record<string, string> = {
   read_file: "Read file",
+  write_file: "Write file",
   list_directory: "List directory",
+  search_code: "Search code",
   git_status: "Git status",
   git_diff: "Git diff",
+  git_commit: "Git commit",
+  run_command: "Run command",
   run_tests: "Run tests",
   view_logs: "View logs",
   trigger_deploy: "Deploy",
@@ -46,8 +50,8 @@ const TOOL_LABELS: Record<string, string> = {
 const STARTER_PROMPTS = [
   "What's the current git status?",
   "Run the unit tests and summarise failures",
-  "Show me the orchestrator executor code",
-  "View the last 30 lines of gateway logs",
+  "Search for all uses of run_agent_stream",
+  "View the last 50 lines of gateway logs",
 ];
 
 // ── Tool row ─────────────────────────────────────────────────────────────────
@@ -223,6 +227,7 @@ export default function CCWorkbenchPage() {
   const [model, setModel] = useState("copilot/claude-sonnet");
   const [models, setModels] = useState<UnifiedModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
+  const [gatewayDown, setGatewayDown] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -356,6 +361,8 @@ export default function CCWorkbenchPage() {
                   };
                 }),
               );
+            } else if (ev.type === "gateway_down") {
+              setGatewayDown(true);
             } else if (ev.type === "error") {
               setMessages((prev) =>
                 prev.map((m) =>
@@ -422,6 +429,22 @@ export default function CCWorkbenchPage() {
         </div>
       </div>
 
+      {/* Gateway-down fallback banner */}
+      {gatewayDown && (
+        <div className="shrink-0 border-b border-warning/20 bg-warning/5 px-4 py-1.5 flex items-center gap-2 text-[11px]">
+          <span className="text-warning">⚡</span>
+          <span className="text-warning/80">
+            CC gateway unreachable — using direct GitHub Copilot API. All tools still work.
+          </span>
+          <button
+            onClick={() => setGatewayDown(false)}
+            className="ml-auto w-5 h-5 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* ── Message thread ─────────────────────────────────────────── */}
       <div ref={threadRef} className="flex-1 overflow-y-auto px-3 sm:px-4 py-4 scrollbar-thin">
         <div className="max-w-3xl mx-auto space-y-5">
@@ -435,8 +458,9 @@ export default function CCWorkbenchPage() {
               <div>
                 <p className="font-semibold text-foreground">CC Workbench</p>
                 <p className="text-sm text-muted-foreground mt-1 max-w-md leading-relaxed">
-                  Direct developer chat for CommandCenter. Reads files, runs tests, checks git,
-                  views logs, and can trigger deployments. Works independently of the CC gateway stack.
+                Direct developer chat for CommandCenter. Reads and writes files, searches code,
+                runs shell commands, tests, git operations, views logs, and deploys.
+                Works independently — falls back to direct GitHub Copilot when the CC gateway is down.
                 </p>
               </div>
               <div className="flex flex-wrap gap-2 justify-center mt-1">
@@ -509,7 +533,7 @@ export default function CCWorkbenchPage() {
               Enter to send · Shift+Enter for new line
             </span>
             <span className="text-[10px] text-muted-foreground/40">
-              read_file · git · run_tests · view_logs · deploy
+              read · write · search · git · run · logs · deploy
             </span>
           </div>
         </div>

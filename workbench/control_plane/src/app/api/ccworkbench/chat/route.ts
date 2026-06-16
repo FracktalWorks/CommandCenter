@@ -53,6 +53,7 @@ const LITELLM_BASE_URL =
   process.env.COPILOT_LLM_BASE_URL ??
   process.env.LITELLM_BASE_URL ??
   "http://127.0.0.1:8080/v1";
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? "";
 
 // Resolve repo path at module load. Using a statically-scoped default avoids
 // Turbopack tracing the entire project tree during build.
@@ -62,12 +63,38 @@ const _default = path.join(
 );
 const REPO_PATH = path.resolve(process.env.CCWORKBENCH_REPO_PATH ?? _default);
 
-// All model calls go through the CC gateway LiteLLM endpoint — this gives
-// access to every configured provider (Copilot, DeepSeek, Groq, OpenRouter…)
-const llmClient = new OpenAI({
-  apiKey: GATEWAY_TOKEN,
-  baseURL: LITELLM_BASE_URL,
-});
+/**
+ * Primary: CC gateway LiteLLM (all configured providers).
+ * Fallback: direct GitHub Copilot API — works even when the CC gateway is down.
+ */
+function makeGatewayClient(): OpenAI {
+  return new OpenAI({ apiKey: GATEWAY_TOKEN, baseURL: LITELLM_BASE_URL });
+}
+
+function makeCopilotDirectClient(): OpenAI {
+  return new OpenAI({
+    apiKey: GITHUB_TOKEN,
+    baseURL: "https://api.githubcopilot.com",
+    defaultHeaders: {
+      "Editor-Version": "vscode/1.100.0",
+      "Copilot-Integration-Id": "vscode-chat",
+    },
+  });
+}
+
+/** Probe if the CC gateway LiteLLM endpoint is reachable (2.5 s timeout). */
+async function isGatewayReachable(): Promise<boolean> {
+  try {
+    const url = LITELLM_BASE_URL.replace(/\/v1\/?$/, "/health");
+    const resp = await fetch(url, {
+      signal: AbortSignal.timeout(2_500),
+      headers: { Authorization: `Bearer ${GATEWAY_TOKEN}` },
+    });
+    return resp.ok || resp.status === 401;
+  } catch {
+    return false;
+  }
+}
 
 // ── Tool definitions ─────────────────────────────────────────────────────────
 
@@ -176,12 +203,77 @@ const TOOLS: OpenAI.Chat.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
-          branch: {
-            type: "string",
-            description: "Git branch to deploy (default: main).",
-          },
+          branch: { type: "string", description: "Git branch to deploy (default: main)." },
         },
         required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "write_file",
+      description:
+        "Write or overwrite a file in the CommandCenter repository. Use for creating new files or applying edits. Always read_file first to understand existing content before overwriting.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Path relative to the repo root." },
+          content: { type: "string", description: "Full file content to write." },
+        },
+        required: ["path", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "search_code",
+      description:
+        "Search for a pattern across the CommandCenter codebase using grep. Returns matching lines with file paths and line numbers.",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: { type: "string", description: "Search pattern (regex supported)." },
+          path: { type: "string", description: "Optional: subdirectory to search within (default: whole repo)." },
+          file_pattern: { type: "string", description: "Optional: glob for file types, e.g. '*.py' or '*.ts'." },
+        },
+        required: ["pattern"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "git_commit",
+      description:
+        "Stage files and create a git commit. Defaults to staging all changes (git add -A).",
+      parameters: {
+        type: "object",
+        properties: {
+          message: { type: "string", description: "Commit message." },
+          paths: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional: specific relative paths to stage. Defaults to all changes.",
+          },
+        },
+        required: ["message"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_command",
+      description:
+        "Run an arbitrary shell command in the CommandCenter repo root. Use for linting, type-checking, formatting, installing deps, etc. Times out after 60 s.",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string", description: "Shell command to run." },
+        },
+        required: ["command"],
       },
     },
   },
@@ -301,6 +393,78 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       }
     }
 
+    case "write_file": {
+      const target = safeResolve(String(args.path ?? ""));
+      if (!target) return "Error: path is outside the repository";
+      const content = String(args.content ?? "");
+      try {
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.writeFile(target, content, "utf-8");
+        const lines = content.split("\n").length;
+        return `Written ${lines} lines to ${String(args.path)}`;
+      } catch (e) {
+        return `Error writing file: ${e}`;
+      }
+    }
+
+    case "search_code": {
+      const pattern = String(args.pattern ?? "");
+      if (!pattern) return "Error: pattern is required";
+      const searchDir = args.path ? (safeResolve(String(args.path)) ?? REPO_PATH) : REPO_PATH;
+      const fileGlob = args.file_pattern ? `--include="${String(args.file_pattern)}"` : "";
+      try {
+        const { stdout } = await execAsync(
+          `grep -rn ${fileGlob} --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.next --exclude-dir=.venv -E "${pattern.replace(/"/g, '\\"')}" "${searchDir}" 2>&1 | head -80`,
+          { cwd: REPO_PATH },
+        );
+        return stdout.slice(0, 8000) || "(no matches)";
+      } catch (e: unknown) {
+        const err = e as { stdout?: string; code?: number };
+        if (err.code === 1) return "(no matches)";
+        return err.stdout?.slice(0, 2000) || `Error: ${String(e)}`;
+      }
+    }
+
+    case "git_commit": {
+      const message = String(args.message ?? "");
+      if (!message) return "Error: commit message is required";
+      const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];
+      try {
+        for (const p of paths) {
+          if (!safeResolve(p)) return `Error: path '${p}' is outside the repository`;
+        }
+        const addCmd = paths.length > 0
+          ? `git add ${paths.map((p) => `"${path.resolve(REPO_PATH, p)}"`).join(" ")}`
+          : "git add -A";
+        await execAsync(addCmd, { cwd: REPO_PATH });
+        const { stdout } = await execAsync(
+          `git commit -m "${message.replace(/"/g, '\\"')}"`,
+          { cwd: REPO_PATH },
+        );
+        return stdout.trim();
+      } catch (e: unknown) {
+        return `Error: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
+
+    case "run_command": {
+      const command = String(args.command ?? "");
+      if (!command) return "Error: command is required";
+      const blocked = /(rm\s+-rf\s+\/|mkfs|dd\s+if=)/i;
+      if (blocked.test(command)) return "Error: command blocked for safety";
+      try {
+        const { stdout, stderr } = await execAsync(command, {
+          cwd: REPO_PATH,
+          timeout: 60_000,
+          env: { ...process.env, PATH: `${process.env.PATH ?? ""}:/root/.local/bin:/home/acb/.local/bin` },
+        });
+        return ((stdout || "") + (stderr || "")).slice(0, 8_000) || "(no output)";
+      } catch (e: unknown) {
+        const err = e as { stdout?: string; stderr?: string; message?: string };
+        return ((err.stdout ?? "") + (err.stderr ?? "") || err.message || String(e)).slice(0, 8_000);
+      }
+    }
+
     default:
       return `Unknown tool: ${name}`;
   }
@@ -329,9 +493,28 @@ Conventions:
 - Type hints required on all public functions
 - Run tests: uv run python -m pytest tests/ -x -v
 
-You have access to these tools: read_file, list_directory, git_status, git_diff, run_tests, view_logs, trigger_deploy.
+You have access to these tools:
+- read_file        — read any file in the repo (up to 8 KB)
+- write_file       — write/create a file (read_file first to understand context)
+- list_directory   — list directory contents
+- search_code      — grep across the codebase (regex, optional file type filter)
+- git_status       — show working tree status
+- git_diff         — show uncommitted changes
+- git_commit       — stage + commit changes (git add -A by default)
+- run_command      — run any shell command (uv, npm, ruff, mypy, etc.) — 60 s timeout
+- run_tests        — run pytest with verbose output
+- view_logs        — tail Docker / systemd service logs
+- trigger_deploy   — deploy to the Hostinger VPS (always confirm with user first)
 
-When exploring the codebase, read relevant files before answering. For deployment, always confirm with the user before calling trigger_deploy. Be concise and direct.`;
+Workflow for code changes:
+1. search_code or read_file to understand the relevant code
+2. write_file to apply the change
+3. run_command to verify (ruff check, mypy, npm run build, or pytest)
+4. git_commit to save the work — never push without explicit user instruction
+
+Python conventions: uv run python -m pytest, uv run ruff check ., uv run mypy apps packages
+TypeScript: cd workbench/control_plane && npm run build (or npm run lint)
+Be concise and direct. Read before writing. Verify after changing.`;
 }
 
 // ── POST handler ─────────────────────────────────────────────────────────────
@@ -347,10 +530,18 @@ export async function POST(req: NextRequest) {
   let messages: Array<{ role: string; content: string }>;
   let model: string;
   try {
-    ({ messages, model = "claude-sonnet-4.5" } = await req.json());
+    ({ messages, model = "copilot/claude-sonnet" } = await req.json());
   } catch {
     return new NextResponse("Invalid JSON body", { status: 400 });
   }
+
+  // Probe gateway; fall back to direct Copilot API if unreachable.
+  const gatewayUp = await isGatewayReachable();
+  const llmClient = gatewayUp ? makeGatewayClient() : makeCopilotDirectClient();
+  // When using direct Copilot, normalise model names (strip any provider prefix)
+  const effectiveModel = gatewayUp ? model : model.replace(/^copilot\//, "");
+  // Surface fallback status in the SSE stream so the UI can show it
+  const usingFallback = !gatewayUp;
 
   const encoder = new TextEncoder();
 
@@ -366,10 +557,15 @@ export async function POST(req: NextRequest) {
       ];
 
       try {
+        // Surface fallback info as a system-level SSE event so the UI can show a banner
+        if (usingFallback) {
+          send({ type: "gateway_down", fallback: "copilot-direct" });
+        }
+
         // Tool-calling loop (max 10 iterations to prevent runaway)
         for (let i = 0; i < 10; i++) {
           const response = await llmClient.chat.completions.create({
-            model,
+            model: effectiveModel,
             messages: allMessages,
             tools: TOOLS,
             tool_choice: "auto",
@@ -410,7 +606,7 @@ export async function POST(req: NextRequest) {
 
           // finish_reason == "stop" or no tool calls — stream the final text
           const finalStream = await llmClient.chat.completions.create({
-            model,
+            model: effectiveModel,
             messages: allMessages,
             stream: true,
             max_tokens: 4096,

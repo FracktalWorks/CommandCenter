@@ -3,37 +3,36 @@
 /**
  * CC Workbench — developer chat for CommandCenter.
  *
- * Session management:
- *   - localStorage for instant reads (cache layer)
- *   - Postgres via /api/chat/sessions for cross-device persistence
- *   - On mount: load from Postgres and merge with localStorage
- *   - On session create/switch: sync to Postgres
- *   - On message save: write-through to Postgres
- *
- * Cross-session memory: CCWORKBENCH_MEMORY.md in the repo root, injected
- * into every system prompt by the API route. The agent can update it with
- * write_file to preserve context across sessions and devices.
+ * Session + message persistence uses the SAME functions as the main chat:
+ *   getSessions / upsertSession / deleteSession / fetchAndMergeSessionsFromDb
+ *   getMessages / saveMessages / fetchMessagesFromDb
+ * These handle localStorage write-through + Postgres background sync correctly.
+ * agent_name is "cc-workbench" so sessions are isolated from regular chats.
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { Terminal, Trash2, Plus, MessageSquare, RefreshCw } from "lucide-react";
 import MarkdownMessage from "@/components/MarkdownMessage";
 import type { UnifiedModel } from "@/app/api/models/all/route";
+import {
+  getSessions,
+  upsertSession,
+  deleteSession,
+  createSession,
+  enrichSession,
+  fetchAndMergeSessionsFromDb,
+  getMessages,
+  saveMessages,
+  fetchMessagesFromDb,
+  type ChatSession,
+  type PersistedMessage,
+} from "@/lib/sessions";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const AGENT_NAME = "cc-workbench";
-const SESSIONS_KEY = "cc-workbench-sessions";
-const msgKey = (id: string) => `cc-workbench-msgs-${id}`;
 
 // ── Types ──────────────────────────────────────────────────────────────────────
-
-interface WBSession {
-  id: string;
-  title: string;
-  createdAt: number;
-  updatedAt: number;
-}
 
 interface ToolCall {
   id: string;
@@ -83,112 +82,42 @@ const THINK_MODES: { mode: ThinkMode; label: string; title: string }[] = [
   { mode: "max",      label: "Max",      title: "Maximum effort / deeper reasoning" },
 ];
 
-// ── Session helpers ───────────────────────────────────────────────────────────
+// ── Convert between PersistedMessage (sessions.ts) and local Message ──────────
 
-function loadSessions(): WBSession[] {
-  if (typeof window === "undefined") return [];
-  try { return JSON.parse(localStorage.getItem(SESSIONS_KEY) ?? "[]"); } catch { return []; }
+function fromPersisted(m: PersistedMessage): Message {
+  return {
+    id: m.id,
+    role: m.role as "user" | "assistant",
+    content: m.content ?? "",
+    timestamp: m.timestamp,
+    streaming: m.streaming,
+    toolCalls: m.toolEvents ? (m.toolEvents as ToolCall[]) : undefined,
+  };
 }
 
-function saveSessions(sessions: WBSession[]) {
-  localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
+function toPersisted(m: Message): PersistedMessage {
+  return {
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    timestamp: m.timestamp,
+    streaming: m.streaming,
+    toolEvents: m.toolCalls,
+  };
+}
+
+// ── Session helpers ───────────────────────────────────────────────────────────
+
+function getWBSessions(): ChatSession[] {
+  return getSessions().filter((s) => s.agentName === AGENT_NAME);
+}
+
+function newWBSession(): ChatSession {
+  return createSession(AGENT_NAME);
 }
 
 function loadMessages(sessionId: string): Message[] {
-  if (typeof window === "undefined") return [];
-  try { return JSON.parse(localStorage.getItem(msgKey(sessionId)) ?? "[]"); } catch { return []; }
-}
-
-function saveMessages(sessionId: string, messages: Message[]) {
-  const settled = messages.filter((m) => !m.streaming || m.content.trim().length > 0);
-  localStorage.setItem(msgKey(sessionId), JSON.stringify(settled));
-}
-
-function newSession(): WBSession {
-  return { id: crypto.randomUUID(), title: "New session", createdAt: Date.now(), updatedAt: Date.now() };
-}
-
-function truncate(text: string, max: number): string {
-  const s = text.replace(/\s+/g, " ").trim();
-  if (s.length <= max) return s;
-  return s.slice(0, max).replace(/\s+\S*$/, "") + "…";
-}
-
-// ── Postgres sync helpers (fire-and-forget) ───────────────────────────────────
-
-async function dbUpsertSession(s: WBSession, preview?: string): Promise<void> {
-  try {
-    await fetch("/api/chat/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id: s.id,
-        agent_name: AGENT_NAME,
-        title: s.title !== "New session" ? s.title : null,
-        last_preview: preview ?? null,
-        message_count: 0,
-      }),
-    });
-  } catch { /* non-fatal */ }
-}
-
-async function dbPatchSession(id: string, patch: { title?: string; last_preview?: string; message_count?: number }): Promise<void> {
-  try {
-    await fetch(`/api/chat/sessions/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
-    });
-  } catch { /* non-fatal */ }
-}
-
-async function dbDeleteSession(id: string): Promise<void> {
-  try { await fetch(`/api/chat/sessions/${id}`, { method: "DELETE" }); } catch { /* non-fatal */ }
-}
-
-async function dbSaveMessages(sessionId: string, messages: Message[]): Promise<void> {
-  const settled = messages.filter((m) => !m.streaming && (m.role === "user" || m.content.trim()));
-  if (settled.length === 0) return;
-  try {
-    await fetch(`/api/chat/sessions/${sessionId}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: settled.map((m) => ({
-        id: m.id, role: m.role, content: m.content,
-        timestamp: new Date(m.timestamp).toISOString(),
-        tool_events: m.toolCalls ? JSON.stringify(m.toolCalls) : null,
-      })) }),
-    });
-  } catch { /* non-fatal */ }
-}
-
-async function dbLoadMessages(sessionId: string): Promise<Message[]> {
-  try {
-    const resp = await fetch(`/api/chat/sessions/${sessionId}/messages`);
-    if (!resp.ok) return [];
-    const data = await resp.json() as { messages?: { id: string; role: string; content: string; timestamp: string; tool_events?: string }[] };
-    return (data.messages ?? []).map((m) => ({
-      id: m.id,
-      role: m.role as "user" | "assistant",
-      content: m.content ?? "",
-      timestamp: new Date(m.timestamp).getTime(),
-      toolCalls: m.tool_events ? (() => { try { return JSON.parse(m.tool_events!); } catch { return undefined; } })() : undefined,
-    }));
-  } catch { return []; }
-}
-
-async function dbFetchSessions(): Promise<WBSession[]> {
-  try {
-    const resp = await fetch(`/api/chat/sessions?agent=${AGENT_NAME}`);
-    if (!resp.ok) return [];
-    const data = await resp.json() as { sessions?: { id: string; title?: string; created_at: string; updated_at: string }[] };
-    return (data.sessions ?? []).map((s) => ({
-      id: s.id,
-      title: s.title ?? "Untitled",
-      createdAt: new Date(s.created_at).getTime(),
-      updatedAt: new Date(s.updated_at).getTime(),
-    }));
-  } catch { return []; }
+  return getMessages(sessionId).map(fromPersisted);
 }
 
 // ── Tool row ──────────────────────────────────────────────────────────────────
@@ -260,140 +189,100 @@ function MessageBubble({ message }: { message: Message }) {
 
 export default function CCWorkbenchPage() {
   // ── Session state ──────────────────────────────────────────────────────────
-  const [sessions, setSessions] = useState<WBSession[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeId, setActiveId] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [syncing, setSyncing] = useState(false);
 
-  // Bootstrap: localStorage first (instant), then merge with Postgres (cross-device)
+  // Mount: localStorage first (instant render), then Postgres merge (cross-device)
   useEffect(() => {
-    let local = loadSessions();
-    if (local.length === 0) {
-      const s = newSession();
-      local = [s];
-      saveSessions(local);
-      dbUpsertSession(s);
+    let wbSessions = getWBSessions();
+    if (wbSessions.length === 0) {
+      const s = newWBSession();
+      upsertSession(s);
+      wbSessions = [s];
     }
-    setSessions(local);
-    setActiveId(local[0].id);
-    // Load messages: localStorage first for instant render, then Postgres for full history
-    const cachedMsgs = loadMessages(local[0].id);
-    setMessages(cachedMsgs);
+    setSessions(wbSessions);
+    const firstId = wbSessions[0].id;
+    setActiveId(firstId);
+    setMessages(loadMessages(firstId));
 
-    // Background: fetch Postgres sessions and merge (catches other-device sessions)
+    // Background: Postgres merge for cross-device sessions
     setSyncing(true);
-    dbFetchSessions().then((remote) => {
-      if (remote.length === 0) return;
-      setSessions((prev) => {
-        // Merge: remote sessions not in local get added; local ordering preserved
-        const localIds = new Set(prev.map((s) => s.id));
-        const merged = [...prev, ...remote.filter((s) => !localIds.has(s.id))];
-        // Sort by updatedAt desc
-        merged.sort((a, b) => b.updatedAt - a.updatedAt);
-        saveSessions(merged);
-        return merged;
-      });
-    }).finally(() => setSyncing(false));
-
-    // Background: fetch full message history for active session from Postgres
-    dbLoadMessages(local[0].id).then((remote) => {
-      if (remote.length > cachedMsgs.length) {
-        setMessages(remote);
-        saveMessages(local[0].id, remote);
-      }
-    });
+    fetchAndMergeSessionsFromDb()
+      .then(() => {
+        const merged = getWBSessions();
+        setSessions(merged);
+        // If Postgres has more messages for the active session, load them
+        fetchMessagesFromDb(firstId).then((remote) => {
+          setMessages(remote.map(fromPersisted));
+        });
+      })
+      .finally(() => setSyncing(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Write-through: persist messages to localStorage + Postgres after each settled turn
-  const lastSavedCountRef = useRef(0);
+  // Persist messages after each settled turn using the exact same function as main chat
   useEffect(() => {
     if (!activeId || messages.length === 0) return;
     const settled = messages.filter((m) => !m.streaming);
-    if (settled.length === lastSavedCountRef.current) return;
-    lastSavedCountRef.current = settled.length;
-    saveMessages(activeId, settled);
-    dbSaveMessages(activeId, settled);
-    // Update last_preview in Postgres
-    const lastAssistant = [...settled].reverse().find((m) => m.role === "assistant" && m.content.trim());
-    if (lastAssistant) {
-      dbPatchSession(activeId, { last_preview: truncate(lastAssistant.content, 120), message_count: settled.length });
-    }
-  }, [messages, activeId]);
+    if (settled.length === 0) return;
+    saveMessages(activeId, settled.map(toPersisted));
+    // Enrich session title + preview for the sidebar
+    const firstUser = messages.find((m) => m.role === "user" && m.content.trim());
+    const lastAsst = [...messages].reverse().find((m) => m.role === "assistant" && m.content.trim() && !m.streaming);
+    enrichSession(activeId, {
+      firstUserMessage: firstUser?.content,
+      lastPreview: lastAsst?.content,
+      messageCount: settled.length,
+    });
+    setSessions(getWBSessions());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages]);
 
-  // Switch session
+  // Switch session: load from localStorage cache immediately, fetch Postgres in background
   const switchSession = useCallback((id: string) => {
     if (id === activeId) return;
     setActiveId(id);
-    lastSavedCountRef.current = 0;
-    // Load from cache immediately
-    const cached = loadMessages(id);
-    setMessages(cached);
+    setMessages(loadMessages(id));
     setInput("");
-    // Then fetch from Postgres
-    dbLoadMessages(id).then((remote) => {
-      if (remote.length > cached.length) {
-        setMessages(remote);
-        saveMessages(id, remote);
-      }
+    fetchMessagesFromDb(id).then((remote) => {
+      setMessages(remote.map(fromPersisted));
     });
   }, [activeId]);
 
   // Create new session
-  const createSession = useCallback(() => {
-    const s = newSession();
-    setSessions((prev) => { const next = [s, ...prev]; saveSessions(next); return next; });
+  const handleCreateSession = useCallback(() => {
+    const s = newWBSession();
+    upsertSession(s);
+    setSessions(getWBSessions());
     setActiveId(s.id);
     setMessages([]);
     setInput("");
-    lastSavedCountRef.current = 0;
-    dbUpsertSession(s);
   }, []);
 
   // Delete session
-  const deleteSession = useCallback((id: string, e: React.MouseEvent) => {
+  const handleDeleteSession = useCallback((id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    localStorage.removeItem(msgKey(id));
-    dbDeleteSession(id);
-    setSessions((prev) => {
-      const next = prev.filter((s) => s.id !== id);
-      saveSessions(next);
+    deleteSession(id);
+    const remaining = getWBSessions();
+    if (remaining.length === 0) {
+      const s = newWBSession();
+      upsertSession(s);
+      setSessions([s]);
+      setActiveId(s.id);
+      setMessages([]);
+    } else {
+      setSessions(remaining);
       if (id === activeId) {
-        if (next.length === 0) {
-          const s = newSession();
-          saveSessions([s]);
-          setActiveId(s.id);
-          setMessages([]);
-          dbUpsertSession(s);
-          return [s];
-        }
-        setActiveId(next[0].id);
-        lastSavedCountRef.current = 0;
-        const cached = loadMessages(next[0].id);
-        setMessages(cached);
-        dbLoadMessages(next[0].id).then((remote) => {
-          if (remote.length > cached.length) { setMessages(remote); saveMessages(next[0].id, remote); }
+        setActiveId(remaining[0].id);
+        setMessages(loadMessages(remaining[0].id));
+        fetchMessagesFromDb(remaining[0].id).then((remote) => {
+          setMessages(remote.map(fromPersisted));
         });
       }
-      return next;
-    });
+    }
   }, [activeId]);
-
-  // Auto-title: set once from first user message, sync to Postgres
-  const titledRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    if (!activeId || titledRef.current.has(activeId)) return;
-    const first = messages.find((m) => m.role === "user" && m.content.trim());
-    if (!first) return;
-    titledRef.current.add(activeId);
-    const title = truncate(first.content, 50);
-    setSessions((prev) => {
-      const next = prev.map((s) => s.id === activeId && s.title === "New session" ? { ...s, title, updatedAt: Date.now() } : s);
-      saveSessions(next);
-      return next;
-    });
-    dbPatchSession(activeId, { title });
-  }, [messages, activeId]);
 
   // ── Chat state ─────────────────────────────────────────────────────────────
   const [input, setInput] = useState("");
@@ -544,8 +433,7 @@ export default function CCWorkbenchPage() {
           <Terminal className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
           <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex-1 truncate">Workbench</span>
           {syncing && <RefreshCw className="w-3 h-3 text-muted-foreground/40 animate-spin shrink-0" />}
-          <button onClick={createSession} title="New session"
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition shrink-0">
+          <button onClick={handleCreateSession} title="New session"
             <Plus className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -560,9 +448,9 @@ export default function CCWorkbenchPage() {
               }`}>
               <MessageSquare className={`w-3 h-3 shrink-0 mt-0.5 ${s.id === activeId ? "text-primary" : "text-muted-foreground"}`} />
               <span className={`flex-1 text-[11px] leading-snug truncate ${s.id === activeId ? "text-foreground font-medium" : "text-muted-foreground"}`}>
-                {s.title}
+                {s.title ?? s.name}
               </span>
-              <button onClick={(e) => deleteSession(s.id, e)} title="Delete"
+              <button onClick={(e) => handleDeleteSession(s.id, e)} title="Delete"
                 className="shrink-0 opacity-0 group-hover:opacity-100 p-0.5 rounded text-muted-foreground/60 hover:text-destructive tech-transition">
                 <Trash2 className="w-3 h-3" />
               </button>
@@ -578,12 +466,12 @@ export default function CCWorkbenchPage() {
         <div className="flex items-center gap-2 h-9 px-4 border-b border-border bg-card/40 shrink-0">
           <div className={`w-2 h-2 rounded-full shrink-0 ${loading ? "bg-warning animate-pulse" : "bg-success"}`} />
           <span className="text-xs font-medium text-foreground truncate">
-            {activeSession?.title ?? "cc-workbench"}
+            {activeSession ? (activeSession.title ?? activeSession.name) : "cc-workbench"}
           </span>
           {loading && <span className="hidden sm:inline text-[10px] text-warning/70 animate-pulse">running…</span>}
           {/* Mobile: new session */}
           <div className="ml-auto sm:hidden">
-            <button onClick={createSession} title="New session"
+            <button onClick={handleCreateSession} title="New session"
               className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition">
               <Plus className="w-3.5 h-3.5" />
             </button>

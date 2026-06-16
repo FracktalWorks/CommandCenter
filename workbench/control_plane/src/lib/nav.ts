@@ -124,6 +124,13 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: "PlusSquare",
         note: "User-created applications",
       },
+      {
+        href: "/build/ccworkbench",
+        label: "CC Workbench",
+        icon: "Terminal",
+        note: "Develop & deploy CommandCenter",
+        badge: "Dev",
+      },
     ],
   },
 ];

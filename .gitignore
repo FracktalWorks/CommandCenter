@@ -6,6 +6,9 @@ __pycache__/
 .uv-cache/
 dist/
 build/
+# Re-include Next.js app route directories named "build" inside src/app
+!workbench/control_plane/src/app/build/
+!workbench/control_plane/src/app/build/**
 
 # Env / secrets
 .env

@@ -75,6 +75,7 @@ Every registered agent (static + GitHub-registered) is exposed as a MAF `Functio
 | **Detailed engineering tasks with estimates** | [`wbs.md`](wbs.md) |
 | **System design: containers, data model, ADRs** | [`system_architecture.md`](system_architecture.md) |
 | **MCP & Plugin integration design** | [`spec_mcp_plugin_integration.md`](spec_mcp_plugin_integration.md) |
+| **LLM prompt caching + memory system plan** | [`spec_llm_caching_memory.md`](spec_llm_caching_memory.md) |
 | **Agent repo compatibility guide** | [`agent_repo_compatibility.md`](agent_repo_compatibility.md) |
 
 ---

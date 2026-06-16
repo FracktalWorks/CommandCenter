@@ -434,6 +434,7 @@ export default function CCWorkbenchPage() {
           <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex-1 truncate">Workbench</span>
           {syncing && <RefreshCw className="w-3 h-3 text-muted-foreground/40 animate-spin shrink-0" />}
           <button onClick={handleCreateSession} title="New session"
+            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition shrink-0">
             <Plus className="w-3.5 h-3.5" />
           </button>
         </div>

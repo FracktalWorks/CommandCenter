@@ -11,8 +11,10 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Terminal, Trash2, Plus, MessageSquare, RefreshCw } from "lucide-react";
+import { Terminal, Trash2, Plus, MessageSquare, RefreshCw, ChevronDown } from "lucide-react";
 import MarkdownMessage from "@/components/MarkdownMessage";
+import MessageActionBar from "@/components/MessageActionBar";
+import SuggestionPills from "@/components/SuggestionPills";
 import type { UnifiedModel } from "@/app/api/models/all/route";
 import {
   getSessions,
@@ -148,24 +150,90 @@ function ToolRow({ tc }: { tc: ToolCall }) {
 
 // ── Message bubble ────────────────────────────────────────────────────────────
 
-function MessageBubble({ message }: { message: Message }) {
+function MessageBubble({
+  message,
+  onResend,
+  onRetry,
+}: {
+  message: Message;
+  onResend?: (content: string) => void;
+  onRetry?: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState(message.content);
+  const editRef = useRef<HTMLTextAreaElement>(null);
   const timestamp = new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  useEffect(() => {
+    if (editing && editRef.current) {
+      const t = editRef.current;
+      t.focus();
+      t.style.height = "auto";
+      t.style.height = `${Math.max(t.scrollHeight, 60)}px`;
+    }
+  }, [editing]);
+
+  const handleEditSubmit = () => {
+    const trimmed = editText.trim();
+    if (trimmed && onResend) onResend(trimmed);
+    setEditing(false);
+  };
+
+  const handleEditKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleEditSubmit(); }
+    if (e.key === "Escape") { setEditing(false); setEditText(message.content); }
+  };
+
   if (message.role === "user") {
+    if (editing) {
+      return (
+        <div className="flex justify-end animate-fade-in">
+          <div className="w-full max-w-[88%] sm:max-w-[78%]">
+            <div className="rounded-2xl rounded-tr-sm border-2 border-amber-500/50 bg-secondary overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-2 border-b border-border/60 bg-secondary/80">
+                <span className="text-[11px] text-amber-400/80 font-medium">✏️ Editing</span>
+                <span className="text-[10px] text-muted-foreground hidden sm:block">Enter to send · Esc to cancel</span>
+              </div>
+              <div className="px-3 py-3">
+                <textarea ref={editRef} value={editText}
+                  onChange={(e) => { setEditText(e.target.value); const t = e.currentTarget; t.style.height = "auto"; t.style.height = `${Math.min(Math.max(t.scrollHeight, 60), 300)}px`; }}
+                  onKeyDown={handleEditKeyDown} rows={3}
+                  className="w-full resize-none rounded-xl bg-card border border-border px-4 py-3 text-[16px] sm:text-sm text-foreground focus:outline-none focus:border-amber-500/60 transition-colors"
+                  style={{ minHeight: "60px", maxHeight: "300px" }}
+                />
+              </div>
+              <div className="flex items-center justify-between px-4 py-2.5 border-t border-border/60 bg-secondary/60">
+                <button onClick={() => { setEditing(false); setEditText(message.content); }}
+                  className="text-[12px] px-3 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors">Cancel</button>
+                <button onClick={handleEditSubmit} disabled={!editText.trim()}
+                  className="text-[12px] px-4 py-1.5 rounded-lg bg-primary text-primary-foreground font-semibold disabled:opacity-30 hover:opacity-90 tech-transition">↑ Send</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
     return (
-      <div className="flex justify-end animate-fade-in">
+      <div className="flex justify-end group animate-fade-in">
         <div className="max-w-[88%] sm:max-w-[78%]">
-          <div className="px-4 py-2.5 text-[13px] sm:text-sm leading-relaxed bg-primary/15 text-foreground rounded-2xl rounded-tr-md">
+          <div onDoubleClick={() => { setEditText(message.content); setEditing(true); }}
+            className="px-4 py-2.5 text-[13px] sm:text-sm leading-relaxed bg-primary/15 text-foreground rounded-2xl rounded-tr-md cursor-pointer select-none hover:bg-primary/20 tech-transition"
+            title="Double-click to edit">
             <p className="whitespace-pre-wrap break-words">{message.content}</p>
           </div>
-          <div className="flex items-center justify-end mt-1 pr-0.5">
+          <div className="flex items-center justify-end gap-2 mt-1 pr-0.5">
+            <MessageActionBar content={message.content} messageId={message.id} role="user"
+              onEdit={() => { setEditText(message.content); setEditing(true); }} />
             <span className="text-[10px] text-muted-foreground">{timestamp}</span>
           </div>
         </div>
       </div>
     );
   }
+
+  // Assistant message
   return (
-    <div className="animate-fade-in">
+    <div className="group animate-fade-in">
       {message.toolCalls?.map((tc) => <ToolRow key={tc.id} tc={tc} />)}
       {message.content ? (
         <MarkdownMessage content={message.content} streaming={message.streaming} sessionId="" />
@@ -179,7 +247,10 @@ function MessageBubble({ message }: { message: Message }) {
         )
       )}
       {!message.streaming && message.content && (
-        <div className="mt-1"><span className="text-[10px] text-muted-foreground">{timestamp}</span></div>
+        <div className="flex items-center gap-2 mt-1">
+          <MessageActionBar content={message.content} messageId={message.id} role="assistant" onRetry={onRetry} />
+          <span className="text-[10px] text-muted-foreground">{timestamp}</span>
+        </div>
       )}
     </div>
   );
@@ -298,6 +369,7 @@ export default function CCWorkbenchPage() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const isNearBottomRef = useRef(true);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
 
   // Close menus on outside click
   useEffect(() => {
@@ -315,7 +387,11 @@ export default function CCWorkbenchPage() {
   useEffect(() => {
     const el = threadRef.current;
     if (!el) return;
-    const onScroll = () => { isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; };
+    const onScroll = () => {
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      isNearBottomRef.current = dist < 80;
+      setShowScrollBtn(!isNearBottomRef.current && el.scrollHeight > el.clientHeight + 200);
+    };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
@@ -339,22 +415,26 @@ export default function CCWorkbenchPage() {
   const currentModelLabel = useMemo(() => models.find((m) => m.id === model)?.label ?? model, [models, model]);
   const modelGroups = useMemo(() => Array.from(new Set(models.map((m) => m.group))), [models]);
 
+  const scrollToBottom = useCallback(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, []);
+
   const stopGeneration = useCallback(() => {
     abortRef.current?.abort();
     setLoading(false);
     setMessages((prev) => prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)));
   }, []);
 
-  const sendMessage = useCallback(async () => {
-    const text = input.trim();
+  const sendMessage = useCallback(async (textOverride?: string) => {
+    const text = (textOverride ?? input).trim();
     if (!text || loading) return;
+    if (!textOverride) setInput("");
 
     const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: text, timestamp: Date.now() };
     const assistantId = crypto.randomUUID();
     const assistantMsg: Message = { id: assistantId, role: "assistant", content: "", toolCalls: [], streaming: true, timestamp: Date.now() };
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
-    setInput("");
     setLoading(true);
 
     const history = [...messages, userMsg].map((m) => ({ role: m.role, content: m.content }));
@@ -416,7 +496,6 @@ export default function CCWorkbenchPage() {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
-
   const activeSession = sessions.find((s) => s.id === activeId);
 
   return (
@@ -444,9 +523,17 @@ export default function CCWorkbenchPage() {
                   : "hover:bg-secondary/60"
               }`}>
               <MessageSquare className={`w-3 h-3 shrink-0 mt-0.5 ${s.id === activeId ? "text-primary" : "text-muted-foreground"}`} />
-              <span className={`flex-1 text-[11px] leading-snug truncate ${s.id === activeId ? "text-foreground font-medium" : "text-muted-foreground"}`}>
-                {s.title ?? s.name}
-              </span>
+              <div className="flex-1 min-w-0 space-y-0.5">
+                <div className={`text-[11px] leading-snug truncate ${s.id === activeId ? "text-foreground font-medium" : "text-muted-foreground"}`}>
+                  {s.title ?? s.name}
+                </div>
+                {s.lastPreview && (
+                  <div className="text-[10px] text-muted-foreground/70 truncate leading-snug">{s.lastPreview}</div>
+                )}
+                <div className="text-[10px] text-muted-foreground/50 leading-snug">
+                  {s.messageCount > 0 ? `${s.messageCount} msgs` : "New"}
+                </div>
+              </div>
               <button onClick={(e) => handleDeleteSession(s.id, e)} title="Delete"
                 className="shrink-0 opacity-0 group-hover:opacity-100 p-0.5 rounded text-muted-foreground/60 hover:text-destructive tech-transition">
                 <Trash2 className="w-3 h-3" />
@@ -476,7 +563,15 @@ export default function CCWorkbenchPage() {
         </div>
 
         {/* Message thread */}
-        <div ref={threadRef} className="flex-1 overflow-y-auto px-3 sm:px-4 py-4 scrollbar-thin">
+        <div ref={threadRef} className="flex-1 overflow-y-auto px-3 sm:px-4 py-4 scrollbar-thin relative">
+          {/* Scroll-to-bottom button */}
+          {showScrollBtn && (
+            <button onClick={scrollToBottom}
+              className="sticky bottom-3 left-1/2 -translate-x-1/2 z-10 w-8 h-8 rounded-full bg-card border border-border text-foreground shadow-lg flex items-center justify-center hover:bg-secondary tech-transition"
+              aria-label="Scroll to bottom">
+              <ChevronDown className="w-4 h-4" />
+            </button>
+          )}
           <div className="max-w-3xl mx-auto space-y-5">
             {messages.length === 0 && (
               <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3 text-center">
@@ -490,17 +585,41 @@ export default function CCWorkbenchPage() {
                     runs shell commands, manages git, deploys via CI/CD.
                   </p>
                 </div>
-                <div className="flex flex-wrap gap-2 justify-center mt-1">
-                  {STARTER_PROMPTS.map((s) => (
-                    <button key={s} onClick={() => setInput(s)}
-                      className="text-xs border border-border rounded-full px-3 py-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition">
-                      {s}
-                    </button>
-                  ))}
-                </div>
+                <SuggestionPills suggestions={STARTER_PROMPTS} onPick={(s) => sendMessage(s)} label="Try asking" align="center" />
               </div>
             )}
-            {messages.map((msg) => <MessageBubble key={msg.id} message={msg} />)}
+            {messages.map((msg, i) => {
+              const prev = i > 0 ? messages[i - 1] : null;
+              const showDate = prev && new Date(msg.timestamp).toDateString() !== new Date(prev.timestamp).toDateString();
+              const prevUser = msg.role === "assistant"
+                ? [...messages.slice(0, i)].reverse().find((m) => m.role === "user")
+                : null;
+              return (
+                <div key={msg.id}>
+                  {showDate && (
+                    <div className="flex items-center gap-3 my-4">
+                      <div className="flex-1 h-px bg-border" />
+                      <span className="text-[10px] text-muted-foreground/40 font-medium shrink-0">
+                        {new Date(msg.timestamp).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
+                      </span>
+                      <div className="flex-1 h-px bg-secondary" />
+                    </div>
+                  )}
+                  <MessageBubble
+                    message={msg}
+                    onResend={msg.role === "user" ? (content) => sendMessage(content) : undefined}
+                    onRetry={prevUser ? () => sendMessage(prevUser.content) : undefined}
+                  />
+                </div>
+              );
+            })}
+            {/* Follow-up suggestion pills after last assistant message */}
+            {!loading && messages.length > 0 && (() => {
+              const last = messages[messages.length - 1];
+              return last?.role === "assistant" && last.content.trim() && !last.streaming
+                ? <SuggestionPills suggestions={STARTER_PROMPTS} onPick={(s) => sendMessage(s)} label="Follow up" align="start" />
+                : null;
+            })()}
             <div ref={bottomRef} />
           </div>
         </div>

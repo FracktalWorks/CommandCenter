@@ -142,7 +142,6 @@ export default function CCWorkbenchPage() {
   const [model, setModel] = useState("copilot/claude-sonnet");
   const [models, setModels] = useState<UnifiedModel[]>([]);
   const [thinkMode, setThinkMode] = useState<ThinkMode>("auto");
-  const [gatewayDown, setGatewayDown] = useState(false);
 
   // Model menu state
   const [showModelMenu, setShowModelMenu] = useState(false);
@@ -260,8 +259,6 @@ export default function CCWorkbenchPage() {
                 return { ...m, toolCalls: (m.toolCalls ?? []).map((t) =>
                   t.id === ev.id ? { ...t, result: ev.result, status: ev.success ? ("done" as const) : ("error" as const) } : t) };
               }));
-            } else if (ev.type === "gateway_down") {
-              setGatewayDown(true);
             } else if (ev.type === "error") {
               setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: `⚠ ${ev.content}`, streaming: false } : m));
             }
@@ -302,15 +299,6 @@ export default function CCWorkbenchPage() {
           </button>
         </div>
       </div>
-
-      {/* Gateway-down fallback banner */}
-      {gatewayDown && (
-        <div className="shrink-0 border-b border-warning/20 bg-warning/5 px-4 py-1.5 flex items-center gap-2 text-[11px]">
-          <span className="text-warning">⚡</span>
-          <span className="text-warning/80">CC gateway unreachable — using direct GitHub Copilot API. All tools still work.</span>
-          <button onClick={() => setGatewayDown(false)} className="ml-auto w-5 h-5 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition">✕</button>
-        </div>
-      )}
 
       {/* ── Message thread ─────────────────────────────────────────── */}
       <div ref={threadRef} className="flex-1 overflow-y-auto px-3 sm:px-4 py-4 scrollbar-thin">

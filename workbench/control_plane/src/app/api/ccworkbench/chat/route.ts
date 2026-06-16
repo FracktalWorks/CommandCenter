@@ -18,16 +18,16 @@
  *   {"type":"error",      "content":"…"}
  *
  * LLM routing:
- *   All model calls go through the CC gateway LiteLLM endpoint
- *   (COPILOT_LLM_BASE_URL, default port 8080). This gives access to every
- *   provider configured in CC — Copilot, DeepSeek, Groq, OpenRouter, Gemini, etc.
- *   The gateway never needs to be running to use the tools; it only needs to be
- *   reachable for the LLM call itself.
+ *   Primary: CC gateway LiteLLM endpoint (COPILOT_LLM_BASE_URL, port 8080).
+ *   Gives access to every provider configured in CC (Copilot, DeepSeek, Groq, OpenRouter…).
+ *   If the gateway is unreachable the request fails with a clear error — we do NOT fall
+ *   back to direct api.githubcopilot.com because PATs are rejected by that endpoint.
  *
  * Env vars:
- *   COPILOT_LLM_BASE_URL   — CC gateway LiteLLM base URL (default http://127.0.0.1:8080/v1)
- *   GATEWAY_INTERNAL_TOKEN — auth token for the gateway (default sk-local-dev-change-me)
- *   CCWORKBENCH_REPO_PATH  — absolute path to the CC repo (defaults to process.cwd())
+ *   COPILOT_LLM_BASE_URL   — LiteLLM base URL (default http://127.0.0.1:8080/v1)
+ *   GATEWAY_INTERNAL_TOKEN — auth token for the gateway
+ *   GITHUB_TOKEN           — PAT used only for GitHub API calls (Actions status, git push)
+ *   CCWORKBENCH_REPO_PATH  — absolute path to the CC repo
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -63,23 +63,9 @@ const _default = path.join(
 );
 const REPO_PATH = path.resolve(process.env.CCWORKBENCH_REPO_PATH ?? _default);
 
-/**
- * Primary: CC gateway LiteLLM (all configured providers).
- * Fallback: direct GitHub Copilot API — works even when the CC gateway is down.
- */
+/** LLM client pointing at the CC gateway LiteLLM endpoint. */
 function makeGatewayClient(): OpenAI {
   return new OpenAI({ apiKey: GATEWAY_TOKEN, baseURL: LITELLM_BASE_URL });
-}
-
-function makeCopilotDirectClient(): OpenAI {
-  return new OpenAI({
-    apiKey: GITHUB_TOKEN,
-    baseURL: "https://api.githubcopilot.com",
-    defaultHeaders: {
-      "Editor-Version": "vscode/1.100.0",
-      "Copilot-Integration-Id": "vscode-chat",
-    },
-  });
 }
 
 // ── GitHub repo helper ──────────────────────────────────────────────────────
@@ -99,19 +85,7 @@ async function getGitHubRepo(): Promise<{ owner: string; repo: string } | null> 
   }
 }
 
-/** Probe if the CC gateway LiteLLM endpoint is reachable (2.5 s timeout). */
-async function isGatewayReachable(): Promise<boolean> {
-  try {
-    const url = LITELLM_BASE_URL.replace(/\/v1\/?$/, "/health");
-    const resp = await fetch(url, {
-      signal: AbortSignal.timeout(2_500),
-      headers: { Authorization: `Bearer ${GATEWAY_TOKEN}` },
-    });
-    return resp.ok || resp.status === 401;
-  } catch {
-    return false;
-  }
-}
+
 
 // ── Tool definitions ─────────────────────────────────────────────────────────
 
@@ -121,7 +95,7 @@ const TOOLS: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: "read_file",
       description:
-        "Read a file from the CommandCenter repository. Returns up to 8 KB of content.",
+        "Read a file from the CommandCenter repository. Returns up to 32 KB of content.",
       parameters: {
         type: "object",
         properties: {
@@ -357,7 +331,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       if (!target) return "Error: path is outside the repository";
       try {
         const content = await fs.readFile(target, "utf-8");
-        return content.slice(0, 8000);
+        return content.slice(0, 32_000);
       } catch (e) {
         return `Error reading file: ${e}`;
       }
@@ -442,9 +416,15 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
 
     case "git_push": {
       const branch = String(args.branch ?? "main");
+      // Use HTTPS with token so push works without an SSH agent.
+      // Derive the HTTPS remote from the current origin (handles both ssh and https remotes).
+      if (!GITHUB_TOKEN) return "Error: GITHUB_TOKEN is not set — cannot push";
+      const ghRepo = await getGitHubRepo();
+      if (!ghRepo) return "Error: could not determine GitHub repo from git remote";
+      const httpsRemote = `https://${GITHUB_TOKEN}@github.com/${ghRepo.owner}/${ghRepo.repo}.git`;
       try {
         const { stdout, stderr } = await execAsync(
-          `git push origin ${branch}`,
+          `git push "${httpsRemote}" HEAD:${branch}`,
           { cwd: REPO_PATH, timeout: 60_000 },
         );
         const out = (stdout + stderr).trim();
@@ -462,8 +442,12 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       if (!GITHUB_TOKEN) return "Error: GITHUB_TOKEN is not set";
       try {
         const qs = new URLSearchParams({ per_page: String(Math.min(limit, 10)) });
-        if (workflow) qs.set("workflow_file", workflow);
-        const url = `https://api.github.com/repos/${ghRepo.owner}/${ghRepo.repo}/actions/runs?${qs}`;
+        // GitHub API accepts workflow file name as a path param, not a query param.
+        // To filter by workflow we use the /actions/workflows/{filename}/runs endpoint.
+        const runsPath = workflow
+          ? `actions/workflows/${encodeURIComponent(workflow)}/runs`
+          : "actions/runs";
+        const url = `https://api.github.com/repos/${ghRepo.owner}/${ghRepo.repo}/${runsPath}?${qs}`;
         const resp = await fetch(url, {
           headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, "X-GitHub-Api-Version": "2022-11-28", Accept: "application/vnd.github+json" },
           signal: AbortSignal.timeout(10_000),
@@ -540,11 +524,12 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       const pattern = String(args.pattern ?? "");
       if (!pattern) return "Error: pattern is required";
       const searchDir = args.path ? (safeResolve(String(args.path)) ?? REPO_PATH) : REPO_PATH;
-      const fileGlob = args.file_pattern ? `--include="${String(args.file_pattern)}"` : "";
+      const fileGlob = args.file_pattern ? String(args.file_pattern).replace(/[^a-zA-Z0-9.*_-]/g, "") : "";
+      // Pass pattern as a separate argument via env to avoid shell injection
       try {
         const { stdout } = await execAsync(
-          `grep -rn ${fileGlob} --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.next --exclude-dir=.venv -E "${pattern.replace(/"/g, '\\"')}" "${searchDir}" 2>&1 | head -80`,
-          { cwd: REPO_PATH },
+          `grep -rn ${fileGlob ? `--include="${fileGlob}"` : ""} --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.next --exclude-dir=.venv -E "$GREP_PAT" "${searchDir}" 2>&1 | head -80`,
+          { cwd: REPO_PATH, env: { ...process.env, GREP_PAT: pattern } },
         );
         return stdout.slice(0, 8000) || "(no matches)";
       } catch (e: unknown) {
@@ -579,8 +564,9 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case "run_command": {
       const command = String(args.command ?? "");
       if (!command) return "Error: command is required";
-      const blocked = /(rm\s+-rf\s+\/|mkfs|dd\s+if=)/i;
-      if (blocked.test(command)) return "Error: command blocked for safety";
+      // Block destructive ops and direct git push (must use git_push tool which enforces HTTPS+token)
+      const blocked = /(rm\s+-rf\s+\/|mkfs|dd\s+if=|git\s+push)/i;
+      if (blocked.test(command)) return "Error: command blocked — use the git_push tool to push changes";
       try {
         const { stdout, stderr } = await execAsync(command, {
           cwd: REPO_PATH,
@@ -672,22 +658,16 @@ export async function POST(req: NextRequest) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
 
-
   let messages: Array<{ role: string; content: string }>;
   let model: string;
+  let thinkMode: string;
   try {
-    ({ messages, model = "copilot/claude-sonnet" } = await req.json());
+    ({ messages, model = "copilot/claude-sonnet", thinkMode = "auto" } = await req.json());
   } catch {
     return new NextResponse("Invalid JSON body", { status: 400 });
   }
 
-  // Probe gateway; fall back to direct Copilot API if unreachable.
-  const gatewayUp = await isGatewayReachable();
-  const llmClient = gatewayUp ? makeGatewayClient() : makeCopilotDirectClient();
-  // When using direct Copilot, normalise model names (strip any provider prefix)
-  const effectiveModel = gatewayUp ? model : model.replace(/^copilot\//, "");
-  // Surface fallback status in the SSE stream so the UI can show it
-  const usingFallback = !gatewayUp;
+  const llmClient = makeGatewayClient();
 
   const encoder = new TextEncoder();
 
@@ -703,15 +683,10 @@ export async function POST(req: NextRequest) {
       ];
 
       try {
-        // Surface fallback info as a system-level SSE event so the UI can show a banner
-        if (usingFallback) {
-          send({ type: "gateway_down", fallback: "copilot-direct" });
-        }
-
         // Tool-calling loop (max 10 iterations to prevent runaway)
         for (let i = 0; i < 10; i++) {
           const response = await llmClient.chat.completions.create({
-            model: effectiveModel,
+            model,
             messages: allMessages,
             tools: TOOLS,
             tool_choice: "auto",
@@ -751,12 +726,19 @@ export async function POST(req: NextRequest) {
           }
 
           // finish_reason == "stop" or no tool calls — stream the final text
+          // Pass thinking_budget when thinkMode != "auto" (supported by Copilot/Anthropic models)
+          const thinkingOpts = thinkMode === "max"
+            ? { thinking: { type: "enabled" as const, budget_tokens: 10_000 } }
+            : thinkMode === "thinking"
+            ? { thinking: { type: "enabled" as const, budget_tokens: 3_000 } }
+            : {};
           const finalStream = await llmClient.chat.completions.create({
-            model: effectiveModel,
+            model,
             messages: allMessages,
             stream: true,
             max_tokens: 4096,
-          });
+            ...thinkingOpts,
+          } as Parameters<typeof llmClient.chat.completions.create>[0]);
 
           for await (const chunk of finalStream) {
             const delta = chunk.choices[0]?.delta?.content;

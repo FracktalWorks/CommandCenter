@@ -694,7 +694,8 @@ export async function POST(req: NextRequest) {
             max_tokens: 4096,
           });
 
-          const choice = response.choices[0];
+          const choice = response.choices?.[0];
+          if (!choice) { send({ type: "done" }); break; }
 
           if (choice.finish_reason === "tool_calls" && choice.message.tool_calls?.length) {
             // Push assistant message with tool calls into history
@@ -734,7 +735,7 @@ export async function POST(req: NextRequest) {
           });
 
           for await (const chunk of finalStream) {
-            const delta = chunk.choices[0]?.delta?.content;
+            const delta = chunk.choices?.[0]?.delta?.content;
             if (delta) send({ type: "delta", content: delta });
           }
 

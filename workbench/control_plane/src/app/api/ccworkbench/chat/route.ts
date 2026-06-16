@@ -726,19 +726,13 @@ export async function POST(req: NextRequest) {
           }
 
           // finish_reason == "stop" or no tool calls — stream the final text
-          // Pass thinking_budget when thinkMode != "auto" (supported by Copilot/Anthropic models)
-          const thinkingOpts = thinkMode === "max"
-            ? { thinking: { type: "enabled" as const, budget_tokens: 10_000 } }
-            : thinkMode === "thinking"
-            ? { thinking: { type: "enabled" as const, budget_tokens: 3_000 } }
-            : {};
           const finalStream = await llmClient.chat.completions.create({
             model,
             messages: allMessages,
             stream: true,
-            max_tokens: 4096,
-            ...thinkingOpts,
-          } as Parameters<typeof llmClient.chat.completions.create>[0]);
+            max_tokens: thinkMode === "max" ? 16_000 : 4096,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any);
 
           for await (const chunk of finalStream) {
             const delta = chunk.choices[0]?.delta?.content;

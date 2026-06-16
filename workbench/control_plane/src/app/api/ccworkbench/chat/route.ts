@@ -729,10 +729,9 @@ export async function POST(req: NextRequest) {
           const finalStream = await llmClient.chat.completions.create({
             model,
             messages: allMessages,
-            stream: true,
+            stream: true as const,
             max_tokens: thinkMode === "max" ? 16_000 : 4096,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          } as any);
+          });
 
           for await (const chunk of finalStream) {
             const delta = chunk.choices[0]?.delta?.content;

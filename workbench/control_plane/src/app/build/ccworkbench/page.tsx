@@ -522,35 +522,3 @@ export default function CCWorkbenchPage() {
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-interface ToolCall {
-  id: string;
-  name: string;
-  args: Record<string, unknown>;
-  result?: string;
-  status: "running" | "done" | "error";
-}
-
-interface Message {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  toolCalls?: ToolCall[];
-}
-
-const TOOL_LABELS: Record<string, string> = {
-  read_file: "Read file",
-  list_directory: "List directory",
-  git_status: "Git status",
-  git_diff: "Git diff",
-  run_tests: "Run tests",
-  view_logs: "View logs",
-  trigger_deploy: "Deploy",
-};
-
-const STARTER_PROMPTS = [
-  "What's the current status of the orchestrator?",
-  "Run all tests and summarise failures",
-  "Show me git status",
-  "View the last 30 lines of gateway logs",
-];
-

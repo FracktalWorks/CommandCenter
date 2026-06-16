@@ -9,6 +9,7 @@ Type=simple
 User=acb
 WorkingDirectory=/opt/acb/app/workbench/control_plane
 Environment=NODE_ENV=production
+Environment=PATH=/home/acb/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=/opt/acb/app/workbench/control_plane/.env.local
 ExecStart=/usr/bin/npm start
 Restart=always

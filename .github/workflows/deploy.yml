@@ -172,6 +172,9 @@ jobs:
               rm -rf .next
               npm run build
             fi
+            # Reload systemd unit in case acb-workbench.service changed (adds PATH for uv etc.)
+            sudo cp "$APP_DIR/deploy/hostinger/acb-workbench.service" /etc/systemd/system/acb-workbench.service
+            sudo systemctl daemon-reload
             sudo systemctl restart acb-workbench
             sleep 3
             systemctl is-active --quiet acb-workbench || { echo "WORKBENCH FAILED TO START"; exit 1; }

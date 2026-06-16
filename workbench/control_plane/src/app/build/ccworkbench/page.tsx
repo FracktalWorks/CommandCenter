@@ -38,17 +38,20 @@ const TOOL_LABELS: Record<string, string> = {
   git_status: "Git status",
   git_diff: "Git diff",
   git_commit: "Git commit",
+  git_push: "Git push → CI/CD",
+  github_workflow_runs: "Check pipeline",
+  github_workflow_logs: "Pipeline logs",
   run_command: "Run command",
   run_tests: "Run tests",
   view_logs: "View logs",
-  trigger_deploy: "Deploy",
+  trigger_deploy: "Emergency deploy",
 };
 
 const STARTER_PROMPTS = [
   "What's the current git status?",
   "Run the unit tests and summarise failures",
   "Search for all uses of run_agent_stream",
-  "View the last 50 lines of gateway logs",
+  "Check the latest CI/CD pipeline status",
 ];
 
 type ThinkMode = "auto" | "thinking" | "max";

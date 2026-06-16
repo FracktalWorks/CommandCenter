@@ -82,6 +82,23 @@ function makeCopilotDirectClient(): OpenAI {
   });
 }
 
+// ── GitHub repo helper ──────────────────────────────────────────────────────
+
+/** Parse owner/repo from git remote origin URL (ssh or https). */
+async function getGitHubRepo(): Promise<{ owner: string; repo: string } | null> {
+  try {
+    const { stdout } = await execAsync("git remote get-url origin", { cwd: REPO_PATH });
+    const url = stdout.trim();
+    // ssh:  git@github.com:Owner/Repo.git
+    // https: https://github.com/Owner/Repo.git
+    const m = url.match(/github\.com[:\/]([\w.-]+)\/([\w.-]+?)(\.git)?$/);
+    if (!m) return null;
+    return { owner: m[1], repo: m[2] };
+  } catch {
+    return null;
+  }
+}
+
 /** Probe if the CC gateway LiteLLM endpoint is reachable (2.5 s timeout). */
 async function isGatewayReachable(): Promise<boolean> {
   try {
@@ -197,13 +214,59 @@ const TOOLS: OpenAI.Chat.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
-      name: "trigger_deploy",
+      name: "git_push",
       description:
-        "Trigger a deployment of CommandCenter to the VPS by executing deploy/hostinger/deploy.sh. Use only when the user explicitly asks to deploy.",
+        "Push committed changes to origin/main. This triggers the GitHub Actions CI/CD pipeline which runs lint → tests → deploy. Use this after git_commit to deploy changes. Always preferred over trigger_deploy.",
       parameters: {
         type: "object",
         properties: {
-          branch: { type: "string", description: "Git branch to deploy (default: main)." },
+          branch: { type: "string", description: "Branch to push (default: main)." },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "github_workflow_runs",
+      description:
+        "List the most recent GitHub Actions workflow runs for this repository. Use after git_push to check if CI/CD passed or failed.",
+      parameters: {
+        type: "object",
+        properties: {
+          limit: { type: "number", description: "Number of runs to return (default: 5)." },
+          workflow: { type: "string", description: "Optional: workflow filename to filter by, e.g. 'deploy.yml'." },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "github_workflow_logs",
+      description:
+        "Get the job steps and failure details for a specific GitHub Actions workflow run. Use when github_workflow_runs shows a failure.",
+      parameters: {
+        type: "object",
+        properties: {
+          run_id: { type: "number", description: "The workflow run ID from github_workflow_runs." },
+        },
+        required: ["run_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "trigger_deploy",
+      description:
+        "EMERGENCY ONLY — run deploy.sh directly on the VPS, bypassing CI/CD. Use only when git_push is not possible (e.g. pipeline itself is broken). Always prefer git_push + github_workflow_runs instead.",
+      parameters: {
+        type: "object",
+        properties: {
+          branch: { type: "string", description: "Branch to deploy (default: main)." },
         },
         required: [],
       },
@@ -377,6 +440,72 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       }
     }
 
+    case "git_push": {
+      const branch = String(args.branch ?? "main");
+      try {
+        const { stdout, stderr } = await execAsync(
+          `git push origin ${branch}`,
+          { cwd: REPO_PATH, timeout: 60_000 },
+        );
+        const out = (stdout + stderr).trim();
+        return out || `Pushed to origin/${branch}. GitHub Actions pipeline triggered — use github_workflow_runs to check status.`;
+      } catch (e: unknown) {
+        return `Error: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
+
+    case "github_workflow_runs": {
+      const limit = Number(args.limit ?? 5);
+      const workflow = args.workflow ? String(args.workflow) : null;
+      const ghRepo = await getGitHubRepo();
+      if (!ghRepo) return "Error: could not determine GitHub repo from git remote";
+      if (!GITHUB_TOKEN) return "Error: GITHUB_TOKEN is not set";
+      try {
+        const qs = new URLSearchParams({ per_page: String(Math.min(limit, 10)) });
+        if (workflow) qs.set("workflow_file", workflow);
+        const url = `https://api.github.com/repos/${ghRepo.owner}/${ghRepo.repo}/actions/runs?${qs}`;
+        const resp = await fetch(url, {
+          headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, "X-GitHub-Api-Version": "2022-11-28", Accept: "application/vnd.github+json" },
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!resp.ok) return `GitHub API error ${resp.status}: ${await resp.text()}`;
+        const data = await resp.json() as { workflow_runs: { id: number; name: string; status: string; conclusion: string | null; head_commit: { message: string }; created_at: string; html_url: string }[] };
+        if (!data.workflow_runs?.length) return "No workflow runs found.";
+        return data.workflow_runs.map((r) =>
+          `[${r.id}] ${r.name} | ${r.status} | ${r.conclusion ?? "in_progress"} | ${r.head_commit.message.split("\n")[0].slice(0, 60)} | ${r.created_at}\n  ${r.html_url}`
+        ).join("\n\n");
+      } catch (e) {
+        return `Error: ${String(e)}`;
+      }
+    }
+
+    case "github_workflow_logs": {
+      const runId = Number(args.run_id);
+      if (!runId) return "Error: run_id is required";
+      const ghRepo = await getGitHubRepo();
+      if (!ghRepo) return "Error: could not determine GitHub repo from git remote";
+      if (!GITHUB_TOKEN) return "Error: GITHUB_TOKEN is not set";
+      try {
+        const url = `https://api.github.com/repos/${ghRepo.owner}/${ghRepo.repo}/actions/runs/${runId}/jobs`;
+        const resp = await fetch(url, {
+          headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, "X-GitHub-Api-Version": "2022-11-28", Accept: "application/vnd.github+json" },
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!resp.ok) return `GitHub API error ${resp.status}: ${await resp.text()}`;
+        const data = await resp.json() as { jobs: { name: string; status: string; conclusion: string | null; steps: { name: string; status: string; conclusion: string | null; number: number }[] }[] };
+        if (!data.jobs?.length) return "No jobs found for this run.";
+        return data.jobs.map((job) => {
+          const failedSteps = job.steps.filter((s) => s.conclusion === "failure");
+          const stepSummary = failedSteps.length
+            ? `  FAILED STEPS:\n${failedSteps.map((s) => `    - Step ${s.number}: ${s.name}`).join("\n")}`
+            : `  All ${job.steps.length} steps passed`;
+          return `Job: ${job.name} | ${job.conclusion ?? job.status}\n${stepSummary}`;
+        }).join("\n\n");
+      } catch (e) {
+        return `Error: ${String(e)}`;
+      }
+    }
+
     case "trigger_deploy": {
       const branch = String(args.branch ?? "main");
       const scriptPath = path.join(REPO_PATH, "deploy", "hostinger", "deploy.sh");
@@ -494,27 +623,44 @@ Conventions:
 - Run tests: uv run python -m pytest tests/ -x -v
 
 You have access to these tools:
-- read_file        — read any file in the repo (up to 8 KB)
-- write_file       — write/create a file (read_file first to understand context)
-- list_directory   — list directory contents
-- search_code      — grep across the codebase (regex, optional file type filter)
-- git_status       — show working tree status
-- git_diff         — show uncommitted changes
-- git_commit       — stage + commit changes (git add -A by default)
-- run_command      — run any shell command (uv, npm, ruff, mypy, etc.) — 60 s timeout
-- run_tests        — run pytest with verbose output
-- view_logs        — tail Docker / systemd service logs
-- trigger_deploy   — deploy to the Hostinger VPS (always confirm with user first)
+- read_file               — read any file in the repo (up to 8 KB)
+- write_file              — write/create a file (always read_file first)
+- list_directory          — list directory contents
+- search_code             — grep across the codebase (regex, file type filter)
+- git_status              — show working tree status
+- git_diff                — show uncommitted changes
+- git_commit              — stage + commit (git add -A by default)
+- git_push                — push to origin → triggers GitHub Actions CI/CD pipeline
+- github_workflow_runs    — list recent Actions runs (check deploy status after push)
+- github_workflow_logs    — get job steps + failure details for a specific run ID
+- run_command             — run any shell command (uv, npm, ruff, mypy…) — 60 s timeout
+- run_tests               — run pytest with verbose output
+- view_logs               — tail Docker / systemd service logs
+- trigger_deploy          — EMERGENCY ONLY: run deploy.sh directly, bypassing CI/CD
 
-Workflow for code changes:
-1. search_code or read_file to understand the relevant code
-2. write_file to apply the change
-3. run_command to verify (ruff check, mypy, npm run build, or pytest)
-4. git_commit to save the work — never push without explicit user instruction
+## Deployment workflow (ALWAYS use this)
 
-Python conventions: uv run python -m pytest, uv run ruff check ., uv run mypy apps packages
-TypeScript: cd workbench/control_plane && npm run build (or npm run lint)
-Be concise and direct. Read before writing. Verify after changing.`;
+1. search_code / read_file — understand the code
+2. write_file — make the change
+3. run_command — verify: ruff check, mypy, npm run build, or pytest as appropriate
+4. git_commit — commit with a clear message
+5. git_push — pushes to origin/main and triggers GitHub Actions:
+   lint → unit tests → SSH deploy → workbench rebuild → smoke test
+6. github_workflow_runs — check the pipeline status (poll until conclusion != null)
+7. If a run FAILED: use github_workflow_logs with the run_id to see which step failed
+
+NEVER call trigger_deploy unless the user explicitly says the pipeline is broken.
+NEVER push without running at least a basic verification step first.
+
+## Python conventions
+uv run python -m pytest tests/ -x -v
+uv run ruff check . --fix
+uv run mypy apps packages --ignore-missing-imports
+
+## TypeScript conventions
+cd workbench/control_plane && npm run build
+
+Be concise and direct. Read before writing. Verify before pushing.`;
 }
 
 // ── POST handler ─────────────────────────────────────────────────────────────

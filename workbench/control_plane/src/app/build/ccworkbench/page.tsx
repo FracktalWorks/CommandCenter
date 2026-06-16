@@ -3,19 +3,26 @@
 /**
  * CC Workbench — developer chat for CommandCenter.
  *
- * Session management: localStorage only (cc-workbench-sessions / cc-workbench-msgs-{id}).
- * No Postgres — this is a developer tool, browser-local persistence is sufficient.
- * Sessions survive page refresh and are listed in a slim left panel.
- * Auto-title from the first user message.
+ * Session management:
+ *   - localStorage for instant reads (cache layer)
+ *   - Postgres via /api/chat/sessions for cross-device persistence
+ *   - On mount: load from Postgres and merge with localStorage
+ *   - On session create/switch: sync to Postgres
+ *   - On message save: write-through to Postgres
+ *
+ * Cross-session memory: CCWORKBENCH_MEMORY.md in the repo root, injected
+ * into every system prompt by the API route. The agent can update it with
+ * write_file to preserve context across sessions and devices.
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Terminal, Trash2, Plus, MessageSquare } from "lucide-react";
+import { Terminal, Trash2, Plus, MessageSquare, RefreshCw } from "lucide-react";
 import MarkdownMessage from "@/components/MarkdownMessage";
 import type { UnifiedModel } from "@/app/api/models/all/route";
 
-// ── Storage keys ──────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
+const AGENT_NAME = "cc-workbench";
 const SESSIONS_KEY = "cc-workbench-sessions";
 const msgKey = (id: string) => `cc-workbench-msgs-${id}`;
 
@@ -107,6 +114,83 @@ function truncate(text: string, max: number): string {
   return s.slice(0, max).replace(/\s+\S*$/, "") + "…";
 }
 
+// ── Postgres sync helpers (fire-and-forget) ───────────────────────────────────
+
+async function dbUpsertSession(s: WBSession, preview?: string): Promise<void> {
+  try {
+    await fetch("/api/chat/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: s.id,
+        agent_name: AGENT_NAME,
+        title: s.title !== "New session" ? s.title : null,
+        last_preview: preview ?? null,
+        message_count: 0,
+      }),
+    });
+  } catch { /* non-fatal */ }
+}
+
+async function dbPatchSession(id: string, patch: { title?: string; last_preview?: string; message_count?: number }): Promise<void> {
+  try {
+    await fetch(`/api/chat/sessions/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+  } catch { /* non-fatal */ }
+}
+
+async function dbDeleteSession(id: string): Promise<void> {
+  try { await fetch(`/api/chat/sessions/${id}`, { method: "DELETE" }); } catch { /* non-fatal */ }
+}
+
+async function dbSaveMessages(sessionId: string, messages: Message[]): Promise<void> {
+  const settled = messages.filter((m) => !m.streaming && (m.role === "user" || m.content.trim()));
+  if (settled.length === 0) return;
+  try {
+    await fetch(`/api/chat/sessions/${sessionId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: settled.map((m) => ({
+        id: m.id, role: m.role, content: m.content,
+        timestamp: new Date(m.timestamp).toISOString(),
+        tool_events: m.toolCalls ? JSON.stringify(m.toolCalls) : null,
+      })) }),
+    });
+  } catch { /* non-fatal */ }
+}
+
+async function dbLoadMessages(sessionId: string): Promise<Message[]> {
+  try {
+    const resp = await fetch(`/api/chat/sessions/${sessionId}/messages`);
+    if (!resp.ok) return [];
+    const data = await resp.json() as { messages?: { id: string; role: string; content: string; timestamp: string; tool_events?: string }[] };
+    return (data.messages ?? []).map((m) => ({
+      id: m.id,
+      role: m.role as "user" | "assistant",
+      content: m.content ?? "",
+      timestamp: new Date(m.timestamp).getTime(),
+      toolCalls: m.tool_events ? (() => { try { return JSON.parse(m.tool_events!); } catch { return undefined; } })() : undefined,
+    }));
+  } catch { return []; }
+}
+
+async function dbFetchSessions(): Promise<WBSession[]> {
+  try {
+    const resp = await fetch(`/api/chat/sessions?agent=${AGENT_NAME}`);
+    if (!resp.ok) return [];
+    const data = await resp.json() as { sessions?: { id: string; title?: string; created_at: string; updated_at: string }[] };
+    return (data.sessions ?? []).map((s) => ({
+      id: s.id,
+      title: s.title ?? "Untitled",
+      createdAt: new Date(s.created_at).getTime(),
+      updatedAt: new Date(s.updated_at).getTime(),
+    }));
+  } catch { return []; }
+}
+
 // ── Tool row ──────────────────────────────────────────────────────────────────
 
 function ToolRow({ tc }: { tc: ToolCall }) {
@@ -179,32 +263,80 @@ export default function CCWorkbenchPage() {
   const [sessions, setSessions] = useState<WBSession[]>([]);
   const [activeId, setActiveId] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [syncing, setSyncing] = useState(false);
 
-  // Bootstrap from localStorage on mount
+  // Bootstrap: localStorage first (instant), then merge with Postgres (cross-device)
   useEffect(() => {
-    let stored = loadSessions();
-    if (stored.length === 0) {
+    let local = loadSessions();
+    if (local.length === 0) {
       const s = newSession();
-      stored = [s];
-      saveSessions(stored);
+      local = [s];
+      saveSessions(local);
+      dbUpsertSession(s);
     }
-    setSessions(stored);
-    setActiveId(stored[0].id);
-    setMessages(loadMessages(stored[0].id));
+    setSessions(local);
+    setActiveId(local[0].id);
+    // Load messages: localStorage first for instant render, then Postgres for full history
+    const cachedMsgs = loadMessages(local[0].id);
+    setMessages(cachedMsgs);
+
+    // Background: fetch Postgres sessions and merge (catches other-device sessions)
+    setSyncing(true);
+    dbFetchSessions().then((remote) => {
+      if (remote.length === 0) return;
+      setSessions((prev) => {
+        // Merge: remote sessions not in local get added; local ordering preserved
+        const localIds = new Set(prev.map((s) => s.id));
+        const merged = [...prev, ...remote.filter((s) => !localIds.has(s.id))];
+        // Sort by updatedAt desc
+        merged.sort((a, b) => b.updatedAt - a.updatedAt);
+        saveSessions(merged);
+        return merged;
+      });
+    }).finally(() => setSyncing(false));
+
+    // Background: fetch full message history for active session from Postgres
+    dbLoadMessages(local[0].id).then((remote) => {
+      if (remote.length > cachedMsgs.length) {
+        setMessages(remote);
+        saveMessages(local[0].id, remote);
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Persist messages whenever they change
+  // Write-through: persist messages to localStorage + Postgres after each settled turn
+  const lastSavedCountRef = useRef(0);
   useEffect(() => {
-    if (!activeId) return;
-    saveMessages(activeId, messages);
+    if (!activeId || messages.length === 0) return;
+    const settled = messages.filter((m) => !m.streaming);
+    if (settled.length === lastSavedCountRef.current) return;
+    lastSavedCountRef.current = settled.length;
+    saveMessages(activeId, settled);
+    dbSaveMessages(activeId, settled);
+    // Update last_preview in Postgres
+    const lastAssistant = [...settled].reverse().find((m) => m.role === "assistant" && m.content.trim());
+    if (lastAssistant) {
+      dbPatchSession(activeId, { last_preview: truncate(lastAssistant.content, 120), message_count: settled.length });
+    }
   }, [messages, activeId]);
 
   // Switch session
   const switchSession = useCallback((id: string) => {
     if (id === activeId) return;
     setActiveId(id);
-    setMessages(loadMessages(id));
+    lastSavedCountRef.current = 0;
+    // Load from cache immediately
+    const cached = loadMessages(id);
+    setMessages(cached);
     setInput("");
+    // Then fetch from Postgres
+    dbLoadMessages(id).then((remote) => {
+      if (remote.length > cached.length) {
+        setMessages(remote);
+        saveMessages(id, remote);
+      }
+    });
   }, [activeId]);
 
   // Create new session
@@ -214,12 +346,15 @@ export default function CCWorkbenchPage() {
     setActiveId(s.id);
     setMessages([]);
     setInput("");
+    lastSavedCountRef.current = 0;
+    dbUpsertSession(s);
   }, []);
 
   // Delete session
   const deleteSession = useCallback((id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     localStorage.removeItem(msgKey(id));
+    dbDeleteSession(id);
     setSessions((prev) => {
       const next = prev.filter((s) => s.id !== id);
       saveSessions(next);
@@ -229,16 +364,22 @@ export default function CCWorkbenchPage() {
           saveSessions([s]);
           setActiveId(s.id);
           setMessages([]);
+          dbUpsertSession(s);
           return [s];
         }
         setActiveId(next[0].id);
-        setMessages(loadMessages(next[0].id));
+        lastSavedCountRef.current = 0;
+        const cached = loadMessages(next[0].id);
+        setMessages(cached);
+        dbLoadMessages(next[0].id).then((remote) => {
+          if (remote.length > cached.length) { setMessages(remote); saveMessages(next[0].id, remote); }
+        });
       }
       return next;
     });
   }, [activeId]);
 
-  // Auto-title from first user message (set once, never overwritten)
+  // Auto-title: set once from first user message, sync to Postgres
   const titledRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!activeId || titledRef.current.has(activeId)) return;
@@ -251,6 +392,7 @@ export default function CCWorkbenchPage() {
       saveSessions(next);
       return next;
     });
+    dbPatchSession(activeId, { title });
   }, [messages, activeId]);
 
   // ── Chat state ─────────────────────────────────────────────────────────────
@@ -328,6 +470,7 @@ export default function CCWorkbenchPage() {
 
     // Touch session updatedAt
     setSessions((prev) => { const next = prev.map((s) => s.id === activeId ? { ...s, updatedAt: Date.now() } : s); saveSessions(next); return next; });
+    dbPatchSession(activeId, {});
 
     const history = [...messages, userMsg].map((m) => ({ role: m.role, content: m.content }));
     const ctrl = new AbortController();
@@ -400,6 +543,7 @@ export default function CCWorkbenchPage() {
         <div className="flex items-center gap-2 h-9 px-3 border-b border-border shrink-0">
           <Terminal className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
           <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex-1 truncate">Workbench</span>
+          {syncing && <RefreshCw className="w-3 h-3 text-muted-foreground/40 animate-spin shrink-0" />}
           <button onClick={createSession} title="New session"
             className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition shrink-0">
             <Plus className="w-3.5 h-3.5" />

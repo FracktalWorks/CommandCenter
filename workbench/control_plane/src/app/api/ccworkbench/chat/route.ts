@@ -587,7 +587,19 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
 
 // ── System prompt ────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(): string {
+/** Read CCWORKBENCH_MEMORY.md from the repo root if it exists. */
+async function readMemoryFile(): Promise<string | null> {
+  try {
+    const memPath = path.join(REPO_PATH, "CCWORKBENCH_MEMORY.md");
+    const content = await fs.readFile(memPath, "utf-8");
+    return content.slice(0, 8_000); // cap to avoid ballooning context
+  } catch {
+    return null;
+  }
+}
+
+async function buildSystemPrompt(): Promise<string> {
+  const memory = await readMemoryFile();
   return `\
 You are a CommandCenter developer assistant with direct shell-level access to the CommandCenter repository at: ${REPO_PATH}
 
@@ -601,15 +613,9 @@ Key directories:
 - infra/               Docker Compose, Postgres schema, LiteLLM config
 - deploy/              VPS deployment scripts
 - tests/               pytest unit + integration tests
-
-Conventions:
-- Python 3.11+ with uv package manager
-- async/await throughout (no sync blocking in request paths)
-- Type hints required on all public functions
-- Run tests: uv run python -m pytest tests/ -x -v
-
+${memory ? `\n## Developer memory (from CCWORKBENCH_MEMORY.md)\n\n${memory}\n` : ""}
 You have access to these tools:
-- read_file               — read any file in the repo (up to 8 KB)
+- read_file               — read any file in the repo (up to 32 KB)
 - write_file              — write/create a file (always read_file first)
 - list_directory          — list directory contents
 - search_code             — grep across the codebase (regex, file type filter)
@@ -637,6 +643,23 @@ You have access to these tools:
 
 NEVER call trigger_deploy unless the user explicitly says the pipeline is broken.
 NEVER push without running at least a basic verification step first.
+
+## Cross-session memory (IMPORTANT)
+
+A file CCWORKBENCH_MEMORY.md at the repo root stores persistent developer context across sessions and devices. At the END of each productive session (when the user says "done", "goodbye", or asks to wrap up), call write_file to update CCWORKBENCH_MEMORY.md with:
+- What was worked on (component/file names, what changed)
+- Current state (what works, what's in-progress, blockers)
+- Next steps the developer planned
+
+Format example:
+\`\`\`
+## Session — YYYY-MM-DD
+- Built: X, Y, Z
+- Status: X deployed, Y in-progress
+- Next: fix Z, then add W
+\`\`\`
+
+Keep the file concise (newest sessions at top, trim entries older than 30 days).
 
 ## Python conventions
 uv run python -m pytest tests/ -x -v
@@ -678,7 +701,7 @@ export async function POST(req: NextRequest) {
       };
 
       const allMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-        { role: "system", content: buildSystemPrompt() },
+        { role: "system", content: await buildSystemPrompt() },
         ...(messages as OpenAI.Chat.ChatCompletionMessageParam[]),
       ];
 

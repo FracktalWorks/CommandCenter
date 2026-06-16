@@ -643,7 +643,7 @@ export default function CCWorkbenchPage() {
                     className="shrink-0 self-end w-8 h-8 rounded-lg bg-destructive/20 border border-destructive/40 text-destructive text-xs flex items-center justify-center hover:bg-destructive/30 tech-transition"
                     title="Stop">■</button>
                 ) : (
-                  <button type="button" onClick={sendMessage} disabled={!input.trim()}
+                  <button type="button" onClick={() => sendMessage()} disabled={!input.trim()}
                     className="shrink-0 self-end w-8 h-8 rounded-lg bg-primary text-primary-foreground font-semibold text-sm flex items-center justify-center disabled:opacity-25 disabled:cursor-not-allowed hover:opacity-90 tech-transition"
                     title="Send (Enter)">↑</button>
                 )}

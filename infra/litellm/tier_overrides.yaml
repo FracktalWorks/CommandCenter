@@ -1,0 +1,13 @@
+model_list:
+- model_name: tier-fast
+  litellm_params:
+    model: deepseek/deepseek-v4-flash
+    api_key: os.environ/DEEPSEEK_API_KEY
+- model_name: tier-powerful
+  litellm_params:
+    model: deepseek/deepseek-reasoner
+    api_key: os.environ/DEEPSEEK_API_KEY
+- model_name: tier-balanced
+  litellm_params:
+    model: deepseek/deepseek-chat
+    api_key: os.environ/DEEPSEEK_API_KEY

@@ -318,26 +318,31 @@ View full report →`,
 export const QUICK_ACTIONS = [
   {
     label: "Summarize inbox",
+    action: "summarize",
     prompt: "Summarize my unread emails and highlight the most important ones.",
     icon: "Sparkles",
   },
   {
     label: "Find urgent emails",
+    action: "find_urgent",
     prompt: "Which emails in my inbox require urgent attention or a response today?",
     icon: "AlertCircle",
   },
   {
     label: "Draft reply",
+    action: "draft_reply",
     prompt: "Help me draft a professional reply to the selected email.",
     icon: "PenLine",
   },
   {
     label: "Unsubscribe suggestions",
+    action: "unsubscribe",
     prompt: "Which mailing lists should I consider unsubscribing from based on my inbox?",
     icon: "MailMinus",
   },
   {
     label: "Schedule follow-ups",
+    action: "find_urgent",
     prompt: "Which emails need a follow-up and haven't been replied to in over 3 days?",
     icon: "CalendarClock",
   },

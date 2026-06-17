@@ -13,14 +13,14 @@ webhook receivers, OAuth callbacks, and the Control Plane API.
 
 ## Local Contracts
 
-1. main.py -- FastAPI app factory, lifespan (key loading, model cache warmup), /copilot/chat AG-UI endpoint (relayed through stream_relay.run_detached when thread_id present)
+1. main.py -- FastAPI app factory, lifespan (key loading, model cache warmup, aiosmtpd inbound SMTP startup, background email sync scheduler), /copilot/chat AG-UI endpoint (relayed through stream_relay.run_detached when thread_id present)
 2. routes/agent.py -- /agent/run, /agent/run/stream (detached: agent survives client disconnect), /agent/run/{thread_id}/reconnect (replay + live follow), /agent/webhook, agent CRUD, mutation inbox (approve/reject)
 3. routes/chat.py -- Chat history CRUD (Postgres-backed sessions and messages) + GET /chat/active-sessions (Redis cc:active:* scan for running agents)
 4. routes/oauth.py -- OAuth authorize->callback->refresh for Zoho/ClickUp/Google
 5. routes/integrations.py — Integration Registry management, MCP server CRUD, Plugin install/remove
 6. routes/memory.py -- Memory search and management endpoints
 7. routes/settings.py -- LLM settings, model config
-8. routes/email.py -- Email account CRUD, message listing/search, send, sync, AI chat, OAuth flow for Gmail/Microsoft
+8. routes/email.py -- Email account CRUD, message listing/search, send, sync, AI chat, OAuth flow for Gmail/Microsoft/IMAP. Background sync scheduler hooks (refresh/remove) on account PATCH/DELETE.
 9. agents.json -- Dynamic agent registry (persisted alongside pyproject.toml)
 
 ## Work Guidance

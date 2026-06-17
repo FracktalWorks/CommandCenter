@@ -13,6 +13,7 @@ interface EmailListProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
   onCompose: () => void;
+  loading?: boolean;
 }
 
 const TOOLBAR_PRIMARY = [
@@ -36,6 +37,7 @@ export function EmailList({
   selectedId,
   onSelect,
   onCompose,
+  loading = false,
 }: EmailListProps) {
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -78,7 +80,12 @@ export function EmailList({
 
       {/* Email rows */}
       <div className="flex-1 overflow-y-auto scrollbar-hide">
-        {emails.length === 0 ? (
+        {loading ? (
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
+            <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+            <p className="text-xs">Loading emails...</p>
+          </div>
+        ) : emails.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
             <MailOpen size={24} className="opacity-40" />
             <p className="text-xs">No emails to show</p>

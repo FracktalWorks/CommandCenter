@@ -1,4 +1,4 @@
-import { Email, EmailAccount } from "./types";
+import { ChatMessage, Email, EmailAccount } from "./types";
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
 
@@ -167,6 +167,29 @@ export async function streamAIChat(
       }
     }
   }
+}
+
+// ── Quick Actions ─────────────────────────────────────────────────────────
+
+export interface QuickActionResponse {
+  action: string;
+  result: string;
+  ok: boolean;
+}
+
+export async function triggerQuickAction(
+  action: string,
+  accountId?: string,
+  emailId?: string
+): Promise<QuickActionResponse> {
+  return gatewayFetch<QuickActionResponse>("/email/ai/quick-action", {
+    method: "POST",
+    body: JSON.stringify({
+      action,
+      account_id: accountId ?? null,
+      email_id: emailId ?? null,
+    }),
+  });
 }
 
 // ── OAuth ────────────────────────────────────────────────────────────────

@@ -33,7 +33,7 @@ from uuid import uuid4
 import httpx
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger, get_settings
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -211,6 +211,13 @@ async def delete_account(
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="Account not found")
         await db.commit()
+
+        # Stop background sync for this account
+        try:
+            from email_ingestion.scheduler import remove_account_sync
+            await remove_account_sync(account_id)
+        except Exception:
+            pass
     finally:
         await db.close()
 
@@ -253,6 +260,16 @@ async def update_account(
         if not row:
             raise HTTPException(status_code=404, detail="Account not found")
         await db.commit()
+
+        # Refresh background sync: start/stop loop for this account
+        try:
+            from email_ingestion.scheduler import refresh_account_sync, remove_account_sync
+            if row.sync_enabled:
+                await refresh_account_sync(account_id)
+            else:
+                await remove_account_sync(account_id)
+        except Exception:
+            pass
 
         return EmailAccountModel(
             id=str(row.id),
@@ -543,7 +560,12 @@ async def trigger_sync(
     req: SyncRequest,
     user: UserContext = Depends(get_current_user),
 ):
-    """Trigger a manual email sync for an account."""
+    """Trigger a manual email sync for an account.
+
+    Calls the email provider's incremental sync and persists new/updated
+    messages to the email_messages table.  Deleted messages are moved to
+    TRASH folder locally.
+    """
     db = await _get_db()
     try:
         result = await db.execute(
@@ -558,7 +580,7 @@ async def trigger_sync(
         if not row:
             raise HTTPException(status_code=404, detail="Account not found")
 
-        # Update sync status
+        # Update sync status to 'syncing'
         await db.execute(
             text(
                 """UPDATE email_accounts
@@ -567,6 +589,18 @@ async def trigger_sync(
             ),
             {"id": req.account_id},
         )
+        await db.commit()
+
+        # Create sync log entry
+        sync_log_result = await db.execute(
+            text(
+                """INSERT INTO email_sync_log (account_id, started_at, status)
+                   VALUES (:id, now(), 'running')
+                   RETURNING id"""
+            ),
+            {"id": req.account_id},
+        )
+        sync_log_id = sync_log_result.fetchone().id
         await db.commit()
 
         # Decrypt credentials
@@ -581,6 +615,9 @@ async def trigger_sync(
         elif row.provider == "microsoft":
             from email_ingestion.providers.outlook import OutlookProvider
             provider = OutlookProvider(creds)
+        elif row.provider == "imap":
+            from email_ingestion.providers.imap import IMAPProvider
+            provider = IMAPProvider(creds)
         else:
             raise HTTPException(
                 status_code=400,
@@ -596,7 +633,128 @@ async def trigger_sync(
                 max_results=100,
             )
 
-            # Update last_synced state
+            # Persist fetched messages to email_messages
+            persisted_count = 0
+            skipped_count = 0
+            for msg in sync_result.messages:
+                if msg.subject == "[DELETED]":
+                    # Message was deleted on provider — move to TRASH locally
+                    await db.execute(
+                        text(
+                            """UPDATE email_messages
+                               SET folder = 'TRASH', updated_at = now()
+                               WHERE account_id = :account_id
+                                 AND provider_message_id = :provider_id"""
+                        ),
+                        {
+                            "account_id": req.account_id,
+                            "provider_id": msg.provider_message_id,
+                        },
+                    )
+                    persisted_count += 1
+                else:
+                    # Upsert message
+                    await db.execute(
+                        text(
+                            """INSERT INTO email_messages
+                               (id, account_id, provider_message_id, thread_id,
+                                folder, labels, from_address, to_addresses,
+                                cc_addresses, bcc_addresses, subject,
+                                body_text, body_html, snippet,
+                                has_attachments, is_read, is_starred, is_flagged,
+                                received_at, synced_at)
+                               VALUES
+                               (:id, :account_id, :provider_id, :thread_id,
+                                :folder, :labels, :from_addr, :to_addrs,
+                                :cc_addrs, :bcc_addrs, :subject,
+                                :body_text, :body_html, :snippet,
+                                :has_attachments, :is_read, :is_starred, :is_flagged,
+                                :received_at, now())
+                               ON CONFLICT (account_id, provider_message_id)
+                               DO UPDATE SET
+                                thread_id = EXCLUDED.thread_id,
+                                folder = EXCLUDED.folder,
+                                labels = EXCLUDED.labels,
+                                from_address = EXCLUDED.from_address,
+                                to_addresses = EXCLUDED.to_addresses,
+                                cc_addresses = EXCLUDED.cc_addresses,
+                                bcc_addresses = EXCLUDED.bcc_addresses,
+                                subject = EXCLUDED.subject,
+                                body_text = EXCLUDED.body_text,
+                                body_html = EXCLUDED.body_html,
+                                snippet = EXCLUDED.snippet,
+                                has_attachments = EXCLUDED.has_attachments,
+                                is_read = EXCLUDED.is_read,
+                                is_starred = EXCLUDED.is_starred,
+                                is_flagged = EXCLUDED.is_flagged,
+                                received_at = EXCLUDED.received_at,
+                                updated_at = now()"""
+                        ),
+                        {
+                            "id": str(uuid4()),
+                            "account_id": req.account_id,
+                            "provider_id": msg.provider_message_id,
+                            "thread_id": msg.thread_id,
+                            "folder": msg.folder or "INBOX",
+                            "labels": msg.labels,
+                            "from_addr": json.dumps({
+                                "name": msg.from_address.name if msg.from_address else "",
+                                "email": msg.from_address.email if msg.from_address else "",
+                            }),
+                            "to_addrs": json.dumps([
+                                {"name": a.name, "email": a.email}
+                                for a in msg.to_addresses
+                            ]),
+                            "cc_addrs": json.dumps([
+                                {"name": a.name, "email": a.email}
+                                for a in msg.cc_addresses
+                            ]),
+                            "bcc_addrs": json.dumps([
+                                {"name": a.name, "email": a.email}
+                                for a in msg.bcc_addresses
+                            ]),
+                            "subject": msg.subject,
+                            "body_text": msg.body_text,
+                            "body_html": msg.body_html,
+                            "snippet": msg.snippet[:200] if msg.snippet else "",
+                            "has_attachments": msg.has_attachments,
+                            "is_read": msg.is_read,
+                            "is_starred": msg.is_starred,
+                            "is_flagged": msg.is_flagged,
+                            "received_at": msg.received_at,
+                        },
+                    )
+                    persisted_count += 1
+
+                    # Persist attachment metadata
+                    for att in msg.attachments:
+                        await db.execute(
+                            text(
+                                """INSERT INTO email_attachments
+                                   (message_id, filename, mime_type, size_bytes,
+                                    provider_attachment_id)
+                                   VALUES (
+                                    (SELECT id FROM email_messages
+                                     WHERE account_id = :account_id
+                                       AND provider_message_id = :provider_id),
+                                    :filename, :mime_type, :size_bytes,
+                                    :provider_attachment_id
+                                   )
+                                   ON CONFLICT DO NOTHING"""
+                            ),
+                            {
+                                "account_id": req.account_id,
+                                "provider_id": msg.provider_message_id,
+                                "filename": att.filename,
+                                "mime_type": att.mime_type,
+                                "size_bytes": att.size_bytes,
+                                "provider_attachment_id": att.provider_attachment_id,
+                            },
+                        )
+
+            await db.commit()
+
+            # Update account sync state
             await db.execute(
                 text(
                     """UPDATE email_accounts
@@ -612,14 +770,34 @@ async def trigger_sync(
                     "history_id": sync_result.new_history_id,
                 },
             )
+
+            # Mark sync log as success
+            await db.execute(
+                text(
+                    """UPDATE email_sync_log
+                       SET status = 'success',
+                           completed_at = now(),
+                           messages_synced = :synced,
+                           messages_skipped = :skipped,
+                           provider_history_id = :history_id
+                       WHERE id = :log_id"""
+                ),
+                {
+                    "log_id": sync_log_id,
+                    "synced": persisted_count,
+                    "skipped": skipped_count,
+                    "history_id": sync_result.new_history_id,
+                },
+            )
             await db.commit()
 
             return {
                 "ok": True,
-                "messages_synced": sync_result.messages_synced,
-                "messages_skipped": sync_result.messages_skipped,
+                "messages_synced": persisted_count,
+                "messages_skipped": skipped_count,
             }
         except Exception as e:
+            # Update account to error state
             await db.execute(
                 text(
                     """UPDATE email_accounts
@@ -629,6 +807,17 @@ async def trigger_sync(
                        WHERE id = :id"""
                 ),
                 {"id": req.account_id, "error": str(e)},
+            )
+            # Mark sync log as error
+            await db.execute(
+                text(
+                    """UPDATE email_sync_log
+                       SET status = 'error',
+                           completed_at = now(),
+                           error_message = :error
+                       WHERE id = :log_id"""
+                ),
+                {"log_id": sync_log_id, "error": str(e)},
             )
             await db.commit()
             raise HTTPException(
@@ -645,18 +834,147 @@ async def trigger_sync(
 async def ai_chat(
     req: AIChatRequest,
     user: UserContext = Depends(get_current_user),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
-    """AI assistant chat — streams SSE events from the email assistant agent."""
-    # This is a skeleton. Full implementation will route through the
-    # orchestrator's run_agent_stream with the email-assistant agent.
+    """AI assistant chat — streams SSE events from the email assistant agent.
+
+    Routes through the orchestrator's run_agent_stream with the email-assistant
+    agent, translating AG-UI protocol events into the frontend SSE format
+    (type: 'start' / 'content' / 'done').
+    """
+    import uuid
+
+    user_id: str = getattr(user, "email", "") or "anonymous"
+    run_id = str(uuid.uuid4())
+
+    # ── Set user context for memory tools ──
+    try:
+        from acb_skills.memory_tools import _set_memory_user_id  # noqa: PLC0415
+        _set_memory_user_id(user_id)
+    except ImportError:
+        pass
+
+    # Build the agent payload — the last user message + optional email context
+    last_user_msg = ""
+    if req.messages:
+        for m in reversed(req.messages):
+            if m.get("role") == "user":
+                last_user_msg = m.get("content", "")
+                break
+
+    # Build conversation history for the agent
+    history = req.messages[:-1] if req.messages else []
+    conversation_context = ""
+    if history:
+        history_lines = []
+        for m in history[-10:]:  # keep last 10 for context
+            role = m.get("role", "unknown")
+            content = m.get("content", "")[:500]
+            history_lines.append(f"[{role}]: {content}")
+        conversation_context = "## Conversation history\n" + "\n".join(history_lines)
+
+    # Build enriched payload
+    payload: dict[str, Any] = {
+        "message": last_user_msg or "Help me with my email",
+        "user_query": last_user_msg,
+        "conversation_history": conversation_context,
+        "account_id": req.account_id,
+        "email_context_id": req.email_context_id,
+    }
+
+    # If an email is in context, fetch its full content for the agent
+    if req.email_context_id:
+        try:
+            db = await _get_db()
+            result = await db.execute(
+                text(
+                    """SELECT subject, body_text, from_name, from_email, received_at
+                       FROM email_messages WHERE id = :id"""
+                ),
+                {"id": req.email_context_id},
+            )
+            email_row = result.fetchone()
+            if email_row:
+                payload["current_email"] = {
+                    "id": req.email_context_id,
+                    "subject": email_row.subject,
+                    "body": (email_row.body_text or "")[:5000],
+                    "from": f"{email_row.from_name} <{email_row.from_email}>",
+                    "date": str(email_row.received_at),
+                }
+            await db.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ── Run the agent through the orchestrator ──
+    from orchestrator.executor import run_agent_stream  # noqa: PLC0415
+
+    agent_gen = run_agent_stream(
+        "email-assistant",
+        payload,
+        run_id=run_id,
+        thread_id=f"email-chat:{user_id}:{run_id}",
+    )
 
     async def event_stream():
-        # Placeholder: simulate streaming response
-        import asyncio
+        """Translate AG-UI protocol events to frontend SSE format."""
         yield f"data: {json.dumps({'type': 'start'})}\n\n"
-        await asyncio.sleep(0.3)
-        yield f"data: {json.dumps({'type': 'content', 'text': 'I am your email assistant. Let me help you with your inbox!'})}\n\n"
+
+        content_buffer: list[str] = []
+        try:
+            async for sse_line in agent_gen:
+                if not sse_line.startswith("data: "):
+                    continue
+                try:
+                    evt = json.loads(sse_line[len("data: "):])
+                except json.JSONDecodeError:
+                    continue
+
+                evt_type = evt.get("type", "")
+                if evt_type in (
+                    "TEXT_MESSAGE_CONTENT",
+                    "REASONING_MESSAGE_CONTENT",
+                    "THINKING_TEXT_MESSAGE_CONTENT",
+                ):
+                    delta = str(evt.get("delta", "") or evt.get("content", ""))
+                    if delta:
+                        content_buffer.append(delta)
+                        yield f"data: {json.dumps({'type': 'content', 'text': delta})}\n\n"
+
+                elif evt_type in ("RUN_FINISHED", "done"):
+                    # Capture any TOOL_CALL_RESULT that might be the final answer
+                    # when the agent returns a tool result as its last message
+                    result_text = evt.get("result") or ""
+                    if result_text:
+                        content_buffer.append(result_text)
+                        yield f"data: {json.dumps({'type': 'content', 'text': result_text})}\n\n"
+
+                elif evt_type == "RUN_ERROR":
+                    error_msg = evt.get("error", "Agent encountered an error")
+                    yield f"data: {json.dumps({'type': 'error', 'error': error_msg})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                    return
+
+        except Exception as exc:  # noqa: BLE001
+            _log.error("email.ai_chat_stream_error", error=str(exc))
+            yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
+
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        # ── Save episode to knowledge graph ──
+        full_response = "".join(content_buffer)
+        if full_response and last_user_msg:
+            try:
+                from acb_memory import add_episode  # noqa: PLC0415
+                background_tasks.add_task(
+                    add_episode,
+                    name=f"email-assistant:{user_id[:20]}",
+                    content=f"Q: {last_user_msg[:300]}\nA: {full_response[:500]}",
+                    source_description="email-assistant",
+                    group_id=user_id,
+                )
+            except ImportError:
+                pass
 
     return StreamingResponse(
         event_stream(),
@@ -674,19 +992,54 @@ async def quick_action(
     req: QuickActionRequest,
     user: UserContext = Depends(get_current_user),
 ):
-    """Trigger a quick AI action (summarize, find urgent, draft reply)."""
-    # Skeleton — will be wired to the email assistant agent
-    actions: dict[str, str] = {
-        "summarize": "Summarizing your inbox...",
-        "find_urgent": "Finding urgent emails...",
-        "draft_reply": "Drafting a reply...",
-        "unsubscribe": "Finding unsubscribe suggestions...",
-    }
-    return {
-        "action": req.action,
-        "message": actions.get(req.action, "Unknown action"),
-        "ok": True,
-    }
+    """Trigger a quick AI action (summarize, find urgent, draft reply).
+
+    Calls the email-assistant agent's tool functions directly for fast,
+    non-streaming responses to common email workflows.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "email_agent",
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "agent-email-assistant", "agents.py"),
+    )
+    agent_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(agent_mod)
+
+    try:
+        if req.action == "summarize":
+            result = await agent_mod.search_emails(
+                query="is:unread",
+                folder="INBOX",
+                account_id=req.account_id,
+            )
+        elif req.action == "find_urgent":
+            result = await agent_mod.find_urgent(account_id=req.account_id)
+        elif req.action == "draft_reply":
+            if not req.email_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="email_id is required for draft_reply",
+                )
+            result = await agent_mod.draft_reply(email_id=req.email_id)
+        elif req.action == "unsubscribe":
+            result = await agent_mod.suggest_unsubscribes(account_id=req.account_id)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown action: {req.action}. Supported: summarize, find_urgent, draft_reply, unsubscribe",
+            )
+
+        return {"action": req.action, "result": result, "ok": True}
+
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _log.error("email.quick_action_error", action=req.action, error=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Quick action '{req.action}' failed: {str(exc)}",
+        )
 
 
 # ── OAuth ────────────────────────────────────────────────────────────────

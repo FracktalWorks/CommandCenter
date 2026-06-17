@@ -56,6 +56,7 @@ export interface ChatMessage {
 
 export interface QuickAction {
   label: string;
+  action: string; // backend action key: 'summarize' | 'find_urgent' | 'draft_reply' | 'unsubscribe'
   prompt: string;
   icon: string; // Lucide icon name
 }

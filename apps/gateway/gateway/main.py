@@ -104,7 +104,47 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         _log.warning("gateway.key_store_skipped", error=str(exc))
 
+    # Start inbound SMTP server (aiosmtpd) if configured
+    inbound_account = os.environ.get("EMAIL_INBOUND_ACCOUNT_ID", "")
+    if inbound_account:
+        try:
+            from email_ingestion.inbound import start_inbound_server, stop_inbound_server
+            _inbound = await start_inbound_server()
+            _log.info("gateway.inbound_smtp_started", port=_inbound.port)
+        except Exception as _exc:
+            _log.warning("gateway.inbound_smtp_failed", error=str(_exc))
+
+    # Start background email sync scheduler
+    if os.environ.get("EMAIL_BACKGROUND_SYNC_ENABLED", "true").lower() != "false":
+        try:
+            from email_ingestion.scheduler import (
+                start_background_sync,
+                stop_background_sync,
+            )
+            launched = await start_background_sync()
+            _log.info("gateway.email_sync_started", accounts=len(launched))
+        except Exception as _exc:
+            _log.warning("gateway.email_sync_failed", error=str(_exc))
+
     yield
+
+    # Shutdown background email sync scheduler
+    try:
+        from email_ingestion.scheduler import stop_background_sync
+        await stop_background_sync()
+        _log.info("gateway.email_sync_stopped")
+    except Exception as _exc:
+        _log.warning("gateway.email_sync_stop_failed", error=str(_exc))
+
+    # Shutdown inbound SMTP server
+    if inbound_account:
+        try:
+            from email_ingestion.inbound import stop_inbound_server
+            await stop_inbound_server()
+            _log.info("gateway.inbound_smtp_stopped")
+        except Exception as _exc:
+            _log.warning("gateway.inbound_smtp_stop_failed", error=str(_exc))
+
     _log.info("gateway.shutdown")
 
 

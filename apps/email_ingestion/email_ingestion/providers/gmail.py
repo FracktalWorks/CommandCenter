@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import datetime
 from email.mime.text import MIMEText
 from typing import Any
 
@@ -229,19 +230,56 @@ class GmailProvider(BaseEmailProvider):
             data = resp.json()
 
             result = SyncResult(new_history_id=data.get("historyId"))
+            message_ids_to_fetch: set[str] = set()
+            message_ids_deleted: set[str] = set()
+
             for history in data.get("history", []):
                 for msg_added in history.get("messagesAdded", []):
-                    result.messages_synced += 1
+                    mid = msg_added.get("message", {}).get("id")
+                    if mid:
+                        message_ids_to_fetch.add(mid)
                 for msg_deleted in history.get("messagesDeleted", []):
+                    mid = msg_deleted.get("message", {}).get("id")
+                    if mid:
+                        message_ids_deleted.add(mid)
+
+            # Mark deleted messages as such
+            for mid in message_ids_deleted:
+                result.messages.append(EmailMessage(
+                    provider_message_id=mid,
+                    folder="TRASH",
+                    labels=["TRASH"],
+                    subject="[DELETED]",
+                ))
+
+            # Fetch full message for each added/updated message
+            for mid in message_ids_to_fetch:
+                try:
+                    msg = await self.get_message(mid)
+                    result.messages.append(msg)
                     result.messages_synced += 1
+                except Exception as e:
+                    result.errors.append(f"Failed to fetch message {mid}: {e}")
+
+            result.messages_synced += len(message_ids_deleted)
             return result
         else:
             # Initial full sync — list all messages
             messages, _ = await self.list_messages(
                 folder="INBOX", max_results=max_results
             )
+            # Also fetch sent mail
+            try:
+                sent_messages, _ = await self.list_messages(
+                    folder="SENT", max_results=max_results
+                )
+                messages.extend(sent_messages)
+            except Exception:
+                pass
+
             return SyncResult(
                 messages_synced=len(messages),
+                messages=messages,
                 new_history_id=None,  # will be set after first history call
             )
 
@@ -325,9 +363,19 @@ class GmailProvider(BaseEmailProvider):
             is_read=is_read,
             is_starred=is_starred,
             is_flagged=is_flagged,
-            received_at=None,  # Parse from internalDate
+            received_at=self._parse_internal_date(raw.get("internalDate")),
             raw=raw,
         )
+
+    @staticmethod
+    def _parse_internal_date(internal_date: str | None) -> datetime | None:
+        """Parse Gmail's internalDate (epoch ms as string) into a datetime."""
+        if not internal_date:
+            return None
+        try:
+            return datetime.fromtimestamp(int(internal_date) / 1000, tz=datetime.timezone.utc)
+        except (ValueError, TypeError):
+            return None
 
     @staticmethod
     def _parse_headers(headers: list[dict]) -> dict[str, str]:

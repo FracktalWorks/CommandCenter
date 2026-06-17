@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   PanelLeftClose,
   PanelLeftOpen,
@@ -17,36 +17,65 @@ import { EmailList } from "./components/EmailList";
 import { EmailDetail } from "./components/EmailDetail";
 import { AIChatPanel } from "./components/AIChatPanel";
 import { ComposePanel } from "./components/ComposePanel";
-import { MOCK_ACCOUNTS, MOCK_FOLDERS, MOCK_EMAILS } from "./lib/mockData";
+import { useEmailStore } from "./lib/emailStore";
 import { folderLabel } from "./lib/utils";
 
 export default function EmailPage() {
   const { isMobile } = useViewMode();
 
-  // Desktop state
+  // Desktop UI state
   const [leftOpen, setLeftOpen] = useState(true);
   const [listOpen, setListOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
-
-  // Shared state
-  const [composeOpen, setComposeOpen] = useState(false);
-  const [selectedFolder, setSelectedFolder] = useState("inbox");
-  const [selectedAccountId, setSelectedAccountId] = useState("1");
-  const [selectedEmailId, setSelectedEmailId] = useState<string | null>(
-    MOCK_EMAILS[0].id
-  );
 
   // Mobile-specific state
   const [mobileView, setMobileView] = useState<"inbox" | "detail">("inbox");
 
   const { open: openDrawer, close: closeDrawer } = useMobileDrawer();
 
-  const visibleEmails = MOCK_EMAILS.filter(
-    (e) => e.folder === selectedFolder && e.accountId === selectedAccountId
-  );
-  const selectedEmail = MOCK_EMAILS.find((e) => e.id === selectedEmailId) ?? null;
-  const unreadCount = visibleEmails.filter((e) => !e.isRead).length;
-  const selectedAccount = MOCK_ACCOUNTS.find((a) => a.id === selectedAccountId);
+  // ── Zustand store ──
+  const {
+    accounts,
+    emails,
+    folders,
+    accountsLoading,
+    emailsLoading,
+    selectedAccountId,
+    selectedFolder,
+    selectedEmailId,
+    composeOpen,
+    composeDefaults,
+    error,
+    fetchAccounts,
+    fetchEmails,
+    selectAccount,
+    selectFolder,
+    selectEmail,
+    setSearchQuery,
+    openCompose,
+    closeCompose,
+    deleteEmail,
+    triggerSync,
+  } = useEmailStore();
+
+  // Fetch on mount
+  useEffect(() => {
+    fetchAccounts();
+  }, [fetchAccounts]);
+
+  // Fetch emails when account or folder changes
+  useEffect(() => {
+    if (selectedAccountId) {
+      fetchEmails();
+    }
+  }, [selectedAccountId, selectedFolder, fetchEmails]);
+
+  // Derived data
+  const selectedAccount = accounts.find((a) => a.id === selectedAccountId) ?? null;
+  const selectedEmail = emails.find((e) => e.id === selectedEmailId) ?? null;
+  const unreadCount = emails.filter(
+    (e) => e.folder === selectedFolder && !e.isRead
+  ).length;
 
   // Reset mobile view when folder/account changes
   useEffect(() => {
@@ -55,35 +84,41 @@ export default function EmailPage() {
 
   // ── Mobile drawer content builders ──
 
-  // Refs to hold drawer content so the event listener can open them.
   const accountsDrawerRef = useRef<React.ReactNode>(null);
   const aiDrawerRef = useRef<React.ReactNode>(null);
 
-  // Build the drawer content (kept in refs so the event listener can access them).
+  const handleAccountSelect = useCallback(
+    (id: string) => {
+      selectAccount(id);
+      setMobileView("inbox");
+      closeDrawer();
+    },
+    [selectAccount, closeDrawer]
+  );
+
+  const handleFolderSelect = useCallback(
+    (f: string) => {
+      selectFolder(f);
+      if (isMobile) {
+        setMobileView("inbox");
+        closeDrawer();
+      }
+    },
+    [selectFolder, isMobile, closeDrawer]
+  );
+
   accountsDrawerRef.current = (
     <AccountSidebar
-      accounts={MOCK_ACCOUNTS}
-      selectedAccountId={selectedAccountId}
-      onAccountSelect={(id) => {
-        setSelectedAccountId(id);
-        const firstForAccount = MOCK_EMAILS.find(
-          (e) => e.folder === selectedFolder && e.accountId === id
-        );
-        setSelectedEmailId(firstForAccount?.id ?? null);
-        setMobileView("inbox");
-        closeDrawer();
-      }}
-      folders={MOCK_FOLDERS}
+      accounts={accounts}
+      selectedAccountId={selectedAccountId ?? ""}
+      onAccountSelect={handleAccountSelect}
+      folders={folders}
       selectedFolder={selectedFolder}
-      onFolderSelect={(f) => {
-        setSelectedFolder(f);
-        setMobileView("inbox");
-        closeDrawer();
-      }}
+      onFolderSelect={handleFolderSelect}
     />
   );
 
-  aiDrawerRef.current = <AIChatPanel />;
+  aiDrawerRef.current = <AIChatPanel selectedAccountId={selectedAccountId} selectedEmailId={selectedEmailId} />;
 
   // Listen for bottom-nav tab events from AppShell MobileBottomNav.
   useEffect(() => {
@@ -97,12 +132,15 @@ export default function EmailPage() {
     };
     window.addEventListener("cc-mobile-nav", handler);
     return () => window.removeEventListener("cc-mobile-nav", handler);
-  }, [openDrawer]);
+  }, [openDrawer, closeDrawer]);
 
-  const handleEmailSelect = (id: string) => {
-    setSelectedEmailId(id);
-    if (isMobile) setMobileView("detail");
-  };
+  const handleEmailSelect = useCallback(
+    (id: string) => {
+      selectEmail(id);
+      if (isMobile) setMobileView("detail");
+    },
+    [selectEmail, isMobile]
+  );
 
   const handleBack = () => setMobileView("inbox");
 
@@ -110,6 +148,29 @@ export default function EmailPage() {
 
   return (
     <div className="flex h-full w-full bg-background overflow-hidden select-none">
+      {/* Loading overlay */}
+      {accountsLoading && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80">
+          <div className="flex gap-2 items-center text-sm text-muted-foreground">
+            <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+            Loading accounts…
+          </div>
+        </div>
+      )}
+
+      {/* Error banner */}
+      {error && (
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-50 bg-destructive text-destructive-foreground text-xs px-4 py-2 rounded-lg shadow-lg flex items-center gap-2">
+          <span>{error}</span>
+          <button
+            onClick={() => useEmailStore.getState().clearError()}
+            className="underline hover:no-underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* ═══ DESKTOP: Left sidebar — accounts + folders ═══ */}
       {!isMobile && (
         <div
@@ -119,18 +180,12 @@ export default function EmailPage() {
         >
           {leftOpen && (
             <AccountSidebar
-              accounts={MOCK_ACCOUNTS}
-              selectedAccountId={selectedAccountId}
-              onAccountSelect={(id) => {
-                setSelectedAccountId(id);
-                const firstForAccount = MOCK_EMAILS.find(
-                  (e) => e.folder === selectedFolder && e.accountId === id
-                );
-                setSelectedEmailId(firstForAccount?.id ?? null);
-              }}
-              folders={MOCK_FOLDERS}
+              accounts={accounts}
+              selectedAccountId={selectedAccountId ?? ""}
+              onAccountSelect={selectAccount}
+              folders={folders.length > 0 ? folders : []}
               selectedFolder={selectedFolder}
-              onFolderSelect={setSelectedFolder}
+              onFolderSelect={selectFolder}
             />
           )}
         </div>
@@ -232,7 +287,7 @@ export default function EmailPage() {
                 </span>
               )}
               <button
-                onClick={() => setComposeOpen(true)}
+                onClick={() => openCompose()}
                 className="p-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
                 aria-label="Compose"
               >
@@ -253,10 +308,11 @@ export default function EmailPage() {
             >
               {listOpen && (
                 <EmailList
-                  emails={visibleEmails}
+                  emails={emails}
                   selectedId={selectedEmailId}
-                  onSelect={setSelectedEmailId}
-                  onCompose={() => setComposeOpen(true)}
+                  onSelect={handleEmailSelect}
+                  onCompose={() => openCompose()}
+                  loading={emailsLoading}
                 />
               )}
             </div>
@@ -266,10 +322,11 @@ export default function EmailPage() {
           {isMobile && mobileView === "inbox" && (
             <div className="flex-1 min-w-0 overflow-y-auto">
               <EmailList
-                emails={visibleEmails}
+                emails={emails}
                 selectedId={selectedEmailId}
                 onSelect={handleEmailSelect}
-                onCompose={() => setComposeOpen(true)}
+                onCompose={() => openCompose()}
+                loading={emailsLoading}
               />
             </div>
           )}
@@ -297,11 +354,17 @@ export default function EmailPage() {
             rightOpen ? "w-72" : "w-0"
           }`}
         >
-          {rightOpen && <AIChatPanel />}
+          {rightOpen && <AIChatPanel selectedAccountId={selectedAccountId} selectedEmailId={selectedEmailId} />}
         </div>
       )}
 
-      <ComposePanel open={composeOpen} onClose={() => setComposeOpen(false)} />
+      <ComposePanel
+        open={composeOpen}
+        onClose={closeCompose}
+        defaultTo={composeDefaults?.to}
+        defaultSubject={composeDefaults?.subject}
+        replyToBody={composeDefaults?.replyToBody}
+      />
     </div>
   );
 }

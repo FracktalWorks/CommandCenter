@@ -681,6 +681,20 @@ async def update_tier(
     _save_tier_override(req.tier_name, entry)
     _log.info("settings.llm.tier_updated", tier=req.tier_name, model=req.model, actor=_user.email)
 
+    # Immediately update the in-memory _TIER_MODEL so the Test button and
+    # /v1/chat/completions use the new model without a gateway restart.
+    # GitHub Copilot models (github/… prefix) skip this — they route through
+    # the Copilot API, not litellm SDK directly.
+    if not req.model.startswith("github/"):
+        tier_id = _TIER_LABELS[req.tier_name]["id"]
+        from acb_llm.client import _TIER_MODEL
+        _TIER_MODEL[tier_id] = req.model
+        _log.info(
+            "settings.llm.tier_model_live",
+            tier=tier_id,
+            model=req.model,
+        )
+
     # Restart LiteLLM so the new config takes effect immediately
     _restart_litellm_bg()
 

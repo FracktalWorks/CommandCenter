@@ -30,8 +30,80 @@ import TodoPanel from "@/components/TodoPanel";
 import { parseAgentError } from "@/lib/parseAgentError";
 import type { ParsedAgentError } from "@/lib/parseAgentError";
 import { getMessages, saveMessages, fetchMessagesFromDb, type PersistedMessage } from "@/lib/sessions";
+import { computeContextUsage, formatTokenCount } from "@/lib/tokenCount";
 import { useAgentEvents } from "@/lib/agentEvents";
 import { buildFrontendToolsAddendum } from "@/hooks/useFrontendTool";
+
+// ── Context-window ring ─────────────────────────────────────────────────────
+/**
+ * Small circular SVG progress ring showing context-window usage.
+ * Color transitions: primary (< 60%) → warning (60–79%) → destructive (≥ 80%).
+ */
+function ContextRing({
+  pct,
+  usedTokens,
+  totalTokens,
+  compacting,
+}: {
+  pct: number;
+  usedTokens: number;
+  totalTokens: number;
+  compacting: boolean;
+}) {
+  const r = 9;
+  const circ = 2 * Math.PI * r;
+  const filled = Math.min(1, pct / 100) * circ;
+  const color =
+    pct >= 80
+      ? "hsl(var(--destructive))"
+      : pct >= 60
+        ? "hsl(var(--warning))"
+        : "hsl(var(--primary))";
+  const label = formatTokenCount(usedTokens, totalTokens);
+
+  if (compacting) {
+    return (
+      <span
+        className="shrink-0 flex items-center gap-1 text-[10px] text-primary/70 animate-pulse"
+        title="Compacting conversation…">
+        <svg width="20" height="20" viewBox="0 0 24 24" className="animate-spin" fill="none">
+          <circle cx="12" cy="12" r="9" stroke="hsl(var(--border))" strokeWidth="2" />
+          <path d="M12 3a9 9 0 0 1 9 9" stroke="hsl(var(--primary))" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+        <span className="hidden sm:inline">Compacting…</span>
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className="shrink-0 flex items-center gap-1 cursor-default"
+      title={`Context window: ${label} used (${pct}%)`}>
+      <svg width="20" height="20" viewBox="0 0 24 24">
+        {/* Background track */}
+        <circle cx="12" cy="12" r={r} fill="none" stroke="hsl(var(--border))" strokeWidth="2" />
+        {/* Progress arc */}
+        <circle
+          cx="12" cy="12" r={r}
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeDasharray={`${filled} ${circ}`}
+          strokeLinecap="round"
+          style={{ transform: "rotate(-90deg)", transformOrigin: "center" }}
+        />
+      </svg>
+      {pct >= 60 && (
+        <span
+          className={`hidden sm:inline text-[10px] font-medium ${
+            pct >= 80 ? "text-destructive" : "text-warning"
+          }`}>
+          {pct}%
+        </span>
+      )}
+    </span>
+  );
+}
 
 // ── Error card — shown inline in the message thread and in the header banner ──
 function ErrorCard({ parsed, compact = false }: { parsed: ParsedAgentError; compact?: boolean }) {
@@ -414,6 +486,49 @@ export default function AgentChat({
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [statuses, setStatuses] = useState<IntegrationStatus[]>(externalStatuses ?? []);
   const [viewerEntry, setViewerEntry] = useState<FileEntry | null>(null);
+
+  // ── Context-window tracking + auto-compaction ─────────────────────────────
+  const contextUsage = useMemo(
+    () => computeContextUsage(messages, currentModel, systemContext),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [messages.length, currentModel, systemContext],
+  );
+  const [compacting, setCompacting] = useState(false);
+  const hasAutoCompactedRef = useRef(false);
+
+  // Reset the compact gate when the session changes so a new session can
+  // trigger its own compaction if needed.
+  useEffect(() => {
+    hasAutoCompactedRef.current = false;
+  }, [sessionId]);
+
+  // Auto-compact when context reaches 75% of the model's limit.
+  // Fires at most once per session (gate via hasAutoCompactedRef) and only
+  // between turns (not while the agent is streaming).
+  useEffect(() => {
+    if (contextUsage.pct < 75) return;
+    if (isLoading) return;
+    if (compacting) return;
+    if (hasAutoCompactedRef.current) return;
+    hasAutoCompactedRef.current = true;
+
+    setCompacting(true);
+    const currentMessages = messagesRef.current;
+    fetch(`/api/chat/sessions/${sessionId}/compact`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: currentMessages, keepLast: 6 }),
+    })
+      .then((r) => r.json() as Promise<{ messages?: ChatMessage[]; compacted?: boolean }>)
+      .then((data) => {
+        if (data.compacted && Array.isArray(data.messages) && data.messages.length > 0) {
+          setMessages(data.messages);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setCompacting(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contextUsage.pct, isLoading, compacting, sessionId]);
 
   // ── HITL (Human-in-the-Loop) confirmation state ────────────────────────
   const [confirmation, setConfirmation] = useState<{
@@ -1115,12 +1230,23 @@ export default function AgentChat({
                 )}
               </div>
 
-              <span className="ml-auto hidden sm:inline text-muted-foreground text-[10px]">
-                {isLoading && sendMode !== "send" && (
-                  <span className="mr-2 text-amber-400">{sendMode === "queue" ? "⏱ Queue" : "⤳ Steer"} mode</span>
+              <div className="ml-auto hidden sm:flex items-center gap-2">
+                {/* Context-window ring — only visible when non-trivial usage */}
+                {contextUsage.pct > 5 && (
+                  <ContextRing
+                    pct={contextUsage.pct}
+                    usedTokens={contextUsage.usedTokens}
+                    totalTokens={contextUsage.totalTokens}
+                    compacting={compacting}
+                  />
                 )}
-                <kbd className="text-muted-foreground">⏎</kbd> send · <kbd className="text-muted-foreground">⇧⏎</kbd> newline
-              </span>
+                <span className="text-muted-foreground text-[10px]">
+                  {isLoading && sendMode !== "send" && (
+                    <span className="mr-2 text-amber-400">{sendMode === "queue" ? "⏱ Queue" : "⤳ Steer"} mode</span>
+                  )}
+                  <kbd className="text-muted-foreground">⏎</kbd> send · <kbd className="text-muted-foreground">⇧⏎</kbd> newline
+                </span>
+              </div>
             </div>
           </div>
 
@@ -1202,6 +1328,26 @@ function MessageBubble({
       } catch {
         // fall through
       }
+    }
+    // Context-compaction summary pill — styled distinctly so users know
+    // the conversation was compressed.
+    if (content.startsWith("[CONTEXT SUMMARY")) {
+      const lines = content.split("\n");
+      const header = lines[0];
+      const body = lines.slice(2).join("\n").trim();
+      return (
+        <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-[11px] text-primary/80">
+          <div className="flex items-center gap-1.5 font-medium mb-1">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M3 8h10M8 3l5 5-5 5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            {header}
+          </div>
+          {body && (
+            <pre className="whitespace-pre-wrap text-[10px] text-primary/60 leading-relaxed">{body}</pre>
+          )}
+        </div>
+      );
     }
     return (
       <div className="text-center text-xs text-muted-foreground italic py-1">

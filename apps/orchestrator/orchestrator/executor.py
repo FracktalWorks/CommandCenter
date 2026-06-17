@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import functools
 import json
 import os
 import re
@@ -42,6 +43,13 @@ from acb_skills.loader import AgentLoadError, load_agent
 _MAX_ANNEAL_ATTEMPTS = 2
 
 _log = get_logger("orchestrator.executor")
+
+# Pre-compiled regex for tool result clearing (technique #1).
+# Matches tool-result code blocks embedded in assistant messages so they can
+# be stripped from old history turns — avoids re-sending 5k-token API dumps.
+_TOOL_RESULT_RE = re.compile(
+    r"\n?(?:Tool call|\[tool\]|```json)[^`]*```", re.S
+)
 
 # ContextVar that holds the active SSE queue for the current agent run.
 # Set by run_agent_stream so that call_agent (injected as a tool) can push
@@ -184,7 +192,7 @@ class _TodoTracker:
         return [self.items[tid] for tid in self.order if tid in self.items]
 
 
-def _build_injected_tools_addendum() -> str:
+def _build_injected_tools_addendum(*, is_sub_agent: bool = False) -> str:
     """Return a system-prompt addendum describing the CommandCenter-injected tools.
 
     Appended to every GitHub Copilot agent's system message at run time so the
@@ -192,8 +200,77 @@ def _build_injected_tools_addendum() -> str:
     names are.  MAF agents receive these instructions via the MAF instructions
     field directly; this is only needed for the Copilot SDK path where the agent's
     own ``instructions.md`` was written without knowledge of CommandCenter injection.
+
+    When ``is_sub_agent=True`` (the agent is called via call_agent from a parent),
+    a compact version is returned — tool names only, no workspace/commit instructions.
+    This saves ~700 tokens per sub-agent invocation.
+
+    The full addendum is module-level cached after first build (the registry
+    only changes on gateway restart) to keep the system-prompt prefix byte-stable
+    across turns — required for KV-cache hits.
     """
-    # Fetch the live agent registry so the model sees the exact names.
+    registry_block = _build_registry_block()
+
+    # ── Compact version for sub-agents ──────────────────────────────────────
+    if is_sub_agent:
+        return f"""
+---
+## CommandCenter Platform Tools
+call_agent(name,msg), call_agents_parallel(tasks), call_agent_background(name,msg)
+web_search(query), fetch_page(url)
+write_artifact(path,content) — files go to outputs/
+remember(query), recall_timeline(entity,query), save_memory(fact), save_episode(name,content)
+
+{registry_block}
+---"""
+
+    return f"""
+---
+## CommandCenter Platform Tools (injected at runtime)
+
+### Inter-agent delegation
+- **call_agent(agent_name, message)** — Delegate to another agent; waits for its response.
+- **call_agents_parallel(tasks)** — Run multiple agents concurrently (JSON array of {{"agent","message"}} objects).
+- **call_agent_background(agent_name, message)** — Fire-and-forget; use when result is not needed now.
+
+{registry_block}
+
+### Web access (no API key required)
+- **web_search(query, max_results=5)** — DuckDuckGo search. Use for current info, news, company research.
+- **fetch_page(url, max_chars=8000)** — Fetch a public URL as clean text via Jina Reader.
+
+### Memory & knowledge graph
+- **remember(query)** — Search episodic memory for past facts about the user. Call before making claims about history or preferences.
+- **recall_timeline(entity, query)** — Bi-temporal knowledge graph: "when did X happen?" or entity history.
+- **save_memory(fact)** — Persist a high-signal user fact. Routine turns are handled automatically.
+- **save_episode(name, content, source?)** — Record a time-stamped episode; Graphiti extracts entities & relationships.
+
+### Workspace & file writing
+Workspace folders visible in the Files Viewer: **outputs/** (default for generated files), **inputs/** (user uploads, read-only), **agent-data/** (reusable reference data).
+- **write_artifact(path, content, encoding?)** — Writes to outputs/ if path has no prefix. Returns a ``download_url`` — you MUST embed it as a clickable link in your reply.
+
+### Working memory (NOTES.md pattern)
+Maintain **`agent-data/NOTES.md`** as your cross-session working memory.
+- At the START of each session: read this file if it exists to restore context.
+- After each significant discovery, decision, or milestone: append a dated bullet (e.g. `- 2026-06-16: Closed ABC Corp deal at ₹50L`).
+- Keep entries concise — one line per fact. This file survives context compaction and session resets.
+
+### Self-improvement & committing
+To persist changes to your own repo: `git add -A`, then `git commit -m "feat: ..."`, then print `COMMIT_SHA: <git rev-parse HEAD>`. Do NOT `git push` — pushes are blocked; your commit queues for human approval in the Control Plane inbox. Never amend; one commit per task.
+---"""
+
+
+@functools.lru_cache(maxsize=1)
+def _build_registry_block() -> str:
+    """Build the agent registry listing, cached for the lifetime of the process.
+
+    The registry only changes when a new agent is registered (gateway restart
+    or dynamic registration endpoint).  Caching keeps the system-prompt prefix
+    byte-stable across turns — required for KV-cache hits (10x cost reduction
+    per Manus benchmarks).
+
+    Call ``_build_registry_block.cache_clear()`` after registering a new agent.
+    """
     agent_lines: list[str] = []
     try:
         from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
@@ -206,144 +283,28 @@ def _build_injected_tools_addendum() -> str:
                 agent_lines.append(f"  - {name!r}: {desc}")
     except Exception:  # noqa: BLE001
         pass
-
-    registry_block = (
-        "Registered agents you can delegate to:\n" + "\n".join(agent_lines)
+    return (
+        "Registered agents:\n" + "\n".join(agent_lines)
         if agent_lines
         else "Registered agents: check with the orchestrator if unsure."
     )
 
-    return f"""
----
-## CommandCenter Platform Tools (injected at runtime)
 
-In addition to your own tools, the following tools have been injected by the
-CommandCenter platform and are available to you in every session:
-
-### Inter-agent delegation
-- **call_agent(agent_name, message)** — Delegate a task to another agent and
-  wait for its full response. Use when you need the result before continuing.
-- **call_agents_parallel(tasks)** — Run multiple agents concurrently (JSON array
-  of {{\"agent\": \"name\", \"message\": \"...\"}} objects). Use for independent
-  sub-tasks that can run simultaneously.
-- **call_agent_background(agent_name, message)** — Fire-and-forget delegation.
-  Returns immediately. Use when the result is not needed synchronously.
-
-{registry_block}
-
-### Web access (no API key required)
-- **web_search(query, max_results=5)** — Search the web via DuckDuckGo. Use for
-  current information, company research, news, or anything outside your training data.
-- **fetch_page(url, max_chars=8000)** — Fetch any public web page as clean text
-  via Jina Reader. Use when you have a specific URL to read.
-
-### Memory & knowledge graph (active read/write)
-These tools give you direct access to CommandCenter's persistent memory systems.
-Use them to maintain continuity across conversations and build up knowledge over time.
-
-- **remember(query)** — Search episodic memory for past facts about the current
-  user. Call BEFORE making claims about user preferences, history, or context.
-  Example: `remember("Vijay's reporting preferences")`
-- **recall_timeline(entity_name, query)** — Search the bi-temporal knowledge graph
-  for time-stamped facts about an entity (deal, person, project, company).
-  Use for "when did X happen?" or "what's the history of Y?" questions.
-  Example: `recall_timeline("ABC Corp", "deal stage changes and follow-ups")`
-- **save_memory(fact)** — Persist a single important fact about the current user
-  to episodic memory. Future conversations will automatically recall this.
-  Example: `save_memory("Vijay prefers weekly Monday reports in bullet format")`
-- **save_episode(name, content, source?)** — Record a time-stamped episode in the
-  knowledge graph. Graphiti extracts entities, relationships, and timestamps.
-  Example: `save_episode("Deal closed", "ABC Corp signed ₹50L PO", source="agent-sales")`
-
-When to save vs. let the platform handle it:
-  - **Actively save** when you learn a NEW fact the user explicitly shares, or
-    when a significant event occurs (deal stage change, meeting outcome, etc.).
-  - **Trust the platform** for routine conversation turns — the gateway
-    automatically extracts memories after each run. Active save is for
-    high-signal facts you want to guarantee are captured.
-
-### Workspace folders & file writing
-Your workspace has three folders.  ONLY files in these folders are visible to
-the operator in the Files Viewer sidebar:
-
-  - **outputs/** — DEFAULT for all agent-generated files (reports, scripts,
-    spreadsheets, PDFs, images, exports, etc.).  ``write_artifact`` auto-places
-    files here unless you specify otherwise.
-  - **inputs/** — User-uploaded files and attachments.  Read from here, do NOT
-    write here unless the user explicitly asks you to modify an uploaded file.
-  - **agent-data/** — Permanent reference data, templates, catalogues, and
-    knowledge that makes you better at your job.  If you discover or generate
-    information worth reusing across sessions, save it here.
-
-- **write_artifact(path, content, encoding?)** — Write a file to the workspace.
-  If *path* doesn't start with ``inputs/``, ``outputs/``, or ``agent-data/``,
-  the file is automatically placed in ``outputs/``.  Accepts text (default
-  UTF-8) or raw bytes (set ``encoding=None``).
-
-  **CRITICAL — embed the download link:**  The tool returns a ``download_url``
-  field.  You MUST include a clickable link in your response text so the
-  operator can download the file.  Example pattern:
-
-  ```
-  result = await write_artifact("q2_report.md", report_markdown)
-  # Then in your reply, write:
-  # Here is the report: [📄 Download Q2 Report]({result["download_url"]})
-  ```
-
-  For multiple files, list each with its download link:
-  ```
-  - [📄 Sales Report]({result1["download_url"]})
-  - [📊 Chart (PNG)]({result2["download_url"]})
-  ```
-
-### Self-improvement & committing
-When you make changes to your own repository (new skills, bug fixes, improvements
-to agents.py or prompts), you MUST commit those changes using git so they can be
-reviewed and pushed by a human operator.
-
-**How to commit your changes:**
-1. Make your changes in the repository (the local clone is already checked out and
-   authenticated — do NOT re-clone).
-2. Stage your changes: `git add -A` (or target specific files).
-3. Commit on the **current branch** — do NOT create a new branch, do NOT push:
-   ```
-   git commit -m "feat: <short description of what changed and why>"
-   ```
-4. After committing, print the following sentinel lines so the platform records them:
-   ```
-   COMMIT_SHA: <output of: git rev-parse HEAD>
-   ```
-   Printing `COMMIT_SHA:` is mandatory — without it the platform cannot register
-   your commit in the approval queue.
-5. **Do NOT run `git push`.** Pushes are blocked at the hook level. Your commit
-   will appear in the Control Plane inbox where a human can review the diff and
-   click **Approve** to push it, or **Reject** to discard it.
-
-**When to self-commit:**
-- You add or update a skill script in `skills/*/scripts/`.
-- You add or update a tool function in `agents.py`.
-- You fix a bug in your own code.
-- You update `prompts/system.md` or a `skills/*/SKILL.md` file.
-- Any time you modify files in your repository as part of completing a task.
-
-**Bot identity is already configured** in the local clone — you do not need to
-set `git config user.name` or `git config user.email`.
-
-**Important constraints:**
-- Commit minimal, targeted changes — do not refactor unrelated code.
-- Never amend a previous commit; always make a new commit.
-- A single task should produce at most one commit.
-- If `git commit` reports "nothing to commit", you have no unstaged changes —
-  this is fine, just skip the commit step.
----"""
-
-
-def _inject_agent_tools(agents: list[Any]) -> None:
+def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_scope: list[str] | None = None) -> None:
     """Inject cross-agent delegation tools into every loaded agent.
 
     Adds ``call_agent`` and ``call_agent_background`` from ``acb_skills.agent_tools``
     so that any agent — MAF or GitHub Copilot SDK — can delegate sub-tasks to
     other registered agents without any changes to the external agent repo.
+
+    When ``is_sub_agent=True``, a compact addendum is appended to Copilot SDK
+    agents instead of the full workspace/commit guidance (~700 token saving per
+    sub-agent invocation).
+
+    When ``tool_scope`` is provided (from ``config.json: tool_scope``), only the
+    named tools are injected.  This prevents the Berkeley leaderboard failure mode
+    where every additional tool degrades model accuracy — inject only what the
+    agent actually needs.  ``None`` means inject all tools (default).
 
     Injection is best-effort: failures are silently swallowed so they never
     block the main agent execution path.
@@ -359,7 +320,7 @@ def _inject_agent_tools(agents: list[Any]) -> None:
         from acb_skills.agent_tools import call_agent  # noqa: PLC0415
         from acb_skills.agent_tools import (call_agent_background,
                                             call_agents_parallel)
-        _extra_tools = [call_agent, call_agents_parallel, call_agent_background]
+        _all_tools = [call_agent, call_agents_parallel, call_agent_background]
     except ImportError:
         return  # acb_skills not installed in this env — skip silently
 
@@ -367,20 +328,18 @@ def _inject_agent_tools(agents: list[Any]) -> None:
     try:
         from acb_skills.web_tools import fetch_page  # noqa: PLC0415
         from acb_skills.web_tools import web_search
-        _extra_tools = _extra_tools + [web_search, fetch_page]
+        _all_tools = _all_tools + [web_search, fetch_page]
     except ImportError:
         pass  # duckduckgo-search / httpx not installed — skip gracefully
 
     # File-writing artifact tool — surfaces created files in the UI sidebar.
     try:
         from acb_skills.write_artifact import write_artifact  # noqa: PLC0415
-        _extra_tools = _extra_tools + [write_artifact]
+        _all_tools = _all_tools + [write_artifact]
     except ImportError:
         pass
 
     # Memory tools — active read/write to Mem0 + Graphiti knowledge graph.
-    # Gives agents the ability to query past facts and persist new knowledge
-    # on demand, rather than relying solely on passive context injection.
     try:
         from acb_skills.memory_tools import (
             remember,
@@ -388,11 +347,29 @@ def _inject_agent_tools(agents: list[Any]) -> None:
             save_memory,
             save_episode,
         )
-        _extra_tools = _extra_tools + [
+        _all_tools = _all_tools + [
             remember, recall_timeline, save_memory, save_episode,
         ]
     except ImportError:
         pass  # acb_memory not installed — skip gracefully
+
+    # ── Dynamic tool scoping (technique #3: inject only what agent needs) ──
+    # If tool_scope is set (from config.json), filter to the named subset.
+    # This prevents the "too many tools" accuracy degradation documented by
+    # the Berkeley Function-Calling Leaderboard (every model degrades, no exceptions).
+    if tool_scope:
+        scope_set = set(tool_scope)
+        _extra_tools = [fn for fn in _all_tools if fn.__name__ in scope_set]
+        if not _extra_tools:
+            # Scope list doesn't match any known tool names — fall back to all
+            _log.warning(
+                "executor.tool_scope_no_match",
+                requested=tool_scope,
+                available=[fn.__name__ for fn in _all_tools],
+            )
+            _extra_tools = _all_tools
+    else:
+        _extra_tools = _all_tools
 
     for agent in agents:
         injected = False
@@ -435,7 +412,7 @@ def _inject_agent_tools(agents: list[Any]) -> None:
                 # the form {'mode': 'append', 'content': '<text>'}.  We must use
                 # dict access (not setattr) and preserve the nested structure.
                 try:
-                    addendum = _build_injected_tools_addendum()
+                    addendum = _build_injected_tools_addendum(is_sub_agent=is_sub_agent)
                     opts = getattr(agent, "_default_options", None)
                     if isinstance(opts, dict):
                         existing_sys = opts.get("system_message")
@@ -638,7 +615,19 @@ async def _run_sub_agent_streaming(
             integrations, _ = build_integrations(mandatory, optional, settings)
             _inject_integrations_to_env(integrations)
             agents = loaded.build_agents()
-            _inject_agent_tools(agents)
+            # Technique #3: read tool_scope from config.json to inject only the
+            # tools this sub-agent actually needs (avoids the Berkeley leaderboard
+            # accuracy degradation from too many tools).
+            _sub_tool_scope = (
+                loaded.config.get("tool_scope") or None
+                if hasattr(loaded, "config")
+                else None
+            )
+            _inject_agent_tools(
+                agents,
+                is_sub_agent=True,
+                tool_scope=_sub_tool_scope,
+            )
             if not agents:
                 return f"({agent_name!r} returned empty agent list)"
             agent = agents[0]
@@ -683,6 +672,14 @@ async def _run_sub_agent_streaming(
                 pass
 
             text_parts: list[str] = []
+
+            # Max chars returned from a sub-agent to the parent (technique #5).
+            # Research: sub-agents explore deeply (10k+ tokens) but the parent
+            # only needs a condensed 1-2k token summary.  Prevents single
+            # sub-agent calls from bloating the orchestrator's context.
+            _MAX_SUB_RESULT_CHARS = int(
+                os.environ.get("SUB_AGENT_MAX_RESULT_CHARS", "8000")
+            )
 
             if _runtime == "github-copilot" and hasattr(agent, "run"):
                 # Resolve model with priority:
@@ -802,7 +799,30 @@ async def _run_sub_agent_streaming(
                         "delta": final_text,
                     })
 
-            return "".join(text_parts) or f"({agent_name!r} returned an empty response)"
+            # ── Technique #5: sub-agent result compression ───────────────
+            # Anthropic multi-agent research: sub-agents explore with 10k+
+            # tokens but the parent only needs a 1-2k summary.  Cap here to
+            # prevent single sub-agent calls from bloating the orchestrator.
+            raw_result = "\n".join(text_parts)
+            if not raw_result:
+                return f"({agent_name!r} returned an empty response)"
+            if len(raw_result) > _MAX_SUB_RESULT_CHARS:
+                trimmed = raw_result[:_MAX_SUB_RESULT_CHARS]
+                last_nl = trimmed.rfind("\n")
+                if last_nl > _MAX_SUB_RESULT_CHARS // 2:
+                    trimmed = trimmed[:last_nl]
+                _log.debug(
+                    "executor.sub_agent_result_truncated",
+                    agent=agent_name,
+                    original=len(raw_result),
+                    capped=_MAX_SUB_RESULT_CHARS,
+                )
+                return (
+                    trimmed
+                    + f"\n\n[Sub-agent result truncated to"
+                    f" {_MAX_SUB_RESULT_CHARS} chars]"
+                )
+            return raw_result
 
     except Exception as exc:  # noqa: BLE001
         await event_queue.put({
@@ -1151,7 +1171,10 @@ async def run_agent(
                 )
 
             agents = loaded.build_agents()
-            _inject_agent_tools(agents)  # inject call_agent / call_agent_background
+            _inject_agent_tools(
+                agents,
+                tool_scope=loaded.config.get("tool_scope") or None,
+            )  # inject call_agent / call_agent_background
 
             # Set write_artifact context + ensure visible workspace dirs exist.
             try:
@@ -1428,7 +1451,10 @@ async def run_agent_stream(
             )
             _inject_integrations_to_env(integrations)
             agents = loaded.build_agents()
-            _inject_agent_tools(agents)  # inject call_agent / call_agent_background
+            _inject_agent_tools(
+                agents,
+                tool_scope=loaded.config.get("tool_scope") or None,
+            )  # inject call_agent / call_agent_background
             # Inject MCP servers from the registry into every agent at runtime
             for _a in agents:
                 await _inject_mcp_servers(_a, agent_name)
@@ -1678,7 +1704,7 @@ async def run_agent_stream(
                     _prior = event_payload.get("messages") or []
                     if _prior:
                         _history_lines: list[str] = []
-                        for m in _prior[-20:]:  # last 10 exchanges
+                        for m in _prior[-12:]:  # last 6 exchanges
                             role = m.get("role", "user")
                             content = (m.get("content") or "").strip()
                             if not content:
@@ -1687,8 +1713,8 @@ async def run_agent_stream(
                                 "User" if role == "user" else "Assistant"
                             )
                             short = (
-                                content if len(content) <= 300
-                                else content[:300] + "..."
+                                content if len(content) <= 200
+                                else content[:200] + "..."
                             )
                             _history_lines.append(f"{label}: {short}")
                         if _history_lines:
@@ -2813,18 +2839,26 @@ def _build_event_message(
         parts.append("## Memory from past conversations\n" + memory_ctx)
     if history:
         history_lines: list[str] = []
-        # Cap at last 20 messages (10 exchanges) to avoid context/payload limits.
-        for m in history[-20:]:
+        # Cap at last 16 messages (8 exchanges) to avoid context/payload limits.
+        # Technique #1 (tool result clearing): strip raw tool-call JSON from old
+        # assistant messages — the LLM doesn't need to re-read 5k-token API
+        # dumps that are deep in history; only final prose answers matter.
+        _sliced = history[-16:]
+        total = len(_sliced)
+        for idx, m in enumerate(_sliced):
             role = m.get("role", "user")
             content = (m.get("content") or "").strip()
             if not content:
                 continue
-            # Skip the current message if it's already in history (frontend may append it)
+            # Skip the current message if it's already in history
             if role == "user" and content == current_msg.strip():
                 continue
             label = "User" if role == "user" else "Assistant"
-            # Truncate very long assistant messages (e.g. tool output dumps)
-            short = content if len(content) <= 800 else content[:800] + "…"
+            # For older messages (not last 3), strip embedded tool result blocks
+            is_recent = idx >= total - 3
+            if not is_recent and role == "assistant":
+                content = _TOOL_RESULT_RE.sub("", content).strip()
+            short = content if len(content) <= 600 else content[:600] + "…"
             history_lines.append(f"{label}: {short}")
         if history_lines:
             parts.append("Conversation history:\n" + "\n".join(history_lines))

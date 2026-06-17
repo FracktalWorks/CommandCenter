@@ -42,6 +42,8 @@ function readDynamicAgentsFallback(): AgentEntry[] {
 
 export interface AgentEntry {
   name: string;
+  /** Human-readable alias shown in the UI. Falls back to ``name`` when empty. */
+  display_name?: string | null;
   description: string;
   tags: string[];
   status: string;

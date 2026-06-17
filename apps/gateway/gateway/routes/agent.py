@@ -230,25 +230,27 @@ def _load_dynamic_agents() -> list[dict]:
         with get_session() as s:
             rows = s.execute(
                 text(
-                    "SELECT name, description, tags, status, agent_runtime, "
-                    "repo_url, repo_name, local_path, integrations, "
-                    "optional_integrations FROM dynamic_agents ORDER BY name"
+                    "SELECT name, display_name, description, tags, status, "
+                    "agent_runtime, repo_url, repo_name, local_path, "
+                    "integrations, optional_integrations "
+                    "FROM dynamic_agents ORDER BY name"
                 )
             ).fetchall()
         if rows:
             return [
                 {
                     "name": (r[0] or "").strip(),
-                    "description": (r[1] or "").strip(),
-                    "tags": r[2] if isinstance(r[2], list) else [],
-                    "status": (r[3] or "live").strip(),
-                    "agent_runtime": (r[4] or "maf").strip(),
-                    "repo_url": (r[5] or "").strip() or None,
-                    "repo_name": (r[6] or "").strip() or None,
-                    "local_path": (r[7] or "").strip() or None,
-                    "integrations": r[8] if isinstance(r[8], list) else [],
+                    "display_name": (r[1] or "").strip() or None,
+                    "description": (r[2] or "").strip(),
+                    "tags": r[3] if isinstance(r[3], list) else [],
+                    "status": (r[4] or "live").strip(),
+                    "agent_runtime": (r[5] or "maf").strip(),
+                    "repo_url": (r[6] or "").strip() or None,
+                    "repo_name": (r[7] or "").strip() or None,
+                    "local_path": (r[8] or "").strip() or None,
+                    "integrations": r[9] if isinstance(r[9], list) else [],
                     "optional_integrations": (
-                        r[9] if isinstance(r[9], list) else []
+                        r[10] if isinstance(r[10], list) else []
                     ),
                     "dynamic": True,
                 }
@@ -370,12 +372,13 @@ def _save_dynamic_agents(agents: list[dict]) -> None:
                 s.execute(
                     text(
                         "INSERT INTO dynamic_agents "
-                        "(name, description, tags, status, agent_runtime, "
-                        "repo_url, repo_name, local_path, integrations, "
-                        "optional_integrations, updated_at) "
-                        "VALUES (:n,:d,:t::jsonb,:s,:r,:ru,:rn,:lp,"
+                        "(name, display_name, description, tags, status, "
+                        "agent_runtime, repo_url, repo_name, local_path, "
+                        "integrations, optional_integrations, updated_at) "
+                        "VALUES (:n,:dn,:d,:t::jsonb,:s,:r,:ru,:rn,:lp,"
                         ":i::jsonb,:oi::jsonb,now()) "
                         "ON CONFLICT (name) DO UPDATE SET "
+                        "display_name=EXCLUDED.display_name, "
                         "description=EXCLUDED.description, "
                         "tags=EXCLUDED.tags, "
                         "status=EXCLUDED.status, "
@@ -388,7 +391,9 @@ def _save_dynamic_agents(agents: list[dict]) -> None:
                         "updated_at=now()"
                     ),
                     {
-                        "n": a["name"], "d": a.get("description", ""),
+                        "n": a["name"],
+                        "dn": a.get("display_name") or None,
+                        "d": a.get("description", ""),
                         "t": _json.dumps(a.get("tags", [])),
                         "s": a.get("status", "live"),
                         "r": a.get("agent_runtime", "maf"),
@@ -480,6 +485,9 @@ _WEBHOOK_ROUTES: dict[tuple[str, str], str] = {
 class RegisterAgentRequest(BaseModel):
     name: str
     """Unique slug, e.g. ``"my-agent"``."""
+    display_name: str = ""
+    """Human-readable alias shown in the UI (e.g. "Sales Assistant").
+    When empty the raw ``name`` is displayed instead."""
     description: str = ""
     repo_url: str = ""
     """GitHub repo as ``owner/repo`` or full ``https://github.com/owner/repo`` URL."""
@@ -834,6 +842,7 @@ async def register_agent(
 
     entry: dict = {
         "name": req.name,
+        "display_name": req.display_name or None,
         "description": description,
         "tags": tags,
         "status": "live",

@@ -446,6 +446,7 @@ interface AgentConfig {
 interface FormValues {
   repoUrl: string;
   name: string;
+  displayName: string;
   description: string;
   tags: string;
   integrations: string;
@@ -497,6 +498,7 @@ function AddAgentModal({
   const [form, setForm] = useState<FormValues>({
     repoUrl: "",
     name: "",
+    displayName: "",
     description: "",
     tags: "",
     integrations: "",
@@ -614,6 +616,7 @@ function AddAgentModal({
       const isLocal = /^([A-Za-z]:[\\/]|\/)/.test(rawInput);
       const body: Record<string, unknown> = {
         name: form.name.trim(),
+        display_name: form.displayName.trim() || undefined,
         description: form.description.trim(),
         tags: parseCsv(form.tags),
         integrations: parseCsv(form.integrations),
@@ -721,6 +724,22 @@ function AddAgentModal({
                   />
                   <p className="mt-1 text-xs text-muted-foreground">lowercase, hyphens only</p>
                 </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                    Display name
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="My Agent"
+                    value={form.displayName}
+                    onChange={(e) => handleField("displayName", e.target.value)}
+                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">human-readable alias (optional)</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1 block text-xs font-medium text-muted-foreground">Tags</label>
                   <input
@@ -846,7 +865,7 @@ function AddAgentModal({
               {/* Mini agent card preview — same style as AgentCard */}
               <div className="rounded-xl border border-border bg-secondary/60 p-4">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
-                  <span className="text-sm font-semibold text-foreground">{addedAgent.name}</span>
+                  <span className="text-sm font-semibold text-foreground">{addedAgent.display_name || addedAgent.name}</span>
                   <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">custom</span>
                   {addedAgent.local_path && (
                     <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">local</span>
@@ -1075,7 +1094,7 @@ function AgentTile({
           }
         />
       </div>
-      <div className="font-medium text-sm text-foreground leading-tight">{agent.name}</div>
+      <div className="font-medium text-sm text-foreground leading-tight">{agent.display_name || agent.name}</div>
       <div className={`text-[10px] mt-0.5 ${
         readiness === "ready"   ? "text-success" :
         readiness === "blocked" ? "text-warning"  : "text-muted-foreground"
@@ -1155,7 +1174,7 @@ function AgentSidePanel({
         <div className="flex items-start gap-3">
           <Icon size={36} className={`${color} mt-0.5 shrink-0`} />
           <div>
-            <div className="font-semibold text-foreground text-base">{agent.name}</div>
+            <div className="font-semibold text-foreground text-base">{agent.display_name || agent.name}</div>
             <div className="flex items-center gap-1.5 mt-1 flex-wrap">
               {agent.agent_runtime === "github-copilot" ? (
                 <>
@@ -1469,7 +1488,7 @@ export default function AgentsPage() {
                       const color = getAgentColor(selectedAgent);
                       return <Icon size={20} className={color} />;
                     })()}
-                    <span className="text-sm font-semibold truncate">{selectedAgent.name}</span>
+                    <span className="text-sm font-semibold truncate">{selectedAgent.display_name || selectedAgent.name}</span>
                   </div>
                   <button onClick={() => setSelected(null)} className="p-1 rounded-md hover:bg-secondary text-muted-foreground shrink-0">
                     <X size={16} />

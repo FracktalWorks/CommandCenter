@@ -136,7 +136,7 @@ function AgentPickerModal({
                     className="w-full text-left rounded-lg border border-border bg-secondary/40 px-4 py-3 hover:border-primary/30 hover:bg-secondary tech-transition"
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-                      <div className="text-sm font-medium text-foreground truncate">{a.name}</div>
+                      <div className="text-sm font-medium text-foreground truncate">{a.display_name || a.name}</div>
                       <div className="flex items-center gap-1.5 flex-wrap shrink-0">
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-primary/40 bg-primary/10 text-primary whitespace-nowrap">
                           Copilot SDK
@@ -178,7 +178,7 @@ function AgentPickerModal({
                     className="w-full text-left rounded-lg border border-border bg-secondary/40 px-4 py-3 hover:border-primary/30 hover:bg-secondary tech-transition"
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-                      <div className="text-sm font-medium text-foreground truncate">{a.name}</div>
+                      <div className="text-sm font-medium text-foreground truncate">{a.display_name || a.name}</div>
                       <div className="flex items-center gap-1.5 flex-wrap shrink-0">
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-accent/40 bg-accent/10 text-accent whitespace-nowrap">
                           MAF

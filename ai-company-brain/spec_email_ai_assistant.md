@@ -390,3 +390,185 @@ src/app/email/
 - [ ] Email send/reply/forward works through connected accounts
 - [ ] Full-text search returns results across all accounts in < 2 seconds
 - [ ] Mobile-responsive layout works on iOS and Android
+
+---
+
+## 12. Competitive Analysis — Inbox Zero (elie222/inbox-zero)
+
+*Analysis date: 2026-06-17*
+
+### Overview
+
+[Inbox Zero](https://github.com/elie222/inbox-zero) is the leading open-source AI email assistant
+(11.3k stars, 1.4k forks). It's a TypeScript monorepo (Next.js + Prisma + Tailwind +
+shadcn/ui + Turborepo) supporting Gmail and Microsoft 365 via OAuth.
+
+**Tech stack:** Next.js App Router, Prisma (Postgres), Upstash Redis, Tinybird (analytics),
+OpenAI / Anthropic / Google AI / Groq / Ollama for AI, Resend for transactional email.
+
+**License:** AGPL v3 + commercial restrictions (cannot monetize without permission,
+enterprise license required for 5+ business users). **We CANNOT reuse their code directly**
+for CommandCenter. Patterns and ideas are informative.
+
+### Feature Comparison
+
+| Feature | Inbox Zero | Our Email App (Planned) | Priority to Add |
+|---------|-----------|------------------------|-----------------|
+| Multi-account Gmail | ✅ | ✅ | — |
+| Microsoft 365 support | ✅ | ✅ | — |
+| AI email classification | ✅ AI Rules engine | ❌ | HIGH |
+| Cold email blocker | ✅ LLM-based detection | ❌ | HIGH |
+| Bulk unsubscribe | ✅ One-click unsub+archive | ❌ Quick action only | HIGH |
+| Bulk archive | ✅ Archive old emails | ❌ | MEDIUM |
+| Reply tracking | ✅ (Reply Zero) | ❌ | HIGH |
+| AI reply drafting | ✅ Tone-aware drafts | 🔲 Skeleton | HIGH |
+| Meeting briefs | ✅ Email+calendar context | ❌ | LOW (later) |
+| Smart attachment filing | ✅ → Google Drive/OneDrive | ❌ | LOW (later) |
+| Email analytics | ✅ Trends, activity stats | ❌ | MEDIUM |
+| Slack/Telegram integration | ✅ Chat from messaging apps | ❌ | MEDIUM |
+| Gmail Pub/Sub webhooks | ✅ Real-time push | 🔲 Polling first | MEDIUM |
+
+### Reusable Architecture Patterns (ideas, not code)
+
+#### 1. AI Rules Engine — Plain English → Structured Rules
+
+Inbox Zero's approach: user writes plain English rules in a "prompt file" →
+parsed into structured database rules → LLM evaluates conditions → executes
+static actions. This two-layer design (human-readable prompt → machine-executable
+rules) is the right architecture for explainable AI email handling.
+
+**Our adaptation:**
+- MAF agent `agent-email-assistant` gets a `process_rules` tool
+- Rules stored in Postgres `email_rules` table with: condition (NL), action type
+  (archive/label/reply/forward/flag), action params, priority, enabled flag
+- On each new email (via sync or webhook), the agent evaluates rules and proposes
+  actions for HITL approval (consistent with CommandCenter Action Broker model)
+
+#### 2. Cold Email Blocker — First-Time Sender LLM Classification
+
+Inbox Zero monitors incoming emails, checks if sender has ever been replied to,
+and if not, runs the email through an LLM to classify as cold/spam. This is
+separate from their main AI rules engine.
+
+**Our adaptation:**
+- `email_messages` table already tracks `from_address` — can query reply history
+- New tool: `detect_cold_email(email_id)` → calls LLM with structured prompt
+- Automatically labels cold emails; user can whitelist senders
+- Whitelist stored in `email_sender_whitelist` table
+
+#### 3. Bulk Unsubscribe — Newsletter Detection + One-Click Actions
+
+Inbox Zero uses Tinybird analytics to identify newsletter patterns (frequency,
+engagement), then presents a UI to unsubscribe and archive in bulk.
+
+**Our adaptation (without Tinybird):**
+- SQL query on `email_messages` to find senders with >5 emails, 0 replies, low
+  open rates → classify as "newsletter"
+- `suggest_unsubscribes` tool already exists — enhance with sender frequency data
+- Bulk action: select multiple senders → generate unsubscribe requests / auto-archive
+
+#### 4. Reply Tracking (Reply Zero)
+
+Inbox Zero tracks emails that need a response and those awaiting responses.
+Implemented as a special AI rule type.
+
+**Our adaptation:**
+- SQL query: emails where `is_read=true`, sent to user, no reply from user within
+  N days, not archived
+- New tool: `find_needing_reply(days=3)` → returns list with priority
+- Integrates with `draft_reply` — one click from "needs reply" to draft
+- Dashboard widget: "Awaiting your reply (N)"
+
+#### 5. Gmail Pub/Sub Watch — Real-Time Notifications
+
+Inbox Zero uses Gmail's `users.watch()` API to receive push notifications via
+Google Cloud Pub/Sub when new emails arrive, rather than polling.
+
+**Our adaptation (Phase 2+):**
+- Gmail provider already has watch scaffolding
+- Need: Google Cloud Pub/Sub topic + subscription → webhook endpoint
+- Gateway route: `POST /email/webhook/gmail` — receives Pub/Sub push
+- On push: trigger incremental sync for that account
+- Benefit: near-instant email delivery, zero polling API quota usage
+
+#### 6. Batch Gmail Operations
+
+Inbox Zero has robust batching for archive/delete/label operations
+(`batch.ts`, `batch-with-retry.ts`) with exponential backoff.
+
+**Our adaptation:**
+- Enhance Gmail provider with batch operations
+- `bulk_archive(message_ids: list[str])` — batch modify with remove INBOX label
+- `bulk_label(message_ids, add_labels, remove_labels)` — batch label changes
+- Retry with exponential backoff on 429/503 errors
+
+#### 7. Email Content Decoding
+
+Inbox Zero handles quoted-printable, base64, multipart MIME, and HTML email
+bodies robustly (`decode.ts`, `content-sanitizer.ts`).
+
+**Our adaptation:**
+- Enhance `GmailProvider._parse_gmail_message()` with proper MIME parsing
+- Handle multipart/alternative (prefer text/plain, fallback to text/html→text)
+- Sanitize HTML to plain text for AI processing (strip tags, decode entities)
+- Preserve reply chains for context when drafting replies
+
+#### 8. Prompt Engineering Patterns
+
+Inbox Zero uses structured, use-case-specific LLM prompts with clear output
+schemas. Key prompts to study:
+- `choose-rule/` — matching emails to user-defined rules
+- `categorize-sender/` — classifying sender types
+- `reply/` — drafting replies with tone/style options
+- `digest/` — generating email summaries
+
+**Our adaptation:**
+- Already defined in `instructions.md` — enhance with structured output formats
+- Add JSON output schemas for rule matching: `{matched: bool, rule_id: str, confidence: float}`
+- Add tone/style parameters to `draft_reply` tool (formal/casual/concise/detailed)
+
+---
+
+## 13. Revised Implementation Phases
+
+### Phase 1: Foundation ✅ COMPLETE (2026-06-17)
+
+- [x] Project plan document
+- [x] Port Figma frontend into workbench `/email`
+- [x] `email_accounts` + `email_messages` DB schema
+- [x] Gateway email routes skeleton
+- [x] Email provider abstraction (`apps/email_ingestion/`)
+- [x] Gmail + Outlook provider implementations
+- [x] Gmail OAuth flow skeleton
+- [x] Email assistant agent skeleton (`apps/agent-email-assistant/`)
+- [x] Mobile-responsive layout with global bottom nav
+- [x] DOX chain updated
+
+### Phase 2: Core Email Reading + AI Classification (target: M3)
+
+- [ ] Real Gmail OAuth: Google Cloud Console project → live OAuth flow
+- [ ] Real Microsoft OAuth: Azure App Registration → live OAuth flow
+- [ ] Live email sync: Gmail history.list + Outlook delta queries → Postgres
+- [ ] **Cold email blocker**: first-time sender LLM classification
+- [ ] **Bulk unsubscribe**: newsletter detection + one-click unsubscribe suggestions
+- [ ] Email list/detail connected to real data (replace mock)
+- [ ] Search across accounts via Postgres FTS
+
+### Phase 3: AI Reply + Actions (target: M3)
+
+- [ ] **AI reply drafting**: tone-aware drafts with email context
+- [ ] **Reply tracking**: find emails needing response, track awaiting replies
+- [ ] Send/reply/forward via Gmail API + Microsoft Graph
+- [ ] **AI Rules Engine (v1)**: simple NL rules → label/archive actions
+- [ ] Batch operations: bulk archive, bulk label, bulk mark-read
+- [ ] AI chat panel connected to live agent streaming
+
+### Phase 4: Real-Time + Polish (target: M4)
+
+- [ ] **Gmail Pub/Sub push notifications** → instant sync
+- [ ] Outlook webhooks → instant sync
+- [ ] Attachment handling (download, preview, save to Drive)
+- [ ] Email analytics dashboard (volume, response time, top senders)
+- [ ] Slack integration: manage inbox from Slack
+- [ ] Email templates + scheduled send
+- [ ] Offline support (service worker cache)

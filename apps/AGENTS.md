@@ -8,6 +8,7 @@ and dynamically loadable agent definitions.
 - gateway/ -- FastAPI entry point, AG-UI chat, agent routes, OAuth, integration credential management (DB-backed, encrypted at rest), MCP server registry, plugin registry
 - orchestrator/ -- Agent execution engine, mutation layer, MAF integration
 - ingestion/ -- ClickUp/Zoho webhook receivers, MCP servers
+- email_ingestion/ -- Multi-provider email sync engine (Gmail, Microsoft 365, IMAP)
 - reconciler/ -- Nightly source-of-truth diff and escalation
 
 ## Agent Definitions (dynamically loaded at runtime)
@@ -15,6 +16,7 @@ and dynamically loadable agent definitions.
 - agent-cc-dev/ -- Developer agent with full access to the CC repo. GitHubCopilotAgent with native file ops, shell, git.
 - agent-task-manager/ -- ClickUp task management
 - agent-apis-config/ -- API discovery and configuration assistant
+- agent-email-assistant/ -- Email AI assistant: read, search, summarize, draft replies across Gmail and Microsoft accounts
 - skill-clickup-sync/ -- ClickUp read/write MCP skill
 
 ## Conventions

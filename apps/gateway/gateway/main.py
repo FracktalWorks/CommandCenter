@@ -356,6 +356,13 @@ try:
 except Exception:  # pragma: no cover
     pass
 
+try:
+    from gateway.routes.email import router as _email_router
+
+    app.include_router(_email_router)
+except Exception:  # pragma: no cover
+    pass
+
 # ---------- Health ----------
 
 class Health(BaseModel):

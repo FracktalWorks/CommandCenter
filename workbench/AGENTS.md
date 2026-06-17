@@ -4,7 +4,8 @@
 Control Plane (Next.js browser UI) and local development tools.
 
 ## Structure
-- control_plane/ -- Next.js app (chat, agents, integrations, settings)
+- control_plane/ -- Next.js app (chat, email, agents, integrations, settings)
+- control_plane/src/app/email/ -- Email AI Assistant: 4-panel email client (accounts sidebar, email list, email detail, AI chat) with multi-account Gmail/Microsoft support
 - control_plane/src/components/AppShell.tsx -- Responsive shell: desktop Sidebar vs mobile top bar + unified slide-in drawer via useMobileDrawer() context
 - control_plane/src/components/ViewModeProvider.tsx -- Mobile/desktop view decision + "Request desktop" toggle (persisted)
 - control_plane/src/lib/nav.ts -- Shared primary navigation config (used by Sidebar + mobile drawer)

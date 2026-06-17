@@ -1,0 +1,157 @@
+"""Abstract base class for email providers.
+
+All email providers (Gmail, Microsoft Graph, IMAP) implement this interface.
+The sync engine calls these methods without knowing the provider details.
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
+
+
+@dataclass
+class EmailAddress:
+    name: str
+    email: str
+
+
+@dataclass
+class Attachment:
+    id: str
+    filename: str
+    mime_type: str
+    size_bytes: int
+    provider_attachment_id: str
+
+
+@dataclass
+class EmailMessage:
+    """Normalized email message across all providers."""
+    provider_message_id: str
+    thread_id: str | None
+    folder: str
+    labels: list[str] = field(default_factory=list)
+    from_address: EmailAddress | None = None
+    to_addresses: list[EmailAddress] = field(default_factory=list)
+    cc_addresses: list[EmailAddress] = field(default_factory=list)
+    bcc_addresses: list[EmailAddress] = field(default_factory=list)
+    subject: str = ""
+    body_text: str = ""
+    body_html: str | None = None
+    snippet: str = ""
+    has_attachments: bool = False
+    attachments: list[Attachment] = field(default_factory=list)
+    is_read: bool = False
+    is_starred: bool = False
+    is_flagged: bool = False
+    received_at: datetime | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class EmailFolder:
+    """Normalized folder/label."""
+    provider_folder_id: str
+    name: str
+    type: str  # 'system' | 'user'
+    message_count: int = 0
+    unread_count: int = 0
+
+
+@dataclass
+class SyncResult:
+    """Result of a sync operation."""
+    messages_synced: int = 0
+    messages_skipped: int = 0
+    new_history_id: str | None = None
+    errors: list[str] = field(default_factory=list)
+
+
+class BaseEmailProvider(ABC):
+    """Abstract email provider interface."""
+
+    def __init__(self, credentials: dict[str, Any]):
+        self.credentials = credentials
+
+    @abstractmethod
+    async def authenticate(self) -> bool:
+        """Validate credentials and obtain an access token.
+
+        Returns True if authentication succeeded.
+        """
+        ...
+
+    @abstractmethod
+    async def list_folders(self) -> list[EmailFolder]:
+        """List all folders/labels for the account."""
+        ...
+
+    @abstractmethod
+    async def list_messages(
+        self,
+        folder: str = "INBOX",
+        query: str | None = None,
+        max_results: int = 50,
+        page_token: str | None = None,
+    ) -> tuple[list[EmailMessage], str | None]:
+        """List email headers (without full body) for a folder.
+
+        Returns (messages, next_page_token).
+        """
+        ...
+
+    @abstractmethod
+    async def get_message(self, provider_message_id: str) -> EmailMessage:
+        """Get full email message including body."""
+        ...
+
+    @abstractmethod
+    async def send_message(
+        self,
+        to: list[str],
+        subject: str,
+        body_text: str,
+        body_html: str | None = None,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        reply_to_message_id: str | None = None,
+    ) -> str:
+        """Send an email. Returns the provider message ID of the sent message."""
+        ...
+
+    @abstractmethod
+    async def modify_message(
+        self,
+        provider_message_id: str,
+        add_labels: list[str] | None = None,
+        remove_labels: list[str] | None = None,
+    ) -> None:
+        """Modify labels/read-state on a message."""
+        ...
+
+    @abstractmethod
+    async def trash_message(self, provider_message_id: str) -> None:
+        """Move message to trash."""
+        ...
+
+    @abstractmethod
+    async def sync_messages(
+        self,
+        history_id: str | None = None,
+        max_results: int = 100,
+    ) -> SyncResult:
+        """Incremental sync — fetch new/updated messages since history_id.
+
+        If history_id is None, performs an initial full sync.
+        """
+        ...
+
+    @abstractmethod
+    async def get_attachment(
+        self, provider_message_id: str, provider_attachment_id: str
+    ) -> bytes:
+        """Download an attachment's raw bytes."""
+        ...

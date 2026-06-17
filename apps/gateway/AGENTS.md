@@ -20,7 +20,8 @@ webhook receivers, OAuth callbacks, and the Control Plane API.
 5. routes/integrations.py — Integration Registry management, MCP server CRUD, Plugin install/remove
 6. routes/memory.py -- Memory search and management endpoints
 7. routes/settings.py -- LLM settings, model config
-8. agents.json -- Dynamic agent registry (persisted alongside pyproject.toml)
+8. routes/email.py -- Email account CRUD, message listing/search, send, sync, AI chat, OAuth flow for Gmail/Microsoft
+9. agents.json -- Dynamic agent registry (persisted alongside pyproject.toml)
 
 ## Work Guidance
 

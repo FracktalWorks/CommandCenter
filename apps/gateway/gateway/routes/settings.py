@@ -640,23 +640,22 @@ async def update_tier(
     if req.tier_name not in _TIER_LABELS:
         raise HTTPException(status_code=400, detail=f"Unknown tier: {req.tier_name}")
 
-    # ── Validate model is recognised by litellm ──────────────────────────
-    # Reject model names that litellm doesn't know about (e.g. made-up names
-    # like "deepseek/deepseek-v4-flash").  Unknown models cause litellm to
-    # silently fall back through OpenRouter or other providers, hitting
-    # unexpected token limits and breaking long conversations.
+    # ── Dynamically register model with litellm ───────────────────────────
+    # Instead of blocking unknown models, register them dynamically so they
+    # route through the correct provider (e.g. deepseek/ → DeepSeek API).
+    # This keeps the model catalogue dynamic — new provider models work
+    # immediately without waiting for a litellm release.
     if not req.model.startswith("github/") and not req.api_base:
-        from acb_llm.client import is_known_model
-        if not is_known_model(req.model):
+        from acb_llm.client import ensure_model_registered
+        provider = ensure_model_registered(req.model)
+        if provider is None:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"Unknown model {req.model!r}.  "
-                    f"This model is not recognised by litellm.  "
-                    f"Use a standard provider/model name like "
-                    f"'deepseek/deepseek-chat', 'groq/llama-3.3-70b', "
-                    f"or check https://docs.litellm.ai/docs/providers "
-                    f"for supported models."
+                    f"Unknown provider prefix for model {req.model!r}.  "
+                    f"Use a recognised prefix like 'deepseek/', 'openai/', "
+                    f"'anthropic/', 'groq/', 'gemini/', 'mistral/', "
+                    f"'openrouter/', or 'github/'."
                 ),
             )
 

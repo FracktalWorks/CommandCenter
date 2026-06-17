@@ -66,6 +66,10 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
 
     from litellm import acompletion  # type: ignore[import-untyped]
 
+    # Dynamically register model so new provider models route correctly.
+    from acb_llm.client import ensure_model_registered
+    ensure_model_registered(model)
+
     common: dict[str, Any] = {
         "model": model,
         "messages": messages,

@@ -110,24 +110,71 @@ class LLMTier(StrEnum):
     TIER_3 = "tier3"
 
 
-def is_known_model(model: str) -> bool:
-    """Check whether *model* is recognised by litellm's provider registry.
+def ensure_model_registered(model: str) -> str | None:
+    """Ensure *model* can be routed by litellm.
 
-    Returns True for known provider/model strings (e.g. ``deepseek/deepseek-chat``)
-    and False for unrecognised names that would cause litellm to silently fall
-    back to unknown routing (often through OpenRouter with unexpected limits).
+    If the model is already in litellm's registry, returns the provider name.
+    If it follows a known provider prefix (``deepseek/``, ``openai/``, etc.)
+    but isn't registered yet, adds it dynamically so litellm routes through
+    the correct API rather than silently falling back to OpenRouter.
+
+    Returns the provider name on success, or ``None`` if the model prefix
+    isn't recognised (caller should warn the user).
+
+    This keeps the model catalogue dynamic — new provider models work
+    immediately without waiting for a litellm or CommandCenter release.
     """
-    # Tier aliases are always known — they resolve via _TIER_MODEL.
-    if model.lower().startswith("tier"):
-        return True
-    # GitHub Copilot models use a github/… prefix handled specially.
-    if model.startswith("github/"):
-        return True
-    try:
-        from litellm import model_cost  # noqa: PLC0415
-        return model in model_cost
-    except ImportError:
-        return True  # can't validate — allow through
+    from litellm import model_cost  # noqa: PLC0415
+
+    # Already known — return the provider
+    if model in model_cost:
+        provider = model_cost[model].get("litellm_provider", "")
+        if provider:
+            return provider
+
+    # Map known prefixes to litellm providers.
+    # When a new model appears (e.g. deepseek/deepseek-v4-turbo), we
+    # register it under the correct provider so litellm calls the right
+    # API instead of guessing (and potentially falling back to OpenRouter).
+    _PREFIX_PROVIDER: dict[str, str] = {
+        "deepseek/": "deepseek",
+        "openai/": "openai",
+        "anthropic/": "anthropic",
+        "groq/": "groq",
+        "gemini/": "gemini",
+        "mistral/": "mistral",
+        "together_ai/": "together_ai",
+        "openrouter/": "openrouter",
+        "cohere/": "cohere",
+    }
+
+    for prefix, provider in _PREFIX_PROVIDER.items():
+        if model.startswith(prefix):
+            # Dynamic registration: add a minimal entry so litellm knows
+            # to route through this provider's API.
+            model_cost[model] = {
+                "litellm_provider": provider,
+                "mode": "chat",
+                "max_tokens": 32768,
+                "max_input_tokens": 262144,
+                "max_output_tokens": 32768,
+                "input_cost_per_token": 0,
+                "output_cost_per_token": 0,
+                "supports_function_calling": True,
+                "supports_parallel_function_calling": True,
+                "supports_native_streaming": True,
+                "supports_system_messages": True,
+                "supports_tool_choice": True,
+                "supports_response_schema": True,
+            }
+            _log.info(
+                "acb_llm.model_registered_dynamic",
+                model=model,
+                provider=provider,
+            )
+            return provider
+
+    return None  # unknown prefix — caller should warn
 
 
 async def complete(
@@ -146,6 +193,9 @@ async def complete(
     await _ensure_keys_loaded()
 
     model = _TIER_MODEL[tier.value]
+
+    # Dynamically register model so new provider models work immediately.
+    ensure_model_registered(model)
 
     last_exc: Exception | None = None
     for attempt in range(3):

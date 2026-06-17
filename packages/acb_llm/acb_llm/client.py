@@ -110,6 +110,26 @@ class LLMTier(StrEnum):
     TIER_3 = "tier3"
 
 
+def is_known_model(model: str) -> bool:
+    """Check whether *model* is recognised by litellm's provider registry.
+
+    Returns True for known provider/model strings (e.g. ``deepseek/deepseek-chat``)
+    and False for unrecognised names that would cause litellm to silently fall
+    back to unknown routing (often through OpenRouter with unexpected limits).
+    """
+    # Tier aliases are always known — they resolve via _TIER_MODEL.
+    if model.lower().startswith("tier"):
+        return True
+    # GitHub Copilot models use a github/… prefix handled specially.
+    if model.startswith("github/"):
+        return True
+    try:
+        from litellm import model_cost  # noqa: PLC0415
+        return model in model_cost
+    except ImportError:
+        return True  # can't validate — allow through
+
+
 async def complete(
     *,
     tier: LLMTier,

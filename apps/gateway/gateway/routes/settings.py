@@ -288,8 +288,9 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     "deepseek": [
         "deepseek/deepseek-chat",
         "deepseek/deepseek-reasoner",
-        "deepseek/deepseek-v4-pro",
-        "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-v3",
+        "deepseek/deepseek-v3.2",
+        "deepseek/deepseek-r1",
     ],
     "openrouter": [
         "openrouter/anthropic/claude-opus-4-5",
@@ -391,8 +392,9 @@ _MODEL_CAPABILITIES: dict[str, dict[str, Any]] = {
     # DeepSeek
     "deepseek/deepseek-chat":      {"label": "DeepSeek-V3",       "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192,  "desc": "General-purpose chat — strong coding and reasoning"},
     "deepseek/deepseek-reasoner":  {"label": "DeepSeek-R1",       "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 8192,  "desc": "Deep reasoning — chain-of-thought for complex problems"},
-    "deepseek/deepseek-v4-pro":   {"label": "DeepSeek-V4 Pro",   "vision": True,  "audio": False, "reasoning": True,  "context_window": 262_144, "max_output": 32768, "desc": "Latest flagship — MoE architecture, vision, 256K context"},
-    "deepseek/deepseek-v4-flash": {"label": "DeepSeek-V4 Flash", "vision": True,  "audio": False, "reasoning": False, "context_window": 262_144, "max_output": 16384, "desc": "Fast V4 variant — vision support, great for daily tasks"},
+    "deepseek/deepseek-v3":        {"label": "DeepSeek-V3",       "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192,  "desc": "DeepSeek-V3 — same as deepseek-chat alias"},
+    "deepseek/deepseek-v3.2":      {"label": "DeepSeek-V3.2",     "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192,  "desc": "DeepSeek-V3.2 — latest V3 revision"},
+    "deepseek/deepseek-r1":        {"label": "DeepSeek-R1",       "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 8192,  "desc": "DeepSeek-R1 — same as deepseek-reasoner alias"},
 
     # Groq
     "groq/llama-3.3-70b-versatile":    {"label": "Llama 3.3 70B",      "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192, "desc": "Meta's latest 70B — strong general-purpose model"},
@@ -637,6 +639,26 @@ async def update_tier(
 ) -> TierInfo:
     if req.tier_name not in _TIER_LABELS:
         raise HTTPException(status_code=400, detail=f"Unknown tier: {req.tier_name}")
+
+    # ── Validate model is recognised by litellm ──────────────────────────
+    # Reject model names that litellm doesn't know about (e.g. made-up names
+    # like "deepseek/deepseek-v4-flash").  Unknown models cause litellm to
+    # silently fall back through OpenRouter or other providers, hitting
+    # unexpected token limits and breaking long conversations.
+    if not req.model.startswith("github/") and not req.api_base:
+        from acb_llm.client import is_known_model
+        if not is_known_model(req.model):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Unknown model {req.model!r}.  "
+                    f"This model is not recognised by litellm.  "
+                    f"Use a standard provider/model name like "
+                    f"'deepseek/deepseek-chat', 'groq/llama-3.3-70b', "
+                    f"or check https://docs.litellm.ai/docs/providers "
+                    f"for supported models."
+                ),
+            )
 
     try:
         cfg = _load_config()

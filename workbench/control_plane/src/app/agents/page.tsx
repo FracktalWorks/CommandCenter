@@ -1140,6 +1140,8 @@ function AgentSidePanel({
   const [editingField, setEditingField] = useState<"display_name" | "description" | null>(null);
   const [editValue, setEditValue] = useState("");
   const [saving, setSaving] = useState(false);
+  const [hoverName, setHoverName] = useState(false);
+  const [hoverDesc, setHoverDesc] = useState(false);
 
   const startEdit = (field: "display_name" | "description") => {
     setEditingField(field);
@@ -1239,10 +1241,12 @@ function AgentSidePanel({
                   className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground hover:text-foreground">Cancel</button>
               </div>
             ) : (
-              <div className="flex items-center gap-1.5 group/name">
+              <div className="flex items-center gap-1.5"
+                onMouseEnter={() => setHoverName(true)}
+                onMouseLeave={() => setHoverName(false)}>
                 <div className="font-semibold text-foreground text-base truncate">{agent.display_name || agent.name}</div>
                 <button onClick={() => startEdit("display_name")}
-                  className="opacity-0 group-hover/name:opacity-100 text-muted-foreground hover:text-foreground p-0.5 rounded transition-all"
+                  className={`text-muted-foreground hover:text-foreground p-0.5 rounded transition-all ${hoverName ? "opacity-100" : "opacity-0"}`}
                   title="Edit display name">
                   <Pencil className="w-3 h-3" />
                 </button>
@@ -1291,14 +1295,16 @@ function AgentSidePanel({
             </div>
           </div>
         ) : (
-          <div className="group/desc">
+          <div className="group/desc"
+            onMouseEnter={() => setHoverDesc(true)}
+            onMouseLeave={() => setHoverDesc(false)}>
             {agent.description ? (
               <p className="text-sm text-muted-foreground leading-relaxed">{agent.description}</p>
             ) : (
               <p className="text-sm text-muted-foreground/50 italic">No description</p>
             )}
             <button onClick={() => startEdit("description")}
-              className="opacity-0 group-hover/desc:opacity-100 text-muted-foreground hover:text-foreground p-0.5 rounded transition-all mt-1"
+              className={`text-muted-foreground hover:text-foreground p-0.5 rounded transition-all mt-1 ${hoverDesc ? "opacity-100" : "opacity-0"}`}
               title="Edit description">
               <Pencil className="w-3 h-3" />
             </button>

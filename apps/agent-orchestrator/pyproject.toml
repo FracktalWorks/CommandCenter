@@ -3,10 +3,7 @@ name = "agent-orchestrator"
 version = "0.1.0"
 description = "CommandCenter orchestrator MAF agent"
 requires-python = ">=3.12"
-dependencies = [
-    "agent-framework",
-    "agent-framework-openai",
-]
+dependencies = []
 
 [build-system]
 requires = ["hatchling"]

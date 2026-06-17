@@ -3,9 +3,7 @@ name = "agent-cc-dev"
 version = "0.1.0"
 description = "CommandCenter developer agent (GitHub Copilot SDK)"
 requires-python = ">=3.12"
-dependencies = [
-    "agent-framework-github-copilot",
-]
+dependencies = []
 
 [build-system]
 requires = ["hatchling"]

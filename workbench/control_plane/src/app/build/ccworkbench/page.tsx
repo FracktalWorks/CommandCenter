@@ -122,7 +122,7 @@ export default function CCWorkbenchPage() {
 
       {viewerFile && (
         <ArtifactViewerModal
-          file={viewerFile}
+          entry={viewerFile}
           sessionId={activeSession.id}
           onClose={() => setViewerFile(null)}
         />

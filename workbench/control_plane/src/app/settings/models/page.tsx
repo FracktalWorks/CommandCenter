@@ -79,7 +79,7 @@ export default function ModelsPage() {
   const [editProvider, setEditProvider] = useState("");
   const [savingTier, setSavingTier] = useState(false);
   const [testingTier, setTestingTier] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<{ ok: boolean; text: string; ms: number } | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; text: string; ms: number; model: string } | null>(null);
 
   // ── Load config ──────────────────────────────────────────────────────────
   const loadConfig = useCallback(async () => {
@@ -222,8 +222,8 @@ export default function ModelsPage() {
     try {
       const res = await fetch("/api/settings/llm/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tier_name: tierName }) });
       const data = await res.json();
-      setTestResult({ ok: data.success, text: data.response, ms: data.latency_ms });
-    } catch (err) { setTestResult({ ok: false, text: String(err), ms: 0 }); }
+      setTestResult({ ok: data.success, text: data.response, ms: data.latency_ms, model: data.model ?? "" });
+    } catch (err) { setTestResult({ ok: false, text: String(err), ms: 0, model: "" }); }
     finally { setTestingTier(null); }
   };
 
@@ -531,7 +531,7 @@ export default function ModelsPage() {
 
                           {testResult && editingTier === null && testingTier === null && tier.tier_name === (config.tiers.find((t) => t.tier_name === tier.tier_name)?.tier_name) && (
                             <div className={`mx-4 mb-3 rounded-md border px-3 py-1.5 text-[10px] ${testResult.ok ? "border-success/30 bg-success/10 text-success" : "border-destructive/20 bg-destructive/5 text-destructive"}`}>
-                              {testResult.ok ? "✓" : "✗"} {testResult.text} · {testResult.ms}ms
+                              {testResult.ok ? "✓" : "✗"} {testResult.text} · {testResult.ms}ms{testResult.model ? ` · ${testResult.model}` : ""}
                             </div>
                           )}
 
@@ -602,7 +602,7 @@ export default function ModelsPage() {
 
                               {testResult && (
                                 <div className={`rounded-md border px-3 py-1.5 text-[10px] ${testResult.ok ? "border-success/30 bg-success/10 text-success" : "border-destructive/20 bg-destructive/5 text-destructive"}`}>
-                                  {testResult.ok ? "✓" : "✗"} {testResult.text} · {testResult.ms}ms
+                                  {testResult.ok ? "✓" : "✗"} {testResult.text} · {testResult.ms}ms{testResult.model ? ` · ${testResult.model}` : ""}
                                 </div>
                               )}
                             </div>

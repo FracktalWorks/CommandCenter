@@ -743,6 +743,7 @@ class TestResult(BaseModel):
     success: bool
     response: str
     latency_ms: int
+    model: str = ""  # resolved provider model (e.g. deepseek/deepseek-chat)
 
 
 @router.post("/llm/test", response_model=TestResult)
@@ -752,12 +753,14 @@ async def test_tier(
 ) -> TestResult:
     import time
 
-    from acb_llm.client import LLMTier, complete
+    from acb_llm.client import LLMTier, _TIER_MODEL, complete
 
     tier_map = {"tier-fast": "tier1", "tier-balanced": "tier2", "tier-powerful": "tier3"}
     tier_id = tier_map.get(req.tier_name)
     if not tier_id:
         raise HTTPException(status_code=400, detail=f"Unknown tier: {req.tier_name}")
+
+    resolved_model = _TIER_MODEL.get(tier_id, tier_id)
 
     t0 = time.monotonic()
     try:
@@ -767,10 +770,20 @@ async def test_tier(
             max_tokens=10,
         )
         elapsed = int((time.monotonic() - t0) * 1000)
-        return TestResult(success=True, response=(text or "").strip() or "(empty response)", latency_ms=elapsed)
+        return TestResult(
+            success=True,
+            response=(text or "").strip() or "(empty response)",
+            latency_ms=elapsed,
+            model=resolved_model,
+        )
     except Exception as exc:
         elapsed = int((time.monotonic() - t0) * 1000)
-        return TestResult(success=False, response=str(exc), latency_ms=elapsed)
+        return TestResult(
+            success=False,
+            response=str(exc),
+            latency_ms=elapsed,
+            model=resolved_model,
+        )
 
 
 # ---------------------------------------------------------------------------

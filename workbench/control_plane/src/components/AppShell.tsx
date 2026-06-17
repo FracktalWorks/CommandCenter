@@ -23,7 +23,7 @@ import {
   type ReactNode,
 } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { X, Monitor, Smartphone, MoreHorizontal, LogOut, Command } from "lucide-react";
+import { X, Monitor, Smartphone, MoreHorizontal, LogOut, Command, Mail, Sparkles } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useActiveSessions } from "@/hooks/useActiveSessions";
@@ -246,6 +246,11 @@ function MobileBottomNavInner({
   );
 
   const isChatPage = pathname?.startsWith("/chat") ?? false;
+  const isEmailPage = pathname?.startsWith("/email") ?? false;
+
+  const dispatchNav = (detail: string) => {
+    window.dispatchEvent(new CustomEvent("cc-mobile-nav", { detail }));
+  };
 
   return (
     <nav className="flex items-center justify-around py-1.5 px-2">
@@ -258,13 +263,35 @@ function MobileBottomNavInner({
           <MenuIcon size={22} />
           <span className="text-[10px] font-medium leading-none">Menu</span>
         </button>
+        {isEmailPage && (
+          <>
+            <button
+              onClick={() => dispatchNav("email-accounts")}
+              className="flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground min-w-[56px]"
+            >
+              <MenuIcon size={22} />
+              <span className="text-[10px] font-medium leading-none">Accounts</span>
+            </button>
+            <button
+              onClick={() => dispatchNav("email-inbox")}
+              className="flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors text-primary min-w-[56px]"
+            >
+              <Mail size={22} />
+              <span className="text-[10px] font-medium leading-none">Inbox</span>
+            </button>
+            <button
+              onClick={() => dispatchNav("email-ai")}
+              className="flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground min-w-[56px]"
+            >
+              <Sparkles size={22} />
+              <span className="text-[10px] font-medium leading-none">AI</span>
+            </button>
+          </>
+        )}
         {isChatPage && (
           <>
             <button
-              onClick={() => {
-                const ev = new CustomEvent("cc-mobile-nav", { detail: "chats" });
-                window.dispatchEvent(ev);
-              }}
+              onClick={() => dispatchNav("chats")}
               className="relative flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground min-w-[56px]"
             >
               <MessageCircle size={22} />
@@ -276,10 +303,7 @@ function MobileBottomNavInner({
               <span className="text-[10px] font-medium leading-none">Chats</span>
             </button>
             <button
-              onClick={() => {
-                const ev = new CustomEvent("cc-mobile-nav", { detail: "files" });
-                window.dispatchEvent(ev);
-              }}
+              onClick={() => dispatchNav("files")}
               className="flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground min-w-[56px]"
             >
               <FolderOpen size={22} />

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   PanelLeftClose,
   PanelLeftOpen,
@@ -8,9 +8,6 @@ import {
   PanelRight,
   Columns2,
   ArrowLeft,
-  Menu,
-  Mail,
-  Sparkles,
   Pencil,
 } from "lucide-react";
 import { useViewMode } from "@/components/ViewModeProvider";
@@ -24,7 +21,7 @@ import { MOCK_ACCOUNTS, MOCK_FOLDERS, MOCK_EMAILS } from "./lib/mockData";
 import { folderLabel } from "./lib/utils";
 
 export default function EmailPage() {
-  const { isMobile, mounted } = useViewMode();
+  const { isMobile } = useViewMode();
 
   // Desktop state
   const [leftOpen, setLeftOpen] = useState(true);
@@ -41,7 +38,6 @@ export default function EmailPage() {
 
   // Mobile-specific state
   const [mobileView, setMobileView] = useState<"inbox" | "detail">("inbox");
-  const [mobileActiveTab, setMobileActiveTab] = useState<"inbox" | "ai">("inbox");
 
   const { open: openDrawer, close: closeDrawer } = useMobileDrawer();
 
@@ -59,33 +55,50 @@ export default function EmailPage() {
 
   // ── Mobile drawer content builders ──
 
-  const openAccountsDrawer = useCallback(() => {
-    openDrawer(
-      <AccountSidebar
-        accounts={MOCK_ACCOUNTS}
-        selectedAccountId={selectedAccountId}
-        onAccountSelect={(id) => {
-          setSelectedAccountId(id);
-          const firstForAccount = MOCK_EMAILS.find(
-            (e) => e.folder === selectedFolder && e.accountId === id
-          );
-          setSelectedEmailId(firstForAccount?.id ?? null);
-          setMobileView("inbox");
-          closeDrawer();
-        }}
-        folders={MOCK_FOLDERS}
-        selectedFolder={selectedFolder}
-        onFolderSelect={(f) => {
-          setSelectedFolder(f);
-          setMobileView("inbox");
-          closeDrawer();
-        }}
-      />
-    );
-  }, [openDrawer, closeDrawer, selectedAccountId, selectedFolder]);
+  // Refs to hold drawer content so the event listener can open them.
+  const accountsDrawerRef = useRef<React.ReactNode>(null);
+  const aiDrawerRef = useRef<React.ReactNode>(null);
 
-  const openAIDrawer = useCallback(() => {
-    openDrawer(<AIChatPanel />);
+  // Build the drawer content (kept in refs so the event listener can access them).
+  accountsDrawerRef.current = (
+    <AccountSidebar
+      accounts={MOCK_ACCOUNTS}
+      selectedAccountId={selectedAccountId}
+      onAccountSelect={(id) => {
+        setSelectedAccountId(id);
+        const firstForAccount = MOCK_EMAILS.find(
+          (e) => e.folder === selectedFolder && e.accountId === id
+        );
+        setSelectedEmailId(firstForAccount?.id ?? null);
+        setMobileView("inbox");
+        closeDrawer();
+      }}
+      folders={MOCK_FOLDERS}
+      selectedFolder={selectedFolder}
+      onFolderSelect={(f) => {
+        setSelectedFolder(f);
+        setMobileView("inbox");
+        closeDrawer();
+      }}
+    />
+  );
+
+  aiDrawerRef.current = <AIChatPanel />;
+
+  // Listen for bottom-nav tab events from AppShell MobileBottomNav.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const tab = (e as CustomEvent<string>).detail;
+      if (tab === "email-accounts" && accountsDrawerRef.current) {
+        openDrawer(accountsDrawerRef.current);
+      } else if (tab === "email-inbox") {
+        setMobileView("inbox");
+      } else if (tab === "email-ai" && aiDrawerRef.current) {
+        openDrawer(aiDrawerRef.current);
+      }
+    };
+    window.addEventListener("cc-mobile-nav", handler);
+    return () => window.removeEventListener("cc-mobile-nav", handler);
   }, [openDrawer]);
 
   const handleEmailSelect = (id: string) => {
@@ -190,7 +203,11 @@ export default function EmailPage() {
         {isMobile && mobileView === "inbox" && (
           <div className="flex items-center justify-between px-3 py-2 border-b border-border flex-shrink-0 bg-card">
             <button
-              onClick={openAccountsDrawer}
+              onClick={() => {
+                window.dispatchEvent(
+                  new CustomEvent("cc-mobile-nav", { detail: "email-accounts" })
+                );
+              }}
               className="flex items-center gap-2 min-w-0 hover:opacity-80 transition-opacity"
             >
               {selectedAccount && (
@@ -283,46 +300,6 @@ export default function EmailPage() {
           }`}
         >
           {rightOpen && <AIChatPanel />}
-        </div>
-      )}
-
-      {/* ═══ MOBILE: Bottom tab bar ═══ */}
-      {isMobile && (
-        <div className="flex-shrink-0 border-t border-border bg-card/90 backdrop-blur pb-safe">
-          <nav className="flex items-center justify-around py-1.5 px-2">
-            <button
-              onClick={openAccountsDrawer}
-              className="flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors min-w-[56px] text-muted-foreground hover:text-foreground"
-            >
-              <Menu size={22} />
-              <span className="text-[10px] font-medium leading-none">Accounts</span>
-            </button>
-
-            <button
-              onClick={() => { setMobileActiveTab("inbox"); setMobileView("inbox"); }}
-              className={`flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors min-w-[56px] ${
-                mobileActiveTab === "inbox" ? "text-primary" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <Mail size={22} />
-              {unreadCount > 0 && (
-                <span className="absolute -top-0.5 right-2 flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-primary text-primary-foreground text-[9px] font-bold">
-                  {unreadCount}
-                </span>
-              )}
-              <span className="text-[10px] font-medium leading-none">Inbox</span>
-            </button>
-
-            <button
-              onClick={() => { setMobileActiveTab("ai"); openAIDrawer(); }}
-              className={`flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors min-w-[56px] ${
-                mobileActiveTab === "ai" ? "text-primary" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <Sparkles size={22} />
-              <span className="text-[10px] font-medium leading-none">AI</span>
-            </button>
-          </nav>
         </div>
       )}
 

@@ -220,7 +220,7 @@ async function translateAndPersistStream(
         } else if (t === "TODO_LIST") {
           // Structured todo list (VS Code Todos panel parity).
           todos = (ev.todos as { id: string; title: string; status: string }[]) ?? [];
-          out = { type: "todos", todos }; }
+          out = { type: "todos", todos };
         } else if (t === "TOOL_CALL_START") {
           const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
           toolNames[String(ev.toolCallId ?? "")] = name;

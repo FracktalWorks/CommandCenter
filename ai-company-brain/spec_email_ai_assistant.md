@@ -406,9 +406,11 @@ shadcn/ui + Turborepo) supporting Gmail and Microsoft 365 via OAuth.
 **Tech stack:** Next.js App Router, Prisma (Postgres), Upstash Redis, Tinybird (analytics),
 OpenAI / Anthropic / Google AI / Groq / Ollama for AI, Resend for transactional email.
 
-**License:** AGPL v3 + commercial restrictions (cannot monetize without permission,
-enterprise license required for 5+ business users). **We CANNOT reuse their code directly**
-for CommandCenter. Patterns and ideas are informative.
+**License:** AGPL v3 + commercial restrictions. Since CommandCenter is also free
+and open source (AGPLv3-compatible), we **CAN reuse their code** under the copyleft
+terms — any modifications we make must also be released under AGPLv3.
+
+### Porting Strategy: TypeScript → Python
 
 ### Feature Comparison
 
@@ -428,7 +430,145 @@ for CommandCenter. Patterns and ideas are informative.
 | Slack/Telegram integration | ✅ Chat from messaging apps | ❌ | MEDIUM |
 | Gmail Pub/Sub webhooks | ✅ Real-time push | 🔲 Polling first | MEDIUM |
 
-### Reusable Architecture Patterns (ideas, not code)
+### Code Files to Port (TypeScript → Python)
+
+Since CommandCenter is AGPLv3 free software, we can directly port the following
+Inbox Zero modules. Listed by priority with our Python destination.
+
+| Inbox Zero File | Our Python Destination | Lines | Value |
+|-----------------|----------------------|-------|-------|
+| `utils/ai/categorize-sender/ai-categorize-single-sender.ts` | `email_ingestion/providers/ai_categorize.py` | ~80 | Cold email LLM classification |
+| `utils/ai/choose-rule/ai-choose-rule.ts` | `email_ingestion/providers/ai_rules.py` | ~120 | Rule matching engine |
+| `utils/ai/choose-rule/match-rules.ts` | `email_ingestion/providers/ai_rules.py` | ~90 | Static rule matching (from/to/subject) |
+| `utils/ai/choose-rule/execute.ts` | `email_ingestion/providers/ai_rules.py` | ~100 | Execute matched actions |
+| `utils/ai/reply/draft-reply.ts` | `agent-email-assistant/agents.py` | ~150 | AI reply drafting with context |
+| `utils/ai/reply/reply-context-collector.ts` | `email_ingestion/providers/ai_reply.py` | ~80 | Gather thread context for replies |
+| `utils/ai/clean/draft-cleanup.ts` | `email_ingestion/providers/email_cleanup.py` | ~60 | Auto-cleanup old drafts |
+| `utils/gmail/mail.ts` | `email_ingestion/providers/gmail.py` | ~200 | Gmail send/reply/forward with retry |
+| `utils/gmail/batch.ts` | `email_ingestion/providers/gmail.py` | ~80 | Batch Gmail operations |
+| `utils/gmail/decode.ts` | `email_ingestion/providers/email_decode.py` | ~60 | MIME decoding + HTML→text |
+| `utils/gmail/watch.ts` | `email_ingestion/providers/gmail.py` | ~70 | Gmail Pub/Sub watch setup |
+| `utils/ai/choose-rule/bulk-process-emails.ts` | `email_ingestion/providers/ai_rules.py` | ~60 | Bulk rule evaluation |
+
+#### Prisma Schema → Our Postgres Schema
+
+Key tables from Inbox Zero's Prisma schema that map to our existing/new tables:
+
+| Inbox Zero Prisma Model | Our Postgres Table | Status |
+|------------------------|-------------------|--------|
+| `EmailAccount` | `email_accounts` | ✅ Exists |
+| `EmailMessage` | `email_messages` | ✅ Exists |
+| `Rule` + `Action` | `email_rules` + `email_actions` | 🔲 New — see §13.1 |
+| `ExecutedRule` + `ExecutedAction` | `email_executed_rules` + `email_executed_actions` | 🔲 New |
+| `Newsletter` | `email_newsletters` | 🔲 New |
+| `ColdEmail` (deprecated — migrating to GroupItem) | `email_cold_senders` | 🔲 New |
+| `ThreadTracker` | `email_thread_trackers` | 🔲 New |
+| `Group` + `GroupItem` | `email_sender_groups` + `email_sender_group_items` | 🔲 New |
+| `Category` | `email_sender_categories` | 🔲 New |
+| `Knowledge` | (use Mem0 memory tools) | ✅ Exists |
+| `ReplyMemory` | (use Mem0 memory tools) | ✅ Exists |
+| `CleanupJob` + `CleanupThread` | `email_cleanup_jobs` | 🔲 New |
+
+### New Tables to Add (Porting from Inbox Zero Schema)
+
+#### `email_rules` + `email_actions`
+
+```sql
+CREATE TABLE email_rules (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id UUID NOT NULL REFERENCES email_accounts(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    instructions TEXT,               -- Natural language rule description
+    enabled BOOLEAN DEFAULT true,
+    run_on_threads BOOLEAN DEFAULT false,
+    conditional_operator TEXT DEFAULT 'AND', -- 'AND' | 'OR'
+    -- Static conditions
+    from_pattern TEXT,               -- regex or exact match
+    to_pattern TEXT,
+    subject_pattern TEXT,
+    body_pattern TEXT,
+    -- AI conditions (instructions field above)
+    -- Category filter
+    category_filter_type TEXT,       -- 'INCLUDE' | 'EXCLUDE'
+    system_type TEXT,                -- 'REPLY_ZERO' | 'COLD_EMAIL' | etc.
+    prompt_text TEXT,                -- Natural language representation for prompt file sync
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(account_id, name)
+);
+
+CREATE TABLE email_actions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    rule_id UUID NOT NULL REFERENCES email_rules(id) ON DELETE CASCADE,
+    account_id UUID NOT NULL REFERENCES email_accounts(id) ON DELETE CASCADE,
+    type TEXT NOT NULL,              -- 'ARCHIVE' | 'LABEL' | 'REPLY' | 'SEND_EMAIL' | 'FORWARD' | 'DRAFT_EMAIL' | 'MARK_SPAM' | 'MARK_READ' | 'STAR' | 'MOVE_FOLDER' | 'CALL_WEBHOOK'
+    label TEXT,                      -- Label name or ID
+    subject TEXT,                    -- For reply/send actions
+    content TEXT,                    -- Reply/send body template
+    to_address TEXT,
+    cc_address TEXT,
+    bcc_address TEXT,
+    url TEXT,                        -- For CALL_WEBHOOK
+    folder_name TEXT,                -- For MOVE_FOLDER
+    delay_minutes INT,               -- Delay before executing
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+#### `email_newsletters` and `email_cold_senders`
+
+```sql
+CREATE TABLE email_newsletters (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id UUID NOT NULL REFERENCES email_accounts(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,             -- Sender email
+    name TEXT,                       -- Sender display name
+    status TEXT DEFAULT 'APPROVED',  -- 'APPROVED' | 'UNSUBSCRIBED' | 'AUTO_ARCHIVED'
+    category_id UUID,                -- Optional category
+    pattern_analyzed BOOLEAN DEFAULT false,
+    last_analyzed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(account_id, email)
+);
+
+CREATE TABLE email_cold_senders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id UUID NOT NULL REFERENCES email_accounts(id) ON DELETE CASCADE,
+    from_email TEXT NOT NULL,
+    status TEXT DEFAULT 'AI_LABELED_COLD', -- 'AI_LABELED_COLD' | 'USER_REJECTED_COLD'
+    reason TEXT,                     -- LLM classification reason
+    thread_id TEXT,
+    message_id TEXT,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(account_id, from_email)
+);
+```
+
+#### `email_thread_trackers`
+
+```sql
+CREATE TABLE email_thread_trackers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id UUID NOT NULL REFERENCES email_accounts(id) ON DELETE CASCADE,
+    thread_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'NEEDS_REPLY', -- 'NEEDS_REPLY' | 'AWAITING_REPLY' | 'NEEDS_ACTION'
+    sent_at TIMESTAMPTZ NOT NULL,
+    resolved BOOLEAN DEFAULT false,
+    follow_up_applied_at TIMESTAMPTZ,
+    follow_up_draft_id TEXT,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(account_id, thread_id, message_id)
+);
+CREATE INDEX idx_email_thread_trackers_unresolved
+    ON email_thread_trackers(account_id, resolved, type, sent_at)
+    WHERE resolved = false;
+```
+
+### Prototype Architecture Patterns
 
 #### 1. AI Rules Engine — Plain English → Structured Rules
 
@@ -437,12 +577,11 @@ parsed into structured database rules → LLM evaluates conditions → executes
 static actions. This two-layer design (human-readable prompt → machine-executable
 rules) is the right architecture for explainable AI email handling.
 
-**Our adaptation:**
+**Our adaptation (porting from `utils/ai/choose-rule/`):**
+- Port `match-rules.ts` → Python: static rule matching (from/to/subject/body patterns)
+- Port `ai-choose-rule.ts` → Python: LLM-based rule selection with structured output
+- Port `execute.ts` → Python: execute matched actions (archive, label, reply, forward, webhook)
 - MAF agent `agent-email-assistant` gets a `process_rules` tool
-- Rules stored in Postgres `email_rules` table with: condition (NL), action type
-  (archive/label/reply/forward/flag), action params, priority, enabled flag
-- On each new email (via sync or webhook), the agent evaluates rules and proposes
-  actions for HITL approval (consistent with CommandCenter Action Broker model)
 
 #### 2. Cold Email Blocker — First-Time Sender LLM Classification
 
@@ -450,11 +589,13 @@ Inbox Zero monitors incoming emails, checks if sender has ever been replied to,
 and if not, runs the email through an LLM to classify as cold/spam. This is
 separate from their main AI rules engine.
 
-**Our adaptation:**
+**Our adaptation (porting from `utils/ai/categorize-sender/`):**
+- Port `ai-categorize-single-sender.ts` → Python: LLM classification of sender type
+- Port `format-categories.ts` → Python: structured category formatting
 - `email_messages` table already tracks `from_address` — can query reply history
 - New tool: `detect_cold_email(email_id)` → calls LLM with structured prompt
 - Automatically labels cold emails; user can whitelist senders
-- Whitelist stored in `email_sender_whitelist` table
+- Whitelist stored in `email_cold_senders` table (ported from `ColdEmail` model)
 
 #### 3. Bulk Unsubscribe — Newsletter Detection + One-Click Actions
 
@@ -472,12 +613,14 @@ engagement), then presents a UI to unsubscribe and archive in bulk.
 Inbox Zero tracks emails that need a response and those awaiting responses.
 Implemented as a special AI rule type.
 
-**Our adaptation:**
-- SQL query: emails where `is_read=true`, sent to user, no reply from user within
-  N days, not archived
-- New tool: `find_needing_reply(days=3)` → returns list with priority
+**Our adaptation (porting from `utils/ai/reply/`):**
+- Port `draft-reply.ts` → Python: AI reply drafting with tone parameters
+- Port `reply-context-collector.ts` → Python: gather thread context for replies
+- Port `determine-thread-status.ts` → Python: classify thread as needs-reply vs awaiting-reply
+- Port `draft-follow-up.ts` → Python: generate follow-up nudge emails
+- SQL query on `email_thread_trackers`: unresolved threads needing response
+- New tool: `find_needing_reply(days=3)` → returns prioritized list
 - Integrates with `draft_reply` — one click from "needs reply" to draft
-- Dashboard widget: "Awaiting your reply (N)"
 
 #### 5. Gmail Pub/Sub Watch — Real-Time Notifications
 
@@ -496,22 +639,23 @@ Google Cloud Pub/Sub when new emails arrive, rather than polling.
 Inbox Zero has robust batching for archive/delete/label operations
 (`batch.ts`, `batch-with-retry.ts`) with exponential backoff.
 
-**Our adaptation:**
-- Enhance Gmail provider with batch operations
-- `bulk_archive(message_ids: list[str])` — batch modify with remove INBOX label
+**Our adaptation (porting from `utils/gmail/mail.ts` + `utils/gmail/batch.ts`):**
+- Port `mail.ts` → Python: send/reply/forward with proper MIME construction + retry logic
+- Port `batch.ts` → Python: batch Gmail API calls with exponential backoff
+- Port `batch-with-retry.ts` → Python: retry wrapper for 429/503 errors
+- `bulk_archive(message_ids)` — batch modify with remove INBOX label
 - `bulk_label(message_ids, add_labels, remove_labels)` — batch label changes
-- Retry with exponential backoff on 429/503 errors
 
 #### 7. Email Content Decoding
 
 Inbox Zero handles quoted-printable, base64, multipart MIME, and HTML email
 bodies robustly (`decode.ts`, `content-sanitizer.ts`).
 
-**Our adaptation:**
+**Our adaptation (porting from `utils/gmail/decode.ts`):**
+- Port `decode.ts` → Python `email_decode.py`: base64, quoted-printable, multipart MIME
+- Port content sanitization: HTML→text for AI processing (strip tags, decode entities)
 - Enhance `GmailProvider._parse_gmail_message()` with proper MIME parsing
 - Handle multipart/alternative (prefer text/plain, fallback to text/html→text)
-- Sanitize HTML to plain text for AI processing (strip tags, decode entities)
-- Preserve reply chains for context when drafting replies
 
 #### 8. Prompt Engineering Patterns
 

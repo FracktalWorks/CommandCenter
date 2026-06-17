@@ -8,12 +8,15 @@ import {
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { fullDateLabel, initials } from "../lib/utils";
+import { useEmailStore } from "../lib/emailStore";
+import { getAttachmentDownloadUrl } from "../lib/api";
 
 interface EmailDetailProps {
   email: Email | null;
 }
 
 export function EmailDetail({ email }: EmailDetailProps) {
+  const { updateEmail, deleteEmail, openCompose } = useEmailStore();
   const [starred, setStarred] = useState(email?.isStarred ?? false);
   const [read, setRead] = useState(email?.isRead ?? true);
   const [flagged, setFlagged] = useState(email?.isFlagged ?? false);
@@ -21,6 +24,9 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const [replyMode, setReplyMode] = useState<"reply" | "reply-all" | "forward" | null>(
     null
   );
+  const [replyBody, setReplyBody] = useState("");
+  const [forwardTo, setForwardTo] = useState("");
+  const [replySending, setReplySending] = useState(false);
 
   // Keep state in sync when email changes
   if (email && starred !== email.isStarred) setStarred(email.isStarred);
@@ -82,8 +88,12 @@ export function EmailDetail({ email }: EmailDetailProps) {
 
           <Divider />
 
-          <TBtn icon={Archive} label="Archive" onClick={() => {}} />
-          <TBtn icon={Trash2} label="Delete" onClick={() => {}} />
+          <TBtn icon={Archive} label="Archive" onClick={() => {
+            if (email) updateEmail(email.id, { folder: "archive" });
+          }} />
+          <TBtn icon={Trash2} label="Delete" onClick={() => {
+            if (email) deleteEmail(email.id);
+          }} />
           <TBtn icon={FolderInput} label="Move" onClick={() => {}} />
 
           <Divider />
@@ -91,19 +101,34 @@ export function EmailDetail({ email }: EmailDetailProps) {
           <TBtn
             icon={Flag}
             label={flagged ? "Unflag" : "Flag"}
-            onClick={() => setFlagged((v) => !v)}
+            onClick={() => {
+              if (email) {
+                setFlagged((v) => !v);
+                updateEmail(email.id, { isFlagged: !flagged });
+              }
+            }}
             active={flagged}
           />
           <TBtn
             icon={Star}
             label={starred ? "Unstar" : "Star"}
-            onClick={() => setStarred((v) => !v)}
+            onClick={() => {
+              if (email) {
+                setStarred((v) => !v);
+                updateEmail(email.id, { isStarred: !starred });
+              }
+            }}
             active={starred}
           />
           <TBtn
             icon={MailOpen}
             label={read ? "Mark as Unread" : "Mark as Read"}
-            onClick={() => setRead((v) => !v)}
+            onClick={() => {
+              if (email) {
+                setRead((v) => !v);
+                updateEmail(email.id, { isRead: !read });
+              }
+            }}
             active={!read}
           />
           <TBtn icon={Tag} label="Label" onClick={() => {}} />
@@ -211,9 +236,15 @@ export function EmailDetail({ email }: EmailDetailProps) {
               >
                 <Paperclip size={13} className="text-muted-foreground" />
                 <span className="text-xs text-foreground">{att.filename}</span>
-                <button className="ml-2 text-muted-foreground hover:text-foreground transition-colors">
+                <a
+                  href={att.downloadUrl || getAttachmentDownloadUrl(att.id)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ml-2 text-muted-foreground hover:text-foreground transition-colors"
+                  title={`Download ${att.filename}`}
+                >
                   <Download size={12} />
-                </button>
+                </a>
               </div>
             ))}
           </div>
@@ -240,12 +271,16 @@ export function EmailDetail({ email }: EmailDetailProps) {
               <div className="px-4 py-1.5 border-b border-border">
                 <input
                   type="text"
+                  value={forwardTo}
+                  onChange={(e) => setForwardTo(e.target.value)}
                   placeholder="To..."
                   className="w-full bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
                 />
               </div>
             )}
             <textarea
+              value={replyBody}
+              onChange={(e) => setReplyBody(e.target.value)}
               placeholder={`Write your ${replyLabel.toLowerCase()}...`}
               rows={5}
               autoFocus
@@ -258,12 +293,55 @@ export function EmailDetail({ email }: EmailDetailProps) {
               <div className="flex gap-2">
                 <button
                   className="px-3 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-                  onClick={() => setReplyMode(null)}
+                  onClick={() => {
+                    setReplyMode(null);
+                    setReplyBody("");
+                    setForwardTo("");
+                  }}
                 >
                   Discard
                 </button>
-                <button className="px-3 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
-                  Send
+                <button
+                  className="px-3 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                  disabled={replySending || (!replyBody.trim() && !forwardTo.trim())}
+                  onClick={async () => {
+                    if (!email || replySending) return;
+                    setReplySending(true);
+                    try {
+                      if (replyMode === "forward") {
+                        const fwdSubject = email.subject.startsWith("Fwd:")
+                          ? email.subject
+                          : `Fwd: ${email.subject}`;
+                        const fwdBody = `\n\n---------- Forwarded message ----------\nFrom: ${email.from.name} <${email.from.email}>\nDate: ${email.receivedAt}\nSubject: ${email.subject}\n\n${email.bodyText}`;
+                        await openCompose({
+                          to: forwardTo || "",
+                          subject: fwdSubject,
+                          replyToBody: replyBody + fwdBody,
+                        });
+                      } else {
+                        const replyTo = replyMode === "reply-all"
+                          ? [email.from.email, ...(email.to || []).filter(t => t.email !== email.from.email).map(t => t.email)].join(", ")
+                          : email.from.email;
+                        const reSubject = email.subject.startsWith("Re:")
+                          ? email.subject
+                          : `Re: ${email.subject}`;
+                        const quotedBody = `\n\nOn ${email.receivedAt}, ${email.from.name} wrote:\n> ${email.bodyText.replace(/\n/g, "\n> ")}`;
+                        await openCompose({
+                          to: replyTo,
+                          subject: reSubject,
+                          replyToBody: replyBody + quotedBody,
+                          replyToMessageId: email.providerMessageId,
+                        });
+                      }
+                      setReplyMode(null);
+                      setReplyBody("");
+                      setForwardTo("");
+                    } finally {
+                      setReplySending(false);
+                    }
+                  }}
+                >
+                  {replySending ? "Opening…" : "Continue in composer"}
                 </button>
               </div>
             </div>

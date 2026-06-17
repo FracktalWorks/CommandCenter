@@ -93,6 +93,12 @@ export async function deleteEmail(id: string): Promise<void> {
   await gatewayFetch(`/email/messages/${id}`, { method: "DELETE" });
 }
 
+// ── Attachments ────────────────────────────────────────────────────────────
+
+export function getAttachmentDownloadUrl(attachmentId: string): string {
+  return `${GATEWAY_URL}/email/attachments/${attachmentId}/download`;
+}
+
 // ── Send ─────────────────────────────────────────────────────────────────
 
 export interface SendEmailParams {

@@ -24,6 +24,7 @@ GET    /email/oauth/{provider}/callback  — OAuth callback
 from __future__ import annotations
 
 import json
+import io
 import os
 import secrets
 from datetime import datetime, timezone
@@ -48,6 +49,15 @@ class EmailAddressModel(BaseModel):
     name: str = ""
     email: str
 
+
+class AttachmentModel(BaseModel):
+    id: str
+    filename: str
+    mime_type: str = "application/octet-stream"
+    size_bytes: int | None = None
+    download_url: str | None = None
+
+
 class EmailMessageModel(BaseModel):
     id: str
     provider_message_id: str
@@ -62,6 +72,7 @@ class EmailMessageModel(BaseModel):
     body_html: str | None = None
     snippet: str = ""
     has_attachments: bool = False
+    attachments: list[AttachmentModel] = []
     is_read: bool = False
     is_starred: bool = False
     is_flagged: bool = False
@@ -411,7 +422,10 @@ async def get_message(
         )
         await db.commit()
 
-        return _row_to_message(row)
+        msg = _row_to_message(row)
+        if msg.has_attachments:
+            msg.attachments = await _fetch_attachments(db, message_id)
+        return msg
     finally:
         await db.close()
 
@@ -490,6 +504,72 @@ async def delete_message(
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="Message not found")
         await db.commit()
+    finally:
+        await db.close()
+
+
+# ── Attachments ───────────────────────────────────────────────────────────
+
+@router.get("/attachments/{attachment_id}/download")
+async def download_attachment(
+    attachment_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Proxy download an email attachment, streaming from the provider."""
+    db = await _get_db()
+    try:
+        # Look up attachment and verify user owns the parent message
+        result = await db.execute(
+            text(
+                """SELECT ea.id, ea.filename, ea.mime_type, ea.size_bytes,
+                          ea.provider_attachment_id, ea.storage_path,
+                          em.provider_message_id, p.provider, ec.credentials_encrypted
+                   FROM email_attachments ea
+                   JOIN email_messages em ON ea.message_id = em.id
+                   JOIN email_accounts p ON em.account_id = p.id
+                   JOIN email_account_credentials ec ON p.id = ec.account_id
+                   WHERE ea.id = :aid AND p.user_id = :user_id"""
+            ),
+            {"aid": attachment_id, "user_id": user.email or "anonymous"},
+        )
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+
+        # Decrypt credentials
+        from acb_llm import decrypt_credential
+        decrypted = decrypt_credential(row.credentials_encrypted)
+
+        # Instantiate provider
+        if row.provider == "gmail":
+            from email_ingestion.providers.gmail import GmailProvider
+            provider = GmailProvider(row.provider_message_id.split("/")[0], decrypted)
+        elif row.provider == "outlook":
+            from email_ingestion.providers.outlook import OutlookProvider
+            provider = OutlookProvider(decrypted)
+        elif row.provider == "imap":
+            from email_ingestion.providers.imap import IMAPProvider
+            provider = IMAPProvider(decrypted)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown provider: {row.provider}")
+
+        content = await provider.get_attachment(
+            row.provider_message_id, row.provider_attachment_id
+        )
+
+        return StreamingResponse(
+            io.BytesIO(content),
+            media_type=row.mime_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{row.filename}"',
+                "Content-Length": str(len(content)),
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.error("download_attachment.failed", aid=attachment_id, error=str(exc)[:200])
+        raise HTTPException(status_code=500, detail="Failed to download attachment")
     finally:
         await db.close()
 
@@ -1306,9 +1386,33 @@ def _row_to_message(row: Any) -> EmailMessageModel:
         body_html=row.body_html,
         snippet=row.snippet or "",
         has_attachments=row.has_attachments or False,
+        attachments=[],  # populated by get_message endpoint
         is_read=row.is_read or False,
         is_starred=row.is_starred or False,
         is_flagged=row.is_flagged or False,
         received_at=row.received_at.isoformat() if row.received_at else None,
         synced_at=row.synced_at.isoformat() if row.synced_at else None,
     )
+
+
+async def _fetch_attachments(db: Any, message_id: str) -> list[AttachmentModel]:
+    """Fetch attachment metadata for a message."""
+    result = await db.execute(
+        text(
+            "SELECT id, filename, mime_type, size_bytes, download_url "
+            "FROM email_attachments WHERE message_id = :mid ORDER BY filename"
+        ),
+        {"mid": message_id},
+    )
+    rows = result.fetchall()
+    gateway_url = os.environ.get("GATEWAY_EXTERNAL_URL", "")
+    return [
+        AttachmentModel(
+            id=str(r.id),
+            filename=r.filename,
+            mime_type=r.mime_type,
+            size_bytes=r.size_bytes,
+            download_url=f"{gateway_url}/email/attachments/{r.id}/download" if gateway_url else None,
+        )
+        for r in rows
+    ]

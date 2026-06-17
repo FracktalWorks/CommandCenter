@@ -45,11 +45,25 @@ def test_acb_memory_package_imports() -> None:
 # ---------------------------------------------------------------------------
 
 def test_memory_client_disabled_when_mem0_not_enabled() -> None:
-    """MemoryClient._get_client() returns None when mem0_enabled=False."""
+    """MemoryClient._get_client() returns None when mem0_enabled=False.
+    
+    Uses monkeypatch to force mem0_enabled=False regardless of .env value.
+    """
+    from unittest.mock import patch
+
+    import acb_memory.mem0_client
+
+    from acb_common import get_settings
     from acb_memory.mem0_client import MemoryClient
-    mc = MemoryClient()
-    # Default in test env: mem0_enabled=False
-    assert mc._get_client() is None
+
+    # Force mem0_enabled=False on the settings instance
+    settings = get_settings()
+    settings.mem0_enabled = False
+    try:
+        mc = MemoryClient()
+        assert mc._get_client() is None
+    finally:
+        settings.mem0_enabled = True  # Restore — .env says true
 
 
 @pytest.mark.asyncio

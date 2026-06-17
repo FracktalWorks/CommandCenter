@@ -3,7 +3,7 @@
 import {
   Pencil, Trash2, Archive, Flag, FolderInput,
   Reply, ReplyAll, Forward, MailOpen, Tag, MoreHorizontal,
-  Paperclip, Star
+  Paperclip, Star, Loader2,
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { timeLabel } from "../lib/utils";
@@ -13,11 +13,11 @@ interface EmailListProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
   onCompose: () => void;
+  onToolbarAction: (action: string, email: Email | null) => void;
   loading?: boolean;
 }
 
 const TOOLBAR_PRIMARY = [
-  { icon: Pencil, label: "New Email", key: "compose" },
   { icon: Trash2, label: "Delete", key: "delete" },
   { icon: Archive, label: "Archive", key: "archive" },
   { icon: Flag, label: "Flag", key: "flag" },
@@ -37,8 +37,11 @@ export function EmailList({
   selectedId,
   onSelect,
   onCompose,
+  onToolbarAction,
   loading = false,
 }: EmailListProps) {
+  const selectedEmail = emails.find(e => e.id === selectedId) || null;
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Primary toolbar row */}
@@ -53,8 +56,8 @@ export function EmailList({
           <span className="text-[10px] font-medium">New</span>
         </button>
 
-        {TOOLBAR_PRIMARY.slice(1).map(({ icon: Icon, label, key }) => (
-          <ToolbarBtn key={key} icon={Icon} label={label} />
+        {TOOLBAR_PRIMARY.map(({ icon: Icon, label, key }) => (
+          <ToolbarBtn key={key} icon={Icon} label={label} onClick={() => onToolbarAction(key, selectedEmail)} />
         ))}
 
         <div className="flex-1" />
@@ -70,7 +73,7 @@ export function EmailList({
       {/* Secondary toolbar row */}
       <div className="flex items-center gap-0.5 px-2 py-1 border-b border-border flex-shrink-0 bg-secondary/30">
         {TOOLBAR_SECONDARY.map(({ icon: Icon, label, key }) => (
-          <ToolbarBtn key={key} icon={Icon} label={label} />
+          <ToolbarBtn key={key} icon={Icon} label={label} onClick={() => onToolbarAction(key, selectedEmail)} />
         ))}
         <div className="flex-1" />
         <span className="text-[10px] text-muted-foreground pr-1">
@@ -166,13 +169,16 @@ export function EmailList({
 function ToolbarBtn({
   icon: Icon,
   label,
+  onClick,
 }: {
   icon: React.ElementType;
   label: string;
+  onClick?: () => void;
 }) {
   return (
     <button
       title={label}
+      onClick={onClick}
       className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
     >
       <Icon size={13} />

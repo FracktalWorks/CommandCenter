@@ -45,7 +45,7 @@ interface EmailState {
 
   // UI
   composeOpen: boolean;
-  composeDefaults: { to: string; subject: string; replyToBody?: string } | null;
+  composeDefaults: { to: string; subject: string; replyToBody?: string; replyToMessageId?: string } | null;
   error: string | null;
 
   // Actions
@@ -55,7 +55,7 @@ interface EmailState {
   selectFolder: (folder: string) => void;
   selectEmail: (id: string | null) => void;
   setSearchQuery: (q: string) => void;
-  openCompose: (defaults?: { to: string; subject: string; replyToBody?: string }) => void;
+  openCompose: (defaults?: { to: string; subject: string; replyToBody?: string; replyToMessageId?: string }) => void;
   closeCompose: () => void;
   updateEmail: (id: string, updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>) => Promise<void>;
   deleteEmail: (id: string) => Promise<void>;
@@ -64,6 +64,8 @@ interface EmailState {
   deleteAccount: (id: string) => Promise<void>;
   clearError: () => void;
 }
+
+let _debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
 export const useEmailStore = create<EmailState>((set, get) => ({
   // Data
@@ -145,8 +147,11 @@ export const useEmailStore = create<EmailState>((set, get) => ({
 
   setSearchQuery: (q: string) => {
     set({ searchQuery: q });
-    // Debounce not needed here — fetchEmails is called explicitly
-    get().fetchEmails();
+    // Debounce: wait 300ms since last keystroke before fetching
+    if (_debounceTimer) clearTimeout(_debounceTimer);
+    _debounceTimer = setTimeout(() => {
+      get().fetchEmails();
+    }, 300);
   },
 
   openCompose: (defaults) => {

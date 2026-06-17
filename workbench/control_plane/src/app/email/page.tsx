@@ -18,6 +18,7 @@ import { EmailDetail } from "./components/EmailDetail";
 import { AIChatPanel } from "./components/AIChatPanel";
 import { ComposePanel } from "./components/ComposePanel";
 import { useEmailStore } from "./lib/emailStore";
+import { Email } from "./lib/types";
 import { folderLabel } from "./lib/utils";
 
 export default function EmailPage() {
@@ -54,8 +55,10 @@ export default function EmailPage() {
     setSearchQuery,
     openCompose,
     closeCompose,
+    updateEmail,
     deleteEmail,
     triggerSync,
+    sendEmail,
   } = useEmailStore();
 
   // Fetch on mount
@@ -140,6 +143,52 @@ export default function EmailPage() {
       if (isMobile) setMobileView("detail");
     },
     [selectEmail, isMobile]
+  );
+
+  const handleToolbarAction = useCallback(
+    (action: string, email: Email | null) => {
+      if (!email) return;
+      switch (action) {
+        case "delete":
+          deleteEmail(email.id);
+          break;
+        case "archive":
+          updateEmail(email.id, { folder: "archive" });
+          break;
+        case "flag":
+          updateEmail(email.id, { isFlagged: !email.isFlagged });
+          break;
+        case "mark-read":
+          updateEmail(email.id, { isRead: true });
+          break;
+        case "reply":
+          openCompose({
+            to: email.from.email,
+            subject: email.subject.startsWith("Re:") ? email.subject : `Re: ${email.subject}`,
+            replyToBody: `\n\nOn ${email.receivedAt}, ${email.from.name} wrote:\n> ${email.bodyText.replace(/\n/g, "\n> ")}`,
+            replyToMessageId: email.providerMessageId,
+          });
+          break;
+        case "reply-all":
+          const allTo = [email.from.email, ...(email.to || []).filter(t => t.email !== email.from.email).map(t => t.email)].join(", ");
+          openCompose({
+            to: allTo,
+            subject: email.subject.startsWith("Re:") ? email.subject : `Re: ${email.subject}`,
+            replyToBody: `\n\nOn ${email.receivedAt}, ${email.from.name} wrote:\n> ${email.bodyText.replace(/\n/g, "\n> ")}`,
+            replyToMessageId: email.providerMessageId,
+          });
+          break;
+        case "forward":
+          openCompose({
+            to: "",
+            subject: email.subject.startsWith("Fwd:") ? email.subject : `Fwd: ${email.subject}`,
+            replyToBody: `\n\n---------- Forwarded message ----------\nFrom: ${email.from.name} <${email.from.email}>\nDate: ${email.receivedAt}\nSubject: ${email.subject}\n\n${email.bodyText}`,
+          });
+          break;
+        // move, label - will need folder/label picker (future)
+      }
+    },
+    [deleteEmail, updateEmail, openCompose]
   );
 
   const handleBack = () => setMobileView("inbox");
@@ -312,6 +361,7 @@ export default function EmailPage() {
                   selectedId={selectedEmailId}
                   onSelect={handleEmailSelect}
                   onCompose={() => openCompose()}
+                  onToolbarAction={handleToolbarAction}
                   loading={emailsLoading}
                 />
               )}
@@ -326,6 +376,7 @@ export default function EmailPage() {
                 selectedId={selectedEmailId}
                 onSelect={handleEmailSelect}
                 onCompose={() => openCompose()}
+                onToolbarAction={handleToolbarAction}
                 loading={emailsLoading}
               />
             </div>
@@ -361,9 +412,18 @@ export default function EmailPage() {
       <ComposePanel
         open={composeOpen}
         onClose={closeCompose}
+        accountId={selectedAccountId ?? ""}
+        onSend={async (params) => {
+          if (!selectedAccountId) return;
+          await sendEmail({
+            accountId: selectedAccountId,
+            ...params,
+          });
+        }}
         defaultTo={composeDefaults?.to}
         defaultSubject={composeDefaults?.subject}
         replyToBody={composeDefaults?.replyToBody}
+        replyToMessageId={composeDefaults?.replyToMessageId}
       />
     </div>
   );

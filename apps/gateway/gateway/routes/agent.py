@@ -607,6 +607,97 @@ async def list_agents(
     return merged
 
 
+# ---------------------------------------------------------------------------
+# PATCH /agent/{name}  — update display_name and/or description
+# ---------------------------------------------------------------------------
+
+class AgentPatchRequest(BaseModel):
+    display_name: str | None = None
+    """New human-readable alias, or ``null`` to clear."""
+    description: str | None = None
+    """New description text, or ``null`` to clear."""
+
+
+@router.patch("/{name}", summary="Update an agent's display name or description")
+async def patch_agent(
+    name: str,
+    req: AgentPatchRequest,
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Update mutable metadata for a registered agent.
+
+    Only ``display_name`` and ``description`` are editable — the internal
+    ``name`` slug, runtime, and integrations are immutable after registration.
+    Works for both static registry agents and dynamic (user-registered) agents.
+    """
+    from acb_graph import get_session  # noqa: PLC0415
+    from sqlalchemy import text  # noqa: PLC0415
+
+    # Resolve the agent: check static registry first, then dynamic
+    dynamic = _load_dynamic_agents()
+    dynamic_entry = next((a for a in dynamic if a["name"] == name), None)
+    static_entry = next((a for a in _AGENT_REGISTRY if a["name"] == name), None)
+
+    if dynamic_entry is None and static_entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent {name!r} not found.",
+        )
+
+    updated: dict = {}
+
+    # Update display_name if provided
+    if req.display_name is not None:
+        val = req.display_name.strip() or None
+        updated["display_name"] = val
+        if dynamic_entry is not None:
+            dynamic_entry["display_name"] = val
+        if static_entry is not None:
+            static_entry["display_name"] = val
+
+    # Update description if provided
+    if req.description is not None:
+        val = req.description.strip()
+        updated["description"] = val
+        if dynamic_entry is not None:
+            dynamic_entry["description"] = val
+        if static_entry is not None:
+            static_entry["description"] = val
+
+    # Persist to DB for dynamic agents
+    if dynamic_entry is not None and updated:
+        try:
+            with get_session() as s:
+                sets: list[str] = []
+                params: dict[str, Any] = {"n": name}
+                if "display_name" in updated:
+                    sets.append("display_name = :dn")
+                    params["dn"] = updated["display_name"]
+                if "description" in updated:
+                    sets.append("description = :d")
+                    params["d"] = updated["description"]
+                if sets:
+                    s.execute(
+                        text(
+                            f"UPDATE dynamic_agents SET {', '.join(sets)}, "
+                            f"updated_at = now() WHERE name = :n"
+                        ),
+                        params,
+                    )
+                    s.commit()
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("agent.patch_db_failed", name=name, error=str(exc))
+
+    # Invalidate registry cache so agent picker reflects changes
+    try:
+        from orchestrator.executor import _build_registry_block  # noqa: PLC0415
+        _build_registry_block.cache_clear()
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {"name": name, "updated": list(updated.keys())}
+
+
 @router.post("/{name}/pull", summary="Pull latest commits for an agent's local clone")
 async def pull_agent(
     name: str,

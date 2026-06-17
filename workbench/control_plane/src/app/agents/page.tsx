@@ -26,6 +26,7 @@ import {
   Loader2,
   MessageCircle,
   Package,
+  Pencil,
   Plug,
   Plus,
   Receipt,
@@ -1135,6 +1136,53 @@ function AgentSidePanel({
   const [pulling, setPulling]       = useState(false);
   const behindBy = (agent as any).behind_by as number | undefined;
 
+  // ── Inline editing for display_name / description ────────────────────
+  const [editingField, setEditingField] = useState<"display_name" | "description" | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const startEdit = (field: "display_name" | "description") => {
+    setEditingField(field);
+    setEditValue(field === "display_name"
+      ? (agent.display_name || agent.name)
+      : (agent.description || ""));
+  };
+
+  const cancelEdit = () => {
+    setEditingField(null);
+    setEditValue("");
+  };
+
+  const saveEdit = async () => {
+    if (!editingField) return;
+    setSaving(true);
+    try {
+      const body: Record<string, string | null> = {};
+      body[editingField] = editValue.trim() || null;
+      const res = await fetch(`/api/agent/${encodeURIComponent(agent.name)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        // Update the local agent object so the UI reflects the change
+        if (editingField === "display_name") {
+          (agent as any).display_name = editValue.trim() || null;
+        } else {
+          (agent as any).description = editValue.trim();
+        }
+        setEditingField(null);
+        onRefresh?.();
+      }
+    } catch { /* silently fail */ }
+    finally { setSaving(false); }
+  };
+
+  const handleEditKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveEdit(); }
+    if (e.key === "Escape") cancelEdit();
+  };
+
   const handlePull = async () => {
     setPulling(true);
     try {
@@ -1173,8 +1221,33 @@ function AgentSidePanel({
       <div className="flex items-start justify-between p-5 border-b border-border shrink-0">
         <div className="flex items-start gap-3">
           <Icon size={36} className={`${color} mt-0.5 shrink-0`} />
-          <div>
-            <div className="font-semibold text-foreground text-base">{agent.display_name || agent.name}</div>
+          <div className="min-w-0">
+            {editingField === "display_name" ? (
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  onKeyDown={handleEditKeyDown}
+                  className="text-sm font-semibold bg-secondary border border-primary/40 rounded px-2 py-0.5 text-foreground w-full max-w-[220px] focus:outline-none focus:border-primary"
+                  autoFocus
+                  disabled={saving}
+                />
+                <button onClick={saveEdit} disabled={saving}
+                  className="text-[10px] px-1.5 py-0.5 rounded bg-success/10 text-success hover:bg-success/20 disabled:opacity-50">Save</button>
+                <button onClick={cancelEdit} disabled={saving}
+                  className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground hover:text-foreground">Cancel</button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 group/name">
+                <div className="font-semibold text-foreground text-base truncate">{agent.display_name || agent.name}</div>
+                <button onClick={() => startEdit("display_name")}
+                  className="opacity-0 group-hover/name:opacity-100 text-muted-foreground hover:text-foreground p-0.5 rounded transition-all"
+                  title="Edit display name">
+                  <Pencil className="w-3 h-3" />
+                </button>
+              </div>
+            )}
             <div className="flex items-center gap-1.5 mt-1 flex-wrap">
               {agent.agent_runtime === "github-copilot" ? (
                 <>
@@ -1199,8 +1272,37 @@ function AgentSidePanel({
       </div>
 
       <div className="flex-1 overflow-y-auto p-5 space-y-4">
-        {agent.description && (
-          <p className="text-sm text-muted-foreground leading-relaxed">{agent.description}</p>
+        {editingField === "description" ? (
+          <div className="space-y-1.5">
+            <textarea
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={handleEditKeyDown}
+              className="w-full text-sm bg-secondary border border-primary/40 rounded-lg px-3 py-2 text-foreground min-h-[80px] focus:outline-none focus:border-primary resize-y"
+              autoFocus
+              disabled={saving}
+              placeholder="Agent description..."
+            />
+            <div className="flex items-center gap-1.5">
+              <button onClick={saveEdit} disabled={saving}
+                className="text-xs px-2 py-1 rounded bg-success/10 text-success hover:bg-success/20 disabled:opacity-50">Save</button>
+              <button onClick={cancelEdit} disabled={saving}
+                className="text-xs px-2 py-1 rounded bg-secondary text-muted-foreground hover:text-foreground">Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <div className="group/desc">
+            {agent.description ? (
+              <p className="text-sm text-muted-foreground leading-relaxed">{agent.description}</p>
+            ) : (
+              <p className="text-sm text-muted-foreground/50 italic">No description</p>
+            )}
+            <button onClick={() => startEdit("description")}
+              className="opacity-0 group-hover/desc:opacity-100 text-muted-foreground hover:text-foreground p-0.5 rounded transition-all mt-1"
+              title="Edit description">
+              <Pencil className="w-3 h-3" />
+            </button>
+          </div>
         )}
 
         {(agent.tags?.length ?? 0) > 0 && (

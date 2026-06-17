@@ -406,6 +406,13 @@ shadcn/ui + Turborepo) supporting Gmail and Microsoft 365 via OAuth.
 **Tech stack:** Next.js App Router, Prisma (Postgres), Upstash Redis, Tinybird (analytics),
 OpenAI / Anthropic / Google AI / Groq / Ollama for AI, Resend for transactional email.
 
+**Key reference files:**
+- [`ARCHITECTURE.md`](https://github.com/elie222/inbox-zero/blob/main/ARCHITECTURE.md) — full system architecture
+- [`apps/web/prisma/schema.prisma`](https://github.com/elie222/inbox-zero/blob/main/apps/web/prisma/schema.prisma) — complete DB schema (1839 lines)
+- [`apps/web/utils/ai/`](https://github.com/elie222/inbox-zero/tree/main/apps/web/utils/ai) — all AI/LLM logic
+- [`apps/web/utils/gmail/`](https://github.com/elie222/inbox-zero/tree/main/apps/web/utils/gmail) — all Gmail API integration
+- [`LICENSE`](https://github.com/elie222/inbox-zero/blob/main/LICENSE) — AGPLv3 + additional terms
+
 **License:** AGPL v3 + commercial restrictions. Since CommandCenter is also free
 and open source (AGPLv3-compatible), we **CAN reuse their code** under the copyleft
 terms — any modifications we make must also be released under AGPLv3.
@@ -437,18 +444,18 @@ Inbox Zero modules. Listed by priority with our Python destination.
 
 | Inbox Zero File | Our Python Destination | Lines | Value |
 |-----------------|----------------------|-------|-------|
-| `utils/ai/categorize-sender/ai-categorize-single-sender.ts` | `email_ingestion/providers/ai_categorize.py` | ~80 | Cold email LLM classification |
-| `utils/ai/choose-rule/ai-choose-rule.ts` | `email_ingestion/providers/ai_rules.py` | ~120 | Rule matching engine |
-| `utils/ai/choose-rule/match-rules.ts` | `email_ingestion/providers/ai_rules.py` | ~90 | Static rule matching (from/to/subject) |
-| `utils/ai/choose-rule/execute.ts` | `email_ingestion/providers/ai_rules.py` | ~100 | Execute matched actions |
-| `utils/ai/reply/draft-reply.ts` | `agent-email-assistant/agents.py` | ~150 | AI reply drafting with context |
-| `utils/ai/reply/reply-context-collector.ts` | `email_ingestion/providers/ai_reply.py` | ~80 | Gather thread context for replies |
-| `utils/ai/clean/draft-cleanup.ts` | `email_ingestion/providers/email_cleanup.py` | ~60 | Auto-cleanup old drafts |
-| `utils/gmail/mail.ts` | `email_ingestion/providers/gmail.py` | ~200 | Gmail send/reply/forward with retry |
-| `utils/gmail/batch.ts` | `email_ingestion/providers/gmail.py` | ~80 | Batch Gmail operations |
-| `utils/gmail/decode.ts` | `email_ingestion/providers/email_decode.py` | ~60 | MIME decoding + HTML→text |
-| `utils/gmail/watch.ts` | `email_ingestion/providers/gmail.py` | ~70 | Gmail Pub/Sub watch setup |
-| `utils/ai/choose-rule/bulk-process-emails.ts` | `email_ingestion/providers/ai_rules.py` | ~60 | Bulk rule evaluation |
+| [`categorize-sender/ai-categorize-single-sender.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/categorize-sender/ai-categorize-single-sender.ts) | `email_ingestion/providers/ai_categorize.py` | ~80 | Cold email LLM classification |
+| [`choose-rule/ai-choose-rule.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/choose-rule/ai-choose-rule.ts) | `email_ingestion/providers/ai_rules.py` | ~120 | Rule matching engine |
+| [`choose-rule/match-rules.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/choose-rule/match-rules.ts) | `email_ingestion/providers/ai_rules.py` | ~90 | Static rule matching (from/to/subject) |
+| [`choose-rule/execute.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/choose-rule/execute.ts) | `email_ingestion/providers/ai_rules.py` | ~100 | Execute matched actions |
+| [`reply/draft-reply.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/reply/draft-reply.ts) | `agent-email-assistant/agents.py` | ~150 | AI reply drafting with context |
+| [`reply/reply-context-collector.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/reply/reply-context-collector.ts) | `email_ingestion/providers/ai_reply.py` | ~80 | Gather thread context for replies |
+| [`clean/draft-cleanup.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/clean/draft-cleanup.ts) | `email_ingestion/providers/email_cleanup.py` | ~60 | Auto-cleanup old drafts |
+| [`gmail/mail.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/mail.ts) | `email_ingestion/providers/gmail.py` | ~200 | Gmail send/reply/forward with retry |
+| [`gmail/batch.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/batch.ts) | `email_ingestion/providers/gmail.py` | ~80 | Batch Gmail operations |
+| [`gmail/decode.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/decode.ts) | `email_ingestion/providers/email_decode.py` | ~60 | MIME decoding + HTML→text |
+| [`gmail/watch.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/watch.ts) | `email_ingestion/providers/gmail.py` | ~70 | Gmail Pub/Sub watch setup |
+| [`choose-rule/bulk-process-emails.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/choose-rule/bulk-process-emails.ts) | `email_ingestion/providers/ai_rules.py` | ~60 | Bulk rule evaluation |
 
 #### Prisma Schema → Our Postgres Schema
 
@@ -577,10 +584,10 @@ parsed into structured database rules → LLM evaluates conditions → executes
 static actions. This two-layer design (human-readable prompt → machine-executable
 rules) is the right architecture for explainable AI email handling.
 
-**Our adaptation (porting from `utils/ai/choose-rule/`):**
-- Port `match-rules.ts` → Python: static rule matching (from/to/subject/body patterns)
-- Port `ai-choose-rule.ts` → Python: LLM-based rule selection with structured output
-- Port `execute.ts` → Python: execute matched actions (archive, label, reply, forward, webhook)
+**Our adaptation (porting from [`choose-rule/`](https://github.com/elie222/inbox-zero/tree/main/apps/web/utils/ai/choose-rule)):**
+- Port [`match-rules.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/choose-rule/match-rules.ts) → Python: static rule matching (from/to/subject/body patterns)
+- Port [`ai-choose-rule.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/choose-rule/ai-choose-rule.ts) → Python: LLM-based rule selection with structured output
+- Port [`execute.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/choose-rule/execute.ts) → Python: execute matched actions (archive, label, reply, forward, webhook)
 - MAF agent `agent-email-assistant` gets a `process_rules` tool
 
 #### 2. Cold Email Blocker — First-Time Sender LLM Classification
@@ -589,9 +596,9 @@ Inbox Zero monitors incoming emails, checks if sender has ever been replied to,
 and if not, runs the email through an LLM to classify as cold/spam. This is
 separate from their main AI rules engine.
 
-**Our adaptation (porting from `utils/ai/categorize-sender/`):**
-- Port `ai-categorize-single-sender.ts` → Python: LLM classification of sender type
-- Port `format-categories.ts` → Python: structured category formatting
+**Our adaptation (porting from [`categorize-sender/`](https://github.com/elie222/inbox-zero/tree/main/apps/web/utils/ai/categorize-sender)):**
+- Port [`ai-categorize-single-sender.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/categorize-sender/ai-categorize-single-sender.ts) → Python: LLM classification of sender type
+- Port [`format-categories.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/categorize-sender/format-categories.ts) → Python: structured category formatting
 - `email_messages` table already tracks `from_address` — can query reply history
 - New tool: `detect_cold_email(email_id)` → calls LLM with structured prompt
 - Automatically labels cold emails; user can whitelist senders
@@ -613,11 +620,11 @@ engagement), then presents a UI to unsubscribe and archive in bulk.
 Inbox Zero tracks emails that need a response and those awaiting responses.
 Implemented as a special AI rule type.
 
-**Our adaptation (porting from `utils/ai/reply/`):**
-- Port `draft-reply.ts` → Python: AI reply drafting with tone parameters
-- Port `reply-context-collector.ts` → Python: gather thread context for replies
-- Port `determine-thread-status.ts` → Python: classify thread as needs-reply vs awaiting-reply
-- Port `draft-follow-up.ts` → Python: generate follow-up nudge emails
+**Our adaptation (porting from [`reply/`](https://github.com/elie222/inbox-zero/tree/main/apps/web/utils/ai/reply)):**
+- Port [`draft-reply.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/reply/draft-reply.ts) → Python: AI reply drafting with tone parameters
+- Port [`reply-context-collector.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/reply/reply-context-collector.ts) → Python: gather thread context for replies
+- Port [`determine-thread-status.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/reply/determine-thread-status.ts) → Python: classify thread as needs-reply vs awaiting-reply
+- Port [`draft-follow-up.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/reply/draft-follow-up.ts) → Python: generate follow-up nudge emails
 - SQL query on `email_thread_trackers`: unresolved threads needing response
 - New tool: `find_needing_reply(days=3)` → returns prioritized list
 - Integrates with `draft_reply` — one click from "needs reply" to draft
@@ -627,8 +634,9 @@ Implemented as a special AI rule type.
 Inbox Zero uses Gmail's `users.watch()` API to receive push notifications via
 Google Cloud Pub/Sub when new emails arrive, rather than polling.
 
-**Our adaptation (Phase 2+):**
+**Our adaptation (porting from [`gmail/watch.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/watch.ts)):**
 - Gmail provider already has watch scaffolding
+- Port watch.ts → Python: Gmail `users.watch()` API setup + Pub/Sub topic management
 - Need: Google Cloud Pub/Sub topic + subscription → webhook endpoint
 - Gateway route: `POST /email/webhook/gmail` — receives Pub/Sub push
 - On push: trigger incremental sync for that account
@@ -639,10 +647,10 @@ Google Cloud Pub/Sub when new emails arrive, rather than polling.
 Inbox Zero has robust batching for archive/delete/label operations
 (`batch.ts`, `batch-with-retry.ts`) with exponential backoff.
 
-**Our adaptation (porting from `utils/gmail/mail.ts` + `utils/gmail/batch.ts`):**
-- Port `mail.ts` → Python: send/reply/forward with proper MIME construction + retry logic
-- Port `batch.ts` → Python: batch Gmail API calls with exponential backoff
-- Port `batch-with-retry.ts` → Python: retry wrapper for 429/503 errors
+**Our adaptation (porting from [`gmail/`](https://github.com/elie222/inbox-zero/tree/main/apps/web/utils/gmail)):**
+- Port [`mail.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/mail.ts) → Python: send/reply/forward with proper MIME construction + retry logic
+- Port [`batch.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/batch.ts) → Python: batch Gmail API calls with exponential backoff
+- Port [`batch-with-retry.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/batch-with-retry.ts) → Python: retry wrapper for 429/503 errors
 - `bulk_archive(message_ids)` — batch modify with remove INBOX label
 - `bulk_label(message_ids, add_labels, remove_labels)` — batch label changes
 
@@ -651,8 +659,8 @@ Inbox Zero has robust batching for archive/delete/label operations
 Inbox Zero handles quoted-printable, base64, multipart MIME, and HTML email
 bodies robustly (`decode.ts`, `content-sanitizer.ts`).
 
-**Our adaptation (porting from `utils/gmail/decode.ts`):**
-- Port `decode.ts` → Python `email_decode.py`: base64, quoted-printable, multipart MIME
+**Our adaptation (porting from [`gmail/decode.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/decode.ts)):**
+- Port [`decode.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/decode.ts) → Python `email_decode.py`: base64, quoted-printable, multipart MIME
 - Port content sanitization: HTML→text for AI processing (strip tags, decode entities)
 - Enhance `GmailProvider._parse_gmail_message()` with proper MIME parsing
 - Handle multipart/alternative (prefer text/plain, fallback to text/html→text)

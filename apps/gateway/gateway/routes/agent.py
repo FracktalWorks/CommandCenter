@@ -195,8 +195,8 @@ _AGENT_REGISTRY: list[dict] = [
         ),
         "tags": ["dev", "engineering", "code", "debug"],
         "status": "live",
-        # GitHubCopilotAgent — native file ops, shell, git, full repo access.
-        "agent_runtime": "maf",
+        # GitHubCopilotAgent — BYOK via LiteLLM (tier-balanced by default).
+        "agent_runtime": "github-copilot",
         "local_path": "apps/agent-cc-dev",
         "integrations": [],
         "optional_integrations": [],

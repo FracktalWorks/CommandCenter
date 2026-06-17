@@ -80,6 +80,7 @@ export default function ModelsPage() {
   const [savingTier, setSavingTier] = useState(false);
   const [testingTier, setTestingTier] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string; ms: number; model: string } | null>(null);
+  const [testedTier, setTestedTier] = useState<string | null>(null);  // which tier the result is for
 
   // ── Load config ──────────────────────────────────────────────────────────
   const loadConfig = useCallback(async () => {
@@ -218,7 +219,7 @@ export default function ModelsPage() {
     setSavingTier(false);
   };
   const handleTestTier = async (tierName: string) => {
-    setTestingTier(tierName); setTestResult(null);
+    setTestingTier(tierName); setTestResult(null); setTestedTier(tierName);
     try {
       const res = await fetch("/api/settings/llm/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tier_name: tierName }) });
       const data = await res.json();
@@ -492,8 +493,8 @@ export default function ModelsPage() {
                           {/* Compact header row */}
                           <button
                             onClick={() => {
-                              if (isEditing) { setEditingTier(null); setTestResult(null); }
-                              else { setEditingTier(tier.tier_name); setEditModel(tier.model); setEditProvider(tier.provider); setEditApiBase(""); setTestResult(null); }
+                              if (isEditing) { setEditingTier(null); setTestResult(null); setTestedTier(null); }
+                              else { setEditingTier(tier.tier_name); setEditModel(tier.model); setEditProvider(tier.provider); setEditApiBase(""); setTestResult(null); setTestedTier(null); }
                             }}
                             className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-secondary/20 tech-transition"
                           >
@@ -529,7 +530,7 @@ export default function ModelsPage() {
                             </div>
                           </button>
 
-                          {testResult && editingTier === null && testingTier === null && tier.tier_name === (config.tiers.find((t) => t.tier_name === tier.tier_name)?.tier_name) && (
+                          {testResult && editingTier === null && testingTier === null && testedTier === tier.tier_name && (
                             <div className={`mx-4 mb-3 rounded-md border px-3 py-1.5 text-[10px] ${testResult.ok ? "border-success/30 bg-success/10 text-success" : "border-destructive/20 bg-destructive/5 text-destructive"}`}>
                               {testResult.ok ? "✓" : "✗"} {testResult.text} · {testResult.ms}ms{testResult.model ? ` · ${testResult.model}` : ""}
                             </div>
@@ -595,12 +596,12 @@ export default function ModelsPage() {
                                   disabled={savingTier || !editModel}
                                   className="rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 tech-transition"
                                 >{savingTier ? "Saving…" : "Save"}</button>
-                                <button onClick={() => { setEditingTier(null); setTestResult(null); }}
+                                <button onClick={() => { setEditingTier(null); setTestResult(null); setTestedTier(null); }}
                                   className="rounded-lg border border-border px-4 py-2 text-xs text-muted-foreground hover:text-foreground tech-transition"
                                 >Cancel</button>
                               </div>
 
-                              {testResult && (
+                              {testResult && testedTier === tier.tier_name && (
                                 <div className={`rounded-md border px-3 py-1.5 text-[10px] ${testResult.ok ? "border-success/30 bg-success/10 text-success" : "border-destructive/20 bg-destructive/5 text-destructive"}`}>
                                   {testResult.ok ? "✓" : "✗"} {testResult.text} · {testResult.ms}ms{testResult.model ? ` · ${testResult.model}` : ""}
                                 </div>

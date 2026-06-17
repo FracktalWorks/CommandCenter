@@ -73,6 +73,7 @@ class WebhookEvent(BaseModel):
 
 _KNOWN_AGENTS: frozenset[str] = frozenset(
     [
+        "orchestrator",
         "task-manager",
         "billing",
         "sales",
@@ -81,12 +82,27 @@ _KNOWN_AGENTS: frozenset[str] = frozenset(
         "reconciler",
         "strategy",
         "apis-config",
+        "commandcenter-dev",
     ]
 )
 
 # Human-readable metadata for the Control Plane agent picker.
 # Keys match the bare agent names in _KNOWN_AGENTS.
 _AGENT_REGISTRY: list[dict] = [
+    {
+        "name": "orchestrator",
+        "description": (
+            "AI Company Brain orchestrator — routes to specialist agents, "
+            "retrieves company data, spawns creation agents."
+        ),
+        "tags": ["orchestrator", "core", "routing"],
+        "status": "live",
+        # Runs through MAF with OpenAIChatCompletionClient (BYOK via litellm).
+        "agent_runtime": "maf",
+        "local_path": "apps/agent-orchestrator",
+        "integrations": [],
+        "optional_integrations": [],
+    },
     {
         "name": "task-manager",
         "description": "ClickUp task management — status, progress, and workload questions with citations.",
@@ -170,6 +186,20 @@ _AGENT_REGISTRY: list[dict] = [
         "local_path": "apps/agent-apis-config",
         "integrations": [],
         "optional_integrations": ["serpapi"],
+    },
+    {
+        "name": "commandcenter-dev",
+        "description": (
+            "CommandCenter Developer — edit code, run tests, debug issues, "
+            "and improve the CC platform itself. Full access to the CC repo."
+        ),
+        "tags": ["dev", "engineering", "code", "debug"],
+        "status": "live",
+        # GitHubCopilotAgent — native file ops, shell, git, full repo access.
+        "agent_runtime": "maf",
+        "local_path": "apps/agent-cc-dev",
+        "integrations": [],
+        "optional_integrations": [],
     },
 ]
 
@@ -809,6 +839,13 @@ async def register_agent(
     }
     dynamic.append(entry)
     _save_dynamic_agents(dynamic)
+    # Invalidate the cached registry block so the next agent run picks up the new
+    # agent name in the system prompt (KV-cache technique: stable prefix).
+    try:
+        from orchestrator.executor import _build_registry_block  # noqa: PLC0415
+        _build_registry_block.cache_clear()
+    except Exception:  # noqa: BLE001
+        pass
     _log.info("agent.registered", name=req.name, actor=user.email, source="local" if local_path else "github")
 
     # Eager background clone — only for GitHub repos (local paths need no cloning)
@@ -845,6 +882,11 @@ async def remove_agent(
     if len(new_dynamic) == len(dynamic):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {name!r} not found.")
     _save_dynamic_agents(new_dynamic)
+    try:
+        from orchestrator.executor import _build_registry_block  # noqa: PLC0415
+        _build_registry_block.cache_clear()
+    except Exception:  # noqa: BLE001
+        pass
     _log.info("agent.removed", name=name, actor=user.email)
     return {"deleted": name}
 
@@ -923,9 +965,13 @@ async def run_agent_stream_endpoint(
         pass
 
     # ── Memory enrichment: inject relevant past facts into the agent's context ──
+    # Technique #4 (memory context dedup): cache Mem0 + Graphiti results in Redis
+    # for 5 minutes per (user_id, message_hash).  Warm turns with similar queries
+    # skip re-fetching (~250 tokens + latency saved per cached turn).
     try:
         from acb_memory import get_memory_context  # noqa: PLC0415
         from acb_memory import search_entity_timeline  # noqa: PLC0415
+        import hashlib as _hashlib  # noqa: PLC0415
         user_msg = (
             req.payload.get("message")
             or req.payload.get("user_query")
@@ -933,30 +979,66 @@ async def run_agent_stream_endpoint(
         )
         memory_parts: list[str] = []
         if user_msg and user_id != "anonymous":
-            # Mem0: episodic facts from past conversations
-            mem_ctx = await get_memory_context(user_id, user_msg)
-            if mem_ctx:
-                memory_parts.append(
-                    "## Memory from past conversations\n" + mem_ctx
-                )
-
-            # Graphiti: time-aware facts about entities in the query
-            entity_hint = user_msg[:80]
-            graph_ctx = await search_entity_timeline(
-                entity_hint, user_msg
+            # Build a short cache key: user + first 120 chars of message
+            _mem_key = (
+                "cc:mem_ctx:"
+                + _hashlib.md5(
+                    f"{user_id}:{user_msg[:120]}".encode()
+                ).hexdigest()
             )
-            if graph_ctx:
-                memory_parts.append(
-                    "## Timeline facts from knowledge graph\n" + graph_ctx
-                )
+            _cached_mem: str | None = None
+            try:
+                import redis.asyncio as _aioredis  # noqa: PLC0415
+                from acb_common import get_settings as _gs  # noqa: PLC0415
+                _redis_url = getattr(_gs(), "redis_url", None) or "redis://localhost:6379/0"
+                _rc = _aioredis.from_url(_redis_url, decode_responses=True)
+                _cached_mem = await _rc.get(_mem_key)
+                await _rc.aclose()
+            except Exception:  # noqa: BLE001
+                pass
 
-            if memory_parts:
-                req.payload["memory_context"] = "\n\n".join(memory_parts)
+            if _cached_mem:
+                req.payload["memory_context"] = _cached_mem
                 _log.debug(
-                    "agent.memory_enriched",
+                    "agent.memory_cache_hit",
                     agent=agent_name,
                     user=user_id[:20],
                 )
+            else:
+                # Mem0: episodic facts from past conversations
+                mem_ctx = await get_memory_context(user_id, user_msg)
+                if mem_ctx:
+                    memory_parts.append(
+                        "## Memory from past conversations\n" + mem_ctx
+                    )
+
+                # Graphiti: time-aware facts about entities in the query
+                entity_hint = user_msg[:80]
+                graph_ctx = await search_entity_timeline(
+                    entity_hint, user_msg
+                )
+                if graph_ctx:
+                    memory_parts.append(
+                        "## Timeline facts from knowledge graph\n" + graph_ctx
+                    )
+
+                if memory_parts:
+                    combined = "\n\n".join(memory_parts)
+                    req.payload["memory_context"] = combined
+                    # Cache for 5 minutes (300s)
+                    try:
+                        _aioredis2 = _aioredis.from_url(
+                            _redis_url, decode_responses=True
+                        )
+                        await _aioredis2.setex(_mem_key, 300, combined)
+                        await _aioredis2.aclose()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    _log.debug(
+                        "agent.memory_enriched",
+                        agent=agent_name,
+                        user=user_id[:20],
+                    )
     except ImportError:
         pass
 

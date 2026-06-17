@@ -1,0 +1,12 @@
+{
+  "name": "commandcenter-dev",
+  "description": "CommandCenter Developer — edit code, run tests, debug issues, and improve the CC platform itself. Full access to the CC repo.",
+  "version": "0.1.0",
+  "runtime": "maf",
+  "skill_repos": [],
+  "mcp_servers": {},
+  "max_mutation_attempts": 1,
+  "tags": ["dev", "engineering", "code", "debug"],
+  "integrations": [],
+  "optional_integrations": []
+}

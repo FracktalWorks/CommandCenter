@@ -10,7 +10,7 @@ Control Plane (Next.js browser UI) and local development tools.
 - control_plane/src/lib/nav.ts -- Shared primary navigation config (used by Sidebar + mobile drawer)
 - control_plane/src/middleware.ts -- Route protection via NextAuth
 - control_plane/src/auth.ts -- NextAuth v5 config (Google SSO, JWT callbacks)
-- control_plane/src/app/api/agent/chat/route.ts -- AG-UI to frontend SSE translation
+- control_plane/src/app/api/agent/chat/route.ts -- UNIFIED AG-UI to frontend SSE translation. ALL agents (orchestrator, task-manager, cc-dev, any named/dynamic) go through the same /agent/run/stream gateway endpoint. No more isOrchestrator branching — one code path for all.
 - control_plane/src/components/AgentChat.tsx -- Main chat component
 - control_plane/src/components/MarkdownMessage.tsx -- GFM rendering with inline images
 - control_plane/src/components/ArtifactCard.tsx -- Inline file cards (images, MD, PDF, etc.)

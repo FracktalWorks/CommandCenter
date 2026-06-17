@@ -4,31 +4,24 @@
  * Returns a Server-Sent Events stream so the UI can render tokens and
  * tool-call events in real time (mirroring the VS Code Copilot experience).
  *
- * IMPORTANT — Three distinct runtimes; do not conflate:
+ * IMPORTANT — Two runtimes; do not conflate:
  *
- *   mode="copilot"   → GitHub Copilot SDK runtime (apps/gateway/routes/copilot_chat.py)
- *                       - CopilotClient wraps `gh copilot` CLI as a subprocess
- *                       - autopilot mode: native tool-calling (shell, file r/w, Python)
- *                       - reads AGENTS.md / .mcp.json from agent workspace
- *                       - on_pre_tool_use / on_post_tool_use hooks emit tool_start/tool_end SSE
- *                       - Auth: GITHUB_TOKEN (direct to api.githubcopilot.com)
- *                              OR BYOK via LiteLLM (session_kwargs["provider"])
- *                       - NOT the same as CopilotKit (the React UI library)
+ *   mode="copilot"   → ALL agents (orchestrator, task-manager, cc-dev, etc.)
+ *                       routed through the unified /agent/run/stream endpoint.
+ *                       The gateway executor loads each agent from its repo
+ *                       or local path, resolves integrations, and streams
+ *                       AG-UI events.  The same translateAndPersistStream
+ *                       layer handles every agent identically.
  *
  *   mode="litellm"   → Direct LiteLLM streaming (no orchestration, no tool calling)
  *                       - Raw OpenAI-compatible /chat/completions call
  *                       - Model = tier1/2/3 alias in infra/litellm/config.yaml
  *                       - Used for fast text-only responses
  *
- *   mode="langgraph" → Legacy LangGraph agent runner (batch, no streaming)
- *                       - POST /agent/run on FastAPI gateway
- *                       - Returns single delta+done pair (not streamed)
- *                       - Future: replace with /agent/langgraph streaming endpoint
- *
  * SSE event types:
  *   {"type":"delta",      "content":"…"}
- *   {"type":"reasoning",  "content":"…"}              — model chain-of-thought (reasoning models only)
- *   {"type":"progress",   "name":"…"}                  — tool about to run (live status)
+ *   {"type":"reasoning",  "content":"…"}              — model chain-of-thought
+ *   {"type":"progress",   "name":"…"}                  — tool about to run
  *   {"type":"tool_start", "id":"…","name":"…","args":{}}
  *   {"type":"tool_end",   "id":"…","name":"…","result":"…","success":bool}
  *   {"type":"done",       "run_id":"…"}
@@ -563,68 +556,13 @@ export async function POST(req: NextRequest): Promise<Response> {
     return streamLiteLLM({ message, messages, model, context });
   }
 
-  // ── Copilot/AG-UI path — ORCHESTRATOR ONLY ────────────────────────────────
-  // The /copilot/chat endpoint is hardwired at gateway startup to the single
-  // built-in orchestrator agent. Named agents (task-manager, sales-assistant,
-  // any GitHub-registered agent) must go through /agent/run so the executor
-  // can clone the repo, import agents.py, resolve integrations, and run via MAF.
-  const ORCHESTRATOR_NAMES = new Set(["orchestrator", "default", "commandcenter", ""]);
-  const isOrchestrator = ORCHESTRATOR_NAMES.has(agentName.toLowerCase().trim());
-
-  if (mode === "copilot" && isOrchestrator) {
-    let gatewayRes: Response;
-    try {
-      // AG-UI protocol: the current message must be part of the messages array.
-      // Append it after the history so the agent sees the full conversation.
-      const agUiMessages = [
-        ...(messages ?? []).map((m) => ({ role: m.role, content: m.content })),
-        { role: "user" as const, content: message },
-      ];
-      gatewayRes = await fetch(`${GATEWAY_URL}/copilot/chat`, {
-        method: "POST",
-        headers: await buildGatewayHeaders(),
-        body: JSON.stringify({
-          thread_id: threadId ?? "",
-          messages: agUiMessages,
-          think_mode: thinkMode ?? "auto",
-        }),
-        signal: AbortSignal.timeout(310_000),
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return new Response(
-        `data: ${JSON.stringify({ type: "error", content: `Gateway unreachable: ${msg}` })}\n\n`,
-        { status: 502, headers: sseHeaders() }
-      );
-    }
-    if (!gatewayRes.ok || !gatewayRes.body) {
-      const text = await gatewayRes.text().catch(() => `status ${gatewayRes.status}`);
-      return new Response(
-        `data: ${JSON.stringify({ type: "error", content: text })}\n\n`,
-        { status: gatewayRes.status, headers: sseHeaders() }
-      );
-    }
-    // Translate AG-UI → frontend SSE, persisting to Postgres so messages
-    // survive client disconnect (tab close, browser quit, network drop).
-    const translated = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        const assistantContent = await translateAndPersistStream(
-          gatewayRes.body!, controller, threadId ?? "", assistantMessageId,
-        );
-        // Post-stream memory extraction — fires after the full response is
-        // known, so Mem0 sees both sides of the conversation.
-        extractMemories(userId, message, assistantContent, messages ?? [], agentName);
-      },
-    });
-    return new Response(translated, { headers: sseHeaders() });
-  }
-
-  // ── Executor path: named agents (copilot mode) + langgraph mode ──────────
-  // Named agents (copilot mode): route through /agent/run/stream which returns
-  // a real AG-UI SSE stream so the UI sees tool events live.
-  // Legacy langgraph mode: falls back to batch /agent/run (no streaming).
-  if (mode === "copilot" && !isOrchestrator) {
-    // /agent/run/stream returns the same AG-UI event format as /copilot/chat.
+  // ── Copilot/AG-UI path — ALL agents (unified) ───────────────────────────
+  // Every agent (orchestrator, task-manager, commandcenter-dev, any named or
+  // dynamically registered agent) goes through the SAME /agent/run/stream
+  // endpoint.  The gateway executor loads the agent from its repo or local
+  // path, resolves integrations, and streams AG-UI events.  The frontend
+  // translation layer (translateAndPersistStream) is identical for all.
+  if (mode === "copilot") {
     let streamRes: Response;
     try {
       streamRes = await fetch(`${GATEWAY_URL}/agent/run/stream`, {
@@ -654,17 +592,17 @@ export async function POST(req: NextRequest): Promise<Response> {
     }
     // Translate AG-UI → frontend SSE, persisting to Postgres so messages
     // survive client disconnect (tab close, browser quit, network drop).
-    const translated2 = new ReadableStream<Uint8Array>({
+    const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
-        const assistantContent2 = await translateAndPersistStream(
+        const assistantContent = await translateAndPersistStream(
           streamRes.body!, controller, threadId ?? "", assistantMessageId,
         );
         // Post-stream memory extraction — fires after the full response is
         // known, so Mem0 sees both sides of the conversation.
-        extractMemories(userId, message, assistantContent2, messages ?? [], agentName);
+        extractMemories(userId, message, assistantContent, messages ?? [], agentName);
       },
     });
-    return new Response(translated2, { headers: sseHeaders() });
+    return new Response(stream, { headers: sseHeaders() });
   }
 
   // ── Legacy executor path: batch /agent/run (langgraph mode + fallback) ─

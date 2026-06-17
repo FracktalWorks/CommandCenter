@@ -22,8 +22,6 @@ import { createSession, getSessions } from "@/lib/sessions";
 
 const AGENT_NAME = "commandcenter-dev";
 
-/** Stable session-id key in localStorage so returning users resume the
- *  same thread across browser restarts. */
 const SESSION_STORAGE_KEY = "cc-workbench-session-id";
 
 function getStoredSessionId(): string | null {
@@ -40,36 +38,29 @@ export default function CCWorkbenchPage() {
   const { data: session } = useSession();
   const userId = session?.user?.email ?? "";
 
-  // ── Stable session — reuse localStorage id or create a fresh one ──────
+  // ── Stable session ─────────────────────────────────────────────────────
   const [activeSession, setActiveSession] = useState<{
-    id: string;
-    agentName: string;
-    title?: string;
-    lastPreview?: string;
-    messageCount: number;
+    id: string; agentName: string; title?: string;
+    lastPreview?: string; messageCount: number;
   } | null>(null);
   const resolved = useRef(false);
 
   useEffect(() => {
     if (resolved.current) return;
     resolved.current = true;
-
     const stored = getStoredSessionId();
     if (stored) {
       const existing = getSessions().find((s) => s.id === stored);
-      if (existing) {
-        setActiveSession(existing);
-        return;
-      }
+      if (existing) { setActiveSession(existing); return; }
     }
-    // createSession handles localStorage write-through + Postgres sync.
     const fresh = createSession(AGENT_NAME);
     storeSessionId(fresh.id);
     setActiveSession(fresh);
   }, []);
 
   // ── Artifact sidebar ───────────────────────────────────────────────────
-  const [files, setFiles] = useState<FileEntry[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [artifactUpdates, setArtifactUpdates] = useState<FileEntry[]>([]);
   const [viewerFile, setViewerFile] = useState<FileEntry | null>(null);
 
   const handleArtifact = useCallback((entry: ArtifactEntry) => {
@@ -80,38 +71,22 @@ export default function CCWorkbenchPage() {
       modified_at: new Date().toISOString(),
       mime_type: "",
     };
-    setFiles((prev) => {
-      const idx = prev.findIndex((f) => f.path === fe.path);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = fe;
-        return next;
-      }
-      return [...prev, fe];
-    });
+    setArtifactUpdates((prev) => [...prev, fe]);
   }, []);
 
-  // ── Session activity (auto-title + last-preview for the sidebar) ──────
+  // ── Session activity ───────────────────────────────────────────────────
   const handleActivity = useCallback(
-    (info: {
-      firstUserMessage?: string;
-      lastPreview?: string;
-      messageCount: number;
-    }) => {
+    (info: { firstUserMessage?: string; lastPreview?: string;
+             messageCount: number }) => {
       setActiveSession((prev) =>
-        prev
-          ? {
-              ...prev,
-              title: info.firstUserMessage
-                ? info.firstUserMessage.slice(0, 60)
-                : prev.title,
-              lastPreview: info.lastPreview,
-              messageCount: info.messageCount,
-            }
-          : prev,
+        prev ? { ...prev,
+          title: info.firstUserMessage
+            ? info.firstUserMessage.slice(0, 60) : prev.title,
+          lastPreview: info.lastPreview,
+          messageCount: info.messageCount,
+        } : prev,
       );
-    },
-    [],
+    }, [],
   );
 
   if (!activeSession) {
@@ -126,7 +101,6 @@ export default function CCWorkbenchPage() {
 
   return (
     <div className="flex h-full overflow-hidden">
-      {/* ── Chat area ─────────────────────────────────────────────────── */}
       <div className="flex flex-1 flex-col overflow-hidden min-w-0">
         <AgentChat
           key={activeSession.id}
@@ -138,27 +112,14 @@ export default function CCWorkbenchPage() {
         />
       </div>
 
-      {/* ── File browser ──────────────────────────────────────────────── */}
       <ArtifactSidebar
-        files={files}
-        onRefresh={async () => {
-          try {
-            const res = await fetch(
-              `/api/agent/workspace/${activeSession.id}/files`,
-            );
-            if (res.ok) {
-              const data = (await res.json()) as FileEntry[];
-              setFiles(data);
-            }
-          } catch {
-            /* silently ignore fetch errors */
-          }
-        }}
-        onOpenFile={(file) => setViewerFile(file)}
         sessionId={activeSession.id}
+        open={sidebarOpen}
+        onToggle={() => setSidebarOpen((v) => !v)}
+        onFileOpen={(file) => setViewerFile(file)}
+        artifactUpdates={artifactUpdates}
       />
 
-      {/* ── File viewer modal ─────────────────────────────────────────── */}
       {viewerFile && (
         <ArtifactViewerModal
           file={viewerFile}

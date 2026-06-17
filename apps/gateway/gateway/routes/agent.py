@@ -418,7 +418,15 @@ def _validate_agent_name(name: str) -> str:
     Performs case-insensitive matching against the registry so names
     stored with mixed case in the DB still resolve correctly.
     """
+    # ── Legacy aliases (map old names to canonical agent names) ──────────
+    _LEGACY_ALIASES: dict[str, str] = {
+        "cc-workbench": "commandcenter-dev",
+    }
+
     safe = name.lower().strip()
+    # Resolve legacy alias first
+    safe = _LEGACY_ALIASES.get(safe, safe)
+
     # Strip optional 'agent-' prefix so 'agent-project-manager' matches 'project-manager'
     if safe.startswith("agent-"):
         safe_no_prefix = safe[len("agent-"):]

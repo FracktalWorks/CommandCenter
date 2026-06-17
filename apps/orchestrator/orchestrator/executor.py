@@ -220,6 +220,12 @@ call_agent(name,msg), call_agents_parallel(tasks), call_agent_background(name,ms
 web_search(query), fetch_page(url)
 write_artifact(path,content) — files go to outputs/
 remember(query), recall_timeline(entity,query), save_memory(fact), save_episode(name,content)
+manage_todo_list(todoList) — structured task tracking panel (JSON array)
+ask_questions(questions) — HITL: ask user for clarification via interactive card
+get_errors(filePaths?) — check Python files for syntax/lint errors
+save_note(path,fact), recall_notes(path,query?) — repo-scoped working memory
+query_history(sql) — SELECT-only query against chat history DB
+github_search(q,scope?,max?), github_repo_search(repo,q?) — code search
 
 {registry_block}
 ---"""
@@ -248,6 +254,26 @@ remember(query), recall_timeline(entity,query), save_memory(fact), save_episode(
 ### Workspace & file writing
 Workspace folders visible in the Files Viewer: **outputs/** (default for generated files), **inputs/** (user uploads, read-only), **agent-data/** (reusable reference data).
 - **write_artifact(path, content, encoding?)** — Writes to outputs/ if path has no prefix. Returns a ``download_url`` — you MUST embed it as a clickable link in your reply.
+
+### Task planning & progress tracking
+- **manage_todo_list(todoList)** — Update the live "Todos (n/m)" panel above the chat input.  Takes a JSON object with ``"todoList"`` (the COMPLETE array of all items) and optional ``"operation"`` (``"write"`` or ``"read"``).  Each item: ``id`` (number, sequential from 1), ``title`` (string, 3-7 words), ``status`` (``"not-started"``, ``"in-progress"``, or ``"completed"``).  Use this tool VERY frequently.  CRITICAL workflow: 1) Plan tasks with specific items. 2) Mark ONE as ``"in-progress"`` before starting. 3) Mark it ``"completed"`` immediately after finishing. 4) Move to next.  Do NOT use for trivial single-step requests.  The user sees this panel update in real time.
+
+### Human-in-the-Loop (HITL) elicitation
+- **ask_questions(questions)** — Pause execution and ask the user clarifying questions via interactive cards.  Takes a JSON object with ``"questions"`` array.  Each question: ``header`` (short label), ``question`` (the question text), optional ``options`` (array of ``{{label, description?, recommended?}}``), ``multiSelect``, ``allowFreeformInput``.  AFTER calling this tool, STOP and wait — the user's answers will arrive as the next message.  Use when you need to disambiguate, the user's request is missing a parameter, or a decision has important implications.
+
+### Code quality & error checking
+- **get_errors(filePaths?)** — Check Python files for syntax, type, and lint errors.  Call after editing or creating files.  Pass a JSON array of file paths (e.g. ``'["executor.py"]'``) or ``'[]'`` to auto-discover recently changed files.  Runs ``py_compile`` (syntax) and ``ruff`` (lint, if installed).  Returns structured errors or ``"No errors found."``.
+
+### Working memory (repo-scoped notes)
+- **save_note(path, fact)** — Append a dated bullet to a markdown notes file under ``agent-data/``.  Your canonical working memory is ``agent-data/NOTES.md`` — read it at session start with ``recall_notes("NOTES.md")``.
+- **recall_notes(path, query?)** — Read back a notes file, optionally filtered by a search query.  Use to restore context from previous sessions.
+
+### Conversation history
+- **query_history(query)** — Run a SELECT-only SQL query against the chat history database (tables: ``chat_session``, ``chat_message``).  Use to recall what was discussed in prior sessions, find past decisions, or resume work on a known thread.
+
+### GitHub code search
+- **github_search(query, scope?, maxResults?)** — Lexical search across public GitHub repositories.  Supports ``language:python``, ``repo:owner/name``, ``path:src/`` filters.
+- **github_repo_search(repo, query?)** — Search within a specific GitHub repository for code snippets and implementation patterns.
 
 ### Working memory (NOTES.md pattern)
 Maintain **`agent-data/NOTES.md`** as your cross-session working memory.
@@ -352,6 +378,50 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
         ]
     except ImportError:
         pass  # acb_memory not installed — skip gracefully
+
+    # Todo-list tracking — VS Code Copilot parity panel above chat input.
+    try:
+        from acb_skills.todo_tools import manage_todo_list  # noqa: PLC0415
+        _all_tools = _all_tools + [manage_todo_list]
+    except ImportError:
+        pass
+
+    # HITL elicitation — agent asks user clarifying questions mid-stream.
+    try:
+        from acb_skills.ask_tools import ask_questions  # noqa: PLC0415
+        _all_tools = _all_tools + [ask_questions]
+    except ImportError:
+        pass
+
+    # Code error checking — lint/syntax/type checks after edits.
+    try:
+        from acb_skills.error_tools import get_errors  # noqa: PLC0415
+        _all_tools = _all_tools + [get_errors]
+    except ImportError:
+        pass
+
+    # Repo-scoped notes — agents maintain durable working memory.
+    try:
+        from acb_skills.note_tools import save_note  # noqa: PLC0415
+        from acb_skills.note_tools import recall_notes
+        _all_tools = _all_tools + [save_note, recall_notes]
+    except ImportError:
+        pass
+
+    # Session history query — recall past conversations.
+    try:
+        from acb_skills.history_tools import query_history  # noqa: PLC0415
+        _all_tools = _all_tools + [query_history]
+    except ImportError:
+        pass
+
+    # GitHub code search — lexical + semantic search across repos.
+    try:
+        from acb_skills.github_tools import github_search  # noqa: PLC0415
+        from acb_skills.github_tools import github_repo_search
+        _all_tools = _all_tools + [github_search, github_repo_search]
+    except ImportError:
+        pass
 
     # ── Dynamic tool scoping (technique #3: inject only what agent needs) ──
     # If tool_scope is set (from config.json), filter to the named subset.
@@ -1899,10 +1969,76 @@ async def run_agent_stream(
                                     _tc_args = _c.arguments
                                     _args_str = (json.dumps(_tc_args) if isinstance(_tc_args, dict)
                                                  else str(_tc_args or ""))
-                                    # Track CLI todo mutations (sql tool on
-                                    # the todos table) → structured panel.
+                                    # ── Structured todo-list tracking ─────
+                                    # Two paths to the same TODO_LIST event:
+                                    # 1. manage_todo_list tool (direct call
+                                    #    from the agent — primary path for
+                                    #    all agent types).
+                                    # 2. sql tool on the todos table (Copilot
+                                    #    CLI legacy path — kept as fallback).
                                     try:
-                                        if _todo_tracker.feed(_tc_name, _tc_args):
+                                        _emitted = False
+                                        if _tc_name == "manage_todo_list":
+                                            _raw_todos = (
+                                                _tc_args.get("todoList", "[]")
+                                                if isinstance(_tc_args, dict)
+                                                else "[]"
+                                            )
+                                            # Handle both wrapped object
+                                            # and bare array formats.
+                                            _parsed = None
+                                            if isinstance(_raw_todos, str):
+                                                try:
+                                                    _parsed = json.loads(_raw_todos)
+                                                except Exception:  # noqa: BLE001
+                                                    _parsed = None
+                                            elif isinstance(_raw_todos, list):
+                                                _parsed = _raw_todos
+                                            # Fallback: maybe args IS the
+                                            # array (old format).
+                                            if (_parsed is None
+                                                    and isinstance(_tc_args, list)):
+                                                _parsed = _tc_args
+                                            if isinstance(_parsed, list):
+                                                _cleaned: list[dict] = []
+                                                for _t in _parsed:
+                                                    if isinstance(_t, dict):
+                                                        _cleaned.append({
+                                                            "id": str(_t.get("id", "")),
+                                                            "title": str(_t.get("title", "")),
+                                                            "status": str(_t.get("status", "not-started")),
+                                                        })
+                                                # Always emit — even empty
+                                                # list clears the panel.
+                                                yield _sse({"type": "TODO_LIST",
+                                                            "todos": _cleaned})
+                                                _emitted = True
+                                        # HITL elicitation — forward
+                                        # ask_questions args as CUSTOM event
+                                        # so the frontend renders the card
+                                        # even for Copilot SDK agents where
+                                        # the tool runs in the CLI process.
+                                        if _tc_name == "ask_questions":
+                                            try:
+                                                _raw_qs = (
+                                                    _tc_args.get("questions", "[]")
+                                                    if isinstance(_tc_args, dict)
+                                                    else "[]"
+                                                )
+                                                _qs = (
+                                                    json.loads(_raw_qs)
+                                                    if isinstance(_raw_qs, str)
+                                                    else _raw_qs
+                                                )
+                                                if isinstance(_qs, list):
+                                                    yield _sse({
+                                                        "type": "CUSTOM",
+                                                        "name": "elicitation_requested",
+                                                        "value": {"questions": _qs},
+                                                    })
+                                            except Exception:  # noqa: BLE001
+                                                pass
+                                        if not _emitted and _todo_tracker.feed(_tc_name, _tc_args):
                                             yield _sse({"type": "TODO_LIST",
                                                         "todos": _todo_tracker.snapshot()})
                                     except Exception:  # noqa: BLE001

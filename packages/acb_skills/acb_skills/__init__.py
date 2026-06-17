@@ -2,6 +2,12 @@
 from acb_skills.agent_tools import call_agent, call_agent_background
 from acb_skills.web_tools import fetch_page, web_search
 from acb_skills.write_artifact import write_artifact, _WRITE_ARTIFACT_CONTEXT
+from acb_skills.todo_tools import manage_todo_list
+from acb_skills.ask_tools import ask_questions
+from acb_skills.error_tools import get_errors
+from acb_skills.note_tools import save_note, recall_notes
+from acb_skills.history_tools import query_history
+from acb_skills.github_tools import github_search, github_repo_search
 from acb_skills.integrations import (
     IntegrationMisconfiguredError,
     IntegrationNotFoundError,
@@ -35,4 +41,18 @@ __all__ = [
     # File-writing tool (auto-injected; also importable explicitly)
     "write_artifact",
     "_WRITE_ARTIFACT_CONTEXT",
+    # Todo-list management tool (auto-injected; also importable explicitly)
+    "manage_todo_list",
+    # HITL elicitation tool (auto-injected)
+    "ask_questions",
+    # Code error-checking tool (auto-injected)
+    "get_errors",
+    # Repo-scoped note tools (auto-injected)
+    "save_note",
+    "recall_notes",
+    # Session history query tool (auto-injected)
+    "query_history",
+    # GitHub code search tools (auto-injected)
+    "github_search",
+    "github_repo_search",
 ]

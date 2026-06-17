@@ -223,6 +223,8 @@ export interface PersistedMessage {
   reasoningBlocks?: string[];
   agentState?: Record<string, unknown>;
   customEvents?: { name: string; value: unknown }[];
+  /** Agent's structured todo list (VS Code Todos panel parity). */
+  todos?: { id: string; title: string; status: string }[];
 }
 
 const MESSAGES_PREFIX = "cc-msgs-";
@@ -310,6 +312,7 @@ export async function fetchMessagesFromDb(sessionId: string): Promise<PersistedM
       reasoning?: string;
       agentState?: Record<string, unknown>;
       customEvents?: { name: string; value: unknown }[];
+      todos?: { id: string; title: string; status: string }[];
     }>;
     // Map Postgres `reasoning` field to localStorage `reasoningBlocks`.
     // Split on the block separator WITHOUT dropping empty segments so block

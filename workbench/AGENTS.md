@@ -78,3 +78,11 @@ Control Plane (Next.js browser UI) and local development tools.
 - Model picker and agent switcher functional
 - Generated images display inline in chat messages
 - Artifact cards appear for files written by agents
+
+## HITL (Human-in-the-Loop)
+- ConfirmationCard.tsx — Approve/Reject prompt for agent confirmation requests
+- ElicitationCard.tsx — Structured question card (VS Code ask_questions parity):
+  single/multi-select options, freeform text input, recommended defaults
+- TodoPanel.tsx — VS Code-style "Todos (n/m)" collapsible panel above input
+- Both cards render inline in the chat thread; user answers are sent as
+  the next chat message for the agent to process

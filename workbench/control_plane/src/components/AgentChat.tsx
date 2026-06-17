@@ -26,6 +26,8 @@ import type { FileEntry } from "@/components/ArtifactSidebar";
 import FileUploadButton from "@/components/FileUploadButton";
 import SuggestionPills from "@/components/SuggestionPills";
 import ConfirmationCard from "@/components/ConfirmationCard";
+import ElicitationCard from "@/components/ElicitationCard";
+import type { ElicitationQuestion, ElicitationAnswers } from "@/components/ElicitationCard";
 import TodoPanel from "@/components/TodoPanel";
 import { parseAgentError } from "@/lib/parseAgentError";
 import type { ParsedAgentError } from "@/lib/parseAgentError";
@@ -471,6 +473,7 @@ export default function AgentChat({
       reasoningBlocks: m.reasoningBlocks,
       agentState: m.agentState,
       customEvents: m.customEvents,
+      todos: m.todos,
     }));
     saveMessages(sessionId, toSave);
   }, [messages, sessionId]);
@@ -535,6 +538,11 @@ export default function AgentChat({
     id: string; title: string; detail?: string; context?: string;
   } | null>(null);
 
+  // ── HITL elicitation state (VS Code ask_questions parity) ────────────
+  const [elicitation, setElicitation] = useState<{
+    questions: ElicitationQuestion[];
+  } | null>(null);
+
   // Subscribe to agent events for HITL detection
   useAgentEvents({
     onCustomEvent: ({ name, value }) => {
@@ -546,6 +554,13 @@ export default function AgentChat({
           detail: v.detail ? String(v.detail) : undefined,
           context: v.context ? String(v.context) : undefined,
         });
+      }
+      if (name === "elicitation_requested" && value && typeof value === "object") {
+        const v = value as Record<string, unknown>;
+        const qs = v.questions;
+        if (Array.isArray(qs) && qs.length > 0) {
+          setElicitation({ questions: qs as ElicitationQuestion[] });
+        }
       }
     },
     onRunFinalized: () => {
@@ -580,6 +595,7 @@ export default function AgentChat({
         reasoningBlocks: m.reasoningBlocks,
         agentState: m.agentState,
         customEvents: m.customEvents,
+        todos: m.todos,
       }));
       // Use sendBeacon for reliable delivery during page unload
       const payload = toSave.map((m) => ({
@@ -594,6 +610,7 @@ export default function AgentChat({
           : null,
         agent_state: m.agentState ?? null,
         custom_events: m.customEvents ?? [],
+        todos: m.todos ?? [],
       }));
       try {
         navigator.sendBeacon(
@@ -1017,6 +1034,28 @@ export default function AgentChat({
             <ConfirmationCard title={confirmation.title} detail={confirmation.detail} context={confirmation.context}
               onApprove={() => { submitText(`APPROVE: ${confirmation.id}`); setConfirmation(null); }}
               onReject={() => { submitText(`REJECT: ${confirmation.id}`); setConfirmation(null); }} />
+          )}
+
+          {elicitation && (
+            <ElicitationCard
+              questions={elicitation.questions}
+              onSubmit={(answers: ElicitationAnswers) => {
+                const formatted = Object.entries(answers)
+                  .map(([header, ans]) => {
+                    const parts: string[] = [`[${header}]`];
+                    if (ans.selected && ans.selected.length > 0) {
+                      parts.push(`Selected: ${ans.selected.join(", ")}`);
+                    }
+                    if (ans.freeform) {
+                      parts.push(`Answer: ${ans.freeform}`);
+                    }
+                    return parts.join("\n");
+                  })
+                  .join("\n\n");
+                submitText(formatted);
+                setElicitation(null);
+              }}
+            />
           )}
 
           {!isLoading && messages.length > 0 && (() => {

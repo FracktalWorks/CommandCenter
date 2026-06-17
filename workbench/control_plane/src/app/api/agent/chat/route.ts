@@ -89,6 +89,7 @@ async function persistAssistantMessage(
   reasoningBlocks: string[] = [],
   progressLines: string[] = [],
   messageId?: string,
+  todos?: { id: string; title: string; status: string }[],
 ): Promise<void> {
   if (!content.trim() && toolEvents.length === 0 && reasoningBlocks.length === 0) return;
   try {
@@ -105,6 +106,7 @@ async function persistAssistantMessage(
       reasoning: reasoningBlocks.length > 0 ? reasoningBlocks.join("\n---\n") : null,
       agent_state: null,
       custom_events: [],
+      todos: todos ?? [],
     }];
     // Write directly to the gateway's chat message store so messages survive
     // even if the Next.js process restarts mid-stream.
@@ -153,6 +155,8 @@ async function translateAndPersistStream(
   const reasoningBlocks: string[] = [];
   /** Brief progress snippets shown in the ThinkingContainer header. */
   const progressLines: string[] = [];
+  /** Accumulated todo list (VS Code Todos panel parity). */
+  let todos: { id: string; title: string; status: string }[] = [];
   let buf = "";
   let assistantContent = "";
   let lastPersistTime = Date.now();
@@ -215,7 +219,8 @@ async function translateAndPersistStream(
           out = { type: "progress", name: msg };
         } else if (t === "TODO_LIST") {
           // Structured todo list (VS Code Todos panel parity).
-          out = { type: "todos", todos: ev.todos ?? [] };
+          todos = (ev.todos as { id: string; title: string; status: string }[]) ?? [];
+          out = { type: "todos", todos }; }
         } else if (t === "TOOL_CALL_START") {
           const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
           toolNames[String(ev.toolCallId ?? "")] = name;
@@ -311,7 +316,7 @@ async function translateAndPersistStream(
         const now = Date.now();
         if ((assistantContent.trim() || reasoningBlocks.length > 0) && now - lastPersistTime > 3000) {
           lastPersistTime = now;
-          persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, assistantMessageId).catch(() => {});
+          persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, assistantMessageId, todos).catch(() => {});
         }
       }
     }
@@ -321,7 +326,7 @@ async function translateAndPersistStream(
 
   // Final persist — ensure the complete message is saved with all stream metadata.
   if (assistantContent.trim() || toolEvents.length > 0 || reasoningBlocks.length > 0) {
-    await persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, assistantMessageId).catch(() => {});
+    await persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, assistantMessageId, todos).catch(() => {});
   }
 
   if (clientConnected) {

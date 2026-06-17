@@ -70,6 +70,12 @@ tools so no agent repo needs to declare them:
 - web_search / fetch_page                                  (web_tools.py)
 - write_artifact                                           (write_artifact.py)
 - remember / recall_timeline / save_memory / save_episode   (memory_tools.py)
+- manage_todo_list                                         (todo_tools.py)
+- ask_questions                                            (ask_tools.py)
+- get_errors                                               (error_tools.py)
+- save_note / recall_notes                                 (note_tools.py)
+- query_history                                            (history_tools.py)
+- github_search / github_repo_search                       (github_tools.py)
 Injection targets: _tools (GitHubCopilotAgent), tools (MAF Agent), _default_options.tools (legacy).
 Tool guidance is appended to _default_options.system_message via _build_injected_tools_addendum().
 User context (_set_memory_user_id) is set by gateway route agent.py before each run.

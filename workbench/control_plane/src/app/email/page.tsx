@@ -91,8 +91,6 @@ export default function EmailPage() {
       const tab = (e as CustomEvent<string>).detail;
       if (tab === "email-accounts" && accountsDrawerRef.current) {
         openDrawer(accountsDrawerRef.current);
-      } else if (tab === "email-inbox") {
-        setMobileView("inbox");
       } else if (tab === "email-ai" && aiDrawerRef.current) {
         openDrawer(aiDrawerRef.current);
       }

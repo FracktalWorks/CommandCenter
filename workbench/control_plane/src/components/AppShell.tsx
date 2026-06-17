@@ -267,13 +267,6 @@ function MobileBottomNavInner({
           <>
             <button
               onClick={() => dispatchNav("email-accounts")}
-              className="flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground min-w-[56px]"
-            >
-              <MenuIcon size={22} />
-              <span className="text-[10px] font-medium leading-none">Accounts</span>
-            </button>
-            <button
-              onClick={() => dispatchNav("email-inbox")}
               className="flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors text-primary min-w-[56px]"
             >
               <Mail size={22} />

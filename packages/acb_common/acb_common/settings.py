@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     # -- Bot git identity (written into every local clone via git config) --
     # Commits and PRs opened by Self_Mutation_Node carry this identity.
     # Create a dedicated GitHub machine user (or use the GitHub App's identity).
-    github_bot_name: str = "commandcenter-bot"
+    github_bot_name: str = "Command-Center"
     github_bot_email: str = ""                # default: {github_bot_name}@users.noreply.github.com
 
     # OpenHands Self-Mutation Sandbox (v2 — ADR-021)

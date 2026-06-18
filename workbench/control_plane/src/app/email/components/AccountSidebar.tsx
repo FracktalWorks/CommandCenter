@@ -14,6 +14,7 @@ interface AccountSidebarProps {
   folders: EmailFolder[];
   selectedFolder: string;
   onFolderSelect: (folder: string) => void;
+  onAddAccount?: () => void;
 }
 
 export function AccountSidebar({
@@ -23,6 +24,7 @@ export function AccountSidebar({
   folders,
   selectedFolder,
   onFolderSelect,
+  onAddAccount,
 }: AccountSidebarProps) {
   const [accountsExpanded, setAccountsExpanded] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -39,6 +41,7 @@ export function AccountSidebar({
         <button
           className="p-1 rounded hover:bg-sidebar-accent text-muted-foreground hover:text-sidebar-foreground transition-colors"
           title="Add email account"
+          onClick={onAddAccount}
         >
           <Plus size={14} />
         </button>

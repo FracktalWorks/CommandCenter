@@ -9,6 +9,7 @@ import {
   Columns2,
   ArrowLeft,
   Pencil,
+  X,
 } from "lucide-react";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
@@ -28,6 +29,7 @@ export default function EmailPage() {
   const [leftOpen, setLeftOpen] = useState(true);
   const [listOpen, setListOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
+  const [showAddModal, setShowAddModal] = useState(false);
 
   // Mobile-specific state
   const [mobileView, setMobileView] = useState<"inbox" | "detail">("inbox");
@@ -110,6 +112,20 @@ export default function EmailPage() {
     [selectFolder, isMobile, closeDrawer]
   );
 
+  const handleConnect = useCallback((provider: "gmail" | "microsoft" | "imap") => {
+    if (provider === "imap") {
+      window.location.href = "/email?addAccount=imap";
+    } else {
+      const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
+      const redirectAfter = encodeURIComponent(window.location.href);
+      window.location.href = `${gatewayUrl}/email/oauth/${provider}/authorize?redirect_after=${redirectAfter}`;
+    }
+  }, []);
+
+  const handleAddAccount = useCallback(() => {
+    setShowAddModal(true);
+  }, []);
+
   accountsDrawerRef.current = (
     <AccountSidebar
       accounts={accounts}
@@ -118,6 +134,7 @@ export default function EmailPage() {
       folders={folders}
       selectedFolder={selectedFolder}
       onFolderSelect={handleFolderSelect}
+      onAddAccount={handleAddAccount}
     />
   );
 
@@ -235,6 +252,7 @@ export default function EmailPage() {
               folders={folders.length > 0 ? folders : []}
               selectedFolder={selectedFolder}
               onFolderSelect={selectFolder}
+              onAddAccount={handleAddAccount}
             />
           )}
         </div>
@@ -425,6 +443,59 @@ export default function EmailPage() {
         replyToBody={composeDefaults?.replyToBody}
         replyToMessageId={composeDefaults?.replyToMessageId}
       />
+
+      {/* Add Account Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setShowAddModal(false)} />
+          <div className="relative bg-card border border-border rounded-2xl shadow-2xl p-6 w-full max-w-sm mx-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-semibold text-foreground">Add Email Account</h3>
+              <button
+                onClick={() => setShowAddModal(false)}
+                className="p-1 rounded-md hover:bg-secondary text-muted-foreground transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="space-y-2">
+              <button
+                onClick={() => { setShowAddModal(false); handleConnect("gmail"); }}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-border hover:border-red-400/40 hover:bg-red-500/5 transition-colors text-left"
+              >
+                <span className="w-8 h-8 rounded-full bg-red-500/15 text-red-400 flex items-center justify-center text-xs font-bold">G</span>
+                <div>
+                  <div className="text-sm font-medium text-foreground">Google / Gmail</div>
+                  <div className="text-[11px] text-muted-foreground">Sign in with Google OAuth</div>
+                </div>
+              </button>
+              <button
+                onClick={() => { setShowAddModal(false); handleConnect("microsoft"); }}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-border hover:border-blue-400/40 hover:bg-blue-500/5 transition-colors text-left"
+              >
+                <span className="w-8 h-8 rounded-full bg-blue-500/15 text-blue-400 flex items-center justify-center text-xs font-bold">M</span>
+                <div>
+                  <div className="text-sm font-medium text-foreground">Microsoft / Outlook</div>
+                  <div className="text-[11px] text-muted-foreground">Sign in with Microsoft OAuth</div>
+                </div>
+              </button>
+              <button
+                onClick={() => { setShowAddModal(false); handleConnect("imap"); }}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-border hover:border-amber-400/40 hover:bg-amber-500/5 transition-colors text-left"
+              >
+                <span className="w-8 h-8 rounded-full bg-amber-500/15 text-amber-400 flex items-center justify-center text-xs font-bold">IM</span>
+                <div>
+                  <div className="text-sm font-medium text-foreground">IMAP / SMTP</div>
+                  <div className="text-[11px] text-muted-foreground">Manual server configuration</div>
+                </div>
+              </button>
+            </div>
+            <p className="mt-4 text-[10px] text-muted-foreground text-center">
+              Credentials are encrypted at rest with AES-256-GCM
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

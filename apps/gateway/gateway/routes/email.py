@@ -34,8 +34,10 @@ from uuid import uuid4
 import httpx
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger, get_settings
+from urllib.parse import urlencode
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -1132,6 +1134,7 @@ _oauth_states: dict[str, dict[str, str]] = {}
 async def oauth_authorize(
     provider: str,
     user: UserContext = Depends(get_current_user),
+    redirect_after: str = Query(default=""),
 ):
     """Start OAuth flow for an email provider."""
     state = secrets.token_urlsafe(32)
@@ -1179,6 +1182,7 @@ async def oauth_authorize(
     _oauth_states[state] = {
         "provider": provider,
         "user_id": user.email or "anonymous",
+        "redirect_after": redirect_after,
     }
 
     return {"url": auth_url}
@@ -1190,23 +1194,53 @@ async def oauth_callback(
     code: str = Query(...),
     state: str = Query(...),
 ):
-    """Handle OAuth callback — exchange code for tokens and create account."""
+    """Handle OAuth callback — exchange code for tokens and redirect to workbench."""
+    workbench_url = os.environ.get(
+        "WORKBENCH_PUBLIC_URL",
+        os.environ.get("GATEWAY_PUBLIC_URL", "http://localhost:8000").replace(":8000", ":3001"),
+    )
+
+    # Build the workbench callback page URL
+    callback_page = f"{workbench_url}/email/oauth/callback"
+
+    # Validate state
     if state not in _oauth_states:
-        raise HTTPException(status_code=400, detail="Invalid state")
+        return RedirectResponse(
+            f"{callback_page}?{urlencode({'error': 'invalid_state'})}",
+            status_code=302,
+        )
 
     oauth_data = _oauth_states.pop(state)
+    redirect_after = oauth_data.get("redirect_after", "")
     redirect_uri = _build_redirect_uri(provider)
 
     # Exchange code for tokens
-    if provider == "gmail":
-        token_data = await _exchange_gmail_token(code, redirect_uri)
-    elif provider == "microsoft":
-        token_data = await _exchange_msft_token(code, redirect_uri)
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+    try:
+        if provider == "gmail":
+            token_data = await _exchange_gmail_token(code, redirect_uri)
+        elif provider == "microsoft":
+            token_data = await _exchange_msft_token(code, redirect_uri)
+        else:
+            return RedirectResponse(
+                f"{callback_page}?{urlencode({'error': f'unknown_provider_{provider}'})}",
+                status_code=302,
+            )
+    except Exception as exc:
+        _log.error("Token exchange failed: %s", exc)
+        return RedirectResponse(
+            f"{callback_page}?{urlencode({'error': 'token_exchange_failed'})}",
+            status_code=302,
+        )
 
     # Get user email from provider
-    user_email = await _get_provider_email(provider, token_data["access_token"])
+    try:
+        user_email = await _get_provider_email(provider, token_data["access_token"])
+    except Exception as exc:
+        _log.error("Failed to get provider email: %s", exc)
+        return RedirectResponse(
+            f"{callback_page}?{urlencode({'error': 'email_fetch_failed'})}",
+            status_code=302,
+        )
 
     # Store in encrypted DB
     from acb_llm.key_store import get_key_store
@@ -1231,9 +1265,9 @@ async def oauth_callback(
             },
         )
         if existing.fetchone():
-            raise HTTPException(
-                status_code=409,
-                detail="Account already connected"
+            return RedirectResponse(
+                f"{callback_page}?{urlencode({'error': 'duplicate', 'email': user_email, 'provider': provider})}",
+                status_code=302,
             )
 
         # Create account
@@ -1243,7 +1277,7 @@ async def oauth_callback(
                    (id, user_id, provider, email_address, label,
                     avatar_color, credentials_encrypted)
                    VALUES (:id, :user_id, :provider, :email, :label,
-                           :color, :creds)
+                            :color, :creds)
                    RETURNING id"""
             ),
             {
@@ -1258,12 +1292,21 @@ async def oauth_callback(
         )
         await db.commit()
 
-        return {
-            "ok": True,
-            "account_id": str(result.fetchone()[0]),
+        account_id = str(result.fetchone()[0])
+
+        # Success redirect
+        params = {
+            "account_id": account_id,
             "email": user_email,
             "provider": provider,
         }
+        if redirect_after:
+            params["redirect_after"] = redirect_after
+
+        return RedirectResponse(
+            f"{callback_page}?{urlencode(params)}",
+            status_code=302,
+        )
     finally:
         await db.close()
 

@@ -200,6 +200,25 @@ export async function triggerQuickAction(
 
 // ── OAuth ────────────────────────────────────────────────────────────────
 
+const WORKBENCH_URL =
+  (typeof window !== "undefined" ? window.location.origin : "") ||
+  process.env.NEXT_PUBLIC_WORKBENCH_URL ||
+  "http://localhost:3001";
+
 export function getOAuthUrl(provider: "gmail" | "microsoft"): string {
   return `${GATEWAY_URL}/email/oauth/${provider}/authorize`;
+}
+
+export function getOAuthAuthorizeUrl(
+  provider: "gmail" | "microsoft",
+  redirectAfter?: string
+): string {
+  const params = new URLSearchParams();
+  if (redirectAfter) params.set("redirect_after", redirectAfter);
+  const qs = params.toString();
+  return `${GATEWAY_URL}/email/oauth/${provider}/authorize${qs ? `?${qs}` : ""}`;
+}
+
+export function getOAuthCallbackUrl(): string {
+  return `${WORKBENCH_URL}/email/oauth/callback`;
 }

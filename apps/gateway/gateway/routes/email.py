@@ -525,11 +525,10 @@ async def download_attachment(
             text(
                 """SELECT ea.id, ea.filename, ea.mime_type, ea.size_bytes,
                           ea.provider_attachment_id, ea.storage_path,
-                          em.provider_message_id, p.provider, ec.credentials_encrypted
+                          em.provider_message_id, p.provider, p.credentials_encrypted
                    FROM email_attachments ea
                    JOIN email_messages em ON ea.message_id = em.id
                    JOIN email_accounts p ON em.account_id = p.id
-                   JOIN email_account_credentials ec ON p.id = ec.account_id
                    WHERE ea.id = :aid AND p.user_id = :user_id"""
             ),
             {"aid": attachment_id, "user_id": user.email or "anonymous"},
@@ -539,19 +538,20 @@ async def download_attachment(
             raise HTTPException(status_code=404, detail="Attachment not found")
 
         # Decrypt credentials
-        from acb_llm import decrypt_credential
-        decrypted = decrypt_credential(row.credentials_encrypted)
+        from acb_llm.key_store import get_key_store
+        store = get_key_store()
+        creds = json.loads(store.decrypt(row.credentials_encrypted))
 
         # Instantiate provider
         if row.provider == "gmail":
             from email_ingestion.providers.gmail import GmailProvider
-            provider = GmailProvider(row.provider_message_id.split("/")[0], decrypted)
-        elif row.provider == "outlook":
+            provider = GmailProvider(creds)
+        elif row.provider == "microsoft":
             from email_ingestion.providers.outlook import OutlookProvider
-            provider = OutlookProvider(decrypted)
+            provider = OutlookProvider(creds)
         elif row.provider == "imap":
             from email_ingestion.providers.imap import IMAPProvider
-            provider = IMAPProvider(decrypted)
+            provider = IMAPProvider(creds)
         else:
             raise HTTPException(status_code=400, detail=f"Unknown provider: {row.provider}")
 
@@ -610,6 +610,9 @@ async def send_email(
         elif row.provider == "microsoft":
             from email_ingestion.providers.outlook import OutlookProvider
             provider = OutlookProvider(creds)
+        elif row.provider == "imap":
+            from email_ingestion.providers.imap import IMAPProvider
+            provider = IMAPProvider(creds)
         else:
             raise HTTPException(
                 status_code=400,
@@ -970,18 +973,23 @@ async def ai_chat(
             db = await _get_db()
             result = await db.execute(
                 text(
-                    """SELECT subject, body_text, from_name, from_email, received_at
+                    """SELECT subject, body_text, from_address, received_at
                        FROM email_messages WHERE id = :id"""
                 ),
                 {"id": req.email_context_id},
             )
             email_row = result.fetchone()
             if email_row:
+                from_data = email_row.from_address
+                if isinstance(from_data, str):
+                    from_data = json.loads(from_data)
+                from_name = from_data.get("name", "") if isinstance(from_data, dict) else ""
+                from_email = from_data.get("email", "") if isinstance(from_data, dict) else ""
                 payload["current_email"] = {
                     "id": req.email_context_id,
                     "subject": email_row.subject,
                     "body": (email_row.body_text or "")[:5000],
-                    "from": f"{email_row.from_name} <{email_row.from_email}>",
+                    "from": f"{from_name} <{from_email}>",
                     "date": str(email_row.received_at),
                 }
             await db.close()

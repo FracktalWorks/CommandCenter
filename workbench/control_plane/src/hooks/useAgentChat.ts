@@ -57,6 +57,9 @@ interface UseAgentChatReturn {
   /** True while polling is actively recovering a stream that was interrupted
    *  by a page refresh. The UI shows a "Reconnecting…" indicator. */
   recovering: boolean;
+  /** Agent run status for the UI: "idle" | "running" | "recovering" | "unknown".
+   *  Lets the user know if execution is stored, stuck, or ongoing. */
+  runStatus: "idle" | "running" | "recovering" | "unknown";
 }
 
 function nanoid(): string {
@@ -555,6 +558,15 @@ export function useAgentChat({
         }
       } catch { /* server unreachable — rely on local heuristic */ }
 
+      // Surface the agent's run status so the UI can show a meaningful
+      // indicator — not just a generic "Reconnecting…" spinner.
+      if (!cancelled) {
+        setSessionState(threadId, (prev) => ({
+          ...prev,
+          runStatus: serverActive ? "running" : localInterrupted ? "recovering" : "idle",
+        }));
+      }
+
       if (cancelled) return;
       if (!localInterrupted && !serverActive) return;
 
@@ -569,6 +581,7 @@ export function useAgentChat({
           ...prev,
           error: null,
           recovering: true,
+          runStatus: "recovering",
           messages: prev.messages.map((m) =>
             m.id === lastId ? { ...m, streaming: false, isThinkingActive: false } : m
           ),
@@ -586,6 +599,7 @@ export function useAgentChat({
           ...prev,
           error: null,
           recovering: true,
+          runStatus: "running",
           messages: [...prev.messages, placeholder],
         }));
       }
@@ -643,14 +657,15 @@ export function useAgentChat({
         const decoder = new TextDecoder();
         let buffer = "";
 
-        // Update helper: modifies the last assistant message.
+        // Update helper: applies changes ONLY to the specific message we're
+        // replaying into (matched by lastId).  Previous messages — even those
+        // without terminal punctuation — must never be modified by replayed
+        // delta events; only the reset target message should accumulate content.
         const updLast = (fn: (m: ChatMessage) => ChatMessage) =>
           setSessionState(threadId, (prev) => ({
             ...prev,
             messages: prev.messages.map((m) =>
-              m.role === "assistant" &&
-              (m.id === lastId || m.streaming || (m.content && !/[.?!]\s*$/.test(m.content.trim())))
-                ? fn(m) : m
+              m.id === lastId ? fn(m) : m
             ),
           }));
 
@@ -754,11 +769,28 @@ export function useAgentChat({
                   ),
                 }));
                 break;
-              case "done":
+              case "done": {
                 reconnected = true;
+                // Check if we actually recovered content.  When the Redis
+                // stream has expired, the reconnect endpoint returns only a
+                // synthetic RUN_FINISHED with no prior delta/tool events —
+                // the recovered message will be empty.  In that case keep
+                // recovering=true so the polling effect fills in content
+                // from Postgres.
+                const cur = getSessionState(threadId);
+                const recoveredMsg = cur.messages.find((m) => m.id === lastId);
+                const hasRecoveredContent =
+                  (recoveredMsg?.content?.trim() ?? "") ||
+                  (recoveredMsg?.toolEvents?.length ?? 0) > 0 ||
+                  (recoveredMsg?.reasoningBlocks?.length ?? 0) > 0;
                 updLast((m) => ({ ...m, streaming: false, isThinkingActive: false }));
-                setSessionState(threadId, (prev) => ({ ...prev, recovering: false }));
+                setSessionState(threadId, (prev) => ({
+                  ...prev,
+                  recovering: hasRecoveredContent ? false : prev.recovering,
+                  runStatus: hasRecoveredContent ? "idle" : "recovering",
+                }));
                 break;
+              }
               case "error":
                 // The agent emitted an error during its run (e.g. Copilot
                 // SDK "Load failed" during model warmup).  Don't abort the
@@ -779,8 +811,18 @@ export function useAgentChat({
 
         // If we got here without a "done" event, the stream ended cleanly.
         if (!reconnected) {
+          const cur2 = getSessionState(threadId);
+          const recoveredMsg2 = cur2.messages.find((m) => m.id === lastId);
+          const hasContent =
+            (recoveredMsg2?.content?.trim() ?? "") ||
+            (recoveredMsg2?.toolEvents?.length ?? 0) > 0 ||
+            (recoveredMsg2?.reasoningBlocks?.length ?? 0) > 0;
           updLast((m) => ({ ...m, streaming: false, isThinkingActive: false }));
-          setSessionState(threadId, (prev) => ({ ...prev, recovering: false }));
+          setSessionState(threadId, (prev) => ({
+            ...prev,
+            recovering: hasContent ? false : prev.recovering,
+            runStatus: hasContent ? "idle" : "recovering",
+          }));
         }
       } catch {
         // Reconnect failed (network error, timeout, etc.) — polling handles it.
@@ -788,7 +830,9 @@ export function useAgentChat({
         // If we never reconnected, make sure recovering is set for polling.
         if (!reconnected && !cancelled) {
           setSessionState(threadId, (prev) =>
-            prev.recovering ? prev : { ...prev, recovering: true }
+            prev.recovering
+              ? prev
+              : { ...prev, recovering: true, runStatus: "recovering" }
           );
         }
       }
@@ -884,6 +928,14 @@ export function useAgentChat({
             ? r.reasoning.split("\n---\n")
             : undefined,
           agentState: r.agent_state ?? undefined,
+          // Restore the todo list from agent_state (where it was persisted
+          // by persistAssistantMessage).  Mirrors the mapping in
+          // sessions.ts fetchMessagesFromDb so the Todos panel survives
+          // polling recovery after a page refresh mid-stream.
+          todos: (
+            (r.agent_state as Record<string, unknown> | null)
+              ?.todos as { id: string; title: string; status: string }[] | undefined
+          ),
           customEvents: (r.custom_events as Array<{ name: string; value: unknown }>) ?? [],
         }));
 
@@ -978,7 +1030,7 @@ export function useAgentChat({
           if (!recoveryStartedAt) recoveryStartedAt = Date.now();
           const recoveryAge = Date.now() - recoveryStartedAt;
           if (!stillIncomplete || recoveryAge > 45000) {
-            setSessionState(threadId, (prev) => ({ ...prev, recovering: false }));
+            setSessionState(threadId, (prev) => ({ ...prev, recovering: false, runStatus: "idle" }));
             recoveryStartedAt = 0;
           }
         } else {
@@ -1006,6 +1058,7 @@ export function useAgentChat({
   }, [threadId, messages, isLoading]);
 
   const recovering = getSessionState(threadId).recovering;
+  const runStatus = getSessionState(threadId).runStatus;
 
-  return { messages, isLoading, error, sendMessage, clearMessages, stopGeneration, setMessages, recovering };
+  return { messages, isLoading, error, sendMessage, clearMessages, stopGeneration, setMessages, recovering, runStatus };
 }

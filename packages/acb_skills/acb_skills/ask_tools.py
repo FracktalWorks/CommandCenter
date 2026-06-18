@@ -132,12 +132,66 @@ async def ask_questions(questions: str) -> str:
             "options": options if has_options else None,
         })
 
-    # Push CUSTOM event into the active SSE queue.
+    # ── Emit elicitation event ──────────────────────────────────────────
+    # Two paths, unified on the same _pending_user_input mechanism as the
+    # Copilot SDK's native ask_user tool:
+    #
+    # Path A — MAF Tier 2 (blocking):  When _active_run_queue is set we
+    #   are running inside the executor's instrumented batch path.  We
+    #   create a Future, park on it, and return the user's answer directly
+    #   as the tool result.  The agent truly blocks — same reliability as
+    #   the Copilot SDK's native ask_user.  The frontend POSTs to
+    #   /api/agent/respond-input to resolve the Future.
+    #
+    # Path B — Copilot SDK / standalone (non-blocking):  The elicitation
+    #   card renders and the answer arrives as the next chat message.
+    #   The agent must self-regulate (stop after the tool call).
+    try:
+        from orchestrator.executor import (  # noqa: PLC0415
+            _active_run_queue,
+            _pending_user_input,
+        )
+        queue = _active_run_queue.get(None)
+    except Exception:  # noqa: BLE001
+        queue = None
+
+    if queue is not None:
+        # ── Path A: blocking Future (MAF Tier 2) ─────────────────────
+        import asyncio as _asyncio
+        import uuid as _uuid
+
+        _request_id = _uuid.uuid4().hex
+        _loop = _asyncio.get_running_loop()
+        _fut: "_asyncio.Future[dict[str, object]]" = _loop.create_future()
+        _pending_user_input[_request_id] = _fut
+
+        await queue.put({
+            "type": "CUSTOM",
+            "name": "elicitation_requested",
+            "value": {"questions": cleaned, "request_id": _request_id},
+        })
+
+        try:
+            _result = await _asyncio.wait_for(
+                _fut, timeout=3600,
+            )
+        except _asyncio.TimeoutError:
+            _pending_user_input.pop(_request_id, None)
+            return "User did not respond in time."
+
+        _answer = str(_result.get("answer", "") or "").strip()
+        if not _answer:
+            return "User provided an empty response."
+        return f"User response: {_answer}"
+
+    # ── Path B: non-blocking (Copilot SDK / standalone) ──────────────
+    # The elicitation card renders; the answer arrives as the next chat
+    # message.  The agent must stop after calling this tool.
     try:
         from orchestrator.executor import _active_run_queue  # noqa: PLC0415
-        queue = _active_run_queue.get(None)
-        if queue is not None:
-            await queue.put({
+        queue_b = _active_run_queue.get(None)
+        if queue_b is not None:
+            await queue_b.put({
                 "type": "CUSTOM",
                 "name": "elicitation_requested",
                 "value": {"questions": cleaned},

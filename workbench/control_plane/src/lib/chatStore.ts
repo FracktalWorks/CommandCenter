@@ -80,10 +80,16 @@ export interface SessionStreamState {
    *  on reconnect the client sends this ID so the server can replay only events
    *  that arrived after the disconnect. */
   lastEventId: string | null;
+  /** Tracks the agent's run state for the UI status indicator:
+   *  - "idle": no agent running
+   *  - "running": agent is actively executing (confirmed by server)
+   *  - "recovering": reconnecting or polling for content after disconnect
+   *  - "unknown": can't determine status (e.g. Redis unavailable) */
+  runStatus: "idle" | "running" | "recovering" | "unknown";
 }
 
 function _defaultState(): SessionStreamState {
-  return { messages: [], isLoading: false, error: null, abortController: null, recovering: false, lastEventId: null };
+  return { messages: [], isLoading: false, error: null, abortController: null, recovering: false, lastEventId: null, runStatus: "idle" };
 }
 
 // ── Module-level store ───────────────────────────────────────────────────────

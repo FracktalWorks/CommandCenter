@@ -2226,7 +2226,9 @@ async def run_agent_stream(
                                                 yield _sse({"type": "TODO_LIST",
                                                             "todos": _cleaned})
                                                 _emitted = True
-                                        # HITL elicitation
+                                        # HITL elicitation — validate before
+                                        # rendering so the ElicitationCard
+                                        # never shows broken/malformed data.
                                         if _tc_name == "ask_questions":
                                             try:
                                                 _qs = _unwrap_json_param(
@@ -2236,11 +2238,29 @@ async def run_agent_stream(
                                                     "questions",
                                                 )
                                                 if isinstance(_qs, list):
-                                                    yield _sse({
-                                                        "type": "CUSTOM",
-                                                        "name": "elicitation_requested",
-                                                        "value": {"questions": _qs},
-                                                    })
+                                                    # Per-item validation
+                                                    # (mirrors ask_tools.py).
+                                                    _valid: list[dict] = []
+                                                    for _qi, _q in enumerate(_qs):
+                                                        if not isinstance(_q, dict):
+                                                            continue
+                                                        _qh = str(_q.get("header", f"Q{_qi + 1}")).strip()[:50]
+                                                        _qt = str(_q.get("question", "")).strip()[:200]
+                                                        if not _qt:
+                                                            continue
+                                                        _valid.append({
+                                                            "header": _qh,
+                                                            "question": _qt,
+                                                            "multiSelect": bool(_q.get("multiSelect", False)),
+                                                            "allowFreeformInput": bool(_q.get("allowFreeformInput", True)),
+                                                            "options": _q.get("options") if isinstance(_q.get("options"), list) and len(_q["options"]) > 0 else None,
+                                                        })
+                                                    if _valid:
+                                                        yield _sse({
+                                                            "type": "CUSTOM",
+                                                            "name": "elicitation_requested",
+                                                            "value": {"questions": _valid},
+                                                        })
                                             except Exception:  # noqa: BLE001
                                                 pass
                                         if not _emitted and _todo_tracker.feed(_tc_name, _tc_args):

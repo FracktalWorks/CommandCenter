@@ -390,7 +390,7 @@ export default function AgentChat({
     [sessionId],
   );
 
-  const { messages, isLoading, error, sendMessage, stopGeneration, setMessages, recovering } = useAgentChat({
+  const { messages, isLoading, error, sendMessage, stopGeneration, setMessages, recovering, runStatus } = useAgentChat({
     agentName: currentAgentName,
     threadId: sessionId,
     model: currentModel,
@@ -539,13 +539,18 @@ export default function AgentChat({
   } | null>(null);
 
   // ── HITL elicitation state (VS Code ask_questions parity) ────────────
+  // When requestId is set the tool is blocking (MAF Tier 2 path — the
+  // agent is parked on a Future).  The answer must be POSTed to
+  // /api/agent/respond-input to resume the SAME stream, identical to the
+  // native ask_user flow below.  When requestId is absent (Copilot SDK
+  // path), the answer is sent as a new chat message.
   const [elicitation, setElicitation] = useState<{
     questions: ElicitationQuestion[];
+    requestId?: string;
   } | null>(null);
 
   // ── Native ask_user state (Copilot SDK on_user_input_request) ────────
-  // Unlike `elicitation` (custom ask_questions, answered as a NEW message),
-  // this prompt BLOCKS the agent run; the answer is POSTed to
+  // This prompt BLOCKS the agent run; the answer is POSTed to
   // /api/agent/respond-input to resume the SAME stream.
   const [userInput, setUserInput] = useState<{
     requestId: string;
@@ -569,8 +574,9 @@ export default function AgentChat({
       if (name === "elicitation_requested" && value && typeof value === "object") {
         const v = value as Record<string, unknown>;
         const qs = v.questions;
+        const reqId = v.request_id ? String(v.request_id) : undefined;
         if (Array.isArray(qs) && qs.length > 0) {
-          setElicitation({ questions: qs as ElicitationQuestion[] });
+          setElicitation({ questions: qs as ElicitationQuestion[], requestId: reqId });
         }
       }
       if (name === "user_input_requested" && value && typeof value === "object") {
@@ -590,9 +596,10 @@ export default function AgentChat({
       }
     },
     onRunFinalized: () => {
-      // Clear any stale confirmation when a run completes
+      // Clear any stale HITL state when a run completes — a finished
+      // run can never be waiting on input anymore.
       setConfirmation((prev) => prev ? null : prev);
-      // A finished run can never be waiting on input anymore.
+      setElicitation((prev) => prev ? null : prev);
       setUserInput((prev) => prev ? null : prev);
     },
   });
@@ -975,12 +982,23 @@ export default function AgentChat({
         )}
 
         <div className="max-w-3xl mx-auto space-y-5">
-          {/* Stream recovery indicator */}
-          {recovering ? (
+          {/* Stream recovery / agent status indicator */}
+          {recovering || runStatus === "running" ? (
             <div className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-[12px] text-primary/90 flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-primary animate-pulse shrink-0" />
-              <span className="font-medium">Reconnecting…</span>
-              <span className="text-primary/60">Recovering your stream from the server</span>
+              <span className={[
+                "w-2.5 h-2.5 rounded-full shrink-0",
+                runStatus === "running" ? "bg-green-500 animate-pulse" : "bg-primary animate-pulse",
+              ].join(" ")} />
+              <span className="font-medium">
+                {runStatus === "running" ? "Agent running…" : "Reconnecting…"}
+              </span>
+              <span className="text-primary/60">
+                {runStatus === "running"
+                  ? "The agent is still working. Content will appear as it's produced."
+                  : runStatus === "recovering"
+                    ? "Recovering your stream from the server"
+                    : "Checking agent status…"}
+              </span>
             </div>
           ) : !isLoading && messages.length > 0 && (() => {
             const last = messages[messages.length - 1];
@@ -1068,20 +1086,64 @@ export default function AgentChat({
             <ElicitationCard
               questions={elicitation.questions}
               onSubmit={(answers: ElicitationAnswers) => {
-                const formatted = Object.entries(answers)
-                  .map(([header, ans]) => {
-                    const parts: string[] = [`[${header}]`];
-                    if (ans.selected && ans.selected.length > 0) {
-                      parts.push(`Selected: ${ans.selected.join(", ")}`);
-                    }
-                    if (ans.freeform) {
-                      parts.push(`Answer: ${ans.freeform}`);
-                    }
-                    return parts.join("\n");
-                  })
-                  .join("\n\n");
-                submitText(formatted);
-                setElicitation(null);
+                if (elicitation.requestId) {
+                  // ── Blocking path (MAF Tier 2) ───────────────────
+                  // The agent is parked on a Future — POST the answer
+                  // to /api/agent/respond-input to unblock it.  The
+                  // agent receives the answer as the tool return value
+                  // and continues in the SAME stream.
+                  //
+                  // For multi-question cards, concatenate all answers
+                  // into one string (same format as the non-blocking
+                  // path) so the LLM can parse structured responses.
+                  const formatted = Object.entries(answers)
+                    .map(([header, ans]) => {
+                      const parts: string[] = [`[${header}]`];
+                      if (ans.selected && ans.selected.length > 0) {
+                        parts.push(`Selected: ${ans.selected.join(", ")}`);
+                      }
+                      if (ans.freeform) {
+                        parts.push(`Answer: ${ans.freeform}`);
+                      }
+                      return parts.join("\n");
+                    })
+                    .join("\n\n");
+                  const firstHeader = elicitation.questions[0]?.header ?? "Question";
+                  const a = answers[firstHeader] ?? {};
+                  const selected = a.selected?.[0];
+                  const freeform = a.freeform?.trim();
+                  const answer = freeform || selected || formatted;
+                  const wasFreeform = !!freeform && !selected;
+                  const reqId = elicitation.requestId;
+                  setElicitation(null);
+                  void fetch("/api/agent/respond-input", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      request_id: reqId,
+                      answer,
+                      was_freeform: wasFreeform,
+                    }),
+                  }).catch(() => {});
+                } else {
+                  // ── Non-blocking path (Copilot SDK / standalone) ──
+                  // Send the answer as a new chat message for the
+                  // agent to process in its next turn.
+                  const formatted = Object.entries(answers)
+                    .map(([header, ans]) => {
+                      const parts: string[] = [`[${header}]`];
+                      if (ans.selected && ans.selected.length > 0) {
+                        parts.push(`Selected: ${ans.selected.join(", ")}`);
+                      }
+                      if (ans.freeform) {
+                        parts.push(`Answer: ${ans.freeform}`);
+                      }
+                      return parts.join("\n");
+                    })
+                    .join("\n\n");
+                  submitText(formatted);
+                  setElicitation(null);
+                }
               }}
             />
           )}

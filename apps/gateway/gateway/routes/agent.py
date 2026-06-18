@@ -281,8 +281,8 @@ def _sync_file_into_db() -> None:
                         "(name, description, tags, status, agent_runtime, "
                         "repo_url, repo_name, local_path, integrations, "
                         "optional_integrations, updated_at) "
-                        "VALUES (:n,:d,:t::jsonb,:s,:r,:ru,:rn,:lp,"
-                        ":i::jsonb,:oi::jsonb,now()) "
+                        "VALUES (:n,:d,CAST(:t AS jsonb),:s,:r,:ru,:rn,:lp,"
+                        "CAST(:i AS jsonb),CAST(:oi AS jsonb),now()) "
                         "ON CONFLICT (name) DO NOTHING"
                     ),
                     {
@@ -353,8 +353,8 @@ def _save_dynamic_agents(agents: list[dict]) -> None:
                         "(name, description, tags, status, agent_runtime, "
                         "repo_url, repo_name, local_path, integrations, "
                         "optional_integrations, updated_at) "
-                        "VALUES (:n,:d,:t::jsonb,:s,:r,:ru,:rn,:lp,"
-                        ":i::jsonb,:oi::jsonb,now()) "
+                        "VALUES (:n,:d,CAST(:t AS jsonb),:s,:r,:ru,:rn,:lp,"
+                        "CAST(:i AS jsonb),CAST(:oi AS jsonb),now()) "
                         "ON CONFLICT (name) DO UPDATE SET "
                         "description=EXCLUDED.description, "
                         "tags=EXCLUDED.tags, "

@@ -345,6 +345,55 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                         raw_representation=event,
                     ))
 
+                # ── External / custom tool execution (our injected tools) ──
+                # Custom tools registered via _register_tools() use the
+                # EXTERNAL_TOOL_REQUESTED / EXTERNAL_TOOL_COMPLETED event
+                # pair instead of the built-in TOOL_EXECUTION_* events.
+                # Without these handlers, our injected tools (manage_todo_list,
+                # ask_questions, etc.) execute but are invisible to the
+                # streaming loop — no TODO_LIST events, no UI updates.
+                elif t == SessionEventType.EXTERNAL_TOOL_REQUESTED:
+                    tc_id = getattr(d, "tool_call_id", "") or ""
+                    tc_name = getattr(d, "tool_name", "") or ""
+                    args = getattr(d, "arguments", None)
+                    queue.put_nowait(AgentResponseUpdate(
+                        role="assistant",
+                        contents=[Content.from_function_call(
+                            call_id=tc_id,
+                            name=tc_name,
+                            arguments=args,
+                            raw_representation=d,
+                        )],
+                        raw_representation=event,
+                    ))
+
+                elif t == SessionEventType.EXTERNAL_TOOL_COMPLETED:
+                    tc_id = getattr(d, "tool_call_id", "") or ""
+                    result_obj = getattr(d, "result", None)
+                    result_text = (
+                        getattr(result_obj, "content", "")
+                        if result_obj else ""
+                    )
+                    success = getattr(d, "success", None)
+                    error_val = getattr(d, "error", None)
+                    exception = None
+                    if success is False and error_val is not None:
+                        exception = (
+                            error_val.message
+                            if hasattr(error_val, "message")
+                            else str(error_val)
+                        )
+                    queue.put_nowait(AgentResponseUpdate(
+                        role="tool",
+                        contents=[Content.from_function_result(
+                            call_id=tc_id,
+                            result=result_text or "",
+                            exception=exception,
+                            raw_representation=d,
+                        )],
+                        raw_representation=event,
+                    ))
+
                 elif t == SessionEventType.TOOL_EXECUTION_PROGRESS:
                     progress = (
                         getattr(d, "progress_message", None)

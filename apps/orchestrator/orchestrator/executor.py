@@ -1641,8 +1641,23 @@ async def run_agent_stream(
             # working_directory is explicitly set.  Point it at the agent's
             # cloned repo so shell commands, file I/O, AGENTS.md, and
             # skill resolution all work correctly.
+            _effective_agent_dir = str(loaded.agent_dir)
             if _agent_runtime == "github-copilot":
-                _stream_agent_dir = str(loaded.agent_dir)
+                # Special case: commandcenter-dev works on the MAIN CC repo,
+                # not its own clone.  Its clone is just the agent definition;
+                # the actual codebase it should edit is /opt/acb/app.
+                if agent_name == "commandcenter-dev":
+                    _cc_repo_root = os.environ.get(
+                        "CC_REPO_ROOT", "/opt/acb/app",
+                    )
+                    if Path(_cc_repo_root).is_dir():
+                        _effective_agent_dir = _cc_repo_root
+                        _log.info(
+                            "executor.cc_dev_workspace",
+                            agent=agent_name,
+                            workspace=_effective_agent_dir,
+                        )
+
                 for _ag in agents:
                     try:
                         if (
@@ -1651,7 +1666,7 @@ async def run_agent_stream(
                         ):
                             _ag._default_options[
                                 "working_directory"
-                            ] = _stream_agent_dir
+                            ] = _effective_agent_dir
                     except Exception:  # noqa: BLE001
                         pass
 
@@ -1735,8 +1750,8 @@ async def run_agent_stream(
                 )
 
                 # Install push guard + capture HEAD for post-run commit detection.
-                await _install_push_guard(str(loaded.agent_dir))
-                _stream_head_before = await _get_current_head(str(loaded.agent_dir))
+                await _install_push_guard(_effective_agent_dir)
+                _stream_head_before = await _get_current_head(_effective_agent_dir)
 
                 # BYOK provider + model already resolved in the early-
                 # detection block.  Reuse pre-computed values.
@@ -2187,7 +2202,7 @@ async def run_agent_stream(
                 yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
 
                 await _detect_agent_commits(
-                    agent_name, str(loaded.agent_dir), run_id,
+                    agent_name, _effective_agent_dir, run_id,
                     since_sha=_stream_head_before if _stream_head_before else None,
                 )
                 return

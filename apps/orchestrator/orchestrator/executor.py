@@ -2084,6 +2084,15 @@ async def run_agent_stream(
                                                     _parsed = json.loads(_raw_todos)
                                                 except Exception:  # noqa: BLE001
                                                     _parsed = None
+                                                # Double-wrap: manage_todo_list
+                                                # takes a JSON string, so the LLM
+                                                # passes todoList as a JSON string
+                                                # that itself contains a "todoList"
+                                                # key.  Unwrap one level.
+                                                if isinstance(_parsed, dict) and "todoList" in _parsed:
+                                                    _inner = _parsed["todoList"]
+                                                    if isinstance(_inner, list):
+                                                        _parsed = _inner
                                             elif isinstance(_raw_todos, list):
                                                 _parsed = _raw_todos
                                             # Fallback: maybe args IS the

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import os
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from acb_common import get_logger, get_settings
@@ -26,18 +27,164 @@ _TRANSIENT_ERRORS = (
     "timeout", "connection", "retry", "service unavailable",
 )
 
-# Tier → litellm model string.  These use native litellm provider prefixes
-# so acompletion() routes directly (no proxy needed).
-# IMPORTANT: the tier ALIASES (tier-fast, tier-balanced, tier-powerful) are defined in
-# v1_compat.py._TIER_NAME_TO_ID — both files must stay in sync when adding tiers.
-_TIER_MODEL: dict[str, str] = {
+# ── Tier → model mapping ──────────────────────────────────────────────────
+# Populated from config.yaml + tier_overrides.yaml at import time so the
+# runtime always matches the configured tiers.  Falls back to these hardcoded
+# defaults if the config files can't be read.
+_TIER_DEFAULTS: dict[str, str] = {
     "tier1": "groq/llama-3.3-70b-versatile",     # fast & cheap (Groq)
     "tier2": "deepseek/deepseek-chat",            # balanced (DeepSeek)
     "tier3": "deepseek/deepseek-reasoner",        # powerful reasoning
 }
+_TIER_MODEL: dict[str, str] = dict(_TIER_DEFAULTS)
+
+# Tier alias → tier ID (must stay in sync with v1_compat.py._TIER_NAME_TO_ID).
+_TIER_ALIAS_MAP: dict[str, str] = {
+    "tier-fast": "tier1",
+    "tier-balanced": "tier2",
+    "tier-powerful": "tier3",
+}
 
 # Track whether keys have been loaded from the store.
 _keys_loaded = False
+_tier_models_initialised = False
+
+
+# ── Tier model initialisation from config ─────────────────────────────────
+
+def _find_workspace_root() -> Path | None:
+    """Walk up from this file to locate the workspace root.
+
+    Looks for pyproject.toml with ``[tool.uv.workspace]`` — the same
+    convention used by settings.py's _repo_root().
+    """
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        pyproject = parent / "pyproject.toml"
+        if pyproject.exists():
+            try:
+                if "[tool.uv.workspace]" in pyproject.read_text(
+                    encoding="utf-8"
+                ):
+                    return parent
+            except OSError:
+                pass
+    return None
+
+
+def _init_tier_models() -> None:
+    """Populate _TIER_MODEL from config.yaml + tier_overrides.yaml.
+
+    Called once at import time so the in-memory tier mapping always
+    reflects the configured models — no gateway restart needed after
+    deployments that change config.yaml (tier_overrides.yaml changes
+    are handled by set_tier_model() at runtime).
+    """
+    global _tier_models_initialised
+    if _tier_models_initialised:
+        return
+    _tier_models_initialised = True
+
+    import yaml  # noqa: PLC0415
+
+    root = _find_workspace_root()
+    if not root:
+        _log.debug("acb_llm.tier_models_no_root")
+        return
+
+    config_path = root / "infra" / "litellm" / "config.yaml"
+    if not config_path.exists():
+        _log.debug(
+            "acb_llm.tier_models_no_config", path=str(config_path)
+        )
+        return
+
+    try:
+        with config_path.open() as f:
+            cfg: dict[str, Any] = yaml.safe_load(f) or {}
+    except Exception as exc:
+        _log.warning(
+            "acb_llm.tier_models_config_read_failed", error=str(exc)
+        )
+        return
+
+    # Merge tier_overrides.yaml on top (Settings UI changes survive deploys)
+    overrides_path = (
+        root / "infra" / "litellm" / "tier_overrides.yaml"
+    )
+    if overrides_path.exists():
+        try:
+            with overrides_path.open() as f:
+                overrides: dict[str, Any] = yaml.safe_load(f) or {}
+            if overrides and "model_list" in overrides:
+                override_map = {
+                    e["model_name"]: e
+                    for e in overrides["model_list"]
+                }
+                base_list = cfg.get("model_list", [])
+                for i, entry in enumerate(base_list):
+                    name = entry.get("model_name", "")
+                    if name in override_map:
+                        base_list[i] = override_map[name]
+                cfg["model_list"] = base_list
+        except Exception as exc:
+            _log.warning(
+                "acb_llm.tier_models_overrides_read_failed",
+                error=str(exc),
+            )
+
+    # Extract tier model assignments
+    model_list: list[dict] = cfg.get("model_list", [])
+    count = 0
+    for entry in model_list:
+        tier_name = entry.get("model_name", "")
+        tier_id = _TIER_ALIAS_MAP.get(tier_name)
+        if not tier_id:
+            continue
+        model = entry.get("litellm_params", {}).get("model", "")
+        if model:
+            _TIER_MODEL[tier_id] = model
+            ensure_model_registered(model)
+            count += 1
+
+    if count:
+        _log.info(
+            "acb_llm.tier_models_initialised",
+            models=_TIER_MODEL.copy(),
+        )
+
+
+def set_tier_model(tier_id: str, model: str) -> bool:
+    """Update a single tier's model assignment at runtime.
+
+    Called by the Settings UI after a user changes a tier model.
+    Updates the in-memory ``_TIER_MODEL`` dict so the Test button
+    and all subsequent completions use the new model immediately.
+
+    Args:
+        tier_id: One of ``"tier1"``, ``"tier2"``, ``"tier3"``.
+        model: LiteLLM model string (e.g. ``"deepseek/deepseek-v4-pro"``).
+
+    Returns:
+        ``True`` if the model prefix was recognised and registered.
+        ``False`` if the prefix is unknown, but the tier mapping is
+        still updated so the caller can try the model anyway.
+    """
+    if tier_id not in ("tier1", "tier2", "tier3"):
+        raise ValueError(f"Unknown tier_id: {tier_id!r}")
+
+    _TIER_MODEL[tier_id] = model
+
+    # Dynamically register so litellm routes through the correct provider
+    # even for brand-new models not yet in litellm's built-in registry.
+    provider = ensure_model_registered(model)
+    _log.info(
+        "acb_llm.tier_model_updated",
+        tier=tier_id,
+        model=model,
+        provider=provider,
+    )
+    return provider is not None
 
 
 async def _ensure_keys_loaded() -> None:
@@ -175,6 +322,11 @@ def ensure_model_registered(model: str) -> str | None:
             return provider
 
     return None  # unknown prefix — caller should warn
+
+
+# Initialise from config at import time (best-effort; hardcoded
+# defaults above are the fallback if config files are absent).
+_init_tier_models()
 
 
 async def complete(

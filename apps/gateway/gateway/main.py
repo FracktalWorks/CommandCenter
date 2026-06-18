@@ -104,47 +104,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         _log.warning("gateway.key_store_skipped", error=str(exc))
 
-    # Start inbound SMTP server (aiosmtpd) if configured
-    inbound_account = os.environ.get("EMAIL_INBOUND_ACCOUNT_ID", "")
-    if inbound_account:
-        try:
-            from email_ingestion.inbound import start_inbound_server, stop_inbound_server
-            _inbound = await start_inbound_server()
-            _log.info("gateway.inbound_smtp_started", port=_inbound.port)
-        except Exception as _exc:
-            _log.warning("gateway.inbound_smtp_failed", error=str(_exc))
-
-    # Start background email sync scheduler
-    if os.environ.get("EMAIL_BACKGROUND_SYNC_ENABLED", "true").lower() != "false":
-        try:
-            from email_ingestion.scheduler import (
-                start_background_sync,
-                stop_background_sync,
-            )
-            launched = await start_background_sync()
-            _log.info("gateway.email_sync_started", accounts=len(launched))
-        except Exception as _exc:
-            _log.warning("gateway.email_sync_failed", error=str(_exc))
-
     yield
-
-    # Shutdown background email sync scheduler
-    try:
-        from email_ingestion.scheduler import stop_background_sync
-        await stop_background_sync()
-        _log.info("gateway.email_sync_stopped")
-    except Exception as _exc:
-        _log.warning("gateway.email_sync_stop_failed", error=str(_exc))
-
-    # Shutdown inbound SMTP server
-    if inbound_account:
-        try:
-            from email_ingestion.inbound import stop_inbound_server
-            await stop_inbound_server()
-            _log.info("gateway.inbound_smtp_stopped")
-        except Exception as _exc:
-            _log.warning("gateway.inbound_smtp_stop_failed", error=str(_exc))
-
     _log.info("gateway.shutdown")
 
 
@@ -287,8 +247,8 @@ if _HAS_MAF:
 
             # Post-run memory extraction (fires after response stream closes)
             try:
-                from acb_memory import (add_episode,  # noqa: PLC0415
-                                        add_memories_background)
+                from acb_memory import add_episode  # noqa: PLC0415
+                from acb_memory import add_memories_background
                 if last_user_msg and messages:
                     conv = [
                         {"role": m.get("role", "user"), "content": m.get("content", "")}
@@ -393,13 +353,6 @@ try:
     from gateway.routes.memory import router as _memory_router
 
     app.include_router(_memory_router)
-except Exception:  # pragma: no cover
-    pass
-
-try:
-    from gateway.routes.email import router as _email_router
-
-    app.include_router(_email_router)
 except Exception:  # pragma: no cover
     pass
 
@@ -678,8 +631,8 @@ async def pull(req: PullRequest, _user: UserContext = Depends(get_current_user))
     citations = sorted({m.group(0) for m in CITATION_RE.finditer(text)})
     # Background: extract facts from this exchange into Mem0
     try:
-        from acb_memory import (add_episode,  # noqa: PLC0415
-                                add_memories_background)
+        from acb_memory import add_episode  # noqa: PLC0415
+        from acb_memory import add_memories_background
         messages = [
             {"role": "user", "content": req.query},
             {"role": "assistant", "content": text},

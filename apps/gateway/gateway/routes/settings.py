@@ -195,6 +195,7 @@ def _sync_key_to_store(env_var: str, value: str) -> None:
     using the reverse of _PROVIDER_ENV_MAP.
     """
     import asyncio as _asyncio
+
     # Reverse _PROVIDER_ENV_MAP: "GEMINI_API_KEY" → "gemini", etc.
     _env_to_provider: dict[str, str] = {
         v: k for k, v in _PROVIDER_ENV_MAP.items() if v
@@ -288,9 +289,8 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     "deepseek": [
         "deepseek/deepseek-chat",
         "deepseek/deepseek-reasoner",
-        "deepseek/deepseek-v3",
-        "deepseek/deepseek-v3.2",
-        "deepseek/deepseek-r1",
+        "deepseek/deepseek-v4-pro",
+        "deepseek/deepseek-v4-flash",
     ],
     "openrouter": [
         "openrouter/anthropic/claude-opus-4-5",
@@ -392,9 +392,8 @@ _MODEL_CAPABILITIES: dict[str, dict[str, Any]] = {
     # DeepSeek
     "deepseek/deepseek-chat":      {"label": "DeepSeek-V3",       "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192,  "desc": "General-purpose chat — strong coding and reasoning"},
     "deepseek/deepseek-reasoner":  {"label": "DeepSeek-R1",       "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 8192,  "desc": "Deep reasoning — chain-of-thought for complex problems"},
-    "deepseek/deepseek-v3":        {"label": "DeepSeek-V3",       "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192,  "desc": "DeepSeek-V3 — same as deepseek-chat alias"},
-    "deepseek/deepseek-v3.2":      {"label": "DeepSeek-V3.2",     "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192,  "desc": "DeepSeek-V3.2 — latest V3 revision"},
-    "deepseek/deepseek-r1":        {"label": "DeepSeek-R1",       "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 8192,  "desc": "DeepSeek-R1 — same as deepseek-reasoner alias"},
+    "deepseek/deepseek-v4-pro":   {"label": "DeepSeek-V4 Pro",   "vision": True,  "audio": False, "reasoning": True,  "context_window": 262_144, "max_output": 32768, "desc": "Latest flagship — MoE architecture, vision, 256K context"},
+    "deepseek/deepseek-v4-flash": {"label": "DeepSeek-V4 Flash", "vision": True,  "audio": False, "reasoning": False, "context_window": 262_144, "max_output": 16384, "desc": "Fast V4 variant — vision support, great for daily tasks"},
 
     # Groq
     "groq/llama-3.3-70b-versatile":    {"label": "Llama 3.3 70B",      "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192, "desc": "Meta's latest 70B — strong general-purpose model"},
@@ -640,25 +639,6 @@ async def update_tier(
     if req.tier_name not in _TIER_LABELS:
         raise HTTPException(status_code=400, detail=f"Unknown tier: {req.tier_name}")
 
-    # ── Dynamically register model with litellm ───────────────────────────
-    # Instead of blocking unknown models, register them dynamically so they
-    # route through the correct provider (e.g. deepseek/ → DeepSeek API).
-    # This keeps the model catalogue dynamic — new provider models work
-    # immediately without waiting for a litellm release.
-    if not req.model.startswith("github/") and not req.api_base:
-        from acb_llm.client import ensure_model_registered
-        provider = ensure_model_registered(req.model)
-        if provider is None:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Unknown provider prefix for model {req.model!r}.  "
-                    f"Use a recognised prefix like 'deepseek/', 'openai/', "
-                    f"'anthropic/', 'groq/', 'gemini/', 'mistral/', "
-                    f"'openrouter/', or 'github/'."
-                ),
-            )
-
     try:
         cfg = _load_config()
     except FileNotFoundError as exc:
@@ -702,19 +682,16 @@ async def update_tier(
     _save_tier_override(req.tier_name, entry)
     _log.info("settings.llm.tier_updated", tier=req.tier_name, model=req.model, actor=_user.email)
 
-    # Immediately update the in-memory _TIER_MODEL so the Test button and
-    # /v1/chat/completions use the new model without a gateway restart.
-    # GitHub Copilot models (github/… prefix) skip this — they route through
-    # the Copilot API, not litellm SDK directly.
-    if not req.model.startswith("github/"):
+    # Update in-memory _TIER_MODEL dict so the Test button and all subsequent
+    # completions use the new model immediately — no gateway restart needed.
+    try:
+        from acb_llm.client import set_tier_model  # noqa: PLC0415
+
         tier_id = _TIER_LABELS[req.tier_name]["id"]
-        from acb_llm.client import _TIER_MODEL
-        _TIER_MODEL[tier_id] = req.model
-        _log.info(
-            "settings.llm.tier_model_live",
-            tier=tier_id,
-            model=req.model,
-        )
+        actual_model = params.get("model", req.model)
+        set_tier_model(tier_id, actual_model)
+    except ImportError:
+        pass  # acb_llm not installed — tier change still persisted to disk
 
     # Restart LiteLLM so the new config takes effect immediately
     _restart_litellm_bg()
@@ -778,7 +755,6 @@ class TestResult(BaseModel):
     success: bool
     response: str
     latency_ms: int
-    model: str = ""  # resolved provider model (e.g. deepseek/deepseek-chat)
 
 
 @router.post("/llm/test", response_model=TestResult)
@@ -788,14 +764,12 @@ async def test_tier(
 ) -> TestResult:
     import time
 
-    from acb_llm.client import LLMTier, _TIER_MODEL, complete
+    from acb_llm.client import LLMTier, complete
 
     tier_map = {"tier-fast": "tier1", "tier-balanced": "tier2", "tier-powerful": "tier3"}
     tier_id = tier_map.get(req.tier_name)
     if not tier_id:
         raise HTTPException(status_code=400, detail=f"Unknown tier: {req.tier_name}")
-
-    resolved_model = _TIER_MODEL.get(tier_id, tier_id)
 
     t0 = time.monotonic()
     try:
@@ -805,20 +779,10 @@ async def test_tier(
             max_tokens=10,
         )
         elapsed = int((time.monotonic() - t0) * 1000)
-        return TestResult(
-            success=True,
-            response=(text or "").strip() or "(empty response)",
-            latency_ms=elapsed,
-            model=resolved_model,
-        )
+        return TestResult(success=True, response=(text or "").strip() or "(empty response)", latency_ms=elapsed)
     except Exception as exc:
         elapsed = int((time.monotonic() - t0) * 1000)
-        return TestResult(
-            success=False,
-            response=str(exc),
-            latency_ms=elapsed,
-            model=resolved_model,
-        )
+        return TestResult(success=False, response=str(exc), latency_ms=elapsed)
 
 
 # ---------------------------------------------------------------------------

@@ -2044,6 +2044,15 @@ async def run_agent_stream(
                                     _tc_id = _c.call_id or ""
                                     _tc_name = _c.name or ""
                                     _tc_args = _c.arguments
+                                    # Copilot SDK may pass arguments as a
+                                    # JSON string (EXTERNAL_TOOL_REQUESTED
+                                    # events) — normalise to dict for the
+                                    # tool-name checks below.
+                                    if isinstance(_tc_args, str) and _tc_args.strip():
+                                        try:
+                                            _tc_args = json.loads(_tc_args)
+                                        except Exception:  # noqa: BLE001
+                                            pass
                                     _args_str = (json.dumps(_tc_args) if isinstance(_tc_args, dict)
                                                  else str(_tc_args or ""))
                                     # ── Structured todo-list tracking ─────

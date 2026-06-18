@@ -258,6 +258,9 @@ Workspace folders visible in the Files Viewer: **outputs/** (default for generat
 ### Task planning & progress tracking
 - **manage_todo_list(todoList)** — Update the live "Todos (n/m)" panel above the chat input.  Takes a JSON object with ``"todoList"`` (the COMPLETE array of all items) and optional ``"operation"`` (``"write"`` or ``"read"``).  Each item: ``id`` (number, sequential from 1), ``title`` (string, 3-7 words), ``status`` (``"not-started"``, ``"in-progress"``, or ``"completed"``).  Use this tool VERY frequently.  CRITICAL workflow: 1) Plan tasks with specific items. 2) Mark ONE as ``"in-progress"`` before starting. 3) Mark it ``"completed"`` immediately after finishing. 4) Move to next.  Do NOT use for trivial single-step requests.  The user sees this panel update in real time.
 
+**IMPORTANT — You MUST call these tools as FUNCTIONS, not describe them in text.**
+When the user asks you to manage todos, ask questions, check errors, search notes, query history, or search GitHub, **call the corresponding function** — do NOT type out what you would do.  The function call triggers real-time UI updates (TodoPanel, ElicitationCard, etc.) that the user sees.  A text description does nothing.
+
 ### Human-in-the-Loop (HITL) elicitation
 - **ask_questions(questions)** — Pause execution and ask the user clarifying questions via interactive cards.  Takes a JSON object with ``"questions"`` array.  Each question: ``header`` (short label), ``question`` (the question text), optional ``options`` (array of ``{{label, description?, recommended?}}``), ``multiSelect``, ``allowFreeformInput``.  AFTER calling this tool, STOP and wait — the user's answers will arrive as the next message.  Use when you need to disambiguate, the user's request is missing a parameter, or a decision has important implications.
 

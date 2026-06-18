@@ -1,7 +1,23 @@
 #!/usr/bin/env python3
 """Test DeepSeek via LiteLLM SDK directly on VPS."""
 import os
-os.environ["DEEPSEEK_API_KEY"] = "sk-a40a5330c1494ffe9ca9b31b4294d593"
+import sys
+
+# API key must be set in environment — never hardcode keys in source
+if not os.environ.get("DEEPSEEK_API_KEY"):
+    print(
+        "ERROR: DEEPSEEK_API_KEY environment variable not set.",
+        file=sys.stderr,
+    )
+    print(
+        "  Set it via: $env:DEEPSEEK_API_KEY='sk-...'  (PowerShell)",
+        file=sys.stderr,
+    )
+    print(
+        "  Or:         export DEEPSEEK_API_KEY=sk-...   (bash)",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 import litellm
 resp = litellm.completion(

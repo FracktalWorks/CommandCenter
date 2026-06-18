@@ -4,24 +4,31 @@
  * Returns a Server-Sent Events stream so the UI can render tokens and
  * tool-call events in real time (mirroring the VS Code Copilot experience).
  *
- * IMPORTANT — Two runtimes; do not conflate:
+ * IMPORTANT — Three distinct runtimes; do not conflate:
  *
- *   mode="copilot"   → ALL agents (orchestrator, task-manager, cc-dev, etc.)
- *                       routed through the unified /agent/run/stream endpoint.
- *                       The gateway executor loads each agent from its repo
- *                       or local path, resolves integrations, and streams
- *                       AG-UI events.  The same translateAndPersistStream
- *                       layer handles every agent identically.
+ *   mode="copilot"   → GitHub Copilot SDK runtime (apps/gateway/routes/copilot_chat.py)
+ *                       - CopilotClient wraps `gh copilot` CLI as a subprocess
+ *                       - autopilot mode: native tool-calling (shell, file r/w, Python)
+ *                       - reads AGENTS.md / .mcp.json from agent workspace
+ *                       - on_pre_tool_use / on_post_tool_use hooks emit tool_start/tool_end SSE
+ *                       - Auth: GITHUB_TOKEN (direct to api.githubcopilot.com)
+ *                              OR BYOK via LiteLLM (session_kwargs["provider"])
+ *                       - NOT the same as CopilotKit (the React UI library)
  *
  *   mode="litellm"   → Direct LiteLLM streaming (no orchestration, no tool calling)
  *                       - Raw OpenAI-compatible /chat/completions call
  *                       - Model = tier1/2/3 alias in infra/litellm/config.yaml
  *                       - Used for fast text-only responses
  *
+ *   mode="langgraph" → Legacy LangGraph agent runner (batch, no streaming)
+ *                       - POST /agent/run on FastAPI gateway
+ *                       - Returns single delta+done pair (not streamed)
+ *                       - Future: replace with /agent/langgraph streaming endpoint
+ *
  * SSE event types:
  *   {"type":"delta",      "content":"…"}
- *   {"type":"reasoning",  "content":"…"}              — model chain-of-thought
- *   {"type":"progress",   "name":"…"}                  — tool about to run
+ *   {"type":"reasoning",  "content":"…"}              — model chain-of-thought (reasoning models only)
+ *   {"type":"progress",   "name":"…"}                  — tool about to run (live status)
  *   {"type":"tool_start", "id":"…","name":"…","args":{}}
  *   {"type":"tool_end",   "id":"…","name":"…","result":"…","success":bool}
  *   {"type":"done",       "run_id":"…"}
@@ -89,9 +96,9 @@ async function persistAssistantMessage(
   reasoningBlocks: string[] = [],
   progressLines: string[] = [],
   messageId?: string,
-  todos?: { id: string; title: string; status: string }[],
+  todos: Array<{ id: string; title: string; status: string }> = [],
 ): Promise<void> {
-  if (!content.trim() && toolEvents.length === 0 && reasoningBlocks.length === 0) return;
+  if (!content.trim() && toolEvents.length === 0 && reasoningBlocks.length === 0 && todos.length === 0) return;
   try {
     const payload = [{
       // Use the frontend-supplied message ID so the row correlates with the
@@ -104,9 +111,10 @@ async function persistAssistantMessage(
       tool_events: toolEvents,
       progress_lines: progressLines,
       reasoning: reasoningBlocks.length > 0 ? reasoningBlocks.join("\n---\n") : null,
-      agent_state: null,
+      // Carry the structured todo list in agent_state so the Todos panel
+      // survives a page refresh (no dedicated DB column needed).
+      agent_state: todos.length > 0 ? { todos } : null,
       custom_events: [],
-      todos: todos ?? [],
     }];
     // Write directly to the gateway's chat message store so messages survive
     // even if the Next.js process restarts mid-stream.
@@ -155,8 +163,8 @@ async function translateAndPersistStream(
   const reasoningBlocks: string[] = [];
   /** Brief progress snippets shown in the ThinkingContainer header. */
   const progressLines: string[] = [];
-  /** Accumulated todo list (VS Code Todos panel parity). */
-  let todos: { id: string; title: string; status: string }[] = [];
+  /** Latest structured todo-list snapshot (persisted via agent_state). */
+  let latestTodos: Array<{ id: string; title: string; status: string }> = [];
   let buf = "";
   let assistantContent = "";
   let lastPersistTime = Date.now();
@@ -219,8 +227,9 @@ async function translateAndPersistStream(
           out = { type: "progress", name: msg };
         } else if (t === "TODO_LIST") {
           // Structured todo list (VS Code Todos panel parity).
-          todos = (ev.todos as { id: string; title: string; status: string }[]) ?? [];
-          out = { type: "todos", todos };
+          const todoItems = (ev.todos ?? []) as Array<{ id: string; title: string; status: string }>;
+          latestTodos = todoItems;
+          out = { type: "todos", todos: todoItems };
         } else if (t === "TOOL_CALL_START") {
           const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
           toolNames[String(ev.toolCallId ?? "")] = name;
@@ -314,9 +323,9 @@ async function translateAndPersistStream(
         // path can restore the full stream state (thinking cascade, tool
         // progress, etc.) — not just the final text.
         const now = Date.now();
-        if ((assistantContent.trim() || reasoningBlocks.length > 0) && now - lastPersistTime > 3000) {
+        if ((assistantContent.trim() || reasoningBlocks.length > 0 || latestTodos.length > 0) && now - lastPersistTime > 3000) {
           lastPersistTime = now;
-          persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, assistantMessageId, todos).catch(() => {});
+          persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, assistantMessageId, latestTodos).catch(() => {});
         }
       }
     }
@@ -325,8 +334,8 @@ async function translateAndPersistStream(
   }
 
   // Final persist — ensure the complete message is saved with all stream metadata.
-  if (assistantContent.trim() || toolEvents.length > 0 || reasoningBlocks.length > 0) {
-    await persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, assistantMessageId, todos).catch(() => {});
+  if (assistantContent.trim() || toolEvents.length > 0 || reasoningBlocks.length > 0 || latestTodos.length > 0) {
+    await persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, assistantMessageId, latestTodos).catch(() => {});
   }
 
   if (clientConnected) {
@@ -561,13 +570,68 @@ export async function POST(req: NextRequest): Promise<Response> {
     return streamLiteLLM({ message, messages, model, context });
   }
 
-  // ── Copilot/AG-UI path — ALL agents (unified) ───────────────────────────
-  // Every agent (orchestrator, task-manager, commandcenter-dev, any named or
-  // dynamically registered agent) goes through the SAME /agent/run/stream
-  // endpoint.  The gateway executor loads the agent from its repo or local
-  // path, resolves integrations, and streams AG-UI events.  The frontend
-  // translation layer (translateAndPersistStream) is identical for all.
-  if (mode === "copilot") {
+  // ── Copilot/AG-UI path — ORCHESTRATOR ONLY ────────────────────────────────
+  // The /copilot/chat endpoint is hardwired at gateway startup to the single
+  // built-in orchestrator agent. Named agents (task-manager, sales-assistant,
+  // any GitHub-registered agent) must go through /agent/run so the executor
+  // can clone the repo, import agents.py, resolve integrations, and run via MAF.
+  const ORCHESTRATOR_NAMES = new Set(["orchestrator", "default", "commandcenter", ""]);
+  const isOrchestrator = ORCHESTRATOR_NAMES.has(agentName.toLowerCase().trim());
+
+  if (mode === "copilot" && isOrchestrator) {
+    let gatewayRes: Response;
+    try {
+      // AG-UI protocol: the current message must be part of the messages array.
+      // Append it after the history so the agent sees the full conversation.
+      const agUiMessages = [
+        ...(messages ?? []).map((m) => ({ role: m.role, content: m.content })),
+        { role: "user" as const, content: message },
+      ];
+      gatewayRes = await fetch(`${GATEWAY_URL}/copilot/chat`, {
+        method: "POST",
+        headers: await buildGatewayHeaders(),
+        body: JSON.stringify({
+          thread_id: threadId ?? "",
+          messages: agUiMessages,
+          think_mode: thinkMode ?? "auto",
+        }),
+        signal: AbortSignal.timeout(310_000),
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return new Response(
+        `data: ${JSON.stringify({ type: "error", content: `Gateway unreachable: ${msg}` })}\n\n`,
+        { status: 502, headers: sseHeaders() }
+      );
+    }
+    if (!gatewayRes.ok || !gatewayRes.body) {
+      const text = await gatewayRes.text().catch(() => `status ${gatewayRes.status}`);
+      return new Response(
+        `data: ${JSON.stringify({ type: "error", content: text })}\n\n`,
+        { status: gatewayRes.status, headers: sseHeaders() }
+      );
+    }
+    // Translate AG-UI → frontend SSE, persisting to Postgres so messages
+    // survive client disconnect (tab close, browser quit, network drop).
+    const translated = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const assistantContent = await translateAndPersistStream(
+          gatewayRes.body!, controller, threadId ?? "", assistantMessageId,
+        );
+        // Post-stream memory extraction — fires after the full response is
+        // known, so Mem0 sees both sides of the conversation.
+        extractMemories(userId, message, assistantContent, messages ?? [], agentName);
+      },
+    });
+    return new Response(translated, { headers: sseHeaders() });
+  }
+
+  // ── Executor path: named agents (copilot mode) + langgraph mode ──────────
+  // Named agents (copilot mode): route through /agent/run/stream which returns
+  // a real AG-UI SSE stream so the UI sees tool events live.
+  // Legacy langgraph mode: falls back to batch /agent/run (no streaming).
+  if (mode === "copilot" && !isOrchestrator) {
+    // /agent/run/stream returns the same AG-UI event format as /copilot/chat.
     let streamRes: Response;
     try {
       streamRes = await fetch(`${GATEWAY_URL}/agent/run/stream`, {
@@ -597,17 +661,17 @@ export async function POST(req: NextRequest): Promise<Response> {
     }
     // Translate AG-UI → frontend SSE, persisting to Postgres so messages
     // survive client disconnect (tab close, browser quit, network drop).
-    const stream = new ReadableStream<Uint8Array>({
+    const translated2 = new ReadableStream<Uint8Array>({
       async start(controller) {
-        const assistantContent = await translateAndPersistStream(
+        const assistantContent2 = await translateAndPersistStream(
           streamRes.body!, controller, threadId ?? "", assistantMessageId,
         );
         // Post-stream memory extraction — fires after the full response is
         // known, so Mem0 sees both sides of the conversation.
-        extractMemories(userId, message, assistantContent, messages ?? [], agentName);
+        extractMemories(userId, message, assistantContent2, messages ?? [], agentName);
       },
     });
-    return new Response(stream, { headers: sseHeaders() });
+    return new Response(translated2, { headers: sseHeaders() });
   }
 
   // ── Legacy executor path: batch /agent/run (langgraph mode + fallback) ─

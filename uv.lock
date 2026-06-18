@@ -22,7 +22,6 @@ members = [
     "acb-skills",
     "action-broker",
     "agent-apis-config",
-    "agent-cc-dev",
     "agent-email-assistant",
     "agent-orchestrator",
     "agent-task-manager",
@@ -246,11 +245,6 @@ requires-dist = [
     { name = "agent-framework-github-copilot" },
     { name = "httpx", specifier = ">=0.27" },
 ]
-
-[[package]]
-name = "agent-cc-dev"
-version = "0.1.0"
-source = { editable = "apps/agent-cc-dev" }
 
 [[package]]
 name = "agent-email-assistant"

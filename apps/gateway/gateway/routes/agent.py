@@ -61,6 +61,14 @@ class AgentRunResponse(BaseModel):
     error: str | None = None
 
 
+class UserInputResponseRequest(BaseModel):
+    """Answer to a native ask_user (on_user_input_request) prompt."""
+
+    request_id: str
+    answer: str
+    was_freeform: bool = True
+
+
 class WebhookEvent(BaseModel):
     source: str
     event_type: str
@@ -73,7 +81,6 @@ class WebhookEvent(BaseModel):
 
 _KNOWN_AGENTS: frozenset[str] = frozenset(
     [
-        "orchestrator",
         "task-manager",
         "billing",
         "sales",
@@ -82,28 +89,12 @@ _KNOWN_AGENTS: frozenset[str] = frozenset(
         "reconciler",
         "strategy",
         "apis-config",
-        "commandcenter-dev",
-        "email-assistant",
     ]
 )
 
 # Human-readable metadata for the Control Plane agent picker.
 # Keys match the bare agent names in _KNOWN_AGENTS.
 _AGENT_REGISTRY: list[dict] = [
-    {
-        "name": "orchestrator",
-        "description": (
-            "AI Company Brain orchestrator — routes to specialist agents, "
-            "retrieves company data, spawns creation agents."
-        ),
-        "tags": ["orchestrator", "core", "routing"],
-        "status": "live",
-        # Runs through MAF with OpenAIChatCompletionClient (BYOK via litellm).
-        "agent_runtime": "maf",
-        "local_path": "apps/agent-orchestrator",
-        "integrations": [],
-        "optional_integrations": [],
-    },
     {
         "name": "task-manager",
         "description": "ClickUp task management — status, progress, and workload questions with citations.",
@@ -188,33 +179,6 @@ _AGENT_REGISTRY: list[dict] = [
         "integrations": [],
         "optional_integrations": ["serpapi"],
     },
-    {
-        "name": "commandcenter-dev",
-        "description": (
-            "CommandCenter Developer — edit code, run tests, debug issues, "
-            "and improve the CC platform itself. Full access to the CC repo."
-        ),
-        "tags": ["dev", "engineering", "code", "debug"],
-        "status": "live",
-        # GitHubCopilotAgent — BYOK via LiteLLM (tier-balanced by default).
-        "agent_runtime": "github-copilot",
-        "local_path": "apps/agent-cc-dev",
-        "integrations": [],
-        "optional_integrations": [],
-    },
-    {
-        "name": "email-assistant",
-        "description": (
-            "Email AI Assistant — search, summarize, find urgent emails, "
-            "draft replies, suggest unsubscribes across Gmail and Microsoft."
-        ),
-        "tags": ["email", "gmail", "outlook", "productivity"],
-        "status": "live",
-        "agent_runtime": "maf",
-        "local_path": "apps/agent-email-assistant",
-        "integrations": ["gmail", "microsoft"],
-        "optional_integrations": [],
-    },
 ]
 
 
@@ -244,27 +208,25 @@ def _load_dynamic_agents() -> list[dict]:
         with get_session() as s:
             rows = s.execute(
                 text(
-                    "SELECT name, display_name, description, tags, status, "
-                    "agent_runtime, repo_url, repo_name, local_path, "
-                    "integrations, optional_integrations "
-                    "FROM dynamic_agents ORDER BY name"
+                    "SELECT name, description, tags, status, agent_runtime, "
+                    "repo_url, repo_name, local_path, integrations, "
+                    "optional_integrations FROM dynamic_agents ORDER BY name"
                 )
             ).fetchall()
         if rows:
             return [
                 {
                     "name": (r[0] or "").strip(),
-                    "display_name": (r[1] or "").strip() or None,
-                    "description": (r[2] or "").strip(),
-                    "tags": r[3] if isinstance(r[3], list) else [],
-                    "status": (r[4] or "live").strip(),
-                    "agent_runtime": (r[5] or "maf").strip(),
-                    "repo_url": (r[6] or "").strip() or None,
-                    "repo_name": (r[7] or "").strip() or None,
-                    "local_path": (r[8] or "").strip() or None,
-                    "integrations": r[9] if isinstance(r[9], list) else [],
+                    "description": (r[1] or "").strip(),
+                    "tags": r[2] if isinstance(r[2], list) else [],
+                    "status": (r[3] or "live").strip(),
+                    "agent_runtime": (r[4] or "maf").strip(),
+                    "repo_url": (r[5] or "").strip() or None,
+                    "repo_name": (r[6] or "").strip() or None,
+                    "local_path": (r[7] or "").strip() or None,
+                    "integrations": r[8] if isinstance(r[8], list) else [],
                     "optional_integrations": (
-                        r[10] if isinstance(r[10], list) else []
+                        r[9] if isinstance(r[9], list) else []
                     ),
                     "dynamic": True,
                 }
@@ -292,9 +254,10 @@ def _sync_file_into_db() -> None:
         if not file_agents:
             return
 
+        import json as _json  # noqa: PLC0415
+
         from acb_graph import get_session  # noqa: PLC0415
         from sqlalchemy import text  # noqa: PLC0415
-        import json as _json  # noqa: PLC0415
 
         with get_session() as s:
             # Get names already in DB
@@ -378,21 +341,21 @@ def _get_agents_file() -> Path:
 def _save_dynamic_agents(agents: list[dict]) -> None:
     """Write the dynamic agent list to the dynamic_agents Postgres table."""
     try:
+        import json as _json
+
         from acb_graph import get_session  # noqa: PLC0415
         from sqlalchemy import text  # noqa: PLC0415
-        import json as _json
         with get_session() as s:
             for a in agents:
                 s.execute(
                     text(
                         "INSERT INTO dynamic_agents "
-                        "(name, display_name, description, tags, status, "
-                        "agent_runtime, repo_url, repo_name, local_path, "
-                        "integrations, optional_integrations, updated_at) "
-                        "VALUES (:n,:dn,:d,:t::jsonb,:s,:r,:ru,:rn,:lp,"
+                        "(name, description, tags, status, agent_runtime, "
+                        "repo_url, repo_name, local_path, integrations, "
+                        "optional_integrations, updated_at) "
+                        "VALUES (:n,:d,:t::jsonb,:s,:r,:ru,:rn,:lp,"
                         ":i::jsonb,:oi::jsonb,now()) "
                         "ON CONFLICT (name) DO UPDATE SET "
-                        "display_name=EXCLUDED.display_name, "
                         "description=EXCLUDED.description, "
                         "tags=EXCLUDED.tags, "
                         "status=EXCLUDED.status, "
@@ -405,9 +368,7 @@ def _save_dynamic_agents(agents: list[dict]) -> None:
                         "updated_at=now()"
                     ),
                     {
-                        "n": a["name"],
-                        "dn": a.get("display_name") or None,
-                        "d": a.get("description", ""),
+                        "n": a["name"], "d": a.get("description", ""),
                         "t": _json.dumps(a.get("tags", [])),
                         "s": a.get("status", "live"),
                         "r": a.get("agent_runtime", "maf"),
@@ -437,15 +398,7 @@ def _validate_agent_name(name: str) -> str:
     Performs case-insensitive matching against the registry so names
     stored with mixed case in the DB still resolve correctly.
     """
-    # ── Legacy aliases (map old names to canonical agent names) ──────────
-    _LEGACY_ALIASES: dict[str, str] = {
-        "cc-workbench": "commandcenter-dev",
-    }
-
     safe = name.lower().strip()
-    # Resolve legacy alias first
-    safe = _LEGACY_ALIASES.get(safe, safe)
-
     # Strip optional 'agent-' prefix so 'agent-project-manager' matches 'project-manager'
     if safe.startswith("agent-"):
         safe_no_prefix = safe[len("agent-"):]
@@ -499,9 +452,6 @@ _WEBHOOK_ROUTES: dict[tuple[str, str], str] = {
 class RegisterAgentRequest(BaseModel):
     name: str
     """Unique slug, e.g. ``"my-agent"``."""
-    display_name: str = ""
-    """Human-readable alias shown in the UI (e.g. "Sales Assistant").
-    When empty the raw ``name`` is displayed instead."""
     description: str = ""
     repo_url: str = ""
     """GitHub repo as ``owner/repo`` or full ``https://github.com/owner/repo`` URL."""
@@ -619,97 +569,6 @@ async def list_agents(
             a["behind_by"] = behind
 
     return merged
-
-
-# ---------------------------------------------------------------------------
-# PATCH /agent/{name}  — update display_name and/or description
-# ---------------------------------------------------------------------------
-
-class AgentPatchRequest(BaseModel):
-    display_name: str | None = None
-    """New human-readable alias, or ``null`` to clear."""
-    description: str | None = None
-    """New description text, or ``null`` to clear."""
-
-
-@router.patch("/{name}", summary="Update an agent's display name or description")
-async def patch_agent(
-    name: str,
-    req: AgentPatchRequest,
-    user: UserContext = Depends(get_current_user),
-) -> dict:
-    """Update mutable metadata for a registered agent.
-
-    Only ``display_name`` and ``description`` are editable — the internal
-    ``name`` slug, runtime, and integrations are immutable after registration.
-    Works for both static registry agents and dynamic (user-registered) agents.
-    """
-    from acb_graph import get_session  # noqa: PLC0415
-    from sqlalchemy import text  # noqa: PLC0415
-
-    # Resolve the agent: check static registry first, then dynamic
-    dynamic = _load_dynamic_agents()
-    dynamic_entry = next((a for a in dynamic if a["name"] == name), None)
-    static_entry = next((a for a in _AGENT_REGISTRY if a["name"] == name), None)
-
-    if dynamic_entry is None and static_entry is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Agent {name!r} not found.",
-        )
-
-    updated: dict = {}
-
-    # Update display_name if provided
-    if req.display_name is not None:
-        val = req.display_name.strip() or None
-        updated["display_name"] = val
-        if dynamic_entry is not None:
-            dynamic_entry["display_name"] = val
-        if static_entry is not None:
-            static_entry["display_name"] = val
-
-    # Update description if provided
-    if req.description is not None:
-        val = req.description.strip()
-        updated["description"] = val
-        if dynamic_entry is not None:
-            dynamic_entry["description"] = val
-        if static_entry is not None:
-            static_entry["description"] = val
-
-    # Persist to DB for dynamic agents
-    if dynamic_entry is not None and updated:
-        try:
-            with get_session() as s:
-                sets: list[str] = []
-                params: dict[str, Any] = {"n": name}
-                if "display_name" in updated:
-                    sets.append("display_name = :dn")
-                    params["dn"] = updated["display_name"]
-                if "description" in updated:
-                    sets.append("description = :d")
-                    params["d"] = updated["description"]
-                if sets:
-                    s.execute(
-                        text(
-                            f"UPDATE dynamic_agents SET {', '.join(sets)}, "
-                            f"updated_at = now() WHERE name = :n"
-                        ),
-                        params,
-                    )
-                    s.commit()
-        except Exception as exc:  # noqa: BLE001
-            _log.warning("agent.patch_db_failed", name=name, error=str(exc))
-
-    # Invalidate registry cache so agent picker reflects changes
-    try:
-        from orchestrator.executor import _build_registry_block  # noqa: PLC0415
-        _build_registry_block.cache_clear()
-    except Exception:  # noqa: BLE001
-        pass
-
-    return {"name": name, "updated": list(updated.keys())}
 
 
 @router.post("/{name}/pull", summary="Pull latest commits for an agent's local clone")
@@ -947,7 +806,6 @@ async def register_agent(
 
     entry: dict = {
         "name": req.name,
-        "display_name": req.display_name or None,
         "description": description,
         "tags": tags,
         "status": "live",
@@ -961,13 +819,6 @@ async def register_agent(
     }
     dynamic.append(entry)
     _save_dynamic_agents(dynamic)
-    # Invalidate the cached registry block so the next agent run picks up the new
-    # agent name in the system prompt (KV-cache technique: stable prefix).
-    try:
-        from orchestrator.executor import _build_registry_block  # noqa: PLC0415
-        _build_registry_block.cache_clear()
-    except Exception:  # noqa: BLE001
-        pass
     _log.info("agent.registered", name=req.name, actor=user.email, source="local" if local_path else "github")
 
     # Eager background clone — only for GitHub repos (local paths need no cloning)
@@ -1004,11 +855,6 @@ async def remove_agent(
     if len(new_dynamic) == len(dynamic):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {name!r} not found.")
     _save_dynamic_agents(new_dynamic)
-    try:
-        from orchestrator.executor import _build_registry_block  # noqa: PLC0415
-        _build_registry_block.cache_clear()
-    except Exception:  # noqa: BLE001
-        pass
     _log.info("agent.removed", name=name, actor=user.email)
     return {"deleted": name}
 
@@ -1087,13 +933,9 @@ async def run_agent_stream_endpoint(
         pass
 
     # ── Memory enrichment: inject relevant past facts into the agent's context ──
-    # Technique #4 (memory context dedup): cache Mem0 + Graphiti results in Redis
-    # for 5 minutes per (user_id, message_hash).  Warm turns with similar queries
-    # skip re-fetching (~250 tokens + latency saved per cached turn).
     try:
         from acb_memory import get_memory_context  # noqa: PLC0415
         from acb_memory import search_entity_timeline  # noqa: PLC0415
-        import hashlib as _hashlib  # noqa: PLC0415
         user_msg = (
             req.payload.get("message")
             or req.payload.get("user_query")
@@ -1101,66 +943,30 @@ async def run_agent_stream_endpoint(
         )
         memory_parts: list[str] = []
         if user_msg and user_id != "anonymous":
-            # Build a short cache key: user + first 120 chars of message
-            _mem_key = (
-                "cc:mem_ctx:"
-                + _hashlib.md5(
-                    f"{user_id}:{user_msg[:120]}".encode()
-                ).hexdigest()
-            )
-            _cached_mem: str | None = None
-            try:
-                import redis.asyncio as _aioredis  # noqa: PLC0415
-                from acb_common import get_settings as _gs  # noqa: PLC0415
-                _redis_url = getattr(_gs(), "redis_url", None) or "redis://localhost:6379/0"
-                _rc = _aioredis.from_url(_redis_url, decode_responses=True)
-                _cached_mem = await _rc.get(_mem_key)
-                await _rc.aclose()
-            except Exception:  # noqa: BLE001
-                pass
+            # Mem0: episodic facts from past conversations
+            mem_ctx = await get_memory_context(user_id, user_msg)
+            if mem_ctx:
+                memory_parts.append(
+                    "## Memory from past conversations\n" + mem_ctx
+                )
 
-            if _cached_mem:
-                req.payload["memory_context"] = _cached_mem
+            # Graphiti: time-aware facts about entities in the query
+            entity_hint = user_msg[:80]
+            graph_ctx = await search_entity_timeline(
+                entity_hint, user_msg
+            )
+            if graph_ctx:
+                memory_parts.append(
+                    "## Timeline facts from knowledge graph\n" + graph_ctx
+                )
+
+            if memory_parts:
+                req.payload["memory_context"] = "\n\n".join(memory_parts)
                 _log.debug(
-                    "agent.memory_cache_hit",
+                    "agent.memory_enriched",
                     agent=agent_name,
                     user=user_id[:20],
                 )
-            else:
-                # Mem0: episodic facts from past conversations
-                mem_ctx = await get_memory_context(user_id, user_msg)
-                if mem_ctx:
-                    memory_parts.append(
-                        "## Memory from past conversations\n" + mem_ctx
-                    )
-
-                # Graphiti: time-aware facts about entities in the query
-                entity_hint = user_msg[:80]
-                graph_ctx = await search_entity_timeline(
-                    entity_hint, user_msg
-                )
-                if graph_ctx:
-                    memory_parts.append(
-                        "## Timeline facts from knowledge graph\n" + graph_ctx
-                    )
-
-                if memory_parts:
-                    combined = "\n\n".join(memory_parts)
-                    req.payload["memory_context"] = combined
-                    # Cache for 5 minutes (300s)
-                    try:
-                        _aioredis2 = _aioredis.from_url(
-                            _redis_url, decode_responses=True
-                        )
-                        await _aioredis2.setex(_mem_key, 300, combined)
-                        await _aioredis2.aclose()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    _log.debug(
-                        "agent.memory_enriched",
-                        agent=agent_name,
-                        user=user_id[:20],
-                    )
     except ImportError:
         pass
 
@@ -1238,6 +1044,39 @@ async def run_agent_stream_endpoint(
             "Connection": "keep-alive",
         },
     )
+
+
+@router.post(
+    "/respond-input",
+    summary="Answer a native ask_user prompt for a running agent",
+)
+async def respond_user_input(
+    req: UserInputResponseRequest,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Resolve a pending ``ask_user`` request so the blocked agent resumes.
+
+    The Copilot SDK's native ``ask_user`` tool blocks the agent turn on an
+    ``on_user_input_request`` handler.  That handler emitted a
+    ``user_input_requested`` SSE frame carrying a ``request_id`` and is now
+    parked on a Future.  The frontend POSTs the user's answer here to unblock
+    it — the agent continues in the SAME run/stream, so the answer is never
+    queued as a separate chat message.
+    """
+    from orchestrator.executor import resolve_user_input  # noqa: PLC0415
+
+    delivered = resolve_user_input(
+        req.request_id, req.answer, req.was_freeform
+    )
+    if not delivered:
+        # The run may have ended or the request id is stale.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No pending question matches that request_id "
+            "(the run may have already finished).",
+        )
+    _log.info("agent.user_input_resolved", request_id=req.request_id[:12])
+    return {"ok": True}
 
 
 @router.get(
@@ -1662,52 +1501,9 @@ async def approve_pending_commit(
         )
         await verify.communicate()
         if verify.returncode != 0:
-            # ── Orphaned commit: the clone was recreated or reset ─────
-            # Auto-cleanup system-generated baseline commits (initial seeds,
-            # auto-syncs) that no longer exist.  Real agent-authored commits
-            # that went missing get a clear error so the operator can
-            # investigate.
-            _commit_msg_lower = (row.commit_message or "").lower()
-            _SYSTEM_ORPHAN_PREFIXES = (
-                "initial: seeded from local source",
-            )
-            if _commit_msg_lower.startswith(_SYSTEM_ORPHAN_PREFIXES):
-                # System baseline — mark as rejected so it disappears from
-                # the inbox without requiring manual intervention.
-                with get_session() as sess:
-                    sess.execute(
-                        text(
-                            "UPDATE pending_commit "
-                            "SET status = 'rejected',"
-                            "    reviewed_by = :by,"
-                            "    reviewed_at = now() "
-                            "WHERE id = :id"
-                        ),
-                        {"id": commit_id, "by": "system:orphaned"},
-                    )
-                    sess.commit()
-                _log.info(
-                    "mutation.orphaned_system_commit_cleaned",
-                    agent=row.agent_name,
-                    commit_sha=commit_sha[:8],
-                    clone_dir=clone_dir,
-                )
-                return {
-                    "status": "rejected",
-                    "reason": (
-                        "System-generated baseline commit no longer exists "
-                        "in the local clone (clone was recreated). "
-                        "Automatically cleaned up."
-                    ),
-                    "commit_sha": commit_sha,
-                }
             raise HTTPException(
                 status_code=422,
-                detail=(
-                    f"commit {commit_sha[:8]} not found in local clone at "
-                    f"{clone_dir}. The clone may have been recreated or "
-                    f"reset.  Reject this commit to clean up the inbox."
-                ),
+                detail=f"commit {commit_sha[:8]} not found in local clone at {clone_dir}",
             )
 
         # Find the local branch that contains the commit and check it out.

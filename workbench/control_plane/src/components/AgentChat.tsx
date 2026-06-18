@@ -543,6 +543,17 @@ export default function AgentChat({
     questions: ElicitationQuestion[];
   } | null>(null);
 
+  // ── Native ask_user state (Copilot SDK on_user_input_request) ────────
+  // Unlike `elicitation` (custom ask_questions, answered as a NEW message),
+  // this prompt BLOCKS the agent run; the answer is POSTed to
+  // /api/agent/respond-input to resume the SAME stream.
+  const [userInput, setUserInput] = useState<{
+    requestId: string;
+    question: string;
+    choices: string[];
+    allowFreeform: boolean;
+  } | null>(null);
+
   // Subscribe to agent events for HITL detection
   useAgentEvents({
     onCustomEvent: ({ name, value }) => {
@@ -562,10 +573,27 @@ export default function AgentChat({
           setElicitation({ questions: qs as ElicitationQuestion[] });
         }
       }
+      if (name === "user_input_requested" && value && typeof value === "object") {
+        const v = value as Record<string, unknown>;
+        const requestId = String(v.request_id ?? "");
+        const question = String(v.question ?? "");
+        if (requestId && question) {
+          setUserInput({
+            requestId,
+            question,
+            choices: Array.isArray(v.choices)
+              ? (v.choices as unknown[]).map(String)
+              : [],
+            allowFreeform: v.allowFreeform !== false,
+          });
+        }
+      }
     },
     onRunFinalized: () => {
       // Clear any stale confirmation when a run completes
       setConfirmation((prev) => prev ? null : prev);
+      // A finished run can never be waiting on input anymore.
+      setUserInput((prev) => prev ? null : prev);
     },
   });
 
@@ -1054,6 +1082,40 @@ export default function AgentChat({
                   .join("\n\n");
                 submitText(formatted);
                 setElicitation(null);
+              }}
+            />
+          )}
+
+          {userInput && (
+            <ElicitationCard
+              questions={[{
+                header: "Question",
+                question: userInput.question,
+                multiSelect: false,
+                allowFreeformInput: userInput.allowFreeform,
+                options: userInput.choices.length > 0
+                  ? userInput.choices.map((c) => ({ label: c }))
+                  : null,
+              }]}
+              onSubmit={(answers: ElicitationAnswers) => {
+                const a = answers["Question"] ?? {};
+                const selected = a.selected?.[0];
+                const freeform = a.freeform?.trim();
+                const answer = freeform || selected || "";
+                const wasFreeform = !!freeform && !selected;
+                const reqId = userInput.requestId;
+                setUserInput(null);
+                // Unblock the parked agent run — it resumes in the SAME
+                // stream (no new chat message, no queuing).
+                void fetch("/api/agent/respond-input", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    request_id: reqId,
+                    answer,
+                    was_freeform: wasFreeform,
+                  }),
+                }).catch(() => {});
               }}
             />
           )}

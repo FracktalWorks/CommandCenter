@@ -117,6 +117,106 @@ def _tee_sse_line(line: str) -> None:
     )
 
 
+# ── Native HITL (Copilot SDK ask_user) ─────────────────────────────────────
+# The Copilot SDK's built-in ``ask_user`` tool is enabled by registering an
+# ``on_user_input_request`` handler.  The handler is awaited by the SDK and
+# BLOCKS the agent turn until it returns the user's answer — this is the
+# correct way to pause/resume a run (unlike the fire-and-forget custom
+# ``ask_questions`` tool, which forced the user's reply to queue as a new
+# message).  The handler emits a ``user_input_requested`` SSE frame to the
+# live stream and parks on an asyncio.Future until the frontend POSTs the
+# answer to ``/agent/respond-input`` (which calls :func:`resolve_user_input`).
+_pending_user_input: dict[str, "asyncio.Future[dict[str, Any]]"] = {}
+
+# How long the agent waits for a human answer before giving up (seconds).
+_USER_INPUT_TIMEOUT = int(os.environ.get("ASK_USER_TIMEOUT", "3600"))
+
+
+def resolve_user_input(
+    request_id: str, answer: str, was_freeform: bool = True
+) -> bool:
+    """Resolve a pending ``ask_user`` request with the user's answer.
+
+    Called by the gateway ``/agent/respond-input`` route.  Returns True when
+    a matching pending request was found and resolved, False otherwise.
+    """
+    fut = _pending_user_input.get(request_id)
+    if fut is None or fut.done():
+        return False
+    payload = {"answer": answer, "wasFreeform": was_freeform}
+    try:
+        loop = fut.get_loop()
+    except Exception:  # noqa: BLE001
+        if not fut.done():
+            fut.set_result(payload)
+        return True
+    loop.call_soon_threadsafe(
+        lambda: (not fut.done()) and fut.set_result(payload)
+    )
+    return True
+
+
+def _make_user_input_handler(thread_id: str) -> Any:
+    """Build an ``on_user_input_request`` handler bound to *thread_id*.
+
+    The returned coroutine emits a ``user_input_requested`` event straight to
+    the Redis relay (the streaming generator is parked awaiting ``agent.run``
+    and cannot yield this frame itself) and blocks until the answer arrives.
+    """
+
+    async def _handler(request: Any, _ctx: Any) -> dict[str, Any]:
+        global _sse_seq
+        import time as _time  # noqa: PLC0415
+        import uuid as _uuid  # noqa: PLC0415
+
+        if isinstance(request, dict):
+            question = request.get("question", "") or ""
+            choices = request.get("choices") or []
+            allow_freeform = request.get("allowFreeform", True)
+        else:
+            question = getattr(request, "question", "") or ""
+            choices = getattr(request, "choices", None) or []
+            allow_freeform = getattr(request, "allowFreeform", True)
+
+        request_id = _uuid.uuid4().hex
+        payload: dict[str, Any] = {
+            "type": "CUSTOM",
+            "name": "user_input_requested",
+            "value": {
+                "request_id": request_id,
+                "question": str(question),
+                "choices": [str(c) for c in choices],
+                "allowFreeform": bool(allow_freeform),
+            },
+        }
+        _sse_seq += 1
+        payload["_stream_id"] = f"local-{int(_time.time() * 1000)}-{_sse_seq}"
+        line = f"data: {json.dumps(payload)}\n\n"
+
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[dict[str, Any]] = loop.create_future()
+        _pending_user_input[request_id] = fut
+
+        # Push to the relay so the live HTTP subscriber receives the prompt.
+        await _push_sse_to_stream(thread_id, line)
+
+        try:
+            result = await asyncio.wait_for(
+                fut, timeout=_USER_INPUT_TIMEOUT
+            )
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            result = {"answer": "", "wasFreeform": True}
+        finally:
+            _pending_user_input.pop(request_id, None)
+
+        return {
+            "answer": str(result.get("answer", "")),
+            "wasFreeform": bool(result.get("wasFreeform", True)),
+        }
+
+    return _handler
+
+
 # ── Todo-list tracking (VS Code Copilot parity) ────────────────────────────
 # The Copilot CLI manages the agent's plan via its built-in `sql` tool
 # against a `todos` table (INSERT INTO todos ... / UPDATE todos SET status).
@@ -252,7 +352,7 @@ web_search(query), fetch_page(url)
 write_artifact(path,content) — files go to outputs/
 remember(query), recall_timeline(entity,query), save_memory(fact), save_episode(name,content)
 manage_todo_list(todoList) — structured task tracking panel (JSON array)
-ask_questions(questions) — HITL: ask user for clarification via interactive card
+ask_user(question,choices?) — HITL: pause and ask the user one question (blocking; the run resumes with their answer)
 get_errors(filePaths?) — check Python files for syntax/lint errors
 save_note(path,fact), recall_notes(path,query?) — repo-scoped working memory
 query_history(sql) — SELECT-only query against chat history DB
@@ -291,7 +391,7 @@ Workspace folders visible in the Files Viewer: **outputs/** (default for generat
 
 **MANDATORY — You MUST call these functions. Do NOT use other tools for these purposes.**
 - For todo/task tracking: call ``manage_todo_list`` — do NOT use ``remember``, ``task_manager``, ClickUp, or any other tool.
-- For clarifying questions: call ``ask_questions`` — do NOT just ask in text.
+- For clarifying questions: call ``ask_user`` (native, blocking) or ``ask_questions`` — do NOT just ask in text.
 - For checking code: call ``get_errors``.
 - For notes: call ``save_note`` / ``recall_notes``.
 - For history: call ``query_history``.
@@ -299,7 +399,8 @@ Workspace folders visible in the Files Viewer: **outputs/** (default for generat
 Function calls trigger real-time UI (TodoPanel, ElicitationCard) — text does nothing.
 
 ### Human-in-the-Loop (HITL) elicitation
-- **ask_questions(questions)** — Pause execution and ask the user clarifying questions via interactive cards.  Takes a JSON object with ``"questions"`` array.  Each question: ``header`` (short label), ``question`` (the question text), optional ``options`` (array of ``{{label, description?, recommended?}}``), ``multiSelect``, ``allowFreeformInput``.  AFTER calling this tool, STOP and wait — the user's answers will arrive as the next message.  Use when you need to disambiguate, the user's request is missing a parameter, or a decision has important implications.
+- **ask_user(question, choices?, allowFreeform?)** — Pause the run and ask the user ONE clarifying question via an interactive card.  This BLOCKS the agent turn: execution truly pauses and resumes automatically with the user's answer (no separate message turn).  ``choices`` is an optional list of suggested answers (rendered as buttons); ``allowFreeform`` (default true) lets the user type a custom answer.  Use when you need to disambiguate, a parameter is missing, or a decision has important implications.  Prefer ONE focused question per call.
+- **ask_questions(questions)** — Alternative for asking SEVERAL questions at once via a multi-question card (JSON object with a ``"questions"`` array; each has ``header``, ``question``, optional ``options``/``multiSelect``/``allowFreeformInput``).  Prefer ``ask_user`` for single blocking questions.
 
 ### Code quality & error checking
 - **get_errors(filePaths?)** — Check Python files for syntax, type, and lint errors.  Call after editing or creating files.  Pass a JSON array of file paths (e.g. ``'["executor.py"]'``) or ``'[]'`` to auto-discover recently changed files.  Runs ``py_compile`` (syntax) and ``ruff`` (lint, if installed).  Returns structured errors or ``"No errors found."``.
@@ -963,12 +1064,13 @@ def _resolve_effective_agent_dir(
 
     By default this is the agent's clone directory.  If the agent config
     specifies ``workspace_root`` (optionally as an env-var reference like
-    ``"$CC_REPO_ROOT"``), that directory is used instead — provided it
+    ``"$SOME_REPO_ROOT"``), that directory is used instead — provided it
     exists on disk.
 
-    This lets agents like ``commandcenter-dev`` work on an external repo
-    (the full CC codebase) while their agent definition stays in its own
-    clone, exactly like every other Copilot SDK agent.
+    This lets an agent opt in to working on an external repo while its
+    agent definition stays in its own clone, exactly like every other
+    Copilot SDK agent.  When unset (the default), the agent operates in
+    its own cloned repo directory.
     """
     raw = agent_config.get("workspace_root") or ""
     if not raw:
@@ -1305,11 +1407,11 @@ async def run_agent(
             local_path=_registry_local_path,
         ) as loaded:
             # ── Resolve effective workspace directory ──────────────────
-            # Agents may specify workspace_root in config.json (e.g.
-            # commandcenter-dev works on the full CC repo at /opt/acb/app).
-            # All directory operations — push guard, HEAD capture, working
-            # directory, commit detection — use this resolved path so they
-            # stay consistent (same pattern as other Copilot SDK agents).
+            # Agents may optionally specify workspace_root in config.json to
+            # work on an external repo.  All directory operations — push
+            # guard, HEAD capture, working directory, commit detection — use
+            # this resolved path so they stay consistent.  When unset, the
+            # agent operates in its own clone directory.
             _effective_agent_dir = _resolve_effective_agent_dir(
                 loaded.agent_dir, loaded.config,
             )
@@ -1766,10 +1868,14 @@ async def run_agent_stream(
                             _ag._default_options[
                                 "working_directory"
                             ] = _effective_agent_dir
+                            # Native HITL: register the blocking ask_user
+                            # handler bound to this run's relay thread so the
+                            # agent can pause for human input mid-turn.
+                            _ag._default_options[
+                                "on_user_input_request"
+                            ] = _make_user_input_handler(thread_id)
                     except Exception:  # noqa: BLE001
                         pass
-
-            # ── Per-message model switching ────────────────────────────
             # If the user switches models mid-thread, the Copilot SDK
             # session is bound to the old model.  Invalidate the stored
             # session so a new one is created with the new model.  The

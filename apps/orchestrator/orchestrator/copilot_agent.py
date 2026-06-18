@@ -88,6 +88,25 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
         if mcp_servers:
             config["mcp_servers"] = mcp_servers
 
+        # === Workspace: forward working_directory so the CLI's file ops,
+        # shell commands, AGENTS.md and skill resolution all happen inside
+        # the agent's own clone dir instead of the gateway process cwd.
+        working_directory = (
+            opts.get("working_directory")
+            or self._default_options.get("working_directory")
+        )
+        if working_directory:
+            config["working_directory"] = working_directory
+
+        # === HITL: forward native ask_user handler so the run blocks on
+        # user input instead of fire-and-forget messaging.
+        user_input_handler = (
+            opts.get("on_user_input_request")
+            or self._default_options.get("on_user_input_request")
+        )
+        if user_input_handler:
+            config["on_user_input_request"] = user_input_handler
+
         # === BYOK: forward provider config to Copilot SDK ===
         provider = opts.get("provider") or self._default_options.get("provider")
         if provider:
@@ -152,6 +171,17 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
         mcp_servers = self._mcp_servers
         if mcp_servers:
             config["mcp_servers"] = mcp_servers
+
+        # === Workspace: re-apply working_directory on resume so an old chat
+        # reopened after refresh still operates in the agent's clone dir.
+        working_directory = self._default_options.get("working_directory")
+        if working_directory:
+            config["working_directory"] = working_directory
+
+        # === HITL: re-apply native ask_user handler on resume ===
+        user_input_handler = self._default_options.get("on_user_input_request")
+        if user_input_handler:
+            config["on_user_input_request"] = user_input_handler
 
         # === BYOK: forward provider config so resumed sessions route correctly
         provider = self._default_options.get("provider")

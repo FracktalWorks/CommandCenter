@@ -282,7 +282,11 @@ export function saveMessages(sessionId: string, messages: PersistedMessage[]): v
     reasoning: m.reasoningBlocks && m.reasoningBlocks.length > 0
       ? m.reasoningBlocks.join("\n---\n")
       : null,
-    agent_state: m.agentState ?? null,
+    // Persist the structured todo list inside agent_state so the Todos
+    // panel survives a refresh (no dedicated DB column needed).
+    agent_state: m.todos && m.todos.length > 0
+      ? { ...(m.agentState ?? {}), todos: m.todos }
+      : (m.agentState ?? null),
     custom_events: m.customEvents ?? [],
   }));
   fetch(`/api/chat/sessions/${sessionId}/messages`, {
@@ -321,6 +325,11 @@ export async function fetchMessagesFromDb(sessionId: string): Promise<PersistedM
       ...r,
       reasoningBlocks: r.reasoning ? r.reasoning.split("\n---\n") : undefined,
       reasoning: undefined,
+      // Restore the todo list from agent_state (where it was persisted).
+      todos: r.todos
+        ?? (r.agentState?.todos as
+          | { id: string; title: string; status: string }[]
+          | undefined),
     }));
     // Update localStorage cache with authoritative Postgres data.
     try {

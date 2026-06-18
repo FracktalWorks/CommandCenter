@@ -13,7 +13,6 @@ and dynamically loadable agent definitions.
 
 ## Agent Definitions (dynamically loaded at runtime)
 - agent-orchestrator/ -- Wraps the built-in orchestrator Agent so it goes through the same `/agent/run/stream` path as all other agents. Eliminates the separate `/copilot/chat` code path in the frontend.
-- agent-cc-dev/ -- Developer agent with full access to the CC repo. GitHubCopilotAgent with native file ops, shell, git.
 - agent-task-manager/ -- ClickUp task management
 - agent-apis-config/ -- API discovery and configuration assistant
 - agent-email-assistant/ -- Email AI assistant: read, search, summarize, draft replies across Gmail and Microsoft accounts

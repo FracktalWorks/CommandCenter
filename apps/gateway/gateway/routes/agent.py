@@ -83,6 +83,7 @@ _KNOWN_AGENTS: frozenset[str] = frozenset(
         "strategy",
         "apis-config",
         "commandcenter-dev",
+        "email-assistant",
     ]
 )
 
@@ -199,6 +200,19 @@ _AGENT_REGISTRY: list[dict] = [
         "agent_runtime": "github-copilot",
         "local_path": "apps/agent-cc-dev",
         "integrations": [],
+        "optional_integrations": [],
+    },
+    {
+        "name": "email-assistant",
+        "description": (
+            "Email AI Assistant — search, summarize, find urgent emails, "
+            "draft replies, suggest unsubscribes across Gmail and Microsoft."
+        ),
+        "tags": ["email", "gmail", "outlook", "productivity"],
+        "status": "live",
+        "agent_runtime": "maf",
+        "local_path": "apps/agent-email-assistant",
+        "integrations": ["gmail", "microsoft"],
         "optional_integrations": [],
     },
 ]

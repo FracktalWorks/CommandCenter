@@ -8,6 +8,7 @@ API reference: https://learn.microsoft.com/en-us/graph/api/resources/mail-api-ov
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -259,18 +260,41 @@ class OutlookProvider(BaseEmailProvider):
             resp.raise_for_status()
             data = resp.json()
 
-            result = SyncResult(
+            messages: list[EmailMessage] = []
+            removed_count = 0
+            for item in data.get("value", []):
+                if item.get("@removed"):
+                    removed_count += 1
+                    messages.append(EmailMessage(
+                        provider_message_id=item["id"],
+                        folder="TRASH",
+                        labels=["TRASH"],
+                        subject="[DELETED]",
+                    ))
+                else:
+                    messages.append(self._parse_graph_message(item))
+
+            return SyncResult(
                 messages_synced=len(data.get("value", [])),
+                messages_skipped=removed_count,
+                messages=messages,
                 new_history_id=data.get("@odata.deltaLink"),
             )
-            return result
         else:
-            # Initial sync
+            # Initial sync — fetch inbox + sent
             messages, _ = await self.list_messages(
                 folder="inbox", max_results=max_results
             )
+            try:
+                sent_messages, _ = await self.list_messages(
+                    folder="sentItems", max_results=max_results
+                )
+                messages.extend(sent_messages)
+            except Exception:
+                pass
             return SyncResult(
                 messages_synced=len(messages),
+                messages=messages,
                 new_history_id=None,
             )
 
@@ -288,6 +312,17 @@ class OutlookProvider(BaseEmailProvider):
         return base64.b64decode(data.get("contentBytes", ""))
 
     # ── Helpers ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_received_datetime(received_dt: str | None) -> datetime | None:
+        """Parse Microsoft Graph receivedDateTime ISO string into datetime."""
+        if not received_dt:
+            return None
+        try:
+            from datetime import timezone
+            return datetime.fromisoformat(received_dt.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return None
 
     def _parse_graph_message(self, raw: dict[str, Any]) -> EmailMessage:
         """Parse a Microsoft Graph message into our normalized EmailMessage."""
@@ -349,6 +384,6 @@ class OutlookProvider(BaseEmailProvider):
             is_read=raw.get("isRead", False),
             is_starred=False,  # Outlook doesn't have stars — use categories
             is_flagged=is_flagged,
-            received_at=None,
+            received_at=self._parse_received_datetime(raw.get("receivedDateTime")),
             raw=raw,
         )

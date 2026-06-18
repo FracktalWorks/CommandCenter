@@ -1,9 +1,15 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Send, Bot, Sparkles, RotateCcw } from "lucide-react";
 import { ChatMessage } from "../lib/types";
 import { QUICK_ACTIONS } from "../lib/mockData";
+import { streamAIChat, triggerQuickAction } from "../lib/api";
+
+interface AIChatPanelProps {
+  selectedAccountId?: string | null;
+  selectedEmailId?: string | null;
+}
 
 const INITIAL_MESSAGES: ChatMessage[] = [
   {
@@ -15,62 +21,134 @@ const INITIAL_MESSAGES: ChatMessage[] = [
   },
 ];
 
-// ── Simulated AI response (will be replaced by real streaming agent) ─────
-
-function simulateResponse(prompt: string): string {
-  const lower = prompt.toLowerCase();
-  if (lower.includes("summarize") || lower.includes("summary")) {
-    return "Here's a summary of your unread emails:\n\n• **Sarah Chen (Acme)** — Project kickoff meeting scheduled for Thursday at 2pm. Action required: confirm attendance.\n• **GitHub** — 3 pull request reviews pending on the design-system repo.\n• **Stripe** — Monthly invoice for $248 is ready to download.\n• **James at Legal** — NDA amendments sent for review, deadline is Friday.\n\nWould you like me to help you prioritize or respond to any of these?";
-  }
-  if (lower.includes("urgent") || lower.includes("important")) {
-    return "Based on your inbox, these emails need attention today:\n\n🔴 **High priority**\n— NDA from Legal (James) — due Friday\n— PR review requests from the design team\n\n🟡 **Should respond soon**\n— Sarah's meeting confirmation\n— Client follow-up from last week's demo\n\nShall I draft responses for any of these?";
-  }
-  if (lower.includes("draft") || lower.includes("reply") || lower.includes("write")) {
-    return "Sure! Here's a professional reply draft:\n\n---\nHi Sarah,\n\nThanks for the update. Thursday at 2pm works great for me — I've added it to my calendar.\n\nLooking forward to the kickoff. Let me know if there's anything I should prepare in advance.\n\nBest,\nAlex\n---\n\nWould you like me to adjust the tone or add any specific details?";
-  }
-  if (lower.includes("unsubscribe") || lower.includes("mailing")) {
-    return "I found several newsletters you haven't opened in 30+ days:\n\n• ProductHunt Digest (last opened 45 days ago)\n• SaaStr Weekly (last opened 60 days ago)\n• The Hustle (never opened)\n• DataElixir (last opened 38 days ago)\n\nWould you like me to generate unsubscribe requests for any of these?";
-  }
-  if (lower.includes("follow-up") || lower.includes("followup")) {
-    return "These conversations haven't had a reply in over 3 days:\n\n• **Dan Kim** — 'Quick sync this week?' (3 days ago)\n• **James Whitfield** — NDA review (today — but deadline is Friday)\n\nWould you like me to draft follow-up messages for any of these?";
-  }
-  return "Got it! I'll look into that for you. Based on what I can see in your inbox, I'd recommend starting with the most recent unread threads and working backwards. Is there a specific time period or sender you'd like me to focus on?";
-}
-
-export function AIChatPanel() {
+export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [streamingContent, setStreamingContent] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isTyping]);
+  }, [messages, isTyping, streamingContent]);
 
-  const sendMessage = (text: string) => {
-    if (!text.trim()) return;
-    const userMsg: ChatMessage = {
-      id: Date.now().toString(),
-      role: "user",
-      content: text.trim(),
-      timestamp: new Date(),
-    };
-    setMessages((prev) => [...prev, userMsg]);
-    setInput("");
-    setIsTyping(true);
+  const sendMessage = useCallback(
+    async (text: string) => {
+      if (!text.trim() || isTyping) return;
 
-    setTimeout(() => {
-      const response = simulateResponse(text);
-      const assistantMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: response,
+      const userMsg: ChatMessage = {
+        id: Date.now().toString(),
+        role: "user",
+        content: text.trim(),
         timestamp: new Date(),
       };
-      setMessages((prev) => [...prev, assistantMsg]);
+      const updatedMessages = [...messages, userMsg];
+      setMessages(updatedMessages);
+      setInput("");
+      setIsTyping(true);
+      setStreamingContent("");
+
+      // Build conversation history
+      const apiMessages = updatedMessages.map((m) => ({
+        role: m.role as "user" | "assistant",
+        content: m.content,
+      }));
+
+      try {
+        await streamAIChat(
+          {
+            messages: apiMessages,
+            accountId: selectedAccountId ?? undefined,
+            emailContextId: selectedEmailId ?? undefined,
+          },
+          (event) => {
+            if (event.type === "content" && event.content) {
+              setStreamingContent((prev) => prev + event.content);
+            } else if (event.type === "done") {
+              setStreamingContent((prev) => {
+                if (prev) {
+                  const assistantMsg: ChatMessage = {
+                    id: (Date.now() + 1).toString(),
+                    role: "assistant",
+                    content: prev,
+                    timestamp: new Date(),
+                  };
+                  setMessages((msgs) => [...msgs, assistantMsg]);
+                }
+                return "";
+              });
+              setIsTyping(false);
+            } else if (event.type === "error") {
+              const errorMsg: ChatMessage = {
+                id: (Date.now() + 1).toString(),
+                role: "assistant",
+                content: "Sorry, I ran into an error. Please try again.",
+                timestamp: new Date(),
+              };
+              setMessages((msgs) => [...msgs, errorMsg]);
+              setIsTyping(false);
+              setStreamingContent("");
+            }
+          }
+        );
+      } catch {
+        const errorMsg: ChatMessage = {
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: "Sorry, I couldn't reach the assistant. Please try again.",
+          timestamp: new Date(),
+        };
+        setMessages((msgs) => [...msgs, errorMsg]);
+        setIsTyping(false);
+        setStreamingContent("");
+      }
+    },
+    [messages, isTyping, selectedAccountId, selectedEmailId]
+  );
+
+  const handleQuickAction = useCallback(
+    async (actionLabel: string, prompt: string, actionKey: string) => {
+      if (isTyping) return;
+
+      const userMsg: ChatMessage = {
+        id: Date.now().toString(),
+        role: "user",
+        content: actionLabel,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, userMsg]);
+      setIsTyping(true);
+      setStreamingContent("");
+
+      try {
+        const result = await triggerQuickAction(
+          actionKey,
+          selectedAccountId ?? undefined,
+          selectedEmailId ?? undefined
+        );
+
+        const assistantMsg: ChatMessage = {
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: result.result || "Done!",
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, assistantMsg]);
+      } catch {
+        const errorMsg: ChatMessage = {
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: "Sorry, the quick action failed. Please try again.",
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, errorMsg]);
+      }
       setIsTyping(false);
-    }, 900 + Math.random() * 700);
-  };
+      setStreamingContent("");
+    },
+    [isTyping, selectedAccountId, selectedEmailId]
+  );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -79,7 +157,12 @@ export function AIChatPanel() {
     }
   };
 
-  const reset = () => setMessages(INITIAL_MESSAGES);
+  const reset = () => {
+    abortRef.current?.abort();
+    setMessages(INITIAL_MESSAGES);
+    setIsTyping(false);
+    setStreamingContent("");
+  };
 
   return (
     <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground overflow-hidden">
@@ -135,11 +218,15 @@ export function AIChatPanel() {
               <Bot size={12} />
             </div>
             <div className="bg-secondary rounded-xl rounded-tl-sm px-3 py-2.5">
-              <div className="flex gap-1 items-center">
-                <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:0ms]" />
-                <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:150ms]" />
-                <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:300ms]" />
-              </div>
+              {streamingContent ? (
+                <MessageContent content={streamingContent} />
+              ) : (
+                <div className="flex gap-1 items-center">
+                  <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:0ms]" />
+                  <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:150ms]" />
+                  <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:300ms]" />
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -152,7 +239,7 @@ export function AIChatPanel() {
           {QUICK_ACTIONS.map((action) => (
             <button
               key={action.label}
-              onClick={() => sendMessage(action.prompt)}
+              onClick={() => handleQuickAction(action.label, action.prompt, action.action)}
               className="text-[10px] px-2 py-1 rounded-full border border-sidebar-border text-muted-foreground hover:text-foreground hover:border-primary/50 hover:bg-primary/10 transition-colors"
             >
               {action.label}

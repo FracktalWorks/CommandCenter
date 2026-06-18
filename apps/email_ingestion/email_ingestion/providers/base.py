@@ -67,6 +67,7 @@ class SyncResult:
     messages_synced: int = 0
     messages_skipped: int = 0
     new_history_id: str | None = None
+    messages: list[EmailMessage] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
 

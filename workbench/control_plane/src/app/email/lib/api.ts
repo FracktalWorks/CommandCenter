@@ -1,4 +1,4 @@
-import { Email, EmailAccount } from "./types";
+import { ChatMessage, Email, EmailAccount } from "./types";
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
 
@@ -93,6 +93,12 @@ export async function deleteEmail(id: string): Promise<void> {
   await gatewayFetch(`/email/messages/${id}`, { method: "DELETE" });
 }
 
+// ── Attachments ────────────────────────────────────────────────────────────
+
+export function getAttachmentDownloadUrl(attachmentId: string): string {
+  return `${GATEWAY_URL}/email/attachments/${attachmentId}/download`;
+}
+
 // ── Send ─────────────────────────────────────────────────────────────────
 
 export interface SendEmailParams {
@@ -169,8 +175,50 @@ export async function streamAIChat(
   }
 }
 
+// ── Quick Actions ─────────────────────────────────────────────────────────
+
+export interface QuickActionResponse {
+  action: string;
+  result: string;
+  ok: boolean;
+}
+
+export async function triggerQuickAction(
+  action: string,
+  accountId?: string,
+  emailId?: string
+): Promise<QuickActionResponse> {
+  return gatewayFetch<QuickActionResponse>("/email/ai/quick-action", {
+    method: "POST",
+    body: JSON.stringify({
+      action,
+      account_id: accountId ?? null,
+      email_id: emailId ?? null,
+    }),
+  });
+}
+
 // ── OAuth ────────────────────────────────────────────────────────────────
+
+const WORKBENCH_URL =
+  (typeof window !== "undefined" ? window.location.origin : "") ||
+  process.env.NEXT_PUBLIC_WORKBENCH_URL ||
+  "http://localhost:3001";
 
 export function getOAuthUrl(provider: "gmail" | "microsoft"): string {
   return `${GATEWAY_URL}/email/oauth/${provider}/authorize`;
+}
+
+export function getOAuthAuthorizeUrl(
+  provider: "gmail" | "microsoft",
+  redirectAfter?: string
+): string {
+  const params = new URLSearchParams();
+  if (redirectAfter) params.set("redirect_after", redirectAfter);
+  const qs = params.toString();
+  return `${GATEWAY_URL}/email/oauth/${provider}/authorize${qs ? `?${qs}` : ""}`;
+}
+
+export function getOAuthCallbackUrl(): string {
+  return `${WORKBENCH_URL}/email/oauth/callback`;
 }

@@ -8,7 +8,7 @@ and dynamically loadable agent definitions.
 - gateway/ -- FastAPI entry point, AG-UI chat, agent routes, OAuth, integration credential management (DB-backed, encrypted at rest), MCP server registry, plugin registry
 - orchestrator/ -- Agent execution engine, mutation layer, MAF integration
 - ingestion/ -- ClickUp/Zoho webhook receivers, MCP servers
-- email_ingestion/ -- Multi-provider email sync engine (Gmail, Microsoft 365, IMAP)
+- email_ingestion/ -- Multi-provider email sync engine (Gmail, Microsoft 365, IMAP/SMTP, aiosmtpd inbound, background scheduler)
 - reconciler/ -- Nightly source-of-truth diff and escalation
 
 ## Agent Definitions (dynamically loaded at runtime)
@@ -29,3 +29,4 @@ and dynamically loadable agent definitions.
 ## Child DOX Index
 - apps/gateway/AGENTS.md
 - apps/orchestrator/AGENTS.md
+- apps/email_ingestion/AGENTS.md

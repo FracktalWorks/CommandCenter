@@ -86,7 +86,7 @@ export default function GenerativeUIPanel({
   agentState,
   customEvents,
 }: GenerativeUIPanelProps): React.ReactElement | null {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const hasState = agentState && Object.keys(agentState).length > 0;
   const hasCustom = customEvents && customEvents.length > 0;
   if (!hasState && !hasCustom) return null;

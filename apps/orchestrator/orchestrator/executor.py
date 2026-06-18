@@ -192,6 +192,37 @@ class _TodoTracker:
         return [self.items[tid] for tid in self.order if tid in self.items]
 
 
+def _unwrap_json_param(raw: Any, param_name: str) -> Any:
+    """Parse a tool parameter that may be a JSON string with double-wrapping.
+
+    Our injected tools take ``str`` parameters that are themselves JSON
+    (e.g. ``manage_todo_list(todoList: str)``).  The LLM naturally
+    constructs ``{"todoList": [...]}`` and passes it as the string value
+    of the ``todoList`` parameter, creating a double-wrap:
+
+        _tc_args = {"todoList": '{"todoList": [...]}' }
+
+    This helper detects the pattern, JSON-parses the outer string, and if
+    the result is a dict containing only the param_name key, unwraps it.
+
+    Returns the unwrapped value (list, dict, or parsed primitive), or the
+    original raw value if no unwrapping was needed.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return raw
+    try:
+        parsed = json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return raw
+    # Double-wrap: LLM passed param_name=json_string where the JSON
+    # itself is a dict with a param_name key containing the real data.
+    if isinstance(parsed, dict) and param_name in parsed:
+        inner = parsed[param_name]
+        if isinstance(inner, (list, dict)):
+            return inner
+    return parsed
+
+
 def _build_injected_tools_addendum(*, is_sub_agent: bool = False) -> str:
     """Return a system-prompt addendum describing the CommandCenter-injected tools.
 
@@ -2071,65 +2102,32 @@ async def run_agent_stream(
                                     try:
                                         _emitted = False
                                         if _tc_name == "manage_todo_list":
-                                            _raw_todos = (
+                                            _todos = _unwrap_json_param(
                                                 _tc_args.get("todoList", "[]")
                                                 if isinstance(_tc_args, dict)
-                                                else "[]"
+                                                else "[]",
+                                                "todoList",
                                             )
-                                            # Handle both wrapped object
-                                            # and bare array formats.
-                                            _parsed = None
-                                            if isinstance(_raw_todos, str):
-                                                try:
-                                                    _parsed = json.loads(_raw_todos)
-                                                except Exception:  # noqa: BLE001
-                                                    _parsed = None
-                                                # Double-wrap: manage_todo_list
-                                                # takes a JSON string, so the LLM
-                                                # passes todoList as a JSON string
-                                                # that itself contains a "todoList"
-                                                # key.  Unwrap one level.
-                                                if isinstance(_parsed, dict) and "todoList" in _parsed:
-                                                    _inner = _parsed["todoList"]
-                                                    if isinstance(_inner, list):
-                                                        _parsed = _inner
-                                            elif isinstance(_raw_todos, list):
-                                                _parsed = _raw_todos
-                                            # Fallback: maybe args IS the
-                                            # array (old format).
-                                            if (_parsed is None
-                                                    and isinstance(_tc_args, list)):
-                                                _parsed = _tc_args
-                                            if isinstance(_parsed, list):
+                                            if isinstance(_todos, list):
                                                 _cleaned: list[dict] = []
-                                                for _t in _parsed:
+                                                for _t in _todos:
                                                     if isinstance(_t, dict):
                                                         _cleaned.append({
                                                             "id": str(_t.get("id", "")),
                                                             "title": str(_t.get("title", "")),
                                                             "status": str(_t.get("status", "not-started")),
                                                         })
-                                                # Always emit — even empty
-                                                # list clears the panel.
                                                 yield _sse({"type": "TODO_LIST",
                                                             "todos": _cleaned})
                                                 _emitted = True
-                                        # HITL elicitation — forward
-                                        # ask_questions args as CUSTOM event
-                                        # so the frontend renders the card
-                                        # even for Copilot SDK agents where
-                                        # the tool runs in the CLI process.
+                                        # HITL elicitation
                                         if _tc_name == "ask_questions":
                                             try:
-                                                _raw_qs = (
+                                                _qs = _unwrap_json_param(
                                                     _tc_args.get("questions", "[]")
                                                     if isinstance(_tc_args, dict)
-                                                    else "[]"
-                                                )
-                                                _qs = (
-                                                    json.loads(_raw_qs)
-                                                    if isinstance(_raw_qs, str)
-                                                    else _raw_qs
+                                                    else "[]",
+                                                    "questions",
                                                 )
                                                 if isinstance(_qs, list):
                                                     yield _sse({

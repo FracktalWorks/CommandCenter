@@ -1662,9 +1662,52 @@ async def approve_pending_commit(
         )
         await verify.communicate()
         if verify.returncode != 0:
+            # ── Orphaned commit: the clone was recreated or reset ─────
+            # Auto-cleanup system-generated baseline commits (initial seeds,
+            # auto-syncs) that no longer exist.  Real agent-authored commits
+            # that went missing get a clear error so the operator can
+            # investigate.
+            _commit_msg_lower = (row.commit_message or "").lower()
+            _SYSTEM_ORPHAN_PREFIXES = (
+                "initial: seeded from local source",
+            )
+            if _commit_msg_lower.startswith(_SYSTEM_ORPHAN_PREFIXES):
+                # System baseline — mark as rejected so it disappears from
+                # the inbox without requiring manual intervention.
+                with get_session() as sess:
+                    sess.execute(
+                        text(
+                            "UPDATE pending_commit "
+                            "SET status = 'rejected',"
+                            "    reviewed_by = :by,"
+                            "    reviewed_at = now() "
+                            "WHERE id = :id"
+                        ),
+                        {"id": commit_id, "by": "system:orphaned"},
+                    )
+                    sess.commit()
+                _log.info(
+                    "mutation.orphaned_system_commit_cleaned",
+                    agent=row.agent_name,
+                    commit_sha=commit_sha[:8],
+                    clone_dir=clone_dir,
+                )
+                return {
+                    "status": "rejected",
+                    "reason": (
+                        "System-generated baseline commit no longer exists "
+                        "in the local clone (clone was recreated). "
+                        "Automatically cleaned up."
+                    ),
+                    "commit_sha": commit_sha,
+                }
             raise HTTPException(
                 status_code=422,
-                detail=f"commit {commit_sha[:8]} not found in local clone at {clone_dir}",
+                detail=(
+                    f"commit {commit_sha[:8]} not found in local clone at "
+                    f"{clone_dir}. The clone may have been recreated or "
+                    f"reset.  Reject this commit to clean up the inbox."
+                ),
             )
 
         # Find the local branch that contains the commit and check it out.

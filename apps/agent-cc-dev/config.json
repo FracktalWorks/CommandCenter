@@ -9,5 +9,6 @@
   "max_mutation_attempts": 1,
   "tags": ["dev", "engineering", "code", "debug"],
   "integrations": [],
-  "optional_integrations": []
+  "optional_integrations": [],
+  "workspace_root": "$CC_REPO_ROOT"
 }

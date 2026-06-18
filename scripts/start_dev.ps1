@@ -41,8 +41,11 @@ if (Test-Path $EnvLocal) {
 Write-Host "Updated .env.local -> port $GatewayPort" -ForegroundColor Green
 
 # ── Start gateway in a new window ────────────────────────────────────────────
+# NOTE: --limit-max-requests 100 --timeout-keep-alive 2 prevents Windows TCP
+# CLOSE_WAIT socket exhaustion that causes the gateway to stop accepting connections.
+# This is a Windows-specific workaround — Linux (production) does not need it.
 Write-Host "Starting gateway on port $GatewayPort ..." -ForegroundColor Yellow
-$gatewayCmd = "cd '$Root'; `$env:PYTHONUTF8=1; uv run uvicorn gateway.main:app --host 0.0.0.0 --port $GatewayPort --app-dir apps/gateway"
+$gatewayCmd = "cd '$Root'; `$env:PYTHONUTF8=1; uv run uvicorn gateway.main:app --host 0.0.0.0 --port $GatewayPort --app-dir apps/gateway --limit-max-requests 100 --timeout-keep-alive 2"
 Start-Process pwsh -ArgumentList "-NoExit", "-Command", $gatewayCmd -WindowStyle Normal
 
 # Give the gateway ~3s to bind the port before starting the frontend

@@ -916,6 +916,43 @@ async def _run_sub_agent_streaming(
                 pass
 
 
+def _resolve_effective_agent_dir(
+    agent_dir: Path, agent_config: dict[str, Any]
+) -> str:
+    """Resolve the effective working directory for an agent.
+
+    By default this is the agent's clone directory.  If the agent config
+    specifies ``workspace_root`` (optionally as an env-var reference like
+    ``"$CC_REPO_ROOT"``), that directory is used instead — provided it
+    exists on disk.
+
+    This lets agents like ``commandcenter-dev`` work on an external repo
+    (the full CC codebase) while their agent definition stays in its own
+    clone, exactly like every other Copilot SDK agent.
+    """
+    raw = agent_config.get("workspace_root") or ""
+    if not raw:
+        return str(agent_dir)
+
+    # Resolve $ENV_VAR references
+    resolved = raw
+    if raw.startswith("$"):
+        var_name = raw[1:]
+        resolved = os.environ.get(var_name, "")
+
+    if resolved and Path(resolved).is_dir():
+        return resolved
+
+    # Fall back to the agent clone if the workspace_root is not available
+    _log.debug(
+        "executor.workspace_root_unavailable",
+        configured=raw,
+        resolved=resolved,
+        fallback=str(agent_dir),
+    )
+    return str(agent_dir)
+
+
 async def _get_current_head(agent_dir: str) -> str:
     """Return the current HEAD SHA of *agent_dir*, or '' on error."""
     try:
@@ -1057,11 +1094,19 @@ async def _detect_agent_commits(
                 # Merge with Phase 1, dedup by SHA, skip already-registered
                 seen = {ln.split("|", 1)[0].strip() for ln in all_lines}
                 new_from_catchup = 0
+                # ── System-generated commit messages to skip ──────────
+                # (duplicated from the registration loop below so the
+                # catch-up scan doesn't even log them as "recovered".)
+                _CATCHUP_SKIP_PREFIXES = (
+                    "initial: seeded from local source",
+                )
                 for ln in catchup_text.splitlines():
                     sha = ln.split("|", 1)[0].strip()
+                    msg = ln.split("|", 1)[1].strip() if "|" in ln else ""
                     if (
                         sha and sha not in seen
                         and sha not in _existing_shas
+                        and not msg.lower().startswith(_CATCHUP_SKIP_PREFIXES)
                     ):
                         all_lines.append(ln)
                         seen.add(sha)
@@ -1090,6 +1135,13 @@ async def _detect_agent_commits(
         from orchestrator.mutation import _git_diff  # noqa: PLC0415
         from orchestrator.mutation import _register_pending_commit
 
+        # ── System-generated commit messages to skip ──────────────────
+        # These are infrastructure commits (initial clones, auto-seeds,
+        # sync baselines) that should never surface for human approval.
+        _SYSTEM_COMMIT_PREFIXES = (
+            "initial: seeded from local source",
+        )
+
         for raw_line in all_lines:
             parts = raw_line.split("|", 1)
             commit_sha = parts[0].strip()
@@ -1097,6 +1149,17 @@ async def _detect_agent_commits(
                 parts[1].strip() if len(parts) > 1 else commit_sha[:8]
             )
             if not commit_sha or commit_sha in _existing_shas:
+                continue
+
+            # Skip system-generated baseline commits — these are infra
+            # artefacts, not agent-authored changes worth reviewing.
+            if commit_message.lower().startswith(_SYSTEM_COMMIT_PREFIXES):
+                _log.debug(
+                    "executor.skip_system_commit",
+                    agent=agent_name,
+                    commit_sha=commit_sha[:8],
+                    commit_message=commit_message[:80],
+                )
                 continue
 
             # Capture the diff for inline review
@@ -1171,7 +1234,7 @@ async def run_agent(
     )
 
     try:
-        _agent_dir: str | None = None
+        _effective_agent_dir: str | None = None
 
         # Look up optional repo_name override from the gateway's agent registry.
         # This allows repos not following the "agent-{name}" naming convention
@@ -1201,7 +1264,15 @@ async def run_agent(
             repo_name=_registry_repo_name,
             local_path=_registry_local_path,
         ) as loaded:
-            _agent_dir = str(loaded.agent_dir)
+            # ── Resolve effective workspace directory ──────────────────
+            # Agents may specify workspace_root in config.json (e.g.
+            # commandcenter-dev works on the full CC repo at /opt/acb/app).
+            # All directory operations — push guard, HEAD capture, working
+            # directory, commit detection — use this resolved path so they
+            # stay consistent (same pattern as other Copilot SDK agents).
+            _effective_agent_dir = _resolve_effective_agent_dir(
+                loaded.agent_dir, loaded.config,
+            )
 
             # For GitHub Copilot SDK agents: install the push guard (prevents
             # direct pushes; commits stay local until operator approves) and
@@ -1218,8 +1289,8 @@ async def run_agent(
                 )
                 if _ea and _ea.get("agent_runtime") == "github-copilot":
                     _is_copilot_agent = True
-                    await _install_push_guard(_agent_dir)
-                    _head_before = await _get_current_head(_agent_dir)
+                    await _install_push_guard(_effective_agent_dir)
+                    _head_before = await _get_current_head(_effective_agent_dir)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -1251,7 +1322,7 @@ async def run_agent(
                 from acb_skills.write_artifact import \
                     _WRITE_ARTIFACT_CONTEXT  # noqa: PLC0415
                 _WRITE_ARTIFACT_CONTEXT["session_id"] = thread_id or run_id
-                _WRITE_ARTIFACT_CONTEXT["workspace_root"] = str(loaded.agent_dir)
+                _WRITE_ARTIFACT_CONTEXT["workspace_root"] = _effective_agent_dir
                 _WRITE_ARTIFACT_CONTEXT["gateway_url"] = str(
                     getattr(settings, "gateway_base_url", "http://127.0.0.1:8000")
                 )
@@ -1260,7 +1331,7 @@ async def run_agent(
                     or getattr(settings, "gateway_internal_token",
                                "sk-local-dev-change-me")
                 )
-                _ws_root = loaded.agent_dir
+                _ws_root = Path(_effective_agent_dir)
                 for _d in ("inputs", "outputs", "agent-data"):
                     (_ws_root / _d).mkdir(parents=True, exist_ok=True)
             except Exception:  # noqa: BLE001
@@ -1269,8 +1340,8 @@ async def run_agent(
             # ── Set working directory for Copilot SDK agents ────────────
             # The Copilot SDK CLI defaults to the gateway CWD unless
             # working_directory is explicitly set.  Point it at the agent's
-            # cloned repo so shell commands, file I/O, AGENTS.md, and
-            # skill resolution all work correctly.
+            # effective workspace (clone dir or workspace_root) so shell
+            # commands, file I/O, AGENTS.md, and skill resolution all work.
             if _is_copilot_agent:
                 for _ag in agents:
                     try:
@@ -1279,7 +1350,7 @@ async def run_agent(
                             and _ag._default_options is not None
                         ):
                             _ag._default_options["working_directory"] = (
-                                _agent_dir
+                                _effective_agent_dir
                             )
                     except Exception:  # noqa: BLE001
                         pass
@@ -1322,7 +1393,7 @@ async def run_agent(
             pass
         if _registry_runtime == "github-copilot":
             await _detect_agent_commits(
-                agent_name, _agent_dir, run_id,
+                agent_name, _effective_agent_dir, run_id,
                 since_sha=_head_before if _head_before else None,
             )
         return final_state
@@ -1347,7 +1418,7 @@ async def run_agent(
             agent_name=agent_name,
             run_id=run_id,
             error=exc,
-            agent_dir=_agent_dir,
+            agent_dir=_effective_agent_dir,
             incompatibility=True,
         )
         pr_url = mutation_result.pr_url if mutation_result else None
@@ -1369,7 +1440,7 @@ async def run_agent(
             run_id=run_id,
             thread_id=thread_id,
             event_payload=event_payload,
-            agent_dir=_agent_dir,
+            agent_dir=_effective_agent_dir,
             error=exc,
         )
         if recovery is not None:
@@ -1383,7 +1454,7 @@ async def run_agent(
             agent_name=agent_name,
             run_id=run_id,
             error=exc,
-            agent_dir=_agent_dir,  # pass persistent clone path for authenticated push
+            agent_dir=_effective_agent_dir,  # pass persistent clone path for authenticated push
         )
         pr_url = mutation_result.pr_url if mutation_result else None
 
@@ -1639,25 +1710,13 @@ async def run_agent_stream(
             # ── Set working directory for Copilot SDK agents ────────────
             # The Copilot SDK CLI defaults to the gateway CWD unless
             # working_directory is explicitly set.  Point it at the agent's
-            # cloned repo so shell commands, file I/O, AGENTS.md, and
-            # skill resolution all work correctly.
-            _effective_agent_dir = str(loaded.agent_dir)
+            # effective workspace (clone dir or workspace_root from config)
+            # so shell commands, file I/O, AGENTS.md, and skill resolution
+            # all work correctly.
+            _effective_agent_dir = _resolve_effective_agent_dir(
+                loaded.agent_dir, loaded.config,
+            )
             if _agent_runtime == "github-copilot":
-                # Special case: commandcenter-dev works on the MAIN CC repo,
-                # not its own clone.  Its clone is just the agent definition;
-                # the actual codebase it should edit is /opt/acb/app.
-                if agent_name == "commandcenter-dev":
-                    _cc_repo_root = os.environ.get(
-                        "CC_REPO_ROOT", "/opt/acb/app",
-                    )
-                    if Path(_cc_repo_root).is_dir():
-                        _effective_agent_dir = _cc_repo_root
-                        _log.info(
-                            "executor.cc_dev_workspace",
-                            agent=agent_name,
-                            workspace=_effective_agent_dir,
-                        )
-
                 for _ag in agents:
                     try:
                         if (

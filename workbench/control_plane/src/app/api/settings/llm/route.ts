@@ -16,7 +16,7 @@ export async function GET(): Promise<NextResponse> {
   try {
     const res = await fetch(`${GATEWAY_URL}/settings/llm`, {
       headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
-      signal: AbortSignal.timeout(5_000),
+      signal: AbortSignal.timeout(15_000),
     });
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });

@@ -123,23 +123,25 @@ jobs:
 
             echo "==> Skipping deprecated LiteLLM proxy cleanup (already removed)"
 
-            echo "==> Ensuring memory-layer env vars in .env"
+            echo "==> Ensuring memory-layer env vars (Neo4j disabled for low-memory VPS)"
             ENV_FILE="/opt/acb/app/.env"
-            for _var in MEM0_ENABLED GRAPHITI_ENABLED NEO4J_URL NEO4J_USER NEO4J_PASSWORD; do
+            for _var in MEM0_ENABLED GRAPHITI_ENABLED; do
               if ! grep -qE "^${_var}=" "$ENV_FILE" 2>/dev/null; then
                 case "$_var" in
                   MEM0_ENABLED)       echo "MEM0_ENABLED=true" >> "$ENV_FILE" ;;
-                  GRAPHITI_ENABLED)   echo "GRAPHITI_ENABLED=true" >> "$ENV_FILE" ;;
-                  NEO4J_URL)          echo "NEO4J_URL=bolt://localhost:7687" >> "$ENV_FILE" ;;
-                  NEO4J_USER)         echo "NEO4J_USER=neo4j" >> "$ENV_FILE" ;;
-                  NEO4J_PASSWORD)     echo "NEO4J_PASSWORD=neo4j_dev_change_me" >> "$ENV_FILE" ;;
+                  GRAPHITI_ENABLED)   echo "GRAPHITI_ENABLED=false" >> "$ENV_FILE" ;;
                 esac
                 echo "    + added $_var to .env"
               fi
             done
+            # Ensure GRAPHITI stays off for this VPS size (idempotent)
+            if grep -qE '^GRAPHITI_ENABLED=true' "$ENV_FILE" 2>/dev/null; then
+              sed -i 's/^GRAPHITI_ENABLED=true/GRAPHITI_ENABLED=false/' "$ENV_FILE"
+              echo "    Disabled GRAPHITI (Neo4j) — saves ~500MB RAM"
+            fi
 
-            echo "==> Bootstrapping Docker Compose stack (core + memory)"
-            docker compose -f infra/docker-compose.yml --profile core --profile memory up -d --remove-orphans
+            echo "==> Bootstrapping Docker Compose stack (core only)"
+            docker compose -f infra/docker-compose.yml --profile core up -d --remove-orphans
 
             echo "==> Waiting for healthchecks (up to 90s)"
             deadline=$(( $(date +%s) + 90 ))
@@ -170,7 +172,8 @@ jobs:
               npm ci --prefer-offline 2>/dev/null || npm install
               # Clean build avoids stale client-reference-manifest errors (Next.js Turbopack)
               rm -rf .next
-              npm run build
+              # Limit Node heap to 1GB to avoid OOM on 4GB VPS
+              NODE_OPTIONS="--max-old-space-size=1024" npm run build
             fi
             # Reload systemd unit in case acb-workbench.service changed (adds PATH for uv etc.)
             sudo cp "$APP_DIR/deploy/hostinger/acb-workbench.service" /etc/systemd/system/acb-workbench.service

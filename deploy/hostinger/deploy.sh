@@ -20,27 +20,29 @@ fi
 say "Pulling images"
 docker compose -f infra/docker-compose.yml pull
 
-# ── Ensure memory-layer env vars exist in .env (idempotent) ─────────
-# MEM0_ENABLED / GRAPHITI_ENABLED were added after initial bootstrap so
-# existing .env files may not have them.  Append defaults if missing.
-say "Ensuring memory-layer env vars"
+# ── Memory-layer: disabled by default on 4GB VPS to save ~500MB RAM ──
+# MEM0 (episodic) still works via Postgres+pgvector without Neo4j.
+# Re-enable GRAPHITI_ENABLED=true + --profile memory after upgrading VPS.
+say "Ensuring memory-layer env vars (Neo4j disabled for low-memory VPS)"
 ENV_FILE="/opt/acb/app/.env"
-for _var in MEM0_ENABLED GRAPHITI_ENABLED NEO4J_URL NEO4J_USER NEO4J_PASSWORD; do
+for _var in MEM0_ENABLED GRAPHITI_ENABLED; do
   if ! grep -qE "^${_var}=" "$ENV_FILE" 2>/dev/null; then
     case "$_var" in
       MEM0_ENABLED)       echo "MEM0_ENABLED=true" >> "$ENV_FILE" ;;
-      GRAPHITI_ENABLED)   echo "GRAPHITI_ENABLED=true" >> "$ENV_FILE" ;;
-      NEO4J_URL)          echo "NEO4J_URL=bolt://localhost:7687" >> "$ENV_FILE" ;;
-      NEO4J_USER)         echo "NEO4J_USER=neo4j" >> "$ENV_FILE" ;;
-      NEO4J_PASSWORD)     echo "NEO4J_PASSWORD=neo4j_dev_change_me" >> "$ENV_FILE" ;;
+      GRAPHITI_ENABLED)   echo "GRAPHITI_ENABLED=false" >> "$ENV_FILE" ;;
     esac
     printf "    + added %s to .env\n" "$_var"
   fi
 done
+# Ensure GRAPHITI stays off for this VPS size (idempotent)
+if grep -qE '^GRAPHITI_ENABLED=true' "$ENV_FILE" 2>/dev/null; then
+  sed -i 's/^GRAPHITI_ENABLED=true/GRAPHITI_ENABLED=false/' "$ENV_FILE"
+  say "Disabled GRAPHITI (Neo4j) — saves ~500MB RAM; re-enable after VPS upgrade"
+fi
 
-say "Booting stack (core + memory)"
+say "Booting stack (core only — memory profile disabled for 4GB VPS)"
 set -a && source /opt/acb/app/.env && set +a
-docker compose -f infra/docker-compose.yml --profile core --profile memory up -d --remove-orphans
+docker compose -f infra/docker-compose.yml --profile core up -d --remove-orphans
 
 say "Waiting for healthchecks (up to 90s)"
 deadline=$(( $(date +%s) + 90 ))

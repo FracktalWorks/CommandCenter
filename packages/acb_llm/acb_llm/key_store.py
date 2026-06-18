@@ -105,7 +105,9 @@ class ProviderKeyStore:
         pg_sql = _re.sub(r":(\w+)", r"%(\1)s", sql)
 
         def _sync() -> list[dict[str, Any]]:
-            with psycopg.connect(conninfo, row_factory=dict_row) as conn:
+            with psycopg.connect(
+                conninfo, row_factory=dict_row, connect_timeout=5,
+            ) as conn:
                 with conn.cursor() as cur:
                     cur.execute(pg_sql, params)
                     if cur.description is None:

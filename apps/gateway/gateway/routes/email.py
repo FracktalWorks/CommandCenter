@@ -1546,10 +1546,12 @@ async def oauth_authorize(
             or os.environ.get("MSFT_OAUTH_CLIENT_ID", "")
             or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_ID", "")
         )
-        # Tenant ID: use MICROSOFT_TENANT_ID (or AUTH_MICROSOFT_TENANT_ID) for
-        # single-tenant apps. Falls back to 'common' for multi-tenant apps.
+        # Tenant ID: use MICROSOFT_TENANT_ID (or AUTH_MICROSOFT_ENTRA_ID_TENANT /
+        # AUTH_MICROSOFT_TENANT_ID) for single-tenant apps. Falls back to
+        # 'common' for multi-tenant apps.
         tenant_id = (
             os.environ.get("MICROSOFT_TENANT_ID", "")
+            or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_TENANT", "")
             or os.environ.get("AUTH_MICROSOFT_TENANT_ID", "")
             or "common"
         )
@@ -1761,10 +1763,12 @@ async def _exchange_msft_token(code: str, redirect_uri: str) -> dict[str, Any]:
         or os.environ.get("MSFT_OAUTH_CLIENT_SECRET", "")
         or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_SECRET", "")
     )
-    # Tenant ID: use MICROSOFT_TENANT_ID (or AUTH_MICROSOFT_TENANT_ID) for
-    # single-tenant apps. Falls back to 'common' for multi-tenant apps.
+    # Tenant ID: use MICROSOFT_TENANT_ID (or AUTH_MICROSOFT_ENTRA_ID_TENANT /
+    # AUTH_MICROSOFT_TENANT_ID) for single-tenant apps. Falls back to
+    # 'common' for multi-tenant apps.
     tenant_id = (
         os.environ.get("MICROSOFT_TENANT_ID", "")
+        or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_TENANT", "")
         or os.environ.get("AUTH_MICROSOFT_TENANT_ID", "")
         or "common"
     )

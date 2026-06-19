@@ -28,6 +28,13 @@ clone cache.
 - Cache at {agents_clone_dir}/repos/{agent_name}/
 - agent_dir always points to the cache directory (isolated from source)
 - Bot git identity configured automatically (commandcenter-bot)
+- **Pull strategy (ADR-022):** ``_pull_latest()`` returns a dict with
+  ``strategy`` and ``conflicts_resolved_by_llm`` fields.  On rebase
+  conflicts, ``_resolve_rebase_conflicts()`` calls the tier-3 (powerful
+  reasoning) LLM via LiteLLM to intelligently merge conflicts before
+  falling back to ``--ours``.  ``_call_llm_for_merge_resolution()``
+  handles the LLM prompt, response parsing, and conflict-marker
+  sanitisation.
 
 ### Adding a new injected tool
 1. Define the async function in the appropriate module

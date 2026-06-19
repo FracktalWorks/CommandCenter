@@ -614,9 +614,10 @@ async def pull_agent(
         pass
 
     # Pull latest
+    pull_info: dict[str, Any] = {"strategy": "skipped"}
     try:
         from acb_skills.loader import _pull_latest  # noqa: PLC0415
-        _pull_latest(clone_path)
+        pull_info = _pull_latest(clone_path)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=500,
@@ -667,6 +668,7 @@ async def pull_agent(
         head_after=head_after[:8],
         pulled=pulled_count,
         still_behind=behind_after,
+        strategy=pull_info.get("strategy", "unknown"),
     )
 
     return {
@@ -675,6 +677,10 @@ async def pull_agent(
         "behind_by": behind_after,
         "head_before": head_before[:8] if head_before else None,
         "head_after": head_after[:8] if head_after else None,
+        "strategy": pull_info.get("strategy", "unknown"),
+        "conflicts_resolved_by_llm": pull_info.get(
+            "conflicts_resolved_by_llm", False
+        ),
     }
 
 

@@ -214,7 +214,269 @@ def _refresh_remote_auth(repo_dir: Path, org: str, repo_name: str, token: str | 
     _run_git(["remote", "set-url", "origin", url], cwd=repo_dir)
 
 
-def _pull_latest(repo_dir: Path) -> None:
+def _resolve_rebase_conflicts(repo_dir: Path) -> bool:
+    """Resolve rebase merge conflicts using the tier-powerful LLM.
+
+    Scans the working tree for conflicted files (those containing
+    ``<<<<<<<`` markers left by ``git rebase``).  For each conflicted
+    file, sends the full content to the tier-3 LLM (powerful reasoning)
+    via LiteLLM and writes back the resolved version.  Then stages all
+    resolved files and runs ``git rebase --continue``.
+
+    Returns True if all conflicts were resolved and the rebase continued
+    successfully.  Returns False if the LLM is unavailable, the rebase
+    --continue fails, or no conflicted files were found (unexpected).
+
+    This is always best-effort — any exception is swallowed after logging
+    and the caller falls back to ``--ours`` resolution.
+    """
+    # ── Find conflicted files ────────────────────────────────────────
+    diff_result = _run_git(
+        ["diff", "--name-only", "--diff-filter=U"],
+        cwd=repo_dir, timeout=10,
+    )
+    if diff_result.returncode != 0:
+        _log.warning(
+            "loader.conflict_scan_failed",
+            repo=repo_dir.name,
+            stderr=diff_result.stderr.strip()[:200],
+        )
+        return False
+
+    conflicted = [
+        line.strip() for line in diff_result.stdout.splitlines()
+        if line.strip()
+    ]
+    if not conflicted:
+        _log.debug(
+            "loader.no_conflicts_found",
+            repo=repo_dir.name,
+            hint="Rebase reported conflict but no U files in diff.",
+        )
+        return False
+
+    _log.info(
+        "loader.conflicts_detected",
+        repo=repo_dir.name,
+        count=len(conflicted),
+        files=conflicted,
+    )
+
+    # ── Resolve each conflicted file with the LLM ────────────────────
+    resolved_count = 0
+    for rel_path in conflicted:
+        full_path = repo_dir / rel_path
+        if not full_path.is_file():
+            _log.warning(
+                "loader.conflict_file_missing",
+                repo=repo_dir.name,
+                file=rel_path,
+            )
+            continue
+
+        try:
+            raw_content = full_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            _log.warning(
+                "loader.conflict_file_unreadable",
+                repo=repo_dir.name,
+                file=rel_path,
+                error=str(exc),
+            )
+            continue
+
+        # Skip binary-looking or empty files
+        if not raw_content.strip() or "\0" in raw_content:
+            _log.debug(
+                "loader.conflict_file_skipped",
+                repo=repo_dir.name,
+                file=rel_path,
+                hint="Empty or binary.",
+            )
+            continue
+
+        resolved = _call_llm_for_merge_resolution(
+            repo_name=repo_dir.name,
+            file_path=rel_path,
+            conflict_content=raw_content,
+        )
+        if resolved is None:
+            _log.warning(
+                "loader.llm_resolution_failed",
+                repo=repo_dir.name,
+                file=rel_path,
+                hint="LLM call failed; will fall back to --ours.",
+            )
+            return False  # One failure → fall back entirely
+
+        try:
+            full_path.write_text(resolved, encoding="utf-8")
+            _run_git(["add", rel_path], cwd=repo_dir, timeout=10)
+            resolved_count += 1
+            _log.info(
+                "loader.conflict_resolved_by_llm",
+                repo=repo_dir.name,
+                file=rel_path,
+            )
+        except OSError as exc:
+            _log.warning(
+                "loader.conflict_write_failed",
+                repo=repo_dir.name,
+                file=rel_path,
+                error=str(exc),
+            )
+            return False
+
+    if resolved_count == 0:
+        return False
+
+    # ── Continue the rebase ──────────────────────────────────────────
+    continue_result = _run_git(
+        ["rebase", "--continue"],
+        cwd=repo_dir, timeout=30,
+    )
+    if continue_result.returncode == 0:
+        _log.info(
+            "loader.rebase_continued_after_llm",
+            repo=repo_dir.name,
+            resolved=resolved_count,
+        )
+        return True
+
+    _log.warning(
+        "loader.rebase_continue_failed_after_llm",
+        repo=repo_dir.name,
+        stderr=continue_result.stderr.strip()[:300],
+        hint="Aborting rebase; caller will fall back to --ours.",
+    )
+    _run_git(["rebase", "--abort"], cwd=repo_dir, timeout=15)
+    return False
+
+
+def _call_llm_for_merge_resolution(
+    *,
+    repo_name: str,
+    file_path: str,
+    conflict_content: str,
+) -> str | None:
+    """Send a conflicted file to the tier-powerful LLM for resolution.
+
+    Uses the ``complete()`` function from ``acb_llm`` to call the tier-3
+    (powerful reasoning) model.  The prompt instructs the model to resolve
+    the conflict markers intelligently, preserving both the upstream
+    improvements and the local pending changes.
+
+    Returns the resolved file content as a string, or None if the LLM
+    call fails.
+    """
+    import asyncio as _asyncio  # noqa: PLC0415
+
+    try:
+        from acb_llm import LLMTier, complete  # noqa: PLC0415
+    except ImportError:
+        _log.warning(
+            "loader.llm_import_failed",
+            hint="acb_llm not available; skipping LLM resolution.",
+        )
+        return None
+
+    # Truncate extremely large files to avoid token overflow.
+    max_chars = 30_000
+    if len(conflict_content) > max_chars:
+        truncation_note = (
+            f"\n\n[TRUNCATED: original file was "
+            f"{len(conflict_content)} chars; "
+            f"showing first {max_chars} chars]\n"
+        )
+        content_for_llm = conflict_content[:max_chars] + truncation_note
+    else:
+        content_for_llm = conflict_content
+
+    system_prompt = (
+        "You are a senior software engineer resolving a git merge conflict. "
+        "The file below contains conflict markers (<<<<<<<, =======, >>>>>>>). "
+        "The section between <<<<<<< and ======= is the LOCAL change (our "
+        "pending commits). The section between ======= and >>>>>>> is the "
+        "REMOTE change (incoming upstream update).\n\n"
+        "Your task: resolve the conflict by producing the CORRECT merged "
+        "version of the file. Preserve the intent of BOTH changes when "
+        "possible. If the changes are incompatible, prefer the remote "
+        "(upstream) change for infrastructure/config and the local change "
+        "for business logic/agent code.\n\n"
+        "IMPORTANT: Return ONLY the resolved file content. Do NOT include "
+        "any explanation, markdown fences, or commentary. Your entire "
+        "response will be written directly to the file."
+    )
+
+    user_prompt = (
+        f"Repository: {repo_name}\n"
+        f"File: {file_path}\n\n"
+        f"{content_for_llm}"
+    )
+
+    try:
+        raw = _asyncio.get_event_loop().run_until_complete(
+            complete(
+                tier=LLMTier.TIER_3,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.1,
+                max_tokens=16_384,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        _log.warning(
+            "loader.llm_call_failed",
+            repo=repo_name,
+            file=file_path,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        return None
+
+    if not raw or not raw.strip():
+        _log.warning(
+            "loader.llm_empty_response",
+            repo=repo_name,
+            file=file_path,
+        )
+        return None
+
+    # Strip markdown fences if the model wrapped the output
+    resolved = raw.strip()
+    if resolved.startswith("```"):
+        lines = resolved.splitlines()
+        # Remove opening fence line
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        # Remove closing fence line
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        resolved = "\n".join(lines)
+
+    # Sanity check: the resolved file must not contain leftover conflict
+    # markers (the LLM failed to resolve them).
+    if any(marker in resolved for marker in ("<<<<<<<", "=======", ">>>>>>>")):
+        _log.warning(
+            "loader.llm_incomplete_resolution",
+            repo=repo_name,
+            file=file_path,
+            hint="LLM returned content still containing conflict markers.",
+        )
+        return None
+
+    _log.info(
+        "loader.llm_resolution_success",
+        repo=repo_name,
+        file=file_path,
+        original_len=len(conflict_content),
+        resolved_len=len(resolved),
+    )
+    return resolved
+
+
+def _pull_latest(repo_dir: Path) -> dict[str, Any]:
     """Pull the latest commits from origin while preserving local commits.
 
     Strategy (in order):
@@ -227,16 +489,29 @@ def _pull_latest(repo_dir: Path) -> None:
     3. If there ARE local-only commits (pending approval), try
        ``git pull --rebase`` which replays our local commits on top of
        the latest remote HEAD.  If rebase hits a merge conflict,
-       auto-resolve with ``--ours`` (our pending commits take priority).
+       attempt LLM-powered resolution first, then fall back to
+       ``--ours`` (our pending commits take priority).
     4. If all strategies fail, the run proceeds with the cached clone
        and logs a warning — we never destroy pending commits.
 
     The pull is always non-fatal.
+
+    Returns:
+        A dict with keys:
+        - ``strategy``: "fast-forward", "hard-reset", "rebase-clean",
+          "rebase-llm", "rebase-ours", "rebase-aborted", or "skipped"
+        - ``conflicts_resolved_by_llm``: bool
     """
+    result_info: dict[str, Any] = {
+        "strategy": "skipped",
+        "conflicts_resolved_by_llm": False,
+    }
+
     # Step 1 — fast-forward (best case: no divergence)
     result = _run_git(["pull", "--ff-only"], cwd=repo_dir, timeout=30)
     if result.returncode == 0:
-        return
+        result_info["strategy"] = "fast-forward"
+        return result_info
 
     _log.info(
         "loader.pull_ff_failed",
@@ -254,7 +529,7 @@ def _pull_latest(repo_dir: Path) -> None:
             stderr=fetch_result.stderr.strip()[:200],
             hint="Using cached clone.",
         )
-        return
+        return result_info
 
     # ── Detect local-only (unpushed) commits ───────────────────────────
     # git rev-list origin/HEAD..HEAD lists commits we have that origin doesn't.
@@ -282,21 +557,40 @@ def _pull_latest(repo_dir: Path) -> None:
     if has_local_commits:
         # ── Step 3: Rebase local commits on top of origin/HEAD ─────────
         # This replays our pending commits onto the latest remote code.
-        # If conflicts arise, auto-resolve with --ours (our changes win).
+        # If conflicts arise, attempt LLM-powered resolution first,
+        # then fall back to --ours if the LLM is unavailable.
         rebase_result = _run_git(
             ["rebase", "origin/HEAD"],
             cwd=repo_dir, timeout=60,
         )
         if rebase_result.returncode == 0:
             _log.info("loader.pull_rebase_ok", repo=repo_dir.name)
-            return
+            result_info["strategy"] = "rebase-clean"
+            return result_info
 
-        # Rebase conflict — auto-resolve with ours
+        # ── Rebase conflict — attempt LLM-powered resolution ─────────
         _log.warning(
             "loader.pull_rebase_conflict",
             repo=repo_dir.name,
             stderr=rebase_result.stderr.strip()[:200],
-            hint="Auto-resolving with checkout --ours.",
+            hint="Attempting LLM-powered conflict resolution.",
+        )
+        llm_resolved = _resolve_rebase_conflicts(repo_dir)
+        if llm_resolved:
+            _log.info(
+                "loader.pull_rebase_llm_resolved",
+                repo=repo_dir.name,
+                hint="Conflicts resolved via LLM; pending commits preserved.",
+            )
+            result_info["strategy"] = "rebase-llm"
+            result_info["conflicts_resolved_by_llm"] = True
+            return result_info
+
+        # LLM unavailable or failed — fall back to --ours
+        _log.warning(
+            "loader.pull_rebase_llm_failed",
+            repo=repo_dir.name,
+            hint="LLM resolution failed; falling back to checkout --ours.",
         )
         _run_git(["checkout", "--ours", "."], cwd=repo_dir, timeout=15)
         _run_git(["add", "-A"], cwd=repo_dir, timeout=15)
@@ -310,7 +604,8 @@ def _pull_latest(repo_dir: Path) -> None:
                 repo=repo_dir.name,
                 hint="Conflicts auto-resolved with --ours; pending commits preserved.",
             )
-            return
+            result_info["strategy"] = "rebase-ours"
+            return result_info
 
         # Rebase failed even after conflict resolution — abort and keep
         # the local state intact.
@@ -321,7 +616,8 @@ def _pull_latest(repo_dir: Path) -> None:
             stderr=continue_result.stderr.strip()[:200],
             hint="Rebase failed; using cached clone with pending commits.",
         )
-        return
+        result_info["strategy"] = "rebase-aborted"
+        return result_info
 
     # ── Step 2: No local commits — safe to hard-reset ──────────────────
     # Stash uncommitted changes (workspace dirt from a failed sandbox run),
@@ -342,7 +638,7 @@ def _pull_latest(repo_dir: Path) -> None:
         )
         if stashed:
             _run_git(["stash", "pop"], cwd=repo_dir, timeout=15)
-        return
+        return result_info
 
     # Stash dropped — uncommitted workspace dirt is discarded (it will be
     # regenerated on the next mutation run if needed).
@@ -350,6 +646,8 @@ def _pull_latest(repo_dir: Path) -> None:
         _run_git(["stash", "drop"], cwd=repo_dir, timeout=10)
 
     _log.info("loader.pull_reset_ok", repo=repo_dir.name)
+    result_info["strategy"] = "hard-reset"
+    return result_info
 
 
 def _ensure_local_git_repo(source_dir: Path, cache_dir: Path, settings: Any) -> None:

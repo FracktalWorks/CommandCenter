@@ -1031,9 +1031,17 @@ function AgentTile({
     e.stopPropagation(); // don't select the tile
     setPulling(true);
     try {
-      await fetch(`/api/agent/${encodeURIComponent(agent.name)}/pull`, {
-        method: "POST",
-      });
+      const res = await fetch(
+        `/api/agent/${encodeURIComponent(agent.name)}/pull`,
+        { method: "POST" },
+      );
+      if (res.ok) {
+        const data = await res.json();
+        // If LLM resolved conflicts, show briefly in a tooltip-like way
+        if (data.conflicts_resolved_by_llm) {
+          // The onRefresh will re-fetch and update behind_by
+        }
+      }
       onRefresh?.();
     } catch {
       // silently fail — badge will update on next poll
@@ -1041,6 +1049,8 @@ function AgentTile({
       setPulling(false);
     }
   };
+
+  const isCopilotAgent = agent.agent_runtime === "github-copilot";
 
   return (
     <button
@@ -1051,16 +1061,25 @@ function AgentTile({
           : "border-border bg-card hover:border-primary/40 hover:bg-secondary/30"
       }`}
     >
-      {/* Update available badge — clickable to pull */}
-      {behindBy && behindBy > 0 && (
-        <button
-          onClick={handlePull}
-          disabled={pulling}
-          className="absolute -top-1.5 -right-1.5 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white shadow-md hover:bg-amber-600 disabled:opacity-60 transition-colors cursor-pointer"
-          title={`Pull ${behindBy} update${behindBy !== 1 ? "s" : ""}`}
-        >
-          {pulling ? "Pulling…" : `${behindBy} update${behindBy !== 1 ? "s" : ""}`}
-        </button>
+      {/* Update badge — shows count when behind, green check when up-to-date for Copilot agents */}
+      {isCopilotAgent && (
+        behindBy && behindBy > 0 ? (
+          <button
+            onClick={handlePull}
+            disabled={pulling}
+            className="absolute -top-1.5 -right-1.5 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white shadow-md hover:bg-amber-600 disabled:opacity-60 transition-colors cursor-pointer z-10"
+            title={`${behindBy} commit${behindBy !== 1 ? "s" : ""} behind — click to pull`}
+          >
+            {pulling ? "…" : behindBy}
+          </button>
+        ) : (
+          <span
+            className="absolute -top-1.5 -right-1.5 rounded-full bg-success/80 px-1.5 py-0.5 text-[10px] font-bold text-white shadow-md z-10"
+            title="Up to date"
+          >
+            ✓
+          </span>
+        )
       )}
 
       <div className="flex items-start justify-between mb-3">
@@ -1117,14 +1136,36 @@ function AgentSidePanel({
   const [confirming, setConfirming] = useState(false);
   const [removing, setRemoving]     = useState(false);
   const [pulling, setPulling]       = useState(false);
+  const [checking, setChecking]     = useState(false);
+  const [pullResult, setPullResult] = useState<{
+    pulled: number;
+    behind_by: number;
+    strategy: string;
+    conflicts_resolved_by_llm: boolean;
+    head_before?: string;
+    head_after?: string;
+  } | null>(null);
   const behindBy = (agent as any).behind_by as number | undefined;
 
-  const handlePull = async () => {
+  const doPull = async () => {
     setPulling(true);
+    setPullResult(null);
     try {
-      await fetch(`/api/agent/${encodeURIComponent(agent.name)}/pull`, {
-        method: "POST",
-      });
+      const res = await fetch(
+        `/api/agent/${encodeURIComponent(agent.name)}/pull`,
+        { method: "POST" },
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setPullResult({
+          pulled: data.pulled ?? 0,
+          behind_by: data.behind_by ?? 0,
+          strategy: data.strategy ?? "unknown",
+          conflicts_resolved_by_llm: data.conflicts_resolved_by_llm ?? false,
+          head_before: data.head_before,
+          head_after: data.head_after,
+        });
+      }
       onRefresh?.();
     } catch {
       // silently fail
@@ -1132,6 +1173,23 @@ function AgentSidePanel({
       setPulling(false);
     }
   };
+
+  const checkUpdates = async () => {
+    setChecking(true);
+    try {
+      await fetch(
+        `/api/agent/${encodeURIComponent(agent.name)}/pull`,
+        { method: "POST" },
+      );
+      onRefresh?.();
+    } catch {
+      // silently fail
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const isCopilotAgent = agent.agent_runtime === "github-copilot";
 
   const missingDeps = (agent.integrations ?? []).filter((i) => {
     const s = statuses.find((x) => x.service === i);
@@ -1287,16 +1345,111 @@ function AgentSidePanel({
           </div>
         )}
 
-        {/* Pull updates button — shown when clone is behind remote */}
-        {behindBy && behindBy > 0 && (
-          <button
-            onClick={handlePull}
-            disabled={pulling}
-            className="flex items-center justify-center gap-2 w-full rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs font-medium text-amber-600 hover:bg-amber-500/20 disabled:opacity-50 transition-colors"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${pulling ? "animate-spin" : ""}`} />
-            {pulling ? "Pulling…" : `Pull ${behindBy} update${behindBy !== 1 ? "s" : ""}`}
-          </button>
+        {/* Pull updates section — always visible for Copilot agents */}
+        {isCopilotAgent && (
+          <div>
+            <div className="text-[10px] text-muted uppercase tracking-wider mb-1.5">
+              Repository Updates
+            </div>
+
+            {/* Status: up-to-date */}
+            {!behindBy && !pullResult && (
+              <div className="flex items-center gap-2">
+                <span className="flex items-center gap-1.5 rounded-lg bg-success/5 border border-success/10 px-3 py-1.5 text-xs text-success">
+                  <span className="w-1.5 h-1.5 rounded-full bg-success" />
+                  Up to date
+                </span>
+                <button
+                  onClick={checkUpdates}
+                  disabled={checking}
+                  className="rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:border-primary/30 hover:text-foreground disabled:opacity-50 transition-colors"
+                  title="Force-check for remote updates"
+                >
+                  <RefreshCw className={`w-3 h-3 ${checking ? "animate-spin" : ""}`} />
+                </button>
+              </div>
+            )}
+
+            {/* Status: behind — pull button */}
+            {behindBy && behindBy > 0 && !pullResult && (
+              <button
+                onClick={doPull}
+                disabled={pulling}
+                className="flex items-center justify-center gap-2 w-full rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs font-medium text-amber-600 hover:bg-amber-500/20 disabled:opacity-50 transition-colors"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${pulling ? "animate-spin" : ""}`} />
+                {pulling
+                  ? "Pulling…"
+                  : `Pull ${behindBy} update${behindBy !== 1 ? "s" : ""}`}
+              </button>
+            )}
+
+            {/* Pulling spinner */}
+            {pulling && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground animate-pulse">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                Pulling latest commits…
+              </div>
+            )}
+
+            {/* Pull result card */}
+            {pullResult && (
+              <div className={`rounded-lg border p-3 text-xs ${
+                pullResult.conflicts_resolved_by_llm
+                  ? "border-primary/30 bg-primary/5"
+                  : pullResult.pulled > 0
+                  ? "border-success/20 bg-success/5"
+                  : "border-border bg-secondary/30"
+              }`}>
+                {pullResult.pulled > 0 ? (
+                  <>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`w-1.5 h-1.5 rounded-full ${
+                        pullResult.conflicts_resolved_by_llm
+                          ? "bg-primary"
+                          : "bg-success"
+                      }`} />
+                      <span className="font-medium text-foreground">
+                        {pullResult.pulled} commit{pullResult.pulled !== 1 ? "s" : ""} pulled
+                      </span>
+                    </div>
+                    <div className="text-muted-foreground space-y-0.5">
+                      {pullResult.head_before && pullResult.head_after && (
+                        <div className="font-mono">
+                          {pullResult.head_before} → {pullResult.head_after}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="capitalize">
+                          Strategy: {pullResult.strategy.replace(/-/g, " ")}
+                        </span>
+                        {pullResult.conflicts_resolved_by_llm && (
+                          <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-primary">
+                            🤖 LLM-resolved conflicts
+                          </span>
+                        )}
+                        {pullResult.strategy === "rebase-ours" && (
+                          <span className="rounded-full bg-warning/10 px-1.5 py-0.5 text-warning">
+                            ⚠ Auto-resolved (--ours)
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <span className="w-1.5 h-1.5 rounded-full bg-muted" />
+                    Already up to date
+                  </div>
+                )}
+                {pullResult.behind_by > 0 && (
+                  <p className="mt-1 text-muted-foreground">
+                    Still {pullResult.behind_by} commit{pullResult.behind_by !== 1 ? "s" : ""} behind — pull again?
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         {/* Show pending commits for ALL agents — any agent can have
@@ -1377,6 +1530,32 @@ export default function AgentsPage() {
   const handleAdded = (agent: AgentEntry) =>
     setAgents((p) => [...p, { ...agent, dynamic: true }]);
 
+  const [checkingAll, setCheckingAll] = useState(false);
+  const copilotAgents = agents.filter(
+    (a) => a.agent_runtime === "github-copilot",
+  );
+  const behindCount = copilotAgents.filter(
+    (a) => typeof (a as any).behind_by === "number" && (a as any).behind_by > 0,
+  ).length;
+
+  const checkAllUpdates = async () => {
+    setCheckingAll(true);
+    try {
+      await Promise.all(
+        copilotAgents.map((a) =>
+          fetch(`/api/agent/${encodeURIComponent(a.name)}/pull`, {
+            method: "POST",
+          }).catch(() => {}),
+        ),
+      );
+      await load();
+    } catch {
+      // silently fail
+    } finally {
+      setCheckingAll(false);
+    }
+  };
+
   const filtered = agents.filter((a) =>
     filter === "builtin" ? !a.dynamic : filter === "custom" ? !!a.dynamic : true
   );
@@ -1398,11 +1577,36 @@ export default function AgentsPage() {
           <p className="text-xs text-muted-foreground mt-0.5">
             {loading
               ? "Loading\u2026"
-              : `${agents.length} agents \u00b7 ${readyCnt} ready${blockedCnt > 0 ? ` \u00b7 ${blockedCnt} blocked` : ""}`}
+              : `${agents.length} agents \u00b7 ${readyCnt} ready${blockedCnt > 0 ? ` \u00b7 ${blockedCnt} blocked` : ""}${copilotAgents.length > 0 ? ` \u00b7 ${copilotAgents.length} git-tracked` : ""}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => void load()} title="Refresh"
+          {copilotAgents.length > 0 && (
+            <button
+              onClick={checkAllUpdates}
+              disabled={checkingAll}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 ${
+                behindCount > 0
+                  ? "border-amber-500/30 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20"
+                  : "border-border text-muted-foreground hover:bg-secondary hover:text-foreground"
+              }`}
+              title={
+                behindCount > 0
+                  ? `${behindCount} agent${behindCount !== 1 ? "s" : ""} behind — pull all`
+                  : "Check all for updates"
+              }
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${checkingAll ? "animate-spin" : ""}`} />
+              <span className="hidden sm:inline">
+                {checkingAll
+                  ? "Checking…"
+                  : behindCount > 0
+                  ? `Pull All (${behindCount})`
+                  : "Check All"}
+              </span>
+            </button>
+          )}
+          <button onClick={() => void load()} title="Refresh agent list"
             className="p-2 rounded-lg border border-border text-muted-foreground hover:bg-secondary transition-colors">
             <RefreshCw className="w-4 h-4" />
           </button>

@@ -224,7 +224,60 @@ async def ask_questions(questions: str) -> str:
     except Exception:  # noqa: BLE001
         pass
 
-    # ── B2: legacy non-blocking (fallback) ────────────────────────────
+    # ── Path C: self-contained blocking (universal fallback) ──────────
+    # Works when neither _active_run_queue (Tier 2) nor
+    # _active_elicitation_request_id (Tier 1.5) is set — covers
+    # Tier 1 MAF AG-UI streaming and standalone calls.  Pushes the
+    # elicitation event directly to the Redis relay and blocks on
+    # a self-created Future until the user answers.
+    try:
+        from orchestrator.executor import (  # noqa: PLC0415
+            _pending_user_input,
+            _stream_relay_thread_id,
+            _push_sse_to_stream,
+        )
+        _tid = _stream_relay_thread_id.get(None)
+        if _tid:
+            import asyncio as _asyncio
+            import json as _json
+            import uuid as _uuid
+
+            _request_id = _uuid.uuid4().hex
+            _loop = _asyncio.get_running_loop()
+            _fut: "_asyncio.Future[dict[str, object]]" = (
+                _loop.create_future())
+            _pending_user_input[_request_id] = _fut
+
+            _payload = _json.dumps({
+                "type": "CUSTOM",
+                "name": "elicitation_requested",
+                "value": {
+                    "questions": cleaned,
+                    "request_id": _request_id,
+                },
+            })
+            _line = f"data: {_payload}\n\n"
+            await _push_sse_to_stream(_tid, _line)
+
+            try:
+                _result = await _asyncio.wait_for(
+                    _fut, timeout=3600,
+                )
+            except _asyncio.TimeoutError:
+                _pending_user_input.pop(_request_id, None)
+                return "User did not respond in time."
+            finally:
+                _pending_user_input.pop(_request_id, None)
+
+            _answer = str(
+                _result.get("answer", "") or "").strip()
+            if not _answer:
+                return "User provided an empty response."
+            return f"User response: {_answer}"
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── B2: legacy non-blocking (last resort) ─────────────────────────
     try:
         from orchestrator.executor import _active_run_queue  # noqa: PLC0415
         queue_b = _active_run_queue.get(None)

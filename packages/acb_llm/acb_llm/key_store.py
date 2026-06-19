@@ -137,6 +137,20 @@ class ProviderKeyStore:
             _log.warning("key_store.decrypt_failed", provider=provider)
             return ""
 
+    def encrypt(self, plain_text: str) -> str:
+        """Encrypt a plain-text string and return base64-encoded ciphertext.
+
+        Uses the same Fernet key as the provider key store.  Callers can
+        store the returned ciphertext and later decrypt it with decrypt().
+        """
+        encrypted = self._f.encrypt(plain_text.encode("utf-8"))
+        return base64.urlsafe_b64encode(encrypted).decode("ascii")
+
+    def decrypt(self, cipher_text: str) -> str:
+        """Decrypt a ciphertext produced by encrypt()."""
+        encrypted = base64.urlsafe_b64decode(cipher_text)
+        return self._f.decrypt(encrypted).decode("utf-8")
+
     async def put(
         self,
         provider: str,

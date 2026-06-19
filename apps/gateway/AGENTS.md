@@ -21,7 +21,8 @@ webhook receivers, OAuth callbacks, and the Control Plane API.
 6. routes/memory.py -- Memory search and management endpoints
 7. routes/settings.py -- LLM settings, model config
 8. routes/email.py -- Email account CRUD, message listing/search, send, sync, AI chat, OAuth flow for Gmail/Microsoft/IMAP. Background sync scheduler hooks (refresh/remove) on account PATCH/DELETE.
-9. agents.json -- Dynamic agent registry (persisted alongside pyproject.toml)
+9. routes/v1_compat.py -- OpenAI-compatible /v1/chat/completions endpoint (used by Copilot SDK BYOK provider and MAF OpenAIChatCompletionClient). Includes message sanitization for providers with strict validation (e.g. DeepSeek rejects assistant messages with neither content nor tool_calls).
+10. agents.json -- Dynamic agent registry (persisted alongside pyproject.toml)
 
 ## Work Guidance
 

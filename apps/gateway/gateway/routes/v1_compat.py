@@ -48,6 +48,69 @@ def _resolve_model(requested: str) -> str:
     return requested
 
 
+def _sanitize_messages_for_provider(
+    messages: list[dict[str, Any]],
+    provider: str,
+) -> list[dict[str, Any]]:
+    """Normalize messages so they pass provider-specific validation.
+
+    DeepSeek (and some other providers) reject assistant messages where both
+    ``content`` and ``tool_calls`` are null/missing.  The Copilot SDK may
+    emit such messages when it serialises conversation history that includes
+    tool-call-only assistant turns (content=null, tool_calls=[...]) or
+    thinking-only turns that have neither field.
+
+    Rules applied:
+    1. Assistant messages with *neither* content nor tool_calls → dropped.
+    2. Assistant messages with tool_calls but null content → content set to "".
+    3. Tool messages with null/empty content → content set to "[tool result]".
+    """
+    if not messages:
+        return messages
+
+    # Providers that require content to be a string (not null) even when
+    # tool_calls are present.  OpenAI accepts null content with tool_calls;
+    # DeepSeek and some others reject it.
+    _null_content_providers = {"deepseek"}
+    _provider_lower = (provider or "").lower()
+    _fix_null_content = any(
+        p in _provider_lower for p in _null_content_providers
+    )
+
+    cleaned: list[dict[str, Any]] = []
+    for m in messages:
+        role = m.get("role", "")
+        content = m.get("content")
+        tool_calls = m.get("tool_calls")
+
+        if role == "assistant":
+            # If both content and tool_calls are null/empty/missing, drop.
+            # Invalid per the OpenAI spec — rejected by all providers.
+            has_content = content is not None and content != ""
+            has_tool_calls = tool_calls is not None and len(tool_calls) > 0
+            if not has_content and not has_tool_calls:
+                _log.debug(
+                    "v1.sanitize_dropped_assistant",
+                    reason="no content or tool_calls",
+                )
+                continue
+            # Some providers require content to be a string (not null) when
+            # tool_calls are present.  Set to empty string for those.
+            if has_tool_calls and content is None and _fix_null_content:
+                m = dict(m)
+                m["content"] = ""
+
+        elif role == "tool":
+            # Some providers reject null/empty tool result content.
+            if content is None or content == "":
+                m = dict(m)
+                m["content"] = "[tool result]"
+
+        cleaned.append(m)
+
+    return cleaned
+
+
 async def _handle_chat_completions(request: Request) -> StreamingResponse | dict[str, Any]:
     """OpenAI-compatible chat completions. Supports streaming and tools."""
     await _ensure_keys_loaded()
@@ -64,11 +127,20 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
     api_base = body.get("api_base") or None
     api_key = body.get("api_key") or None
 
+    import litellm as _litellm  # type: ignore[import-untyped]
     from litellm import acompletion  # type: ignore[import-untyped]
+
+    # Drop parameters the provider doesn't support (e.g. Copilot SDK may
+    # send fields that DeepSeek / other providers reject).
+    _litellm.drop_params = True
+    _litellm.suppress_debug_info = True
 
     # Dynamically register model so new provider models route correctly.
     from acb_llm.client import ensure_model_registered
-    ensure_model_registered(model)
+    provider = ensure_model_registered(model)
+
+    # Sanitize messages for providers with strict validation (e.g. DeepSeek).
+    messages = _sanitize_messages_for_provider(messages, provider or model)
 
     common: dict[str, Any] = {
         "model": model,

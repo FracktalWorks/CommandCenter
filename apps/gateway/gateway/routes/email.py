@@ -1666,6 +1666,13 @@ async def oauth_callback(
 
         account_id = str(result.fetchone()[0])
 
+        # Start background sync for the new account
+        try:
+            from email_ingestion.scheduler import refresh_account_sync
+            await refresh_account_sync(account_id)
+        except Exception:
+            pass
+
         # Success redirect
         params = {
             "account_id": account_id,

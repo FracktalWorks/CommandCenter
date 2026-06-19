@@ -104,7 +104,23 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         _log.warning("gateway.key_store_skipped", error=str(exc))
 
+    # Start background email sync scheduler
+    try:
+        from email_ingestion.scheduler import start_background_sync
+        await start_background_sync()
+        _log.info("gateway.email_sync_started")
+    except Exception as exc:
+        _log.warning("gateway.email_sync_skipped", error=str(exc))
+
     yield
+
+    # Stop background email sync scheduler
+    try:
+        from email_ingestion.scheduler import stop_background_sync
+        await stop_background_sync()
+    except Exception:
+        pass
+
     _log.info("gateway.shutdown")
 
 

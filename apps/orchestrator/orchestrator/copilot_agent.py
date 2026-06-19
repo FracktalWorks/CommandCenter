@@ -14,6 +14,24 @@ from copilot.session import SessionEventType
 
 logger = logging.getLogger(__name__)
 
+# ── Output token limit ───────────────────────────────────────────────────
+# Copilot SDK sessions don't set max_tokens by default, so BYOK models use
+# their provider's default (often as low as 4096).  When the agent emits
+# reasoning + text + tool calls, it can exhaust that budget mid-sentence and
+# the model stops silently → SESSION_IDLE → stream ends.  This env var lets
+# operators set a generous ceiling (default 16000) to prevent truncation.
+_MAX_OUTPUT_TOKENS: int = int(
+    os.environ.get("COPILOT_MAX_OUTPUT_TOKENS", "16000")
+)
+
+# ── Stream stall detection ────────────────────────────────────────────────
+# If no Copilot SDK event arrives for this many seconds, the CLI subprocess
+# is likely dead/hung.  Raise an exception so the executor can retry or fail
+# gracefully instead of leaving the HTTP stream hanging forever.
+_STREAM_STALL_TIMEOUT: float = float(
+    os.environ.get("COPILOT_STREAM_STALL_TIMEOUT", "300")
+)
+
 
 class CommandCenterCopilotAgent(GitHubCopilotAgent):
     """GitHubCopilotAgent with BYOK provider forwarding and rich event streaming.
@@ -112,6 +130,19 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
         if provider:
             config["provider"] = provider
 
+        # === Output tokens: prevent model truncation mid-response ===
+        # When unset, BYOK models use their provider's default output limit
+        # (often 4096 tokens).  The agent's reasoning + tool calls + text can
+        # easily exceed this, causing the model to stop mid-sentence.  Set a
+        # generous ceiling so the agent can finish its thought.
+        max_tokens = (
+            opts.get("max_tokens")
+            or self._default_options.get("max_tokens")
+            or _MAX_OUTPUT_TOKENS
+        )
+        if max_tokens:
+            config["max_tokens"] = int(max_tokens)
+
         # === Reasoning: forward effort so thinking deltas stream ===
         effort = (
             opts.get("reasoning_effort")
@@ -187,6 +218,11 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
         provider = self._default_options.get("provider")
         if provider:
             config["provider"] = provider
+
+        # === Output tokens: re-apply on resume to avoid mid-thought cutoff ===
+        max_tokens = self._default_options.get("max_tokens") or _MAX_OUTPUT_TOKENS
+        if max_tokens:
+            config["max_tokens"] = int(max_tokens)
 
         # === Reasoning: forward effort so thinking deltas keep streaming ===
         effort = self._default_options.get("reasoning_effort")
@@ -489,8 +525,33 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
         try:
             await copilot_session.send({"prompt": prompt})
 
+            # ── Stream stall detection ───────────────────────────────
+            # If the Copilot CLI subprocess crashes or hangs, queue.get()
+            # blocks forever.  A timeout turns a silent hang into a
+            # visible error that the executor can retry or surface.
+            last_event_time = asyncio.get_running_loop().time()
             while True:
-                update = await queue.get()
+                try:
+                    update = await asyncio.wait_for(
+                        queue.get(),
+                        timeout=_STREAM_STALL_TIMEOUT,
+                    )
+                    last_event_time = asyncio.get_running_loop().time()
+                except asyncio.TimeoutError:
+                    elapsed = (
+                        asyncio.get_running_loop().time()
+                        - last_event_time
+                    )
+                    logger.error(
+                        "copilot_stream_stalled: no event for %.0fs "
+                        "(stall_timeout=%.0fs)",
+                        elapsed, _STREAM_STALL_TIMEOUT,
+                    )
+                    raise AgentException(
+                        f"Copilot session stalled: no event for "
+                        f"{elapsed:.0f}s (timeout={_STREAM_STALL_TIMEOUT}s). "
+                        f"The CLI subprocess may have crashed."
+                    ) from None
                 if update is None:
                     break
                 if isinstance(update, Exception):

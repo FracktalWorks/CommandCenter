@@ -252,23 +252,35 @@ _SETUP_GUIDES: dict[str, dict[str, Any]] = {
         ],
     },
     "microsoft-oauth": {
-        "label": "Microsoft OAuth (user sign-in)",
-        "description": "Let users connect their Outlook / Microsoft 365 accounts via Microsoft sign-in. Required for the Email app.",
+        "label": "Microsoft OAuth (Email)",
+        "description": (
+            "Let users connect their Outlook / Microsoft 365 accounts. "
+            "Reuses your existing sign-in Azure app registration (AUTH_MICROSOFT_ENTRA_ID_*) "
+            "— just add the Email redirect URI and Mail.ReadWrite permission to it."
+        ),
         "setup_url": "https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade",
         "docs_url": "https://learn.microsoft.com/en-us/graph/auth-v2-user",
         "instructions": (
-            "1. Go to Azure Portal → App registrations → New registration.\n"
-            "2. Name: 'CommandCenter Email'. Supported account types: 'Any organizational directory and personal Microsoft accounts'.\n"
-            "3. Add Redirect URI (Web):\n"
+            "If you already have a sign-in app registration (AUTH_MICROSOFT_ENTRA_ID_*), "
+            "you can reuse it — no separate registration needed. Just add these to it:\n\n"
+            "1. Go to Azure Portal → App registrations → your existing CommandCenter app.\n"
+            "2. Under 'Authentication', add Redirect URI (Web):\n"
             "   https://api.commandcenter.fracktal.in/email/oauth/microsoft/callback\n"
-            "4. Click 'Register', then copy the Application (client) ID below.\n"
+            "3. Under 'API Permissions', add Microsoft Graph → Delegated:\n"
+            "   Mail.ReadWrite, User.Read\n"
+            "4. Click 'Grant admin consent' if tenant-restricted.\n\n"
+            "If you are NOT using the same app registration, create a new one:\n"
+            "1. App registrations → New registration.\n"
+            "2. Name: 'CommandCenter Email'. Supported account types: 'Any organizational directory and personal Microsoft accounts'.\n"
+            "3. Add Redirect URI (Web) as above.\n"
+            "4. Copy the Application (client) ID below.\n"
             "5. Go to 'Certificates & secrets' → New client secret, copy it below.\n"
             "6. Under 'API Permissions', add Microsoft Graph → Delegated:\n"
             "   Mail.ReadWrite, User.Read"
         ),
         "env_vars": [
-            {"key": "MSFT_OAUTH_CLIENT_ID", "label": "Application (client) ID", "sensitive": False},
-            {"key": "MSFT_OAUTH_CLIENT_SECRET", "label": "Client Secret", "sensitive": True},
+            {"key": "MSFT_OAUTH_CLIENT_ID", "label": "Application (client) ID (optional — falls back to AUTH_MICROSOFT_ENTRA_ID_ID)", "sensitive": False},
+            {"key": "MSFT_OAUTH_CLIENT_SECRET", "label": "Client Secret (optional — falls back to AUTH_MICROSOFT_ENTRA_ID_SECRET)", "sensitive": True},
         ],
     },
     "google-sheets": {
@@ -333,7 +345,10 @@ def _is_configured(service_name: str, settings: Any) -> bool:
         "gmail":           lambda s: bool(s.gmail_sa_json_path),
         "gmail-send":      lambda s: bool(s.gmail_sa_json_path),
         "gmail-oauth":     lambda s: bool(s.gmail_oauth_client_id and s.gmail_oauth_client_secret),
-        "microsoft-oauth": lambda s: bool(s.msft_oauth_client_id and s.msft_oauth_client_secret),
+        "microsoft-oauth": lambda s: bool(
+            (s.msft_oauth_client_id and s.msft_oauth_client_secret)
+            or (os.getenv("AUTH_MICROSOFT_ENTRA_ID_ID") and os.getenv("AUTH_MICROSOFT_ENTRA_ID_SECRET"))
+        ),
         "clickup":       lambda s: bool(s.clickup_api_token),
         "smtp":          lambda s: bool(s.smtp_host and s.smtp_username),
         "github":        lambda s: bool(s.github_token),
@@ -579,6 +594,7 @@ async def integration_status(
                 "configured": configured,
                 "mandatory": False,
                 "description": row.get("description", ""),
+                "domain": row.get("domain", ""),
                 "uses": [],
                 "setup_url": row.get("setup_url", ""),
                 "docs_url": row.get("docs_url", ""),
@@ -1034,6 +1050,7 @@ class CustomApiDef(BaseModel):
     label: str
     category: str = "custom"
     description: str = ""
+    domain: str = ""
     setup_url: str = ""
     docs_url: str = ""
     instructions: str = ""
@@ -1055,6 +1072,7 @@ async def list_custom_apis(
                 "label": r["label"],
                 "category": r.get("category", "custom"),
                 "description": r.get("description", ""),
+                "domain": r.get("domain", ""),
                 "setup_url": r.get("setup_url", ""),
                 "docs_url": r.get("docs_url", ""),
                 "instructions": r.get("instructions", ""),
@@ -1086,15 +1104,16 @@ async def create_custom_api(
         await _db_query(
             """
             INSERT INTO custom_api_definitions
-                (service_id, label, category, description,
+                (service_id, label, category, description, domain,
                  setup_url, docs_url, instructions, env_vars)
             VALUES
-                (:service_id, :label, :category, :description,
+                (:service_id, :label, :category, :description, :domain,
                  :setup_url, :docs_url, :instructions, :env_vars)
             ON CONFLICT (service_id) DO UPDATE SET
                 label        = :label,
                 category     = :category,
                 description  = :description,
+                domain       = :domain,
                 setup_url    = :setup_url,
                 docs_url     = :docs_url,
                 instructions = :instructions,
@@ -1105,6 +1124,7 @@ async def create_custom_api(
             label=req.label,
             category=req.category,
             description=req.description,
+            domain=req.domain or "",
             setup_url=req.setup_url,
             docs_url=req.docs_url,
             instructions=req.instructions,

@@ -42,6 +42,21 @@ from acb_skills.loader import AgentLoadError, load_agent
 # Max self-anneal retries before giving up and falling back to LLM recovery.
 _MAX_ANNEAL_ATTEMPTS = 2
 
+# ── Tool execution timeout ────────────────────────────────────────────────
+# When the agent calls a tool (shell command, sub-agent, web fetch, etc.),
+# the tool runs inside the Copilot SDK's async event loop.  If the tool
+# hangs (infinite loop, waiting for stdin, network partition), the entire
+# stream blocks forever.  This timeout bounds individual tool execution so
+# a hung tool is detected and surfaced as an error instead of a silent hang.
+# Set via COPILOT_TOOL_TIMEOUT_SECONDS (default 300 = 5 min).
+_TOOL_EXECUTION_TIMEOUT: float = float(
+    os.environ.get("COPILOT_TOOL_TIMEOUT_SECONDS", "300")
+)
+
+# ── Elicitation bridge: track which tool_call_id maps to a pending
+# ask_questions Future so cleanup only fires for the matching result.
+_elicitation_tc_ids: dict[str, str] = {}
+
 _log = get_logger("orchestrator.executor")
 
 # Pre-compiled regex for tool result clearing (technique #1).
@@ -2149,6 +2164,12 @@ async def run_agent_stream(
                             _run_opts_inner["model"] = _byok_model_id
                         elif _final_model_early:
                             _run_opts_inner["model"] = _final_model_early
+                        # ── Forward max_tokens to prevent model truncation ─
+                        _copilot_max_tok = os.environ.get(
+                            "COPILOT_MAX_OUTPUT_TOKENS", ""
+                        ).strip()
+                        if _copilot_max_tok:
+                            _run_opts_inner["max_tokens"] = int(_copilot_max_tok)
                         _stream = agent.run(
                             _eff, stream=True,
                             options=_run_opts_inner if _run_opts_inner else None,
@@ -2305,10 +2326,16 @@ async def run_agent_stream(
                                                         _fut: "asyncio.Future[dict[str, Any]]" = (
                                                             _loop.create_future())
                                                         _pending_user_input[_req_id] = _fut
+                                                        # ── Track which tool_call_id maps to
+                                                        # this elicitation so cleanup only fires
+                                                        # for the matching function_result.
+                                                        _elicitation_tc_ids[
+                                                            _req_id] = _tc_id
                                                         _log.debug(
                                                             "executor.elicitation_parked",
                                                             request_id=_req_id[:12],
                                                             question_count=len(_valid),
+                                                            tool_call_id=_tc_id[:12],
                                                         )
                                                         yield _sse({
                                                             "type": "CUSTOM",
@@ -2342,22 +2369,38 @@ async def run_agent_stream(
                                                 "content": str(_tc_result)[:2000],
                                                 "success": _tc_ok})
                                     # ── Clean up elicitation bridge ──────
-                                    # If this function_result belongs to a
-                                    # pending ask_questions call, reset the
-                                    # ContextVar and remove the Future so
-                                    # subsequent tool calls are unaffected.
+                                    # Only clear when this function_result
+                                    # belongs to a pending ask_questions
+                                    # call (matched by tool_call_id stored
+                                    # alongside the Future).  Previously
+                                    # ANY function_result would reset the
+                                    # ContextVar, causing a race where a
+                                    # second tool's completion cleared the
+                                    # bridge before ask_questions could
+                                    # park on the Future.
                                     _elic_id = (
                                         _active_elicitation_request_id.get(
                                             None))
                                     if _elic_id:
-                                        _active_elicitation_request_id.set(
-                                            None)
-                                        _pending_user_input.pop(
-                                            _elic_id, None)
-                                        _log.debug(
-                                            "executor.elicitation_cleaned",
-                                            request_id=_elic_id[:12],
-                                        )
+                                        # Only clear if this result matches
+                                        # the elicitation's tool_call_id
+                                        # or if no tool_call_id was stored
+                                        # (defensive: clear anyway).
+                                        _elic_tc_id = _elicitation_tc_ids.get(
+                                            _elic_id)
+                                        if (_elic_tc_id is None
+                                                or _elic_tc_id == _tc_id):
+                                            _active_elicitation_request_id.set(
+                                                None)
+                                            _pending_user_input.pop(
+                                                _elic_id, None)
+                                            _elicitation_tc_ids.pop(
+                                                _elic_id, None)
+                                            _log.debug(
+                                                "executor.elicitation_cleaned",
+                                                request_id=_elic_id[:12],
+                                                tool_call_id=_tc_id[:12],
+                                            )
                             # Agent intent from raw events
                             _raw = _update.raw_representation
                             if _raw is not None:
@@ -2394,6 +2437,15 @@ async def run_agent_stream(
                             except Exception:  # noqa: BLE001
                                 _log.exception("executor.store_session_failed")
 
+                # ── Artifact event relay ─────────────────────────────────
+                # Create a queue and expose it via _active_run_queue so the
+                # write_artifact tool (and any other tool) can push CUSTOM
+                # events (artifact_created, etc.) into the active SSE stream.
+                # Without this the Copilot SDK path never forwards artifact
+                # events — they silently drop because _active_run_queue is None.
+                _artifact_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+                _t15_token = _active_run_queue.set(_artifact_queue)
+
                 # ── Retry loop: at most 2 attempts ─────────────────────────
                 # Attempt 0: normal run (may use a stored Copilot session).
                 # Attempt 1 (only if attempt 0 raised a stale-session error):
@@ -2408,6 +2460,17 @@ async def run_agent_stream(
                     try:
                         async for _line in _run_copilot_attempt(_effective_msg, _ag_sess):
                             yield _line
+                            # ── Drain artifact events (write_artifact pushes
+                            # artifact_created CUSTOM events here) ──────────
+                            while not _artifact_queue.empty():
+                                _aev = _artifact_queue.get_nowait()
+                                if _aev:
+                                    yield _sse(_aev)
+                        # Drain any remaining artifact events after stream ends
+                        while not _artifact_queue.empty():
+                            _aev = _artifact_queue.get_nowait()
+                            if _aev:
+                                yield _sse(_aev)
                         break  # success — exit retry loop
                     except Exception as _exc:  # noqa: BLE001
                         # ── Gap-1 fix: stale Copilot session ─────────────
@@ -2481,8 +2544,53 @@ async def run_agent_stream(
                         _todo_tracker = _TodoTracker()
                         # continue → next iteration of retry loop
 
+                # ── Drain any late-arriving artifact events + reset queue ─
+                while not _artifact_queue.empty():
+                    _aev = _artifact_queue.get_nowait()
+                    if _aev:
+                        yield _sse(_aev)
+                _active_run_queue.reset(_t15_token)
+
+                # ── Premature stream-end detection ───────────────────────
+                # If text was started but no tool call completed after it,
+                # the model likely stopped mid-thought (token limit reached,
+                # content filter, provider error).  Log a warning so
+                # operators can diagnose and tune COPILOT_MAX_OUTPUT_TOKENS.
+                if _text_started and not _msg_id:
+                    _log.warning(
+                        "executor.copilot_premature_end",
+                        agent=agent_name,
+                        run_id=run_id,
+                        hint=(
+                            "Model emitted text but stream ended before "
+                            "completion.  Try increasing "
+                            "COPILOT_MAX_OUTPUT_TOKENS (current default "
+                            "16000) or check provider logs for content "
+                            "filter / rate-limit events."
+                        ),
+                    )
                 if _msg_id and _text_started:
                     yield _sse({"type": "TEXT_MESSAGE_END", "messageId": _msg_id})
+                elif not _text_started:
+                    # Stream ended without any assistant text — surface as
+                    # a warning so the frontend doesn't show an empty bubble.
+                    _log.warning(
+                        "executor.copilot_no_text",
+                        agent=agent_name,
+                        run_id=run_id,
+                    )
+                    yield _sse({
+                        "type": "RUN_ERROR",
+                        "runId": run_id,
+                        "message": (
+                            "The agent produced no text output.  The "
+                            "underlying model may have hit a token limit, "
+                            "content filter, or provider error.  Check "
+                            "gateway logs for details."
+                        ),
+                        "code": "NO_OUTPUT",
+                    })
+                    return
                 yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
 
                 await _detect_agent_commits(

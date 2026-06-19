@@ -1540,7 +1540,12 @@ async def oauth_authorize(
         )
     elif provider == "microsoft":
         settings = get_settings()
-        client_id = settings.msft_oauth_client_id or os.environ.get("MSFT_OAUTH_CLIENT_ID", "")
+        # Prefer dedicated email OAuth creds; fall back to sign-in auth creds (shared app registration)
+        client_id = (
+            settings.msft_oauth_client_id
+            or os.environ.get("MSFT_OAUTH_CLIENT_ID", "")
+            or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_ID", "")
+        )
         if not client_id:
             raise HTTPException(
                 status_code=400,
@@ -1738,8 +1743,17 @@ async def _exchange_gmail_token(code: str, redirect_uri: str) -> dict[str, Any]:
 async def _exchange_msft_token(code: str, redirect_uri: str) -> dict[str, Any]:
     """Exchange authorization code for Microsoft OAuth tokens."""
     settings = get_settings()
-    client_id = settings.msft_oauth_client_id or os.environ.get("MSFT_OAUTH_CLIENT_ID", "")
-    client_secret = settings.msft_oauth_client_secret or os.environ.get("MSFT_OAUTH_CLIENT_SECRET", "")
+    # Prefer dedicated email OAuth creds; fall back to sign-in auth creds (shared app registration)
+    client_id = (
+        settings.msft_oauth_client_id
+        or os.environ.get("MSFT_OAUTH_CLIENT_ID", "")
+        or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_ID", "")
+    )
+    client_secret = (
+        settings.msft_oauth_client_secret
+        or os.environ.get("MSFT_OAUTH_CLIENT_SECRET", "")
+        or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_SECRET", "")
+    )
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             "https://login.microsoftonline.com/common/oauth2/v2.0/token",

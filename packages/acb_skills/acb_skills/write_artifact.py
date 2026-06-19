@@ -191,6 +191,7 @@ async def _notify(
                 "path": artifact["path"],
                 "sha256": artifact.get("sha256"),
                 "size": artifact.get("size"),
+                "mime_type": artifact.get("mime_type"),
             }
             await queue.put({
                 "type": "CUSTOM",

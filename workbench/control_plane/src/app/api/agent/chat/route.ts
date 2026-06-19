@@ -97,8 +97,9 @@ async function persistAssistantMessage(
   progressLines: string[] = [],
   messageId?: string,
   todos: Array<{ id: string; title: string; status: string }> = [],
+  customEvents: Array<{ name: string; value: unknown }> = [],
 ): Promise<void> {
-  if (!content.trim() && toolEvents.length === 0 && reasoningBlocks.length === 0 && todos.length === 0) return;
+  if (!content.trim() && toolEvents.length === 0 && reasoningBlocks.length === 0 && todos.length === 0 && customEvents.length === 0) return;
   try {
     const payload = [{
       // Use the frontend-supplied message ID so the row correlates with the
@@ -114,7 +115,7 @@ async function persistAssistantMessage(
       // Carry the structured todo list in agent_state so the Todos panel
       // survives a page refresh (no dedicated DB column needed).
       agent_state: todos.length > 0 ? { todos } : null,
-      custom_events: [],
+      custom_events: customEvents,
     }];
     // Write directly to the gateway's chat message store so messages survive
     // even if the Next.js process restarts mid-stream.
@@ -163,6 +164,9 @@ async function translateAndPersistStream(
   const reasoningBlocks: string[] = [];
   /** Brief progress snippets shown in the ThinkingContainer header. */
   const progressLines: string[] = [];
+  /** Artifact and other custom events (artifact_created, etc.) — persisted
+   *  so ArtifactCard components survive page refresh. */
+  const customEvents: Array<{ name: string; value: unknown }> = [];
   /** Latest structured todo-list snapshot (persisted via agent_state). */
   let latestTodos: Array<{ id: string; title: string; status: string }> = [];
   let buf = "";
@@ -292,7 +296,9 @@ async function translateAndPersistStream(
         } else if (t === "STATE_DELTA") {
           out = { type: "state_delta", delta: ev.delta ?? [] };
         } else if (t === "CUSTOM") {
-          out = { type: "custom", name: ev.name ?? "", value: ev.value ?? null };
+          const cev = { name: String(ev.name ?? ""), value: ev.value ?? null };
+          customEvents.push(cev);
+          out = { type: "custom", name: cev.name, value: cev.value };
         } else if (t === "SUB_AGENT_TEXT_DELTA") {
           out = { type: "sub_agent_delta", agentName: String(ev.agentName ?? ""), runId: String(ev.runId ?? ""), delta: String(ev.delta ?? "") };
         } else if (t === "SUB_AGENT_TOOL_CALL_START") {
@@ -323,9 +329,9 @@ async function translateAndPersistStream(
         // path can restore the full stream state (thinking cascade, tool
         // progress, etc.) — not just the final text.
         const now = Date.now();
-        if ((assistantContent.trim() || reasoningBlocks.length > 0 || latestTodos.length > 0) && now - lastPersistTime > 3000) {
+        if ((assistantContent.trim() || reasoningBlocks.length > 0 || latestTodos.length > 0 || customEvents.length > 0) && now - lastPersistTime > 3000) {
           lastPersistTime = now;
-          persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, assistantMessageId, latestTodos).catch(() => {});
+          persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, assistantMessageId, latestTodos, customEvents).catch(() => {});
         }
       }
     }
@@ -334,8 +340,8 @@ async function translateAndPersistStream(
   }
 
   // Final persist — ensure the complete message is saved with all stream metadata.
-  if (assistantContent.trim() || toolEvents.length > 0 || reasoningBlocks.length > 0 || latestTodos.length > 0) {
-    await persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, assistantMessageId, latestTodos).catch(() => {});
+  if (assistantContent.trim() || toolEvents.length > 0 || reasoningBlocks.length > 0 || latestTodos.length > 0 || customEvents.length > 0) {
+    await persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, assistantMessageId, latestTodos, customEvents).catch(() => {});
   }
 
   if (clientConnected) {

@@ -11,7 +11,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import React from "react";
 import Link from "next/link";
-import { ArrowUp, Square, ListOrdered, CornerDownRight, ChevronDown } from "lucide-react";
+import { ArrowUp, Square, ListOrdered, CornerDownRight, ChevronDown, CheckCircle } from "lucide-react";
 import { useAgentChat } from "@/hooks/useAgentChat";
 import type { ArtifactEntry, ChatMessage } from "@/hooks/useAgentChat";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
@@ -209,6 +209,12 @@ const SEND_MODE_LABELS: Record<SendMode, string> = {
   send: "Send",
   queue: "Queue",
   steer: "Steer",
+};
+
+const SEND_MODE_DESCRIPTIONS: Record<SendMode, string> = {
+  steer: "Interrupt current reply and send now (default)",
+  send:  "Send when idle, queue if busy",
+  queue: "Wait for current reply, then send",
 };
 
 // ── Suggestion pills (CopilotKit-style starter prompts) ─────────────────
@@ -500,7 +506,7 @@ export default function AgentChat({
   }, [messages, sessionId]);
 
   const [input, setInput] = useState("");
-  const [sendMode, setSendMode] = useState<SendMode>("send");
+  const [sendMode, setSendMode] = useState<SendMode>("steer");
   const [showSendMenu, setShowSendMenu] = useState(false);
   const [queuedCount, setQueuedCount] = useState(0);
   const queueRef = useRef<string[]>([]);
@@ -1310,70 +1316,84 @@ export default function AgentChat({
 
               {/* Contextual send / stop button */}
               {isLoading ? (
-                <div className="shrink-0 flex items-stretch gap-0.5 self-end" ref={sendMenuRef}>
+                <div className="shrink-0 flex items-stretch self-end" ref={sendMenuRef}>
                   {/* Stop button — always visible while loading */}
                   <button type="button" onClick={stopGeneration}
-                    className="h-8 w-8 rounded-lg bg-destructive/20 border border-destructive/40 text-destructive flex items-center justify-center hover:bg-destructive/30 tech-transition"
+                    className="h-9 w-9 rounded-xl bg-destructive/10 border border-destructive/30 text-destructive flex items-center justify-center hover:bg-destructive/20 tech-transition"
                     aria-label="Stop generation" title="Stop generation">
-                    <Square size={14} strokeWidth={2.5} fill="currentColor" />
+                    <Square size={15} strokeWidth={2.5} fill="currentColor" />
                   </button>
-                  {/* Send/Queue/Steer — shown when input has text */}
+                  {/* Send/Queue/Steer — unified pill: button + dropdown toggle merged */}
                   {input.trim() && (
-                    <>
-                      <button type="submit"
-                        className={`h-8 px-2.5 rounded-lg font-semibold text-xs flex items-center gap-1 tech-transition ${
-                          sendMode === "steer" ? "bg-amber-600 text-white hover:bg-amber-700" :
-                          sendMode === "queue" ? "bg-sky-600 text-white hover:bg-sky-700" :
-                          "bg-primary text-primary-foreground hover:opacity-90"
-                        }`}
-                        aria-label={SEND_MODE_LABELS[sendMode]}
-                        title={`${SEND_MODE_LABELS[sendMode]} (click ▾ to change mode)`}>
-                        {sendMode === "send" ? <ArrowUp size={14} strokeWidth={2.5} /> :
-                         sendMode === "queue" ? <ListOrdered size={14} strokeWidth={2} /> :
-                         <CornerDownRight size={14} strokeWidth={2} />}
-                        <span className="text-[11px] hidden sm:inline">{SEND_MODE_LABELS[sendMode]}</span>
-                      </button>
-                      <button type="button"
-                        onClick={() => setShowSendMenu((v) => !v)}
-                        className={`h-8 w-5 rounded-r-lg flex items-center justify-center tech-transition text-[10px] ${
-                          sendMode === "steer" ? "bg-amber-600/80 text-white hover:bg-amber-700" :
-                          sendMode === "queue" ? "bg-sky-600/80 text-white hover:bg-sky-700" :
-                          "bg-primary/80 text-primary-foreground hover:bg-primary"
-                        }`}
-                        aria-label="Choose send mode" title="Choose how to send">
-                        <ChevronDown size={12} strokeWidth={2.5} />
-                      </button>
+                    <div className="relative ml-1.5">
+                      <div className={`flex items-stretch rounded-xl overflow-hidden border ${
+                        sendMode === "steer" ? "bg-amber-600 border-amber-500" :
+                        sendMode === "queue" ? "bg-sky-600 border-sky-500" :
+                        "bg-primary border-primary"
+                      }`}>
+                        {/* Main send action */}
+                        <button type="submit"
+                          className={`h-9 pl-3 pr-2 text-white font-semibold text-xs flex items-center gap-1.5 hover:brightness-110 tech-transition ${
+                            sendMode === "steer" ? "bg-amber-600" :
+                            sendMode === "queue" ? "bg-sky-600" :
+                            "bg-primary"
+                          }`}
+                          aria-label={SEND_MODE_LABELS[sendMode]}
+                          title={`${SEND_MODE_LABELS[sendMode]} — press Enter`}>
+                          {sendMode === "steer" ? <CornerDownRight size={14} strokeWidth={2} /> :
+                           sendMode === "queue" ? <ListOrdered size={14} strokeWidth={2} /> :
+                           <ArrowUp size={14} strokeWidth={2.5} />}
+                          <span className="hidden sm:inline text-[11px]">{SEND_MODE_LABELS[sendMode]}</span>
+                        </button>
+                        {/* Dropdown toggle — divider + chevron */}
+                        <button type="button"
+                          onClick={(e) => { e.preventDefault(); setShowSendMenu((v) => !v); }}
+                          className={`h-9 w-7 flex items-center justify-center border-l hover:brightness-110 tech-transition ${
+                            sendMode === "steer" ? "bg-amber-600 border-amber-500" :
+                            sendMode === "queue" ? "bg-sky-600 border-sky-500" :
+                            "bg-primary border-primary-foreground/20"
+                          }`}
+                          aria-label="Change send mode" title="Change how messages are sent">
+                          <ChevronDown size={14} strokeWidth={2.5} className="text-white/80" />
+                        </button>
+                      </div>
+                      {/* Dropdown menu */}
                       {showSendMenu && (
-                        <div className="absolute bottom-full right-0 mb-1.5 w-56 rounded-lg border border-border bg-popover shadow-xl z-50 py-1 tech-glass-subtle"
+                        <div className="absolute bottom-full right-0 mb-1.5 w-56 rounded-xl border border-border bg-popover shadow-2xl z-50 py-1.5 tech-glass-subtle"
                           onMouseLeave={() => setShowSendMenu(false)}>
-                          {(["send", "queue", "steer"] as SendMode[]).map((m) => (
+                          <div className="px-3 pb-1 text-[9px] text-muted-foreground/60 uppercase tracking-wider font-semibold">Send mode</div>
+                          {(["steer", "send", "queue"] as SendMode[]).map((m) => (
                             <button key={m} type="button"
                               onClick={() => { setSendMode(m); setShowSendMenu(false); }}
                               className={`w-full text-left px-3 py-2 text-xs hover:bg-secondary tech-transition ${m === sendMode ? "text-foreground bg-secondary/60" : "text-muted-foreground"}`}>
-                              <div className="flex items-center justify-between">
-                                <span className="font-medium flex items-center gap-1.5">
-                                  {m === "send" ? <ArrowUp size={12} strokeWidth={2.5} /> :
-                                   m === "queue" ? <ListOrdered size={12} strokeWidth={2} /> :
-                                   <CornerDownRight size={12} strokeWidth={2} />}
-                                  {m === "send" ? "Send" : m === "queue" ? "Queue" : "Steer"}
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-medium flex items-center gap-2">
+                                  <span className={`w-6 h-6 rounded-lg flex items-center justify-center ${
+                                    m === "steer" ? "bg-amber-500/15 text-amber-400" :
+                                    m === "queue" ? "bg-sky-500/15 text-sky-400" :
+                                    "bg-primary/15 text-primary"
+                                  }`}>
+                                    {m === "steer" ? <CornerDownRight size={13} strokeWidth={2} /> :
+                                     m === "queue" ? <ListOrdered size={13} strokeWidth={2} /> :
+                                     <ArrowUp size={13} strokeWidth={2.5} />}
+                                  </span>
+                                  {m === "steer" ? "Steer" : m === "queue" ? "Queue" : "Send"}
                                 </span>
-                                {m === sendMode && <span className="text-emerald-400 text-[10px]">✓</span>}
+                                {m === sendMode && <CheckCircle size={13} className="text-emerald-400 shrink-0" />}
                               </div>
-                              <div className="text-muted-foreground mt-0.5 text-[10px]">
-                                {m === "send" ? "Send now (queues if busy)"
-                                  : m === "queue" ? "Wait for current reply, then send"
-                                  : "Interrupt current reply and send now"}
+                              <div className="text-muted-foreground mt-0.5 text-[10px] ml-8">
+                                {SEND_MODE_DESCRIPTIONS[m]}
                               </div>
                             </button>
                           ))}
                         </div>
                       )}
-                    </>
+                    </div>
                   )}
                 </div>
               ) : (
                 <button type="submit" disabled={!input.trim()}
-                  className="shrink-0 self-end w-8 h-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center disabled:opacity-25 disabled:cursor-not-allowed hover:opacity-90 tech-transition"
+                  className="shrink-0 self-end h-9 w-9 rounded-xl bg-primary text-primary-foreground flex items-center justify-center disabled:opacity-25 disabled:cursor-not-allowed hover:opacity-90 tech-transition"
                   aria-label="Send" title="Send message">
                   <ArrowUp size={16} strokeWidth={2.5} />
                 </button>

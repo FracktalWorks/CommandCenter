@@ -795,7 +795,7 @@ async def _run_sub_agent_streaming(
     agent_name: str,
     message_str: str,
     run_id: str,
-    event_queue: "asyncio.Queue[dict[str, Any] | None]",
+    event_queue: "asyncio.Queue[dict[str, Any] | None] | None" = None,
 ) -> str:
     """Run a sub-agent and forward its streaming events to *event_queue*.
 
@@ -804,6 +804,10 @@ async def _run_sub_agent_streaming(
 
     Supports GitHub Copilot SDK agents (native stream) and MAF agents (batch
     run with a single result delta at the end).
+
+    When *event_queue* is ``None`` but ``_stream_relay_thread_id`` is set
+    (Tier 1 / Tier 1.5 / any path without a queue), events are pushed
+    directly to the Redis relay so the frontend subscriber receives them.
 
     Returns the final text response.
     """
@@ -828,6 +832,25 @@ async def _run_sub_agent_streaming(
     # Initialised before try so the finally block always has access
     # even when load_agent() or build_agents() raises early.
     _saved_artifact_ctx: dict[str, str] = {}
+
+    # ── Redis relay fallback for paths without _active_run_queue ──────
+    # Tier 1 (MAF AG-UI) and Tier 1.5 (Copilot SDK) don't set
+    # _active_run_queue, so call_agent passes event_queue=None.  In that
+    # case we push SUB_AGENT_* events directly to the Redis relay so the
+    # frontend subscriber receives them in real time (same pattern as
+    # ask_questions Path C).
+    _relay_tid = _stream_relay_thread_id.get(None)
+    _push_to_relay = bool(_relay_tid and event_queue is None)
+
+    async def _emit_sub_event(evt: dict[str, Any]) -> None:
+        """Push to queue (if available) and/or Redis relay."""
+        if event_queue is not None:
+            await event_queue.put(evt)
+        if _push_to_relay:
+            import json as _json_sub  # noqa: PLC0415
+            _payload = _json_sub.dumps(evt, default=str)
+            _line = f"data: {_payload}\n\n"
+            await _push_sse_to_stream(_relay_tid, _line)  # type: ignore[arg-type]
 
     try:
         with load_agent(agent_name, run_id=run_id, repo_name=_repo_name, local_path=_local_path) as loaded:
@@ -966,7 +989,7 @@ async def _run_sub_agent_streaming(
                                 delta = content.text or ""
                                 if delta:
                                     text_parts.append(delta)
-                                    await event_queue.put({
+                                    await _emit_sub_event({
                                         "type": "SUB_AGENT_TEXT_DELTA",
                                         "agentName": agent_name,
                                         "runId": run_id,
@@ -982,7 +1005,7 @@ async def _run_sub_agent_streaming(
                                         args_str = json.dumps(args_val) if not isinstance(args_val, str) else args_val
                                     except Exception:  # noqa: BLE001
                                         args_str = str(args_val)
-                                await event_queue.put({
+                                await _emit_sub_event({
                                     "type": "SUB_AGENT_TOOL_CALL_START",
                                     "agentName": agent_name,
                                     "toolCallId": call_id,
@@ -993,7 +1016,7 @@ async def _run_sub_agent_streaming(
                                 call_id = getattr(content, "call_id", run_id)
                                 exc_val = getattr(content, "exception", None)
                                 result_val = getattr(content, "result", "") or ""
-                                await event_queue.put({
+                                await _emit_sub_event({
                                     "type": "SUB_AGENT_TOOL_CALL_RESULT",
                                     "agentName": agent_name,
                                     "toolCallId": call_id,
@@ -1013,7 +1036,7 @@ async def _run_sub_agent_streaming(
                 final_text = str(text) if text else ""
                 if final_text:
                     text_parts.append(final_text)
-                    await event_queue.put({
+                    await _emit_sub_event({
                         "type": "SUB_AGENT_TEXT_DELTA",
                         "agentName": agent_name,
                         "runId": run_id,
@@ -1046,7 +1069,7 @@ async def _run_sub_agent_streaming(
             return raw_result
 
     except Exception as exc:  # noqa: BLE001
-        await event_queue.put({
+        await _emit_sub_event({
             "type": "SUB_AGENT_ERROR",
             "agentName": agent_name,
             "runId": run_id,

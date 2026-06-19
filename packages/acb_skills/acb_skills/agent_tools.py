@@ -86,6 +86,20 @@ async def call_agent(agent_name: str, message: str) -> str:
         except Exception as exc:  # noqa: BLE001
             return f"Sub-task to {agent_name!r} failed: {exc}"
 
+    # No active queue — try Redis relay (Tier 1 / Tier 1.5 / Copilot SDK).
+    # Push SUB_AGENT_* events directly to the Redis stream so the frontend
+    # subscriber receives them in real time (same pattern as ask_questions Path C).
+    try:
+        from orchestrator.executor import (  # noqa: PLC0415
+            _stream_relay_thread_id,
+            _run_sub_agent_streaming,
+        )
+        _relay_tid = _stream_relay_thread_id.get(None)
+        if _relay_tid:
+            return await _run_sub_agent_streaming(agent_name, message, run_id, None)
+    except (ImportError, Exception):  # noqa: BLE001
+        pass
+
     # Fallback: no active stream — batch path (background runs, webhooks, etc.)
     try:
         from orchestrator.executor import run_agent  # noqa: PLC0415
@@ -154,11 +168,31 @@ async def call_agents_parallel(tasks: str) -> str:
     except (ImportError, Exception):  # noqa: BLE001
         pass
 
+    # Redis relay fallback (Tier 1 / Tier 1.5) when no queue is available.
+    _relay_tid = None
+    if event_queue is None:
+        try:
+            from orchestrator.executor import (  # noqa: PLC0415
+                _stream_relay_thread_id,
+                _run_sub_agent_streaming as _rss_relay,
+            )
+            _relay_tid = _stream_relay_thread_id.get(None)
+            if _relay_tid:
+                _run_sub_agent_streaming = _rss_relay
+        except (ImportError, Exception):  # noqa: BLE001
+            pass
+
     async def _run_one(agent_name: str, message: str) -> tuple[str, str]:
         run_id = str(_uuid.uuid4())
-        if event_queue is not None and _run_sub_agent_streaming is not None:
+        # Use streaming path if we have either a queue (Tier 2) or
+        # Redis relay (Tier 1 / Tier 1.5).  Pass event_queue=None
+        # for the relay path — _run_sub_agent_streaming will push
+        # events directly to Redis.
+        if _run_sub_agent_streaming is not None:
             try:
-                result = await _run_sub_agent_streaming(agent_name, message, run_id, event_queue)
+                _q = event_queue if event_queue is not None else None
+                result = await _run_sub_agent_streaming(
+                    agent_name, message, run_id, _q)
                 return agent_name, result
             except Exception as exc:  # noqa: BLE001
                 return agent_name, f"Sub-task failed: {exc}"

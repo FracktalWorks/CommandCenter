@@ -184,9 +184,47 @@ async def ask_questions(questions: str) -> str:
             return "User provided an empty response."
         return f"User response: {_answer}"
 
-    # ── Path B: non-blocking (Copilot SDK / standalone) ──────────────
-    # The elicitation card renders; the answer arrives as the next chat
-    # message.  The agent must stop after calling this tool.
+    # ── Path B: Copilot SDK / standalone ──────────────────────────────
+    # Two sub-paths:
+    #
+    # B1 — Executor-bridged blocking (preferred):  When the executor
+    #   detected this ask_questions call and pre-created a Future in
+    #   _pending_user_input (signalled via _active_elicitation_request_id
+    #   ContextVar), we block on that Future.  The user's answer resolves
+    #   the Future; we return the answer as the tool result; the LLM
+    #   continues and produces text.  This prevents the "chat dies without
+    #   output" bug that occurred when Path B returned immediately.
+    #
+    # B2 — Legacy non-blocking (fallback):  When no Future was pre-created
+    #   (standalone use or executor bridge unavailable), emit the CUSTOM
+    #   event (if queue available) and return immediately.  The answer
+    #   arrives as the next chat message.
+    try:
+        from orchestrator.executor import (  # noqa: PLC0415
+            _active_elicitation_request_id,
+            _pending_user_input,
+        )
+        _req_id = _active_elicitation_request_id.get(None)
+        if _req_id:
+            _fut = _pending_user_input.get(_req_id)
+            if _fut is not None:
+                # ── B1: blocking bridge ──────────────────────────
+                import asyncio as _asyncio
+                try:
+                    _result = await _asyncio.wait_for(
+                        _fut, timeout=3600,
+                    )
+                except _asyncio.TimeoutError:
+                    return "User did not respond in time."
+                _answer = str(
+                    _result.get("answer", "") or "").strip()
+                if not _answer:
+                    return "User provided an empty response."
+                return f"User response: {_answer}"
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── B2: legacy non-blocking (fallback) ────────────────────────────
     try:
         from orchestrator.executor import _active_run_queue  # noqa: PLC0415
         queue_b = _active_run_queue.get(None)

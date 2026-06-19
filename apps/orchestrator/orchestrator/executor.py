@@ -59,6 +59,16 @@ _active_run_queue: contextvars.ContextVar["asyncio.Queue[dict[str, Any] | None] 
     contextvars.ContextVar("_active_run_queue", default=None)
 )
 
+# ContextVar that bridges the executor's ask_questions detection with the
+# ask_questions tool function.  When the executor sees the Copilot SDK about
+# to call ask_questions, it generates a request_id, creates a
+# _pending_user_input Future, and sets this ContextVar so the tool function
+# can find the Future and block on it (instead of returning immediately via
+# the non-blocking Path B which causes the chat to die without output).
+_active_elicitation_request_id: contextvars.ContextVar[str | None] = (
+    contextvars.ContextVar("_active_elicitation_request_id", default=None)
+)
+
 # ContextVar that holds the current thread_id for stream relay tee-ing.
 # When set, every _sse() call automatically pushes the event to Redis Stream
 # so the reconnect endpoint can replay missed events after a disconnect.
@@ -2256,10 +2266,34 @@ async def run_agent_stream(
                                                             "options": _q.get("options") if isinstance(_q.get("options"), list) and len(_q["options"]) > 0 else None,
                                                         })
                                                     if _valid:
+                                                        # ── Bridge to blocking HITL ──────────
+                                                        # Generate a request_id and park a
+                                                        # Future so the ask_questions tool
+                                                        # function can block until the user
+                                                        # answers.  Without this the tool
+                                                        # returns immediately via Path B, the
+                                                        # LLM stops without producing text,
+                                                        # and the chat "dies" with no output.
+                                                        import uuid as _uuid  # noqa: PLC0415
+                                                        _req_id = _uuid.uuid4().hex
+                                                        _active_elicitation_request_id.set(
+                                                            _req_id)
+                                                        _loop = asyncio.get_running_loop()
+                                                        _fut: "asyncio.Future[dict[str, Any]]" = (
+                                                            _loop.create_future())
+                                                        _pending_user_input[_req_id] = _fut
+                                                        _log.debug(
+                                                            "executor.elicitation_parked",
+                                                            request_id=_req_id[:12],
+                                                            question_count=len(_valid),
+                                                        )
                                                         yield _sse({
                                                             "type": "CUSTOM",
                                                             "name": "elicitation_requested",
-                                                            "value": {"questions": _valid},
+                                                            "value": {
+                                                                "questions": _valid,
+                                                                "request_id": _req_id,
+                                                            },
                                                         })
                                             except Exception:  # noqa: BLE001
                                                 pass
@@ -2284,6 +2318,23 @@ async def run_agent_stream(
                                                 "toolCallId": _tc_id,
                                                 "content": str(_tc_result)[:2000],
                                                 "success": _tc_ok})
+                                    # ── Clean up elicitation bridge ──────
+                                    # If this function_result belongs to a
+                                    # pending ask_questions call, reset the
+                                    # ContextVar and remove the Future so
+                                    # subsequent tool calls are unaffected.
+                                    _elic_id = (
+                                        _active_elicitation_request_id.get(
+                                            None))
+                                    if _elic_id:
+                                        _active_elicitation_request_id.set(
+                                            None)
+                                        _pending_user_input.pop(
+                                            _elic_id, None)
+                                        _log.debug(
+                                            "executor.elicitation_cleaned",
+                                            request_id=_elic_id[:12],
+                                        )
                             # Agent intent from raw events
                             _raw = _update.raw_representation
                             if _raw is not None:

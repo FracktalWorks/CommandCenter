@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from acb_auth import UserContext, UserRole, get_current_user, require_role
 from acb_common import configure_logging, get_logger, get_settings
 from fastapi import BackgroundTasks, Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -129,6 +130,20 @@ app = FastAPI(
     version="0.0.1",
     description="Pull queries, push notifications, approvals. See ai-company-brain/system_architecture.md §3.",
     lifespan=lifespan,
+)
+
+# ── CORS ── allow workbench dev server (port 3001) and production origin
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3001",
+        "http://localhost:3000",
+        os.environ.get("WORKBENCH_PUBLIC_URL", ""),
+        os.environ.get("GATEWAY_PUBLIC_URL", ""),
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ── Wire AG-UI endpoint — custom per-request endpoint with memory injection ──

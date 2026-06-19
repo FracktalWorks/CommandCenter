@@ -191,11 +191,15 @@ async def _get_db(request_id: str | None = None):
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
     settings = get_settings()
-    db_url = os.environ.get(
-        "DATABASE_URL",
-        f"postgresql+asyncpg://{settings.postgres_user}:{settings.postgres_password}"
-        f"@{settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}",
-    )
+    # Convert the sync psycopg URL to async asyncpg URL
+    db_url = os.environ.get("DATABASE_URL", settings.database_url)
+    if "postgresql+psycopg" in db_url:
+        db_url = db_url.replace("postgresql+psycopg", "postgresql+asyncpg")
+    elif db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
+    elif "+asyncpg" not in db_url and "postgresql" in db_url:
+        # Insert asyncpg driver if no driver specified
+        db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
     engine = create_async_engine(db_url, echo=False)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     return session_factory()

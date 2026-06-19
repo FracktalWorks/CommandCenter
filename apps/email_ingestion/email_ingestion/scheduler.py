@@ -38,17 +38,25 @@ def _get_db_url() -> str:
     """Get the asyncpg database URL from environment."""
     db_url = os.environ.get("DATABASE_URL")
     if db_url:
+        # Convert sync psycopg URL to async asyncpg if needed
+        if "postgresql+psycopg" in db_url:
+            db_url = db_url.replace("postgresql+psycopg", "postgresql+asyncpg")
+        elif db_url.startswith("postgresql://"):
+            db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
         return db_url
     try:
         from acb_common.settings import get_settings
         settings = get_settings()
-        return (
-            f"postgresql+asyncpg://{settings.postgres_user}:{settings.postgres_password}"
-            f"@{settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}"
-        )
+        raw = settings.database_url
+        if "postgresql+psycopg" in raw:
+            return raw.replace("postgresql+psycopg", "postgresql+asyncpg")
+        if raw.startswith("postgresql://"):
+            return raw.replace("postgresql://", "postgresql+asyncpg://")
+        return raw
     except Exception:
         raise RuntimeError(
-            "DATABASE_URL env var or Postgres settings are required for email sync scheduler"
+            "DATABASE_URL env var or Postgres settings are required "
+            "for email sync scheduler"
         )
 
 

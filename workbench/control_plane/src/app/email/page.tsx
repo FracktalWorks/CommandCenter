@@ -10,6 +10,13 @@ import {
   ArrowLeft,
   Pencil,
   X,
+  Mail,
+  ExternalLink,
+  Settings,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
+  ArrowRight,
 } from "lucide-react";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
@@ -30,6 +37,10 @@ export default function EmailPage() {
   const [listOpen, setListOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [oauthStatus, setOauthStatus] = useState<{
+    gmail: boolean; microsoft: boolean; checked: boolean;
+  }>({ gmail: false, microsoft: false, checked: false });
 
   // Mobile-specific state
   const [mobileView, setMobileView] = useState<"inbox" | "detail">("inbox");
@@ -86,6 +97,33 @@ export default function EmailPage() {
   useEffect(() => {
     setMobileView("inbox");
   }, [selectedFolder, selectedAccountId]);
+
+  // ── Onboarding detection ──
+  // Check OAuth status and decide whether to show the setup guide
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const res = await fetch("/api/integrations/status");
+        if (!res.ok) return;
+        const data: Array<{ service: string; configured: boolean }> = await res.json();
+        const gmailOk = data.find((i) => i.service === "gmail-oauth")?.configured ?? false;
+        const msOk = data.find((i) => i.service === "microsoft-oauth")?.configured ?? false;
+        setOauthStatus({ gmail: gmailOk, microsoft: msOk, checked: true });
+      } catch {
+        setOauthStatus((prev) => ({ ...prev, checked: true }));
+      }
+    };
+    void check();
+  }, []);
+
+  // Show onboarding when accounts fetched and none exist
+  useEffect(() => {
+    if (!accountsLoading && accounts.length === 0 && oauthStatus.checked) {
+      setShowOnboarding(true);
+    }
+  }, [accountsLoading, accounts.length, oauthStatus.checked]);
+
+  const dismissOnboarding = () => setShowOnboarding(false);
 
   // ── Mobile drawer content builders ──
 
@@ -224,8 +262,120 @@ export default function EmailPage() {
         </div>
       )}
 
-      {/* Error banner */}
-      {error && (
+      {/* Onboarding modal — shown when no accounts exist */}
+      {showOnboarding && !accountsLoading && accounts.length === 0 && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-background/85 backdrop-blur-sm">
+          <div className="bg-card border border-border rounded-2xl shadow-2xl p-6 w-full max-w-md mx-4 chat-fade-in max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="text-center mb-5">
+              <div className="w-12 h-12 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center mx-auto mb-3">
+                <Mail className="w-6 h-6 text-primary" />
+              </div>
+              <h2 className="text-lg font-semibold text-foreground">Welcome to Email</h2>
+              <p className="text-sm text-muted-foreground mt-1">
+                A few setup steps to get your inbox connected.
+              </p>
+            </div>
+
+            {/* Steps */}
+            <div className="space-y-4 mb-5">
+              {/* Step 1: OAuth */}
+              <div className={`p-3 rounded-xl border ${oauthStatus.gmail && oauthStatus.microsoft ? "border-emerald-500/20 bg-emerald-500/5" : "border-amber-500/20 bg-amber-500/5"}`}>
+                <div className="flex items-start gap-3">
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-xs font-bold ${oauthStatus.gmail && oauthStatus.microsoft ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"}`}>
+                    {oauthStatus.gmail && oauthStatus.microsoft ? <CheckCircle2 size={14} /> : "1"}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-foreground">
+                      {oauthStatus.gmail && oauthStatus.microsoft
+                        ? "OAuth configured"
+                        : "Configure OAuth (one-time)"}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {oauthStatus.gmail && oauthStatus.microsoft
+                        ? "Google + Microsoft OAuth are ready."
+                        : "Register CommandCenter with Google and Microsoft so you can sign in with Gmail or Outlook."}
+                    </p>
+                    {(!oauthStatus.gmail || !oauthStatus.microsoft) && (
+                      <a
+                        href="/integrations?tab=apis&search=OAuth"
+                        className="inline-flex items-center gap-1 text-xs text-primary hover:opacity-80 mt-1.5 transition-opacity"
+                      >
+                        <Settings size={11} /> Open setup guides
+                        <ExternalLink size={10} />
+                      </a>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 2: Connect account */}
+              <div className="p-3 rounded-xl border border-border bg-secondary/30">
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center shrink-0 mt-0.5 text-xs font-bold text-muted-foreground">
+                    2
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-foreground">
+                      Connect your first account
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Choose a provider below. IMAP works immediately — no OAuth setup needed.
+                    </p>
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      <button
+                        onClick={() => handleConnect("gmail")}
+                        disabled={!oauthStatus.gmail}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-secondary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        title={!oauthStatus.gmail ? "Configure Gmail OAuth first (Step 1)" : "Connect Gmail account"}
+                      >
+                        <span className="w-4 h-4 rounded-full bg-red-500/15 text-red-400 flex items-center justify-center text-[9px] font-bold">G</span>
+                        Gmail
+                      </button>
+                      <button
+                        onClick={() => handleConnect("microsoft")}
+                        disabled={!oauthStatus.microsoft}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-secondary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        title={!oauthStatus.microsoft ? "Configure Microsoft OAuth first (Step 1)" : "Connect Outlook account"}
+                      >
+                        <span className="w-4 h-4 rounded-full bg-blue-500/15 text-blue-400 flex items-center justify-center text-[9px] font-bold">M</span>
+                        Outlook
+                      </button>
+                      <button
+                        onClick={() => handleConnect("imap")}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-secondary transition-colors"
+                      >
+                        <span className="w-4 h-4 rounded-full bg-amber-500/15 text-amber-400 flex items-center justify-center text-[9px] font-bold">IM</span>
+                        IMAP/SMTP
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex gap-2">
+              <button
+                onClick={dismissOnboarding}
+                className="flex-1 py-2 rounded-lg border border-border text-xs text-muted-foreground hover:bg-secondary transition-colors"
+              >
+                Maybe later
+              </button>
+              <a
+                href="/integrations?tab=email"
+                className="flex-1 py-2 rounded-lg bg-primary hover:opacity-90 text-xs font-medium text-primary-foreground text-center transition-colors flex items-center justify-center gap-1.5"
+              >
+                Manage in Integrations
+                <ArrowRight size={12} />
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Error banner — only for non-onboarding errors */}
+      {error && accounts.length > 0 && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 z-50 bg-destructive text-destructive-foreground text-xs px-4 py-2 rounded-lg shadow-lg flex items-center gap-2">
           <span>{error}</span>
           <button

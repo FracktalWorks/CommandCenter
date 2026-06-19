@@ -6,13 +6,12 @@ async function gatewayFetch<T>(
   path: string,
   init?: RequestInit
 ): Promise<T> {
-  const res = await fetch(`${GATEWAY_URL}${path}`, {
+  const res = await fetch(`/api/email${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
       ...init?.headers,
     },
-    credentials: "include",
   });
 
   if (!res.ok) {
@@ -245,7 +244,7 @@ export async function deleteEmail(id: string): Promise<void> {
 // ── Attachments ────────────────────────────────────────────────────────────
 
 export function getAttachmentDownloadUrl(attachmentId: string): string {
-  return `${GATEWAY_URL}/email/attachments/${attachmentId}/download`;
+  return `/api/email/attachments/${attachmentId}/download`;
 }
 
 // ── Send ─────────────────────────────────────────────────────────────────
@@ -300,7 +299,7 @@ export async function streamAIChat(
   request: AIChatRequest,
   onEvent: (event: { type: string; content?: string; done?: boolean }) => void
 ): Promise<void> {
-  const res = await fetch(`${GATEWAY_URL}/email/ai/chat`, {
+  const res = await fetch("/api/email/ai/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),

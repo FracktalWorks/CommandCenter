@@ -330,6 +330,14 @@ class ProviderKeyStore:
             "google-sheets": {
                 "sa_json_path": "GOOGLE_SHEETS_SA_JSON_PATH",
             },
+            "gmail-oauth": {
+                "gmail_oauth_client_id": "GMAIL_OAUTH_CLIENT_ID",
+                "gmail_oauth_client_secret": "GMAIL_OAUTH_CLIENT_SECRET",
+            },
+            "microsoft-oauth": {
+                "msft_oauth_client_id": "MSFT_OAUTH_CLIENT_ID",
+                "msft_oauth_client_secret": "MSFT_OAUTH_CLIENT_SECRET",
+            },
         }
 
         for service, key_map in _integration_env_map.items():

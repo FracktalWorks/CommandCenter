@@ -1262,6 +1262,70 @@ async def _run_test(service: str, settings: Any) -> dict[str, Any]:
                 return {"ok": True, "detail": f"Authenticated as GitHub user '{login}'."}
             return {"ok": False, "detail": f"Status {resp.status_code}: {resp.text[:200]}"}
 
+        if service == "gmail-oauth":
+            client_id = (
+                settings.gmail_oauth_client_id
+                or os.environ.get("GMAIL_OAUTH_CLIENT_ID", "")
+            )
+            client_secret = (
+                settings.gmail_oauth_client_secret
+                or os.environ.get("GMAIL_OAUTH_CLIENT_SECRET", "")
+            )
+            if not client_id or not client_secret:
+                return {"ok": False, "detail": "Gmail OAuth client ID or secret is empty."}
+            # Validate by attempting token exchange with a dummy code.
+            # Valid credentials → Google returns "invalid_grant" (expected).
+            # Invalid credentials → Google returns "invalid_client".
+            resp = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "code": "dummy_test_code",
+                    "grant_type": "authorization_code",
+                    "redirect_uri": "http://localhost:8000/email/oauth/gmail/callback",
+                },
+            )
+            err = (resp.json() or {}).get("error", "")
+            if err == "invalid_grant":
+                return {"ok": True, "detail": "Credentials valid — ready for user OAuth flow."}
+            if err == "invalid_client":
+                return {"ok": False, "detail": "Invalid client ID or secret. Check your Google Cloud OAuth credentials."}
+            return {"ok": False, "detail": f"Unexpected: {resp.text[:200]}"}
+
+        if service == "microsoft-oauth":
+            client_id = (
+                settings.msft_oauth_client_id
+                or os.environ.get("MSFT_OAUTH_CLIENT_ID", "")
+                or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_ID", "")
+            )
+            client_secret = (
+                settings.msft_oauth_client_secret
+                or os.environ.get("MSFT_OAUTH_CLIENT_SECRET", "")
+                or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_SECRET", "")
+            )
+            if not client_id or not client_secret:
+                return {"ok": False, "detail": "Microsoft OAuth client ID or secret is empty."}
+            # Validate by attempting token exchange with a dummy code.
+            # Valid credentials → Microsoft returns "invalid_grant" (expected).
+            # Invalid credentials → Microsoft returns "invalid_client".
+            resp = await client.post(
+                "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "code": "dummy_test_code",
+                    "grant_type": "authorization_code",
+                    "redirect_uri": "http://localhost:8000/email/oauth/microsoft/callback",
+                },
+            )
+            err = (resp.json() or {}).get("error", "")
+            if err == "invalid_grant":
+                return {"ok": True, "detail": "Credentials valid — ready for user OAuth flow."}
+            if err == "invalid_client":
+                return {"ok": False, "detail": "Invalid client ID or secret. Check your Azure app registration credentials."}
+            return {"ok": False, "detail": f"Unexpected: {resp.text[:200]}"}
+
     return {"ok": False, "detail": f"No test defined for service '{service}'."}
 
 

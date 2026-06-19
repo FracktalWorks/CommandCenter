@@ -1159,30 +1159,49 @@ async def _get_current_head(agent_dir: str) -> str:
 
 
 async def _install_push_guard(agent_dir: str) -> None:
-    """Install a git pre-push hook that rejects all pushes from the local clone.
+    """Install git hooks for commit-gate workflow.
 
-    Called once per clone.  Copilot SDK agents must commit locally; the
-    human-approval gateway endpoint handles the push.  This prevents an agent
-    from bypassing the inbox by pushing directly.
+    Installs two hooks (idempotent — skips if already present):
 
-    Non-fatal — if the hook already exists or the write fails, execution
-    continues; the post-run commit scan still catches any new commits.
+    1. **pre-push**: Rejects all direct pushes.  The human-approval gateway
+       endpoint handles the push, or the operator may tell the agent to
+       ``git push --no-verify`` from chat to bypass this hook explicitly.
+
+    2. **post-commit**: Appends the new commit SHA to ``.git/cc-commits-queue``.
+       The post-run commit scanner reads this file to detect commits made
+       *during* a chat session (before ``run_agent`` returns) so they appear
+       in the Self Mutation Commits UI immediately after the run.
+
+    Non-fatal — if any hook write fails, execution continues; the post-run
+    commit scan (including catch-up) still catches new commits.
     """
     try:
         hooks_dir = Path(agent_dir) / ".git" / "hooks"
         if not hooks_dir.is_dir():
             return
-        hook_file = hooks_dir / "pre-push"
-        if hook_file.exists():
-            return  # already installed
-        hook_file.write_text(
-            "#!/bin/sh\n"
-            "echo 'Direct push blocked: commits are queued for human approval'\n"
-            "echo 'Approve via the CommandCenter Control Plane inbox.'\n"
-            "exit 1\n",
-            encoding="utf-8",
-        )
-        hook_file.chmod(0o755)
+        # --- pre-push hook ---
+        pre_push = hooks_dir / "pre-push"
+        if not pre_push.exists():
+            pre_push.write_text(
+                "#!/bin/sh\n"
+                "echo 'Direct push blocked: commits are queued for human approval'\n"
+                "echo 'Approve via the CommandCenter Control Plane inbox, or tell the agent you approve and it will push with --no-verify.'\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            pre_push.chmod(0o755)
+        # --- post-commit hook ---
+        post_commit = hooks_dir / "post-commit"
+        if not post_commit.exists():
+            post_commit.write_text(
+                "#!/bin/sh\n"
+                "# Append the new commit SHA to the queue file.\n"
+                "# The executor reads this file at end-of-run to register commits\n"
+                "# that were made *during* the chat session.\n"
+                "echo \"$(git rev-parse HEAD)\" >> \"$(git rev-parse --git-dir)/cc-commits-queue\"\n",
+                encoding="utf-8",
+            )
+            post_commit.chmod(0o755)
     except Exception as exc:  # noqa: BLE001
         _log.warning("executor.push_guard_install_failed", agent=agent_dir, error=str(exc))
 
@@ -1194,22 +1213,31 @@ async def _detect_agent_commits(
     *,
     since_sha: str | None = None,
 ) -> None:
-    """After a GitHub Copilot agent run, register any new commits for inbox approval.
+    """After an agent run, register any new commits for inbox approval.
 
     Detection strategy (layered — catches orphaned commits from prior runs):
 
+    0. **Queue-file scan** (real-time, fastest path): reads
+       ``.git/cc-commits-queue`` written by the post-commit hook.
+       Dequeues all SHAs, deduplicates them, registers any that are not
+       already in ``pending_commit``, then truncates the file.  This
+       catches commits made *during* the chat session so they appear in
+       the Self Mutation Commits UI immediately after the run.
+
     1. **Since-sha scan**: detects commits made during THIS run
        (``git log {since_sha}..HEAD``).  This catches all new commits
-       whether pushed or not.
-    2. **Catch-up scan** (always runs): detects local-only commits that
-       were missed by prior runs (``git log origin/HEAD..HEAD``).  This
-       recovers commits orphaned by a previous detection failure, DB
-       outage, or gateway restart.
-    3. Both scans are deduplicated against ``pending_commit.commit_sha``
-       so no commit is ever registered twice.
+       that may have been missed by the post-commit hook.
 
-    Only called for ``agent_runtime == "github-copilot"``; MAF agents
-    don't commit to the repo during a run.
+    2. **Catch-up scan** (always runs): scans the last 50 commits and
+       registers any missing from ``pending_commit``.  This recovers
+       commits orphaned by a previous detection failure, DB outage, or
+       gateway restart.
+
+    All phases are deduplicated against ``pending_commit.commit_sha``
+    so no commit is ever registered twice.
+
+    Called for **all** agents (not just github-copilot).  MAF agents that
+    do not commit simply produce empty scans.
 
     Non-fatal — any subprocess or DB error is logged and swallowed.
     """
@@ -1235,6 +1263,54 @@ async def _detect_agent_commits(
             pass
 
         all_lines: list[str] = []
+
+        # ── Phase 0: queue-file scan (post-commit hook) ─────────────────
+        # The post-commit hook appends each new SHA to this file.  We read
+        # it, deduplicate, register any unseen SHAs, then truncate so they
+        # are not re-registered on the next scan.
+        queue_file = Path(agent_dir) / ".git" / "cc-commits-queue"
+        if queue_file.exists():
+            try:
+                raw = queue_file.read_text(encoding="utf-8").strip()
+                if raw:
+                    queue_shas: list[str] = []
+                    seen_queue: set[str] = set()
+                    for line in raw.splitlines():
+                        sha = line.strip()
+                        # Must be a full 40-char SHA
+                        if sha and len(sha) == 40 and sha not in seen_queue:
+                            seen_queue.add(sha)
+                            if sha not in _existing_shas:
+                                queue_shas.append(sha)
+                    if queue_shas:
+                        _log.info(
+                            "executor.commits_queue_file",
+                            agent=agent_name,
+                            count=len(queue_shas),
+                        )
+                        # Fetch the full message for each queued SHA inline.
+                        for sha in queue_shas:
+                            _existing_shas.add(sha)
+                            msg = ""
+                            try:
+                                p = await asyncio.create_subprocess_exec(
+                                    "git", "log", "-1", "--format=%s", sha,
+                                    cwd=agent_dir,
+                                    stdout=asyncio.subprocess.PIPE,
+                                    stderr=asyncio.subprocess.DEVNULL,
+                                )
+                                out, _ = await asyncio.wait_for(p.communicate(), timeout=5)
+                                msg = out.decode(errors="replace").strip()
+                            except Exception:  # noqa: BLE001
+                                msg = sha[:12]
+                            all_lines.append(f"{sha}|{msg}")
+                # Truncate so SHAs are not re-registered on next scan.
+                queue_file.write_text("", encoding="utf-8")
+            except Exception as exc:  # noqa: BLE001
+                _log.warning(
+                    "executor.commit_scan_queue_failed",
+                    agent=agent_name, error=str(exc),
+                )
 
         # ── Phase 1: since-sha scan (this run's commits) ────────────────
         if since_sha:
@@ -1479,8 +1555,11 @@ async def run_agent(
                 )
                 if _ea and _ea.get("agent_runtime") == "github-copilot":
                     _is_copilot_agent = True
-                    await _install_push_guard(_effective_agent_dir)
-                    _head_before = await _get_current_head(_effective_agent_dir)
+                # Install push guard + capture HEAD for ALL agents (not just
+                # github-copilot).  MAF agents may also generate commits during
+                # a run, and the guard protects against unapproved pushes.
+                await _install_push_guard(_effective_agent_dir)
+                _head_before = await _get_current_head(_effective_agent_dir)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -1568,7 +1647,7 @@ async def run_agent(
                 },
             )
         )
-        # Post-run: detect commits the agent made during this run (github-copilot only)
+        # Post-run: detect commits the agent made during this run (ALL agents)
         _registry_runtime = "maf"
         try:
             from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
@@ -1581,11 +1660,10 @@ async def run_agent(
                 _registry_runtime = _e.get("agent_runtime", "maf")
         except Exception:  # noqa: BLE001
             pass
-        if _registry_runtime == "github-copilot":
-            await _detect_agent_commits(
-                agent_name, _effective_agent_dir, run_id,
-                since_sha=_head_before if _head_before else None,
-            )
+        await _detect_agent_commits(
+            agent_name, _effective_agent_dir, run_id,
+            since_sha=_head_before if _head_before else None,
+        )
         return final_state
 
     except AgentLoadError as exc:

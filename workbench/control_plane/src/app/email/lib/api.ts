@@ -70,6 +70,7 @@ function mapEmail(raw: Record<string, unknown>): Email {
     subject: String(raw.subject ?? ""),
     bodyText: String(raw.body_text ?? raw.bodyText ?? ""),
     bodyHtml: (raw.body_html as string) ?? (raw.bodyHtml as string) ?? undefined,
+    bodyTruncated: Boolean(raw.body_truncated ?? raw.bodyTruncated ?? false),
     snippet: String(raw.snippet ?? ""),
     hasAttachments: Boolean(raw.has_attachments ?? raw.hasAttachments ?? false),
     attachments: ((raw.attachments as Array<Record<string, unknown>>) ?? []).map(
@@ -203,6 +204,20 @@ export async function listEmails(
 export async function getEmail(id: string): Promise<Email> {
   const raw = await gatewayFetch<Record<string, unknown>>(`/email/messages/${id}`);
   return mapEmail(raw);
+}
+
+// ── Full-body fetch (for truncated messages) ────────────────────────────
+
+export interface FullBodyResponse {
+  message_id: string;
+  body_text: string;
+  body_html: string | null;
+  subject: string;
+  from: string;
+}
+
+export async function fetchFullBody(id: string): Promise<FullBodyResponse> {
+  return gatewayFetch<FullBodyResponse>(`/email/messages/${id}/full-body`);
 }
 
 export async function updateEmail(

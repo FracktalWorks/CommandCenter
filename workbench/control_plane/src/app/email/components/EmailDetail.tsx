@@ -9,7 +9,7 @@ import {
 import { Email } from "../lib/types";
 import { fullDateLabel, initials } from "../lib/utils";
 import { useEmailStore } from "../lib/emailStore";
-import { getAttachmentDownloadUrl } from "../lib/api";
+import { getAttachmentDownloadUrl, fetchFullBody } from "../lib/api";
 
 interface EmailDetailProps {
   email: Email | null;
@@ -27,6 +27,8 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const [replyBody, setReplyBody] = useState("");
   const [forwardTo, setForwardTo] = useState("");
   const [replySending, setReplySending] = useState(false);
+  const [loadingFullBody, setLoadingFullBody] = useState(false);
+  const [fullBodyText, setFullBodyText] = useState<string | null>(null);
 
   // Keep state in sync when email changes
   if (email && starred !== email.isStarred) setStarred(email.isStarred);
@@ -220,8 +222,35 @@ export function EmailDetail({ email }: EmailDetailProps) {
 
         {/* Body */}
         <div className="text-sm text-foreground/85 leading-relaxed whitespace-pre-wrap max-w-2xl">
-          {email.bodyText}
+          {fullBodyText ?? email.bodyText}
         </div>
+
+        {/* "Load full message" button — appears when body was truncated at sync */}
+        {email.bodyTruncated && !fullBodyText && (
+          <div className="mt-2">
+            <button
+              onClick={async () => {
+                setLoadingFullBody(true);
+                try {
+                  const fb = await fetchFullBody(email.id);
+                  setFullBodyText(fb.body_text);
+                } catch {
+                  // keep truncated body on failure
+                } finally {
+                  setLoadingFullBody(false);
+                }
+              }}
+              disabled={loadingFullBody}
+              className="flex items-center gap-1.5 text-xs text-primary hover:opacity-80 transition-opacity disabled:opacity-40"
+            >
+              <ExternalLink size={12} />
+              {loadingFullBody ? "Loading…" : "Load full message from provider"}
+            </button>
+            <p className="text-[10px] text-muted-foreground mt-1">
+              This message was truncated to save storage. Click to fetch the complete body.
+            </p>
+          </div>
+        )}
 
         {/* Attachment */}
         {email.hasAttachments && email.attachments && email.attachments.length > 0 && (

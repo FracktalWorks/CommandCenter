@@ -23,6 +23,7 @@ export interface Email {
   subject: string;
   bodyText: string;
   bodyHtml?: string;
+  bodyTruncated: boolean;
   snippet: string;
   hasAttachments: boolean;
   attachments?: Attachment[];

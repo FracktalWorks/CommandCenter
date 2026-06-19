@@ -157,6 +157,35 @@ class CreateAccountRequest(BaseModel):
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
+def _truncate_body(text: str, max_bytes: int) -> str:
+    """Truncate text to fit within max_bytes when UTF-8 encoded.
+
+    Appends a truncation marker \"… [truncated]\" so the UI can offer a
+    \"Load full message\" button.
+    """
+    if not text:
+        return text
+    encoded = text.encode("utf-8", errors="replace")
+    if len(encoded) <= max_bytes:
+        return text
+    marker = b" ... [truncated]"
+    # Find a safe cut point that doesn't split a multi-byte character
+    cut = max_bytes - len(marker)
+    while cut > 0 and (encoded[cut] & 0xC0) == 0x80:
+        cut -= 1
+    return encoded[:cut].decode("utf-8", errors="replace") + marker.decode()
+
+
+async def _get_redis():
+    """Get a Redis client for caching (skips if unavailable)."""
+    try:
+        import redis.asyncio as aioredis  # noqa: PLC0415
+        settings = get_settings()
+        return aioredis.from_url(settings.redis_url, decode_responses=False)
+    except Exception:
+        return None
+
+
 async def _get_db(request_id: str | None = None):
     """Get an async database session."""
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
@@ -714,7 +743,32 @@ async def download_attachment(
     attachment_id: str,
     user: UserContext = Depends(get_current_user),
 ):
-    """Proxy download an email attachment, streaming from the provider."""
+    """Proxy download an email attachment, streaming from the provider.
+
+    Checks Redis cache first (TTL 1 hour) to avoid redundant provider API
+    calls for attachments downloaded multiple times.
+    """
+    # ── Check Redis cache first ──
+    redis = await _get_redis()
+    if redis:
+        try:
+            cache_key = f"email:att:cache:{attachment_id}"
+            cached = await redis.get(cache_key)
+            if cached:
+                return StreamingResponse(
+                    io.BytesIO(cached),
+                    media_type="application/octet-stream",
+                    headers={
+                        "Content-Disposition": (
+                            f'attachment; filename="cached"'
+                        ),
+                        "Content-Length": str(len(cached)),
+                        "X-Cache": "HIT",
+                    },
+                )
+        except Exception:
+            redis = None  # fall through to provider fetch
+
     db = await _get_db()
     try:
         # Look up attachment and verify user owns the parent message
@@ -750,18 +804,34 @@ async def download_attachment(
             from email_ingestion.providers.imap import IMAPProvider
             provider = IMAPProvider(creds)
         else:
-            raise HTTPException(status_code=400, detail=f"Unknown provider: {row.provider}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown provider: {row.provider}",
+            )
 
         content = await provider.get_attachment(
             row.provider_message_id, row.provider_attachment_id
         )
 
+        # ── Store in Redis cache ──
+        if redis and content:
+            try:
+                cache_key = f"email:att:cache:{attachment_id}"
+                await redis.setex(
+                    cache_key, ATTACHMENT_CACHE_TTL_SECS, content
+                )
+            except Exception:
+                pass
+
         return StreamingResponse(
             io.BytesIO(content),
             media_type=row.mime_type,
             headers={
-                "Content-Disposition": f'attachment; filename="{row.filename}"',
+                "Content-Disposition": (
+                    f'attachment; filename="{row.filename}"'
+                ),
                 "Content-Length": str(len(content)),
+                "X-Cache": "MISS",
             },
         )
     except HTTPException:
@@ -769,6 +839,88 @@ async def download_attachment(
     except Exception as exc:
         _log.error("download_attachment.failed", aid=attachment_id, error=str(exc)[:200])
         raise HTTPException(status_code=500, detail="Failed to download attachment")
+    finally:
+        await db.close()
+
+
+# ── Full-body fetch ─────────────────────────────────────────────────────
+
+
+@router.get("/messages/{message_id}/full-body")
+async def get_full_body(
+    message_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Fetch the full, untruncated email body from the provider.
+
+    Use this when body_truncated is true on a message — the stored body
+    was capped to stay within storage limits.  This endpoint reaches out
+    to Gmail/Microsoft/IMAP live to retrieve the complete message body.
+    """
+    db = await _get_db()
+    try:
+        result = await db.execute(
+            text(
+                """SELECT em.provider_message_id, p.provider,
+                          p.credentials_encrypted
+                   FROM email_messages em
+                   JOIN email_accounts p ON em.account_id = p.id
+                   WHERE em.id = :mid AND p.user_id = :user_id"""
+            ),
+            {"mid": message_id, "user_id": user.email or "anonymous"},
+        )
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Message not found")
+
+        # Decrypt credentials
+        from acb_llm.key_store import get_key_store
+        store = get_key_store()
+        creds = json.loads(store.decrypt(row.credentials_encrypted))
+
+        # Instantiate provider
+        if row.provider == "gmail":
+            from email_ingestion.providers.gmail import GmailProvider
+            provider = GmailProvider(creds)
+        elif row.provider == "microsoft":
+            from email_ingestion.providers.outlook import OutlookProvider
+            provider = OutlookProvider(creds)
+        elif row.provider == "imap":
+            from email_ingestion.providers.imap import IMAPProvider
+            provider = IMAPProvider(creds)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown provider: {row.provider}",
+            )
+
+        if not await provider.authenticate():
+            raise HTTPException(
+                status_code=401,
+                detail="Email account authentication failed",
+            )
+
+        msg = await provider.get_message(row.provider_message_id)
+        return {
+            "message_id": message_id,
+            "body_text": msg.body_text,
+            "body_html": msg.body_html,
+            "subject": msg.subject,
+            "from": (
+                f"{msg.from_address.name} <{msg.from_address.email}>"
+                if msg.from_address else ""
+            ),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.error(
+            "full_body.failed", message_id=message_id, error=str(exc)[:200]
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch full body: {str(exc)}",
+        )
     finally:
         await db.close()
 
@@ -1603,6 +1755,15 @@ def _default_label(provider: str) -> str:
 
 # ── Row → Model mapper ───────────────────────────────────────────────────
 
+def _is_body_truncated(body_text: str, body_html: str) -> bool:
+    """Check whether a stored message body was truncated at sync time."""
+    if body_text and len(body_text.encode("utf-8", errors="replace")) >= MAX_BODY_TEXT_BYTES:
+        return True
+    if body_html and len(body_html.encode("utf-8", errors="replace")) >= MAX_BODY_HTML_BYTES:
+        return True
+    return False
+
+
 def _row_to_message(row: Any) -> EmailMessageModel:
     """Convert a database row to an EmailMessageModel."""
     def _parse_jsonb(val: Any) -> Any:
@@ -1647,6 +1808,9 @@ def _row_to_message(row: Any) -> EmailMessageModel:
         subject=row.subject or "",
         body_text=row.body_text or "",
         body_html=row.body_html,
+        body_truncated=_is_body_truncated(
+            row.body_text or "", row.body_html or ""
+        ),
         snippet=row.snippet or "",
         has_attachments=row.has_attachments or False,
         attachments=[],  # populated by get_message endpoint

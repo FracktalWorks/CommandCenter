@@ -66,6 +66,7 @@ export const MOCK_EMAILS: Email[] = [
     to: [{ name: "Alex Morgan", email: "alex.morgan@gmail.com" }],
     subject: "Project Kickoff — Design System v2.0",
     snippet: "Hey Alex, just wanted to confirm the kickoff meeting for Thursday. I've attached the agenda and stakeholder list.",
+    bodyTruncated: false,
     bodyText: `Hey Alex,
 
 Just wanted to confirm the kickoff meeting for Thursday at 2pm. I've attached the agenda and stakeholder list for your review.
@@ -99,6 +100,7 @@ Sarah`,
     to: [{ name: "Alex Morgan", email: "alex.morgan@gmail.com" }],
     subject: "[design-system] PR #142 — Add TokenProvider component",
     snippet: "james-r opened a pull request. 3 reviewers requested. CI is passing.",
+    bodyTruncated: false,
     bodyText: `james-r opened pull request #142 in acmecorp/design-system
 
 Title: Add TokenProvider component
@@ -132,6 +134,7 @@ CI Status: ✅ All checks passing
     to: [{ name: "Alex Morgan", email: "alex.morgan@gmail.com" }],
     subject: "Your June invoice is ready — $248.00",
     snippet: "Your Stripe invoice for June 2026 is now available. Total charged: $248.00 to Visa ending 4242.",
+    bodyTruncated: false,
     bodyText: `Hi Alex,
 
 Your Stripe invoice for June 2026 is ready.
@@ -168,6 +171,7 @@ Thanks for using Stripe!`,
     to: [{ name: "Alex Morgan", email: "alex.morgan@gmail.com" }],
     subject: "NDA — Amended clauses for your review",
     snippet: "Hi Alex, please find the revised NDA with our amendments in Section 4 and 7. We need this by Friday.",
+    bodyTruncated: false,
     bodyText: `Hi Alex,
 
 Please find the revised Non-Disclosure Agreement attached. We've made amendments to:
@@ -200,6 +204,7 @@ Senior Counsel, LegalCo`,
     to: [{ name: "Alex Morgan", email: "alex.morgan@gmail.com" }],
     subject: "Re: Figma component handoff notes",
     snippet: "Thanks for sharing those! I've updated the component spec doc with your feedback. A few questions on the spacing tokens...",
+    bodyTruncated: false,
     bodyText: `Hey Alex,
 
 Thanks for sharing the handoff notes — super helpful! I've updated the component spec doc in Notion.
@@ -233,6 +238,7 @@ Priya`,
     to: [{ name: "Alex Morgan", email: "alex.morgan@gmail.com" }],
     subject: "🚀 Today's top products: AI code reviewers, design tools, and more",
     snippet: "Discover the best new products launched today on Product Hunt. Top picks: CodeReview AI, DesignSync, Velocity CRM...",
+    bodyTruncated: false,
     bodyText: `Today's top products on Product Hunt:
 
 🥇 CodeReview AI — AI-powered code review that catches bugs and style issues automatically.
@@ -260,6 +266,7 @@ Unsubscribe | Manage preferences`,
     to: [{ name: "Alex Morgan", email: "alex.morgan@gmail.com" }],
     subject: "Quick sync this week?",
     snippet: "Hey! Are you free for a 20-minute sync Thursday or Friday? Want to walk through the Q3 roadmap before the all-hands.",
+    bodyTruncated: false,
     bodyText: `Hey Alex,
 
 Are you free for a quick 20-minute sync this Thursday or Friday morning? I want to walk through the Q3 roadmap priorities before the all-hands presentation next Monday.
@@ -290,6 +297,7 @@ Dan`,
     to: [{ name: "Alex Morgan", email: "alex.m@outlook.com" }],
     subject: "Your monthly Microsoft 365 summary",
     snippet: "Here's your June activity summary for Microsoft 365. Storage used: 12.4 GB of 15 GB.",
+    bodyTruncated: false,
     bodyText: `Hi Alex,
 
 Here's your Microsoft 365 activity summary for June 2026:

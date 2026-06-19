@@ -23,10 +23,102 @@ async function gatewayFetch<T>(
   return res.json();
 }
 
+// ── Snake → CamelCase mappers ────────────────────────────────────────────
+
+function asProvider(v: unknown): "gmail" | "microsoft" | "imap" {
+  const s = String(v ?? "");
+  if (s === "gmail" || s === "microsoft" || s === "imap") return s;
+  return "imap";
+}
+
+/** Map a backend EmailAccount (snake_case) to frontend EmailAccount (camelCase). */
+function mapAccount(raw: Record<string, unknown>): EmailAccount {
+  return {
+    id: String(raw.id ?? ""),
+    provider: asProvider(raw.provider),
+    emailAddress: String(raw.email_address ?? ""),
+    label: String(raw.label ?? ""),
+    avatar: (String(raw.email_address ?? "?").charAt(0) || "?").toUpperCase(),
+    color: String(raw.avatar_color ?? "#6366f1"),
+    unreadCount: Number(raw.unread_count ?? 0),
+    syncEnabled: Boolean(raw.sync_enabled ?? true),
+    lastSyncedAt: raw.last_synced_at ? String(raw.last_synced_at) : undefined,
+  };
+}
+
+/** Map a backend Email message (snake_case) to frontend Email (camelCase). */
+function mapEmail(raw: Record<string, unknown>): Email {
+  const fromRaw = (raw.from_address ?? raw.from ?? {}) as Record<string, unknown>;
+  return {
+    id: String(raw.id ?? ""),
+    providerMessageId: String(raw.provider_message_id ?? ""),
+    threadId: raw.thread_id ? String(raw.thread_id) : undefined,
+    accountId: String(raw.account_id ?? ""),
+    from: {
+      name: String(fromRaw.name ?? fromRaw.Name ?? ""),
+      email: String(fromRaw.email ?? fromRaw.Email ?? ""),
+    },
+    to: ((raw.to_addresses ?? raw.to ?? []) as Array<Record<string, unknown>>).map(
+      (a) => ({ name: String(a.name ?? a.Name ?? ""), email: String(a.email ?? a.Email ?? "") })
+    ),
+    cc: ((raw.cc_addresses ?? raw.cc ?? []) as Array<Record<string, unknown>>).map(
+      (a) => ({ name: String(a.name ?? ""), email: String(a.email ?? "") })
+    ),
+    bcc: ((raw.bcc_addresses ?? raw.bcc ?? []) as Array<Record<string, unknown>>).map(
+      (a) => ({ name: String(a.name ?? ""), email: String(a.email ?? "") })
+    ),
+    subject: String(raw.subject ?? ""),
+    bodyText: String(raw.body_text ?? raw.bodyText ?? ""),
+    bodyHtml: (raw.body_html as string) ?? (raw.bodyHtml as string) ?? undefined,
+    snippet: String(raw.snippet ?? ""),
+    hasAttachments: Boolean(raw.has_attachments ?? raw.hasAttachments ?? false),
+    attachments: ((raw.attachments as Array<Record<string, unknown>>) ?? []).map(
+      (a) => ({
+        id: String(a.id ?? ""),
+        filename: String(a.filename ?? ""),
+        mimeType: String(a.mime_type ?? a.mimeType ?? "application/octet-stream"),
+        sizeBytes: Number(a.size_bytes ?? a.sizeBytes ?? 0),
+        downloadUrl: (a.download_url as string) ?? (a.downloadUrl as string) ?? undefined,
+      })
+    ),
+    isRead: Boolean(raw.is_read ?? raw.isRead ?? false),
+    isStarred: Boolean(raw.is_starred ?? raw.isStarred ?? false),
+    isFlagged: Boolean(raw.is_flagged ?? raw.isFlagged ?? false),
+    labels: (raw.labels as string[]) ?? [],
+    folder: String(raw.folder ?? "INBOX"),
+    receivedAt: raw.received_at ? String(raw.received_at) : new Date().toISOString(),
+    syncedAt: raw.synced_at ? String(raw.synced_at) : new Date().toISOString(),
+  };
+}
+
 // ── Email Accounts ───────────────────────────────────────────────────────
 
 export async function listEmailAccounts(): Promise<EmailAccount[]> {
-  return gatewayFetch<EmailAccount[]>("/email/accounts");
+  const raw = await gatewayFetch<Record<string, unknown>[]>("/email/accounts");
+  return (raw ?? []).map(mapAccount);
+}
+
+export interface CreateEmailAccountParams {
+  provider: "imap" | "gmail" | "microsoft";
+  emailAddress: string;
+  label?: string;
+  credentials: Record<string, unknown>;
+}
+
+export async function createEmailAccount(
+  params: CreateEmailAccountParams
+): Promise<EmailAccount> {
+  const body: Record<string, unknown> = {
+    provider: params.provider,
+    email_address: params.emailAddress,
+    label: params.label ?? "",
+    credentials: params.credentials,
+  };
+  const raw = await gatewayFetch<Record<string, unknown>>(
+    "/email/accounts",
+    { method: "POST", body: JSON.stringify(body) }
+  );
+  return mapAccount(raw);
 }
 
 export async function deleteEmailAccount(id: string): Promise<void> {
@@ -37,10 +129,33 @@ export async function updateEmailAccount(
   id: string,
   updates: Partial<Pick<EmailAccount, "label" | "syncEnabled">>
 ): Promise<EmailAccount> {
-  return gatewayFetch<EmailAccount>(`/email/accounts/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(updates),
-  });
+  // Map camelCase → snake_case for the backend PATCH
+  const body: Record<string, unknown> = {};
+  if (updates.label !== undefined) body.label = updates.label;
+  if (updates.syncEnabled !== undefined) body.sync_enabled = updates.syncEnabled;
+  const raw = await gatewayFetch<Record<string, unknown>>(
+    `/email/accounts/${id}`,
+    { method: "PATCH", body: JSON.stringify(body) }
+  );
+  return mapAccount(raw);
+}
+
+// ── Folders ──────────────────────────────────────────────────────────────
+
+export interface EmailFolderRaw {
+  provider_folder_id: string;
+  name: string;
+  type: string; // 'system' | 'user'
+  message_count: number;
+  unread_count: number;
+}
+
+export async function listEmailFolders(
+  accountId: string
+): Promise<EmailFolderRaw[]> {
+  return gatewayFetch<EmailFolderRaw[]>(
+    `/email/accounts/${accountId}/folders`
+  );
 }
 
 // ── Emails ───────────────────────────────────────────────────────────────
@@ -70,23 +185,42 @@ export async function listEmails(
   if (params.page) searchParams.set("page", String(params.page));
   if (params.pageSize) searchParams.set("page_size", String(params.pageSize));
 
-  return gatewayFetch<ListEmailsResponse>(
-    `/email/messages?${searchParams.toString()}`
-  );
+  const raw = await gatewayFetch<{
+    emails: Record<string, unknown>[];
+    total: number;
+    page: number;
+    page_size: number;
+  }>(`/email/messages?${searchParams.toString()}`);
+
+  return {
+    emails: (raw.emails ?? []).map(mapEmail),
+    total: raw.total ?? 0,
+    page: raw.page ?? 1,
+    pageSize: raw.page_size ?? 50,
+  };
 }
 
 export async function getEmail(id: string): Promise<Email> {
-  return gatewayFetch<Email>(`/email/messages/${id}`);
+  const raw = await gatewayFetch<Record<string, unknown>>(`/email/messages/${id}`);
+  return mapEmail(raw);
 }
 
 export async function updateEmail(
   id: string,
   updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder" | "labels">>
 ): Promise<Email> {
-  return gatewayFetch<Email>(`/email/messages/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(updates),
-  });
+  // Map camelCase → snake_case for the backend PATCH
+  const body: Record<string, unknown> = {};
+  if (updates.isRead !== undefined) body.is_read = updates.isRead;
+  if (updates.isStarred !== undefined) body.is_starred = updates.isStarred;
+  if (updates.isFlagged !== undefined) body.is_flagged = updates.isFlagged;
+  if (updates.folder !== undefined) body.folder = updates.folder;
+  if (updates.labels !== undefined) body.labels = updates.labels;
+  const raw = await gatewayFetch<Record<string, unknown>>(
+    `/email/messages/${id}`,
+    { method: "PATCH", body: JSON.stringify(body) }
+  );
+  return mapEmail(raw);
 }
 
 export async function deleteEmail(id: string): Promise<void> {
@@ -113,9 +247,20 @@ export interface SendEmailParams {
 }
 
 export async function sendEmail(params: SendEmailParams): Promise<{ id: string }> {
+  // Map camelCase → snake_case for the backend
+  const body: Record<string, unknown> = {
+    account_id: params.accountId,
+    to: params.to,
+    subject: params.subject,
+    body_text: params.bodyText,
+  };
+  if (params.cc) body.cc = params.cc;
+  if (params.bcc) body.bcc = params.bcc;
+  if (params.bodyHtml) body.body_html = params.bodyHtml;
+  if (params.replyToMessageId) body.reply_to_message_id = params.replyToMessageId;
   return gatewayFetch<{ id: string }>("/email/send", {
     method: "POST",
-    body: JSON.stringify(params),
+    body: JSON.stringify(body),
   });
 }
 

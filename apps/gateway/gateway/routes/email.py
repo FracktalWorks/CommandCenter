@@ -60,6 +60,12 @@ class AttachmentModel(BaseModel):
     download_url: str | None = None
 
 
+# Storage limits (hybrid approach — store bodies with caps, fetch full on demand)
+MAX_BODY_TEXT_BYTES = 500 * 1024      # 500 KB
+MAX_BODY_HTML_BYTES = 2 * 1024 * 1024  # 2 MB
+ATTACHMENT_CACHE_TTL_SECS = 3600       # 1 hour
+
+
 class EmailMessageModel(BaseModel):
     id: str
     provider_message_id: str
@@ -72,6 +78,7 @@ class EmailMessageModel(BaseModel):
     subject: str = ""
     body_text: str = ""
     body_html: str | None = None
+    body_truncated: bool = False
     snippet: str = ""
     has_attachments: bool = False
     attachments: list[AttachmentModel] = []
@@ -140,6 +147,14 @@ class OAuthCallbackRequest(BaseModel):
     code: str
     state: str
 
+class CreateAccountRequest(BaseModel):
+    """Manual account creation (IMAP/SMTP or other manual config)."""
+    provider: str  # 'imap' | 'gmail' | 'microsoft'
+    email_address: str
+    label: str = ""
+    credentials: dict[str, Any]  # Provider-specific credential dict
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 async def _get_db(request_id: str | None = None):
@@ -202,6 +217,104 @@ async def list_accounts(
                 unread_count=unread,
             ))
         return accounts
+    finally:
+        await db.close()
+
+
+@router.post("/accounts", response_model=EmailAccountModel, status_code=201)
+async def create_account(
+    req: CreateAccountRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Add a new email account manually (IMAP/SMTP or pre-configured OAuth creds).
+
+    For OAuth-based providers (gmail, microsoft), use the /oauth/{provider}/authorize
+    flow instead — it handles token exchange automatically.
+    """
+    # Validate provider
+    if req.provider not in ("gmail", "microsoft", "imap"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown provider: {req.provider}. Supported: gmail, microsoft, imap",
+        )
+
+    # For IMAP, validate required credential fields
+    if req.provider == "imap":
+        required = ["imap_host", "imap_port", "imap_username", "imap_password",
+                     "smtp_host", "smtp_port"]
+        missing = [k for k in required if k not in req.credentials]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing IMAP credential fields: {', '.join(missing)}",
+            )
+
+    # Encrypt credentials
+    from acb_llm.key_store import get_key_store
+    store = get_key_store()
+    encrypted_creds = store.encrypt(json.dumps(req.credentials))
+
+    db = await _get_db()
+    try:
+        # Check for duplicate account
+        existing = await db.execute(
+            text(
+                """SELECT id FROM email_accounts
+                   WHERE user_id = :user_id
+                     AND provider = :provider
+                     AND email_address = :email"""
+            ),
+            {
+                "user_id": user.email or "anonymous",
+                "provider": req.provider,
+                "email": req.email_address,
+            },
+        )
+        if existing.fetchone():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Account {req.email_address} already exists",
+            )
+
+        account_id = str(uuid4())
+        await db.execute(
+            text(
+                """INSERT INTO email_accounts
+                   (id, user_id, provider, email_address, label,
+                    avatar_color, credentials_encrypted)
+                   VALUES (:id, :user_id, :provider, :email, :label,
+                           :color, :creds)"""
+            ),
+            {
+                "id": account_id,
+                "user_id": user.email or "anonymous",
+                "provider": req.provider,
+                "email": req.email_address,
+                "label": req.label or _default_label(req.provider),
+                "color": "#6366f1",
+                "creds": encrypted_creds,
+            },
+        )
+        await db.commit()
+
+        # Start background sync for this account
+        try:
+            from email_ingestion.scheduler import refresh_account_sync
+            await refresh_account_sync(account_id)
+        except Exception:
+            pass
+
+        return EmailAccountModel(
+            id=account_id,
+            provider=req.provider,
+            email_address=req.email_address,
+            label=req.label or _default_label(req.provider),
+            avatar_color="#6366f1",
+            sync_enabled=True,
+            sync_status="idle",
+            last_synced_at=None,
+            unread_count=0,
+        )
     finally:
         await db.close()
 
@@ -294,6 +407,90 @@ async def update_account(
             sync_status=row.sync_status or "idle",
             last_synced_at=row.last_synced_at.isoformat()
             if row.last_synced_at else None,
+        )
+    finally:
+        await db.close()
+
+
+class EmailFolderModel(BaseModel):
+    provider_folder_id: str
+    name: str
+    type: str = "system"  # 'system' | 'user'
+    message_count: int = 0
+    unread_count: int = 0
+
+
+@router.get("/accounts/{account_id}/folders", response_model=list[EmailFolderModel])
+async def list_folders(
+    account_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """List folders/labels for a connected email account.
+
+    Fetches live from the provider (Gmail labels, Outlook folders, IMAP mailboxes)
+    so the UI always shows the current folder structure.
+    """
+    db = await _get_db()
+    try:
+        result = await db.execute(
+            text(
+                """SELECT provider, credentials_encrypted
+                   FROM email_accounts
+                   WHERE id = :id AND user_id = :user_id"""
+            ),
+            {"id": account_id, "user_id": user.email or "anonymous"},
+        )
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        # Decrypt credentials
+        from acb_llm.key_store import get_key_store
+        store = get_key_store()
+        creds = json.loads(store.decrypt(row.credentials_encrypted))
+
+        # Instantiate provider
+        if row.provider == "gmail":
+            from email_ingestion.providers.gmail import GmailProvider
+            provider = GmailProvider(creds)
+        elif row.provider == "microsoft":
+            from email_ingestion.providers.outlook import OutlookProvider
+            provider = OutlookProvider(creds)
+        elif row.provider == "imap":
+            from email_ingestion.providers.imap import IMAPProvider
+            provider = IMAPProvider(creds)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown provider: {row.provider}",
+            )
+
+        # Authenticate and fetch folders
+        if not await provider.authenticate():
+            raise HTTPException(
+                status_code=401,
+                detail="Email account authentication failed — token may have expired",
+            )
+
+        folders = await provider.list_folders()
+
+        return [
+            EmailFolderModel(
+                provider_folder_id=f.provider_folder_id,
+                name=f.name,
+                type=f.type,
+                message_count=f.message_count,
+                unread_count=f.unread_count,
+            )
+            for f in folders
+        ]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.error("list_folders.failed", account_id=account_id, error=str(exc)[:200])
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list folders: {str(exc)}",
         )
     finally:
         await db.close()
@@ -799,13 +996,28 @@ async def trigger_sync(
                                 for a in msg.bcc_addresses
                             ]),
                             "subject": msg.subject,
-                            "body_text": msg.body_text,
-                            "body_html": msg.body_html,
-                            "snippet": msg.snippet[:200] if msg.snippet else "",
+                            "body_text": _truncate_body(msg.body_text, MAX_BODY_TEXT_BYTES),
+                            "body_html": _truncate_body(
+                                msg.body_html, MAX_BODY_HTML_BYTES
+                            ) if msg.body_html else None,
+                                            "snippet": msg.snippet[:200] if msg.snippet else "",
                             "has_attachments": msg.has_attachments,
                             "is_read": msg.is_read,
                             "is_starred": msg.is_starred,
                             "is_flagged": msg.is_flagged,
+                            "body_truncated": (
+                                len(msg.body_text.encode("utf-8", errors="replace"))
+                                > MAX_BODY_TEXT_BYTES
+                                or (
+                                    bool(msg.body_html)
+                                    and len(
+                                        (msg.body_html or "").encode(
+                                            "utf-8", errors="replace"
+                                        )
+                                    )
+                                    > MAX_BODY_HTML_BYTES
+                                )
+                            ),
                             "received_at": msg.received_at,
                         },
                     )
@@ -1193,7 +1405,7 @@ async def oauth_authorize(
         "redirect_after": redirect_after,
     }
 
-    return {"url": auth_url}
+    return RedirectResponse(auth_url, status_code=302)
 
 
 @router.get("/oauth/{provider}/callback")

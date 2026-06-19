@@ -62,6 +62,7 @@ orchestrator  = { workspace = true }
 ingestion     = { workspace = true }
 reconciler    = { workspace = true }
 action-broker  = { workspace = true }
+email-ingestion = { workspace = true }
 
 # ---------- Tooling config ----------
 

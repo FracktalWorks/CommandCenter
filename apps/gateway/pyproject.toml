@@ -16,6 +16,7 @@ dependencies = [
     "acb-llm",
     "acb-auth",
     "orchestrator",
+    "email-ingestion",
 ]
 
 [build-system]

@@ -808,6 +808,16 @@ function EmailTab() {
   const [showAdd, setShowAdd] = useState(false);
   const hasFetched = useRef(false);
 
+  const mapAccount = useCallback((raw: Record<string, unknown>) => ({
+    id: String(raw.id ?? ""),
+    provider: String(raw.provider ?? "imap"),
+    emailAddress: String(raw.email_address ?? ""),
+    label: String(raw.label ?? ""),
+    unreadCount: Number(raw.unread_count ?? 0),
+    syncEnabled: Boolean(raw.sync_enabled ?? true),
+    lastSyncedAt: raw.last_synced_at ? String(raw.last_synced_at) : undefined,
+  }), []);
+
   const fetchAccounts = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -816,23 +826,25 @@ function EmailTab() {
         credentials: "include",
       });
       if (!res.ok) throw new Error(await res.json().then((b: any) => b.detail).catch(() => "Failed to load accounts"));
-      const data = await res.json();
-      setAccounts(data);
+      const data: Array<Record<string, unknown>> = await res.json();
+      setAccounts((data ?? []).map(mapAccount));
     } catch (e: any) {
       setError(e.message ?? "Failed to load email accounts");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [mapAccount]);
 
   useEffect(() => {
     if (!hasFetched.current) { hasFetched.current = true; void fetchAccounts(); }
   }, [fetchAccounts]);
 
+  const [showIMAP, setShowIMAP] = useState(false);
+
   const handleConnect = useCallback((provider: "gmail" | "microsoft" | "imap") => {
     if (provider === "imap") {
-      // IMAP: open the email app compose-style modal (future)
-      window.location.href = "/email?addAccount=imap";
+      setShowAdd(false);
+      setShowIMAP(true);
     } else {
       const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
       window.location.href = `${gatewayUrl}/email/oauth/${provider}/authorize?redirect_after=${encodeURIComponent(window.location.href)}`;
@@ -963,6 +975,14 @@ function EmailTab() {
         <AddEmailModal onClose={() => setShowAdd(false)} onConnect={handleConnect} />
       )}
 
+      {/* IMAP Configuration modal */}
+      {showIMAP && (
+        <AddIMAPModal
+          onClose={() => setShowIMAP(false)}
+          onCreated={() => { setShowIMAP(false); void fetchAccounts(); }}
+        />
+      )}
+
       {/* Link to full email client */}
       <div className="px-4 py-2 border-t border-border shrink-0 flex items-center gap-2">
         <a href="/email" className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
@@ -1020,6 +1040,147 @@ function AddEmailModal({
               <div className="text-sm font-medium text-foreground">IMAP / SMTP</div>
               <div className="text-[11px] text-muted-foreground">Manual server configuration</div>
             </div>
+          </button>
+        </div>
+        <p className="mt-4 text-[10px] text-muted-foreground text-center">
+          Credentials are encrypted at rest with AES-256-GCM
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function AddIMAPModal({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
+  const [email, setEmail] = useState("");
+  const [label, setLabel] = useState("");
+  const [imapHost, setImapHost] = useState("");
+  const [imapPort, setImapPort] = useState("993");
+  const [smtpHost, setSmtpHost] = useState("");
+  const [smtpPort, setSmtpPort] = useState("587");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    if (!email.trim() || !imapHost.trim() || !smtpHost.trim() || !username.trim() || !password) {
+      setError("All fields are required");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`${gatewayUrl}/email/accounts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          provider: "imap",
+          email_address: email.trim(),
+          label: label.trim() || email.trim(),
+          credentials: {
+            imap_host: imapHost.trim(),
+            imap_port: parseInt(imapPort, 10) || 993,
+            imap_username: username.trim(),
+            imap_password: password,
+            imap_use_ssl: true,
+            smtp_host: smtpHost.trim(),
+            smtp_port: parseInt(smtpPort, 10) || 587,
+            smtp_username: username.trim(),
+            smtp_password: password,
+            smtp_use_starttls: true,
+          },
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || `Failed (${res.status})`);
+      }
+      onCreated();
+    } catch (e: any) {
+      setError(e.message ?? "Failed to add account");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="relative bg-card border border-border rounded-2xl shadow-2xl p-6 w-full max-w-sm mx-4 chat-fade-in max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-base font-semibold text-foreground">IMAP / SMTP Setup</h3>
+          <button onClick={onClose} className="p-1 rounded-md hover:bg-secondary text-muted-foreground transition-colors">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Email Address</label>
+            <input type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary transition-colors" />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Display Label (optional)</label>
+            <input type="text" value={label} onChange={(e) => setLabel(e.target.value)}
+              placeholder="Work / Personal"
+              className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary transition-colors" />
+          </div>
+          <div className="border-t border-border pt-3">
+            <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2">Incoming (IMAP)</div>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="col-span-2">
+                <input type="text" value={imapHost} onChange={(e) => setImapHost(e.target.value)}
+                  placeholder="imap.example.com"
+                  className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary transition-colors" />
+              </div>
+              <div>
+                <input type="number" value={imapPort} onChange={(e) => setImapPort(e.target.value)}
+                  placeholder="993"
+                  className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary transition-colors" />
+              </div>
+            </div>
+          </div>
+          <div className="border-t border-border pt-3">
+            <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2">Outgoing (SMTP)</div>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="col-span-2">
+                <input type="text" value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)}
+                  placeholder="smtp.example.com"
+                  className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary transition-colors" />
+              </div>
+              <div>
+                <input type="number" value={smtpPort} onChange={(e) => setSmtpPort(e.target.value)}
+                  placeholder="587"
+                  className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary transition-colors" />
+              </div>
+            </div>
+          </div>
+          <div className="border-t border-border pt-3">
+            <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2">Authentication</div>
+            <div className="space-y-2">
+              <input type="text" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)}
+                placeholder="Username"
+                className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary transition-colors" />
+              <input type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)}
+                placeholder="Password or App Password"
+                className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-primary transition-colors" />
+            </div>
+          </div>
+
+          {error && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{error}</p>}
+
+          <button onClick={handleSave} disabled={saving}
+            className="w-full py-2.5 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 text-sm font-medium text-primary-foreground transition-colors flex items-center justify-center gap-2">
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+            {saving ? "Connecting…" : "Connect Account"}
           </button>
         </div>
         <p className="mt-4 text-[10px] text-muted-foreground text-center">

@@ -1,28 +1,74 @@
 import { create } from "zustand";
 import { Email, EmailAccount, EmailFolder } from "./types";
 import * as api from "./api";
+import type { EmailFolderRaw } from "./api";
 import { QUICK_ACTIONS } from "./mockData";
 
+/** System folder icons mapped by canonical key. */
+const SYSTEM_FOLDER_ICONS: Record<string, string> = {
+  inbox: "Inbox", INBOX: "Inbox",
+  sent: "Send", drafts: "FileText", archive: "Archive",
+  trash: "Trash2", junk: "ShieldAlert", spam: "ShieldAlert",
+  starred: "Star", important: "AlertTriangle",
+};
+
+/** Default system folders that always appear even before sync. */
+const DEFAULT_SYSTEM_FOLDERS: EmailFolder[] = [
+  { icon: "Inbox", label: "Inbox", key: "inbox", count: 0 },
+  { icon: "Star", label: "Starred", key: "starred", count: 0 },
+  { icon: "Send", label: "Sent", key: "sent", count: 0 },
+  { icon: "FileText", label: "Drafts", key: "drafts", count: 0 },
+  { icon: "Archive", label: "Archive", key: "archive", count: 0 },
+  { icon: "Tag", label: "Labels", key: "labels", count: 0 },
+  { icon: "Trash2", label: "Trash", key: "trash", count: 0 },
+];
+
 /**
- * Derive folder counts from email list.
+ * Merge real provider folders with default system folders.
+ * Provider folders are mapped by their canonical name (lowercased).
+ * Folders not in the provider list keep their counts from email data.
+ */
+function mergeFolders(
+  providerFolders: EmailFolderRaw[],
+  emailCounts: Record<string, number>,
+): EmailFolder[] {
+  const providerMap = new Map<string, EmailFolderRaw>();
+  for (const f of providerFolders) {
+    providerMap.set(f.name.toLowerCase(), f);
+  }
+
+  return DEFAULT_SYSTEM_FOLDERS.map((df) => {
+    const pf = providerMap.get(df.key);
+    if (pf) {
+      return {
+        ...df,
+        count: pf.message_count || emailCounts[df.key] || 0,
+        label: pf.name, // use provider's display name
+      };
+    }
+    return {
+      ...df,
+      count: emailCounts[df.key] || 0,
+    };
+  });
+}
+
+/**
+ * Derive folder counts from email list (fallback when provider folders
+ * haven't been fetched yet).
  */
 function buildFolders(emails: Email[]): EmailFolder[] {
   const counts: Record<string, number> = {};
   for (const email of emails) {
-    counts[email.folder] = (counts[email.folder] || 0) + 1;
-    if (!email.isRead) counts["inbox-unread"] = (counts["inbox-unread"] || 0) + 1;
+    counts[email.folder.toLowerCase()] = (counts[email.folder.toLowerCase()] || 0) + 1;
+    if (!email.isRead) counts["inbox"] = (counts["inbox"] || 0) + 1;
     if (email.isStarred) counts["starred"] = (counts["starred"] || 0) + 1;
   }
 
-  return [
-    { icon: "Inbox", label: "Inbox", key: "inbox", count: counts["inbox"] || 0 },
-    { icon: "Star", label: "Starred", key: "starred", count: counts["starred"] || 0 },
-    { icon: "Send", label: "Sent", key: "sent", count: counts["sent"] || 0 },
-    { icon: "FileText", label: "Drafts", key: "drafts", count: counts["drafts"] || 0 },
-    { icon: "Archive", label: "Archive", key: "archive", count: counts["archive"] || 0 },
-    { icon: "Tag", label: "Labels", key: "labels", count: 0 },
-    { icon: "Trash2", label: "Trash", key: "trash", count: counts["trash"] || 0 },
-  ];
+  return DEFAULT_SYSTEM_FOLDERS.map((df) => ({
+    ...df,
+    count: counts[df.key] || 0,
+  }));
 }
 
 interface EmailState {
@@ -35,6 +81,7 @@ interface EmailState {
   // Loading states
   accountsLoading: boolean;
   emailsLoading: boolean;
+  foldersLoading: boolean;
   syncStatus: Record<string, "idle" | "syncing" | "error">;
 
   // Selection
@@ -50,6 +97,7 @@ interface EmailState {
 
   // Actions
   fetchAccounts: () => Promise<void>;
+  fetchFolders: (accountId?: string) => Promise<void>;
   fetchEmails: () => Promise<void>;
   selectAccount: (id: string) => void;
   selectFolder: (folder: string) => void;
@@ -77,6 +125,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   // Loading states
   accountsLoading: false,
   emailsLoading: false,
+  foldersLoading: false,
   syncStatus: {},
 
   // Selection
@@ -100,9 +149,32 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       const { selectedAccountId } = get();
       if (!selectedAccountId && accounts.length > 0) {
         set({ selectedAccountId: accounts[0].id });
+        // Fetch folders for the auto-selected account
+        get().fetchFolders(accounts[0].id);
       }
     } catch (err: any) {
       set({ accountsLoading: false, error: err.message || "Failed to load accounts" });
+    }
+  },
+
+  fetchFolders: async (accountId?: string) => {
+    const aid = accountId ?? get().selectedAccountId;
+    if (!aid) return;
+    set({ foldersLoading: true });
+    try {
+      const rawFolders = await api.listEmailFolders(aid);
+      // Merge with current email counts
+      const emailCounts: Record<string, number> = {};
+      for (const e of get().emails) {
+        const key = e.folder.toLowerCase();
+        emailCounts[key] = (emailCounts[key] || 0) + 1;
+      }
+      const folders = mergeFolders(rawFolders, emailCounts);
+      set({ folders, foldersLoading: false });
+    } catch {
+      // Fall back to deriving from emails
+      const folders = buildFolders(get().emails);
+      set({ folders, foldersLoading: false });
     }
   },
 
@@ -125,7 +197,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
 
   selectAccount: (id: string) => {
     set({ selectedAccountId: id, selectedEmailId: null });
-    // Fetch emails for the newly selected account
+    // Fetch folders and emails for the newly selected account
+    get().fetchFolders(id);
     get().fetchEmails();
   },
 

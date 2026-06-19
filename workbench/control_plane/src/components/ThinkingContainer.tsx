@@ -7,7 +7,9 @@
  * collapsible container with a vertical timeline connecting each step.
  *
  * Visual design mirrors VS Code's chatThinkingContentPart:
- *   • Vertical connecting line with colored dots per step
+ *   • Vertical connecting line with Lucide line-art icons per step
+ *     (Brain, BookOpen, Terminal, Search, SquarePen, GitBranch, Wrench)
+ *   • Git-tree style sub-timeline for sub-agent tool calls
  *   • Action badges (Read, Edit, Search, Run, etc.)
  *   • Color-coded left borders for different action types
  *   • Timing info, diff-style change badges
@@ -20,6 +22,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import {
+  Brain,
+  BookOpen,
+  Search,
+  SquarePen,
+  Terminal,
+  GitBranch,
+  Wrench,
+  Check,
+  X,
+  LoaderCircle,
+  type LucideIcon,
+} from "lucide-react";
 import type { ToolEvent } from "@/components/MarkdownMessage";
 
 interface ThinkingContainerProps {
@@ -32,24 +47,46 @@ interface ThinkingContainerProps {
 
 // ─── Tool classification ────────────────────────────────────────────────────
 
-type ActionKind = "read" | "edit" | "search" | "run" | "delegate" | "other";
+type ActionKind = "read" | "edit" | "search" | "run" | "delegate" | "think" | "other";
+
+/** Icon key used to look up the Lucide component from the icon map. */
+type IconKey = "brain" | "book" | "search" | "edit" | "terminal" | "branch" | "wrench";
+
+/** Map icon keys to their Lucide line-art components. */
+const ICON_MAP: Record<IconKey, LucideIcon> = {
+  brain: Brain,
+  book: BookOpen,
+  search: Search,
+  edit: SquarePen,
+  terminal: Terminal,
+  branch: GitBranch,
+  wrench: Wrench,
+};
 
 function classifyTool(name: string): {
-  kind: ActionKind; icon: string; label: string;
-  borderClass: string; dotClass: string;
+  kind: ActionKind; iconKey: IconKey; label: string;
+  borderClass: string; iconClass: string;
 } {
   const n = name.toLowerCase();
   if (/search|grep|find|list|semantic|codebase|query|retrieve|lookup/.test(n))
-    return { kind: "search", icon: "🔍", label: "Search", borderClass: "border-amber-700/50", dotClass: "bg-amber-400" };
+    return { kind: "search", iconKey: "search", label: "Search", borderClass: "border-amber-700/50", iconClass: "text-amber-400" };
   if (/read|get_file|problems|fetch|load|open|view|analyzing|generating/.test(n))
-    return { kind: "read", icon: "📖", label: "Read", borderClass: "border-sky-700/50", dotClass: "bg-sky-400" };
+    return { kind: "read", iconKey: "book", label: "Read", borderClass: "border-sky-700/50", iconClass: "text-sky-400" };
   if (/edit|create|write|replace|patch|insert|update|append|fix/.test(n))
-    return { kind: "edit", icon: "✏️", label: "Edit", borderClass: "border-emerald-700/50", dotClass: "bg-emerald-400" };
+    return { kind: "edit", iconKey: "edit", label: "Edit", borderClass: "border-emerald-700/50", iconClass: "text-emerald-400" };
   if (/terminal|bash|shell|exec|run|command/.test(n))
-    return { kind: "run", icon: "▸", label: "Run", borderClass: "border-violet-700/50", dotClass: "bg-violet-400" };
+    return { kind: "run", iconKey: "terminal", label: "Code", borderClass: "border-violet-700/50", iconClass: "text-violet-400" };
   if (/delegate|spawn|agent|call_agent/.test(n))
-    return { kind: "delegate", icon: "🤝", label: "Delegate", borderClass: "border-rose-700/50", dotClass: "bg-rose-400" };
-  return { kind: "other", icon: "⚙️", label: "Tool", borderClass: "border-border/50", dotClass: "bg-muted-foreground/50" };
+    return { kind: "delegate", iconKey: "branch", label: "Delegate", borderClass: "border-rose-700/50", iconClass: "text-rose-400" };
+  if (/think|reason|reflect|plan|analyze|consider/.test(n))
+    return { kind: "think", iconKey: "brain", label: "Think", borderClass: "border-purple-700/50", iconClass: "text-purple-400" };
+  return { kind: "other", iconKey: "wrench", label: "Tool", borderClass: "border-border/50", iconClass: "text-muted-foreground" };
+}
+
+/** Render a Lucide icon for a given icon key, sized for the timeline axis. */
+function TimelineIcon({ iconKey, className }: { iconKey: IconKey; className?: string }) {
+  const Icon = ICON_MAP[iconKey];
+  return <Icon className={className} size={14} strokeWidth={1.5} />;
 }
 
 function formatToolName(name: string): string {
@@ -63,6 +100,7 @@ const KIND_VERBS: Record<ActionKind, { done: string; running: string }> = {
   search: { done: "Searched", running: "Searching" },
   edit: { done: "Edited", running: "Editing" },
   delegate: { done: "Delegated to", running: "Delegating to" },
+  think: { done: "Thought", running: "Thinking" },
   other: { done: "Used", running: "Using" },
 };
 
@@ -302,6 +340,7 @@ export default function ThinkingContainer({
       search: ["search", "searches"],
       edit: ["edit", "edits"],
       delegate: ["agent", "agents"],
+      think: ["reflection", "reflections"],
       other: ["tool", "tools"],
     };
     const parts = Array.from(counts.entries()).map(([k, n], i) => {
@@ -357,11 +396,11 @@ export default function ThinkingContainer({
       >
         <span className="shrink-0 flex items-center justify-center w-4">
           {isActive ? (
-            <span className={`w-2 h-2 rounded-full chat-pulse-dot ${hasError ? "bg-red-400" : "bg-sky-400"}`} />
+            hasError ? <X className="text-red-400" size={14} strokeWidth={2} /> : <Brain className="text-sky-400" size={14} strokeWidth={1.5} />
           ) : hasError ? (
-            <span className="text-red-400 text-[10px]">✗</span>
+            <X className="text-red-400" size={14} strokeWidth={2} />
           ) : (
-            <span className="text-emerald-500 text-[10px]">✓</span>
+            <Check className="text-emerald-500" size={14} strokeWidth={2} />
           )}
         </span>
         <span className={`text-xs font-medium min-w-0 truncate ${isActive ? "chat-shimmer-text" : "text-muted-foreground"}`}>
@@ -406,9 +445,9 @@ export default function ThinkingContainer({
                   const live = isActive && isLastReasoning;
                   return (
                     <div key={`r-${item.blockIndex}`} className="relative">
-                      {/* Small muted dot on the timeline axis */}
-                      <div className="absolute left-[10px] top-[7px] z-10">
-                        <span className={`block w-1.5 h-1.5 rounded-full ${live ? "bg-muted-foreground/40 chat-pulse-dot" : "bg-muted"}`} />
+                      {/* Brain icon on the timeline axis for reasoning */}
+                      <div className="absolute left-[6px] top-[5px] z-10">
+                        <Brain className={live ? "text-purple-400" : "text-muted-foreground/50"} size={13} strokeWidth={1.5} />
                       </div>
                     <div className="ml-8 mr-3 text-[11.5px] text-muted-foreground leading-relaxed">
                       <ReactMarkdown
@@ -454,17 +493,15 @@ export default function ThinkingContainer({
                 const toggle = () =>
                   setToolOverrides((prev) => ({ ...prev, [event.id]: !open }));
 
+                const hasSubAgent = !!(event.subAgentName && (event.subAgentTools?.length || event.subAgentText));
                 return (
                   <div key={event.id} className="relative">
-                    {/* Colored dot on the timeline axis */}
-                    <div className="absolute left-[8px] top-[6px] z-10">
-                      {isRunning ? (
-                        <span className={`block w-2 h-2 rounded-full ${style.dotClass} chat-pulse-dot`} />
-                      ) : isError ? (
-                        <span className="block w-2 h-2 rounded-full bg-red-500" />
-                      ) : (
-                        <span className={`block w-2 h-2 rounded-full ${style.dotClass}`} />
-                      )}
+                    {/* Lucide icon on the timeline axis */}
+                    <div className="absolute left-[5px] top-[5px] z-10">
+                      <TimelineIcon
+                        iconKey={style.iconKey}
+                        className={isRunning ? `${style.iconClass} drop-shadow-[0_0_4px_currentColor]` : isError ? "text-red-500" : style.iconClass}
+                      />
                     </div>
 
                     <div className="ml-8 mr-3 min-w-0">
@@ -537,7 +574,7 @@ export default function ThinkingContainer({
                           ) : (
                             <div className={`rounded-md border-l-2 ${style.borderClass} bg-card/40 px-2.5 py-1.5`}>
                               <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="text-[10px] shrink-0">{style.icon}</span>
+                                <TimelineIcon iconKey={style.iconKey} className={style.iconClass} />
                                 <span className="text-[10px] text-muted-foreground font-mono truncate">{formatToolName(event.name)}</span>
                                 {dur !== undefined && <span className="text-[9px] text-muted-foreground font-mono ml-auto shrink-0">{dur}ms</span>}
                               </div>
@@ -559,18 +596,64 @@ export default function ThinkingContainer({
                             </div>
                           )}
 
-                          {/* Sub-agent inline panel */}
-                          {event.subAgentName && (
-                            <div className="mt-1.5 rounded border border-border/60 bg-zinc-950/50 px-2 py-1.5">
-                              <div className="flex items-center gap-1.5 text-[10px]">
-                                <span className="text-sky-400">🤝</span>
-                                <span className="text-sky-400 font-medium">{event.subAgentName}</span>
-                                {event.subAgentActive && <span className="w-1.5 h-1.5 rounded-full bg-sky-400 chat-pulse-dot shrink-0" />}
+                          {/* ── Git-tree style sub-agent sub-timeline ── */}
+                          {hasSubAgent && (
+                            <div className="mt-1.5 ml-3 relative">
+                              {/* Branch connector: horizontal line from parent line to sub-tree */}
+                              <div className="absolute left-[-12px] top-0 bottom-0 w-px bg-rose-700/40" />
+                              <div className="absolute left-[-12px] top-3 w-[12px] h-px bg-rose-700/40" />
+
+                              {/* Sub-agent header */}
+                              <div className="flex items-center gap-1.5 text-[10px] mb-1">
+                                <GitBranch className="text-rose-400" size={12} strokeWidth={1.5} />
+                                <span className="text-rose-400 font-medium">{event.subAgentName}</span>
+                                {event.subAgentActive && (
+                                  <span className="text-[9px] text-rose-400 animate-pulse">● running</span>
+                                )}
                               </div>
+
+                              {/* Sub-agent output text */}
                               {event.subAgentText && (
-                                <pre className="text-muted-foreground whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed mt-1 max-h-32 overflow-y-auto">
+                                <pre className="text-muted-foreground whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed mb-1.5 max-h-24 overflow-y-auto bg-zinc-950/50 rounded px-2 py-1 border border-border/40">
                                   {event.subAgentText}
                                 </pre>
+                              )}
+
+                              {/* Sub-agent's own tool calls as child nodes */}
+                              {event.subAgentTools && event.subAgentTools.length > 0 && (
+                                <div className="relative ml-2">
+                                  {/* Sub-tree vertical line */}
+                                  <div className="absolute left-[6px] top-1 bottom-1 w-px bg-rose-700/30" />
+                                  <div className="space-y-1">
+                                    {event.subAgentTools.map((st, si) => {
+                                      const isLast = si === event.subAgentTools!.length - 1;
+                                      const stRunning = st.status === "running";
+                                      const stError = st.status === "error";
+                                      const stStyle = classifyTool(st.name);
+                                      return (
+                                        <div key={st.id} className="relative flex items-start gap-2">
+                                          {/* Sub-node connector */}
+                                          <div className="absolute left-[6px] top-[8px] w-[8px] h-px bg-rose-700/30" />
+                                          {/* Sub-node icon */}
+                                          <span className={`shrink-0 mt-0.5 ml-[14px] ${stRunning ? `${stStyle.iconClass} drop-shadow-[0_0_3px_currentColor]` : stError ? "text-red-500" : stStyle.iconClass}`}>
+                                            <TimelineIcon iconKey={stStyle.iconKey} />
+                                          </span>
+                                          <span className={`text-[10px] font-mono truncate px-1 py-px rounded bg-secondary/50 border border-border/30 ${stError ? "text-red-400" : "text-foreground"}`}>
+                                            {formatToolName(st.name)}
+                                          </span>
+                                          {st.result && (
+                                            <span className="text-[9px] text-muted-foreground font-mono truncate max-w-[200px]">
+                                              {String(st.result).slice(0, 60)}
+                                            </span>
+                                          )}
+                                          {stRunning && (
+                                            <span className="text-[9px] text-rose-400 animate-pulse shrink-0">…</span>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
                               )}
                             </div>
                           )}
@@ -579,13 +662,14 @@ export default function ThinkingContainer({
                     </div>
                   </div>
                 );
+
               })}
 
               {/* Live working spinner */}
               {isActive && toolEvents.every((t) => t.status !== "running") && (
                 <div className="relative">
-                  <div className="absolute left-[8px] top-[10px] z-10">
-                    <span className="block w-2.5 h-2.5 rounded-full bg-muted-foreground/50 chat-pulse-dot" />
+                  <div className="absolute left-[5px] top-[7px] z-10">
+                    <LoaderCircle className="text-muted-foreground/50 animate-spin" size={13} strokeWidth={1.5} />
                   </div>
                   <div className="ml-8 mr-3 rounded-md border-l-2 border-border/50 bg-card/40 px-2.5 py-1.5">
                     <span className="text-[11px] text-muted-foreground italic">{workingMsg}…</span>

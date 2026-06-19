@@ -840,6 +840,25 @@ function EmailTab() {
   }, [fetchAccounts]);
 
   const [showIMAP, setShowIMAP] = useState(false);
+  const [oauthStatus, setOauthStatus] = useState<{
+    gmail: boolean; microsoft: boolean;
+  }>({ gmail: false, microsoft: false });
+
+  // Check OAuth configuration status for Gmail + Microsoft
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const res = await fetch("/api/integrations/status");
+        if (!res.ok) return;
+        const data: Array<{ service: string; configured: boolean }> = await res.json();
+        setOauthStatus({
+          gmail: data.find((i: any) => i.service === "gmail-oauth")?.configured ?? false,
+          microsoft: data.find((i: any) => i.service === "microsoft-oauth")?.configured ?? false,
+        });
+      } catch { /* non-fatal */ }
+    };
+    void check();
+  }, [accounts]); // re-check when accounts change
 
   const handleConnect = useCallback((provider: "gmail" | "microsoft" | "imap") => {
     if (provider === "imap") {
@@ -895,6 +914,47 @@ function EmailTab() {
           </button>
         </div>
       </div>
+
+      {/* OAuth status banner — shows which providers are ready */}
+      {(!oauthStatus.gmail || !oauthStatus.microsoft) && (
+        <div className="mx-4 mt-3 p-3 rounded-xl bg-amber-500/8 border border-amber-500/20">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium text-amber-300 mb-1">
+                OAuth sign-in not fully configured
+              </p>
+              <p className="text-[11px] text-muted-foreground leading-relaxed mb-2">
+                To connect Gmail or Outlook accounts via OAuth, you need to
+                register CommandCenter as an app with Google and Microsoft first.
+                This is a one-time setup.
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {!oauthStatus.gmail && (
+                  <a href="/integrations?tab=apis&search=Gmail+OAuth"
+                    className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                    Gmail OAuth — not set up
+                    <ExternalLink className="w-2.5 h-2.5" />
+                  </a>
+                )}
+                {!oauthStatus.microsoft && (
+                  <a href="/integrations?tab=apis&search=Microsoft+OAuth"
+                    className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-colors">
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                    Microsoft OAuth — not set up
+                    <ExternalLink className="w-2.5 h-2.5" />
+                  </a>
+                )}
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-2">
+                You can still use <strong className="text-foreground">IMAP/SMTP</strong> to
+                connect email accounts without OAuth setup.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4">

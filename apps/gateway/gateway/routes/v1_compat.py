@@ -60,49 +60,81 @@ def _sanitize_messages_for_provider(
     tool-call-only assistant turns (content=null, tool_calls=[...]) or
     thinking-only turns that have neither field.
 
+    Also handles camelCase ``toolCalls`` (some SDK variants), empty/whitespace
+    content, and malformed tool-call items that lack a ``function`` key.
+
     Rules applied:
-    1. Assistant messages with *neither* content nor tool_calls → dropped.
-    2. Assistant messages with tool_calls but null content → content set to "".
+    1. Assistant messages with *neither* valid content nor valid tool_calls
+       → dropped.
+    2. Assistant messages with tool_calls but null/empty content → content
+       set to "" (all providers — null content violates the OpenAI spec).
     3. Tool messages with null/empty content → content set to "[tool result]".
+    4. Malformed tool-call items (missing ``function`` / ``name``) → stripped.
     """
     if not messages:
         return messages
-
-    # Providers that require content to be a string (not null) even when
-    # tool_calls are present.  OpenAI accepts null content with tool_calls;
-    # DeepSeek and some others reject it.
-    _null_content_providers = {"deepseek"}
-    _provider_lower = (provider or "").lower()
-    _fix_null_content = any(
-        p in _provider_lower for p in _null_content_providers
-    )
 
     cleaned: list[dict[str, Any]] = []
     for m in messages:
         role = m.get("role", "")
         content = m.get("content")
-        tool_calls = m.get("tool_calls")
+        # Accept both snake_case and camelCase tool calls.
+        tool_calls = m.get("tool_calls") or m.get("toolCalls")
 
         if role == "assistant":
-            # If both content and tool_calls are null/empty/missing, drop.
-            # Invalid per the OpenAI spec — rejected by all providers.
-            has_content = content is not None and content != ""
-            has_tool_calls = tool_calls is not None and len(tool_calls) > 0
+            # ── Normalise tool_calls ──────────────────────────────
+            _valid_tool_calls: list[dict[str, Any]] = []
+            if isinstance(tool_calls, list):
+                for tc in tool_calls:
+                    if isinstance(tc, dict):
+                        fn = tc.get("function") or {}
+                        if isinstance(fn, dict) and fn.get("name"):
+                            _valid_tool_calls.append(tc)
+                            continue
+                        # Some SDKs put name/arguments at top level.
+                        if tc.get("name"):
+                            _valid_tool_calls.append(tc)
+                            continue
+                if _valid_tool_calls:
+                    m = dict(m)
+                    m["tool_calls"] = _valid_tool_calls
+                    tool_calls = _valid_tool_calls
+                else:
+                    tool_calls = None
+
+            # ── Assess content ───────────────────────────────────
+            has_content = bool(
+                content is not None
+                and str(content).strip()
+            )
+
+            # ── Assess tool_calls ────────────────────────────────
+            has_tool_calls = bool(
+                isinstance(tool_calls, list) and len(tool_calls) > 0
+            )
+
+            # ── Drop if neither is present ───────────────────────
             if not has_content and not has_tool_calls:
                 _log.debug(
                     "v1.sanitize_dropped_assistant",
                     reason="no content or tool_calls",
                 )
                 continue
-            # Some providers require content to be a string (not null) when
-            # tool_calls are present.  Set to empty string for those.
-            if has_tool_calls and content is None and _fix_null_content:
-                m = dict(m)
+
+            # ── Always fix null/empty content when tool_calls set ─
+            # The OpenAI spec says content SHOULD be null when
+            # tool_calls is present, but many providers (DeepSeek,
+            # Groq, Together) reject null content outright.
+            if has_tool_calls and (
+                content is None or str(content).strip() == ""
+            ):
+                if not isinstance(m, dict):
+                    m = dict(m)
                 m["content"] = ""
 
         elif role == "tool":
-            # Some providers reject null/empty tool result content.
-            if content is None or content == "":
+            # Tool messages must have non-empty string content.
+            if content is None or str(content).strip() == "":
                 m = dict(m)
                 m["content"] = "[tool result]"
 

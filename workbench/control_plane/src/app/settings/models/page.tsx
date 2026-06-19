@@ -335,7 +335,7 @@ export default function ModelsPage() {
                 </div>
               )}
               {selectedProvider && selectedProvData && (
-                <div className="sm:hidden fixed inset-0 z-40 pointer-events-none">
+                <div className="sm:hidden fixed inset-0 z-[60] pointer-events-none">
                   <div className="absolute inset-0 bg-black/50 pointer-events-auto" onClick={() => setSelectedProvider(null)} />
                   <aside className="absolute inset-x-0 bottom-14 pointer-events-auto flex max-h-[55%] flex-col rounded-t-2xl border-t border-border bg-card shadow-2xl chat-fade-in">
                     <ProviderDetail provider={selectedProvData} guide={guide} copilotScopeOk={selectedProvData.id === "github" ? copilotScopeOk : undefined}
@@ -449,7 +449,7 @@ export default function ModelsPage() {
                 </div>
               )}
               {selectedModel && (
-                <div className="sm:hidden fixed inset-0 z-40 pointer-events-none">
+                <div className="sm:hidden fixed inset-0 z-[60] pointer-events-none">
                   <div className="absolute inset-0 bg-black/50 pointer-events-auto" onClick={() => setSelectedModel(null)} />
                   <aside className="absolute inset-x-0 bottom-14 pointer-events-auto flex max-h-[55%] flex-col rounded-t-2xl border-t border-border bg-card shadow-2xl chat-fade-in">
                     <ModelDetailPanel model={selectedModel} enabled={enabledIds.has(selectedModel.id)} busy={busyModel === selectedModel.id}

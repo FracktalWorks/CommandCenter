@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
+import { Trash2 } from "lucide-react";
 import {
   getSessions,
   upsertSession,
@@ -86,7 +87,7 @@ function AgentPickerModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
@@ -319,16 +320,17 @@ function SessionList({
     return entries;
   }, [sessions, activeId]);
 
-  // Track which accordion sections are expanded.
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  // Auto-expand the active agent's group, collapse others on activeId change.
+  // Track which accordion sections are expanded (empty = all collapsed by default).
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Auto-expand the active agent's group when activeId changes.
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     const activeAgent = sessions.find((s) => s.id === activeId)?.agentName;
     if (activeAgent) {
-      setCollapsed((prev) => {
+      setExpanded((prev) => {
+        if (prev.has(activeAgent)) return prev;
         const next = new Set(prev);
-        next.delete(activeAgent);
+        next.add(activeAgent);
         return next;
       });
     }
@@ -336,7 +338,7 @@ function SessionList({
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const toggleAgent = (agent: string) => {
-    setCollapsed((prev) => {
+    setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(agent)) next.delete(agent);
       else next.add(agent);
@@ -368,7 +370,7 @@ function SessionList({
       </button>
 
       {groups.map(([agentName, agentSessions]) => {
-        const isCollapsed = collapsed.has(agentName);
+        const isExpanded = expanded.has(agentName);
         const isActiveAgent = agentSessions.some((s) => s.id === activeId);
         const count = agentSessions.length;
 
@@ -383,7 +385,7 @@ function SessionList({
                   : "text-muted-foreground hover:bg-secondary/40 hover:text-foreground"
               }`}
             >
-              <span className="text-[10px] transition-transform duration-150" style={{ transform: isCollapsed ? "rotate(-90deg)" : "rotate(0deg)" }}>
+              <span className="text-[10px] transition-transform duration-150" style={{ transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)" }}>
                 ▼
               </span>
               <span className="flex-1 text-xs font-medium truncate">
@@ -402,7 +404,7 @@ function SessionList({
             </button>
 
             {/* Sessions for this agent */}
-            {!isCollapsed && (
+            {isExpanded && (
               <div className="mt-1 ml-2.5 flex flex-col gap-1 border-l border-border/60 pl-2">
                 {agentSessions.map((s) => (
                   <div
@@ -432,13 +434,15 @@ function SessionList({
                     </div>
                     <button
                       onClick={(e) => {
+                        e.preventDefault();
                         e.stopPropagation();
                         onDelete(s.id);
                       }}
-                      className="ml-2 mt-0.5 shrink-0 rounded p-0.5 text-muted-foreground hover:text-red-400 transition-colors text-[10px]"
+                      className="ml-2 shrink-0 rounded-md p-1.5 text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 transition-colors"
                       title="Delete session"
+                      aria-label="Delete session"
                     >
-                      ✕
+                      <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
                 ))}

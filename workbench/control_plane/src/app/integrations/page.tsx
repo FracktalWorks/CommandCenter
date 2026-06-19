@@ -471,7 +471,7 @@ function DiscoverModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
   const current = configQueue[configIdx];
 
   return (
-    <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-4 bg-background/80 backdrop-blur-sm"
+    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center sm:p-4 bg-background/80 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="w-full max-w-xl bg-card border-t sm:border border-border rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh] sm:max-h-[90vh]">
         <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
@@ -765,9 +765,9 @@ function ApisTab() {
 
         {selectedApi && (
           <>
-            <div className="sm:hidden fixed inset-0 z-40 pointer-events-none">
+            <div className="sm:hidden fixed inset-0 z-[60] pointer-events-none">
               <div className="absolute inset-0 bg-black/50 pointer-events-auto" onClick={() => setSelected(null)} />
-              <aside className="absolute inset-x-0 bottom-14 pointer-events-auto flex max-h-[45%] flex-col rounded-t-2xl border-t border-border bg-card shadow-2xl chat-fade-in">
+              <aside className="absolute inset-x-0 bottom-14 pointer-events-auto flex max-h-[55%] flex-col rounded-t-2xl border-t border-border bg-card shadow-2xl chat-fade-in">
                 <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
                   <div className="flex items-center gap-2">
                     <ServiceLogo service={selectedApi.service} label={selectedApi.label ?? selectedApi.service} category={selectedApi.category} size="sm" />
@@ -981,7 +981,7 @@ function AddEmailModal({
   onConnect: (provider: "gmail" | "microsoft" | "imap") => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <div className="relative bg-card border border-border rounded-2xl shadow-2xl p-6 w-full max-w-sm mx-4 chat-fade-in">
         <div className="flex items-center justify-between mb-4">
@@ -1244,7 +1244,7 @@ function AddMcpModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =>
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-4 bg-background/80 backdrop-blur-sm"
+    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center sm:p-4 bg-background/80 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="w-full max-w-md bg-card border-t sm:border border-border rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
         <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
@@ -1516,7 +1516,7 @@ function InstallPluginModal({ onClose, onInstalled }: { onClose: () => void; onI
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-4 bg-background/80 backdrop-blur-sm"
+    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center sm:p-4 bg-background/80 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="w-full max-w-md bg-card border-t sm:border border-border rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
         <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">

@@ -26,7 +26,6 @@ import {
   Loader2,
   MessageCircle,
   Package,
-  Pencil,
   Plug,
   Plus,
   Receipt,
@@ -447,7 +446,6 @@ interface AgentConfig {
 interface FormValues {
   repoUrl: string;
   name: string;
-  displayName: string;
   description: string;
   tags: string;
   integrations: string;
@@ -499,7 +497,6 @@ function AddAgentModal({
   const [form, setForm] = useState<FormValues>({
     repoUrl: "",
     name: "",
-    displayName: "",
     description: "",
     tags: "",
     integrations: "",
@@ -617,7 +614,6 @@ function AddAgentModal({
       const isLocal = /^([A-Za-z]:[\\/]|\/)/.test(rawInput);
       const body: Record<string, unknown> = {
         name: form.name.trim(),
-        display_name: form.displayName.trim() || undefined,
         description: form.description.trim(),
         tags: parseCsv(form.tags),
         integrations: parseCsv(form.integrations),
@@ -655,11 +651,11 @@ function AddAgentModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/70"
+      className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center sm:p-4 bg-black/70"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg rounded-t-xl sm:rounded-xl border-t sm:border border-border bg-card shadow-2xl max-h-[92vh] overflow-y-auto"
+        className="w-full max-w-lg rounded-t-xl sm:rounded-xl border-t sm:border border-border bg-card shadow-2xl max-h-[92vh] overflow-y-auto mb-14 sm:mb-0 pb-safe"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -725,22 +721,6 @@ function AddAgentModal({
                   />
                   <p className="mt-1 text-xs text-muted-foreground">lowercase, hyphens only</p>
                 </div>
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-muted-foreground">
-                    Display name
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="My Agent"
-                    value={form.displayName}
-                    onChange={(e) => handleField("displayName", e.target.value)}
-                    className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
-                  />
-                  <p className="mt-1 text-xs text-muted-foreground">human-readable alias (optional)</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1 block text-xs font-medium text-muted-foreground">Tags</label>
                   <input
@@ -866,7 +846,7 @@ function AddAgentModal({
               {/* Mini agent card preview — same style as AgentCard */}
               <div className="rounded-xl border border-border bg-secondary/60 p-4">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
-                  <span className="text-sm font-semibold text-foreground">{addedAgent.display_name || addedAgent.name}</span>
+                  <span className="text-sm font-semibold text-foreground">{addedAgent.name}</span>
                   <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">custom</span>
                   {addedAgent.local_path && (
                     <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">local</span>
@@ -1095,7 +1075,7 @@ function AgentTile({
           }
         />
       </div>
-      <div className="font-medium text-sm text-foreground leading-tight">{agent.display_name || agent.name}</div>
+      <div className="font-medium text-sm text-foreground leading-tight">{agent.name}</div>
       <div className={`text-[10px] mt-0.5 ${
         readiness === "ready"   ? "text-success" :
         readiness === "blocked" ? "text-warning"  : "text-muted-foreground"
@@ -1122,12 +1102,14 @@ function AgentSidePanel({
   onClose,
   onRemove,
   onRefresh,
+  compact = false,
 }: {
   agent: AgentEntry;
   statuses: IntegrationStatus[];
   onClose: () => void;
   onRemove: (name: string) => void;
   onRefresh?: () => void;
+  compact?: boolean;
 }) {
   const Icon  = getAgentIcon(agent);
   const color = getAgentColor(agent);
@@ -1135,55 +1117,6 @@ function AgentSidePanel({
   const [removing, setRemoving]     = useState(false);
   const [pulling, setPulling]       = useState(false);
   const behindBy = (agent as any).behind_by as number | undefined;
-
-  // ── Inline editing for display_name / description ────────────────────
-  const [editingField, setEditingField] = useState<"display_name" | "description" | null>(null);
-  const [editValue, setEditValue] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [hoverName, setHoverName] = useState(false);
-  const [hoverDesc, setHoverDesc] = useState(false);
-
-  const startEdit = (field: "display_name" | "description") => {
-    setEditingField(field);
-    setEditValue(field === "display_name"
-      ? (agent.display_name || agent.name)
-      : (agent.description || ""));
-  };
-
-  const cancelEdit = () => {
-    setEditingField(null);
-    setEditValue("");
-  };
-
-  const saveEdit = async () => {
-    if (!editingField) return;
-    setSaving(true);
-    try {
-      const body: Record<string, string | null> = {};
-      body[editingField] = editValue.trim() || null;
-      const res = await fetch(`/api/agent/${encodeURIComponent(agent.name)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (res.ok) {
-        // Update the local agent object so the UI reflects the change
-        if (editingField === "display_name") {
-          (agent as any).display_name = editValue.trim() || null;
-        } else {
-          (agent as any).description = editValue.trim();
-        }
-        setEditingField(null);
-        onRefresh?.();
-      }
-    } catch { /* silently fail */ }
-    finally { setSaving(false); }
-  };
-
-  const handleEditKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveEdit(); }
-    if (e.key === "Escape") cancelEdit();
-  };
 
   const handlePull = async () => {
     setPulling(true);
@@ -1219,96 +1152,40 @@ function AgentSidePanel({
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-start justify-between p-5 border-b border-border shrink-0">
-        <div className="flex items-start gap-3">
-          <Icon size={36} className={`${color} mt-0.5 shrink-0`} />
-          <div className="min-w-0">
-            {editingField === "display_name" ? (
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="text"
-                  value={editValue}
-                  onChange={(e) => setEditValue(e.target.value)}
-                  onKeyDown={handleEditKeyDown}
-                  className="text-sm font-semibold bg-secondary border border-primary/40 rounded px-2 py-0.5 text-foreground w-full max-w-[220px] focus:outline-none focus:border-primary"
-                  autoFocus
-                  disabled={saving}
-                />
-                <button onClick={saveEdit} disabled={saving}
-                  className="text-[10px] px-1.5 py-0.5 rounded bg-success/10 text-success hover:bg-success/20 disabled:opacity-50">Save</button>
-                <button onClick={cancelEdit} disabled={saving}
-                  className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground hover:text-foreground">Cancel</button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-1.5"
-                onMouseEnter={() => setHoverName(true)}
-                onMouseLeave={() => setHoverName(false)}>
-                <div className="font-semibold text-foreground text-base truncate">{agent.display_name || agent.name}</div>
-                <button onClick={() => startEdit("display_name")}
-                  className={`text-muted-foreground hover:text-foreground p-0.5 rounded transition-all ${hoverName ? "opacity-100" : "opacity-0"}`}
-                  title="Edit display name">
-                  <Pencil className="w-3 h-3" />
-                </button>
-              </div>
-            )}
-            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-              {agent.agent_runtime === "github-copilot" ? (
-                <>
+      {/* Header — hidden in compact (mobile) mode since the wrapper provides its own */}
+      {!compact && (
+        <div className="flex items-start justify-between p-5 border-b border-border shrink-0">
+          <div className="flex items-start gap-3">
+            <Icon size={36} className={`${color} mt-0.5 shrink-0`} />
+            <div>
+              <div className="font-semibold text-foreground text-base">{agent.name}</div>
+              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                {agent.agent_runtime === "github-copilot" ? (
+                  <>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded border border-accent/20 bg-accent/10 text-accent">MAF</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded border border-primary/30 bg-primary/10 text-primary/80">Copilot SDK</span>
+                  </>
+                ) : (
                   <span className="text-[10px] px-1.5 py-0.5 rounded border border-accent/20 bg-accent/10 text-accent">MAF</span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-primary/30 bg-primary/10 text-primary/80">Copilot SDK</span>
-                </>
-              ) : (
-                <span className="text-[10px] px-1.5 py-0.5 rounded border border-accent/20 bg-accent/10 text-accent">MAF</span>
-              )}
-              <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                agent.status === "live" ? "bg-success/10 text-success" : "bg-secondary text-muted-foreground"
-              }`}>{agent.status}</span>
-              {agent.dynamic && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary">custom</span>
-              )}
+                )}
+                <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                  agent.status === "live" ? "bg-success/10 text-success" : "bg-secondary text-muted-foreground"
+                }`}>{agent.status}</span>
+                {agent.dynamic && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary">custom</span>
+                )}
+              </div>
             </div>
           </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground p-1 rounded transition-colors">
+            <X className="w-4 h-4" />
+          </button>
         </div>
-        <button onClick={onClose} className="text-muted-foreground hover:text-foreground p-1 rounded transition-colors">
-          <X className="w-4 h-4" />
-        </button>
-      </div>
+      )}
 
-      <div className="flex-1 overflow-y-auto p-5 space-y-4">
-        {editingField === "description" ? (
-          <div className="space-y-1.5">
-            <textarea
-              value={editValue}
-              onChange={(e) => setEditValue(e.target.value)}
-              onKeyDown={handleEditKeyDown}
-              className="w-full text-sm bg-secondary border border-primary/40 rounded-lg px-3 py-2 text-foreground min-h-[80px] focus:outline-none focus:border-primary resize-y"
-              autoFocus
-              disabled={saving}
-              placeholder="Agent description..."
-            />
-            <div className="flex items-center gap-1.5">
-              <button onClick={saveEdit} disabled={saving}
-                className="text-xs px-2 py-1 rounded bg-success/10 text-success hover:bg-success/20 disabled:opacity-50">Save</button>
-              <button onClick={cancelEdit} disabled={saving}
-                className="text-xs px-2 py-1 rounded bg-secondary text-muted-foreground hover:text-foreground">Cancel</button>
-            </div>
-          </div>
-        ) : (
-          <div className="group/desc"
-            onMouseEnter={() => setHoverDesc(true)}
-            onMouseLeave={() => setHoverDesc(false)}>
-            {agent.description ? (
-              <p className="text-sm text-muted-foreground leading-relaxed">{agent.description}</p>
-            ) : (
-              <p className="text-sm text-muted-foreground/50 italic">No description</p>
-            )}
-            <button onClick={() => startEdit("description")}
-              className={`text-muted-foreground hover:text-foreground p-0.5 rounded transition-all mt-1 ${hoverDesc ? "opacity-100" : "opacity-0"}`}
-              title="Edit description">
-              <Pencil className="w-3 h-3" />
-            </button>
-          </div>
+      <div className={`flex-1 overflow-y-auto space-y-4 ${compact ? "p-3" : "p-5"}`}>
+        {agent.description && (
+          <p className="text-sm text-muted-foreground leading-relaxed">{agent.description}</p>
         )}
 
         {(agent.tags?.length ?? 0) > 0 && (
@@ -1585,10 +1462,10 @@ export default function AgentsPage() {
 
         {selectedAgent && (
           <>
-            {/* Mobile: compact slide-up panel (45% height) — grid stays visible below */}
-            <div className="sm:hidden fixed inset-0 z-40 pointer-events-none">
+            {/* Mobile: compact slide-up panel (60% height) — grid stays visible below */}
+            <div className="sm:hidden fixed inset-0 z-[60] pointer-events-none">
               <div className="absolute inset-0 bg-black/50 pointer-events-auto" onClick={() => setSelected(null)} />
-              <aside className="absolute inset-x-0 bottom-14 pointer-events-auto flex max-h-[45%] flex-col rounded-t-2xl border-t border-border bg-card shadow-2xl chat-fade-in">
+              <aside className="absolute inset-x-0 bottom-14 pointer-events-auto flex max-h-[60%] flex-col rounded-t-2xl border-t border-border bg-card shadow-2xl chat-fade-in">
                 <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
                   <div className="flex items-center gap-2 min-w-0">
                     {(() => {
@@ -1596,19 +1473,20 @@ export default function AgentsPage() {
                       const color = getAgentColor(selectedAgent);
                       return <Icon size={20} className={color} />;
                     })()}
-                    <span className="text-sm font-semibold truncate">{selectedAgent.display_name || selectedAgent.name}</span>
+                    <span className="text-sm font-semibold truncate">{selectedAgent.name}</span>
                   </div>
                   <button onClick={() => setSelected(null)} className="p-1 rounded-md hover:bg-secondary text-muted-foreground shrink-0">
                     <X size={16} />
                   </button>
                 </div>
-                <div className="flex-1 min-h-0 overflow-y-auto">
+                <div className="flex-1 min-h-0 overflow-y-auto pb-safe">
                   <AgentSidePanel
                     agent={selectedAgent}
                     statuses={intgs}
                     onClose={() => setSelected(null)}
                     onRemove={handleRemove}
                     onRefresh={load}
+                    compact
                   />
                 </div>
               </aside>

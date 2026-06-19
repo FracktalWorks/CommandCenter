@@ -446,7 +446,7 @@ export default function EmailPage() {
 
       {/* Add Account Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/60" onClick={() => setShowAddModal(false)} />
           <div className="relative bg-card border border-border rounded-2xl shadow-2xl p-6 w-full max-w-sm mx-4">
             <div className="flex items-center justify-between mb-4">

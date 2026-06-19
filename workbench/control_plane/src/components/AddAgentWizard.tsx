@@ -391,7 +391,7 @@ export default function AddAgentWizard({
 
   if (loading) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70">
         <div className="flex flex-col items-center gap-3 text-neutral-400">
           <div className="w-6 h-6 border-2 border-neutral-600 border-t-blue-500 rounded-full animate-spin" />
           <span className="text-sm">Checking integrations…</span>
@@ -402,7 +402,7 @@ export default function AddAgentWizard({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"
       onClick={onCancel}
     >
       <div

@@ -451,7 +451,7 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
   return (
     /* Backdrop */
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       {/* Modal — full-width on mobile, constrained on desktop. pb-safe protects against iOS rounded corners. */}

@@ -3,7 +3,7 @@
 > **Audience:** AI coding agents and developers building new CommandCenter-compatible agents.
 > **Reference implementation:** `sales-prospector` repo — the canonical pattern every new agent must follow.
 > **Framework:** DOE v2 — Skills (what to do) / Orchestration (decision making) / Execution (doing the work).
-> **Date:** 2026-06-14 · **Version:** 5.0
+> **Date:** 2026-06-19 · **Version:** 6.0
 
 ---
 
@@ -19,6 +19,18 @@ A CommandCenter agent is a Python repo with three required files at the root (`a
 | CommandCenter        | `agents.py → build_agents()`     | `.github/prompts/system.md` + all `SKILL.md` files |
 
 Both modes share the same `.github/skills/*/SKILL.md` instructions and `.github/skills/*/scripts/` executables.
+
+### Key files and their roles
+
+| File | Purpose | Who reads it |
+| --- | --- | --- |
+| `.github/prompts/system.md` | System prompt loaded by `agents.py` for CommandCenter mode | The LLM at runtime |
+| `instructions.md` (repo root) | Agent purpose summary — read by the mutation sandbox during auto-repair to understand what the agent does | Mutation sandbox, humans |
+| `.github/agents/<name>.agent.md` | VS Code Copilot Chat agent definition with inline system prompt | VS Code Copilot Chat |
+| `.github/copilot-instructions.md` | Brief repo overview auto-loaded by GitHub Copilot in ALL contexts | GitHub Copilot (VS Code + chat) |
+| `AGENTS.md` | Human + AI orientation document — persona, skills table, quick start | Humans and AI coding agents |
+
+> **Note:** `instructions.md` and `system.md` serve different purposes. `system.md` is the runtime prompt the LLM sees. `instructions.md` is a higher-level summary the mutation sandbox reads during auto-repair to understand what the agent was built to do. Keep both files, but keep `instructions.md` brief (~1 paragraph of purpose).
 
 ---
 
@@ -98,7 +110,9 @@ agent-<name>/
 ### Hard layout rules
 
 - Skills live in `.github/skills/<name>/` — NOT a top-level `skills/` folder.
+  - *(Internal CommandCenter agents use `skills/` at the repo root — this doc covers external agents only.)*
 - System prompt lives in `.github/prompts/system.md` — NOT `instructions.md` at root.
+- `instructions.md` at repo root is optional but recommended: a 1-paragraph agent purpose summary the mutation sandbox reads during auto-repair.
 - Shared utilities live in `.tmp/scripts/` — NOT `scripts/` at root.
 - Reference data lives in `agent-data/` — NOT `data/`.
 - User-provided files go in `inputs/` — NOT anywhere else.
@@ -116,35 +130,134 @@ This file is the machine-readable contract between the repo and CommandCenter. E
 
 ```json
 {
-  "name": "agent-my-agent",
+  "name": "my-agent",
   "description": "One-line description with trigger keywords. CommandCenter routes requests using this.",
   "version": "0.1.0",
   "skill_repos": [],
   "integrations": ["anthropic", "zoho-crm", "serpapi"],
   "optional_integrations": [],
-  "model_tier": "tier-balanced",
-  "execution_budget": {
-    "max_runtime_seconds": 300,
-    "max_llm_calls": 20,
-    "max_tool_calls": 40
-  },
-  "authority": "suggest",
+  "tags": ["sales", "outbound"],
+  "tool_scope": null,
   "max_mutation_attempts": 1,
-  "tags": ["sales", "outbound"]
+  "mcp_servers": {},
+  "icon": "Bot",
+  "category": "external",
+  "webhook_routes": []
 }
 ```
 
-| Field                   | Required | Notes                                                                         |
-| ----------------------- | -------- | ----------------------------------------------------------------------------- |
-| `name`                  | ✅       | Bare agent name shown in Control Plane. Use `agent-` prefix.                  |
-| `description`           | ✅       | **Primary routing signal.** Include trigger keywords and domain. Be specific. |
-| `version`               | ✅       | Semver. Bump on breaking changes.                                             |
-| `integrations`          | ✅       | Integration Registry keys — credentials injected as env vars at runtime.      |
-| `model_tier`            | ✅       | One of `tier-fast`, `tier-balanced`, `tier-powerful`.                         |
-| `max_mutation_attempts` | ✅       | **MUST be `1`.** Hard constraint — never change this.                         |
-| `authority`             | ✅       | `suggest` (proposes actions) or `execute` (runs autonomously).                |
-| `tags`                  | ✅       | Used for filtering in Control Plane.                                          |
-| `optional_integrations` | —        | Credentials the agent can use if available but doesn't require.               |
+| Field | Required | Notes |
+| --- | --- | --- |
+| `name` | ✅ | Lowercase slug, 2–50 chars: letters, digits, hyphens only. Must match ``^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$``. **Do NOT include an ``agent-`` prefix** — the system strips it automatically. Shown in Control Plane. |
+| `description` | ✅ | **Primary routing signal.** Include trigger keywords and domain. Be specific. Used by the orchestrator to decide which agent to route to. |
+| `version` | — | Semver. Bump on breaking changes. Informational only — not validated by the runtime. |
+| `integrations` | ✅ | Integration Registry keys — credentials injected as env vars at runtime (see §13). |
+| `optional_integrations` | — | Credentials the agent can use if available but doesn't require. |
+| `tags` | ✅ | Used for filtering in Control Plane. |
+| `tool_scope` | — | Limits which **platform-injected tools** are attached to this agent. If omitted or ``null``, ALL 15+ platform tools are injected (which may hurt accuracy — see §2b). Use a list of tool function names, e.g. ``["call_agent", "web_search", "write_artifact"]``. |
+| `max_mutation_attempts` | ✅ | **MUST be ``1``.** Hard constraint — never change this. |
+| `mcp_servers` | — | MCP server config overrides (merged with MCP registry at runtime). Rarely needed — prefer registering MCP servers via the Control Plane UI. |
+| `icon` | — | Lucide icon name for the Control Plane agent picker (e.g. ``"Mail"``, ``"Bot"``, ``"ShoppingCart"``). Default: ``"Bot"``. |
+| `category` | — | Grouping key for the Control Plane UI (e.g. ``"sales"``, ``"ops"``, ``"external"``). |
+| `webhook_routes` | — | List of ``{"source": "...", "event_type": "..."}`` objects. When populated, CommandCenter routes matching webhooks to this agent (Phase 2 — currently hardcoded in the gateway). |
+
+### Fields NOT consumed by the runtime (reserved for future use)
+
+The following fields appear in older versions of this guide but are **not currently read** by the CommandCenter runtime. Include them if you want forward-compatibility, but they will not affect agent behaviour today:
+
+| Field | Status |
+| --- | --- |
+| `model_tier` | Not consumed — model selection is handled by the Control Plane UI per-chat. |
+| `execution_budget` | Not consumed — timeout/budget limits are set via environment variables (``COPILOT_TOOL_TIMEOUT_SECONDS``, etc.). |
+| `authority` | Not consumed — all agents run with the same authority model. |
+
+### How `agent_runtime` is determined
+
+You do NOT set `agent_runtime` in `config.json` — CommandCenter auto-determines it at registration time:
+
+| Registration method | `agent_runtime` | What it means |
+| --- | --- | --- |
+| GitHub repo URL (``owner/repo`` or full HTTPS URL) | ``"github-copilot"`` | Agent runs via the **GitHub Copilot SDK** (``GitHubCopilotAgent``). Gets Copilot-native features: built-in `sql`/todos tool, VS Code Copilot parity toolset. All platform-injected tools are also attached. |
+| Local path (dev mode) | ``"maf"`` | Agent runs as a plain **MAF Agent**. Lighter runtime — fewer built-in tools, but platform-injected tools are still attached. |
+
+> **For agent authors:** Your `agents.py` should use ``GitHubCopilotAgent`` as shown in §3. CommandCenter will import and run it correctly in both modes. The runtime mode is transparent to the agent code.
+
+---
+
+## 2a. Platform-Injected Tools (available to every agent)
+
+CommandCenter automatically attaches **15+ tools** to every agent at runtime via the executor's ``_inject_agent_tools()``. These tools are available to the LLM **without the agent author writing any code**. You do NOT wire them in `agents.py` — they are injected transparently.
+
+Knowing these tools exist is critical:
+- **Don't re-implement them.** If you need web search, use the injected `web_search` — don't build your own.
+- **Reference them in your system prompt.** Your `.github/prompts/system.md` should tell the LLM when to use each one.
+- **Use `tool_scope` to limit them.** If your agent doesn't need all 15+, set `tool_scope` in `config.json` to improve accuracy (see §2b).
+
+### Complete injected tool catalog
+
+| Tool | When the LLM should use it |
+| --- | --- |
+| `call_agent(agent_name, message)` | Delegate a sub-task to another registered agent. Blocks until the sub-agent responds. |
+| `call_agents_parallel(tasks)` | Run multiple agents concurrently. Pass a JSON array of `{"agent", "message"}` objects. |
+| `call_agent_background(agent_name, message)` | Fire-and-forget delegation. Use when the result is not needed immediately. |
+| `web_search(query, max_results=5)` | Search the web via DuckDuckGo. Use for current info, news, company research. No API key needed. |
+| `fetch_page(url, max_chars=8000)` | Fetch a public URL as clean Markdown text via Jina Reader. |
+| `write_artifact(path, content, encoding?)` | Write a file to the agent workspace. Files land in `outputs/` by default and appear in the Control Plane Files Viewer sidebar. Returns a `download_url` — embed it as a clickable link in your reply. |
+| `remember(query)` | Search episodic memory (Mem0) for past facts about the user. Call BEFORE making claims about history or preferences. |
+| `recall_timeline(entity, query)` | Query the bi-temporal knowledge graph (Graphiti): "when did X happen?" or entity relationship history. |
+| `save_memory(fact)` | Persist a high-signal user fact to Mem0. Routine turns are handled automatically — use this sparingly for important discoveries. |
+| `save_episode(name, content, source?)` | Record a time-stamped episode in Graphiti. Entities and relationships are extracted automatically. |
+| `manage_todo_list(todoList)` | Update the live "Todos (n/m)" panel in the Control Plane chat UI. Takes a JSON object with `"todoList"` (complete array) and optional `"operation"` (`"write"` or `"read"`). Each item: `id` (number), `title` (string), `status` (`"not-started"`, `"in-progress"`, `"completed"`). Use VERY frequently — the user sees real-time progress. |
+| `ask_user(question, choices?, allowFreeform?)` | **Native HITL — blocks the agent turn.** Pause and ask the user ONE clarifying question via an interactive card. Execution truly pauses; resumes automatically when the user answers. Use when you need to disambiguate, a parameter is missing, or a decision has important implications. |
+| `ask_questions(questions)` | Multi-question HITL card. Takes a JSON object with a `"questions"` array. Prefer `ask_user` for single blocking questions. |
+| `get_errors(filePaths?)` | Check Python files for syntax, type, and lint errors. Call after editing or creating files. Pass a JSON array of file paths or `[]` to auto-discover recently changed files. |
+| `save_note(path, fact)` | Append a dated bullet to a Markdown notes file under `agent-data/`. Use `agent-data/NOTES.md` as your canonical cross-session working memory. |
+| `recall_notes(path, query?)` | Read back a notes file, optionally filtered by a search query. Use at session start to restore context from previous sessions. |
+| `query_history(sql)` | Run a SELECT-only SQL query against the chat history database (tables: `chat_session`, `chat_message`). Use to recall past conversations, find decisions, or resume work. |
+| `github_search(query, scope?, maxResults?)` | Lexical search across public GitHub repositories. Supports `language:python`, `repo:owner/name`, `path:src/` filters. |
+| `github_repo_search(repo, query?)` | Search within a specific GitHub repository for code snippets and implementation patterns. |
+
+### How your system prompt should reference injected tools
+
+Your `.github/prompts/system.md` should include a section like this so the LLM knows these tools exist:
+
+```markdown
+## Platform Tools (injected by CommandCenter)
+
+You have access to these tools automatically — do NOT re-implement them:
+- `call_agent` / `call_agents_parallel` — delegate to other agents
+- `web_search` / `fetch_page` — web access (no API key needed)
+- `write_artifact` — write files visible in the UI sidebar
+- `manage_todo_list` — update the live task panel
+- `ask_user` — pause and ask the user a clarifying question
+- `remember` / `save_memory` / `save_episode` — memory and knowledge graph
+- `get_errors` — check code for syntax/lint errors
+- `save_note` / `recall_notes` — repo-scoped working memory
+- `query_history` — search past conversations
+```
+
+The executor also appends a comprehensive tool guidance block to the system message at runtime, so the LLM will always have full documentation even if your system prompt is minimal.
+
+---
+
+## 2b. `tool_scope` — Limiting Injected Tools
+
+**Why this matters:** The Berkeley Function-Calling Leaderboard has shown that **every model degrades in accuracy as the number of available tools increases.** If your agent doesn't need all 15+ platform tools, use `tool_scope` to limit what gets injected.
+
+Set `tool_scope` in `config.json` to a list of tool function names:
+
+```json
+{
+  "tool_scope": ["web_search", "fetch_page", "write_artifact", "manage_todo_list", "ask_user"]
+}
+```
+
+Only the named tools will be injected. If `tool_scope` is omitted or `null`, ALL tools are injected (default).
+
+**Valid tool names** (the function `__name__` of each injected tool):
+`call_agent`, `call_agents_parallel`, `call_agent_background`, `web_search`, `fetch_page`, `write_artifact`, `remember`, `recall_timeline`, `save_memory`, `save_episode`, `manage_todo_list`, `ask_questions`, `get_errors`, `save_note`, `recall_notes`, `query_history`, `github_search`, `github_repo_search`
+
+> **Note:** If none of the names in your `tool_scope` list match any known tool, the executor falls back to injecting ALL tools and logs a warning.
 
 ---
 
@@ -154,6 +267,9 @@ This file is the machine-readable contract between the repo and CommandCenter. E
 
 ```python
 """agent-<name> — MAF Agent definitions.
+
+Your repo should be named ``agent-<name>`` on GitHub, but the bare agent name
+in config.json (and this file) is ``<name>`` without the prefix.
 
 Exports:
     build_agents() -> list[GitHubCopilotAgent]   (Dynamic Agent Loader entry point)
@@ -274,7 +390,7 @@ def build_agent() -> "GitHubCopilotAgent":
     from copilot.types import PermissionHandler                     # type: ignore[import]
 
     return GitHubCopilotAgent(
-        name="agent-my-agent",
+        name="my-agent",
         description="One-line description matching config.json.",
         instructions=SYSTEM_PROMPT,
         tools=[
@@ -763,26 +879,28 @@ logs/
 Use this checklist when creating a new agent from scratch.
 
 ```
-- [ ] 1.  Scaffold repo as agent-<name> with the folder structure from §1
-- [ ] 2.  config.json — name, description (trigger keywords!), integrations, tags, max_mutation_attempts: 1
-- [ ] 3.  .github/prompts/system.md — agent identity, tool table, rules (≤ 300 lines)
+- [ ] 1.  Scaffold repo as `agent-<name>` on GitHub with the folder structure from §1. The bare agent name in `config.json` is `<name>` (no prefix).
+- [ ] 2.  config.json — name (bare slug, no `agent-` prefix), description (trigger keywords!), integrations, tags, `max_mutation_attempts: 1`, optional `tool_scope` (see §2b).
+- [ ] 3.  .github/prompts/system.md — agent identity, tool table (include platform-injected tools reference — see §2a), rules (≤ 300 lines).
 - [ ] 4.  AGENTS.md — persona, skills table, file organization, quick start
 - [ ] 5.  .github/agents/<name>.agent.md — frontmatter with model + tools, inline system prompt
 - [ ] 6.  .github/copilot-instructions.md — brief repo overview for Copilot in all contexts
-- [ ] 7.  For each skill: mkdir .github/skills/<name>, write SKILL.md + scripts/*.py
-- [ ] 8.  .tmp/scripts/ — add shared utilities (retry_utils.py, campaign_data_manager.py, etc.)
-- [ ] 9.  agent-data/ — add reference assets + write INDEX.md describing every file
-- [ ] 10. inputs/ — create folder with .gitkeep (user files land here per project)
-- [ ] 11. agents.py — use canonical template (§3), wire one async def tool per skill capability
-- [ ] 12. pyproject.toml — dependencies, dev extras, pytest config (§11)
-- [ ] 13. requirements.txt — pip-installable list for setup scripts
-- [ ] 14. tests/test_agents.py — minimum CI gate suite from §12
-- [ ] 15. .env.example — all required keys with placeholder values (§13)
-- [ ] 16. .gitignore — required entries from §14
-- [ ] 17. Smoke test: python -m pytest tests/ -v  (all pass or skip — no failures)
-- [ ] 18. Import test: python -c "from agents import SYSTEM_PROMPT; print(len(SYSTEM_PROMPT), 'chars')"
-- [ ] 19. Tools test: python -c "from agents import build_agents" (must not raise)
-- [ ] 20. Register in CommandCenter: Control Plane → Agents → Add Agent → paste GitHub repo URL
+- [ ] 7.  instructions.md (repo root) — 1-paragraph agent purpose summary for mutation sandbox
+- [ ] 8.  For each skill: mkdir .github/skills/<name>, write SKILL.md + scripts/*.py
+- [ ] 9.  .tmp/scripts/ — add shared utilities (retry_utils.py, campaign_data_manager.py, etc.)
+- [ ] 10. agent-data/ — add reference assets + write INDEX.md describing every file
+- [ ] 11. inputs/ — create folder with .gitkeep (user files land here per project)
+- [ ] 12. agents.py — use canonical template (§3), wire one async def tool per skill capability
+- [ ] 13. pyproject.toml — dependencies, dev extras, pytest config (§11)
+- [ ] 14. requirements.txt — pip-installable list for setup scripts
+- [ ] 15. tests/test_agents.py — minimum CI gate suite from §12
+- [ ] 16. .env.example — all required keys with placeholder values (§13)
+- [ ] 17. .gitignore — required entries from §14
+- [ ] 18. Smoke test: `python -m pytest tests/ -v` (all pass or skip — no failures)
+- [ ] 19. Import test: `python -c "from agents import SYSTEM_PROMPT; print(len(SYSTEM_PROMPT), 'chars')"`
+- [ ] 20. Tools test: `python -c "from agents import build_agents"` (must not raise)
+- [ ] 21. Review §18 (Agent Registration Flow) — verify your repo meets all registration requirements
+- [ ] 22. Register in CommandCenter: Control Plane → Agents → Add Agent → paste GitHub repo URL
 ```
 
 ---
@@ -808,6 +926,9 @@ These will cause registration failures, silent bugs, or CommandCenter rejection:
 | `except Exception: return {"error": ...}`  | `raise RuntimeError(...)` always    |
 | User files in `agent-data/`                | User files in `inputs/<project>/`   |
 | Campaign outputs scattered at root         | `outputs/<campaign-slug>/`          |
+| ``"name": "agent-my-agent"`` in config.json | ``"name": "my-agent"`` (no prefix) |
+| Building your own `web_search` tool        | Use the injected `web_search` (see §2a) |
+| Re-implementing any platform-injected tool | Reference it in system prompt; don't code it |
 
 ---
 
@@ -819,6 +940,37 @@ CommandCenter monitors agent repos and applies auto-repairs under two conditions
 
 **AgentLoadError repair:** If `agents.py` fails to import, `build_agents()` throws, or the return type is wrong, a Copilot SDK mutation sandbox generates a fix, runs `pytest tests/`, and commits the fix directly. Maximum 1 attempt per failure event.
 
+### How the mutation sandbox works
+
+1. A **detached Docker container** (`acb-mutation-runner`) is spawned with the failing agent's local clone mounted at `/workspace/repo`.
+2. The sandbox receives the full error traceback, the agent's `instructions.md` (purpose summary), and — for structural incompatibilities — this entire `agent_repo_compatibility.md` guide as context.
+3. It generates a fix and runs `pytest tests/` inside the container.
+4. **Auto-push gate:** If all tests pass → the commit is pushed directly. If tests fail → the commit is **queued for human approval** in the Control Plane Inbox. A human must review and approve/reject before the commit is pushed.
+5. The live agent continues to use its pre-mutation code until the fix commit is pushed and pulled.
+
+**Implication:** Keep `tests/test_agents.py` tight. If the tests are weak, auto-repair may commit a broken fix that passes flawed tests — but the human review gate (step 4) catches this before it reaches production.
+
 To revert any auto-commit: `git revert <hash>` and push.
 
-**Implication:** Keep `tests/test_agents.py` tight. If the tests are weak, auto-repair may commit a broken fix that passes flawed tests.
+---
+
+## 18. Agent Registration Flow
+
+When a user registers your agent in CommandCenter (Control Plane → Agents → Add Agent → paste GitHub repo URL), here's what happens:
+
+1. **Name validation:** The agent name is checked against ``^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$``. Must be unique — no duplicate names allowed.
+2. **`config.json` fetch:** CommandCenter fetches your repo's `config.json` from GitHub (tries `main`, `master`, `HEAD` branches in order). Fields `description`, `tags`, `integrations`, and `optional_integrations` are auto-populated from `config.json` if left empty in the registration form.
+3. **`agent_runtime` assignment:** If you provided a GitHub URL → `"github-copilot"`. If you provided a local path → `"maf"`.
+4. **Persistence:** The agent entry is saved to the `dynamic_agents` Postgres table (survives deploys and reboots).
+5. **Background clone:** A background task clones your repo into ``{agents_clone_dir}/repos/{agent_name}/`` so the agent is warm before its first run.
+6. **Live:** The agent appears in the Control Plane agent picker immediately. It can be invoked via `/agent/run/stream`.
+
+### Registration checklist for agent authors
+
+- [ ] Repo is public (or the CommandCenter GitHub token has access to your org)
+- [ ] `config.json` is at the repo root and is valid JSON
+- [ ] `agents.py` is at the repo root and exports `build_agents() -> list`
+- [ ] `build_agents()` returns at least one agent with a non-trivial system prompt and at least one tool
+- [ ] `max_mutation_attempts` is set to `1`
+- [ ] No credentials are hardcoded — all secrets use `os.getenv(...)`
+- [ ] Repo name follows the convention (e.g. `agent-my-agent` for discoverability, though the bare agent name in `config.json` should be `my-agent`)

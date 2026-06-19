@@ -11,6 +11,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import React from "react";
 import Link from "next/link";
+import { ArrowUp, Square, ListOrdered, CornerDownRight, ChevronDown } from "lucide-react";
 import { useAgentChat } from "@/hooks/useAgentChat";
 import type { ArtifactEntry, ChatMessage } from "@/hooks/useAgentChat";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
@@ -39,6 +40,7 @@ import { buildFrontendToolsAddendum } from "@/hooks/useFrontendTool";
 // ── Context-window ring ─────────────────────────────────────────────────────
 /**
  * Small circular SVG progress ring showing context-window usage.
+ * Always shows the token count. Clickable to trigger manual /compact when ≥ 60%.
  * Color transitions: primary (< 60%) → warning (60–79%) → destructive (≥ 80%).
  */
 function ContextRing({
@@ -46,11 +48,13 @@ function ContextRing({
   usedTokens,
   totalTokens,
   compacting,
+  onCompact,
 }: {
   pct: number;
   usedTokens: number;
   totalTokens: number;
   compacting: boolean;
+  onCompact?: () => void;
 }) {
   const r = 9;
   const circ = 2 * Math.PI * r;
@@ -62,13 +66,14 @@ function ContextRing({
         ? "hsl(var(--warning))"
         : "hsl(var(--primary))";
   const label = formatTokenCount(usedTokens, totalTokens);
+  const canCompact = pct >= 60 && onCompact && !compacting;
 
   if (compacting) {
     return (
       <span
-        className="shrink-0 flex items-center gap-1 text-[10px] text-primary/70 animate-pulse"
+        className="shrink-0 flex items-center gap-1 text-[10px] text-primary/70 animate-pulse px-1.5 py-0.5 rounded-md"
         title="Compacting conversation…">
-        <svg width="20" height="20" viewBox="0 0 24 24" className="animate-spin" fill="none">
+        <svg width="16" height="16" viewBox="0 0 24 24" className="animate-spin" fill="none">
           <circle cx="12" cy="12" r="9" stroke="hsl(var(--border))" strokeWidth="2" />
           <path d="M12 3a9 9 0 0 1 9 9" stroke="hsl(var(--primary))" strokeWidth="2" strokeLinecap="round" />
         </svg>
@@ -77,11 +82,9 @@ function ContextRing({
     );
   }
 
-  return (
-    <span
-      className="shrink-0 flex items-center gap-1 cursor-default"
-      title={`Context window: ${label} used (${pct}%)`}>
-      <svg width="20" height="20" viewBox="0 0 24 24">
+  const ring = (
+    <span className="shrink-0 flex items-center gap-1">
+      <svg width="16" height="16" viewBox="0 0 24 24">
         {/* Background track */}
         <circle cx="12" cy="12" r={r} fill="none" stroke="hsl(var(--border))" strokeWidth="2" />
         {/* Progress arc */}
@@ -95,14 +98,32 @@ function ContextRing({
           style={{ transform: "rotate(-90deg)", transformOrigin: "center" }}
         />
       </svg>
-      {pct >= 60 && (
-        <span
-          className={`hidden sm:inline text-[10px] font-medium ${
-            pct >= 80 ? "text-destructive" : "text-warning"
-          }`}>
-          {pct}%
-        </span>
-      )}
+      <span className={`text-[10px] font-mono font-medium ${
+        pct >= 80 ? "text-destructive" : pct >= 60 ? "text-warning" : "text-muted-foreground"
+      }`}>
+        {label}
+      </span>
+    </span>
+  );
+
+  if (canCompact) {
+    return (
+      <button
+        type="button"
+        onClick={onCompact}
+        className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-md hover:bg-warning/10 tech-transition"
+        title={`Context window ${pct}% full — click to compact`}>
+        {ring}
+        <span className="hidden sm:inline text-[9px] text-warning font-medium">/compact</span>
+      </button>
+    );
+  }
+
+  return (
+    <span
+      className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-md cursor-default"
+      title={`Context window: ${label} used (${pct}%)`}>
+      {ring}
     </span>
   );
 }
@@ -533,6 +554,27 @@ export default function AgentChat({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contextUsage.pct, isLoading, compacting, sessionId]);
 
+  /** Manual /compact trigger — user clicks the context ring when it's high. */
+  const handleCompact = useCallback(() => {
+    if (compacting || isLoading) return;
+    setCompacting(true);
+    const currentMessages = messagesRef.current;
+    fetch(`/api/chat/sessions/${sessionId}/compact`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: currentMessages, keepLast: 6 }),
+    })
+      .then((r) => r.json() as Promise<{ messages?: ChatMessage[]; compacted?: boolean }>)
+      .then((data) => {
+        if (data.compacted && Array.isArray(data.messages) && data.messages.length > 0) {
+          setMessages(data.messages);
+          hasAutoCompactedRef.current = true; // prevent auto-fire after manual compact
+        }
+      })
+      .catch(() => {})
+      .finally(() => setCompacting(false));
+  }, [compacting, isLoading, sessionId, setMessages]);
+
   // ── HITL (Human-in-the-Loop) confirmation state ────────────────────────
   const [confirmation, setConfirmation] = useState<{
     id: string; title: string; detail?: string; context?: string;
@@ -899,6 +941,7 @@ export default function AgentChat({
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showThinkMenu, setShowThinkMenu] = useState(false);
   const modelMenuRef = useRef<HTMLDivElement>(null);
+  const sendMenuRef = useRef<HTMLDivElement>(null);
 
   // Close model menu on outside click
   useEffect(() => {
@@ -911,6 +954,18 @@ export default function AgentChat({
     document.addEventListener("mousedown", handleOutside);
     return () => document.removeEventListener("mousedown", handleOutside);
   }, [showModelMenu]);
+
+  // Close send-mode menu on outside click (works on touch devices too)
+  useEffect(() => {
+    if (!showSendMenu) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (sendMenuRef.current && !sendMenuRef.current.contains(e.target as Node)) {
+        setShowSendMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [showSendMenu]);
 
   /** Display labels + styling for an agent_runtime value. */
   function agentRuntimeMeta(rt: string): { label: string; title: string; cls: string }[] {
@@ -1253,55 +1308,75 @@ export default function AgentChat({
                 style={{ minHeight: "32px" }}
                 onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = `${Math.min(t.scrollHeight, 160)}px`; }} />
 
-              {/* Contextual send button */}
+              {/* Contextual send / stop button */}
               {isLoading ? (
-                input.trim() ? (
-                  <div className="relative shrink-0 flex items-stretch self-end">
-                    <button type="submit"
-                      className="h-8 pl-2.5 pr-2 rounded-l-lg bg-primary text-primary-foreground font-semibold text-xs flex items-center gap-1 hover:opacity-90 tech-transition"
-                      aria-label={SEND_MODE_LABELS[sendMode]}
-                      title={`${SEND_MODE_LABELS[sendMode]} (current mode)`}>
-                      {sendMode === "send" ? "↑" : sendMode === "queue" ? "⏱" : "⤳"}
-                      <span className="text-[11px] hidden sm:inline">{SEND_MODE_LABELS[sendMode]}</span>
-                    </button>
-                    <button type="button"
-                      onClick={() => setShowSendMenu((v) => !v)}
-                      className="h-8 px-1.5 rounded-r-lg bg-primary/80 text-primary-foreground border-l border-primary-foreground/20 hover:bg-primary tech-transition text-[10px]"
-                      aria-label="Choose send mode" title="Choose how to send">
-                      ▾
-                    </button>
-                    {showSendMenu && (
-                      <div className="absolute bottom-full right-0 mb-1.5 w-56 rounded-lg border border-border bg-popover shadow-xl z-50 py-1 tech-glass-subtle"
-                        onMouseLeave={() => setShowSendMenu(false)}>
-                        {(["send", "queue", "steer"] as SendMode[]).map((m) => (
-                          <button key={m} type="button"
-                            onClick={() => { setSendMode(m); setShowSendMenu(false); }}
-                            className={`w-full text-left px-3 py-2 text-xs hover:bg-secondary tech-transition ${m === sendMode ? "text-foreground bg-secondary/60" : "text-muted-foreground"}`}>
-                            <div className="flex items-center justify-between">
-                              <span className="font-medium">
-                                {m === "send" ? "↑ Send" : m === "queue" ? "⏱ Queue" : "⤳ Steer"}
-                              </span>
-                              {m === sendMode && <span className="text-emerald-400 text-[10px]">✓</span>}
-                            </div>
-                            <div className="text-muted-foreground mt-0.5 text-[10px]">
-                              {m === "send" ? "Send now (queues if busy)"
-                                : m === "queue" ? "Wait for current reply, then send"
-                                : "Interrupt current reply and send now"}
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ) : (
+                <div className="shrink-0 flex items-stretch gap-0.5 self-end" ref={sendMenuRef}>
+                  {/* Stop button — always visible while loading */}
                   <button type="button" onClick={stopGeneration}
-                    className="shrink-0 self-end w-8 h-8 rounded-lg bg-destructive/20 border border-destructive/40 text-destructive text-xs flex items-center justify-center hover:bg-destructive/30 tech-transition"
-                    aria-label="Stop generation" title="Stop generation">■</button>
-                )
+                    className="h-8 w-8 rounded-lg bg-destructive/20 border border-destructive/40 text-destructive flex items-center justify-center hover:bg-destructive/30 tech-transition"
+                    aria-label="Stop generation" title="Stop generation">
+                    <Square size={14} strokeWidth={2.5} fill="currentColor" />
+                  </button>
+                  {/* Send/Queue/Steer — shown when input has text */}
+                  {input.trim() && (
+                    <>
+                      <button type="submit"
+                        className={`h-8 px-2.5 rounded-lg font-semibold text-xs flex items-center gap-1 tech-transition ${
+                          sendMode === "steer" ? "bg-amber-600 text-white hover:bg-amber-700" :
+                          sendMode === "queue" ? "bg-sky-600 text-white hover:bg-sky-700" :
+                          "bg-primary text-primary-foreground hover:opacity-90"
+                        }`}
+                        aria-label={SEND_MODE_LABELS[sendMode]}
+                        title={`${SEND_MODE_LABELS[sendMode]} (click ▾ to change mode)`}>
+                        {sendMode === "send" ? <ArrowUp size={14} strokeWidth={2.5} /> :
+                         sendMode === "queue" ? <ListOrdered size={14} strokeWidth={2} /> :
+                         <CornerDownRight size={14} strokeWidth={2} />}
+                        <span className="text-[11px] hidden sm:inline">{SEND_MODE_LABELS[sendMode]}</span>
+                      </button>
+                      <button type="button"
+                        onClick={() => setShowSendMenu((v) => !v)}
+                        className={`h-8 w-5 rounded-r-lg flex items-center justify-center tech-transition text-[10px] ${
+                          sendMode === "steer" ? "bg-amber-600/80 text-white hover:bg-amber-700" :
+                          sendMode === "queue" ? "bg-sky-600/80 text-white hover:bg-sky-700" :
+                          "bg-primary/80 text-primary-foreground hover:bg-primary"
+                        }`}
+                        aria-label="Choose send mode" title="Choose how to send">
+                        <ChevronDown size={12} strokeWidth={2.5} />
+                      </button>
+                      {showSendMenu && (
+                        <div className="absolute bottom-full right-0 mb-1.5 w-56 rounded-lg border border-border bg-popover shadow-xl z-50 py-1 tech-glass-subtle"
+                          onMouseLeave={() => setShowSendMenu(false)}>
+                          {(["send", "queue", "steer"] as SendMode[]).map((m) => (
+                            <button key={m} type="button"
+                              onClick={() => { setSendMode(m); setShowSendMenu(false); }}
+                              className={`w-full text-left px-3 py-2 text-xs hover:bg-secondary tech-transition ${m === sendMode ? "text-foreground bg-secondary/60" : "text-muted-foreground"}`}>
+                              <div className="flex items-center justify-between">
+                                <span className="font-medium flex items-center gap-1.5">
+                                  {m === "send" ? <ArrowUp size={12} strokeWidth={2.5} /> :
+                                   m === "queue" ? <ListOrdered size={12} strokeWidth={2} /> :
+                                   <CornerDownRight size={12} strokeWidth={2} />}
+                                  {m === "send" ? "Send" : m === "queue" ? "Queue" : "Steer"}
+                                </span>
+                                {m === sendMode && <span className="text-emerald-400 text-[10px]">✓</span>}
+                              </div>
+                              <div className="text-muted-foreground mt-0.5 text-[10px]">
+                                {m === "send" ? "Send now (queues if busy)"
+                                  : m === "queue" ? "Wait for current reply, then send"
+                                  : "Interrupt current reply and send now"}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
               ) : (
                 <button type="submit" disabled={!input.trim()}
-                  className="shrink-0 self-end w-8 h-8 rounded-lg bg-primary text-primary-foreground font-semibold text-sm flex items-center justify-center disabled:opacity-25 disabled:cursor-not-allowed hover:opacity-90 tech-transition"
-                  aria-label="Send" title="Send message">↑</button>
+                  className="shrink-0 self-end w-8 h-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center disabled:opacity-25 disabled:cursor-not-allowed hover:opacity-90 tech-transition"
+                  aria-label="Send" title="Send message">
+                  <ArrowUp size={16} strokeWidth={2.5} />
+                </button>
               )}
             </div>
 
@@ -1397,23 +1472,26 @@ export default function AgentChat({
                 )}
               </div>
 
-              <div className="ml-auto hidden sm:flex items-center gap-2">
-                {/* Context-window ring — only visible when non-trivial usage */}
-                {contextUsage.pct > 5 && (
-                  <ContextRing
-                    pct={contextUsage.pct}
-                    usedTokens={contextUsage.usedTokens}
-                    totalTokens={contextUsage.totalTokens}
-                    compacting={compacting}
-                  />
-                )}
-                <span className="text-muted-foreground text-[10px]">
-                  {isLoading && sendMode !== "send" && (
-                    <span className="mr-2 text-amber-400">{sendMode === "queue" ? "⏱ Queue" : "⤳ Steer"} mode</span>
-                  )}
-                  <kbd className="text-muted-foreground">⏎</kbd> send · <kbd className="text-muted-foreground">⇧⏎</kbd> newline
+              <span className="w-px h-3.5 bg-secondary/60 shrink-0" />
+
+              {/* Context-window ring — always visible inline */}
+              <ContextRing
+                pct={contextUsage.pct}
+                usedTokens={contextUsage.usedTokens}
+                totalTokens={contextUsage.totalTokens}
+                compacting={compacting}
+                onCompact={handleCompact}
+              />
+
+              {isLoading && sendMode !== "send" && (
+                <span className="text-amber-400 text-[10px] font-medium">
+                  {sendMode === "queue" ? "⏱ Queued" : "⤳ Steering"}
                 </span>
-              </div>
+              )}
+
+              <span className="hidden sm:inline text-muted-foreground text-[10px] ml-auto">
+                <kbd className="text-muted-foreground">⏎</kbd> send · <kbd className="text-muted-foreground">⇧⏎</kbd> newline
+              </span>
             </div>
           </div>
 

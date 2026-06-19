@@ -708,13 +708,15 @@ class ArtifactListResponse(BaseModel):
 
 
 def _discover_agent_workspaces() -> dict[str, Path]:
-    """Return a dict of {agent_name: workspace_path} for all known agents.
+    """Return a dict of {agent_name: workspace_path} for all *live* agents.
 
     Discovery sources (in order):
     1. Static agent registry (``_AGENT_REGISTRY``) — local_path entries.
-    2. Dynamic agent registry (Postgres-backed) — local_path entries.
+    2. Dynamic agent registry (Postgres-backed) — local_path entries
+       filtered to ``status == 'live'`` only.
     3. Agents.json file — local_path entries (legacy fallback).
-    4. Clone-cache directory — {agents_clone_dir}/repos/*.
+    4. Clone-cache directory — only directories matching a registered
+       live agent name (cross-referenced with sources 1-3).
     """
     workspaces: dict[str, Path] = {}
 
@@ -731,17 +733,23 @@ def _discover_agent_workspaces() -> dict[str, Path]:
     except Exception:  # noqa: BLE001
         pass
 
-    # ── 2. Dynamic registry (Postgres-backed) ─────────────────────────────
+    # ── 2. Dynamic registry (Postgres-backed) — live agents only ──────────
+    live_dynamic_names: set[str] = set()
     try:
         from gateway.routes.agent import \
             _load_dynamic_agents  # noqa: PLC0415
         for entry in _load_dynamic_agents():
             name = entry.get("name")
+            status = entry.get("status", "live")
+            if status != "live":
+                continue
             lp = entry.get("local_path")
-            if name and lp:
-                p = Path(lp)
-                if p.exists() and name not in workspaces:
-                    workspaces[name] = p
+            if name:
+                live_dynamic_names.add(name)
+                if lp:
+                    p = Path(lp)
+                    if p.exists() and name not in workspaces:
+                        workspaces[name] = p
     except Exception:  # noqa: BLE001
         pass
 
@@ -763,10 +771,11 @@ def _discover_agent_workspaces() -> dict[str, Path]:
                     p = Path(lp)
                     if p.exists():
                         workspaces[name] = p
+                        live_dynamic_names.add(name)
     except Exception:  # noqa: BLE001
         pass
 
-    # ── 4. Clone-cache directory ────────────────────────────────────────
+    # ── 4. Clone-cache directory — only for registered live agents ──────
     try:
         from acb_common import get_settings  # noqa: PLC0415
         settings = get_settings()
@@ -776,8 +785,10 @@ def _discover_agent_workspaces() -> dict[str, Path]:
         if clone_root.is_dir():
             for child in clone_root.iterdir():
                 if child.is_dir() and not child.name.startswith("."):
-                    # Don't override local_path entries.
-                    if child.name not in workspaces:
+                    if (
+                        child.name in live_dynamic_names
+                        and child.name not in workspaces
+                    ):
                         workspaces[child.name] = child
     except Exception:  # noqa: BLE001
         pass

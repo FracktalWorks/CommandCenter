@@ -5,7 +5,7 @@
  *
  * Agents are the top-level folders.  Inside each agent, files and folders
  * are shown together like a file explorer (Google Drive / VS Code style).
- * Double-click a folder to navigate in; breadcrumbs let you navigate back.
+ * Click a folder to navigate in; breadcrumbs let you navigate back.
  * Grid / List views change how the current directory's contents appear.
  */
 
@@ -48,6 +48,7 @@ interface ArtifactEntry {
 
 interface AgentOption {
   name: string;
+  status?: string;
 }
 
 type ViewMode = "grid" | "list";
@@ -250,8 +251,8 @@ function FolderCard({ item, onNavigate, index }: { item: ExplorerItem; onNavigat
     <div
       className="group relative rounded-xl border border-border bg-card hover:border-amber-500/30 hover:shadow-lg tech-transition overflow-hidden animate-fade-in cursor-pointer"
       style={{ animationDelay: `${Math.min(index * 40, 600)}ms` }}
-      onDoubleClick={onNavigate}
-      title={`${item.name}\nDouble-click to open`}
+      onClick={onNavigate}
+      title={`${item.name}\nClick to open`}
     >
       <div className="flex items-center justify-center h-28 bg-amber-500/5 border-b border-border/30">
         <FolderClosed size={40} className="text-amber-400/70" />
@@ -273,8 +274,7 @@ function ListRow({ item, onNavigate, onView, index }: {
     <div
       className="grid grid-cols-[1fr_80px_80px] sm:grid-cols-[1fr_100px_100px] gap-x-3 px-4 py-2 border-b border-border/40 last:border-b-0 hover:bg-secondary/20 tech-transition cursor-pointer animate-fade-in"
       style={{ animationDelay: `${Math.min(index * 20, 400)}ms` }}
-      onDoubleClick={item.isDir ? onNavigate : undefined}
-      onClick={item.isDir ? undefined : onView}
+      onClick={() => { if (item.isDir) onNavigate(); else onView(); }}
     >
       <div className="flex items-center gap-2.5 min-w-0">
         {item.isDir
@@ -341,8 +341,16 @@ export default function ArtifactsPage() {
   useEffect(() => { fetchArtifacts(); }, [fetchArtifacts]);
 
   const availableAgents = useMemo(() => {
-    return Array.from(new Set(artifacts.map((a) => a.agent_name))).sort();
-  }, [artifacts]);
+    // Only show agents that are registered AND active (status === "live").
+    // This prevents stale clone directories and deactivated agents from
+    // appearing as duplicate agent folders on the artifacts page.
+    const liveNames = new Set(
+      agents.filter((a) => !a.status || a.status === "live").map((a) => a.name)
+    );
+    return Array.from(new Set(artifacts.map((a) => a.agent_name)))
+      .filter((name) => liveNames.has(name))
+      .sort();
+  }, [artifacts, agents]);
 
   const filteredFiles = useMemo(() => {
     let list = artifacts.filter((a) => !a.is_dir);

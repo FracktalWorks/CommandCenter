@@ -839,12 +839,50 @@ async def register_agent(
     return entry
 
 
+def _cleanup_agent_workspace(agent_name: str) -> bool:
+    """Delete the clone-cache directory for *agent_name*.
+
+    Returns ``True`` if the directory existed and was removed, ``False``
+    if it didn't exist.  Errors (permissions, etc.) are logged and swallowed
+    so cleanup failures don't block the API response.
+    """
+    import shutil as _shutil  # noqa: PLC0415
+
+    try:
+        from acb_common import get_settings  # noqa: PLC0415
+        settings = get_settings()
+        clone_root = Path(
+            getattr(settings, "agents_clone_dir", "/tmp/acb_agents")
+        ) / "repos"
+        target = clone_root / agent_name
+        if target.is_dir():
+            _shutil.rmtree(target, ignore_errors=True)
+            _log.info(
+                "agent.workspace_cleaned",
+                name=agent_name,
+                path=str(target),
+            )
+            return True
+        return False
+    except Exception as exc:
+        _log.warning(
+            "agent.workspace_cleanup_failed",
+            name=agent_name,
+            error=str(exc),
+        )
+        return False
+
+
 @router.delete("/{name}", summary="Remove a user-registered agent")
 async def remove_agent(
     name: str,
     user: UserContext = Depends(get_current_user),
 ) -> dict:
-    """Delete a dynamic agent from agents.json.  Built-in agents cannot be removed."""
+    """Delete a dynamic agent from the registry and clean up its workspace.
+
+    Built-in agents cannot be removed.  The agent's clone directory on disk
+    is also deleted so stale artifacts don't linger in the file browser.
+    """
     if name in _KNOWN_AGENTS:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -853,8 +891,36 @@ async def remove_agent(
     dynamic = _load_dynamic_agents()
     new_dynamic = [a for a in dynamic if a["name"] != name]
     if len(new_dynamic) == len(dynamic):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {name!r} not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent {name!r} not found.",
+        )
+
+    # ── Delete the DB row (not just stop upserting) ──────────────────
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+        with get_session() as s:
+            s.execute(
+                text("DELETE FROM dynamic_agents WHERE name = :n"),
+                {"n": name},
+            )
+            s.commit()
+    except Exception as exc:
+        _log.warning(
+            "agent.db_delete_failed",
+            name=name,
+            error=str(exc),
+        )
+
     _save_dynamic_agents(new_dynamic)
+
+    # ── Clean up workspace files on disk ─────────────────────────────
+    import asyncio as _asyncio  # noqa: PLC0415
+    await _asyncio.get_event_loop().run_in_executor(
+        None, _cleanup_agent_workspace, name,
+    )
+
     _log.info("agent.removed", name=name, actor=user.email)
     return {"deleted": name}
 
@@ -873,7 +939,12 @@ async def patch_agent(
     req: PatchAgentRequest,
     user: UserContext = Depends(get_current_user),
 ) -> dict:
-    """Partially update a dynamic agent's metadata in agents.json."""
+    """Partially update a dynamic agent's metadata.
+
+    When an agent's status is changed from ``"live"`` to anything else,
+    its workspace files on disk are automatically cleaned up so stale
+    artifacts don't linger in the file browser.
+    """
     if name in _KNOWN_AGENTS:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -882,7 +953,11 @@ async def patch_agent(
     dynamic = _load_dynamic_agents()
     entry = next((a for a in dynamic if a["name"] == name), None)
     if entry is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {name!r} not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent {name!r} not found.",
+        )
+    prev_status = entry.get("status", "live")
     if req.description is not None:
         entry["description"] = req.description
     if req.tags is not None:
@@ -894,6 +969,18 @@ async def patch_agent(
     if req.status is not None:
         entry["status"] = req.status
     _save_dynamic_agents(dynamic)
+
+    # ── Clean up workspace when deactivating ─────────────────────────
+    if (
+        req.status is not None
+        and prev_status == "live"
+        and req.status != "live"
+    ):
+        import asyncio as _asyncio  # noqa: PLC0415
+        await _asyncio.get_event_loop().run_in_executor(
+            None, _cleanup_agent_workspace, name,
+        )
+
     _log.info("agent.patched", name=name, actor=user.email)
     return entry
 

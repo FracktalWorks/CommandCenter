@@ -7,7 +7,7 @@
  *   sessionId        — active chat session (used to fetch /api/agent/workspace/{id})
  *   open             — controlled open/closed state
  *   onToggle         — called when the collapse chevron is clicked
- *   onFileOpen       — called when the user double-clicks a file (passes FileEntry)
+ *   onFileOpen       — called when the user clicks a file (passes FileEntry)
  *   artifactUpdates  — new FileEntry objects pushed in from SSE (ST-AV-06); merged into tree
  */
 
@@ -183,8 +183,8 @@ function TreeNodeRow({
     <div
       className="group flex items-center gap-1.5 rounded px-1 py-0.5 text-xs text-muted-foreground hover:bg-secondary cursor-pointer transition-colors"
       style={{ paddingLeft: paddingLeft + 14 }}
-      onDoubleClick={() => onFileOpen(entry)}
-      title={`${entry.path} · ${formatBytes(entry.size)}${deletable ? "\nClick 🗑 to delete" : "\nProtected file"}\nDouble-click to open`}
+      onClick={() => onFileOpen(entry)}
+      title={`${entry.path} · ${formatBytes(entry.size)}${deletable ? "\nClick 🗑 to delete" : "\nProtected file"}\nClick to open`}
     >
       {fileIcon(entry)}
       <span className="flex-1 truncate">{entry.name}</span>

@@ -1595,10 +1595,17 @@ async def oauth_callback(
     state: str = Query(...),
 ):
     """Handle OAuth callback — exchange code for tokens and redirect to workbench."""
-    workbench_url = os.environ.get(
-        "WORKBENCH_PUBLIC_URL",
-        os.environ.get("GATEWAY_PUBLIC_URL", "http://localhost:8000").replace(":8000", ":3001"),
-    )
+    gateway_public = os.environ.get("GATEWAY_PUBLIC_URL", "http://localhost:8000")
+    workbench_url = os.environ.get("WORKBENCH_PUBLIC_URL")
+    if not workbench_url:
+        # Auto-derive workbench URL from gateway: replace "api." → "" for subdomain,
+        # or swap :8000 → :3001 for local dev.
+        if gateway_public == "http://localhost:8000":
+            workbench_url = "http://localhost:3001"
+        elif ".a" in gateway_public or "api." in gateway_public:
+            workbench_url = gateway_public.replace("api.", "", 1)
+        else:
+            workbench_url = gateway_public
 
     # Build the workbench callback page URL
     callback_page = f"{workbench_url}/email/oauth/callback"

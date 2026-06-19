@@ -40,6 +40,18 @@ if grep -qE '^GRAPHITI_ENABLED=true' "$ENV_FILE" 2>/dev/null; then
   say "Disabled GRAPHITI (Neo4j) — saves ~500MB RAM; re-enable after VPS upgrade"
 fi
 
+say "Ensuring OAuth env vars"
+for _var in MICROSOFT_TENANT_ID AUTH_MICROSOFT_ENTRA_ID_TENANT GATEWAY_PUBLIC_URL; do
+  if ! grep -qE "^${_var}=" "$ENV_FILE" 2>/dev/null; then
+    case "$_var" in
+      MICROSOFT_TENANT_ID)             echo "MICROSOFT_TENANT_ID=3a83c19d-ef37-4934-b61a-0d33750ca82e" >> "$ENV_FILE" ;;
+      AUTH_MICROSOFT_ENTRA_ID_TENANT)   echo "AUTH_MICROSOFT_ENTRA_ID_TENANT=3a83c19d-ef37-4934-b61a-0d33750ca82e" >> "$ENV_FILE" ;;
+      GATEWAY_PUBLIC_URL)              echo "GATEWAY_PUBLIC_URL=https://api.commandcenter.fracktal.in" >> "$ENV_FILE" ;;
+    esac
+    printf "    + added %s to .env\n" "$_var"
+  fi
+done
+
 say "Booting stack (core only — memory profile disabled for 4GB VPS)"
 set -a && source /opt/acb/app/.env && set +a
 docker compose -f infra/docker-compose.yml --profile core up -d --remove-orphans

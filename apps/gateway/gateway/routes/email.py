@@ -1546,6 +1546,13 @@ async def oauth_authorize(
             or os.environ.get("MSFT_OAUTH_CLIENT_ID", "")
             or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_ID", "")
         )
+        # Tenant ID: use MICROSOFT_TENANT_ID (or AUTH_MICROSOFT_TENANT_ID) for
+        # single-tenant apps. Falls back to 'common' for multi-tenant apps.
+        tenant_id = (
+            os.environ.get("MICROSOFT_TENANT_ID", "")
+            or os.environ.get("AUTH_MICROSOFT_TENANT_ID", "")
+            or "common"
+        )
         if not client_id:
             raise HTTPException(
                 status_code=400,
@@ -1556,7 +1563,7 @@ async def oauth_authorize(
                 ),
             )
         auth_url = (
-            "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+            f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/authorize"
             f"?client_id={client_id}"
             "&response_type=code"
             "&scope=offline_access+https://graph.microsoft.com/Mail.ReadWrite"
@@ -1754,9 +1761,16 @@ async def _exchange_msft_token(code: str, redirect_uri: str) -> dict[str, Any]:
         or os.environ.get("MSFT_OAUTH_CLIENT_SECRET", "")
         or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_SECRET", "")
     )
+    # Tenant ID: use MICROSOFT_TENANT_ID (or AUTH_MICROSOFT_TENANT_ID) for
+    # single-tenant apps. Falls back to 'common' for multi-tenant apps.
+    tenant_id = (
+        os.environ.get("MICROSOFT_TENANT_ID", "")
+        or os.environ.get("AUTH_MICROSOFT_TENANT_ID", "")
+        or "common"
+    )
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+            f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
             data={
                 "client_id": client_id,
                 "client_secret": client_secret,

@@ -281,6 +281,7 @@ _SETUP_GUIDES: dict[str, dict[str, Any]] = {
         "env_vars": [
             {"key": "MSFT_OAUTH_CLIENT_ID", "label": "Application (client) ID (optional — falls back to AUTH_MICROSOFT_ENTRA_ID_ID)", "sensitive": False},
             {"key": "MSFT_OAUTH_CLIENT_SECRET", "label": "Client Secret (optional — falls back to AUTH_MICROSOFT_ENTRA_ID_SECRET)", "sensitive": True},
+            {"key": "MICROSOFT_TENANT_ID", "label": "Directory (tenant) ID — required for single-tenant apps. Copy from Azure Overview tab. Leave blank for multi-tenant.", "sensitive": False},
         ],
     },
     "google-sheets": {

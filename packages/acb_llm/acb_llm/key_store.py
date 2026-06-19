@@ -337,6 +337,7 @@ class ProviderKeyStore:
             "microsoft-oauth": {
                 "msft_oauth_client_id": "MSFT_OAUTH_CLIENT_ID",
                 "msft_oauth_client_secret": "MSFT_OAUTH_CLIENT_SECRET",
+                "microsoft_tenant_id": "MICROSOFT_TENANT_ID",
             },
         }
 

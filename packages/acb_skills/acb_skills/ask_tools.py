@@ -239,7 +239,6 @@ async def ask_questions(questions: str) -> str:
         _tid = _stream_relay_thread_id.get(None)
         if _tid:
             import asyncio as _asyncio
-            import json as _json
             import uuid as _uuid
 
             _request_id = _uuid.uuid4().hex

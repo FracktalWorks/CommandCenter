@@ -599,8 +599,12 @@ export default function AgentChat({
       // Clear any stale HITL state when a run completes — a finished
       // run can never be waiting on input anymore.
       setConfirmation((prev) => prev ? null : prev);
-      setElicitation((prev) => prev ? null : prev);
-      setUserInput((prev) => prev ? null : prev);
+      // Only clear elicitation when the agent was BLOCKED on a Future
+      // (requestId present, MAF Tier 2 path).  For the Copilot SDK
+      // non-blocking path (no requestId), the card must persist until
+      // the user submits — clearing here makes it vanish mid-interaction.
+      setElicitation((prev) => prev && prev.requestId ? null : prev);
+      setUserInput((prev) => prev && prev.requestId ? null : prev);
     },
   });
 

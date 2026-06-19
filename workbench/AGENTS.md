@@ -30,6 +30,10 @@ Control Plane (Next.js browser UI) and local development tools.
 - Agent-generated files (artefacts) are proxied via /api/agent/workspace/{sessionId}/file?path=
 - Image URLs in markdown are rewritten through the workspace file proxy automatically
 - Agents SHOULD write generated files to .tmp/ or outputs/ for discoverability
+- **Design System**: ALL UI must follow `control_plane/DESIGN_SYSTEM.md`. Use shared
+  components from `src/components/` (Tabs, FilterPills, etc.) — never inline ad-hoc
+  tab bars, filter pills, or page headers. Use semantic color tokens from
+  `globals.css` — never arbitrary hex values.
 
 ## Thinking timeline (VS Code parity)
 - ThinkingContainer.tsx renders reasoning text and tool calls as ONE

@@ -26,3 +26,18 @@ headless, self-mutating multi-agent platform on MAF (Microsoft Agent Framework).
 2. Follow the DOX chain to the target file
 3. Read the nearest `AGENTS.md` for local rules
 4. Run `uv run python -m pytest tests/unit/ -x -q` after changes
+
+## Control Plane UI (Next.js)
+
+When editing any file under `workbench/control_plane/`:
+
+- **Read** `workbench/control_plane/DESIGN_SYSTEM.md` first — it defines the
+  unified UI/UX standards (colors, typography, spacing, component patterns).
+- **Use shared components** from `src/components/`:
+  - `Tabs` — for tab navigation (segmented or underline variants)
+  - `FilterPills` — for filter/chip-style list filtering
+  - Never inline ad-hoc tab bars, filter pills, or page headers.
+- **Use semantic color tokens** (`bg-primary`, `text-foreground`, `border-border`,
+  etc.) — never arbitrary hex values or `bg-[#1a1b1e]`.
+- **Match the page layout pattern**: header → tabs/filters → content.
+- Run `npx next build` from `workbench/control_plane/` to verify after changes.

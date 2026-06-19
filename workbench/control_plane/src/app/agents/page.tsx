@@ -38,6 +38,7 @@ import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { MutationEntry } from "@/app/api/agent/mutations/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 import GitHubDeviceConnect from "@/components/GitHubDeviceConnect";
+import FilterPills from "@/components/FilterPills";
 
 // ---------------------------------------------------------------------------
 // Pending commits panel (GitHub Copilot agents only)
@@ -1412,18 +1413,12 @@ export default function AgentsPage() {
         </div>
       </div>
 
-      <div className="flex items-center gap-1 px-3 sm:px-4 py-2 border-b border-border shrink-0 overflow-x-auto scrollbar-hide">
-        {FILTERS.map((f) => (
-          <button key={f.id} onClick={() => setFilter(f.id)}
-            className={`text-xs px-2.5 py-1 rounded-full whitespace-nowrap shrink-0 transition-colors ${
-              filter === f.id
-                ? "bg-primary text-primary-foreground font-medium"
-                : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-            }`}>
-            {f.label} <span className="opacity-60">{f.count}</span>
-          </button>
-        ))}
-      </div>
+      {/* Filter pills — shared FilterPills component */}
+      <FilterPills
+        items={FILTERS}
+        activeId={filter}
+        onChange={(id) => setFilter(id as typeof filter)}
+      />
 
       <div className="flex flex-1 overflow-hidden relative">
         <div className={`flex-1 p-4 overflow-y-auto ${selectedAgent ? "sm:min-w-0" : ""}`}>

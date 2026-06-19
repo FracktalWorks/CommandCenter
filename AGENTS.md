@@ -87,6 +87,10 @@ failure via isolated Copilot SDK sandboxes.
 - Tests in tests/unit/ and tests/integration/ -- pytest with asyncio
 - CI/CD via GitHub Actions: deploy.yml (push-to-deploy on main), pr-check.yml (lint+test on PRs)
 - Deploy target: Hostinger KVM 4 VPS (Ubuntu 24.04 + Docker)
+- **Control Plane UI**: All frontend work MUST follow `workbench/control_plane/DESIGN_SYSTEM.md`.
+  Use shared components (`Tabs`, `FilterPills`, etc.) from `src/components/` — never inline
+  ad-hoc tab bars, filter pills, or page headers. Use semantic Tailwind color tokens
+  (`bg-primary`, `text-foreground`, `border-border`) — never arbitrary hex values.
 - Agent-generated artefacts (images, reports, PDFs) MUST be written to
   `inputs/`, `outputs/`, or `agent-data/` within the agent workspace so the
   Control Plane file browser and inline chat cards can discover them.  These

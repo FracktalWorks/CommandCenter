@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { LLMConfig, ProviderInfo, ModelInfo } from "@/lib/model-types";
 import { PROVIDER_GUIDES, PROVIDER_COLOURS, PROVIDER_ICONS } from "@/lib/model-types";
+import Tabs from "@/components/Tabs";
 
 // ── Icons ───────────────────────────────────────────────────────────────────
 
@@ -271,17 +272,17 @@ export default function ModelsPage() {
         </div>
       )}
 
-      {/* Tabs */}
-      <div className="flex items-center gap-0.5 px-4 sm:px-6 pt-3 pb-3 border-b border-border shrink-0">
-        <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-secondary/50">
-          {(["providers", "models", "tiers"] as const).map((t) => (
-            <button key={t} onClick={() => { setTab(t); setSelectedProvider(null); setEditingTier(null); }}
-              className={`px-4 py-1.5 rounded-md text-xs font-medium tech-transition ${tab === t ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
-              {t === "providers" ? "Providers" : t === "models" ? "Models" : "Tiers"}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* Tabs — shared Tabs component (segmented variant) */}
+      <Tabs
+        tabs={[
+          { id: "providers", label: "Providers" },
+          { id: "models", label: "Models" },
+          { id: "tiers", label: "Tiers" },
+        ]}
+        activeTab={tab}
+        onTabChange={(t) => { setTab(t as typeof tab); setSelectedProvider(null); setEditingTier(null); }}
+        variant="segmented"
+      />
 
       {loading ? (
         <div className="flex-1 flex items-center justify-center"><span className="w-5 h-5 rounded-full border-2 border-muted border-t-primary animate-spin mr-2.5" /><span className="text-sm text-muted-foreground">Loading…</span></div>

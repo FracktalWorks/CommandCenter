@@ -43,6 +43,8 @@ import {
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 import type { AgentEntry } from "@/app/api/agent/list/route";
 import GitHubAccountBadge from "@/components/GitHubAccountBadge";
+import Tabs from "@/components/Tabs";
+import type { TabDef } from "@/components/Tabs";
 
 // ---------------------------------------------------------------------------
 // Tab navigation
@@ -50,7 +52,7 @@ import GitHubAccountBadge from "@/components/GitHubAccountBadge";
 
 type TabId = "apis" | "email" | "mcps" | "plugins";
 
-const TABS: { id: TabId; label: string; icon: React.ElementType; note: string }[] = [
+const TABS: TabDef[] = [
   { id: "apis",    label: "APIs",    icon: Zap,    note: "REST API credentials & discovery" },
   { id: "email",   label: "Email",   icon: Mail,   note: "Email account connections" },
   { id: "mcps",    label: "MCPs",    icon: Server, note: "Model Context Protocol servers" },
@@ -108,18 +110,33 @@ const CAT_COLORS: Record<string, string> = {
 };
 
 const KNOWN_DOMAINS: Record<string, string> = {
-  "zoho-crm":      "zoho.com",
-  "apollo":        "apollo.io",
-  "google-maps":   "google.com",
-  "instantly":     "instantly.ai",
-  "gmail":         "google.com",
-  "gmail-send":    "google.com",
-  "clickup":       "clickup.com",
-  "github":        "github.com",
-  "serpapi":       "serpapi.com",
-  "apify":         "apify.com",
-  "anymailfinder": "anymailfinder.com",
-  "google-sheets": "google.com",
+  "zoho-crm":        "zoho.com",
+  "apollo":          "apollo.io",
+  "google-maps":     "google.com",
+  "instantly":       "instantly.ai",
+  "gmail":           "mail.google.com",
+  "gmail-send":      "mail.google.com",
+  "gmail-oauth":     "mail.google.com",
+  "microsoft-oauth": "outlook.office.com",
+  "clickup":         "clickup.com",
+  "smtp":            "",
+  "github":          "github.com",
+  "serpapi":         "serpapi.com",
+  "apify":           "apify.com",
+  "anymailfinder":   "anymailfinder.com",
+  "google-sheets":   "sheets.google.com",
+};
+
+/** Direct logo URLs for services where domain-based favicon/clearbit heuristics fail.
+ *  These are official or reliable CDN-hosted SVG/PNG logos. */
+const KNOWN_LOGOS: Record<string, string> = {
+  // Google services — the favicon for mail.google.com returns the generic Google "G",
+  // so we use Gmail's own static icon.
+  "gmail":         "https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico",
+  "gmail-send":    "https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico",
+  "gmail-oauth":   "https://ssl.gstatic.com/ui/v1/icons/mail/rfr/gmail.ico",
+  // Microsoft / Outlook
+  "microsoft-oauth": "https://outlook.live.com/favicon.ico",
 };
 
 const DISCOVER_SUGGESTIONS = [
@@ -155,8 +172,14 @@ function ServiceLogo({
 }: {
   service?: string; label: string; domain?: string; category: string; size?: "sm" | "md" | "lg";
 }) {
+  // 1) Direct known logo (bypasses domain heuristics for Gmail, Outlook, etc.)
+  const knownLogo = service ? KNOWN_LOGOS[service] : undefined;
+  // 2) Domain-based fallbacks (Google favicons → Clearbit → DuckDuckGo)
   const resolvedDomain = KNOWN_DOMAINS[service ?? ""] ?? domain ?? "";
-  const urls = logoUrls(resolvedDomain);
+  const domainUrls = logoUrls(resolvedDomain);
+  // Combine: try the known logo first, then domain-based fallbacks
+  const urls = knownLogo ? [knownLogo, ...domainUrls] : domainUrls;
+
   const [urlIdx, setUrlIdx] = useState(0);
   const px = size === "sm" ? 24 : size === "lg" ? 40 : 32;
   const currentUrl = urls[urlIdx];
@@ -984,9 +1007,12 @@ function EmailTab() {
                 className="p-4 rounded-xl border border-border bg-card hover:border-primary/30 transition-colors">
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-full bg-primary/15 text-primary flex items-center justify-center text-xs font-bold">
-                      {account.provider === "gmail" ? "G" : account.provider === "microsoft" ? "M" : "I"}
-                    </div>
+                    <ServiceLogo
+                      service={account.provider === "gmail" ? "gmail-oauth" : account.provider === "microsoft" ? "microsoft-oauth" : undefined}
+                      label={account.provider}
+                      category={account.provider === "gmail" ? "communication" : account.provider === "microsoft" ? "communication" : "email"}
+                      size="md"
+                    />
                     <div>
                       <div className="text-sm font-medium text-foreground">{account.label || account.emailAddress}</div>
                       <div className="text-[11px] text-muted-foreground">{account.emailAddress}</div>
@@ -1075,7 +1101,7 @@ function AddEmailModal({
             onClick={() => onConnect("gmail")}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-border hover:border-red-400/40 hover:bg-red-500/5 transition-colors text-left"
           >
-            <span className="w-8 h-8 rounded-full bg-red-500/15 text-red-400 flex items-center justify-center text-xs font-bold">G</span>
+            <ServiceLogo service="gmail-oauth" label="Gmail" category="communication" size="md" />
             <div>
               <div className="text-sm font-medium text-foreground">Google / Gmail</div>
               <div className="text-[11px] text-muted-foreground">Sign in with Google OAuth</div>
@@ -1085,7 +1111,7 @@ function AddEmailModal({
             onClick={() => onConnect("microsoft")}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-border hover:border-blue-400/40 hover:bg-blue-500/5 transition-colors text-left"
           >
-            <span className="w-8 h-8 rounded-full bg-blue-500/15 text-blue-400 flex items-center justify-center text-xs font-bold">M</span>
+            <ServiceLogo service="microsoft-oauth" label="Outlook" category="communication" size="md" />
             <div>
               <div className="text-sm font-medium text-foreground">Microsoft / Outlook</div>
               <div className="text-[11px] text-muted-foreground">Sign in with Microsoft OAuth</div>
@@ -1802,24 +1828,13 @@ export default function IntegrationsPage() {
         </div>
       </div>
 
-      {/* Tab bar */}
-      <div className="flex items-center gap-1 px-4 pt-3 pb-0 border-b border-border shrink-0">
-        {TABS.map((t) => {
-          const Icon = t.icon;
-          const active = tab === t.id;
-          return (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-t-lg border-b-2 transition-colors ${
-                active
-                  ? "border-primary text-foreground bg-primary/5"
-                  : "border-transparent text-muted-foreground hover:text-foreground hover:bg-secondary/50"
-              }`}>
-              <Icon className="w-3.5 h-3.5" />
-              {t.label}
-            </button>
-          );
-        })}
-      </div>
+      {/* Tab bar — shared Tabs component (underline variant) */}
+      <Tabs
+        tabs={TABS}
+        activeTab={tab}
+        onTabChange={(id) => setTab(id as TabId)}
+        variant="underline"
+      />
 
       {/* Tab content */}
       <div className="flex flex-col flex-1 overflow-hidden">

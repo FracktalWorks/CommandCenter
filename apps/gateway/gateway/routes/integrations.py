@@ -231,6 +231,46 @@ _SETUP_GUIDES: dict[str, dict[str, Any]] = {
             {"key": "ANYMAILFINDER_API_KEY", "label": "API Key", "sensitive": True},
         ],
     },
+    "gmail-oauth": {
+        "label": "Gmail OAuth (user sign-in)",
+        "description": "Let users connect their personal Gmail accounts via Google sign-in. Required for the Email app.",
+        "setup_url": "https://console.cloud.google.com/apis/credentials",
+        "docs_url": "https://developers.google.com/gmail/api/guides/oauth-installed-app",
+        "instructions": (
+            "1. Go to Google Cloud Console → APIs & Services → Credentials.\n"
+            "2. Click 'Create Credentials' → 'OAuth client ID'.\n"
+            "3. Choose 'Web application'.\n"
+            "4. Add Authorized redirect URI:\n"
+            "   https://api.commandcenter.fracktal.in/email/oauth/gmail/callback\n"
+            "   (or your gateway's public URL).\n"
+            "5. Copy the Client ID and Client Secret below.\n"
+            "6. Also enable the Gmail API under 'Enabled APIs & Services'."
+        ),
+        "env_vars": [
+            {"key": "GMAIL_OAUTH_CLIENT_ID", "label": "Client ID", "sensitive": False},
+            {"key": "GMAIL_OAUTH_CLIENT_SECRET", "label": "Client Secret", "sensitive": True},
+        ],
+    },
+    "microsoft-oauth": {
+        "label": "Microsoft OAuth (user sign-in)",
+        "description": "Let users connect their Outlook / Microsoft 365 accounts via Microsoft sign-in. Required for the Email app.",
+        "setup_url": "https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade",
+        "docs_url": "https://learn.microsoft.com/en-us/graph/auth-v2-user",
+        "instructions": (
+            "1. Go to Azure Portal → App registrations → New registration.\n"
+            "2. Name: 'CommandCenter Email'. Supported account types: 'Any organizational directory and personal Microsoft accounts'.\n"
+            "3. Add Redirect URI (Web):\n"
+            "   https://api.commandcenter.fracktal.in/email/oauth/microsoft/callback\n"
+            "4. Click 'Register', then copy the Application (client) ID below.\n"
+            "5. Go to 'Certificates & secrets' → New client secret, copy it below.\n"
+            "6. Under 'API Permissions', add Microsoft Graph → Delegated:\n"
+            "   Mail.ReadWrite, User.Read"
+        ),
+        "env_vars": [
+            {"key": "MSFT_OAUTH_CLIENT_ID", "label": "Application (client) ID", "sensitive": False},
+            {"key": "MSFT_OAUTH_CLIENT_SECRET", "label": "Client Secret", "sensitive": True},
+        ],
+    },
     "google-sheets": {
         "label": "Google Sheets",
         "description": "Read and write Google Sheets for data export and reporting.",
@@ -255,8 +295,10 @@ _SETUP_GUIDES: dict[str, dict[str, Any]] = {
 # ---------------------------------------------------------------------------
 
 _GUIDE_CATEGORIES: dict[str, str] = {
-    "github":         "core",
-    "zoho-crm":       "crm",
+    "github":           "core",
+    "gmail-oauth":      "communication",
+    "microsoft-oauth":  "communication",
+    "zoho-crm":         "crm",
     "apollo":         "prospecting",
     "google-maps":    "prospecting",
     "instantly":      "email",
@@ -288,8 +330,10 @@ def _is_configured(service_name: str, settings: Any) -> bool:
         "apollo":        lambda s: bool(s.apollo_api_key),
         "google-maps":   lambda s: bool(s.google_maps_api_key),
         "instantly":     lambda s: bool(s.instantly_api_key),
-        "gmail":         lambda s: bool(s.gmail_sa_json_path),
-        "gmail-send":    lambda s: bool(s.gmail_sa_json_path),
+        "gmail":           lambda s: bool(s.gmail_sa_json_path),
+        "gmail-send":      lambda s: bool(s.gmail_sa_json_path),
+        "gmail-oauth":     lambda s: bool(s.gmail_oauth_client_id and s.gmail_oauth_client_secret),
+        "microsoft-oauth": lambda s: bool(s.msft_oauth_client_id and s.msft_oauth_client_secret),
         "clickup":       lambda s: bool(s.clickup_api_token),
         "smtp":          lambda s: bool(s.smtp_host and s.smtp_username),
         "github":        lambda s: bool(s.github_token),

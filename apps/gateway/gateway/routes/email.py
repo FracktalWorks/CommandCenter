@@ -1517,11 +1517,16 @@ async def oauth_authorize(
     redirect_uri = _build_redirect_uri(provider)
 
     if provider == "gmail":
-        client_id = os.environ.get("GMAIL_OAUTH_CLIENT_ID", "")
+        settings = get_settings()
+        client_id = settings.gmail_oauth_client_id or os.environ.get("GMAIL_OAUTH_CLIENT_ID", "")
         if not client_id:
             raise HTTPException(
-                status_code=500,
-                detail="GMAIL_OAUTH_CLIENT_ID not configured"
+                status_code=400,
+                detail=(
+                    "Gmail OAuth is not configured. Go to Integrations → APIs → "
+                    "'Gmail OAuth' and enter your Google Cloud OAuth client ID "
+                    "and secret. Instructions are provided there."
+                ),
             )
         auth_url = (
             "https://accounts.google.com/o/oauth2/v2/auth"
@@ -1534,11 +1539,16 @@ async def oauth_authorize(
             "&prompt=consent"
         )
     elif provider == "microsoft":
-        client_id = os.environ.get("MSFT_OAUTH_CLIENT_ID", "")
+        settings = get_settings()
+        client_id = settings.msft_oauth_client_id or os.environ.get("MSFT_OAUTH_CLIENT_ID", "")
         if not client_id:
             raise HTTPException(
-                status_code=500,
-                detail="MSFT_OAUTH_CLIENT_ID not configured"
+                status_code=400,
+                detail=(
+                    "Microsoft OAuth is not configured. Go to Integrations → APIs → "
+                    "'Microsoft OAuth' and enter your Azure App client ID "
+                    "and secret. Instructions are provided there."
+                ),
             )
         auth_url = (
             "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
@@ -1707,12 +1717,15 @@ def _build_redirect_uri(provider: str) -> str:
 
 async def _exchange_gmail_token(code: str, redirect_uri: str) -> dict[str, Any]:
     """Exchange authorization code for Gmail OAuth tokens."""
+    settings = get_settings()
+    client_id = settings.gmail_oauth_client_id or os.environ.get("GMAIL_OAUTH_CLIENT_ID", "")
+    client_secret = settings.gmail_oauth_client_secret or os.environ.get("GMAIL_OAUTH_CLIENT_SECRET", "")
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             "https://oauth2.googleapis.com/token",
             data={
-                "client_id": os.environ.get("GMAIL_OAUTH_CLIENT_ID", ""),
-                "client_secret": os.environ.get("GMAIL_OAUTH_CLIENT_SECRET", ""),
+                "client_id": client_id,
+                "client_secret": client_secret,
                 "code": code,
                 "redirect_uri": redirect_uri,
                 "grant_type": "authorization_code",
@@ -1724,12 +1737,15 @@ async def _exchange_gmail_token(code: str, redirect_uri: str) -> dict[str, Any]:
 
 async def _exchange_msft_token(code: str, redirect_uri: str) -> dict[str, Any]:
     """Exchange authorization code for Microsoft OAuth tokens."""
+    settings = get_settings()
+    client_id = settings.msft_oauth_client_id or os.environ.get("MSFT_OAUTH_CLIENT_ID", "")
+    client_secret = settings.msft_oauth_client_secret or os.environ.get("MSFT_OAUTH_CLIENT_SECRET", "")
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             "https://login.microsoftonline.com/common/oauth2/v2.0/token",
             data={
-                "client_id": os.environ.get("MSFT_OAUTH_CLIENT_ID", ""),
-                "client_secret": os.environ.get("MSFT_OAUTH_CLIENT_SECRET", ""),
+                "client_id": client_id,
+                "client_secret": client_secret,
                 "code": code,
                 "redirect_uri": redirect_uri,
                 "grant_type": "authorization_code",

@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     gmail_default_user: str = ""         # default mailbox to impersonate
     gmail_pubsub_token: str = ""         # bearer token expected on /webhooks/gmail
 
+    # Email OAuth (Gmail + Microsoft) — configured via Integrations → APIs UI
+    gmail_oauth_client_id: str = ""
+    gmail_oauth_client_secret: str = ""
+    msft_oauth_client_id: str = ""
+    msft_oauth_client_secret: str = ""
+
     # Dynamic Agent Loader (v2 — ADR-013)
     # Repos are cloned ONCE into agents_clone_dir/repos/ and refreshed with
     # git pull on each event (no full re-clone per run).

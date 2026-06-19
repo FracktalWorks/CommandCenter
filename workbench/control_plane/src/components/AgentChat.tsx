@@ -42,6 +42,9 @@ import { buildFrontendToolsAddendum } from "@/hooks/useFrontendTool";
  * Small circular SVG progress ring showing context-window usage.
  * Always shows the token count. Clickable to trigger manual /compact when ≥ 60%.
  * Color transitions: primary (< 60%) → warning (60–79%) → destructive (≥ 80%).
+ *
+ * Hover (desktop) or tap (mobile) reveals a detail popup with used/total tokens
+ * and percentage.  Click away or mouse-out dismisses it.
  */
 function ContextRing({
   pct,
@@ -49,12 +52,14 @@ function ContextRing({
   totalTokens,
   compacting,
   onCompact,
+  modelId,
 }: {
   pct: number;
   usedTokens: number;
   totalTokens: number;
   compacting: boolean;
   onCompact?: () => void;
+  modelId?: string;
 }) {
   const r = 9;
   const circ = 2 * Math.PI * r;
@@ -68,34 +73,113 @@ function ContextRing({
   const label = formatTokenCount(usedTokens, totalTokens);
   const canCompact = pct >= 60 && onCompact && !compacting;
 
-  if (compacting) {
-    return (
-      <span
-        className="shrink-0 flex items-center gap-1 text-[10px] text-primary/70 animate-pulse px-1.5 py-0.5 rounded-md"
-        title="Compacting conversation…">
-        <svg width="16" height="16" viewBox="0 0 24 24" className="animate-spin" fill="none">
-          <circle cx="12" cy="12" r="9" stroke="hsl(var(--border))" strokeWidth="2" />
-          <path d="M12 3a9 9 0 0 1 9 9" stroke="hsl(var(--primary))" strokeWidth="2" strokeLinecap="round" />
-        </svg>
-        <span className="hidden sm:inline">Compacting…</span>
-      </span>
-    );
-  }
+  // ── Popup state ──────────────────────────────────────────────────────
+  const [showPopup, setShowPopup] = React.useState(false);
+  const containerRef = React.useRef<HTMLSpanElement>(null);
 
+  // Click-away: close popup when clicking outside the container.
+  React.useEffect(() => {
+    if (!showPopup) return;
+    const handleClick = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setShowPopup(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showPopup]);
+
+  // ── Mini progress bar color (use computed `color` directly) ──────────
+  const barColor = color; // "hsl(var(--primary))" etc. — works in style={}
+
+  // ── Detail popup ─────────────────────────────────────────────────────
+  const popup = showPopup && (
+    <div
+      className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50
+        rounded-lg border border-border bg-popover px-3 py-2.5 shadow-xl
+        text-xs whitespace-nowrap
+        animate-in fade-in slide-in-from-bottom-1 duration-150"
+    >
+      {/* Arrow */}
+      <div className="absolute top-full left-1/2 -translate-x-1/2
+        w-0 h-0 border-l-4 border-r-4 border-t-4
+        border-l-transparent border-r-transparent border-t-border" />
+
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className={`font-semibold ${
+          pct >= 80 ? "text-destructive" : pct >= 60 ? "text-warning" : "text-foreground"
+        }`}>
+          {pct}% full
+        </span>
+        {modelId && (
+          <span className="text-[10px] text-muted-foreground truncate max-w-[120px]">
+            {modelId}
+          </span>
+        )}
+      </div>
+
+      {/* Mini progress bar */}
+      <div className="w-full h-1.5 rounded-full bg-border/50 mb-2 overflow-hidden">
+        <div
+          className="h-full rounded-full transition-all duration-300"
+          style={{ width: `${Math.min(100, pct)}%`, backgroundColor: barColor }}
+        />
+      </div>
+
+      <div className="flex items-center justify-between gap-4 text-[10px]">
+        <span className="text-muted-foreground">Used</span>
+        <span className="font-mono font-medium text-foreground tabular-nums">
+          {usedTokens.toLocaleString()}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-4 text-[10px]">
+        <span className="text-muted-foreground">Total</span>
+        <span className="font-mono font-medium text-foreground tabular-nums">
+          {totalTokens.toLocaleString()}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-4 text-[10px]">
+        <span className="text-muted-foreground">Remaining</span>
+        <span className="font-mono font-medium text-foreground tabular-nums">
+          {Math.max(0, totalTokens - usedTokens).toLocaleString()}
+        </span>
+      </div>
+    </div>
+  );
+
+  // ── Shared hover / tap handlers ──────────────────────────────────────
+  const hoverProps = {
+    onMouseEnter: () => setShowPopup(true),
+    onMouseLeave: () => setShowPopup(false),
+    onClick: (e: React.MouseEvent) => {
+      // Toggle popup on tap (mobile).  On desktop hover handles show/hide.
+      // Don't toggle if the click landed on the /compact button itself —
+      // let that button fire its own onCompact handler.
+      const target = e.target as HTMLElement;
+      if (target.closest("button")) return;
+      setShowPopup((v) => !v);
+    },
+  };
+
+  // ── Ring content (SVG + label) ───────────────────────────────────────
   const ring = (
     <span className="shrink-0 flex items-center gap-1">
       <svg width="16" height="16" viewBox="0 0 24 24">
         {/* Background track */}
-        <circle cx="12" cy="12" r={r} fill="none" stroke="hsl(var(--border))" strokeWidth="2" />
+        <circle cx="12" cy="12" r={r} fill="none" strokeWidth="2"
+          style={{ stroke: "hsl(var(--border))" } as React.CSSProperties} />
         {/* Progress arc */}
         <circle
           cx="12" cy="12" r={r}
           fill="none"
-          stroke={color}
           strokeWidth="2"
           strokeDasharray={`${filled} ${circ}`}
           strokeLinecap="round"
-          style={{ transform: "rotate(-90deg)", transformOrigin: "center" }}
+          style={{
+            stroke: color,
+            transform: "rotate(-90deg)",
+            transformOrigin: "center",
+          } as React.CSSProperties}
         />
       </svg>
       <span className={`text-[10px] font-mono font-medium ${
@@ -106,24 +190,45 @@ function ContextRing({
     </span>
   );
 
-  if (canCompact) {
+  // ── Compacting spinner (no popup, no hover interaction) ──────────────
+  if (compacting) {
     return (
-      <button
-        type="button"
-        onClick={onCompact}
-        className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-md hover:bg-warning/10 tech-transition"
-        title={`Context window ${pct}% full — click to compact`}>
-        {ring}
-        <span className="hidden sm:inline text-[9px] text-warning font-medium">/compact</span>
-      </button>
+      <span
+        className="shrink-0 flex items-center gap-1 text-[10px] text-primary/70 animate-pulse px-1.5 py-0.5 rounded-md">
+        <svg width="16" height="16" viewBox="0 0 24 24" className="animate-spin" fill="none">
+          <circle cx="12" cy="12" r="9" strokeWidth="2"
+            style={{ stroke: "hsl(var(--border))" } as React.CSSProperties} />
+          <path d="M12 3a9 9 0 0 1 9 9" strokeWidth="2" strokeLinecap="round"
+            style={{ stroke: "hsl(var(--primary))" } as React.CSSProperties} />
+        </svg>
+        <span className="hidden sm:inline">Compacting…</span>
+      </span>
     );
   }
 
+  // ── /compact button (≥ 60%) ──────────────────────────────────────────
+  if (canCompact) {
+    return (
+      <span ref={containerRef} className="relative" {...hoverProps}>
+        {popup}
+        <button
+          type="button"
+          onClick={onCompact}
+          className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-md hover:bg-warning/10 tech-transition">
+          {ring}
+          <span className="hidden sm:inline text-[9px] text-warning font-medium">/compact</span>
+        </button>
+      </span>
+    );
+  }
+
+  // ── Normal (read-only ring) ──────────────────────────────────────────
   return (
-    <span
-      className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-md cursor-default"
-      title={`Context window: ${label} used (${pct}%)`}>
-      {ring}
+    <span ref={containerRef} className="relative" {...hoverProps}>
+      {popup}
+      <span className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-md cursor-default">
+        {ring}
+      </span>
     </span>
   );
 }
@@ -1501,6 +1606,7 @@ export default function AgentChat({
                 totalTokens={contextUsage.totalTokens}
                 compacting={compacting}
                 onCompact={handleCompact}
+                modelId={currentModel}
               />
 
               {isLoading && sendMode !== "send" && (

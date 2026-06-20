@@ -166,6 +166,9 @@ jobs:
             done
             docker ps --filter "label=com.docker.compose.project=acb" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
+            echo "==> Applying database migrations (02+ — init only mounts 00/01)"
+            APP_DIR="$APP_DIR" bash scripts/apply_migrations.sh
+
             echo "==> Syncing Python deps"
             if ! command -v uv >/dev/null; then
               curl -LsSf https://astral.sh/uv/install.sh | sh

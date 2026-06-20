@@ -67,6 +67,9 @@ while [ $(date +%s) -lt $deadline ]; do
 done
 docker ps --filter "label=com.docker.compose.project=acb" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 
+say "Applying database migrations (02+ — initdb only mounts 00/01)"
+APP_DIR="$APP_DIR" bash scripts/apply_migrations.sh
+
 if [ ! -d .venv ]; then
   say "First run: installing uv + python deps"
   if ! command -v uv >/dev/null; then

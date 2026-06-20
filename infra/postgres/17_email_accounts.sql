@@ -30,9 +30,9 @@ CREATE TABLE IF NOT EXISTS email_accounts (
     UNIQUE(user_id, provider, email_address)
 );
 
-CREATE INDEX idx_email_accounts_user ON email_accounts(user_id);
-CREATE INDEX idx_email_accounts_provider ON email_accounts(provider);
-CREATE INDEX idx_email_accounts_sync ON email_accounts(sync_enabled, last_synced_at)
+CREATE INDEX IF NOT EXISTS idx_email_accounts_user ON email_accounts(user_id);
+CREATE INDEX IF NOT EXISTS idx_email_accounts_provider ON email_accounts(provider);
+CREATE INDEX IF NOT EXISTS idx_email_accounts_sync ON email_accounts(sync_enabled, last_synced_at)
     WHERE sync_enabled = true;
 
 -- Email messages — synced email cache

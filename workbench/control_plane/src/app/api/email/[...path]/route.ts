@@ -58,8 +58,26 @@ export async function GET(
   try {
     const res = await fetch(upstream, {
       headers: await buildGatewayHeaders(),
-      signal: AbortSignal.timeout(30_000),
+      // Attachments can be large; allow more time than JSON calls.
+      signal: AbortSignal.timeout(120_000),
     });
+    const contentType = res.headers.get("content-type") ?? "";
+    // Binary / non-JSON responses (e.g. attachment downloads) must be streamed
+    // through untouched — parsing them as JSON corrupts the bytes and the
+    // browser ends up with an empty object instead of the file.
+    if (!contentType.includes("application/json")) {
+      const headers = new Headers();
+      for (const h of [
+        "content-type",
+        "content-disposition",
+        "content-length",
+        "cache-control",
+      ]) {
+        const v = res.headers.get(h);
+        if (v) headers.set(h, v);
+      }
+      return new NextResponse(res.body, { status: res.status, headers });
+    }
     const body = await res.json().catch(() => ({}));
     return NextResponse.json(body, { status: res.status });
   } catch (err) {

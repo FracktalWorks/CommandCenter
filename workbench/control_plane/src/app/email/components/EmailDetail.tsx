@@ -385,30 +385,67 @@ export function EmailDetail({ email }: EmailDetailProps) {
           </div>
         )}
 
-        {/* Attachment */}
+        {/* Attachments */}
         {view.hasAttachments && view.attachments && view.attachments.length > 0 && (
           <div className="mt-6 pt-4 border-t border-border">
             <p className="text-xs text-muted-foreground mb-2">
               Attachments ({view.attachments.length})
             </p>
-            {view.attachments.map((att) => (
-              <div
-                key={att.id}
-                className="flex items-center gap-2 bg-secondary rounded-md px-3 py-2 w-fit mb-1.5"
-              >
-                <Paperclip size={13} className="text-muted-foreground" />
-                <span className="text-xs text-foreground">{att.filename}</span>
-                <a
-                  href={att.downloadUrl || getAttachmentDownloadUrl(att.id)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="ml-2 text-muted-foreground hover:text-foreground transition-colors"
-                  title={`Download ${att.filename}`}
-                >
-                  <Download size={12} />
-                </a>
-              </div>
-            ))}
+            <div className="flex flex-wrap gap-2">
+              {view.attachments.map((att) => {
+                // Always go through the authenticated Next proxy — the absolute
+                // gateway downloadUrl can't carry the internal token from a
+                // browser, so it would 401.
+                const url = getAttachmentDownloadUrl(att.id);
+                const isImage = att.mimeType.startsWith("image/");
+                return (
+                  <div
+                    key={att.id}
+                    className="border border-border rounded-md overflow-hidden bg-secondary w-fit"
+                  >
+                    {isImage && (
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={`Open ${att.filename}`}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={url}
+                          alt={att.filename}
+                          className="max-h-40 max-w-[240px] object-contain bg-background block"
+                        />
+                      </a>
+                    )}
+                    <div className="flex items-center gap-2 px-3 py-2">
+                      <Paperclip size={13} className="text-muted-foreground flex-shrink-0" />
+                      <span
+                        className="text-xs text-foreground truncate max-w-[160px]"
+                        title={att.filename}
+                      >
+                        {att.filename}
+                      </span>
+                      {att.sizeBytes > 0 && (
+                        <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                          {formatBytes(att.sizeBytes)}
+                        </span>
+                      )}
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        download={att.filename}
+                        className="ml-1 text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
+                        title={`Download ${att.filename}`}
+                      >
+                        <Download size={12} />
+                      </a>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -545,4 +582,10 @@ function TBtn({
 
 function Divider() {
   return <div className="w-px h-4 bg-border" />;
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }

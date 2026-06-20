@@ -570,6 +570,25 @@ export function useAgentChat({
       if (cancelled) return;
       if (!localInterrupted && !serverActive) return;
 
+      // ── Non-active interruption: let polling recover from Postgres ──
+      // If the server is not actively running (agent finished) but the
+      // last local message looks interrupted (e.g. ends mid-code-block
+      // without terminal punctuation), DON'T try to reconnect — it would
+      // reset the perfectly-valid local content and leave an empty
+      // placeholder while waiting for a Redis stream that already expired.
+      // Just set recovering=true so the polling loop fetches the settled
+      // content from Postgres at 1.5s intervals.
+      if (!serverActive) {
+        if (localInterrupted && !cancelled) {
+          setSessionState(threadId, (prev) => ({
+            ...prev,
+            recovering: true,
+            runStatus: "recovering",
+          }));
+        }
+        return;
+      }
+
       // ── Surface loading state so the stop button appears ──────────
       // When an agent is still running on the server, the user needs a
       // way to abort it.  Store the abort controller so stopGeneration()
@@ -874,7 +893,15 @@ export function useAgentChat({
   const stopGeneration = useCallback(() => {
     const current = getSessionState(threadId);
     current.abortController?.abort();
-    setSessionState(threadId, (prev) => ({ ...prev, abortController: null }));
+    // Immediately clear loading/recovering state so the UI reflects idle
+    // (don't wait for the next polling tick to clear the stale flag).
+    setSessionState(threadId, (prev) => ({
+      ...prev,
+      abortController: null,
+      isLoading: false,
+      recovering: false,
+      runStatus: "idle",
+    }));
   }, [threadId]);
 
   // ── Reconnection & cross-device polling ─────────────────────────────

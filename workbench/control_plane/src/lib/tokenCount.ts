@@ -64,9 +64,18 @@ export function getContextLimit(modelId: string): number {
 /**
  * Estimate token usage from the conversation messages and optional system
  * context.  Returns {usedTokens, totalTokens, pct}.
+ *
+ * Tool event args + results are counted separately because they can be large
+ * (file contents, shell output, search results) and are included verbatim in
+ * the context window sent to the model.
  */
 export function computeContextUsage(
-  messages: { role: string; content: string }[],
+  messages: {
+    role: string;
+    content: string;
+    toolEvents?: Array<{ args?: unknown; result?: string }>;
+    reasoningBlocks?: string[];
+  }[],
   modelId: string,
   systemContext?: string,
 ): ContextUsage {
@@ -75,7 +84,16 @@ export function computeContextUsage(
   // Count characters across all messages (4 chars ≈ 1 token)
   let usedChars = 0;
   for (const m of messages) {
-    usedChars += (m.content?.length ?? 0) + 20; // ~20-char overhead per message turn
+    usedChars += (m.content?.length ?? 0) + 20; // ~20-char overhead per turn
+    // Tool call arguments and results contribute to the context window.
+    for (const t of m.toolEvents ?? []) {
+      if (t.args) usedChars += JSON.stringify(t.args).length + 10;
+      if (t.result) usedChars += t.result.length + 10;
+    }
+    // Reasoning/thinking blocks are included in the context for extended-thinking models.
+    for (const block of m.reasoningBlocks ?? []) {
+      usedChars += block.length + 5;
+    }
   }
   if (systemContext) usedChars += systemContext.length;
 

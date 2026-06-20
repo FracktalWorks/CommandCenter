@@ -193,33 +193,25 @@ function ContextRing({
     </span>
   );
 
-  // ── Compacting spinner (no popup, no hover interaction) ──────────────
+  // ── Compacting spinner overlaid on the ring ────────────────────────
   if (compacting) {
     return (
-      <span
-        className="shrink-0 flex items-center gap-1 text-[10px] text-primary/70 animate-pulse px-1.5 py-0.5 rounded-md">
-        <svg width="16" height="16" viewBox="0 0 24 24" className="animate-spin" fill="none">
-          <circle cx="12" cy="12" r="9" strokeWidth="2"
-            style={{ stroke: "hsl(var(--border))" } as React.CSSProperties} />
-          <path d="M12 3a9 9 0 0 1 9 9" strokeWidth="2" strokeLinecap="round"
-            style={{ stroke: "hsl(var(--primary))" } as React.CSSProperties} />
-        </svg>
-        <span className="hidden sm:inline">Compacting…</span>
-      </span>
-    );
-  }
-
-  // ── Loading spinner (agent is streaming) ───────────────────────────
-  if (isLoading && !compacting) {
-    return (
       <span className="shrink-0 flex items-center gap-1 text-[10px] text-primary/70 animate-pulse px-1.5 py-0.5 rounded-md">
-        <svg width="16" height="16" viewBox="0 0 24 24" className="animate-spin" fill="none">
-          <circle cx="12" cy="12" r="9" strokeWidth="2"
-            style={{ stroke: "hsl(var(--border))" } as React.CSSProperties} />
-          <path d="M12 3a9 9 0 0 1 9 9" strokeWidth="2" strokeLinecap="round"
-            style={{ stroke: "hsl(var(--primary))" } as React.CSSProperties} />
-        </svg>
-        <span className="hidden sm:inline">{label}</span>
+        {/* Show the filled ring + a spinning overlay so user sees both fill level and activity */}
+        <span className="relative w-4 h-4 shrink-0">
+          <svg width="16" height="16" viewBox="0 0 24 24" className="absolute inset-0">
+            <circle cx="12" cy="12" r={r} fill="none" strokeWidth="2"
+              style={{ stroke: "hsl(var(--border))" } as React.CSSProperties} />
+            <circle cx="12" cy="12" r={r} fill="none" strokeWidth="2"
+              strokeDasharray={`${filled} ${circ}`} strokeLinecap="round"
+              style={{ stroke: color, transform: "rotate(-90deg)", transformOrigin: "center" } as React.CSSProperties} />
+          </svg>
+          <svg width="16" height="16" viewBox="0 0 24 24" className="absolute inset-0 animate-spin" fill="none">
+            <path d="M12 3a9 9 0 0 1 9 9" strokeWidth="2" strokeLinecap="round"
+              style={{ stroke: "hsl(var(--primary))" } as React.CSSProperties} />
+          </svg>
+        </span>
+        <span className="hidden sm:inline">Compacting…</span>
       </span>
     );
   }
@@ -232,7 +224,7 @@ function ContextRing({
         <button
           type="button"
           onClick={onCompact}
-          className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-md hover:bg-warning/10 tech-transition">
+          className={`shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-md hover:bg-warning/10 tech-transition ${isLoading ? "animate-pulse" : ""}`}>
           {ring}
           <span className="hidden sm:inline text-[9px] text-warning font-medium">/compact</span>
         </button>
@@ -240,11 +232,11 @@ function ContextRing({
     );
   }
 
-  // ── Normal (read-only ring) ──────────────────────────────────────────
+  // ── Normal ring — pulses subtly while agent is streaming ────────────
   return (
     <span ref={containerRef} className="relative" {...hoverProps}>
       {popup}
-      <span className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-md cursor-default">
+      <span className={`shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-md cursor-default ${isLoading ? "animate-pulse" : ""}`}>
         {ring}
       </span>
     </span>
@@ -641,23 +633,50 @@ export default function AgentChat({
   const [viewerEntry, setViewerEntry] = useState<FileEntry | null>(null);
 
   // ── Context-window tracking + auto-compaction ─────────────────────────────
+  // Recompute when the count changes (new message added), when the total settled
+  // content length changes (streaming completed and content grew), when the model
+  // changes (different context limit), or when the system context changes.
+  // Using settled length (non-streaming messages only) avoids thrashing on every
+  // streaming delta while still updating promptly after each turn completes.
+  const settledContentLen = useMemo(
+    () => messages
+      .filter((m) => !m.streaming)
+      .reduce((s, m) => {
+        let len = m.content?.length ?? 0;
+        for (const t of m.toolEvents ?? []) {
+          len += (t.result?.length ?? 0) + (t.args ? JSON.stringify(t.args).length : 0);
+        }
+        for (const b of m.reasoningBlocks ?? []) len += b.length;
+        return s + len;
+      }, 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [messages.length, messages.filter(m => !m.streaming).length],
+  );
   const contextUsage = useMemo(
     () => computeContextUsage(messages, currentModel, systemContext),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [messages.length, currentModel, systemContext],
+    [settledContentLen, messages.length, currentModel, systemContext],
   );
   const [compacting, setCompacting] = useState(false);
   const hasAutoCompactedRef = useRef(false);
 
-  // Reset the compact gate when the session changes so a new session can
-  // trigger its own compaction if needed.
+  // Reset the compact gate when the session or model changes.
+  // This lets a model switch (especially to a smaller-context model) trigger
+  // its own auto-compaction if the existing conversation now exceeds the limit.
   useEffect(() => {
     hasAutoCompactedRef.current = false;
   }, [sessionId]);
 
+  useEffect(() => {
+    hasAutoCompactedRef.current = false;
+  }, [currentModel]);
+
   // Auto-compact when context reaches 75% of the model's limit.
-  // Fires at most once per session (gate via hasAutoCompactedRef) and only
+  // Fires at most once per gate reset (session change or model switch) and only
   // between turns (not while the agent is streaming).
+  // On model switch the gate was just reset, so if the new model's smaller
+  // context window puts us at ≥ 90% we compact immediately even though the
+  // threshold is normally 75%.
   useEffect(() => {
     if (contextUsage.pct < 75) return;
     if (isLoading) return;
@@ -1017,7 +1036,7 @@ export default function AgentChat({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim()) return;
+    if (!input.trim() || loadingHistory) return;
     submitText(input);
     setInput("");
     inputRef.current?.focus();
@@ -1428,17 +1447,24 @@ export default function AgentChat({
 
               <textarea ref={inputRef} value={input}
                 onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} rows={1}
+                disabled={loadingHistory}
                 placeholder={
-                  isLoading
-                    ? `${SEND_MODE_LABELS[sendMode]} a follow-up to ${currentAgentName}…`
-                    : `Message ${currentAgentName}…`
+                  loadingHistory
+                    ? "Loading previous messages…"
+                    : isLoading
+                      ? `${SEND_MODE_LABELS[sendMode]} a follow-up to ${currentAgentName}…`
+                      : `Message ${currentAgentName}…`
                 }
-                className="flex-1 resize-none bg-transparent px-1 py-1.5 text-[16px] sm:text-sm text-foreground placeholder-muted-foreground focus:outline-none max-h-40 overflow-y-auto scrollbar-thin"
+                className="flex-1 resize-none bg-transparent px-1 py-1.5 text-[16px] sm:text-sm text-foreground placeholder-muted-foreground focus:outline-none max-h-40 overflow-y-auto scrollbar-thin disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ minHeight: "32px" }}
                 onInput={(e) => { const t = e.currentTarget; t.style.height = "auto"; t.style.height = `${Math.min(t.scrollHeight, 160)}px`; }} />
 
               {/* Contextual send / stop button */}
-              {isLoading ? (
+              {loadingHistory ? (
+                <div className="shrink-0 self-end h-9 w-9 rounded-xl bg-muted flex items-center justify-center">
+                  <span className="w-4 h-4 rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground animate-spin" />
+                </div>
+              ) : isLoading ? (
                 <div className="shrink-0 flex items-stretch self-end" ref={sendMenuRef}>
                   {/* Stop button — always visible while loading */}
                   <button type="button" onClick={stopGeneration}

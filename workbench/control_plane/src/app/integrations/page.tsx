@@ -893,8 +893,11 @@ function EmailTab() {
       setShowIMAP(true);
     } else {
       const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
+      // URLSearchParams already percent-encodes values — don't pre-encode with
+      // encodeURIComponent or redirect_after ends up double-encoded and the
+      // callback treats it as a relative path (→ /email/oauth/https%3A%2F%2F… 404).
       const params = new URLSearchParams({
-        redirect_after: encodeURIComponent(window.location.href),
+        redirect_after: window.location.href,
       });
       if (session?.user?.email) params.set("user_email", session.user.email);
       window.location.href = `${gatewayUrl}/email/oauth/${provider}/authorize?${params.toString()}`;

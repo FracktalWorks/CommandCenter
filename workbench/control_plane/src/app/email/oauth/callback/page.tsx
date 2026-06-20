@@ -4,6 +4,26 @@ import { useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { CheckCircle2, XCircle, ArrowRight, Mail, Settings } from "lucide-react";
 
+/**
+ * Normalise the post-auth redirect target to a safe internal path.
+ *
+ * `redirect_after` arrives as the full URL the user came from (e.g.
+ * "https://commandcenter.fracktal.in/integrations").  Reduce it to a
+ * same-origin path so router.push() navigates correctly; reject anything
+ * cross-origin or unparseable to avoid an open-redirect and the 404 that
+ * results from pushing an absolute/encoded string as a relative path.
+ */
+function safeRedirectTarget(raw: string | null): string {
+  if (!raw) return "/email";
+  try {
+    const u = new URL(raw, window.location.origin);
+    if (u.origin !== window.location.origin) return "/email";
+    return u.pathname + u.search + u.hash;
+  } catch {
+    return raw.startsWith("/") ? raw : "/email";
+  }
+}
+
 function CallbackContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -20,7 +40,7 @@ function CallbackContent() {
   // Auto-redirect after success
   useEffect(() => {
     if (!success) return;
-    const target = redirectAfter || "/email";
+    const target = safeRedirectTarget(redirectAfter);
     if (countdown <= 0) {
       router.push(target);
       return;

@@ -240,16 +240,18 @@ jobs:
         run: |
           GATEWAY_URL="${GATEWAY_URL:-https://api.commandcenter.fracktal.in}"
           echo "Hitting $GATEWAY_URL/health (with retries for cold start)..."
-          # Services may still be warming up right after deploy (systemd
-          # restart + Next.js rebuild). Retry for up to ~60s before failing.
-          for attempt in $(seq 1 12); do
+          # The 4GB VPS is still under heavy load right after deploy (the
+          # Next.js rebuild pegs CPU/RAM), so the gateway can take a couple of
+          # minutes to answer. Retry for up to ~5min before calling it a failure
+          # so a slow warm-up doesn't masquerade as a broken deploy.
+          for attempt in $(seq 1 30); do
             if curl -fsS --max-time 10 "$GATEWAY_URL/health"; then
               echo ""
               echo "Gateway is healthy (attempt $attempt)"
               exit 0
             fi
-            echo "attempt $attempt/12 failed — retrying in 5s..."
-            sleep 5
+            echo "attempt $attempt/30 failed — retrying in 10s..."
+            sleep 10
           done
-          echo "Health check failed after 12 attempts (~60s)"
+          echo "Health check failed after 30 attempts (~5min)"
           exit 1

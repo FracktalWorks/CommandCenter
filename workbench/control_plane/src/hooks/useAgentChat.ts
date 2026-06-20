@@ -892,9 +892,20 @@ export function useAgentChat({
 
   const stopGeneration = useCallback(() => {
     const current = getSessionState(threadId);
+    // 1. Abort the local SSE fetch (stops the browser reading the stream).
     current.abortController?.abort();
-    // Immediately clear loading/recovering state so the UI reflects idle
-    // (don't wait for the next polling tick to clear the stale flag).
+    // 2. Tell the backend to ACTUALLY cancel the run.  Without this the agent
+    //    keeps executing detached server-side (burning tokens, writing files)
+    //    because it's decoupled from the HTTP response lifecycle.  Fire-and-
+    //    forget — the UI shouldn't block on it.
+    void fetch("/api/agent/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ threadId }),
+      keepalive: true,
+    }).catch(() => {});
+    // 3. Immediately clear loading/recovering state so the UI reflects idle
+    //    (don't wait for the next polling tick to clear the stale flag).
     setSessionState(threadId, (prev) => ({
       ...prev,
       abortController: null,
@@ -948,8 +959,12 @@ export function useAgentChat({
     const poll = async () => {
       if (cancelled) return;
       try {
+        // Poll only the most recent window — polling exists to pick up the
+        // latest assistant message growing / new turns, never to backfill old
+        // history (that's loadOlderHistory's job).  The content-aware merge
+        // below only updates/appends by id, so older loaded messages are kept.
         const res = await fetch(
-          `/api/chat/sessions/${threadId}/messages`,
+          `/api/chat/sessions/${threadId}/messages?limit=50`,
           { signal: AbortSignal.timeout(5000) }
         );
         if (!res.ok) return;

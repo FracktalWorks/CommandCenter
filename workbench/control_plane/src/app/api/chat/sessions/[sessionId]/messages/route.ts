@@ -38,15 +38,28 @@ async function gatewayHeaders(): Promise<Record<string, string>> {
 }
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ sessionId: string }> },
 ): Promise<NextResponse> {
   try {
     const { sessionId } = await params;
-    const res = await fetch(`${GATEWAY_URL}/chat/sessions/${sessionId}/messages`, {
-      headers: await gatewayHeaders(),
-      signal: AbortSignal.timeout(8_000),
-    });
+    // Forward pagination params for windowed lazy-loading:
+    //   ?limit=N        — return only the most recent N messages
+    //   ?before=<ms>    — return only messages older than this timestamp_ms
+    //                     (cursor for loading older history on scroll-up)
+    const qs = new URLSearchParams();
+    const limit = req.nextUrl.searchParams.get("limit");
+    const before = req.nextUrl.searchParams.get("before");
+    if (limit) qs.set("limit", limit);
+    if (before) qs.set("before", before);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    const res = await fetch(
+      `${GATEWAY_URL}/chat/sessions/${sessionId}/messages${suffix}`,
+      {
+        headers: await gatewayHeaders(),
+        signal: AbortSignal.timeout(8_000),
+      },
+    );
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch (err) {

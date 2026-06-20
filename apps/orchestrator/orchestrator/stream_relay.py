@@ -401,3 +401,40 @@ async def run_detached(
     # Serve events from Redis — the SAME path a reconnecting client uses.
     async for evt in subscribe_events(thread_id, since_id="0"):
         yield evt
+
+
+async def cancel_run(thread_id: str) -> bool:
+    """Cancel the in-flight detached agent run for *thread_id*.
+
+    This actually stops backend execution (vs. merely disconnecting the SSE
+    subscriber): it cancels the background asyncio task draining the agent
+    generator, marks the thread inactive, and pushes a terminal RUN_FINISHED
+    event so any live subscribers (and reconnecting clients) close cleanly.
+
+    Returns True if a running task was found and cancelled, False otherwise.
+    Safe to call when no run is active (idempotent) — it still marks the
+    thread inactive and emits the terminal event so a stuck UI recovers.
+    """
+    task = _DETACHED_TASKS.get(thread_id)
+    found = task is not None and not task.done()
+
+    if found and task is not None:
+        task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=3)
+        except BaseException:  # noqa: BLE001
+            pass
+        _DETACHED_TASKS.pop(thread_id, None)
+
+    # Mark inactive and emit a terminal event so subscribers stop blocking.
+    try:
+        await mark_inactive(thread_id)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        await push_event(thread_id, {"type": "RUN_FINISHED", "cancelled": True})
+    except Exception:  # noqa: BLE001
+        pass
+
+    _log.info("stream_relay.cancel_run", thread_id=thread_id[:12], found=found)
+    return found

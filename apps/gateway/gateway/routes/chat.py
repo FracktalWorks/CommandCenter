@@ -157,7 +157,22 @@ def _delete_session(session_id: str, user_id: str) -> bool:
         return result.rowcount > 0
 
 
-def _get_messages(session_id: str, user_id: str) -> list[dict]:
+def _get_messages(
+    session_id: str,
+    user_id: str,
+    limit: int | None = None,
+    before: int | None = None,
+) -> list[dict]:
+    """Fetch messages for a session, always returned oldest→newest.
+
+    When ``limit`` is given, returns only the most recent ``limit`` messages
+    (windowed lazy-load).  ``before`` is a ``timestamp_ms`` cursor: only
+    messages strictly older than it are returned, so the frontend can page
+    backwards through history by passing the oldest timestamp it already has.
+
+    When ``limit`` is omitted the full history is returned (backward compatible
+    with callers that expect every message, e.g. compaction).
+    """
     from acb_graph import get_session  # noqa: PLC0415
     from sqlalchemy import text  # noqa: PLC0415
 
@@ -170,16 +185,27 @@ def _get_messages(session_id: str, user_id: str) -> list[dict]:
         if not owns:
             return []
 
-        rows = s.execute(
-            text(
-                "SELECT id, role, content, timestamp_ms, tool_events, progress_lines, "
-                "reasoning, agent_state, custom_events "
-                "FROM chat_message "
-                "WHERE session_id = :sid "
-                "ORDER BY timestamp_ms ASC"
-            ),
-            {"sid": session_id},
-        ).fetchall()
+        cols = (
+            "SELECT id, role, content, timestamp_ms, tool_events, progress_lines, "
+            "reasoning, agent_state, custom_events FROM chat_message WHERE session_id = :sid"
+        )
+        params: dict = {"sid": session_id}
+        if before is not None:
+            cols += " AND timestamp_ms < :before"
+            params["before"] = before
+
+        if limit is not None and limit > 0:
+            # Newest-first with LIMIT, then reverse to oldest→newest below.
+            cols += " ORDER BY timestamp_ms DESC LIMIT :limit"
+            params["limit"] = limit
+        else:
+            cols += " ORDER BY timestamp_ms ASC"
+
+        rows = s.execute(text(cols), params).fetchall()
+
+    # When we fetched newest-first (limit path), reverse to chronological order.
+    if limit is not None and limit > 0:
+        rows = list(reversed(rows))
 
     return [
         {
@@ -286,8 +312,19 @@ async def delete_session(
 async def get_messages(
     session_id: str,
     user: UserContext = Depends(get_current_user),
+    limit: int | None = None,
+    before: int | None = None,
 ) -> list[dict]:
-    return await asyncio.to_thread(_get_messages, session_id, user.email or "default")
+    """Return messages oldest→newest.
+
+    Optional query params enable windowed lazy-loading:
+    - ``limit``: return only the most recent N messages.
+    - ``before``: a ``timestamp_ms`` cursor; only messages older than it are
+      returned (used together with ``limit`` to page backwards on scroll-up).
+    """
+    return await asyncio.to_thread(
+        _get_messages, session_id, user.email or "default", limit, before
+    )
 
 
 @router.post(

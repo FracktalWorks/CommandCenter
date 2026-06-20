@@ -1255,6 +1255,35 @@ async def reconnect_agent_stream(
     )
 
 
+@router.post(
+    "/run/{thread_id}/cancel",
+    summary="Cancel a running agent (actually stops backend execution)",
+)
+async def cancel_agent_run(
+    thread_id: str,
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Stop the in-flight agent run for *thread_id*.
+
+    Unlike simply dropping the SSE connection (which leaves the agent running
+    detached in the background, continuing to burn tokens and write files),
+    this cancels the background task, marks the thread inactive, and pushes a
+    terminal RUN_FINISHED event so any live/reconnecting subscribers close.
+
+    Works for any runtime (MAF / Copilot SDK) because cancellation happens at
+    the detached-task layer that wraps every agent generator.
+    """
+    from orchestrator.stream_relay import cancel_run  # noqa: PLC0415
+
+    _log.info(
+        "agent.cancel_request",
+        thread_id=thread_id[:12],
+        actor=(getattr(user, "email", None) or "anonymous")[:20],
+    )
+    cancelled = await cancel_run(thread_id)
+    return {"ok": True, "cancelled": cancelled, "threadId": thread_id}
+
+
 @router.post("/run", response_model=AgentRunResponse)
 async def run_agent_sync(
     req: AgentRunRequest,

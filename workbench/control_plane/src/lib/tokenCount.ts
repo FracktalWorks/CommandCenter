@@ -62,6 +62,20 @@ export function getContextLimit(modelId: string): number {
 }
 
 /**
+ * Resolve the context limit for a model, preferring a dynamically-loaded value
+ * (from the gateway's capability map via /api/models/all) and falling back to
+ * the static substring table.  This keeps the context ring accurate even after
+ * a mid-chat model switch to a model not in the static table.
+ */
+export function resolveContextLimit(
+  modelId: string,
+  dynamicLimit?: number,
+): number {
+  if (dynamicLimit && dynamicLimit > 0) return dynamicLimit;
+  return getContextLimit(modelId);
+}
+
+/**
  * Estimate token usage from the conversation messages and optional system
  * context.  Returns {usedTokens, totalTokens, pct}.
  *
@@ -78,8 +92,11 @@ export function computeContextUsage(
   }[],
   modelId: string,
   systemContext?: string,
+  /** Dynamically-loaded context window (tokens) for this model; when provided
+   *  it overrides the static lookup table. */
+  dynamicLimit?: number,
 ): ContextUsage {
-  const totalTokens = getContextLimit(modelId);
+  const totalTokens = resolveContextLimit(modelId, dynamicLimit);
 
   // Count characters across all messages (4 chars ≈ 1 token)
   let usedChars = 0;

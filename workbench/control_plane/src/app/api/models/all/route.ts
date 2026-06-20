@@ -48,6 +48,12 @@ export interface UnifiedModel {
    *  model selection and always uses its internal default (currently
    *  claude-sonnet-4.6). Use BYOK (LiteLLM models) to switch models. */
   model_picker_enabled?: boolean;
+  /** Real context-window size (tokens) for this model, sourced dynamically
+   *  from the gateway's capability map.  Lets the UI show an accurate
+   *  context-usage ring and auto-compact threshold per model — including
+   *  after a mid-chat model switch.  Undefined when unknown (UI falls back
+   *  to a static estimate). */
+  contextWindow?: number;
 }
 
 export interface UnifiedModelsResponse {
@@ -288,6 +294,27 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
     seen.add(m.id);
     return true;
   });
+
+  // ── Attach real context-window sizes (dynamic, per-model) ──────────────────
+  // Fetch the gateway's capability map so the context-usage ring reflects the
+  // actual model — critical when the user switches models mid-chat.
+  let ctxMap: Record<string, number> = {};
+  try {
+    const cwRes = await fetch(`${GATEWAY_URL}/settings/llm/context-windows`, {
+      headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+      signal: AbortSignal.timeout(3_000),
+    });
+    if (cwRes.ok) ctxMap = (await cwRes.json()) as Record<string, number>;
+  } catch (_e) {
+    // Gateway unreachable — leave contextWindow undefined; UI falls back to its
+    // static estimate table.
+  }
+  const resolveCtx = (id: string): number | undefined =>
+    ctxMap[id] ?? ctxMap[id.split("/").pop() ?? id] ?? undefined;
+  for (const m of deduped) {
+    const cw = resolveCtx(m.id);
+    if (cw && cw > 0) m.contextWindow = cw;
+  }
 
   return NextResponse.json({
     models: deduped,

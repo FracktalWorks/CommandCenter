@@ -318,6 +318,11 @@ const MODELS_FALLBACK: UnifiedModel[] = [
   { id: "gemini/gemini-2.5-pro",   label: "Gemini 2.5 Pro",   runtime: "litellm", group: "LiteLLM — Gemini" },
 ];
 
+// Number of messages loaded per window when restoring / paging history.
+// Keeps initial restore fast for very long sessions; older messages load on
+// scroll-up.
+const HISTORY_PAGE_SIZE = 30;
+
 type SendMode = "send" | "queue" | "steer";
 
 const SEND_MODE_LABELS: Record<SendMode, string> = {
@@ -524,12 +529,18 @@ export default function AgentChat({
   // was active in this browser. Empty when the session lives only in Postgres
   // (cache cleared, a different device, or the first time we open it here).
   // Drop stale __ERROR__ system messages saved by older builds.
-  const cachedInitial = useMemo(
+  const cachedFull = useMemo(
     () =>
       (getMessages(sessionId) as ChatMessage[]).filter(
         (m) => !(m.role === "system" && m.content.startsWith("__ERROR__")),
       ),
     [sessionId],
+  );
+  // Show only the most recent window initially — older messages lazy-load on
+  // scroll-up.  This keeps restore snappy for very long sessions.
+  const cachedInitial = useMemo(
+    () => cachedFull.slice(-HISTORY_PAGE_SIZE),
+    [cachedFull],
   );
 
   const { messages, isLoading, error, sendMessage, stopGeneration, setMessages, recovering, runStatus } = useAgentChat({
@@ -544,6 +555,21 @@ export default function AgentChat({
     initialMessages: cachedInitial,
   });
 
+  // ── Lazy history paging state ──────────────────────────────────────────────
+  // hasMoreHistory: there are older messages not yet loaded (show "load older"
+  // affordance + enable scroll-up fetch).  loadingOlder: a page fetch is in
+  // flight.  oldestTimestampRef: cursor for the next backwards page.
+  const [hasMoreHistory, setHasMoreHistory] = useState(
+    () => cachedFull.length > HISTORY_PAGE_SIZE,
+  );
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const loadingOlderRef = useRef(false);
+  // Scroll-position preservation when prepending older messages: holds the
+  // pre-prepend scrollHeight so a layout effect can keep the viewport anchored.
+  const pendingPrependRef = useRef<number | null>(null);
+  // Latest loadOlderHistory, callable from the (deps:[]) scroll handler.
+  const loadOlderHistoryRef = useRef<() => void>(() => {});
+
   // History-loading state: always true when the sidebar says this session has
   // prior messages.  When localStorage has cached messages we show them right
   // away with a subtle "syncing…" banner; when nothing is cached we show a
@@ -554,30 +580,36 @@ export default function AgentChat({
     () => (expectedMessageCount ?? 0) > 0,
   );
 
-  // On mount, fetch the authoritative message history from Postgres and sync
-  // the local state if Postgres has richer data (more messages OR longer content
-  // for any message — happens when persistAssistantMessage grows the same
+  // On mount, fetch the most recent WINDOW of authoritative history from
+  // Postgres (not the full session — that's slow for long chats).  Older
+  // messages load on scroll-up via loadOlderHistory().  We still sync the
+  // window if Postgres has richer data than the local cache (more messages OR
+  // longer content — refresh-recovery where persistAssistantMessage grew the
   // assistant record in-place during streaming).
   useEffect(() => {
     let cancelled = false;
-    fetchMessagesFromDb(sessionId).then((remoteRaw) => {
+    // Fetch one extra so we can reliably tell whether older messages exist.
+    fetchMessagesFromDb(sessionId, { limit: HISTORY_PAGE_SIZE + 1 }).then((remoteRaw) => {
       if (cancelled || remoteRaw.length === 0) return;
       // Drop stale __ERROR__ system messages persisted by older builds —
       // transient errors must never resurface on reload.
-      const remote = (remoteRaw as ChatMessage[]).filter(
+      const remoteAll = (remoteRaw as ChatMessage[]).filter(
         (m) => !(m.role === "system" && m.content?.startsWith("__ERROR__")),
       );
-      if (remote.length === 0) return;
-      const local = getMessages(sessionId);
-      // Quick check: more messages → definitely use DB.
+      if (remoteAll.length === 0) return;
+      // If we got more than a page, there's older history to lazy-load.
+      const moreExist = remoteAll.length > HISTORY_PAGE_SIZE;
+      const remote = remoteAll.slice(-HISTORY_PAGE_SIZE);
+      if (!cancelled) setHasMoreHistory(moreExist);
+
+      const local = messages;
+      // Quick check: window has more messages than what's shown → use it.
       if (remote.length > local.length) {
         setMessages(remote as ChatMessage[]);
         return;
       }
       // Same count but maybe richer content?  Compare total content length
-      // and tool-event counts.  This catches the refresh-recovery case
-      // where persistAssistantMessage has grown the assistant message
-      // in-place (same id, longer content / more tool events).
+      // and tool-event counts (refresh-recovery: same id, longer content).
       const localTotalLen = local.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
       const remoteTotalLen = remote.reduce((sum: number, m: { content?: string }) => sum + (m.content?.length ?? 0), 0);
       const localToolCount = local.reduce((sum, m) => sum + ((m as { toolEvents?: unknown[] }).toolEvents?.length ?? 0), 0);
@@ -638,6 +670,7 @@ export default function AgentChat({
   // changes (different context limit), or when the system context changes.
   // Using settled length (non-streaming messages only) avoids thrashing on every
   // streaming delta while still updating promptly after each turn completes.
+  const settledCount = messages.filter((m) => !m.streaming).length;
   const settledContentLen = useMemo(
     () => messages
       .filter((m) => !m.streaming)
@@ -650,39 +683,45 @@ export default function AgentChat({
         return s + len;
       }, 0),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [messages.length, messages.filter(m => !m.streaming).length],
+    [messages.length, settledCount],
   );
+  // Real per-model context window (dynamically loaded from the gateway via
+  // /api/models/all).  Falls back to the static estimate when unknown.
+  const currentModelContextWindow = selectedModel?.contextWindow;
   const contextUsage = useMemo(
-    () => computeContextUsage(messages, currentModel, systemContext),
+    () => computeContextUsage(messages, currentModel, systemContext, currentModelContextWindow),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [settledContentLen, messages.length, currentModel, systemContext],
+    [settledContentLen, messages.length, currentModel, systemContext, currentModelContextWindow],
   );
   const [compacting, setCompacting] = useState(false);
-  const hasAutoCompactedRef = useRef(false);
+  // Armed = allowed to auto-compact.  Disarmed after a compaction fires and
+  // re-armed (via hysteresis) once usage falls back below the lower bound, so
+  // a long conversation auto-compacts EACH time it fills up — not just once.
+  const compactArmedRef = useRef(true);
 
-  // Reset the compact gate when the session or model changes.
-  // This lets a model switch (especially to a smaller-context model) trigger
-  // its own auto-compaction if the existing conversation now exceeds the limit.
+  // Re-arm on session or model change so a switch (especially to a smaller
+  // context window) can trigger its own auto-compaction immediately.
   useEffect(() => {
-    hasAutoCompactedRef.current = false;
+    compactArmedRef.current = true;
   }, [sessionId]);
 
   useEffect(() => {
-    hasAutoCompactedRef.current = false;
+    compactArmedRef.current = true;
   }, [currentModel]);
 
-  // Auto-compact when context reaches 75% of the model's limit.
-  // Fires at most once per gate reset (session change or model switch) and only
-  // between turns (not while the agent is streaming).
-  // On model switch the gate was just reset, so if the new model's smaller
-  // context window puts us at ≥ 90% we compact immediately even though the
-  // threshold is normally 75%.
+  // Auto-compact when context reaches the high-water mark (75%).  Uses a 70/75
+  // hysteresis band so it fires once per fill-up rather than thrashing, and
+  // re-arms after a compaction drops usage back down.  Runs only between turns
+  // (never mid-stream).  Because contextUsage uses the model's REAL context
+  // window (dynamically loaded), switching mid-chat to a smaller-context model
+  // recomputes usage and triggers compaction if the history now overflows.
   useEffect(() => {
+    // Re-arm when usage falls below the lower band (hysteresis).
+    if (contextUsage.pct < 70) compactArmedRef.current = true;
     if (contextUsage.pct < 75) return;
-    if (isLoading) return;
-    if (compacting) return;
-    if (hasAutoCompactedRef.current) return;
-    hasAutoCompactedRef.current = true;
+    if (isLoading || compacting) return;
+    if (!compactArmedRef.current) return;
+    compactArmedRef.current = false;
 
     setCompacting(true);
     const currentMessages = messagesRef.current;
@@ -716,7 +755,7 @@ export default function AgentChat({
       .then((data) => {
         if (data.compacted && Array.isArray(data.messages) && data.messages.length > 0) {
           setMessages(data.messages);
-          hasAutoCompactedRef.current = true; // prevent auto-fire after manual compact
+          compactArmedRef.current = false; // prevent auto-fire right after manual compact
         }
       })
       .catch(() => {})
@@ -986,6 +1025,8 @@ export default function AgentChat({
       const nearBottom = dist < 80;
       isNearBottomRef.current = nearBottom;
       setShowScrollBtn(!nearBottom && el.scrollHeight > el.clientHeight + 200);
+      // Near the top → lazy-load the previous page of history.
+      if (el.scrollTop < 140) loadOlderHistoryRef.current();
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
@@ -1001,6 +1042,61 @@ export default function AgentChat({
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
+
+  // ── Load older history (scroll-up lazy paging) ─────────────────────────────
+  const loadOlderHistory = useCallback(async () => {
+    if (loadingOlderRef.current || !hasMoreHistory) return;
+    // Cursor = timestamp of the oldest message currently shown.
+    const cursor = messages.length > 0 ? messages[0].timestamp : undefined;
+    if (!cursor) return;
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    const el = threadRef.current;
+    const prevHeight = el ? el.scrollHeight : 0;
+    try {
+      // Fetch one extra to detect whether still-older messages remain.
+      const olderRaw = await fetchMessagesFromDb(sessionId, {
+        limit: HISTORY_PAGE_SIZE + 1,
+        before: cursor,
+      });
+      const older = (olderRaw as ChatMessage[]).filter(
+        (m) => !(m.role === "system" && m.content?.startsWith("__ERROR__")),
+      );
+      const moreOlder = older.length > HISTORY_PAGE_SIZE;
+      // Drop the peek element (oldest) when more remain — it's re-fetched on the
+      // next page via the new cursor, so nothing is lost.
+      const batch = moreOlder ? older.slice(1) : older;
+      setHasMoreHistory(moreOlder);
+      if (batch.length > 0) {
+        pendingPrependRef.current = prevHeight; // anchor viewport after prepend
+        setMessages((prev) => {
+          const existing = new Set(prev.map((m) => m.id));
+          const fresh = batch.filter((m) => !existing.has(m.id));
+          return fresh.length > 0 ? [...fresh, ...prev] : prev;
+        });
+      }
+    } catch {
+      /* network error — leave hasMoreHistory as-is so the user can retry */
+    } finally {
+      loadingOlderRef.current = false;
+      setLoadingOlder(false);
+    }
+  }, [hasMoreHistory, messages, sessionId, setMessages]);
+
+  // Keep the scroll-handler-callable ref pointing at the latest closure.
+  useEffect(() => {
+    loadOlderHistoryRef.current = loadOlderHistory;
+  }, [loadOlderHistory]);
+
+  // After prepending older messages, keep the viewport anchored where the user
+  // was reading (offset by the height that was just added at the top).
+  React.useLayoutEffect(() => {
+    if (pendingPrependRef.current != null) {
+      const el = threadRef.current;
+      if (el) el.scrollTop += el.scrollHeight - pendingPrependRef.current;
+      pendingPrependRef.current = null;
+    }
+  }, [messages]);
 
   const enqueue = useCallback((text: string, front = false) => {
     if (front) queueRef.current.unshift(text);
@@ -1251,6 +1347,26 @@ export default function AgentChat({
                 suggestions={AGENT_SUGGESTIONS[currentAgentName] ?? DEFAULT_SUGGESTIONS}
                 onPick={handleChoice}
               />
+            </div>
+          )}
+
+          {/* Older-history affordance — auto-loads on scroll-up; also clickable. */}
+          {hasMoreHistory && messages.length > 0 && (
+            <div className="flex items-center justify-center py-2">
+              {loadingOlder ? (
+                <span className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <span className="w-3 h-3 rounded-full border-2 border-muted border-t-primary animate-spin" />
+                  Loading earlier messages…
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => loadOlderHistory()}
+                  className="text-[11px] text-muted-foreground hover:text-foreground px-3 py-1 rounded-full border border-border/60 hover:border-primary/40 tech-transition"
+                >
+                  ↑ Load earlier messages
+                </button>
+              )}
             </div>
           )}
 

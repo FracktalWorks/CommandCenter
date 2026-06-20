@@ -299,13 +299,31 @@ export function saveMessages(sessionId: string, messages: PersistedMessage[]): v
 /**
  * Load messages from Postgres and update the localStorage cache.
  * Returns the fetched list, or falls back to the localStorage cache on error.
+ *
+ * Pass `opts` to lazy-load a window of history instead of the full session:
+ *   - `limit`:  return only the most recent N messages (windowed restore).
+ *   - `before`: a `timestamp` cursor — only messages older than it (used to
+ *               page backwards on scroll-up).
+ *
+ * When paginating (limit or before set), the localStorage cache is left
+ * untouched — the caller merges the window into the visible list and the
+ * component's own save effect persists it.  Only an unpaginated full fetch
+ * rewrites the cache authoritatively.
  */
-export async function fetchMessagesFromDb(sessionId: string): Promise<PersistedMessage[]> {
+export async function fetchMessagesFromDb(
+  sessionId: string,
+  opts?: { limit?: number; before?: number },
+): Promise<PersistedMessage[]> {
+  const paginated = !!(opts?.limit || opts?.before);
   try {
-    const res = await fetch(`/api/chat/sessions/${sessionId}/messages`, {
+    const qs = new URLSearchParams();
+    if (opts?.limit) qs.set("limit", String(opts.limit));
+    if (opts?.before) qs.set("before", String(opts.before));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    const res = await fetch(`/api/chat/sessions/${sessionId}/messages${suffix}`, {
       signal: AbortSignal.timeout(8_000),
     });
-    if (!res.ok) return getMessages(sessionId);
+    if (!res.ok) return paginated ? [] : getMessages(sessionId);
     const remote = (await res.json()) as Array<{
       id: string;
       role: "user" | "assistant" | "system";
@@ -331,13 +349,17 @@ export async function fetchMessagesFromDb(sessionId: string): Promise<PersistedM
           | { id: string; title: string; status: string }[]
           | undefined),
     }));
-    // Update localStorage cache with authoritative Postgres data.
-    try {
-      localStorage.setItem(MESSAGES_PREFIX + sessionId, JSON.stringify(mapped));
-    } catch (_e) { /* quota */ }
+    // Update localStorage cache with authoritative Postgres data — only on a
+    // full (unpaginated) fetch.  A windowed/paginated fetch must not shrink or
+    // clobber the cache.
+    if (!paginated) {
+      try {
+        localStorage.setItem(MESSAGES_PREFIX + sessionId, JSON.stringify(mapped));
+      } catch (_e) { /* quota */ }
+    }
     return mapped as unknown as PersistedMessage[];
   } catch (_e) {
-    return getMessages(sessionId);
+    return paginated ? [] : getMessages(sessionId);
   }
 }
 

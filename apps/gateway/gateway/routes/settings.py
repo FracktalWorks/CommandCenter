@@ -1401,6 +1401,65 @@ async def list_provider_models(
     return _static_models_for_provider(provider)
 
 
+# Context windows for tier routing aliases (these route to backing models that
+# aren't in _MODEL_CAPABILITIES under their alias name).  Conservative values.
+_TIER_CONTEXT_WINDOWS: dict[str, int] = {
+    "tier1-local-qwen3": 32_768,
+    "tier2-sonnet": 200_000,
+    "tier3-opus": 200_000,
+    "tier-fast": 32_768,
+    "tier-balanced": 128_000,
+    "tier-powerful": 200_000,
+}
+
+
+@router.get("/llm/context-windows")
+async def get_context_windows(
+    _user: UserContext = Depends(get_current_user),
+) -> dict[str, int]:
+    """Return a ``{model_id: context_window}`` map for every known model.
+
+    Merges three sources so the frontend can show an accurate context-usage
+    ring for whatever model is selected (including after a mid-chat switch):
+      1. Static ``_MODEL_CAPABILITIES`` (covers all built-in models).
+      2. The live provider-models cache (covers refreshed provider lists, e.g.
+         the full OpenRouter catalogue with real context sizes).
+      3. Tier routing aliases (``tier1``/``tier2``/``tier3``).
+
+    Keys are stored under both their full id and their bare suffix (after the
+    last ``/``) so lookups succeed regardless of provider-prefix differences
+    between the picker id and the capability key.
+    """
+    out: dict[str, int] = {}
+
+    def _put(model_id: str, cw: int) -> None:
+        if not model_id or cw <= 0:
+            return
+        out[model_id] = cw
+        bare = model_id.split("/")[-1]
+        # Don't clobber a full-id entry with a less-specific bare one.
+        out.setdefault(bare, cw)
+
+    # 1. Static capabilities.
+    for mid, caps in _MODEL_CAPABILITIES.items():
+        _put(mid, int(caps.get("context_window", 0) or 0))
+
+    # 2. Live cache (provider-models refresh results).
+    try:
+        cache = _load_models_cache()
+        for entry in cache.values():
+            for m in entry.get("models", []):
+                _put(str(m.get("id", "")), int(m.get("context_window", 0) or 0))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 3. Tier aliases.
+    for mid, cw in _TIER_CONTEXT_WINDOWS.items():
+        _put(mid, cw)
+
+    return out
+
+
 class RefreshRequest(BaseModel):
     providers: list[str] | None = None  # None = all configured
 

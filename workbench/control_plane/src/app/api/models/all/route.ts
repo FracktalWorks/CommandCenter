@@ -64,12 +64,12 @@ export interface UnifiedModelsResponse {
 
 const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
 
-const COPILOT_FALLBACK: { id: string; label: string }[] = [
-  { id: "auto", label: "auto (SDK picks)" },
-  { id: "claude-sonnet-4.5", label: "Claude Sonnet 4.5" },
-  { id: "claude-haiku-4.5", label: "Claude Haiku 4.5" },
-  { id: "gpt-5.5", label: "GPT 5.5" },
-  { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
+const COPILOT_FALLBACK: { id: string; label: string; context_window?: number }[] = [
+  { id: "auto", label: "auto (SDK picks)", context_window: 200_000 },
+  { id: "claude-sonnet-4.5", label: "Claude Sonnet 4.5", context_window: 200_000 },
+  { id: "claude-haiku-4.5", label: "Claude Haiku 4.5", context_window: 200_000 },
+  { id: "gpt-5.5", label: "GPT 5.5", context_window: 400_000 },
+  { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", context_window: 1_000_000 },
 ];
 
 // LiteLLM model catalogue.
@@ -193,7 +193,8 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
     // safe to ignore — custom_models.json may not exist yet
   }
   // Fetched live from the gateway when GITHUB_TOKEN is set; fallback otherwise.
-  let copilotModels: { id: string; label: string }[] = configured.has("github")
+  type CopilotModel = { id: string; label: string; model_picker_enabled?: boolean; context_window?: number };
+  let copilotModels: CopilotModel[] = configured.has("github")
     ? COPILOT_FALLBACK
     : [{ id: "auto", label: "auto (SDK picks — needs GITHUB_TOKEN)" }];
   let source = configured.has("github") ? "fallback" : "no-token";
@@ -205,12 +206,14 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
       });
       if (res.ok) {
         const data = (await res.json()) as {
-          models?: { id: string; label: string; model_picker_enabled?: boolean }[];
+          models?: CopilotModel[];
           source?: string;
         };
         if (Array.isArray(data.models) && data.models.length > 0) {
           copilotModels = [
-            { id: "auto", label: "auto (SDK picks)", model_picker_enabled: false },
+            // "auto" lets the SDK pick — default to the Claude Sonnet context
+            // window (the SDK's current default model).
+            { id: "auto", label: "auto (SDK picks)", model_picker_enabled: false, context_window: 200_000 },
             ...data.models.filter((m) => m.id !== "auto"),
           ];
           source = data.source ?? "live";
@@ -275,7 +278,12 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
             label: m.label,
             runtime: "copilot" as ModelRuntime,
             group: "GitHub Copilot SDK",
-            model_picker_enabled: (m as { id: string; label: string; model_picker_enabled?: boolean }).model_picker_enabled ?? false,
+            model_picker_enabled: m.model_picker_enabled ?? false,
+            // Real context window from the Copilot SDK (provider-sourced) when
+            // available.
+            ...(m.context_window && m.context_window > 0
+              ? { contextWindow: m.context_window }
+              : {}),
           }))
       : []),
 

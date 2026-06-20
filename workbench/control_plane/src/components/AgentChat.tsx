@@ -67,12 +67,16 @@ function ContextRing({
   const r = 9;
   const circ = 2 * Math.PI * r;
   const filled = Math.min(1, pct / 100) * circ;
+  // NOTE: the theme defines these vars as FULL colors (e.g.
+  // `--primary: hsl(198 89% 50%)`), so use `var(--x)` directly — wrapping them
+  // in `hsl(var(--x))` yields `hsl(hsl(...))`, which is invalid and renders
+  // nothing (this is why the ring was invisible and only the % text showed).
   const color =
     pct >= 80
-      ? "hsl(var(--destructive))"
+      ? "var(--destructive)"
       : pct >= 60
-        ? "hsl(var(--warning))"
-        : "hsl(var(--primary))";
+        ? "var(--warning)"
+        : "var(--primary)";
   const canCompact = pct >= 60 && onCompact && !compacting;
 
   // ── Popup state ──────────────────────────────────────────────────────
@@ -92,7 +96,7 @@ function ContextRing({
   }, [showPopup]);
 
   // ── Mini progress bar color (use computed `color` directly) ──────────
-  const barColor = color; // "hsl(var(--primary))" etc. — works in style={}
+  const barColor = color; // "var(--primary)" etc. — works in style={}
 
   // ── Detail popup ─────────────────────────────────────────────────────
   const popup = showPopup && (
@@ -172,7 +176,7 @@ function ContextRing({
       <svg width="18" height="18" viewBox="0 0 24 24" className="shrink-0">
         {/* Background track */}
         <circle cx="12" cy="12" r={r} fill="none" strokeWidth="3"
-          style={{ stroke: "hsl(var(--border))" } as React.CSSProperties} />
+          style={{ stroke: "var(--border)" } as React.CSSProperties} />
         {/* Progress arc — starts at 12 o'clock, fills clockwise */}
         <circle
           cx="12" cy="12" r={r}
@@ -200,14 +204,14 @@ function ContextRing({
         <span className="relative w-4 h-4 shrink-0">
           <svg width="16" height="16" viewBox="0 0 24 24" className="absolute inset-0">
             <circle cx="12" cy="12" r={r} fill="none" strokeWidth="2"
-              style={{ stroke: "hsl(var(--border))" } as React.CSSProperties} />
+              style={{ stroke: "var(--border)" } as React.CSSProperties} />
             <circle cx="12" cy="12" r={r} fill="none" strokeWidth="2"
               strokeDasharray={`${filled} ${circ}`} strokeLinecap="round"
               style={{ stroke: color, transform: "rotate(-90deg)", transformOrigin: "center" } as React.CSSProperties} />
           </svg>
           <svg width="16" height="16" viewBox="0 0 24 24" className="absolute inset-0 animate-spin" fill="none">
             <path d="M12 3a9 9 0 0 1 9 9" strokeWidth="2" strokeLinecap="round"
-              style={{ stroke: "hsl(var(--primary))" } as React.CSSProperties} />
+              style={{ stroke: "var(--primary)" } as React.CSSProperties} />
           </svg>
         </span>
         <span className="hidden sm:inline">Compacting…</span>

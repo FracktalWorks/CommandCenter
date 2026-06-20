@@ -579,6 +579,53 @@ _COPILOT_MODELS_STATIC = [
     {"id": "gpt-5-mini",           "label": "GPT-5 mini"},
 ]
 
+
+def _copilot_ctx(model_id: str) -> int:
+    """Curated context-window (tokens) for a Copilot SDK model id.
+
+    Used as a fallback when the SDK model object doesn't expose its limits.
+    Substring match so version variants (claude-sonnet-4.5/4.6, gpt-5.4/5.5)
+    resolve to the right family.
+    """
+    mid = (model_id or "").lower()
+    if "claude" in mid:
+        return 200_000
+    if "gpt-5" in mid or "gpt5" in mid:
+        return 400_000
+    if "gpt-4.1" in mid:
+        return 1_000_000
+    if "gpt-4o" in mid or "gpt-4" in mid:
+        return 128_000
+    if mid.startswith(("o1", "o3", "o4")) or "-o3" in mid or "-o1" in mid:
+        return 200_000
+    if "gemini-3" in mid or "gemini-2.5" in mid or "gemini" in mid:
+        return 1_000_000
+    return 0
+
+
+def _sdk_ctx(model: object) -> int:
+    """Best-effort extraction of a Copilot SDK model's context window.
+
+    The GitHub Copilot models API exposes
+    capabilities.limits.max_context_window_tokens; the SDK may surface it as
+    nested attributes or a dict.  Returns 0 when unavailable (caller falls back
+    to the curated map)."""
+    caps = getattr(model, "capabilities", None)
+    # Dict form
+    if isinstance(caps, dict):
+        lim = caps.get("limits") or {}
+        if isinstance(lim, dict):
+            v = lim.get("max_context_window_tokens") or lim.get("max_prompt_tokens")
+            if isinstance(v, int) and v > 0:
+                return v
+    # Attribute form
+    lim = getattr(caps, "limits", None)
+    for attr in ("max_context_window_tokens", "max_prompt_tokens"):
+        v = getattr(lim, attr, None)
+        if isinstance(v, int) and v > 0:
+            return v
+    return 0
+
 import time as _time
 
 _copilot_models_cache: dict = {"data": None, "ts": 0.0}
@@ -609,8 +656,17 @@ async def copilot_models() -> dict:
                 await _sdk.stop()
             if _models:
                 result = {
-                    "models": [{"id": m.id, "label": m.name, "model_picker_enabled": True}
-                               for m in _models if not m.policy or m.policy.state == "enabled"],
+                    "models": [
+                        {
+                            "id": m.id,
+                            "label": m.name,
+                            "model_picker_enabled": True,
+                            # Real context window from the provider (SDK) when
+                            # exposed; curated fallback otherwise.
+                            "context_window": _sdk_ctx(m) or _copilot_ctx(m.id),
+                        }
+                        for m in _models if not m.policy or m.policy.state == "enabled"
+                    ],
                     "source": "live",
                 }
                 _copilot_models_cache["data"] = result
@@ -618,7 +674,13 @@ async def copilot_models() -> dict:
                 return result
         except Exception as _e:  # noqa: BLE001
             _log.warning("gateway.copilot_models_failed", error=str(_e))
-    static = {"models": [dict(m, model_picker_enabled=False) for m in _COPILOT_MODELS_STATIC], "source": "static"}
+    static = {
+        "models": [
+            dict(m, model_picker_enabled=False, context_window=_copilot_ctx(m["id"]))
+            for m in _COPILOT_MODELS_STATIC
+        ],
+        "source": "static",
+    }
     _copilot_models_cache["data"] = static
     _copilot_models_cache["ts"] = _now - (_COPILOT_MODELS_CACHE_TTL - 30)
     return static

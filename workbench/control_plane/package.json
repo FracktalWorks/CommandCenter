@@ -12,6 +12,7 @@
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
     "@types/react-syntax-highlighter": "^15.5.13",
+    "dompurify": "^3.4.11",
     "gray-matter": "^4.0.3",
     "lucide-react": "^1.17.0",
     "mammoth": "^1.12.0",

@@ -522,6 +522,37 @@ export default function EmailPage() {
           </div>
         )}
 
+        {/* ── Reconnect banner: account auth/sync is failing ── */}
+        {selectedAccount?.syncStatus === "error" && (
+          <div className="flex items-start gap-2 px-3 py-2 border-b border-amber-500/30 bg-amber-500/10 flex-shrink-0">
+            <AlertCircle size={14} className="text-amber-400 mt-0.5 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-foreground">
+                <span className="font-medium">{selectedAccount.emailAddress}</span> can&apos;t
+                reach the provider — message bodies, folders and statuses may be stale.
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
+                {selectedAccount.syncError || "The connection may have expired. Reconnect to restore full access."}
+              </p>
+            </div>
+            {(selectedAccount.provider === "gmail" || selectedAccount.provider === "microsoft") ? (
+              <button
+                onClick={() => handleConnect(selectedAccount.provider as "gmail" | "microsoft")}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 text-[11px] font-medium transition-colors flex-shrink-0"
+              >
+                <ExternalLink size={11} /> Reconnect
+              </button>
+            ) : (
+              <a
+                href="/integrations?tab=email"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 text-[11px] font-medium transition-colors flex-shrink-0"
+              >
+                <ExternalLink size={11} /> Fix in Integrations
+              </a>
+            )}
+          </div>
+        )}
+
         {/* ── Content: email list + detail ── */}
         <div className="flex-1 flex min-w-0 overflow-hidden">
           {/* DESKTOP: email list pane */}

@@ -58,7 +58,7 @@ export function AnalyticsView({ accountId }: AnalyticsViewProps) {
   const maxSender = Math.max(1, ...data.top_senders.map((s) => s.count));
 
   return (
-    <div className="h-full overflow-y-auto px-5 py-4 space-y-5">
+    <div className="h-full overflow-y-auto px-4 sm:px-5 py-4 space-y-5">
       {/* Range selector */}
       <div className="flex items-center justify-between">
         <p className="text-xs text-muted-foreground">

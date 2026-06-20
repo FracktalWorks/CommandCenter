@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Pencil, Trash2, Archive, Flag, FolderInput,
   Reply, ReplyAll, Forward, MailOpen, Mail, Tag, MoreHorizontal,
@@ -107,6 +107,33 @@ export function EmailList({
   };
 
   const hasMore = total !== undefined && emails.length < total;
+  const canPageProvider = !hasMore && canBackfill && !!onBackfill;
+
+  // ── Auto-load on scroll ──
+  // When the bottom sentinel scrolls into view, page the next batch: first from
+  // what's already synced (DB), then — once that's exhausted — pull older mail
+  // from the provider (backfill). Replaces the manual "Load more" buttons.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  const handleAutoLoad = useCallback(() => {
+    if (loadingMore || backfilling) return;
+    if (hasMore) onLoadMore?.();
+    else if (canPageProvider) onBackfill?.();
+  }, [loadingMore, backfilling, hasMore, canPageProvider, onLoadMore, onBackfill]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) handleAutoLoad();
+      },
+      { root: scrollRef.current, rootMargin: "300px" }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [handleAutoLoad]);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -176,7 +203,7 @@ export function EmailList({
       )}
 
       {/* Email rows */}
-      <div className="flex-1 overflow-y-auto scrollbar-hide">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-hide">
         {loading ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
             <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -301,33 +328,27 @@ export function EmailList({
               );
             })}
 
-            {/* Load more (from what's already synced) */}
-            {hasMore ? (
-              <div className="p-2">
+            {/* Auto-load sentinel: pages from the DB, then backfills from the
+                provider. Tapping it also works if auto-load hasn't fired. */}
+            {(hasMore || canPageProvider) && (
+              <div ref={sentinelRef} className="p-2">
                 <button
-                  onClick={onLoadMore}
-                  disabled={loadingMore}
+                  onClick={handleAutoLoad}
+                  disabled={loadingMore || backfilling}
                   className="w-full flex items-center justify-center gap-1.5 py-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
                 >
-                  {loadingMore && <Loader2 size={12} className="animate-spin" />}
-                  {loadingMore ? "Loading…" : `Load more (${emails.length} of ${total})`}
+                  {(loadingMore || backfilling) && (
+                    <Loader2 size={12} className="animate-spin" />
+                  )}
+                  {backfilling
+                    ? "Fetching older messages…"
+                    : loadingMore
+                      ? "Loading…"
+                      : hasMore
+                        ? `Load more (${emails.length} of ${total})`
+                        : "Load older messages from server"}
                 </button>
               </div>
-            ) : (
-              /* DB exhausted — offer to page further back through the provider */
-              canBackfill &&
-              onBackfill && (
-                <div className="p-2">
-                  <button
-                    onClick={onBackfill}
-                    disabled={backfilling}
-                    className="w-full flex items-center justify-center gap-1.5 py-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
-                  >
-                    {backfilling && <Loader2 size={12} className="animate-spin" />}
-                    {backfilling ? "Fetching older…" : "Load older messages from server"}
-                  </button>
-                </div>
-              )
             )}
           </>
         )}

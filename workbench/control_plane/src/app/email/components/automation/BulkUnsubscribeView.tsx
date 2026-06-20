@@ -98,7 +98,7 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
   return (
     <div className="h-full flex flex-col">
       {/* Toolbar */}
-      <div className="flex items-center gap-2 px-5 py-3 border-b border-border flex-shrink-0">
+      <div className="flex items-center gap-2 px-3 sm:px-5 py-3 border-b border-border flex-shrink-0">
         <div className="flex items-center gap-2 bg-secondary rounded-md px-2.5 py-1.5 flex-1 max-w-xs">
           <Search size={13} className="text-muted-foreground" />
           <input
@@ -123,7 +123,7 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
       </div>
 
       {error && (
-        <div className="px-5 py-2 text-xs text-destructive bg-destructive/10 border-b border-border">
+        <div className="px-3 sm:px-5 py-2 text-xs text-destructive bg-destructive/10 border-b border-border">
           {error}
         </div>
       )}
@@ -139,7 +139,7 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
             {visible.map((s) => (
               <div
                 key={s.email}
-                className="flex items-center gap-3 px-5 py-2.5 hover:bg-secondary/40 transition-colors"
+                className="flex items-center gap-3 px-3 sm:px-5 py-2.5 hover:bg-secondary/40 transition-colors"
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
@@ -217,7 +217,7 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
           </div>
         )}
       </div>
-      <div className="flex-shrink-0 px-5 py-2 border-t border-border text-[10px] text-muted-foreground flex items-center gap-1.5">
+      <div className="flex-shrink-0 px-3 sm:px-5 py-2 border-t border-border text-[10px] text-muted-foreground flex items-center gap-1.5">
         <MailMinus size={11} />
         Unsubscribe opens the sender&apos;s List-Unsubscribe link when available and
         archives their existing mail. Auto-archive blocks future inbox delivery.

@@ -42,12 +42,12 @@ export function AssistantView({ accountId, selectedEmailId }: AssistantViewProps
   return (
     <div className="h-full flex flex-col">
       {/* Sub-tabs */}
-      <div className="flex items-center gap-1 px-5 py-2 border-b border-border flex-shrink-0">
+      <div className="flex items-center gap-1 px-3 sm:px-5 py-2 border-b border-border flex-shrink-0 overflow-x-auto scrollbar-hide">
         {TABS.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
             onClick={() => setTab(key)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors flex-shrink-0 whitespace-nowrap ${
               tab === key
                 ? "bg-primary/15 text-primary"
                 : "text-muted-foreground hover:text-foreground hover:bg-secondary"
@@ -311,7 +311,7 @@ function RuleEditor({
         />
       </Field>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="From contains">
           <input
             value={draft.from_pattern ?? ""}

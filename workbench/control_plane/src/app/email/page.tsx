@@ -739,6 +739,9 @@ export default function EmailPage() {
                   total={emailsTotal}
                   onLoadMore={loadMoreEmails}
                   loadingMore={loadingMore}
+                  onBackfill={backfillOlder}
+                  backfilling={backfilling}
+                  canBackfill={!backfillExhausted[selectedFolder]}
                 />
               )}
             </div>

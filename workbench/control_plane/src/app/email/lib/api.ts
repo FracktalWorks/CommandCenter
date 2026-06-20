@@ -6,7 +6,11 @@ async function gatewayFetch<T>(
   path: string,
   init?: RequestInit
 ): Promise<T> {
-  const res = await fetch(`/api/email${path}`, {
+  // `path` already includes the gateway's `/email` router prefix (e.g.
+  // "/email/accounts"), and the Next proxy lives at `/api/email/[...path]`.
+  // Prefix with `/api` (NOT `/api/email`) so we hit `/api/email/accounts`,
+  // not the doubled `/api/email/email/accounts` (which 404s).
+  const res = await fetch(`/api${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",

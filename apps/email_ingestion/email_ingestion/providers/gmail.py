@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from typing import Any
 
@@ -23,7 +23,27 @@ from .base import (
     EmailFolder,
     EmailMessage,
     SyncResult,
+    canonical_folder,
 )
+
+# Gmail label IDs → canonical folder keys.  A message can carry several labels;
+# the first match (in this priority order) wins.
+_GMAIL_LABEL_TO_FOLDER = [
+    ("TRASH", "trash"),
+    ("SPAM", "junk"),
+    ("DRAFT", "drafts"),
+    ("SENT", "sent"),
+    ("INBOX", "inbox"),
+]
+
+
+def _gmail_folder_from_labels(label_ids: list[str]) -> str:
+    labels = set(label_ids or [])
+    for label, folder in _GMAIL_LABEL_TO_FOLDER:
+        if label in labels:
+            return folder
+    return "inbox"
+
 
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1"
 GMAIL_SCOPES = ["https://mail.google.com/"]
@@ -40,6 +60,18 @@ class GmailProvider(BaseEmailProvider):
         self._client_secret: str | None = credentials.get("client_secret")
         self._token_expiry: str | None = credentials.get("token_expiry")
         self._http: httpx.AsyncClient | None = None
+        self._creds_dirty = False
+
+    def credentials_dirty(self) -> bool:
+        return self._creds_dirty
+
+    def export_credentials(self) -> dict[str, Any]:
+        """Return credentials with the latest (possibly refreshed) tokens."""
+        return {
+            **self.credentials,
+            "access_token": self._access_token,
+            "refresh_token": self._refresh_token,
+        }
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -74,6 +106,7 @@ class GmailProvider(BaseEmailProvider):
             self._access_token = data["access_token"]
             if "refresh_token" in data:
                 self._refresh_token = data["refresh_token"]
+            self._creds_dirty = True
 
     async def authenticate(self) -> bool:
         """Validate and refresh token if needed."""
@@ -135,11 +168,13 @@ class GmailProvider(BaseEmailProvider):
         resp.raise_for_status()
         data = resp.json()
 
+        canon = canonical_folder(folder)
         messages: list[EmailMessage] = []
         for msg_ref in data.get("messages", []):
             # Fetch full message
             try:
                 msg = await self.get_message(msg_ref["id"])
+                msg.folder = canon
                 messages.append(msg)
             except Exception:
                 continue
@@ -345,7 +380,7 @@ class GmailProvider(BaseEmailProvider):
         return EmailMessage(
             provider_message_id=raw["id"],
             thread_id=raw.get("threadId"),
-            folder=label_ids[0] if label_ids else "INBOX",
+            folder=_gmail_folder_from_labels(label_ids),
             labels=label_ids,
             from_address=EmailAddress(
                 name=headers.get("From", "").split("<")[0].strip(),
@@ -373,7 +408,7 @@ class GmailProvider(BaseEmailProvider):
         if not internal_date:
             return None
         try:
-            return datetime.fromtimestamp(int(internal_date) / 1000, tz=datetime.timezone.utc)
+            return datetime.fromtimestamp(int(internal_date) / 1000, tz=timezone.utc)
         except (ValueError, TypeError):
             return None
 

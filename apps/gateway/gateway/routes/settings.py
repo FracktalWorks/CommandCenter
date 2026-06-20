@@ -389,11 +389,14 @@ _MODEL_CAPABILITIES: dict[str, dict[str, Any]] = {
     "anthropic/claude-sonnet-4":        {"label": "Claude Sonnet 4",      "vision": True, "audio": False, "reasoning": True,  "context_window": 200_000, "max_output": 16384, "desc": "Previous-gen Sonnet — strong all-rounder"},
     "anthropic/claude-3-7-sonnet-latest":{"label": "Claude 3.7 Sonnet",   "vision": True, "audio": False, "reasoning": True,  "context_window": 200_000, "max_output": 16384, "desc": "Previous-gen — extended thinking support"},
 
-    # DeepSeek
-    "deepseek/deepseek-chat":      {"label": "DeepSeek-V3",       "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192,  "desc": "General-purpose chat — strong coding and reasoning"},
-    "deepseek/deepseek-reasoner":  {"label": "DeepSeek-R1",       "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 8192,  "desc": "Deep reasoning — chain-of-thought for complex problems"},
-    "deepseek/deepseek-v4-pro":   {"label": "DeepSeek-V4 Pro",   "vision": True,  "audio": False, "reasoning": True,  "context_window": 262_144, "max_output": 32768, "desc": "Latest flagship — MoE architecture, vision, 256K context"},
-    "deepseek/deepseek-v4-flash": {"label": "DeepSeek-V4 Flash", "vision": True,  "audio": False, "reasoning": False, "context_window": 262_144, "max_output": 16384, "desc": "Fast V4 variant — vision support, great for daily tasks"},
+    # DeepSeek — V4 models are 1M context / 384K max output per DeepSeek docs
+    # (https://api-docs.deepseek.com).  The legacy deepseek-chat / deepseek-reasoner
+    # names now map to deepseek-v4-flash (non-thinking / thinking) and deprecate
+    # 2026-07-24, so they share the same 1M window.
+    "deepseek/deepseek-chat":      {"label": "DeepSeek Chat (→V4 Flash)", "vision": False, "audio": False, "reasoning": False, "context_window": 1_000_000, "max_output": 65536,  "desc": "Non-thinking mode of DeepSeek-V4 Flash (legacy name, deprecates 2026-07-24)"},
+    "deepseek/deepseek-reasoner":  {"label": "DeepSeek Reasoner (→V4 Flash)", "vision": False, "audio": False, "reasoning": True,  "context_window": 1_000_000, "max_output": 65536,  "desc": "Thinking mode of DeepSeek-V4 Flash (legacy name, deprecates 2026-07-24)"},
+    "deepseek/deepseek-v4-pro":   {"label": "DeepSeek-V4 Pro",   "vision": True,  "audio": False, "reasoning": True,  "context_window": 1_000_000, "max_output": 384_000, "desc": "Flagship V4 — MoE, vision, 1M context, 384K max output"},
+    "deepseek/deepseek-v4-flash": {"label": "DeepSeek-V4 Flash", "vision": True,  "audio": False, "reasoning": False, "context_window": 1_000_000, "max_output": 384_000, "desc": "Fast V4 variant — vision, 1M context, 384K max output"},
 
     # Groq
     "groq/llama-3.3-70b-versatile":    {"label": "Llama 3.3 70B",      "vision": False, "audio": False, "reasoning": False, "context_window": 131_072, "max_output": 8192, "desc": "Meta's latest 70B — strong general-purpose model"},

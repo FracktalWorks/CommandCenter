@@ -600,6 +600,13 @@ def _copilot_ctx(model_id: str) -> int:
         return 200_000
     if "gemini-3" in mid or "gemini-2.5" in mid or "gemini" in mid:
         return 1_000_000
+    # DeepSeek V4 via Copilot CLI: docs configure an 840K prompt limit
+    # (https://api-docs.deepseek.com/quick_start/agent_integrations/copilot_cli);
+    # native DeepSeek API context is 1M but Copilot CLI caps the prompt budget.
+    if "deepseek-v4" in mid or "deepseek/deepseek-v4" in mid:
+        return 840_000
+    if "deepseek" in mid:
+        return 128_000
     return 0
 
 

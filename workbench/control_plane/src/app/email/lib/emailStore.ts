@@ -125,6 +125,10 @@ interface EmailState {
   emailsLoading: boolean;
   foldersLoading: boolean;
   syncStatus: Record<string, "idle" | "syncing" | "error">;
+  /** Accounts whose live provider calls returned 401/403 (stale OAuth), keyed
+   *  by account id → error message. Drives the in-app reconnect banner
+   *  immediately, without waiting for the next sync to set sync_status. */
+  authErrors: Record<string, string>;
 
   // Selection
   selectedAccountId: string | null;
@@ -170,6 +174,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   emailsLoading: false,
   foldersLoading: false,
   syncStatus: {},
+  authErrors: {},
 
   // Selection
   selectedAccountId: null,
@@ -213,11 +218,28 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         emailCounts[key] = (emailCounts[key] || 0) + 1;
       }
       const folders = mergeFolders(rawFolders, emailCounts);
-      set({ folders, foldersLoading: false });
-    } catch {
+      // Live provider call succeeded — clear any prior auth flag for this account.
+      const cleared = { ...get().authErrors };
+      delete cleared[aid];
+      set({ folders, foldersLoading: false, authErrors: cleared });
+    } catch (err: any) {
       // Fall back to deriving from emails
       const folders = buildFolders(get().emails);
-      set({ folders, foldersLoading: false });
+      // A 401/403 from the live folder call means the account's OAuth token is
+      // stale — flag it immediately so the reconnect banner shows without
+      // waiting for the next background sync to mark sync_status='error'.
+      if (err?.status === 401 || err?.status === 403) {
+        set({
+          folders,
+          foldersLoading: false,
+          authErrors: {
+            ...get().authErrors,
+            [aid]: err?.message || "Authentication failed — reconnect the account.",
+          },
+        });
+      } else {
+        set({ folders, foldersLoading: false });
+      }
     }
   },
 

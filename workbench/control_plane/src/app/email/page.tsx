@@ -64,6 +64,7 @@ export default function EmailPage() {
     composeOpen,
     composeDefaults,
     error,
+    authErrors,
     fetchAccounts,
     fetchEmails,
     selectAccount,
@@ -523,7 +524,8 @@ export default function EmailPage() {
         )}
 
         {/* ── Reconnect banner: account auth/sync is failing ── */}
-        {selectedAccount?.syncStatus === "error" && (
+        {selectedAccount &&
+          (selectedAccount.syncStatus === "error" || authErrors[selectedAccount.id]) && (
           <div className="flex items-start gap-2 px-3 py-2 border-b border-amber-500/30 bg-amber-500/10 flex-shrink-0">
             <AlertCircle size={14} className="text-amber-400 mt-0.5 flex-shrink-0" />
             <div className="flex-1 min-w-0">
@@ -532,7 +534,7 @@ export default function EmailPage() {
                 reach the provider — message bodies, folders and statuses may be stale.
               </p>
               <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
-                {selectedAccount.syncError || "The connection may have expired. Reconnect to restore full access."}
+                {selectedAccount.syncError || authErrors[selectedAccount.id] || "The connection may have expired. Reconnect to restore full access."}
               </p>
             </div>
             {(selectedAccount.provider === "gmail" || selectedAccount.provider === "microsoft") ? (

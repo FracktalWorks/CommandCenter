@@ -20,7 +20,11 @@ async function gatewayFetch<T>(
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `Gateway error ${res.status}`);
+    const err = new Error(body.detail || `Gateway error ${res.status}`) as Error & {
+      status?: number;
+    };
+    err.status = res.status;
+    throw err;
   }
 
   return res.json();

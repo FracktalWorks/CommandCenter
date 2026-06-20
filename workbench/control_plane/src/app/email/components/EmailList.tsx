@@ -5,6 +5,7 @@ import {
   Pencil, Trash2, Archive, Flag, FolderInput,
   Reply, ReplyAll, Forward, MailOpen, Mail, Tag, MoreHorizontal,
   Paperclip, Star, AlertTriangle, ChevronRight, Loader2, Check, CheckSquare, X,
+  MessagesSquare,
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { timeLabel } from "../lib/utils";
@@ -241,6 +242,15 @@ export function EmailList({
                     </span>
                   </div>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {(email.threadCount ?? 1) > 1 && (
+                      <span
+                        className="inline-flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded-full bg-secondary text-muted-foreground"
+                        title={`${email.threadCount} messages in this conversation`}
+                      >
+                        <MessagesSquare size={9} />
+                        {email.threadCount}
+                      </span>
+                    )}
                     {email.importance === "high" && (
                       <AlertTriangle size={10} className="text-red-400" />
                     )}

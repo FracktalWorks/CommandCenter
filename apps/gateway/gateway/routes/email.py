@@ -897,8 +897,31 @@ async def list_messages(
 
         messages = [_row_to_message(row) for row in rows]
 
+        # Thread sizes — one extra grouped query so the list can flag which rows
+        # are conversations (badge with the message count).
+        thread_ids = list({m.thread_id for m in messages if m.thread_id})
+        thread_counts: dict[str, int] = {}
+        if thread_ids:
+            cnt_params: dict[str, Any] = {"tids": thread_ids}
+            cnt_sql = (
+                "SELECT thread_id, COUNT(*) AS c FROM email_messages "
+                "WHERE thread_id = ANY(:tids)"
+            )
+            if account_id:
+                cnt_sql += " AND account_id = :account_id"
+                cnt_params["account_id"] = account_id
+            cnt_sql += " GROUP BY thread_id"
+            cnt_res = await db.execute(text(cnt_sql), cnt_params)
+            thread_counts = {r.thread_id: r.c for r in cnt_res.fetchall()}
+
+        emails_out = []
+        for m in messages:
+            d = m.model_dump()
+            d["thread_count"] = thread_counts.get(m.thread_id, 1)
+            emails_out.append(d)
+
         return {
-            "emails": [m.model_dump() for m in messages],
+            "emails": emails_out,
             "total": total,
             "page": page,
             "page_size": page_size,

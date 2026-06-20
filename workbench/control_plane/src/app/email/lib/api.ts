@@ -62,6 +62,7 @@ function mapEmail(raw: Record<string, unknown>): Email {
     id: String(raw.id ?? ""),
     providerMessageId: String(raw.provider_message_id ?? ""),
     threadId: raw.thread_id ? String(raw.thread_id) : undefined,
+    threadCount: Number(raw.thread_count ?? raw.threadCount ?? 1),
     accountId: String(raw.account_id ?? ""),
     from: {
       name: String(fromRaw.name ?? fromRaw.Name ?? ""),

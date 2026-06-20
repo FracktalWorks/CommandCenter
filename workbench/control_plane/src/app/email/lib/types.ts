@@ -15,6 +15,8 @@ export interface Email {
   id: string;
   providerMessageId: string;
   threadId?: string;
+  /** Number of messages in this conversation (1 = standalone). */
+  threadCount?: number;
   accountId: string;
   from: EmailAddress;
   to: EmailAddress[];

@@ -1511,8 +1511,15 @@ async def oauth_authorize(
     provider: str,
     user: UserContext = Depends(get_current_user),
     redirect_after: str = Query(default=""),
+    user_email: str = Query(default=""),
 ):
-    """Start OAuth flow for an email provider."""
+    """Start OAuth flow for an email provider.
+
+    Accepts an optional ``user_email`` query parameter so the workbench can
+    pass the authenticated user's email when the browser navigates directly
+    to the gateway (bypassing the Next.js proxy).  Falls back to the
+    ``X-User-Email`` header (proxy path) or ``"anonymous"``.
+    """
     state = secrets.token_urlsafe(32)
     redirect_uri = _build_redirect_uri(provider)
 
@@ -1546,10 +1553,12 @@ async def oauth_authorize(
             or os.environ.get("MSFT_OAUTH_CLIENT_ID", "")
             or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_ID", "")
         )
-        # Tenant ID: use MICROSOFT_TENANT_ID (or AUTH_MICROSOFT_TENANT_ID) for
-        # single-tenant apps. Falls back to 'common' for multi-tenant apps.
+        # Tenant ID: use MICROSOFT_TENANT_ID (or AUTH_MICROSOFT_ENTRA_ID_TENANT /
+        # AUTH_MICROSOFT_TENANT_ID) for single-tenant apps. Falls back to
+        # 'common' for multi-tenant apps.
         tenant_id = (
             os.environ.get("MICROSOFT_TENANT_ID", "")
+            or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_TENANT", "")
             or os.environ.get("AUTH_MICROSOFT_TENANT_ID", "")
             or "common"
         )
@@ -1579,7 +1588,7 @@ async def oauth_authorize(
 
     _oauth_states[state] = {
         "provider": provider,
-        "user_id": user.email or "anonymous",
+        "user_id": user_email or user.email or "anonymous",
         "redirect_after": redirect_after,
     }
 
@@ -1593,10 +1602,17 @@ async def oauth_callback(
     state: str = Query(...),
 ):
     """Handle OAuth callback — exchange code for tokens and redirect to workbench."""
-    workbench_url = os.environ.get(
-        "WORKBENCH_PUBLIC_URL",
-        os.environ.get("GATEWAY_PUBLIC_URL", "http://localhost:8000").replace(":8000", ":3001"),
-    )
+    gateway_public = os.environ.get("GATEWAY_PUBLIC_URL", "http://localhost:8000")
+    workbench_url = os.environ.get("WORKBENCH_PUBLIC_URL")
+    if not workbench_url:
+        # Auto-derive workbench URL from gateway: replace "api." → "" for subdomain,
+        # or swap :8000 → :3001 for local dev.
+        if gateway_public == "http://localhost:8000":
+            workbench_url = "http://localhost:3001"
+        elif ".a" in gateway_public or "api." in gateway_public:
+            workbench_url = gateway_public.replace("api.", "", 1)
+        else:
+            workbench_url = gateway_public
 
     # Build the workbench callback page URL
     callback_page = f"{workbench_url}/email/oauth/callback"
@@ -1761,10 +1777,12 @@ async def _exchange_msft_token(code: str, redirect_uri: str) -> dict[str, Any]:
         or os.environ.get("MSFT_OAUTH_CLIENT_SECRET", "")
         or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_SECRET", "")
     )
-    # Tenant ID: use MICROSOFT_TENANT_ID (or AUTH_MICROSOFT_TENANT_ID) for
-    # single-tenant apps. Falls back to 'common' for multi-tenant apps.
+    # Tenant ID: use MICROSOFT_TENANT_ID (or AUTH_MICROSOFT_ENTRA_ID_TENANT /
+    # AUTH_MICROSOFT_TENANT_ID) for single-tenant apps. Falls back to
+    # 'common' for multi-tenant apps.
     tenant_id = (
         os.environ.get("MICROSOFT_TENANT_ID", "")
+        or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_TENANT", "")
         or os.environ.get("AUTH_MICROSOFT_TENANT_ID", "")
         or "common"
     )

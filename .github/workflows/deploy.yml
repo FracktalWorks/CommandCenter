@@ -140,6 +140,19 @@ jobs:
               echo "    Disabled GRAPHITI (Neo4j) — saves ~500MB RAM"
             fi
 
+            echo "==> Ensuring OAuth env vars"
+            for _var in MICROSOFT_TENANT_ID AUTH_MICROSOFT_ENTRA_ID_TENANT GATEWAY_PUBLIC_URL WORKBENCH_PUBLIC_URL; do
+              if ! grep -qE "^${_var}=" "$ENV_FILE" 2>/dev/null; then
+                case "$_var" in
+                  MICROSOFT_TENANT_ID)             echo "MICROSOFT_TENANT_ID=3a83c19d-ef37-4934-b61a-0d33750ca82e" >> "$ENV_FILE" ;;
+                  AUTH_MICROSOFT_ENTRA_ID_TENANT)   echo "AUTH_MICROSOFT_ENTRA_ID_TENANT=3a83c19d-ef37-4934-b61a-0d33750ca82e" >> "$ENV_FILE" ;;
+                  GATEWAY_PUBLIC_URL)              echo "GATEWAY_PUBLIC_URL=https://api.commandcenter.fracktal.in" >> "$ENV_FILE" ;;
+                  WORKBENCH_PUBLIC_URL)            echo "WORKBENCH_PUBLIC_URL=https://commandcenter.fracktal.in" >> "$ENV_FILE" ;;
+                esac
+                echo "    + added $_var to .env"
+              fi
+            done
+
             echo "==> Bootstrapping Docker Compose stack (core only)"
             docker compose -f infra/docker-compose.yml --profile core up -d --remove-orphans
 

@@ -11,6 +11,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useSession } from "next-auth/react";
 import {
   AlertCircle,
   ArrowRight,
@@ -822,6 +823,7 @@ function ApisTab() {
 // ===========================================================================
 
 function EmailTab() {
+  const { data: session } = useSession();
   const [accounts, setAccounts] = useState<Array<{
     id: string; provider: string; emailAddress: string; label: string;
     unreadCount: number; syncEnabled: boolean; lastSyncedAt?: string;
@@ -845,9 +847,7 @@ function EmailTab() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000"}/email/accounts`, {
-        credentials: "include",
-      });
+      const res = await fetch("/api/email/accounts");
       if (!res.ok) throw new Error(await res.json().then((b: any) => b.detail).catch(() => "Failed to load accounts"));
       const data: Array<Record<string, unknown>> = await res.json();
       setAccounts((data ?? []).map(mapAccount));
@@ -889,15 +889,18 @@ function EmailTab() {
       setShowIMAP(true);
     } else {
       const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
-      window.location.href = `${gatewayUrl}/email/oauth/${provider}/authorize?redirect_after=${encodeURIComponent(window.location.href)}`;
+      const params = new URLSearchParams({
+        redirect_after: encodeURIComponent(window.location.href),
+      });
+      if (session?.user?.email) params.set("user_email", session.user.email);
+      window.location.href = `${gatewayUrl}/email/oauth/${provider}/authorize?${params.toString()}`;
     }
-  }, []);
+  }, [session]);
 
   const handleDelete = useCallback(async (id: string) => {
     if (!confirm("Remove this email account?")) return;
     try {
-      const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
-      await fetch(`${gatewayUrl}/email/accounts/${id}`, { method: "DELETE", credentials: "include" });
+      await fetch(`/api/email/accounts/${id}`, { method: "DELETE" });
       setAccounts((prev) => prev.filter((a) => a.id !== id));
     } catch {
       setError("Failed to remove account");
@@ -906,12 +909,10 @@ function EmailTab() {
 
   const handleSync = useCallback(async (id: string) => {
     try {
-      const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
-      await fetch(`${gatewayUrl}/email/sync`, {
+      await fetch("/api/email/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ account_id: id }),
-        credentials: "include",
       });
       void fetchAccounts(); // refresh after sync
     } catch {
@@ -1143,7 +1144,6 @@ function AddIMAPModal({
   onClose: () => void;
   onCreated: () => void;
 }) {
-  const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
   const [email, setEmail] = useState("");
   const [label, setLabel] = useState("");
   const [imapHost, setImapHost] = useState("");
@@ -1163,10 +1163,9 @@ function AddIMAPModal({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`${gatewayUrl}/email/accounts`, {
+      const res = await fetch("/api/email/accounts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({
           provider: "imap",
           email_address: email.trim(),

@@ -18,6 +18,7 @@ import {
   Loader2,
   ArrowRight,
 } from "lucide-react";
+import { useSession } from "next-auth/react";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
 import { AccountSidebar } from "./components/AccountSidebar";
@@ -46,6 +47,9 @@ export default function EmailPage() {
   const [mobileView, setMobileView] = useState<"inbox" | "detail">("inbox");
 
   const { open: openDrawer, close: closeDrawer } = useMobileDrawer();
+
+  // ── Session (for passing user email to OAuth) ──
+  const { data: session } = useSession();
 
   // ── Zustand store ──
   const {
@@ -156,9 +160,11 @@ export default function EmailPage() {
     } else {
       const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
       const redirectAfter = encodeURIComponent(window.location.href);
-      window.location.href = `${gatewayUrl}/email/oauth/${provider}/authorize?redirect_after=${redirectAfter}`;
+      const params = new URLSearchParams({ redirect_after: redirectAfter });
+      if (session?.user?.email) params.set("user_email", session.user.email);
+      window.location.href = `${gatewayUrl}/email/oauth/${provider}/authorize?${params.toString()}`;
     }
-  }, []);
+  }, [session]);
 
   const handleAddAccount = useCallback(() => {
     setShowAddModal(true);

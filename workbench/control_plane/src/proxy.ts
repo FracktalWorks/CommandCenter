@@ -14,6 +14,7 @@ export async function proxy(req: NextRequest) {
     pathname.startsWith("/api/chat/") ||
     pathname.startsWith("/api/integrations/") ||
     pathname.startsWith("/api/memory/") ||
+    pathname.startsWith("/api/email/") ||
     pathname.startsWith("/api/settings/") ||
     pathname === "/signin" ||
     pathname.startsWith("/_next") ||

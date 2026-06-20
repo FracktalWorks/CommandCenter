@@ -32,6 +32,7 @@ import {
   Plus,
   Puzzle,
   RefreshCw,
+  RotateCcw,
   Search,
   Server,
   Settings2,
@@ -827,6 +828,7 @@ function EmailTab() {
   const [accounts, setAccounts] = useState<Array<{
     id: string; provider: string; emailAddress: string; label: string;
     unreadCount: number; syncEnabled: boolean; lastSyncedAt?: string;
+    syncStatus: string; syncError?: string;
   }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -841,6 +843,8 @@ function EmailTab() {
     unreadCount: Number(raw.unread_count ?? 0),
     syncEnabled: Boolean(raw.sync_enabled ?? true),
     lastSyncedAt: raw.last_synced_at ? String(raw.last_synced_at) : undefined,
+    syncStatus: String(raw.sync_status ?? "idle"),
+    syncError: raw.sync_error ? String(raw.sync_error) : undefined,
   }), []);
 
   const fetchAccounts = useCallback(async () => {
@@ -919,6 +923,14 @@ function EmailTab() {
       // non-fatal
     }
   }, [fetchAccounts]);
+
+  // Re-run the OAuth flow for an existing account. The gateway callback
+  // refreshes the stored credentials in place (rather than rejecting as a
+  // duplicate), so this repairs accounts whose refresh token went stale.
+  const handleReconnect = useCallback((provider: string) => {
+    if (provider !== "gmail" && provider !== "microsoft") return;
+    handleConnect(provider);
+  }, [handleConnect]);
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
@@ -1020,6 +1032,12 @@ function EmailTab() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
+                    {(account.provider === "gmail" || account.provider === "microsoft") && (
+                      <button onClick={() => handleReconnect(account.provider)} title="Reconnect (re-authorize)"
+                        className="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+                        <RotateCcw className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     <button onClick={() => handleSync(account.id)} title="Sync now"
                       className="p-1 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
                       <RefreshCw className="w-3.5 h-3.5" />
@@ -1032,8 +1050,14 @@ function EmailTab() {
                 </div>
                 <div className="flex items-center gap-4 text-xs text-muted-foreground">
                   <span className="flex items-center gap-1.5">
-                    <span className={`w-1.5 h-1.5 rounded-full ${account.syncEnabled ? "bg-emerald-400" : "bg-muted"}`} />
-                    {account.syncEnabled ? "Active" : "Paused"}
+                    <span className={`w-1.5 h-1.5 rounded-full ${
+                      account.syncStatus === "error"
+                        ? "bg-red-400"
+                        : account.syncEnabled ? "bg-emerald-400" : "bg-muted"
+                    }`} />
+                    {account.syncStatus === "error"
+                      ? "Auth error"
+                      : account.syncEnabled ? "Active" : "Paused"}
                   </span>
                   {account.unreadCount > 0 && (
                     <span className="bg-primary/15 text-primary rounded-full px-2 py-0.5 text-[10px] font-medium">
@@ -1042,6 +1066,24 @@ function EmailTab() {
                   )}
                   <span className="uppercase text-[10px] opacity-50">{account.provider}</span>
                 </div>
+                {account.syncStatus === "error" && (
+                  <div className="mt-2 p-2 rounded-lg bg-red-500/8 border border-red-500/20">
+                    <div className="flex items-start gap-1.5">
+                      <AlertCircle className="w-3 h-3 text-red-400 mt-0.5 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] text-red-300 leading-snug break-words">
+                          {account.syncError || "Sync failed — the connection may have expired."}
+                        </p>
+                        {(account.provider === "gmail" || account.provider === "microsoft") && (
+                          <button onClick={() => handleReconnect(account.provider)}
+                            className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium text-primary hover:opacity-80">
+                            <RotateCcw className="w-2.5 h-2.5" /> Reconnect account
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {account.lastSyncedAt && (
                   <div className="mt-2 text-[10px] text-muted-foreground/60">
                     Last synced: {new Date(account.lastSyncedAt).toLocaleString()}

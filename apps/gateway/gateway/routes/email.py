@@ -98,6 +98,7 @@ class EmailAccountModel(BaseModel):
     avatar_color: str = "#6366f1"
     sync_enabled: bool = True
     sync_status: str = "idle"
+    sync_error: str | None = None
     last_synced_at: str | None = None
     unread_count: int = 0
 
@@ -217,7 +218,7 @@ async def list_accounts(
         result = await db.execute(
             text(
                 """SELECT id, provider, email_address, label, avatar_color,
-                          sync_enabled, sync_status, last_synced_at
+                          sync_enabled, sync_status, sync_error, last_synced_at
                    FROM email_accounts
                    WHERE user_id = :user_id
                    ORDER BY created_at"""
@@ -245,6 +246,7 @@ async def list_accounts(
                 avatar_color=row.avatar_color or "#6366f1",
                 sync_enabled=row.sync_enabled,
                 sync_status=row.sync_status or "idle",
+                sync_error=row.sync_error,
                 last_synced_at=row.last_synced_at.isoformat()
                 if row.last_synced_at else None,
                 unread_count=unread,
@@ -1711,7 +1713,12 @@ async def oauth_callback(
 
     db = await _get_db()
     try:
-        # Check if account already exists for this user+email
+        # Check if an account already exists for this user+email.  If so, this
+        # is a *reconnect*: refresh the stored credentials in place rather than
+        # rejecting as a duplicate (the old behaviour left users with no way to
+        # repair an account whose refresh token had gone stale).  Resetting
+        # last_history_id forces a full re-sync so messages persisted under the
+        # old code path (e.g. raw provider folder IDs) get re-normalised.
         existing = await db.execute(
             text(
                 """SELECT id FROM email_accounts
@@ -1725,37 +1732,47 @@ async def oauth_callback(
                 "email": user_email,
             },
         )
-        if existing.fetchone():
-            return RedirectResponse(
-                f"{callback_page}?{urlencode({'error': 'duplicate', 'email': user_email, 'provider': provider})}",
-                status_code=302,
+        existing_row = existing.fetchone()
+        if existing_row:
+            account_id = str(existing_row.id)
+            await db.execute(
+                text(
+                    """UPDATE email_accounts
+                       SET credentials_encrypted = :creds,
+                           sync_status = 'idle',
+                           sync_error = NULL,
+                           last_history_id = NULL,
+                           updated_at = now()
+                       WHERE id = :id"""
+                ),
+                {"creds": encrypted_creds, "id": account_id},
             )
+            await db.commit()
+        else:
+            # Create account
+            result = await db.execute(
+                text(
+                    """INSERT INTO email_accounts
+                       (id, user_id, provider, email_address, label,
+                        avatar_color, credentials_encrypted)
+                       VALUES (:id, :user_id, :provider, :email, :label,
+                                :color, :creds)
+                       RETURNING id"""
+                ),
+                {
+                    "id": str(uuid4()),
+                    "user_id": oauth_data["user_id"],
+                    "provider": provider,
+                    "email": user_email,
+                    "label": _default_label(provider),
+                    "color": "#6366f1",
+                    "creds": encrypted_creds,
+                },
+            )
+            await db.commit()
+            account_id = str(result.fetchone()[0])
 
-        # Create account
-        result = await db.execute(
-            text(
-                """INSERT INTO email_accounts
-                   (id, user_id, provider, email_address, label,
-                    avatar_color, credentials_encrypted)
-                   VALUES (:id, :user_id, :provider, :email, :label,
-                            :color, :creds)
-                   RETURNING id"""
-            ),
-            {
-                "id": str(uuid4()),
-                "user_id": oauth_data["user_id"],
-                "provider": provider,
-                "email": user_email,
-                "label": _default_label(provider),
-                "color": "#6366f1",
-                "creds": encrypted_creds,
-            },
-        )
-        await db.commit()
-
-        account_id = str(result.fetchone()[0])
-
-        # Start background sync for the new account
+        # Start (or restart) background sync for the account
         try:
             from email_ingestion.scheduler import refresh_account_sync
             await refresh_account_sync(account_id)

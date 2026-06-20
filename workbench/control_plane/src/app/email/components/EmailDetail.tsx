@@ -4,12 +4,15 @@ import { useState, useEffect } from "react";
 import {
   Star, Reply, Forward, Trash2, Archive, MoreHorizontal,
   Paperclip, Download, ReplyAll, Flag, FolderInput,
-  MailOpen, Tag, Printer, ExternalLink, X, AlertTriangle, Loader2,
+  MailOpen, Tag, Printer, ExternalLink, X, AlertTriangle, Loader2, Send,
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { fullDateLabel, initials } from "../lib/utils";
 import { useEmailStore } from "../lib/emailStore";
-import { getAttachmentDownloadUrl, fetchFullBody, getEmail } from "../lib/api";
+import {
+  getAttachmentDownloadUrl, fetchFullBody, getEmail,
+  sendEmail as apiSendEmail,
+} from "../lib/api";
 import { MessageContent } from "./MessageContent";
 
 interface EmailDetailProps {
@@ -17,7 +20,10 @@ interface EmailDetailProps {
 }
 
 export function EmailDetail({ email }: EmailDetailProps) {
-  const { updateEmail, deleteEmail, openCompose, hydrateEmail, folders } = useEmailStore();
+  const {
+    updateEmail, deleteEmail, openCompose, hydrateEmail, folders,
+    accounts, selectedAccountId, fetchEmails,
+  } = useEmailStore();
   const [starred, setStarred] = useState(email?.isStarred ?? false);
   const [read, setRead] = useState(email?.isRead ?? true);
   const [flagged, setFlagged] = useState(email?.isFlagged ?? false);
@@ -27,7 +33,9 @@ export function EmailDetail({ email }: EmailDetailProps) {
     null
   );
   const [replyBody, setReplyBody] = useState("");
-  const [forwardTo, setForwardTo] = useState("");
+  const [replyTo, setReplyTo] = useState("");
+  const [replyCc, setReplyCc] = useState("");
+  const [sendErr, setSendErr] = useState<string | null>(null);
   const [replySending, setReplySending] = useState(false);
   const [loadingFullBody, setLoadingFullBody] = useState(false);
   const [fullBodyText, setFullBodyText] = useState<string | null>(null);
@@ -108,6 +116,106 @@ export function EmailDetail({ email }: EmailDetailProps) {
         ? "Reply All"
         : "Reply";
 
+  // The address of the account we're viewing from — excluded from reply-all
+  // recipients so we don't reply to ourselves.
+  const ownEmail = accounts
+    .find((a) => a.id === selectedAccountId)?.emailAddress?.toLowerCase();
+
+  /** Open the inline composer with recipients + a quoted body prefilled. */
+  const startReply = (mode: "reply" | "reply-all" | "forward") => {
+    setSendErr(null);
+    // HTML-only mail (e.g. Outlook) has no bodyText — fall back to the snippet.
+    const quoteSrc = view.bodyText || view.snippet || "";
+    if (mode === "forward") {
+      setReplyTo("");
+      setReplyCc("");
+      setReplyBody(
+        `\n\n---------- Forwarded message ----------\n` +
+        `From: ${view.from.name} <${view.from.email}>\n` +
+        `Date: ${view.receivedAt}\nSubject: ${view.subject}\n\n${quoteSrc}`
+      );
+    } else {
+      const recips =
+        mode === "reply-all"
+          ? [view.from.email, ...(view.to || []).map((t) => t.email)]
+          : [view.from.email];
+      const to = recips.filter(
+        (e, i) => e && recips.indexOf(e) === i && e.toLowerCase() !== ownEmail
+      );
+      const cc =
+        mode === "reply-all"
+          ? (view.cc || [])
+              .map((c) => c.email)
+              .filter((e) => e && e.toLowerCase() !== ownEmail)
+          : [];
+      setReplyTo(to.join(", "));
+      setReplyCc(cc.join(", "));
+      setReplyBody(
+        `\n\nOn ${view.receivedAt}, ${view.from.name} wrote:\n> ` +
+        quoteSrc.replace(/\n/g, "\n> ")
+      );
+    }
+    setReplyMode(mode);
+  };
+
+  const replySubject = () =>
+    replyMode === "forward"
+      ? email.subject.startsWith("Fwd:")
+        ? email.subject
+        : `Fwd: ${email.subject}`
+      : email.subject.startsWith("Re:")
+        ? email.subject
+        : `Re: ${email.subject}`;
+
+  /** Send the inline reply/forward directly (no detour through the modal). */
+  const handleInlineSend = async () => {
+    if (!email || replySending) return;
+    if (!selectedAccountId) {
+      setSendErr("No account selected");
+      return;
+    }
+    const toArr = replyTo.split(",").map((s) => s.trim()).filter(Boolean);
+    if (toArr.length === 0) {
+      setSendErr("Add at least one recipient");
+      return;
+    }
+    const ccArr = replyCc.split(",").map((s) => s.trim()).filter(Boolean);
+    setReplySending(true);
+    setSendErr(null);
+    try {
+      await apiSendEmail({
+        accountId: selectedAccountId,
+        to: toArr,
+        cc: ccArr.length ? ccArr : undefined,
+        subject: replySubject(),
+        bodyText: replyBody,
+        replyToMessageId:
+          replyMode === "forward" ? undefined : email.providerMessageId,
+      });
+      setReplyMode(null);
+      setReplyBody("");
+      setReplyTo("");
+      setReplyCc("");
+      fetchEmails();
+    } catch (err) {
+      setSendErr(err instanceof Error ? err.message : "Failed to send");
+    } finally {
+      setReplySending(false);
+    }
+  };
+
+  /** Hand the current draft off to the full composer (Cc/Bcc, attachments). */
+  const popOutToComposer = () => {
+    openCompose({
+      to: replyTo,
+      subject: replySubject(),
+      replyToBody: replyBody,
+      replyToMessageId:
+        replyMode === "forward" ? undefined : email.providerMessageId,
+    });
+    setReplyMode(null);
+  };
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* ── Main toolbar ── */}
@@ -117,19 +225,19 @@ export function EmailDetail({ email }: EmailDetailProps) {
           <TBtn
             icon={Reply}
             label="Reply"
-            onClick={() => setReplyMode("reply")}
+            onClick={() => startReply("reply")}
             active={replyMode === "reply"}
           />
           <TBtn
             icon={ReplyAll}
             label="Reply All"
-            onClick={() => setReplyMode("reply-all")}
+            onClick={() => startReply("reply-all")}
             active={replyMode === "reply-all"}
           />
           <TBtn
             icon={Forward}
             label="Forward"
-            onClick={() => setReplyMode("forward")}
+            onClick={() => startReply("forward")}
             active={replyMode === "forward"}
           />
 
@@ -466,84 +574,77 @@ export function EmailDetail({ email }: EmailDetailProps) {
                 <X size={14} />
               </button>
             </div>
-            {replyMode === "forward" && (
-              <div className="px-4 py-1.5 border-b border-border">
-                <input
-                  type="text"
-                  value={forwardTo}
-                  onChange={(e) => setForwardTo(e.target.value)}
-                  placeholder="To..."
-                  className="w-full bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
-                />
-              </div>
-            )}
+            {/* Recipients */}
+            <div className="px-4 py-1.5 border-b border-border flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground w-7 flex-shrink-0">To</span>
+              <input
+                type="text"
+                value={replyTo}
+                onChange={(e) => setReplyTo(e.target.value)}
+                placeholder="Recipients (comma-separated)…"
+                className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
+              />
+            </div>
+            <div className="px-4 py-1.5 border-b border-border flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground w-7 flex-shrink-0">Cc</span>
+              <input
+                type="text"
+                value={replyCc}
+                onChange={(e) => setReplyCc(e.target.value)}
+                placeholder="Cc…"
+                className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
+              />
+            </div>
             <textarea
               value={replyBody}
               onChange={(e) => setReplyBody(e.target.value)}
-              placeholder={`Write your ${replyLabel.toLowerCase()}...`}
-              rows={5}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  void handleInlineSend();
+                }
+              }}
+              placeholder={`Write your ${replyLabel.toLowerCase()}…`}
+              rows={6}
               autoFocus
               className="w-full bg-transparent px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground outline-none resize-none"
             />
-            <div className="px-4 py-2 bg-secondary/50 border-t border-border flex items-center justify-between">
-              <span className="text-[10px] text-muted-foreground">
-                Press Ctrl+Enter to send
+            <div className="px-4 py-2 bg-secondary/50 border-t border-border flex items-center justify-between gap-2">
+              <span className="text-[10px] truncate">
+                {sendErr ? (
+                  <span className="text-red-500">{sendErr}</span>
+                ) : (
+                  <span className="text-muted-foreground">Ctrl+Enter to send</span>
+                )}
               </span>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-shrink-0">
+                <button
+                  className="px-3 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                  onClick={popOutToComposer}
+                  title="Open in the full composer (Bcc, attachments)"
+                >
+                  Pop out
+                </button>
                 <button
                   className="px-3 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
                   onClick={() => {
                     setReplyMode(null);
-                    setReplyBody("");
-                    setForwardTo("");
+                    setSendErr(null);
                   }}
                 >
                   Discard
                 </button>
                 <button
-                  className="px-3 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-                  disabled={replySending || (!replyBody.trim() && !forwardTo.trim())}
-                  onClick={async () => {
-                    if (!email || replySending) return;
-                    setReplySending(true);
-                    try {
-                      // HTML-only mail (e.g. Outlook) has no bodyText — fall
-                      // back to the snippet so the quote isn't blank.
-                      const quoteSrc = view.bodyText || view.snippet || "";
-                      if (replyMode === "forward") {
-                        const fwdSubject = email.subject.startsWith("Fwd:")
-                          ? email.subject
-                          : `Fwd: ${email.subject}`;
-                        const fwdBody = `\n\n---------- Forwarded message ----------\nFrom: ${view.from.name} <${view.from.email}>\nDate: ${view.receivedAt}\nSubject: ${view.subject}\n\n${quoteSrc}`;
-                        await openCompose({
-                          to: forwardTo || "",
-                          subject: fwdSubject,
-                          replyToBody: replyBody + fwdBody,
-                        });
-                      } else {
-                        const replyTo = replyMode === "reply-all"
-                          ? [email.from.email, ...(email.to || []).filter(t => t.email !== email.from.email).map(t => t.email)].join(", ")
-                          : email.from.email;
-                        const reSubject = email.subject.startsWith("Re:")
-                          ? email.subject
-                          : `Re: ${email.subject}`;
-                        const quotedBody = `\n\nOn ${view.receivedAt}, ${view.from.name} wrote:\n> ${quoteSrc.replace(/\n/g, "\n> ")}`;
-                        await openCompose({
-                          to: replyTo,
-                          subject: reSubject,
-                          replyToBody: replyBody + quotedBody,
-                          replyToMessageId: email.providerMessageId,
-                        });
-                      }
-                      setReplyMode(null);
-                      setReplyBody("");
-                      setForwardTo("");
-                    } finally {
-                      setReplySending(false);
-                    }
-                  }}
+                  className="px-4 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                  disabled={replySending || !replyTo.trim() || !replyBody.trim()}
+                  onClick={() => void handleInlineSend()}
                 >
-                  {replySending ? "Opening…" : "Continue in composer"}
+                  {replySending ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    <Send size={12} />
+                  )}
+                  {replySending ? "Sending…" : "Send"}
                 </button>
               </div>
             </div>

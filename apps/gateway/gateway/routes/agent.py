@@ -1226,12 +1226,19 @@ async def reconnect_agent_stream(
         # replay end and subscribe start.
         _cursor = _since
         if await stream_exists(thread_id):
-            missed = await replay_events(thread_id, since_id=_since, count=500)
-            for evt in missed:
-                _eid = evt.get("_stream_id")
-                if _eid:
-                    _cursor = _eid
-                yield f"data: {_json.dumps(evt)}\n\n"
+            # Drain in batches until exhausted — a single 500-event read would
+            # silently truncate the tail of long, tool-heavy runs on reconnect.
+            while True:
+                missed = await replay_events(thread_id, since_id=_cursor, count=500)
+                if not missed:
+                    break
+                for evt in missed:
+                    _eid = evt.get("_stream_id")
+                    if _eid:
+                        _cursor = _eid
+                    yield f"data: {_json.dumps(evt)}\n\n"
+                if len(missed) < 500:
+                    break
 
         # Phase 2: If agent is still active, subscribe to live events from
         # the cursor (no gap with Phase 1).
@@ -1255,6 +1262,29 @@ async def reconnect_agent_stream(
     )
 
 
+def _thread_owner_ok(thread_id: str, user_id: str) -> bool:
+    """True if *thread_id* is owned by *user_id* OR not a persisted session.
+
+    Permissive by design: returns True when the session row is absent
+    (ephemeral / legacy thread) or on any DB error, so legitimate cancels are
+    never blocked.  Returns False only when the session exists for a DIFFERENT
+    user.
+    """
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+        with get_session() as s:
+            row = s.execute(
+                text("SELECT user_id FROM chat_session WHERE id = :id"),
+                {"id": thread_id},
+            ).first()
+        if row is None:
+            return True
+        return row.user_id == user_id
+    except Exception:  # noqa: BLE001
+        return True
+
+
 @router.post(
     "/run/{thread_id}/cancel",
     summary="Cancel a running agent (actually stops backend execution)",
@@ -1273,12 +1303,22 @@ async def cancel_agent_run(
     Works for any runtime (MAF / Copilot SDK) because cancellation happens at
     the detached-task layer that wraps every agent generator.
     """
+    import asyncio  # noqa: PLC0415
+
     from orchestrator.stream_relay import cancel_run  # noqa: PLC0415
+
+    # Ownership guard: a thread_id maps to a chat_session.  Block only when the
+    # session exists AND belongs to a different user (prevents one user
+    # cancelling another's run).  Allow when not found (ephemeral/legacy thread)
+    # or on DB hiccup, so legitimate cancels never get stuck.
+    actor = getattr(user, "email", None) or "default"
+    if not await asyncio.to_thread(_thread_owner_ok, thread_id, actor):
+        raise HTTPException(status_code=403, detail="Not your conversation")
 
     _log.info(
         "agent.cancel_request",
         thread_id=thread_id[:12],
-        actor=(getattr(user, "email", None) or "anonymous")[:20],
+        actor=actor[:20],
     )
     cancelled = await cancel_run(thread_id)
     return {"ok": True, "cancelled": cancelled, "threadId": thread_id}

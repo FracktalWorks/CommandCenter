@@ -45,12 +45,19 @@ const CONTEXT_LIMITS: [string, number][] = [
   ["gemini-2.0-flash",      1_000_000],
   ["gemini-1.5-pro",        2_000_000],
   ["gemini",                  128_000],
-  // DeepSeek
+  // DeepSeek — V4 (1M ctx per DeepSeek docs) MUST precede the generic
+  // "deepseek" match (first-substring-wins).
+  ["deepseek-v4",           1_000_000],
   ["deepseek-r1",             128_000],
   ["deepseek-v3",             128_000],
   ["deepseek-chat",            64_000],
   ["deepseek",                 64_000],
-  // LiteLLM tiers (conservative)
+  // LiteLLM tiers (conservative) — match both the legacy tier-* names and the
+  // current tier1/2/3 aliases so the ring is sane even if the dynamic
+  // context-window map is unavailable (gateway down).
+  ["tier1",                    32_000],
+  ["tier2",                   200_000],
+  ["tier3",                   200_000],
   ["tier-fast",                32_000],
   ["tier-balanced",           128_000],
   ["tier-powerful",           200_000],

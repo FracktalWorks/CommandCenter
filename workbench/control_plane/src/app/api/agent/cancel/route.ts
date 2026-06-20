@@ -10,7 +10,7 @@
  */
 
 import { NextRequest } from "next/server";
-import { auth } from "@/auth";
+import { auth, isAuthEnabled } from "@/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,7 +30,8 @@ const EXECUTIVE_EMAILS = new Set(
 
 export async function POST(req: NextRequest) {
   const session = await auth();
-  if (!session) {
+  // Gate only when auth is enabled (no-op in dev, where auth() returns null).
+  if (isAuthEnabled && !session?.user?.email) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
@@ -58,9 +59,10 @@ export async function POST(req: NextRequest) {
     "Content-Type": "application/json",
     Authorization: `Bearer ${INTERNAL_TOKEN}`,
   };
-  if (session.user?.email) {
-    headers["X-User-Email"] = session.user.email;
-    headers["X-User-Role"] = EXECUTIVE_EMAILS.has(session.user.email.toLowerCase())
+  const email = session?.user?.email;
+  if (email) {
+    headers["X-User-Email"] = email;
+    headers["X-User-Role"] = EXECUTIVE_EMAILS.has(email.toLowerCase())
       ? "executive"
       : "employee";
   }

@@ -467,9 +467,15 @@ export default function AgentChat({
   }, []);
 
   // Persist model preference per agent + track usage count.
+  // Only count usage on an ACTUAL model change (not on mount or agent switch),
+  // otherwise every session open inflates the "Frequently Used" ranking.
+  const prevModelRef = useRef<string | null>(null);
   useEffect(() => {
     setLastModel(currentAgentName, currentModel);
-    incrementModelUsage(currentModel);
+    if (prevModelRef.current !== null && prevModelRef.current !== currentModel) {
+      incrementModelUsage(currentModel);
+    }
+    prevModelRef.current = currentModel;
   }, [currentModel, currentAgentName]);
 
   // ── Model sorting: frequently used models float to the top ──────────────
@@ -719,6 +725,7 @@ export default function AgentChat({
 
     setCompacting(true);
     const currentMessages = messagesRef.current;
+    const forSession = sessionId; // guard against applying to a switched session
     fetch(`/api/chat/sessions/${sessionId}/compact`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -726,6 +733,7 @@ export default function AgentChat({
     })
       .then((r) => r.json() as Promise<{ messages?: ChatMessage[]; compacted?: boolean }>)
       .then((data) => {
+        if (forSession !== sessionIdRef.current) return; // session switched mid-compaction
         if (data.compacted && Array.isArray(data.messages) && data.messages.length > 0) {
           setMessages(data.messages);
         }
@@ -740,6 +748,7 @@ export default function AgentChat({
     if (compacting || isLoading) return;
     setCompacting(true);
     const currentMessages = messagesRef.current;
+    const forSession = sessionId; // guard against applying to a switched session
     fetch(`/api/chat/sessions/${sessionId}/compact`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -747,6 +756,7 @@ export default function AgentChat({
     })
       .then((r) => r.json() as Promise<{ messages?: ChatMessage[]; compacted?: boolean }>)
       .then((data) => {
+        if (forSession !== sessionIdRef.current) return; // session switched mid-compaction
         if (data.compacted && Array.isArray(data.messages) && data.messages.length > 0) {
           setMessages(data.messages);
           compactArmedRef.current = false; // prevent auto-fire right after manual compact
@@ -836,6 +846,13 @@ export default function AgentChat({
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  // Live ref to the current sessionId so async callbacks (e.g. /compact) can
+  // bail if the user switched sessions while the request was in flight.
+  const sessionIdRef = useRef(sessionId);
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   // Save messages on beforeunload so partial streams survive browser close.
   useEffect(() => {
@@ -1099,6 +1116,14 @@ export default function AgentChat({
     [isLoading, sendMode, sendMessage, stopGeneration, enqueue, setMessages]
   );
 
+  /** Explicit Stop — also clears the queue so steered/queued messages don't
+   *  auto-send when the run halts (the drain effect fires on isLoading→false). */
+  const handleStop = useCallback(() => {
+    queueRef.current = [];
+    setQueuedCount(0);
+    stopGeneration();
+  }, [stopGeneration]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || loadingHistory) return;
@@ -1256,7 +1281,7 @@ export default function AgentChat({
         <div className="max-w-3xl mx-auto space-y-5">
           {/* Stream recovery / agent status indicator */}
           {recovering || runStatus === "running" ? (
-            <div className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-[12px] text-primary/90 flex items-center gap-2">
+            <div role="status" aria-live="polite" className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-[12px] text-primary/90 flex items-center gap-2">
               <span className={[
                 "w-2.5 h-2.5 rounded-full shrink-0",
                 runStatus === "running" ? "bg-green-500 animate-pulse" : "bg-primary animate-pulse",
@@ -1527,6 +1552,7 @@ export default function AgentChat({
               <textarea ref={inputRef} value={input}
                 onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} rows={1}
                 disabled={loadingHistory}
+                aria-label={`Message ${currentAgentName}`}
                 placeholder={
                   loadingHistory
                     ? "Loading previous messages…"
@@ -1546,7 +1572,7 @@ export default function AgentChat({
               ) : isLoading ? (
                 <div className="shrink-0 flex items-stretch self-end" ref={sendMenuRef}>
                   {/* Stop button — always visible while loading */}
-                  <button type="button" onClick={stopGeneration}
+                  <button type="button" onClick={handleStop}
                     className="h-9 w-9 rounded-xl bg-destructive/10 border border-destructive/30 text-destructive flex items-center justify-center hover:bg-destructive/20 tech-transition"
                     aria-label="Stop generation" title="Stop generation">
                     <Square size={15} strokeWidth={2.5} fill="currentColor" />

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth, isAuthEnabled } from "@/auth";
 
 /**
  * POST /api/chat/sessions/[sessionId]/compact
@@ -41,6 +42,11 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ sessionId: string }> },
 ) {
+  // Require auth (middleware marks /api/chat as public; no-op in dev).  Prevents
+  // unauthenticated callers from running billed LiteLLM completions.
+  if (isAuthEnabled && !(await auth())?.user?.email) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
   // params is async in Next.js 15+
   await params; // ensure params are resolved (sessionId not needed server-side)
 

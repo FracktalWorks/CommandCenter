@@ -36,7 +36,7 @@
  */
 
 import { NextRequest } from "next/server";
-import { auth } from "@/auth";
+import { auth, isAuthEnabled } from "@/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -518,11 +518,18 @@ export async function POST(req: NextRequest): Promise<Response> {
     );
   }
 
-  // ── Resolve authenticated user for memory extraction ──
+  // ── Require authentication (middleware marks /api/agent as public, so the
+  //    route must gate itself).  Skipped when auth is disabled (dev). ──
   let userId = "";
   try {
     const session = await auth();
     userId = session?.user?.email ?? "";
+    if (isAuthEnabled && !userId) {
+      return new Response(
+        `data: ${JSON.stringify({ type: "error", content: "Unauthorized" })}\n\n`,
+        { status: 401, headers: sseHeaders() }
+      );
+    }
   } catch { /* non-request context — extraction will be skipped */ }
 
   // ── Reconnect path: resume an existing agent stream after disconnect ────

@@ -3,7 +3,18 @@
  * POST /api/chat/sessions/[sessionId]/messages   — upsert a batch of messages
  */
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { auth, isAuthEnabled } from "@/auth";
+
+/** 401 helper — middleware marks /api/chat as public, so routes gate themselves
+ *  (no-op when auth is disabled in dev). */
+async function requireAuth(): Promise<NextResponse | null> {
+  if (!isAuthEnabled) return null;
+  const session = await auth();
+  if (!session?.user?.email) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  return null;
+}
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +52,8 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ sessionId: string }> },
 ): Promise<NextResponse> {
+  const unauth = await requireAuth();
+  if (unauth) return unauth;
   try {
     const { sessionId } = await params;
     // Forward pagination params for windowed lazy-loading:
@@ -71,6 +84,8 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ sessionId: string }> },
 ): Promise<NextResponse> {
+  const unauth = await requireAuth();
+  if (unauth) return unauth;
   try {
     const { sessionId } = await params;
     const body = await req.json();

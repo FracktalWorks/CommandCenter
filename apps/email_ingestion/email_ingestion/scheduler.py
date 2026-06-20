@@ -250,6 +250,24 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
 
             await db.commit()
 
+            # Persist refreshed OAuth tokens if the provider rotated them, so the
+            # next sync cycle doesn't reuse a stale (and soon-invalid) token.
+            if provider.credentials_dirty():
+                await db.execute(
+                    text(
+                        """UPDATE email_accounts
+                           SET credentials_encrypted = :creds, updated_at = now()
+                           WHERE id = :id"""
+                    ),
+                    {
+                        "id": account_id,
+                        "creds": store.encrypt(
+                            json.dumps(provider.export_credentials())
+                        ),
+                    },
+                )
+                await db.commit()
+
             # Update account sync state
             await db.execute(
                 text(
@@ -281,15 +299,16 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
             await db.commit()
 
             logger.info(
-                "sync.account_done",
-                account_id=account_id,
-                provider=provider_name,
-                synced=persisted_count,
+                "sync.account_done account_id=%s provider=%s synced=%s",
+                account_id, provider_name, persisted_count,
             )
             return {"synced": persisted_count, "history_id": sync_result.new_history_id}
 
         except Exception as exc:
-            logger.warning("sync.account_failed", account_id=account_id, error=str(exc))
+            logger.warning(
+                "sync.account_failed account_id=%s error=%s",
+                account_id, str(exc),
+            )
 
             # Mark account as error
             try:
@@ -325,12 +344,18 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
 
 async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
     """Run sync in a loop for a single account forever."""
-    logger.info("sync.loop_started", account_id=account_id, interval=interval_secs)
+    logger.info(
+        "sync.loop_started account_id=%s interval=%s",
+        account_id, interval_secs,
+    )
     while True:
         try:
             await _sync_account(account_id)
         except Exception as exc:
-            logger.warning("sync.loop_iteration_failed", account_id=account_id, error=str(exc))
+            logger.warning(
+                "sync.loop_iteration_failed account_id=%s error=%s",
+                account_id, str(exc),
+            )
 
         # Re-read interval in case it was changed via PATCH
         try:
@@ -401,7 +426,7 @@ async def start_background_sync() -> dict[str, int]:
             launched[account_id] = interval
 
         _scheduler_running = True
-        logger.info("sync.scheduler_started", accounts=len(launched))
+        logger.info("sync.scheduler_started accounts=%s", len(launched))
         return launched
 
 
@@ -423,7 +448,7 @@ async def stop_background_sync() -> None:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        logger.info("sync.scheduler_stopped", tasks_cancelled=len(tasks))
+        logger.info("sync.scheduler_stopped tasks_cancelled=%s", len(tasks))
 
 
 async def refresh_account_sync(account_id: str) -> None:
@@ -444,12 +469,17 @@ async def refresh_account_sync(account_id: str) -> None:
         # Read current config
         interval = await _get_account_sync_interval(account_id)
         if interval is None:
-            logger.warning("sync.refresh_account_not_found", account_id=account_id)
+            logger.warning(
+                "sync.refresh_account_not_found account_id=%s", account_id
+            )
             return
 
         task = asyncio.create_task(_account_sync_loop(account_id, interval))
         _scheduler_tasks[account_id] = task
-        logger.info("sync.loop_refreshed", account_id=account_id, interval=interval)
+        logger.info(
+            "sync.loop_refreshed account_id=%s interval=%s",
+            account_id, interval,
+        )
 
 
 async def remove_account_sync(account_id: str) -> None:
@@ -465,7 +495,7 @@ async def remove_account_sync(account_id: str) -> None:
                 await task
             except asyncio.CancelledError:
                 pass
-            logger.info("sync.loop_removed", account_id=account_id)
+            logger.info("sync.loop_removed account_id=%s", account_id)
 
 
 def get_scheduler_status() -> dict[str, Any]:

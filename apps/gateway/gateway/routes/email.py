@@ -507,6 +507,23 @@ async def list_folders(
 
         folders = await provider.list_folders()
 
+        # Persist rotated OAuth tokens so a later sync doesn't reuse a stale one.
+        if provider.credentials_dirty():
+            await db.execute(
+                text(
+                    """UPDATE email_accounts
+                       SET credentials_encrypted = :creds, updated_at = now()
+                       WHERE id = :id"""
+                ),
+                {
+                    "id": account_id,
+                    "creds": store.encrypt(
+                        json.dumps(provider.export_credentials())
+                    ),
+                },
+            )
+            await db.commit()
+
         return [
             EmailFolderModel(
                 provider_folder_id=f.provider_folder_id,
@@ -556,8 +573,14 @@ async def list_messages(
             where_clauses.append("em.account_id = :account_id")
             params["account_id"] = account_id
         if folder:
-            where_clauses.append("em.folder = :folder")
-            params["folder"] = folder
+            # "starred" is a flag, not a stored folder; everything else is matched
+            # case-insensitively against the canonical folder key persisted by the
+            # providers (inbox/sent/drafts/trash/archive/junk + user folders).
+            if folder.lower() == "starred":
+                where_clauses.append("em.is_starred = true")
+            else:
+                where_clauses.append("LOWER(em.folder) = LOWER(:folder)")
+                params["folder"] = folder
         if query:
             where_clauses.append(
                 """to_tsvector('english',
@@ -1207,6 +1230,24 @@ async def trigger_sync(
 
             await db.commit()
 
+            # Persist refreshed OAuth tokens (access/refresh) if the provider
+            # rotated them during this sync, so the next sync doesn't reuse a
+            # stale token.
+            if provider.credentials_dirty():
+                await db.execute(
+                    text(
+                        """UPDATE email_accounts
+                           SET credentials_encrypted = :creds, updated_at = now()
+                           WHERE id = :id"""
+                    ),
+                    {
+                        "id": req.account_id,
+                        "creds": store.encrypt(
+                            json.dumps(provider.export_credentials())
+                        ),
+                    },
+                )
+
             # Update account sync state
             await db.execute(
                 text(
@@ -1656,6 +1697,12 @@ async def oauth_callback(
             status_code=302,
         )
 
+    # Persist the OAuth *app* credentials (client_id/secret, tenant) alongside
+    # the user's tokens.  Without these the provider cannot refresh the access
+    # token once it expires (~1h) and all sync/folder/message calls start
+    # failing with "authentication failed".
+    token_data.update(_provider_oauth_app_creds(provider))
+
     # Store in encrypted DB
     from acb_llm.key_store import get_key_store
     store = get_key_store()
@@ -1741,6 +1788,37 @@ def _build_redirect_uri(provider: str) -> str:
         "http://localhost:8000",
     )
     return f"{base}/email/oauth/{provider}/callback"
+
+
+def _provider_oauth_app_creds(provider: str) -> dict[str, str]:
+    """Resolve the OAuth *app* credentials (client id/secret, tenant) for a provider.
+
+    These must be stored alongside the user's tokens so the provider can refresh
+    the access token later — Microsoft/Google access tokens expire in ~1 hour and
+    a refresh requires the client_id/client_secret used at authorize time.
+    """
+    settings = get_settings()
+    if provider == "gmail":
+        return {
+            "client_id": settings.gmail_oauth_client_id
+            or os.environ.get("GMAIL_OAUTH_CLIENT_ID", ""),
+            "client_secret": settings.gmail_oauth_client_secret
+            or os.environ.get("GMAIL_OAUTH_CLIENT_SECRET", ""),
+        }
+    if provider == "microsoft":
+        return {
+            "client_id": settings.msft_oauth_client_id
+            or os.environ.get("MSFT_OAUTH_CLIENT_ID", "")
+            or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_ID", ""),
+            "client_secret": settings.msft_oauth_client_secret
+            or os.environ.get("MSFT_OAUTH_CLIENT_SECRET", "")
+            or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_SECRET", ""),
+            "tenant_id": os.environ.get("MICROSOFT_TENANT_ID", "")
+            or os.environ.get("AUTH_MICROSOFT_ENTRA_ID_TENANT", "")
+            or os.environ.get("AUTH_MICROSOFT_TENANT_ID", "")
+            or "common",
+        }
+    return {}
 
 
 async def _exchange_gmail_token(code: str, redirect_uri: str) -> dict[str, Any]:

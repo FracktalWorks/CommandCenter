@@ -11,6 +11,42 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+# Canonical folder keys shared by the whole stack (DB, gateway query, UI store).
+# Provider-specific folder names/IDs (Outlook ``parentFolderId``, Gmail label IDs,
+# IMAP mailbox names) MUST be normalized to one of these before persisting so the
+# inbox query ``WHERE folder = 'inbox'`` actually matches.  The workbench email
+# store uses these exact lowercase keys.
+_CANONICAL_FOLDERS: dict[str, str] = {
+    "inbox": "inbox",
+    "sent": "sent",
+    "sentitems": "sent",
+    "sent items": "sent",
+    "sent mail": "sent",
+    "drafts": "drafts",
+    "draft": "drafts",
+    "trash": "trash",
+    "deleteditems": "trash",
+    "deleted items": "trash",
+    "bin": "trash",
+    "archive": "archive",
+    "junk": "junk",
+    "junkemail": "junk",
+    "junk email": "junk",
+    "spam": "junk",
+}
+
+
+def canonical_folder(name: str | None) -> str:
+    """Normalize a provider folder name/ID to a canonical lowercase key.
+
+    Unknown names fall through lowercased (so user-created folders keep a stable
+    key) and a missing name defaults to ``inbox``.
+    """
+    if not name:
+        return "inbox"
+    key = name.strip().lower()
+    return _CANONICAL_FOLDERS.get(key, key)
+
 
 @dataclass
 class EmailAddress:
@@ -76,6 +112,19 @@ class BaseEmailProvider(ABC):
 
     def __init__(self, credentials: dict[str, Any]):
         self.credentials = credentials
+
+    def credentials_dirty(self) -> bool:
+        """Whether the in-memory credentials changed (e.g. token refresh).
+
+        Providers that rotate OAuth tokens override this so the caller can
+        persist the refreshed credentials back to storage.  Defaults to False
+        for providers (like IMAP) that never mutate their credentials.
+        """
+        return False
+
+    def export_credentials(self) -> dict[str, Any]:
+        """Return the current credentials for persistence after a refresh."""
+        return self.credentials
 
     @abstractmethod
     async def authenticate(self) -> bool:

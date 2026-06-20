@@ -20,6 +20,7 @@ from .base import (
     EmailFolder,
     EmailMessage,
     SyncResult,
+    canonical_folder,
 )
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
@@ -41,6 +42,18 @@ class OutlookProvider(BaseEmailProvider):
         self._client_secret: str | None = credentials.get("client_secret")
         self._tenant_id: str = credentials.get("tenant_id", "common")
         self._http: httpx.AsyncClient | None = None
+        self._creds_dirty = False
+
+    def credentials_dirty(self) -> bool:
+        return self._creds_dirty
+
+    def export_credentials(self) -> dict[str, Any]:
+        """Return credentials with the latest (possibly refreshed) tokens."""
+        return {
+            **self.credentials,
+            "access_token": self._access_token,
+            "refresh_token": self._refresh_token,
+        }
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -77,8 +90,11 @@ class OutlookProvider(BaseEmailProvider):
             resp.raise_for_status()
             data = resp.json()
             self._access_token = data["access_token"]
+            # Microsoft rotates refresh tokens on every use — persist the new one
+            # or subsequent refreshes will fail with the stale token.
             if "refresh_token" in data:
                 self._refresh_token = data["refresh_token"]
+            self._creds_dirty = True
 
     async def authenticate(self) -> bool:
         """Validate the access token."""
@@ -155,9 +171,15 @@ class OutlookProvider(BaseEmailProvider):
         resp.raise_for_status()
         data = resp.json()
 
+        # Normalize every message to the canonical folder key for the folder we
+        # queried — Graph's ``parentFolderId`` is an opaque ID that would never
+        # match the gateway's ``WHERE folder = 'inbox'`` filter.
+        canon = canonical_folder(folder)
         messages: list[EmailMessage] = []
         for msg_data in data.get("value", []):
-            messages.append(self._parse_graph_message(msg_data))
+            msg = self._parse_graph_message(msg_data)
+            msg.folder = canon
+            messages.append(msg)
 
         next_token = data.get("@odata.nextLink")
         return messages, next_token
@@ -272,7 +294,10 @@ class OutlookProvider(BaseEmailProvider):
                         subject="[DELETED]",
                     ))
                 else:
-                    messages.append(self._parse_graph_message(item))
+                    msg = self._parse_graph_message(item)
+                    # The delta query runs against the inbox folder.
+                    msg.folder = "inbox"
+                    messages.append(msg)
 
             return SyncResult(
                 messages_synced=len(data.get("value", [])),

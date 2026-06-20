@@ -46,6 +46,8 @@ function mapAccount(raw: Record<string, unknown>): EmailAccount {
     unreadCount: Number(raw.unread_count ?? 0),
     syncEnabled: Boolean(raw.sync_enabled ?? true),
     lastSyncedAt: raw.last_synced_at ? String(raw.last_synced_at) : undefined,
+    syncStatus: raw.sync_status ? String(raw.sync_status) : undefined,
+    syncError: raw.sync_error ? String(raw.sync_error) : undefined,
   };
 }
 

@@ -51,6 +51,10 @@ export interface EmailAccount {
   unreadCount: number;
   syncEnabled: boolean;
   lastSyncedAt?: string;
+  /** Provider sync state: 'idle' | 'syncing' | 'error'. */
+  syncStatus?: string;
+  /** Last sync error (e.g. expired OAuth token), when syncStatus is 'error'. */
+  syncError?: string;
 }
 
 export interface ChatMessage {

@@ -17,11 +17,12 @@ interface EmailDetailProps {
 }
 
 export function EmailDetail({ email }: EmailDetailProps) {
-  const { updateEmail, deleteEmail, openCompose, hydrateEmail } = useEmailStore();
+  const { updateEmail, deleteEmail, openCompose, hydrateEmail, folders } = useEmailStore();
   const [starred, setStarred] = useState(email?.isStarred ?? false);
   const [read, setRead] = useState(email?.isRead ?? true);
   const [flagged, setFlagged] = useState(email?.isFlagged ?? false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [showMoveMenu, setShowMoveMenu] = useState(false);
   const [replyMode, setReplyMode] = useState<"reply" | "reply-all" | "forward" | null>(
     null
   );
@@ -140,7 +141,41 @@ export function EmailDetail({ email }: EmailDetailProps) {
           <TBtn icon={Trash2} label="Delete" onClick={() => {
             if (email) deleteEmail(email.id);
           }} />
-          <TBtn icon={FolderInput} label="Move" onClick={() => {}} />
+          <div className="relative">
+            <TBtn
+              icon={FolderInput}
+              label="Move to folder"
+              onClick={() => setShowMoveMenu((v) => !v)}
+              active={showMoveMenu}
+            />
+            {showMoveMenu && (
+              <>
+                <div
+                  className="fixed inset-0 z-10"
+                  onClick={() => setShowMoveMenu(false)}
+                />
+                <div className="absolute left-0 top-full mt-1 z-20 bg-popover border border-border rounded-lg shadow-xl py-1 w-44 max-h-64 overflow-y-auto">
+                  <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Move to
+                  </div>
+                  {folders
+                    .filter((f) => f.key !== "starred" && f.key !== email?.folder)
+                    .map((f) => (
+                      <button
+                        key={f.key}
+                        className="w-full text-left px-3 py-1.5 text-xs text-foreground/80 hover:text-foreground hover:bg-secondary transition-colors"
+                        onClick={() => {
+                          if (email) updateEmail(email.id, { folder: f.key });
+                          setShowMoveMenu(false);
+                        }}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                </div>
+              </>
+            )}
+          </div>
 
           <Divider />
 
@@ -435,11 +470,14 @@ export function EmailDetail({ email }: EmailDetailProps) {
                     if (!email || replySending) return;
                     setReplySending(true);
                     try {
+                      // HTML-only mail (e.g. Outlook) has no bodyText — fall
+                      // back to the snippet so the quote isn't blank.
+                      const quoteSrc = view.bodyText || view.snippet || "";
                       if (replyMode === "forward") {
                         const fwdSubject = email.subject.startsWith("Fwd:")
                           ? email.subject
                           : `Fwd: ${email.subject}`;
-                        const fwdBody = `\n\n---------- Forwarded message ----------\nFrom: ${view.from.name} <${view.from.email}>\nDate: ${view.receivedAt}\nSubject: ${view.subject}\n\n${view.bodyText}`;
+                        const fwdBody = `\n\n---------- Forwarded message ----------\nFrom: ${view.from.name} <${view.from.email}>\nDate: ${view.receivedAt}\nSubject: ${view.subject}\n\n${quoteSrc}`;
                         await openCompose({
                           to: forwardTo || "",
                           subject: fwdSubject,
@@ -452,7 +490,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                         const reSubject = email.subject.startsWith("Re:")
                           ? email.subject
                           : `Re: ${email.subject}`;
-                        const quotedBody = `\n\nOn ${view.receivedAt}, ${view.from.name} wrote:\n> ${view.bodyText.replace(/\n/g, "\n> ")}`;
+                        const quotedBody = `\n\nOn ${view.receivedAt}, ${view.from.name} wrote:\n> ${quoteSrc.replace(/\n/g, "\n> ")}`;
                         await openCompose({
                           to: replyTo,
                           subject: reSubject,

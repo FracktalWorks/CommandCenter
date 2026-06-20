@@ -224,30 +224,36 @@ export default function EmailPage() {
         case "mark-read":
           updateEmail(email.id, { isRead: true });
           break;
-        case "reply":
+        case "reply": {
+          const quoteSrc = email.bodyText || email.snippet || "";
           openCompose({
             to: email.from.email,
             subject: email.subject.startsWith("Re:") ? email.subject : `Re: ${email.subject}`,
-            replyToBody: `\n\nOn ${email.receivedAt}, ${email.from.name} wrote:\n> ${email.bodyText.replace(/\n/g, "\n> ")}`,
+            replyToBody: `\n\nOn ${email.receivedAt}, ${email.from.name} wrote:\n> ${quoteSrc.replace(/\n/g, "\n> ")}`,
             replyToMessageId: email.providerMessageId,
           });
           break;
-        case "reply-all":
+        }
+        case "reply-all": {
+          const quoteSrc = email.bodyText || email.snippet || "";
           const allTo = [email.from.email, ...(email.to || []).filter(t => t.email !== email.from.email).map(t => t.email)].join(", ");
           openCompose({
             to: allTo,
             subject: email.subject.startsWith("Re:") ? email.subject : `Re: ${email.subject}`,
-            replyToBody: `\n\nOn ${email.receivedAt}, ${email.from.name} wrote:\n> ${email.bodyText.replace(/\n/g, "\n> ")}`,
+            replyToBody: `\n\nOn ${email.receivedAt}, ${email.from.name} wrote:\n> ${quoteSrc.replace(/\n/g, "\n> ")}`,
             replyToMessageId: email.providerMessageId,
           });
           break;
-        case "forward":
+        }
+        case "forward": {
+          const quoteSrc = email.bodyText || email.snippet || "";
           openCompose({
             to: "",
             subject: email.subject.startsWith("Fwd:") ? email.subject : `Fwd: ${email.subject}`,
-            replyToBody: `\n\n---------- Forwarded message ----------\nFrom: ${email.from.name} <${email.from.email}>\nDate: ${email.receivedAt}\nSubject: ${email.subject}\n\n${email.bodyText}`,
+            replyToBody: `\n\n---------- Forwarded message ----------\nFrom: ${email.from.name} <${email.from.email}>\nDate: ${email.receivedAt}\nSubject: ${email.subject}\n\n${quoteSrc}`,
           });
           break;
+        }
         // move, label - will need folder/label picker (future)
       }
     },

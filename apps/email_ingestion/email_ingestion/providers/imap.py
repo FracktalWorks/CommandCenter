@@ -39,6 +39,7 @@ from .base import (
     EmailFolder,
     EmailMessage,
     SyncResult,
+    canonical_folder,
 )
 
 
@@ -168,8 +169,14 @@ class IMAPProvider(BaseEmailProvider):
         query: str | None = None,
         max_results: int = 50,
         page_token: str | None = None,
+        canonical_override: str | None = None,
     ) -> tuple[list[EmailMessage], str | None]:
         imap = await self._get_imap()
+
+        # IMAP per-message folder is inferred from flags (INBOX/DRAFTS/TRASH);
+        # for any other mailbox we stamp the canonical key of the selected folder
+        # so the message is filed under the folder the user actually opened.
+        canon = canonical_override or canonical_folder(folder)
 
         def _list() -> tuple[list[EmailMessage], str | None]:
             s, _ = imap.select(f'"{folder}"', readonly=True)
@@ -204,6 +211,11 @@ class IMAPProvider(BaseEmailProvider):
 
             messages = _parse_imap_fetch(msg_data)
             messages.reverse()
+            # Stamp the canonical folder for non-INBOX mailboxes so Sent/Drafts/
+            # user folders file correctly (the flag-based default is INBOX).
+            if canon != "inbox":
+                for m in messages:
+                    m.folder = canon
             return messages, None
 
         return await asyncio.to_thread(_list)
@@ -401,6 +413,13 @@ class IMAPProvider(BaseEmailProvider):
                 new_history_id=new_history_id,
             )
 
+        # NOTE: IMAP sync is INBOX-only.  IMAP UIDs are unique only *within* a
+        # mailbox (they restart per folder), but email_messages enforces a global
+        # UNIQUE(account_id, provider_message_id) and get_message/apply_flags/
+        # move all treat the id as a bare INBOX UID.  Syncing other mailboxes
+        # would let e.g. a Sent UID collide with an Inbox UID and clobber it.
+        # Multi-folder IMAP needs folder-namespaced ids end-to-end first (see the
+        # email review notes); until then user folders stay empty for IMAP.
         return await asyncio.to_thread(_sync)
 
     async def get_attachment(

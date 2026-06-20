@@ -153,7 +153,13 @@ class GmailProvider(BaseEmailProvider):
         query: str | None = None,
         max_results: int = 50,
         page_token: str | None = None,
+        canonical_override: str | None = None,
     ) -> tuple[list[EmailMessage], str | None]:
+        """List messages carrying ``folder`` (a Gmail label ID).
+
+        ``canonical_override`` forces the stored folder key (used when syncing a
+        user label whose *name* — not its opaque ID — is the UI folder key).
+        """
         client = await self._get_client()
         params: dict[str, Any] = {
             "maxResults": min(max_results, 500),
@@ -168,7 +174,7 @@ class GmailProvider(BaseEmailProvider):
         resp.raise_for_status()
         data = resp.json()
 
-        canon = canonical_folder(folder)
+        canon = canonical_override or canonical_folder(folder)
         messages: list[EmailMessage] = []
         for msg_ref in data.get("messages", []):
             # Fetch full message
@@ -339,9 +345,36 @@ class GmailProvider(BaseEmailProvider):
             result.messages_synced += len(message_ids_deleted)
             return result
         else:
-            # Initial full sync — fetch the standard system labels so messages
-            # land in the right folder in the UI (not just inbox/sent).
+            # Initial full sync. User labels are fetched FIRST and the system
+            # labels LAST: the persistence layer upserts in list order, so when a
+            # message carries both INBOX and a user label the system folder wins
+            # and the message still shows in the inbox (Gmail labels are
+            # many-to-many, our ``folder`` column is single-valued).
             messages: list[EmailMessage] = []
+
+            # User labels — so the user's own folders aren't empty in the UI.
+            try:
+                folders = await self.list_folders()
+            except Exception:
+                folders = []
+            for f in folders:
+                if f.type != "user":
+                    continue
+                canon = canonical_folder(f.name)
+                # Skip anything that collapses onto a system folder key.
+                if canon in ("inbox", "sent", "drafts", "trash", "junk", "archive"):
+                    continue
+                try:
+                    user_msgs, _ = await self.list_messages(
+                        folder=f.provider_folder_id,
+                        max_results=max_results,
+                        canonical_override=canon,
+                    )
+                    messages.extend(user_msgs)
+                except Exception:
+                    continue
+
+            # System labels last (so they win the upsert on shared messages).
             for label in ("INBOX", "SENT", "DRAFT", "SPAM", "TRASH"):
                 try:
                     label_msgs, _ = await self.list_messages(

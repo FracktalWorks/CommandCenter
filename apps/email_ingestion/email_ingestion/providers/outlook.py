@@ -140,6 +140,7 @@ class OutlookProvider(BaseEmailProvider):
         query: str | None = None,
         max_results: int = 50,
         page_token: str | None = None,
+        canonical_override: str | None = None,
     ) -> tuple[list[EmailMessage], str | None]:
         client = await self._get_client()
 
@@ -178,7 +179,7 @@ class OutlookProvider(BaseEmailProvider):
         # Normalize every message to the canonical folder key for the folder we
         # queried — Graph's ``parentFolderId`` is an opaque ID that would never
         # match the gateway's ``WHERE folder = 'inbox'`` filter.
-        canon = canonical_folder(folder)
+        canon = canonical_override or canonical_folder(folder)
         messages: list[EmailMessage] = []
         for msg_data in data.get("value", []):
             msg = self._parse_graph_message(msg_data)
@@ -366,6 +367,30 @@ class OutlookProvider(BaseEmailProvider):
                 except Exception:
                     # A missing/forbidden folder shouldn't abort the whole sync.
                     continue
+
+            # User-created folders — each Outlook message lives in exactly one
+            # folder, so storing folder=canonical(displayName) is unambiguous and
+            # makes the user's own folders openable in the UI.
+            try:
+                folders = await self.list_folders()
+            except Exception:
+                folders = []
+            for f in folders:
+                if f.type == "system":
+                    continue
+                canon = canonical_folder(f.name)
+                if canon in ("inbox", "sent", "drafts", "trash", "junk", "archive"):
+                    continue
+                try:
+                    folder_msgs, _ = await self.list_messages(
+                        folder=f.provider_folder_id,
+                        max_results=max_results,
+                        canonical_override=canon,
+                    )
+                    messages.extend(folder_msgs)
+                except Exception:
+                    continue
+
             return SyncResult(
                 messages_synced=len(messages),
                 messages=messages,

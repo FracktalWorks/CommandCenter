@@ -20,7 +20,7 @@ interface MessageContentProps {
  */
 export function MessageContent({ html, text }: MessageContentProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [height, setHeight] = useState(120);
+  const [height, setHeight] = useState(400);
 
   const hasHtml = !!html && html.trim().length > 0;
 
@@ -49,6 +49,8 @@ export function MessageContent({ html, text }: MessageContentProps) {
     const iframe = iframeRef.current;
     if (!iframe) return;
 
+    let observer: ResizeObserver | null = null;
+
     const resize = () => {
       try {
         const doc = iframe.contentDocument;
@@ -57,7 +59,12 @@ export function MessageContent({ html, text }: MessageContentProps) {
             doc.body.scrollHeight,
             doc.documentElement.scrollHeight
           );
-          setHeight(h + 16);
+          if (h > 0) setHeight(h + 24);
+          // Keep tracking growth as images/fonts settle in.
+          if (!observer && typeof ResizeObserver !== "undefined") {
+            observer = new ResizeObserver(resize);
+            observer.observe(doc.body);
+          }
         }
       } catch {
         // cross-origin guard — ignore
@@ -65,11 +72,12 @@ export function MessageContent({ html, text }: MessageContentProps) {
     };
 
     iframe.addEventListener("load", resize);
-    // Re-measure shortly after load for late-loading images.
-    const t = setTimeout(resize, 400);
+    // Re-measure a few times after load for late-loading images/web fonts.
+    const timers = [200, 600, 1200].map((d) => setTimeout(resize, d));
     return () => {
       iframe.removeEventListener("load", resize);
-      clearTimeout(t);
+      timers.forEach(clearTimeout);
+      observer?.disconnect();
     };
   }, [hasHtml, srcDoc]);
 
@@ -79,9 +87,12 @@ export function MessageContent({ html, text }: MessageContentProps) {
         ref={iframeRef}
         title="Email content"
         srcDoc={srcDoc}
-        sandbox="allow-popups allow-popups-to-escape-sandbox"
+        // allow-same-origin (without allow-scripts) lets us measure the content
+        // height for auto-sizing; scripts still never run, so remote markup stays
+        // inert. Omitting it leaves contentDocument null and the frame stuck small.
+        sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
         className="w-full border-0 bg-transparent"
-        style={{ height }}
+        style={{ height, minHeight: 200 }}
       />
     );
   }

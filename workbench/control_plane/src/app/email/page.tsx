@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   PanelLeftClose,
   PanelLeftOpen,
@@ -26,6 +26,7 @@ import { EmailList } from "./components/EmailList";
 import { EmailDetail } from "./components/EmailDetail";
 import { AIChatPanel } from "./components/AIChatPanel";
 import { ComposePanel } from "./components/ComposePanel";
+import { CommandPalette, Command } from "./components/CommandPalette";
 import { useEmailStore } from "./lib/emailStore";
 import { Email } from "./lib/types";
 import { folderLabel } from "./lib/utils";
@@ -39,6 +40,7 @@ export default function EmailPage() {
   const [rightOpen, setRightOpen] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [oauthStatus, setOauthStatus] = useState<{
     gmail: boolean; microsoft: boolean; checked: boolean;
   }>({ gmail: false, microsoft: false, checked: false });
@@ -265,6 +267,116 @@ export default function EmailPage() {
 
   const handleBack = () => setMobileView("inbox");
 
+  // ── Keyboard shortcuts (Gmail/Superhuman style) ──
+  const navigateList = useCallback(
+    (dir: 1 | -1) => {
+      if (emails.length === 0) return;
+      const idx = emails.findIndex((e) => e.id === selectedEmailId);
+      const next =
+        idx === -1 ? 0 : Math.min(emails.length - 1, Math.max(0, idx + dir));
+      handleEmailSelect(emails[next].id);
+    },
+    [emails, selectedEmailId, handleEmailSelect]
+  );
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Command palette — works even while typing in a field.
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+        return;
+      }
+      if (e.key === "Escape") {
+        setPaletteOpen(false);
+        return;
+      }
+      // Don't hijack typing, modifier combos, or when a modal owns the keys.
+      const t = e.target as HTMLElement | null;
+      const typing =
+        !!t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable);
+      if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (composeOpen || showAddModal || showOnboarding || paletteOpen) return;
+
+      const em = selectedEmail;
+      switch (e.key) {
+        case "c":
+          e.preventDefault();
+          openCompose();
+          break;
+        case "j":
+          e.preventDefault();
+          navigateList(1);
+          break;
+        case "k":
+          e.preventDefault();
+          navigateList(-1);
+          break;
+        case "r":
+          if (em) { e.preventDefault(); handleToolbarAction("reply", em); }
+          break;
+        case "a":
+          if (em) { e.preventDefault(); handleToolbarAction("reply-all", em); }
+          break;
+        case "f":
+          if (em) { e.preventDefault(); handleToolbarAction("forward", em); }
+          break;
+        case "e":
+          if (em) { e.preventDefault(); updateEmail(em.id, { folder: "archive" }); }
+          break;
+        case "s":
+          if (em) { e.preventDefault(); updateEmail(em.id, { isStarred: !em.isStarred }); }
+          break;
+        case "u":
+          if (em) { e.preventDefault(); updateEmail(em.id, { isRead: !em.isRead }); }
+          break;
+        case "#":
+        case "Delete":
+          if (em) { e.preventDefault(); deleteEmail(em.id); }
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [
+    selectedEmail, navigateList, openCompose, handleToolbarAction,
+    updateEmail, deleteEmail, composeOpen, showAddModal, showOnboarding,
+    paletteOpen,
+  ]);
+
+  // Command palette entries (Cmd/Ctrl+K).
+  const commands = useMemo<Command[]>(() => {
+    const cmds: Command[] = [
+      { id: "compose", label: "Compose new email", hint: "C", run: () => openCompose() },
+    ];
+    const em = selectedEmail;
+    if (em) {
+      cmds.push(
+        { id: "reply", label: "Reply", hint: "R", run: () => handleToolbarAction("reply", em) },
+        { id: "reply-all", label: "Reply all", hint: "A", run: () => handleToolbarAction("reply-all", em) },
+        { id: "forward", label: "Forward", hint: "F", run: () => handleToolbarAction("forward", em) },
+        { id: "archive", label: "Archive", hint: "E", run: () => updateEmail(em.id, { folder: "archive" }) },
+        { id: "delete", label: "Delete", hint: "#", run: () => deleteEmail(em.id) },
+        { id: "star", label: em.isStarred ? "Remove star" : "Star", hint: "S", run: () => updateEmail(em.id, { isStarred: !em.isStarred }) },
+        { id: "read", label: em.isRead ? "Mark as unread" : "Mark as read", hint: "U", run: () => updateEmail(em.id, { isRead: !em.isRead }) },
+        { id: "flag", label: em.isFlagged ? "Clear flag" : "Flag / mark important", run: () => updateEmail(em.id, { isFlagged: !em.isFlagged }) },
+      );
+    }
+    for (const f of folders) {
+      cmds.push({ id: `go-${f.key}`, label: `Go to ${f.label}`, run: () => selectFolder(f.key) });
+    }
+    if (selectedAccountId) {
+      cmds.push({ id: "sync", label: "Sync now", run: () => triggerSync(selectedAccountId) });
+    }
+    return cmds;
+  }, [
+    selectedEmail, folders, selectedAccountId, openCompose,
+    handleToolbarAction, updateEmail, deleteEmail, selectFolder, triggerSync,
+  ]);
+
   // ── Render ──
 
   return (
@@ -457,6 +569,15 @@ export default function EmailPage() {
               </div>
             </div>
             <div className="flex items-center gap-1">
+              <button
+                onClick={() => setPaletteOpen(true)}
+                title="Command palette (Ctrl/Cmd+K)"
+                className="flex items-center gap-1 px-2 py-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+              >
+                <span className="text-[10px] border border-border rounded px-1 leading-tight">
+                  ⌘K
+                </span>
+              </button>
               <IconBtn
                 icon={rightOpen ? PanelRightClose : PanelRight}
                 label={rightOpen ? "Hide AI assistant" : "Show AI assistant"}
@@ -632,6 +753,12 @@ export default function EmailPage() {
           {rightOpen && <AIChatPanel selectedAccountId={selectedAccountId} selectedEmailId={selectedEmailId} />}
         </div>
       )}
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        commands={commands}
+      />
 
       <ComposePanel
         open={composeOpen}

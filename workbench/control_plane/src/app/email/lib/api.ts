@@ -1,4 +1,8 @@
-import { ChatMessage, Email, EmailAccount } from "./types";
+import {
+  ChatMessage, Email, EmailAccount,
+  AnalyticsOverview, SenderStat, NewsletterStatus,
+  AutomationRule, RuleTestResult, ExecutedRule,
+} from "./types";
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
 
@@ -462,4 +466,158 @@ export function getOAuthAuthorizeUrl(
 
 export function getOAuthCallbackUrl(): string {
   return `${WORKBENCH_URL}/email/oauth/callback`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Email Automation — Analytics, Senders/Bulk, Newsletters, Assistant rules
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── Analytics ──────────────────────────────────────────────────────────────
+
+export async function getAnalyticsOverview(
+  accountId?: string,
+  days = 30
+): Promise<AnalyticsOverview> {
+  const sp = new URLSearchParams({ days: String(days) });
+  if (accountId) sp.set("account_id", accountId);
+  return gatewayFetch<AnalyticsOverview>(`/email/analytics/overview?${sp}`);
+}
+
+// ── Senders + bulk actions ──────────────────────────────────────────────────
+
+export async function listSenders(
+  accountId?: string,
+  folder?: string,
+  limit = 200
+): Promise<SenderStat[]> {
+  const sp = new URLSearchParams({ limit: String(limit) });
+  if (accountId) sp.set("account_id", accountId);
+  if (folder) sp.set("folder", folder);
+  const res = await gatewayFetch<{ senders: SenderStat[] }>(
+    `/email/senders?${sp}`
+  );
+  return res.senders ?? [];
+}
+
+export interface BulkActionParams {
+  action: "archive" | "trash" | "read" | "unread" | "star" | "unstar";
+  accountId?: string;
+  messageIds?: string[];
+  senderEmail?: string;
+  folder?: string;
+  olderThanDays?: number;
+  onlyRead?: boolean;
+}
+
+export async function bulkAction(
+  params: BulkActionParams
+): Promise<{ affected: number }> {
+  const body: Record<string, unknown> = { action: params.action };
+  if (params.accountId) body.account_id = params.accountId;
+  if (params.messageIds) body.message_ids = params.messageIds;
+  if (params.senderEmail) body.sender_email = params.senderEmail;
+  if (params.folder) body.folder = params.folder;
+  if (params.olderThanDays) body.older_than_days = params.olderThanDays;
+  if (params.onlyRead) body.only_read = params.onlyRead;
+  return gatewayFetch<{ affected: number }>("/email/messages/bulk", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+// ── Newsletters (unsubscribe disposition) ───────────────────────────────────
+
+export async function upsertNewsletter(params: {
+  accountId: string;
+  email: string;
+  name?: string;
+  status: NewsletterStatus;
+  unsubscribeLink?: string | null;
+}): Promise<{ ok: boolean; status: string; archived: number }> {
+  return gatewayFetch("/email/newsletters", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: params.accountId,
+      email: params.email,
+      name: params.name,
+      status: params.status,
+      unsubscribe_link: params.unsubscribeLink ?? null,
+    }),
+  });
+}
+
+// ── Assistant: rules ────────────────────────────────────────────────────────
+
+export async function listRules(accountId: string): Promise<AutomationRule[]> {
+  const res = await gatewayFetch<{ rules: AutomationRule[] }>(
+    `/email/rules?account_id=${encodeURIComponent(accountId)}`
+  );
+  return res.rules ?? [];
+}
+
+export async function createRule(rule: AutomationRule): Promise<AutomationRule> {
+  return gatewayFetch<AutomationRule>("/email/rules", {
+    method: "POST",
+    body: JSON.stringify(rule),
+  });
+}
+
+export async function updateRule(
+  id: string,
+  rule: AutomationRule
+): Promise<AutomationRule> {
+  return gatewayFetch<AutomationRule>(`/email/rules/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(rule),
+  });
+}
+
+export async function deleteRule(id: string): Promise<void> {
+  await gatewayFetch(`/email/rules/${id}`, { method: "DELETE" });
+}
+
+export async function testRules(params: {
+  accountId: string;
+  emailId?: string;
+  subject?: string;
+  fromEmail?: string;
+  body?: string;
+}): Promise<RuleTestResult> {
+  return gatewayFetch<RuleTestResult>("/email/rules/test", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: params.accountId,
+      email_id: params.emailId,
+      subject: params.subject,
+      from_email: params.fromEmail,
+      body: params.body,
+    }),
+  });
+}
+
+export async function getRulesHistory(
+  accountId?: string,
+  limit = 100
+): Promise<ExecutedRule[]> {
+  const sp = new URLSearchParams({ limit: String(limit) });
+  if (accountId) sp.set("account_id", accountId);
+  const res = await gatewayFetch<{ history: ExecutedRule[] }>(
+    `/email/rules/history?${sp}`
+  );
+  return res.history ?? [];
+}
+
+export async function runRules(params: {
+  accountId: string;
+  limit?: number;
+  dryRun?: boolean;
+}): Promise<{ scheduled: boolean; dry_run: boolean }> {
+  return gatewayFetch("/email/rules/run", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: params.accountId,
+      limit: params.limit ?? 20,
+      dry_run: params.dryRun ?? true,
+    }),
+  });
 }

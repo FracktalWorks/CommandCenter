@@ -73,6 +73,110 @@ export interface QuickAction {
   icon: string; // Lucide icon name
 }
 
+/** The four Email Automation features surfaced in the sidebar. */
+export type AutomationFeature =
+  | "assistant"
+  | "unsubscribe"
+  | "archive"
+  | "analytics";
+
+// ── Analytics ──────────────────────────────────────────────────────────────
+
+export interface AnalyticsOverview {
+  totals: {
+    total: number;
+    unread: number;
+    sent: number;
+    archived: number;
+    starred: number;
+    with_attachments: number;
+    read_rate: number;
+  };
+  volume: { day: string; received: number; sent: number }[];
+  top_senders: { email: string; name: string; count: number; unread: number }[];
+  by_folder: { folder: string; count: number }[];
+}
+
+// ── Senders (bulk archive / unsubscribe) ────────────────────────────────────
+
+export type NewsletterStatus = "APPROVED" | "UNSUBSCRIBED" | "AUTO_ARCHIVED";
+
+export interface SenderStat {
+  email: string;
+  name: string;
+  count: number;
+  unread: number;
+  archived: number;
+  read_rate: number;
+  last_received: string | null;
+  unsubscribe_link: string | null;
+  status: NewsletterStatus;
+}
+
+// ── Assistant rules ─────────────────────────────────────────────────────────
+
+export type RuleActionType =
+  | "ARCHIVE"
+  | "LABEL"
+  | "MARK_READ"
+  | "STAR"
+  | "MARK_SPAM"
+  | "TRASH"
+  | "MOVE_FOLDER"
+  | "REPLY"
+  | "FORWARD"
+  | "DRAFT_EMAIL"
+  | "CALL_WEBHOOK";
+
+export interface RuleAction {
+  id?: string;
+  type: RuleActionType;
+  label?: string | null;
+  subject?: string | null;
+  content?: string | null;
+  to_address?: string | null;
+  cc_address?: string | null;
+  bcc_address?: string | null;
+  url?: string | null;
+}
+
+export interface AutomationRule {
+  id?: string;
+  account_id: string;
+  name: string;
+  instructions?: string | null;
+  enabled: boolean;
+  run_on_threads: boolean;
+  conditional_operator: "AND" | "OR";
+  from_pattern?: string | null;
+  to_pattern?: string | null;
+  subject_pattern?: string | null;
+  body_pattern?: string | null;
+  category_filter_type?: string | null;
+  system_type?: string | null;
+  sort_order: number;
+  actions: RuleAction[];
+}
+
+export interface RuleTestResult {
+  matched: boolean;
+  rule: { id: string; name: string } | null;
+  reason: string;
+  actions: RuleAction[];
+}
+
+export interface ExecutedRule {
+  id: string;
+  rule_name: string | null;
+  subject: string | null;
+  from: string | null;
+  status: string;
+  automated: boolean;
+  actions: string[];
+  reason: string | null;
+  created_at: string | null;
+}
+
 export interface EmailFolder {
   icon: string; // Lucide icon name
   label: string;

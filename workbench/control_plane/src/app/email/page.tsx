@@ -27,8 +27,9 @@ import { EmailDetail } from "./components/EmailDetail";
 import { AIChatPanel } from "./components/AIChatPanel";
 import { ComposePanel } from "./components/ComposePanel";
 import { CommandPalette, Command } from "./components/CommandPalette";
+import { AutomationView } from "./components/automation/AutomationView";
 import { useEmailStore } from "./lib/emailStore";
-import { Email } from "./lib/types";
+import { Email, AutomationFeature } from "./lib/types";
 import { folderLabel } from "./lib/utils";
 
 export default function EmailPage() {
@@ -47,6 +48,10 @@ export default function EmailPage() {
 
   // Mobile-specific state
   const [mobileView, setMobileView] = useState<"inbox" | "detail">("inbox");
+
+  // Email Automation overlay (Assistant / Unsubscribe / Archive / Analytics)
+  const [automationFeature, setAutomationFeature] =
+    useState<AutomationFeature | null>(null);
 
   const { open: openDrawer, close: closeDrawer } = useMobileDrawer();
 
@@ -180,6 +185,14 @@ export default function EmailPage() {
     setShowAddModal(true);
   }, []);
 
+  const handleOpenAutomation = useCallback(
+    (feature: AutomationFeature) => {
+      setAutomationFeature(feature);
+      if (isMobile) closeDrawer();
+    },
+    [isMobile, closeDrawer]
+  );
+
   accountsDrawerRef.current = (
     <AccountSidebar
       accounts={accounts}
@@ -190,6 +203,8 @@ export default function EmailPage() {
       onFolderSelect={handleFolderSelect}
       onAddAccount={handleAddAccount}
       onSearch={setSearchQuery}
+      onOpenAutomation={handleOpenAutomation}
+      activeAutomation={automationFeature}
     />
   );
 
@@ -537,11 +552,26 @@ export default function EmailPage() {
               onFolderSelect={selectFolder}
               onAddAccount={handleAddAccount}
               onSearch={setSearchQuery}
+              onOpenAutomation={handleOpenAutomation}
+              activeAutomation={automationFeature}
             />
           )}
         </div>
       )}
 
+      {/* ═══ Email Automation overlay (replaces panes, keeps left sidebar) ═══ */}
+      {automationFeature ? (
+        <div className="flex-1 min-w-0 overflow-hidden">
+          <AutomationView
+            feature={automationFeature}
+            accountId={selectedAccountId}
+            selectedEmailId={selectedEmailId}
+            onClose={() => setAutomationFeature(null)}
+            onArchived={fetchEmails}
+          />
+        </div>
+      ) : (
+      <>
       {/* ═══ Main area ═══ */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* ── DESKTOP top bar ── */}
@@ -759,6 +789,8 @@ export default function EmailPage() {
         >
           {rightOpen && <AIChatPanel selectedAccountId={selectedAccountId} selectedEmailId={selectedEmailId} />}
         </div>
+      )}
+      </>
       )}
 
       <CommandPalette

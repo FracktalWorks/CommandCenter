@@ -3,10 +3,11 @@
 import { useState } from "react";
 import {
   Inbox, Send, FileText, Trash2, Star, Archive, Tag,
-  Search, Plus, ChevronDown, ChevronRight, Settings2, Check,
-  ShieldAlert, Folder,
+  Search, Plus, ChevronDown, ChevronRight, Check,
+  ShieldAlert, Folder, Sparkles, MailMinus, Archive as ArchiveIcon,
+  BarChart3, Zap,
 } from "lucide-react";
-import { EmailAccount, EmailFolder } from "../lib/types";
+import { EmailAccount, EmailFolder, AutomationFeature } from "../lib/types";
 
 interface AccountSidebarProps {
   accounts: EmailAccount[];
@@ -17,7 +18,22 @@ interface AccountSidebarProps {
   onFolderSelect: (folder: string) => void;
   onAddAccount?: () => void;
   onSearch?: (query: string) => void;
+  /** Open one of the Email Automation feature views. */
+  onOpenAutomation?: (feature: AutomationFeature) => void;
+  /** Currently-open automation feature, for highlighting. */
+  activeAutomation?: AutomationFeature | null;
 }
+
+const AUTOMATION_ITEMS: {
+  key: AutomationFeature;
+  label: string;
+  icon: React.ElementType;
+}[] = [
+  { key: "assistant", label: "Assistant", icon: Sparkles },
+  { key: "unsubscribe", label: "Bulk Unsubscribe", icon: MailMinus },
+  { key: "archive", label: "Bulk Archive", icon: ArchiveIcon },
+  { key: "analytics", label: "Analytics", icon: BarChart3 },
+];
 
 export function AccountSidebar({
   accounts,
@@ -28,6 +44,8 @@ export function AccountSidebar({
   onFolderSelect,
   onAddAccount,
   onSearch,
+  onOpenAutomation,
+  activeAutomation,
 }: AccountSidebarProps) {
   const [accountsExpanded, setAccountsExpanded] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -153,12 +171,28 @@ export function AccountSidebar({
         })}
       </div>
 
-      {/* Footer */}
-      <div className="flex-shrink-0 border-t border-sidebar-border px-3 py-3">
-        <button className="flex items-center gap-2.5 w-full px-2 py-1.5 rounded-md text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors">
-          <Settings2 size={13} />
-          <span className="text-xs">Email Settings</span>
-        </button>
+      {/* Footer — Email Automation */}
+      <div className="flex-shrink-0 border-t border-sidebar-border px-2 py-2.5">
+        <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] tracking-widest uppercase text-muted-foreground font-semibold">
+          <Zap size={11} className="text-primary" />
+          <span>Email Automation</span>
+        </div>
+        <div className="mt-1 space-y-0.5">
+          {AUTOMATION_ITEMS.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              onClick={() => onOpenAutomation?.(key)}
+              className={`flex items-center gap-2.5 w-full px-2 py-1.5 rounded-md transition-colors text-left ${
+                activeAutomation === key
+                  ? "bg-primary/15 text-primary"
+                  : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+              }`}
+            >
+              <Icon size={13} className="flex-shrink-0" />
+              <span className="text-xs">{label}</span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );

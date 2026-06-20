@@ -45,6 +45,31 @@ def _gmail_folder_from_labels(label_ids: list[str]) -> str:
     return "inbox"
 
 
+def _parse_list_unsubscribe(header: str) -> str | None:
+    """Pick the best link from a List-Unsubscribe header.
+
+    The header is a comma-separated list of <...> targets, e.g.
+    ``<https://x.com/unsub?id=1>, <mailto:unsub@x.com>``. Prefer an https
+    one-click URL; fall back to a mailto:. Returns None if neither is present.
+    """
+    if not header:
+        return None
+    targets: list[str] = []
+    for part in header.split(","):
+        part = part.strip()
+        if part.startswith("<") and part.endswith(">"):
+            part = part[1:-1].strip()
+        if part:
+            targets.append(part)
+    for t in targets:
+        if t.lower().startswith("http"):
+            return t
+    for t in targets:
+        if t.lower().startswith("mailto:"):
+            return t
+    return targets[0] if targets else None
+
+
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1"
 GMAIL_SCOPES = ["https://mail.google.com/"]
 
@@ -528,6 +553,10 @@ class GmailProvider(BaseEmailProvider):
         # only the raw IDs as labels and leave categories empty for now.
         categories: list[str] = []
 
+        unsubscribe_link = _parse_list_unsubscribe(
+            headers.get("List-Unsubscribe", "")
+        )
+
         return EmailMessage(
             provider_message_id=raw["id"],
             thread_id=raw.get("threadId"),
@@ -551,6 +580,7 @@ class GmailProvider(BaseEmailProvider):
             is_flagged=is_flagged,
             importance=importance,
             categories=categories,
+            unsubscribe_link=unsubscribe_link,
             received_at=self._parse_internal_date(raw.get("internalDate")),
             raw=raw,
         )

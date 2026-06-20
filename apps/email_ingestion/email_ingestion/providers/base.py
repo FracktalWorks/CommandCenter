@@ -85,6 +85,9 @@ class EmailMessage:
     is_flagged: bool = False
     importance: str = "normal"  # 'high' | 'normal' | 'low'
     categories: list[str] = field(default_factory=list)
+    # Best unsubscribe target parsed from the List-Unsubscribe header (https
+    # one-click preferred, else mailto:). Powers bulk unsubscribe.
+    unsubscribe_link: str | None = None
     received_at: datetime | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 

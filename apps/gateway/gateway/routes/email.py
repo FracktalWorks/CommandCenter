@@ -1635,7 +1635,7 @@ async def trigger_sync(
                                 cc_addresses, bcc_addresses, subject,
                                 body_text, body_html, snippet,
                                 has_attachments, is_read, is_starred, is_flagged,
-                                received_at, synced_at)
+                                unsubscribe_link, received_at, synced_at)
                                VALUES
                                (:id, :account_id, :provider_id, :thread_id,
                                 :folder, :labels, :categories, :importance,
@@ -1643,7 +1643,7 @@ async def trigger_sync(
                                 :cc_addrs, :bcc_addrs, :subject,
                                 :body_text, :body_html, :snippet,
                                 :has_attachments, :is_read, :is_starred, :is_flagged,
-                                :received_at, now())
+                                :unsubscribe_link, :received_at, now())
                                ON CONFLICT (account_id, provider_message_id)
                                DO UPDATE SET
                                 thread_id = EXCLUDED.thread_id,
@@ -1663,6 +1663,9 @@ async def trigger_sync(
                                 is_read = EXCLUDED.is_read,
                                 is_starred = EXCLUDED.is_starred,
                                 is_flagged = EXCLUDED.is_flagged,
+                                unsubscribe_link = COALESCE(
+                                    EXCLUDED.unsubscribe_link,
+                                    email_messages.unsubscribe_link),
                                 received_at = EXCLUDED.received_at,
                                 updated_at = now()"""
                         ),
@@ -1701,6 +1704,8 @@ async def trigger_sync(
                             "is_read": msg.is_read,
                             "is_starred": msg.is_starred,
                             "is_flagged": msg.is_flagged,
+                            "unsubscribe_link": getattr(
+                                msg, "unsubscribe_link", None),
                             "body_truncated": (
                                 len(msg.body_text.encode("utf-8", errors="replace"))
                                 > MAX_BODY_TEXT_BYTES
@@ -2056,6 +2061,964 @@ async def quick_action(
             status_code=500,
             detail=f"Quick action '{req.action}' failed: {str(exc)}",
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# EMAIL AUTOMATION — Analytics, Bulk actions, Newsletters, Assistant rules
+# ══════════════════════════════════════════════════════════════════════════
+#
+# Backs the four "Email Automation" features in the email app sidebar:
+#   • Analytics        — GET /email/analytics/overview
+#   • Bulk Archive     — GET /email/senders, POST /email/messages/bulk
+#   • Bulk Unsubscribe — GET /email/senders, GET/POST /email/newsletters
+#   • Assistant        — /email/rules CRUD, /test, /run, /history
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _account_scope(account_id: str | None, params: dict[str, Any]) -> str:
+    """Return a SQL fragment scoping email_messages `em` to the user's accounts.
+
+    Adds :uid (and optionally :aid) to `params`. The caller must have already
+    set params["uid"] to the user's email.
+    """
+    frag = "em.account_id IN (SELECT id FROM email_accounts WHERE user_id = :uid"
+    if account_id:
+        frag += " AND id = :aid"
+        params["aid"] = account_id
+    frag += ")"
+    return frag
+
+
+async def _assert_account_owner(db: Any, account_id: str, user_email: str) -> None:
+    """Raise 404 if the account isn't owned by the user."""
+    res = await db.execute(
+        text("SELECT 1 FROM email_accounts WHERE id = :id AND user_id = :uid"),
+        {"id": account_id, "uid": user_email},
+    )
+    if not res.fetchone():
+        raise HTTPException(status_code=404, detail="Account not found")
+
+
+# ── Analytics ───────────────────────────────────────────────────────────────
+
+@router.get("/analytics/overview")
+async def analytics_overview(
+    account_id: str | None = Query(None),
+    days: int = Query(30, ge=1, le=365),
+    user: UserContext = Depends(get_current_user),
+):
+    """Inbox analytics: totals, read-rate, volume-over-time, top senders, folders."""
+    db = await _get_db()
+    try:
+        params: dict[str, Any] = {"uid": user.email or "anonymous", "days": days}
+        scope = _account_scope(account_id, params)
+
+        totals = (await db.execute(text(
+            f"""SELECT
+                  COUNT(*) AS total,
+                  COUNT(*) FILTER (WHERE is_read = false) AS unread,
+                  COUNT(*) FILTER (WHERE LOWER(folder) = 'sent') AS sent,
+                  COUNT(*) FILTER (WHERE LOWER(folder) = 'archive') AS archived,
+                  COUNT(*) FILTER (WHERE is_starred) AS starred,
+                  COUNT(*) FILTER (WHERE has_attachments) AS with_attachments
+                FROM email_messages em WHERE {scope}"""
+        ), params)).fetchone()
+
+        total = totals.total or 0
+        read = total - (totals.unread or 0)
+        read_rate = round(read / total, 4) if total else 0.0
+
+        volume_rows = (await db.execute(text(
+            f"""SELECT to_char(date_trunc('day', received_at), 'YYYY-MM-DD') AS day,
+                       COUNT(*) FILTER (WHERE LOWER(folder) <> 'sent') AS received,
+                       COUNT(*) FILTER (WHERE LOWER(folder) = 'sent') AS sent
+                FROM email_messages em
+                WHERE {scope} AND received_at >= now() - make_interval(days => :days)
+                GROUP BY day ORDER BY day"""
+        ), params)).fetchall()
+
+        sender_rows = (await db.execute(text(
+            f"""SELECT from_address->>'email' AS email,
+                       MAX(from_address->>'name') AS name,
+                       COUNT(*) AS count,
+                       COUNT(*) FILTER (WHERE is_read = false) AS unread
+                FROM email_messages em
+                WHERE {scope} AND COALESCE(from_address->>'email','') <> ''
+                GROUP BY email ORDER BY count DESC LIMIT 12"""
+        ), params)).fetchall()
+
+        folder_rows = (await db.execute(text(
+            f"""SELECT LOWER(folder) AS folder, COUNT(*) AS count
+                FROM email_messages em WHERE {scope}
+                GROUP BY LOWER(folder) ORDER BY count DESC"""
+        ), params)).fetchall()
+
+        return {
+            "totals": {
+                "total": total,
+                "unread": totals.unread or 0,
+                "sent": totals.sent or 0,
+                "archived": totals.archived or 0,
+                "starred": totals.starred or 0,
+                "with_attachments": totals.with_attachments or 0,
+                "read_rate": read_rate,
+            },
+            "volume": [
+                {"day": r.day, "received": r.received or 0, "sent": r.sent or 0}
+                for r in volume_rows
+            ],
+            "top_senders": [
+                {"email": r.email, "name": r.name or "", "count": r.count,
+                 "unread": r.unread or 0}
+                for r in sender_rows
+            ],
+            "by_folder": [
+                {"folder": r.folder, "count": r.count} for r in folder_rows
+            ],
+        }
+    finally:
+        await db.close()
+
+
+# ── Sender aggregation (bulk archive + unsubscribe) ─────────────────────────
+
+@router.get("/senders")
+async def list_senders(
+    account_id: str | None = Query(None),
+    folder: str | None = Query(None),
+    limit: int = Query(200, ge=1, le=1000),
+    user: UserContext = Depends(get_current_user),
+):
+    """Aggregate messages by sender, merged with newsletter status.
+
+    Powers Bulk Archive (volume per sender) and Bulk Unsubscribe (read-rate +
+    unsubscribe link + approve/unsubscribe disposition).
+    """
+    db = await _get_db()
+    try:
+        params: dict[str, Any] = {"uid": user.email or "anonymous", "limit": limit}
+        scope = _account_scope(account_id, params)
+        folder_sql = ""
+        if folder:
+            folder_sql = " AND LOWER(em.folder) = LOWER(:folder)"
+            params["folder"] = folder
+
+        rows = (await db.execute(text(
+            f"""SELECT LOWER(from_address->>'email') AS email,
+                       MAX(from_address->>'name') AS name,
+                       COUNT(*) AS count,
+                       COUNT(*) FILTER (WHERE is_read = false) AS unread,
+                       COUNT(*) FILTER (WHERE LOWER(folder) = 'archive') AS archived,
+                       MAX(received_at) AS last_received,
+                       MAX(unsubscribe_link) AS unsubscribe_link
+                FROM email_messages em
+                WHERE {scope}{folder_sql}
+                  AND COALESCE(from_address->>'email','') <> ''
+                GROUP BY LOWER(from_address->>'email')
+                ORDER BY count DESC LIMIT :limit"""
+        ), params)).fetchall()
+
+        # Merge newsletter disposition (APPROVED/UNSUBSCRIBED/AUTO_ARCHIVED).
+        nl_params: dict[str, Any] = {"uid": user.email or "anonymous"}
+        nl_scope = (
+            "account_id IN (SELECT id FROM email_accounts WHERE user_id = :uid"
+        )
+        if account_id:
+            nl_scope += " AND id = :aid"
+            nl_params["aid"] = account_id
+        nl_scope += ")"
+        nl_rows = (await db.execute(text(
+            f"SELECT LOWER(email) AS email, status FROM email_newsletters WHERE {nl_scope}"
+        ), nl_params)).fetchall()
+        status_by_email = {r.email: r.status for r in nl_rows}
+
+        return {
+            "senders": [
+                {
+                    "email": r.email,
+                    "name": r.name or "",
+                    "count": r.count,
+                    "unread": r.unread or 0,
+                    "archived": r.archived or 0,
+                    "read_rate": round((r.count - (r.unread or 0)) / r.count, 4)
+                    if r.count else 0.0,
+                    "last_received": r.last_received.isoformat()
+                    if r.last_received else None,
+                    "unsubscribe_link": r.unsubscribe_link,
+                    "status": status_by_email.get(r.email, "APPROVED"),
+                }
+                for r in rows
+            ]
+        }
+    finally:
+        await db.close()
+
+
+# ── Bulk actions ────────────────────────────────────────────────────────────
+
+class BulkActionRequest(BaseModel):
+    action: str  # archive | trash | read | unread | star | unstar
+    account_id: str | None = None
+    message_ids: list[str] | None = None
+    sender_email: str | None = None
+    folder: str | None = None
+    older_than_days: int | None = None
+    only_read: bool | None = None
+
+
+_BULK_DB_UPDATE = {
+    "archive": "folder = 'archive'",
+    "trash": "folder = 'trash'",
+    "read": "is_read = true",
+    "unread": "is_read = false",
+    "star": "is_starred = true",
+    "unstar": "is_starred = false",
+}
+
+_BULK_MAX = 1000
+
+
+@router.post("/messages/bulk")
+async def bulk_action(
+    req: BulkActionRequest,
+    background: BackgroundTasks,
+    user: UserContext = Depends(get_current_user),
+):
+    """Apply an action to many messages at once (archive/trash/read/star).
+
+    The local DB is updated synchronously (authoritative for the UI); the
+    provider is reconciled in the background so the request stays fast.
+    """
+    if req.action not in _BULK_DB_UPDATE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown action '{req.action}'. "
+            f"Supported: {', '.join(_BULK_DB_UPDATE)}",
+        )
+
+    db = await _get_db()
+    try:
+        params: dict[str, Any] = {"uid": user.email or "anonymous"}
+        scope = _account_scope(req.account_id, params)
+        clauses = [scope]
+        if req.message_ids:
+            clauses.append("em.id::text = ANY(:ids)")
+            params["ids"] = req.message_ids
+        if req.sender_email:
+            clauses.append("LOWER(em.from_address->>'email') = LOWER(:sender)")
+            params["sender"] = req.sender_email
+        if req.folder:
+            clauses.append("LOWER(em.folder) = LOWER(:folder)")
+            params["folder"] = req.folder
+        if req.older_than_days:
+            clauses.append("em.received_at < now() - make_interval(days => :odays)")
+            params["odays"] = req.older_than_days
+        if req.only_read:
+            clauses.append("em.is_read = true")
+        where_sql = " AND ".join(clauses)
+
+        # Resolve target rows (capped) — keep provider ids for reconciliation.
+        rows = (await db.execute(text(
+            f"""SELECT em.id, em.provider_message_id, em.account_id, ea.provider
+                FROM email_messages em
+                JOIN email_accounts ea ON em.account_id = ea.id
+                WHERE {where_sql}
+                LIMIT {_BULK_MAX}"""
+        ), params)).fetchall()
+        if not rows:
+            return {"affected": 0}
+
+        ids = [str(r.id) for r in rows]
+        await db.execute(text(
+            f"UPDATE email_messages SET {_BULK_DB_UPDATE[req.action]}, "
+            f"updated_at = now() WHERE id::text = ANY(:ids)"
+        ), {"ids": ids})
+        await db.commit()
+
+        # Group provider message ids per account for background reconciliation.
+        per_account: dict[str, list[str]] = {}
+        for r in rows:
+            per_account.setdefault(str(r.account_id), []).append(r.provider_message_id)
+        for aid, pmids in per_account.items():
+            background.add_task(_bulk_reconcile_provider, aid, pmids, req.action)
+
+        return {"affected": len(ids)}
+    finally:
+        await db.close()
+
+
+async def _bulk_reconcile_provider(
+    account_id: str, provider_msg_ids: list[str], action: str
+) -> None:
+    """Best-effort: push a bulk action to the provider (runs in background)."""
+    db = await _get_db()
+    try:
+        row = (await db.execute(text(
+            "SELECT provider, credentials_encrypted FROM email_accounts WHERE id = :id"
+        ), {"id": account_id})).fetchone()
+        if not row:
+            return
+        from acb_llm.key_store import get_key_store
+        store = get_key_store()
+        creds = json.loads(store.decrypt(row.credentials_encrypted))
+        provider = _instantiate_provider(row.provider, creds)
+        if not await provider.authenticate():
+            return
+        for pmid in provider_msg_ids:
+            try:
+                if action == "archive":
+                    await provider.move_to_folder(pmid, "archive")
+                elif action == "trash":
+                    await provider.trash_message(pmid)
+                elif action == "read":
+                    await provider.apply_flags(pmid, is_read=True)
+                elif action == "unread":
+                    await provider.apply_flags(pmid, is_read=False)
+                elif action == "star":
+                    await provider.apply_flags(pmid, is_starred=True)
+                elif action == "unstar":
+                    await provider.apply_flags(pmid, is_starred=False)
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("email.bulk_reconcile_item_failed",
+                             pmid=pmid, action=action, error=str(exc)[:120])
+        await _persist_rotated_creds(db, store, account_id, provider)
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.bulk_reconcile_failed", account_id=account_id,
+                     error=str(exc)[:200])
+    finally:
+        await db.close()
+
+
+# ── Newsletters (bulk unsubscribe disposition) ──────────────────────────────
+
+class NewsletterUpdate(BaseModel):
+    account_id: str
+    email: str
+    name: str | None = None
+    status: str  # APPROVED | UNSUBSCRIBED | AUTO_ARCHIVED
+    unsubscribe_link: str | None = None
+
+
+@router.get("/newsletters")
+async def list_newsletters(
+    account_id: str | None = Query(None),
+    user: UserContext = Depends(get_current_user),
+):
+    """List newsletter dispositions for the user's accounts."""
+    db = await _get_db()
+    try:
+        params: dict[str, Any] = {"uid": user.email or "anonymous"}
+        scope = "account_id IN (SELECT id FROM email_accounts WHERE user_id = :uid"
+        if account_id:
+            scope += " AND id = :aid"
+            params["aid"] = account_id
+        scope += ")"
+        rows = (await db.execute(text(
+            f"""SELECT id, account_id, email, name, status, unsubscribe_link, updated_at
+                FROM email_newsletters WHERE {scope} ORDER BY updated_at DESC"""
+        ), params)).fetchall()
+        return {
+            "newsletters": [
+                {"id": str(r.id), "account_id": str(r.account_id), "email": r.email,
+                 "name": r.name or "", "status": r.status,
+                 "unsubscribe_link": r.unsubscribe_link,
+                 "updated_at": r.updated_at.isoformat() if r.updated_at else None}
+                for r in rows
+            ]
+        }
+    finally:
+        await db.close()
+
+
+@router.post("/newsletters")
+async def upsert_newsletter(
+    req: NewsletterUpdate,
+    background: BackgroundTasks,
+    user: UserContext = Depends(get_current_user),
+):
+    """Set a sender's disposition. UNSUBSCRIBED/AUTO_ARCHIVED also archives the
+    sender's existing inbox mail (locally + provider in the background)."""
+    if req.status not in ("APPROVED", "UNSUBSCRIBED", "AUTO_ARCHIVED"):
+        raise HTTPException(status_code=400, detail=f"Bad status: {req.status}")
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        await db.execute(text(
+            """INSERT INTO email_newsletters
+                 (account_id, email, name, status, unsubscribe_link, updated_at)
+               VALUES (:aid, LOWER(:email), :name, :status, :link, now())
+               ON CONFLICT (account_id, email) DO UPDATE SET
+                 name = COALESCE(EXCLUDED.name, email_newsletters.name),
+                 status = EXCLUDED.status,
+                 unsubscribe_link = COALESCE(EXCLUDED.unsubscribe_link,
+                                             email_newsletters.unsubscribe_link),
+                 updated_at = now()"""
+        ), {"aid": req.account_id, "email": req.email, "name": req.name,
+            "status": req.status, "link": req.unsubscribe_link})
+        await db.commit()
+
+        archived = 0
+        if req.status in ("UNSUBSCRIBED", "AUTO_ARCHIVED"):
+            rows = (await db.execute(text(
+                """SELECT em.id, em.provider_message_id
+                   FROM email_messages em
+                   WHERE em.account_id = :aid
+                     AND LOWER(em.from_address->>'email') = LOWER(:email)
+                     AND LOWER(em.folder) = 'inbox'"""
+            ), {"aid": req.account_id, "email": req.email})).fetchall()
+            if rows:
+                ids = [str(r.id) for r in rows]
+                await db.execute(text(
+                    "UPDATE email_messages SET folder = 'archive', updated_at = now() "
+                    "WHERE id::text = ANY(:ids)"
+                ), {"ids": ids})
+                await db.commit()
+                archived = len(ids)
+                background.add_task(
+                    _bulk_reconcile_provider, req.account_id,
+                    [r.provider_message_id for r in rows], "archive",
+                )
+
+        return {"ok": True, "status": req.status, "archived": archived}
+    finally:
+        await db.close()
+
+
+# ── Assistant: rules engine ─────────────────────────────────────────────────
+
+class RuleActionModel(BaseModel):
+    id: str | None = None
+    type: str
+    label: str | None = None
+    subject: str | None = None
+    content: str | None = None
+    to_address: str | None = None
+    cc_address: str | None = None
+    bcc_address: str | None = None
+    url: str | None = None
+
+
+class RuleModel(BaseModel):
+    id: str | None = None
+    account_id: str
+    name: str
+    instructions: str | None = None
+    enabled: bool = True
+    run_on_threads: bool = False
+    conditional_operator: str = "AND"
+    from_pattern: str | None = None
+    to_pattern: str | None = None
+    subject_pattern: str | None = None
+    body_pattern: str | None = None
+    category_filter_type: str | None = None
+    system_type: str | None = None
+    sort_order: int = 0
+    actions: list[RuleActionModel] = []
+
+
+async def _load_rules(db: Any, account_id: str) -> list[dict[str, Any]]:
+    """Load rules + their actions for an account, ordered by sort_order."""
+    rule_rows = (await db.execute(text(
+        """SELECT id, account_id, name, instructions, enabled, run_on_threads,
+                  conditional_operator, from_pattern, to_pattern, subject_pattern,
+                  body_pattern, category_filter_type, system_type, sort_order
+           FROM email_rules WHERE account_id = :aid
+           ORDER BY sort_order, created_at"""
+    ), {"aid": account_id})).fetchall()
+    rules: list[dict[str, Any]] = []
+    for r in rule_rows:
+        act_rows = (await db.execute(text(
+            """SELECT id, type, label, subject, content, to_address, cc_address,
+                      bcc_address, url FROM email_actions WHERE rule_id = :rid
+               ORDER BY created_at"""
+        ), {"rid": r.id})).fetchall()
+        rules.append({
+            "id": str(r.id), "account_id": str(r.account_id), "name": r.name,
+            "instructions": r.instructions, "enabled": r.enabled,
+            "run_on_threads": r.run_on_threads,
+            "conditional_operator": r.conditional_operator,
+            "from_pattern": r.from_pattern, "to_pattern": r.to_pattern,
+            "subject_pattern": r.subject_pattern, "body_pattern": r.body_pattern,
+            "category_filter_type": r.category_filter_type,
+            "system_type": r.system_type, "sort_order": r.sort_order,
+            "actions": [
+                {"id": str(a.id), "type": a.type, "label": a.label,
+                 "subject": a.subject, "content": a.content,
+                 "to_address": a.to_address, "cc_address": a.cc_address,
+                 "bcc_address": a.bcc_address, "url": a.url}
+                for a in act_rows
+            ],
+        })
+    return rules
+
+
+@router.get("/rules")
+async def list_rules(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """List assistant rules (with actions) for an account."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        return {"rules": await _load_rules(db, account_id)}
+    finally:
+        await db.close()
+
+
+async def _replace_actions(db: Any, rule_id: str, actions: list[RuleActionModel]) -> None:
+    await db.execute(text("DELETE FROM email_actions WHERE rule_id = :rid"),
+                     {"rid": rule_id})
+    for a in actions:
+        await db.execute(text(
+            """INSERT INTO email_actions
+                 (rule_id, type, label, subject, content, to_address,
+                  cc_address, bcc_address, url)
+               VALUES (:rid, :type, :label, :subject, :content, :to_addr,
+                       :cc, :bcc, :url)"""
+        ), {"rid": rule_id, "type": a.type, "label": a.label, "subject": a.subject,
+            "content": a.content, "to_addr": a.to_address, "cc": a.cc_address,
+            "bcc": a.bcc_address, "url": a.url})
+
+
+@router.post("/rules")
+async def create_rule(
+    req: RuleModel,
+    user: UserContext = Depends(get_current_user),
+):
+    """Create an assistant rule with its actions."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        rule_id = str(uuid4())
+        await db.execute(text(
+            """INSERT INTO email_rules
+                 (id, account_id, name, instructions, enabled, run_on_threads,
+                  conditional_operator, from_pattern, to_pattern, subject_pattern,
+                  body_pattern, category_filter_type, system_type, sort_order)
+               VALUES (:id, :aid, :name, :instr, :enabled, :rot, :op, :fp, :tp,
+                       :sp, :bp, :cft, :st, :so)"""
+        ), {"id": rule_id, "aid": req.account_id, "name": req.name,
+            "instr": req.instructions, "enabled": req.enabled,
+            "rot": req.run_on_threads, "op": req.conditional_operator,
+            "fp": req.from_pattern, "tp": req.to_pattern, "sp": req.subject_pattern,
+            "bp": req.body_pattern, "cft": req.category_filter_type,
+            "st": req.system_type, "so": req.sort_order})
+        await _replace_actions(db, rule_id, req.actions)
+        await db.commit()
+        rules = await _load_rules(db, req.account_id)
+        return next((r for r in rules if r["id"] == rule_id), {"id": rule_id})
+    finally:
+        await db.close()
+
+
+@router.patch("/rules/{rule_id}")
+async def update_rule(
+    rule_id: str,
+    req: RuleModel,
+    user: UserContext = Depends(get_current_user),
+):
+    """Update a rule and replace its actions."""
+    db = await _get_db()
+    try:
+        owner = (await db.execute(text(
+            """SELECT er.account_id FROM email_rules er
+               JOIN email_accounts ea ON er.account_id = ea.id
+               WHERE er.id = :rid AND ea.user_id = :uid"""
+        ), {"rid": rule_id, "uid": user.email or "anonymous"})).fetchone()
+        if not owner:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        await db.execute(text(
+            """UPDATE email_rules SET
+                 name = :name, instructions = :instr, enabled = :enabled,
+                 run_on_threads = :rot, conditional_operator = :op,
+                 from_pattern = :fp, to_pattern = :tp, subject_pattern = :sp,
+                 body_pattern = :bp, category_filter_type = :cft,
+                 system_type = :st, sort_order = :so, updated_at = now()
+               WHERE id = :rid"""
+        ), {"rid": rule_id, "name": req.name, "instr": req.instructions,
+            "enabled": req.enabled, "rot": req.run_on_threads,
+            "op": req.conditional_operator, "fp": req.from_pattern,
+            "tp": req.to_pattern, "sp": req.subject_pattern, "bp": req.body_pattern,
+            "cft": req.category_filter_type, "st": req.system_type,
+            "so": req.sort_order})
+        await _replace_actions(db, rule_id, req.actions)
+        await db.commit()
+        rules = await _load_rules(db, str(owner.account_id))
+        return next((r for r in rules if r["id"] == rule_id), {"id": rule_id})
+    finally:
+        await db.close()
+
+
+@router.delete("/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_rule(
+    rule_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Delete a rule (cascades to actions)."""
+    db = await _get_db()
+    try:
+        res = await db.execute(text(
+            """DELETE FROM email_rules er
+               USING email_accounts ea
+               WHERE er.id = :rid AND er.account_id = ea.id
+                 AND ea.user_id = :uid"""
+        ), {"rid": rule_id, "uid": user.email or "anonymous"})
+        await db.commit()
+        if res.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Rule not found")
+    finally:
+        await db.close()
+
+
+def _safe_json(content: str) -> Any | None:
+    """Extract a JSON object/array from an LLM response (tolerates ``` fences)."""
+    if not content:
+        return None
+    s = content.strip()
+    if s.startswith("```"):
+        s = s.split("```", 2)[1] if "```" in s[3:] else s.strip("`")
+        if s.startswith("json"):
+            s = s[4:]
+    start = min((i for i in (s.find("{"), s.find("[")) if i >= 0), default=-1)
+    if start < 0:
+        return None
+    s = s[start:]
+    end = max(s.rfind("}"), s.rfind("]"))
+    if end >= 0:
+        s = s[:end + 1]
+    try:
+        return json.loads(s)
+    except Exception:
+        return None
+
+
+async def _llm_pick_rule(
+    email: dict[str, str], rules: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Ask the LLM which instruction-based rule matches the email.
+
+    Returns {"index": int, "reason": str} (index into `rules`) or None.
+    Fails closed (returns None) when the LLM is unavailable.
+    """
+    if not rules:
+        return None
+    try:
+        import litellm as _litellm  # noqa: PLC0415
+        from litellm import acompletion  # noqa: PLC0415
+        from acb_llm.client import ensure_model_registered, _TIER_MODEL  # noqa: PLC0415
+        _litellm.drop_params = True
+        _litellm.suppress_debug_info = True
+        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
+        ensure_model_registered(model)
+
+        rule_lines = "\n".join(
+            f"{i}. {r['name']}: {r.get('instructions') or '(no description)'}"
+            for i, r in enumerate(rules)
+        )
+        sys_prompt = (
+            "You are an email classifier. Given an email and a numbered list of "
+            "rules, choose the single best-matching rule. Respond with ONLY a JSON "
+            'object: {"index": <number or -1 if none match>, "reason": "<short why>"}.'
+        )
+        user_prompt = (
+            f"EMAIL\nFrom: {email.get('from','')}\nSubject: {email.get('subject','')}\n"
+            f"Body: {(email.get('body','') or '')[:1500]}\n\nRULES\n{rule_lines}"
+        )
+        resp = await acompletion(
+            model=model,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": user_prompt}],
+            temperature=0, max_tokens=300,
+        )
+        content = resp.choices[0].message.content or ""
+        data = _safe_json(content)
+        if isinstance(data, dict) and isinstance(data.get("index"), int):
+            idx = data["index"]
+            if 0 <= idx < len(rules):
+                return {"index": idx, "reason": str(data.get("reason", ""))[:300]}
+        return None
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.llm_pick_rule_failed", error=str(exc)[:200])
+        return None
+
+
+def _static_match(rule: dict[str, Any], email: dict[str, str]) -> bool | None:
+    """Evaluate a rule's static patterns. Returns None if the rule has none."""
+    checks: list[bool] = []
+    field_map = [
+        ("from_pattern", email.get("from", "")),
+        ("to_pattern", email.get("to", "")),
+        ("subject_pattern", email.get("subject", "")),
+        ("body_pattern", email.get("body", "")),
+    ]
+    for key, value in field_map:
+        pat = rule.get(key)
+        if pat:
+            checks.append(pat.lower() in (value or "").lower())
+    if not checks:
+        return None
+    return all(checks) if rule.get("conditional_operator", "AND") == "AND" else any(checks)
+
+
+async def _match_email_to_rule(
+    db: Any, account_id: str, email: dict[str, str]
+) -> dict[str, Any] | None:
+    """Return the first matching rule + reason, or None.
+
+    Static-only rules are evaluated locally; rules with NL instructions are
+    resolved with a single LLM call. Static-first keeps it cheap & deterministic.
+    """
+    rules = [r for r in await _load_rules(db, account_id) if r["enabled"]]
+    if not rules:
+        return None
+
+    instruction_rules: list[dict[str, Any]] = []
+    for rule in rules:
+        sm = _static_match(rule, email)
+        has_instr = bool((rule.get("instructions") or "").strip())
+        if sm is True and not has_instr:
+            return {"rule": rule, "reason": "Matched static conditions."}
+        if sm is False and not has_instr:
+            continue
+        if has_instr:
+            # Static (if any) must not contradict; let the LLM decide.
+            if sm is not False:
+                instruction_rules.append(rule)
+
+    if instruction_rules:
+        pick = await _llm_pick_rule(email, instruction_rules)
+        if pick:
+            return {"rule": instruction_rules[pick["index"]],
+                    "reason": pick["reason"] or "Matched by AI."}
+    return None
+
+
+async def _email_payload_from_id(db: Any, message_id: str, user_email: str) -> dict[str, str]:
+    row = (await db.execute(text(
+        """SELECT em.subject, em.body_text, em.snippet, em.from_address, em.to_addresses
+           FROM email_messages em JOIN email_accounts ea ON em.account_id = ea.id
+           WHERE em.id = :mid AND ea.user_id = :uid"""
+    ), {"mid": message_id, "uid": user_email})).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Message not found")
+    frm = row.from_address if isinstance(row.from_address, dict) else json.loads(row.from_address or "{}")
+    return {
+        "subject": row.subject or "",
+        "body": row.body_text or row.snippet or "",
+        "from": frm.get("email", ""),
+        "to": "",
+    }
+
+
+class RuleTestRequest(BaseModel):
+    account_id: str
+    email_id: str | None = None
+    subject: str | None = None
+    from_email: str | None = None
+    body: str | None = None
+
+
+@router.post("/rules/test")
+async def test_rules(
+    req: RuleTestRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Test the rules against one email (selected message or a pasted sample)."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        if req.email_id:
+            email = await _email_payload_from_id(db, req.email_id, user.email or "anonymous")
+        else:
+            email = {"subject": req.subject or "", "from": req.from_email or "",
+                     "body": req.body or "", "to": ""}
+        match = await _match_email_to_rule(db, req.account_id, email)
+        if not match:
+            return {"matched": False, "rule": None, "reason": "No rule matched.",
+                    "actions": []}
+        return {
+            "matched": True,
+            "rule": {"id": match["rule"]["id"], "name": match["rule"]["name"]},
+            "reason": match["reason"],
+            "actions": match["rule"]["actions"],
+        }
+    finally:
+        await db.close()
+
+
+@router.get("/rules/history")
+async def rules_history(
+    account_id: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    user: UserContext = Depends(get_current_user),
+):
+    """Executed-rule audit log for the user's accounts."""
+    db = await _get_db()
+    try:
+        params: dict[str, Any] = {"uid": user.email or "anonymous", "limit": limit}
+        scope = ("er.account_id IN (SELECT id FROM email_accounts WHERE user_id = :uid")
+        if account_id:
+            scope += " AND id = :aid"
+            params["aid"] = account_id
+        scope += ")"
+        rows = (await db.execute(text(
+            f"""SELECT er.id, er.rule_name, er.subject, er.from_address, er.status,
+                       er.automated, er.actions_taken, er.reason, er.created_at
+                FROM email_executed_rules er
+                WHERE {scope} ORDER BY er.created_at DESC LIMIT :limit"""
+        ), params)).fetchall()
+        return {
+            "history": [
+                {"id": str(r.id), "rule_name": r.rule_name, "subject": r.subject,
+                 "from": r.from_address, "status": r.status, "automated": r.automated,
+                 "actions": r.actions_taken if isinstance(r.actions_taken, list)
+                 else json.loads(r.actions_taken or "[]"),
+                 "reason": r.reason,
+                 "created_at": r.created_at.isoformat() if r.created_at else None}
+                for r in rows
+            ]
+        }
+    finally:
+        await db.close()
+
+
+class RuleRunRequest(BaseModel):
+    account_id: str
+    limit: int = 20
+    dry_run: bool = True
+
+
+@router.post("/rules/run")
+async def run_rules(
+    req: RuleRunRequest,
+    background: BackgroundTasks,
+    user: UserContext = Depends(get_current_user),
+):
+    """Run enabled rules over recent inbox mail (scheduled in the background).
+
+    `dry_run` (default) only logs what WOULD happen to the history; set it false
+    to actually apply the matched actions. Poll GET /email/rules/history for
+    results.
+    """
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+    finally:
+        await db.close()
+    background.add_task(
+        _run_rules_job, req.account_id, min(req.limit, 50), req.dry_run,
+        user.email or "anonymous",
+    )
+    return {"scheduled": True, "dry_run": req.dry_run}
+
+
+async def _run_rules_job(
+    account_id: str, limit: int, dry_run: bool, user_email: str
+) -> None:
+    """Background worker: match recent inbox messages to rules and log/apply."""
+    db = await _get_db()
+    try:
+        rows = (await db.execute(text(
+            """SELECT em.id, em.provider_message_id, em.thread_id, em.subject,
+                      em.body_text, em.snippet, em.from_address
+               FROM email_messages em
+               WHERE em.account_id = :aid AND LOWER(em.folder) = 'inbox'
+               ORDER BY em.received_at DESC LIMIT :limit"""
+        ), {"aid": account_id, "limit": limit})).fetchall()
+
+        provider = None
+        store = None
+        if not dry_run:
+            acc = (await db.execute(text(
+                "SELECT provider, credentials_encrypted FROM email_accounts WHERE id = :id"
+            ), {"id": account_id})).fetchone()
+            if acc:
+                from acb_llm.key_store import get_key_store
+                store = get_key_store()
+                creds = json.loads(store.decrypt(acc.credentials_encrypted))
+                provider = _instantiate_provider(acc.provider, creds)
+                if not await provider.authenticate():
+                    provider = None
+
+        for r in rows:
+            frm = r.from_address if isinstance(r.from_address, dict) \
+                else json.loads(r.from_address or "{}")
+            email = {"subject": r.subject or "", "from": frm.get("email", ""),
+                     "body": r.body_text or r.snippet or "", "to": ""}
+            match = await _match_email_to_rule(db, account_id, email)
+            if not match:
+                continue
+            rule = match["rule"]
+            actions_taken: list[str] = []
+            if not dry_run and provider is not None:
+                actions_taken = await _apply_rule_actions(
+                    db, provider, str(r.id), r.provider_message_id, rule["actions"]
+                )
+            else:
+                actions_taken = [a["type"] for a in rule["actions"]]
+            await db.execute(text(
+                """INSERT INTO email_executed_rules
+                     (account_id, rule_id, rule_name, message_id, provider_message_id,
+                      thread_id, subject, from_address, status, automated,
+                      actions_taken, reason)
+                   VALUES (:aid, :rid, :rname, :mid, :pmid, :tid, :subj, :frm,
+                           :status, true, :acts, :reason)"""
+            ), {"aid": account_id, "rid": rule["id"], "rname": rule["name"],
+                "mid": str(r.id), "pmid": r.provider_message_id, "tid": r.thread_id,
+                "subj": r.subject or "", "frm": frm.get("email", ""),
+                "status": "PENDING" if dry_run else "APPLIED",
+                "acts": json.dumps(actions_taken), "reason": match["reason"]})
+            await db.commit()
+        if provider is not None and store is not None:
+            await _persist_rotated_creds(db, store, account_id, provider)
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.run_rules_failed", account_id=account_id,
+                     error=str(exc)[:200])
+    finally:
+        await db.close()
+
+
+async def _apply_rule_actions(
+    db: Any, provider: Any, message_id: str, provider_msg_id: str,
+    actions: list[dict[str, Any]],
+) -> list[str]:
+    """Apply the safe subset of rule actions (archive/trash/read/star/label/move)."""
+    done: list[str] = []
+    for a in actions:
+        t = a.get("type")
+        try:
+            if t == "ARCHIVE":
+                await db.execute(text("UPDATE email_messages SET folder='archive', updated_at=now() WHERE id=:id"), {"id": message_id})
+                await provider.move_to_folder(provider_msg_id, "archive")
+            elif t == "TRASH":
+                await db.execute(text("UPDATE email_messages SET folder='trash', updated_at=now() WHERE id=:id"), {"id": message_id})
+                await provider.trash_message(provider_msg_id)
+            elif t == "MARK_SPAM":
+                await db.execute(text("UPDATE email_messages SET folder='junk', updated_at=now() WHERE id=:id"), {"id": message_id})
+                await provider.move_to_folder(provider_msg_id, "junk")
+            elif t == "MARK_READ":
+                await db.execute(text("UPDATE email_messages SET is_read=true, updated_at=now() WHERE id=:id"), {"id": message_id})
+                await provider.apply_flags(provider_msg_id, is_read=True)
+            elif t == "STAR":
+                await db.execute(text("UPDATE email_messages SET is_starred=true, updated_at=now() WHERE id=:id"), {"id": message_id})
+                await provider.apply_flags(provider_msg_id, is_starred=True)
+            elif t == "MOVE_FOLDER" and a.get("label"):
+                await db.execute(text("UPDATE email_messages SET folder=:f, updated_at=now() WHERE id=:id"), {"id": message_id, "f": a["label"].lower()})
+                await provider.move_to_folder(provider_msg_id, a["label"].lower())
+            elif t == "LABEL" and a.get("label"):
+                await provider.set_labels(provider_msg_id, add=[a["label"]], remove=[])
+            elif t == "CALL_WEBHOOK" and a.get("url"):
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    await client.post(a["url"], json={"message_id": message_id})
+            else:
+                continue
+            done.append(t)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("email.rule_action_failed", action=t, error=str(exc)[:120])
+    return done
 
 
 # ── OAuth ────────────────────────────────────────────────────────────────
@@ -2521,7 +3484,7 @@ async def _upsert_message(db: Any, account_id: str, msg: Any) -> None:
                 cc_addresses, bcc_addresses, subject,
                 body_text, body_html, snippet,
                 has_attachments, is_read, is_starred, is_flagged,
-                received_at, synced_at)
+                unsubscribe_link, received_at, synced_at)
                VALUES
                (:id, :account_id, :provider_id, :thread_id,
                 :folder, :labels, :categories, :importance,
@@ -2529,7 +3492,7 @@ async def _upsert_message(db: Any, account_id: str, msg: Any) -> None:
                 :cc_addrs, :bcc_addrs, :subject,
                 :body_text, :body_html, :snippet,
                 :has_attachments, :is_read, :is_starred, :is_flagged,
-                :received_at, now())
+                :unsubscribe_link, :received_at, now())
                ON CONFLICT (account_id, provider_message_id)
                DO UPDATE SET
                 thread_id = EXCLUDED.thread_id,
@@ -2547,6 +3510,8 @@ async def _upsert_message(db: Any, account_id: str, msg: Any) -> None:
                 is_read = EXCLUDED.is_read,
                 is_starred = EXCLUDED.is_starred,
                 is_flagged = EXCLUDED.is_flagged,
+                unsubscribe_link = COALESCE(
+                    EXCLUDED.unsubscribe_link, email_messages.unsubscribe_link),
                 received_at = EXCLUDED.received_at,
                 updated_at = now()"""
         ),
@@ -2581,6 +3546,7 @@ async def _upsert_message(db: Any, account_id: str, msg: Any) -> None:
             "is_read": msg.is_read,
             "is_starred": msg.is_starred,
             "is_flagged": msg.is_flagged,
+            "unsubscribe_link": getattr(msg, "unsubscribe_link", None),
             "received_at": msg.received_at,
         },
     )

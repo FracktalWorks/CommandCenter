@@ -179,6 +179,7 @@ export default function EmailPage() {
       selectedFolder={selectedFolder}
       onFolderSelect={handleFolderSelect}
       onAddAccount={handleAddAccount}
+      onSearch={setSearchQuery}
     />
   );
 
@@ -409,6 +410,7 @@ export default function EmailPage() {
               selectedFolder={selectedFolder}
               onFolderSelect={selectFolder}
               onAddAccount={handleAddAccount}
+              onSearch={setSearchQuery}
             />
           )}
         </div>

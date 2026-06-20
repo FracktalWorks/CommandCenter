@@ -3,7 +3,7 @@
 import {
   Pencil, Trash2, Archive, Flag, FolderInput,
   Reply, ReplyAll, Forward, MailOpen, Tag, MoreHorizontal,
-  Paperclip, Star, Loader2,
+  Paperclip, Star, AlertTriangle,
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { timeLabel } from "../lib/utils";
@@ -119,8 +119,14 @@ export function EmailList({
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {email.importance === "high" && (
+                    <AlertTriangle size={10} className="text-red-400" />
+                  )}
                   {email.hasAttachments && (
                     <Paperclip size={10} className="text-muted-foreground" />
+                  )}
+                  {email.isFlagged && (
+                    <Flag size={10} className="text-amber-400 fill-amber-400" />
                   )}
                   {email.isStarred && (
                     <Star size={10} className="text-amber-400 fill-amber-400" />
@@ -145,10 +151,10 @@ export function EmailList({
                 {email.snippet}
               </div>
 
-              {/* Labels */}
-              {email.labels.length > 0 && (
-                <div className="flex gap-1 mt-0.5">
-                  {email.labels.map((label) => (
+              {/* Categories / user labels */}
+              {email.categories.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-0.5">
+                  {email.categories.slice(0, 3).map((label) => (
                     <span
                       key={label}
                       className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary/15 text-primary"

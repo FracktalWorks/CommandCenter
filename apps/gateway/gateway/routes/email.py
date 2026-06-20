@@ -85,7 +85,9 @@ class EmailMessageModel(BaseModel):
     is_read: bool = False
     is_starred: bool = False
     is_flagged: bool = False
+    importance: str = "normal"
     labels: list[str] = []
+    categories: list[str] = []
     folder: str = "INBOX"
     received_at: str | None = None
     synced_at: str | None = None
@@ -185,6 +187,63 @@ async def _get_redis():
         return aioredis.from_url(settings.redis_url, decode_responses=False)
     except Exception:
         return None
+
+
+def _instantiate_provider(provider_name: str, creds: dict[str, Any]):
+    """Construct an email provider instance from its name + decrypted creds.
+
+    Raises HTTPException(400) for unknown providers so callers get a clean error.
+    """
+    if provider_name == "gmail":
+        from email_ingestion.providers.gmail import GmailProvider
+        return GmailProvider(creds)
+    if provider_name == "microsoft":
+        from email_ingestion.providers.outlook import OutlookProvider
+        return OutlookProvider(creds)
+    if provider_name == "imap":
+        from email_ingestion.providers.imap import IMAPProvider
+        return IMAPProvider(creds)
+    raise HTTPException(status_code=400, detail=f"Unknown provider: {provider_name}")
+
+
+async def _provider_for_message(db: Any, message_id: str, user_email: str):
+    """Load the provider + provider_message_id for a stored message.
+
+    Returns (provider, provider_message_id, account_id, store) or raises 404.
+    Persisting rotated OAuth tokens is the caller's responsibility via
+    ``_persist_rotated_creds``.
+    """
+    result = await db.execute(
+        text(
+            """SELECT em.provider_message_id, em.account_id,
+                      ea.provider, ea.credentials_encrypted
+               FROM email_messages em
+               JOIN email_accounts ea ON em.account_id = ea.id
+               WHERE em.id = :mid AND ea.user_id = :user_id"""
+        ),
+        {"mid": message_id, "user_id": user_email},
+    )
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Message not found")
+    from acb_llm.key_store import get_key_store
+    store = get_key_store()
+    creds = json.loads(store.decrypt(row.credentials_encrypted))
+    provider = _instantiate_provider(row.provider, creds)
+    return provider, row.provider_message_id, str(row.account_id), store
+
+
+async def _persist_rotated_creds(db: Any, store: Any, account_id: str, provider) -> None:
+    """Persist refreshed OAuth tokens if the provider rotated them mid-request."""
+    if provider.credentials_dirty():
+        await db.execute(
+            text(
+                """UPDATE email_accounts
+                   SET credentials_encrypted = :creds, updated_at = now()
+                   WHERE id = :id"""
+            ),
+            {"id": account_id, "creds": store.encrypt(json.dumps(provider.export_credentials()))},
+        )
 
 
 async def _get_db(request_id: str | None = None):
@@ -618,6 +677,7 @@ async def list_messages(
                           em.subject, em.body_text, em.body_html,
                           em.snippet, em.has_attachments,
                           em.is_read, em.is_starred, em.is_flagged,
+                          em.importance, em.categories,
                           em.received_at, em.synced_at
                    FROM email_messages em
                    JOIN email_accounts ea ON em.account_id = ea.id
@@ -658,6 +718,7 @@ async def get_message(
                           em.subject, em.body_text, em.body_html,
                           em.snippet, em.has_attachments,
                           em.is_read, em.is_starred, em.is_flagged,
+                          em.importance, em.categories,
                           em.received_at, em.synced_at
                    FROM email_messages em
                    JOIN email_accounts ea ON em.account_id = ea.id
@@ -680,6 +741,67 @@ async def get_message(
         await db.commit()
 
         msg = _row_to_message(row)
+
+        # ── Lazy body hydration ──
+        # Some providers (notably Outlook/Graph) sync message *headers* only, so
+        # the stored body is empty.  When the user opens such a message, fetch the
+        # full body from the provider once and persist it so subsequent opens are
+        # instant.  Mark as read on the provider too (two-way sync).
+        if not msg.body_text and not msg.body_html:
+            try:
+                provider, provider_msg_id, account_id, store = await _provider_for_message(
+                    db, message_id, user.email or "anonymous"
+                )
+                if await provider.authenticate():
+                    full = await provider.get_message(provider_msg_id)
+                    body_text = _truncate_body(full.body_text or "", MAX_BODY_TEXT_BYTES)
+                    body_html = (
+                        _truncate_body(full.body_html, MAX_BODY_HTML_BYTES)
+                        if full.body_html else None
+                    )
+                    await db.execute(
+                        text(
+                            """UPDATE email_messages
+                               SET body_text = :bt, body_html = :bh,
+                                   has_attachments = :ha, updated_at = now()
+                               WHERE id = :id"""
+                        ),
+                        {
+                            "id": message_id,
+                            "bt": body_text,
+                            "bh": body_html,
+                            "ha": full.has_attachments,
+                        },
+                    )
+                    # Persist attachment metadata fetched with the full message.
+                    for att in full.attachments:
+                        await db.execute(
+                            text(
+                                """INSERT INTO email_attachments
+                                   (message_id, filename, mime_type, size_bytes,
+                                    provider_attachment_id)
+                                   VALUES (:mid, :filename, :mime_type, :size_bytes,
+                                           :provider_attachment_id)
+                                   ON CONFLICT DO NOTHING"""
+                            ),
+                            {
+                                "mid": message_id,
+                                "filename": att.filename,
+                                "mime_type": att.mime_type,
+                                "size_bytes": att.size_bytes,
+                                "provider_attachment_id": att.provider_attachment_id,
+                            },
+                        )
+                    await _persist_rotated_creds(db, store, account_id, provider)
+                    await db.commit()
+                    msg.body_text = body_text
+                    msg.body_html = body_html
+                    msg.has_attachments = full.has_attachments
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("get_message.hydrate_failed", message_id=message_id, error=str(exc)[:200])
+
         if msg.has_attachments:
             msg.attachments = await _fetch_attachments(db, message_id)
         return msg
@@ -734,6 +856,37 @@ async def update_message(
         )
         await db.commit()
 
+        # ── Two-way sync: push the change to the provider (best-effort) ──
+        # The local DB is already updated; if the provider write fails we keep the
+        # local state and log, rather than failing the user's action.
+        try:
+            provider, provider_msg_id, account_id, store = await _provider_for_message(
+                db, message_id, user.email or "anonymous"
+            )
+            if await provider.authenticate():
+                if (
+                    updates.is_read is not None
+                    or updates.is_starred is not None
+                    or updates.is_flagged is not None
+                ):
+                    await provider.apply_flags(
+                        provider_msg_id,
+                        is_read=updates.is_read,
+                        is_starred=updates.is_starred,
+                        is_flagged=updates.is_flagged,
+                    )
+                if updates.folder is not None:
+                    await provider.move_to_folder(provider_msg_id, updates.folder.lower())
+                await _persist_rotated_creds(db, store, account_id, provider)
+                await db.commit()
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            _log.warning(
+                "update_message.provider_sync_failed",
+                message_id=message_id, error=str(exc)[:200],
+            )
+
         # Return updated message
         return await get_message(message_id, user)
     finally:
@@ -745,12 +898,12 @@ async def delete_message(
     message_id: str,
     user: UserContext = Depends(get_current_user),
 ):
-    """Move email to trash."""
+    """Move email to trash (locally and on the provider)."""
     db = await _get_db()
     try:
         result = await db.execute(
             text(
-                """UPDATE email_messages SET folder = 'TRASH', updated_at = now()
+                """UPDATE email_messages SET folder = 'trash', updated_at = now()
                    WHERE id = :id
                    AND account_id IN (
                        SELECT id FROM email_accounts WHERE user_id = :user_id
@@ -761,6 +914,23 @@ async def delete_message(
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="Message not found")
         await db.commit()
+
+        # ── Two-way sync: trash on the provider too (best-effort) ──
+        try:
+            provider, provider_msg_id, account_id, store = await _provider_for_message(
+                db, message_id, user.email or "anonymous"
+            )
+            if await provider.authenticate():
+                await provider.trash_message(provider_msg_id)
+                await _persist_rotated_creds(db, store, account_id, provider)
+                await db.commit()
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            _log.warning(
+                "delete_message.provider_sync_failed",
+                message_id=message_id, error=str(exc)[:200],
+            )
     finally:
         await db.close()
 
@@ -1121,14 +1291,16 @@ async def trigger_sync(
                         text(
                             """INSERT INTO email_messages
                                (id, account_id, provider_message_id, thread_id,
-                                folder, labels, from_address, to_addresses,
+                                folder, labels, categories, importance,
+                                from_address, to_addresses,
                                 cc_addresses, bcc_addresses, subject,
                                 body_text, body_html, snippet,
                                 has_attachments, is_read, is_starred, is_flagged,
                                 received_at, synced_at)
                                VALUES
                                (:id, :account_id, :provider_id, :thread_id,
-                                :folder, :labels, :from_addr, :to_addrs,
+                                :folder, :labels, :categories, :importance,
+                                :from_addr, :to_addrs,
                                 :cc_addrs, :bcc_addrs, :subject,
                                 :body_text, :body_html, :snippet,
                                 :has_attachments, :is_read, :is_starred, :is_flagged,
@@ -1138,6 +1310,8 @@ async def trigger_sync(
                                 thread_id = EXCLUDED.thread_id,
                                 folder = EXCLUDED.folder,
                                 labels = EXCLUDED.labels,
+                                categories = EXCLUDED.categories,
+                                importance = EXCLUDED.importance,
                                 from_address = EXCLUDED.from_address,
                                 to_addresses = EXCLUDED.to_addresses,
                                 cc_addresses = EXCLUDED.cc_addresses,
@@ -1160,6 +1334,8 @@ async def trigger_sync(
                             "thread_id": msg.thread_id,
                             "folder": msg.folder or "INBOX",
                             "labels": msg.labels,
+                            "categories": getattr(msg, "categories", []) or [],
+                            "importance": getattr(msg, "importance", "normal") or "normal",
                             "from_addr": json.dumps({
                                 "name": msg.from_address.name if msg.from_address else "",
                                 "email": msg.from_address.email if msg.from_address else "",
@@ -1985,6 +2161,8 @@ def _row_to_message(row: Any) -> EmailMessageModel:
         is_read=row.is_read or False,
         is_starred=row.is_starred or False,
         is_flagged=row.is_flagged or False,
+        importance=getattr(row, "importance", None) or "normal",
+        categories=list(row.categories) if getattr(row, "categories", None) else [],
         received_at=row.received_at.isoformat() if row.received_at else None,
         synced_at=row.synced_at.isoformat() if row.synced_at else None,
     )

@@ -88,7 +88,17 @@ function mapEmail(raw: Record<string, unknown>): Email {
     isRead: Boolean(raw.is_read ?? raw.isRead ?? false),
     isStarred: Boolean(raw.is_starred ?? raw.isStarred ?? false),
     isFlagged: Boolean(raw.is_flagged ?? raw.isFlagged ?? false),
+    importance: ((): "high" | "normal" | "low" => {
+      const v = String(raw.importance ?? "normal").toLowerCase();
+      return v === "high" || v === "low" ? v : "normal";
+    })(),
     labels: (raw.labels as string[]) ?? [],
+    categories: Array.isArray(raw.categories)
+      ? (raw.categories as string[]) // real provider categories (Outlook) — keep verbatim
+      : ((raw.labels as string[]) ?? []).filter(
+          // Falling back to Gmail labels: hide UPPERCASE system labels.
+          (l) => !/^[A-Z_]+$/.test(l)
+        ),
     folder: String(raw.folder ?? "INBOX"),
     receivedAt: raw.received_at ? String(raw.received_at) : new Date().toISOString(),
     syncedAt: raw.synced_at ? String(raw.synced_at) : new Date().toISOString(),

@@ -147,9 +147,13 @@ class OutlookProvider(BaseEmailProvider):
         well_known: dict[str, str] = {
             "inbox": "inbox",
             "sent": "sentitems",
+            "sentitems": "sentitems",
             "drafts": "drafts",
             "trash": "deleteditems",
+            "deleteditems": "deleteditems",
             "archive": "archive",
+            "junk": "junkemail",
+            "junkemail": "junkemail",
         }
         folder_path = well_known.get(folder.lower(), folder)
 
@@ -160,7 +164,7 @@ class OutlookProvider(BaseEmailProvider):
             "$select": "id,subject,from,toRecipients,ccRecipients,"
                        "bccRecipients,receivedDateTime,isRead,hasAttachments,"
                        "flag,bodyPreview,categories,parentFolderId,"
-                       "conversationId",
+                       "conversationId,importance",
         }
         if query:
             params["$search"] = f'"{query}"'
@@ -262,8 +266,52 @@ class OutlookProvider(BaseEmailProvider):
             resp.raise_for_status()
 
     async def trash_message(self, provider_message_id: str) -> None:
+        # Graph "delete" moves the item to Deleted Items (soft delete), which is
+        # what we want for a trash action.
+        await self.move_to_folder(provider_message_id, "trash")
+
+    # Canonical folder key → Graph well-known folder name for moves.
+    _MOVE_TARGETS = {
+        "inbox": "inbox",
+        "archive": "archive",
+        "trash": "deleteditems",
+        "drafts": "drafts",
+        "junk": "junkemail",
+        "sent": "sentitems",
+    }
+
+    async def apply_flags(
+        self,
+        provider_message_id: str,
+        *,
+        is_read: bool | None = None,
+        is_starred: bool | None = None,
+        is_flagged: bool | None = None,
+    ) -> None:
+        """PATCH read state / flag on the Graph message.
+
+        Outlook has no "star" concept, so ``is_starred`` is ignored (the star is
+        kept as a local-only marker in CommandCenter).
+        """
+        patch: dict[str, Any] = {}
+        if is_read is not None:
+            patch["isRead"] = is_read
+        if is_flagged is not None:
+            patch["flag"] = {"flagStatus": "flagged" if is_flagged else "notFlagged"}
+        if patch:
+            client = await self._get_client()
+            resp = await client.patch(f"/me/messages/{provider_message_id}", json=patch)
+            resp.raise_for_status()
+
+    async def move_to_folder(self, provider_message_id: str, folder: str) -> None:
+        target = self._MOVE_TARGETS.get((folder or "").lower())
+        if not target:
+            return
         client = await self._get_client()
-        resp = await client.delete(f"/me/messages/{provider_message_id}")
+        resp = await client.post(
+            f"/me/messages/{provider_message_id}/move",
+            json={"destinationId": target},
+        )
         resp.raise_for_status()
 
     async def sync_messages(
@@ -306,17 +354,18 @@ class OutlookProvider(BaseEmailProvider):
                 new_history_id=data.get("@odata.deltaLink"),
             )
         else:
-            # Initial sync — fetch inbox + sent
-            messages, _ = await self.list_messages(
-                folder="inbox", max_results=max_results
-            )
-            try:
-                sent_messages, _ = await self.list_messages(
-                    folder="sentItems", max_results=max_results
-                )
-                messages.extend(sent_messages)
-            except Exception:
-                pass
+            # Initial sync — fetch all standard folders so messages land in the
+            # right place in the UI (not just inbox/sent).
+            messages = []
+            for folder_key in ("inbox", "sent", "drafts", "archive", "junk", "trash"):
+                try:
+                    folder_msgs, _ = await self.list_messages(
+                        folder=folder_key, max_results=max_results
+                    )
+                    messages.extend(folder_msgs)
+                except Exception:
+                    # A missing/forbidden folder shouldn't abort the whole sync.
+                    continue
             return SyncResult(
                 messages_synced=len(messages),
                 messages=messages,
@@ -368,12 +417,17 @@ class OutlookProvider(BaseEmailProvider):
             fa = raw["from"].get("emailAddress", {})
             from_addr = EmailAddress(name=fa.get("name", ""), email=fa.get("address", ""))
 
-        # Categories → labels
-        categories = raw.get("categories", [])
+        # Categories (Outlook user categories, e.g. "Red category")
+        categories = raw.get("categories", []) or []
 
         # Flag status
         flag = raw.get("flag", {})
         is_flagged = flag.get("flagStatus") == "flagged"
+
+        # Importance: 'low' | 'normal' | 'high'
+        importance = str(raw.get("importance", "normal")).lower()
+        if importance not in ("low", "normal", "high"):
+            importance = "normal"
 
         # Attachments
         attachments: list[Attachment] = []
@@ -407,8 +461,10 @@ class OutlookProvider(BaseEmailProvider):
             has_attachments=raw.get("hasAttachments", False),
             attachments=attachments,
             is_read=raw.get("isRead", False),
-            is_starred=False,  # Outlook doesn't have stars — use categories
+            is_starred=False,  # Outlook doesn't have stars — use flag/categories
             is_flagged=is_flagged,
+            importance=importance,
+            categories=categories,
             received_at=self._parse_received_datetime(raw.get("receivedDateTime")),
             raw=raw,
         )

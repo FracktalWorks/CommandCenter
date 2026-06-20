@@ -246,6 +246,46 @@ class GmailProvider(BaseEmailProvider):
         )
         resp.raise_for_status()
 
+    async def apply_flags(
+        self,
+        provider_message_id: str,
+        *,
+        is_read: bool | None = None,
+        is_starred: bool | None = None,
+        is_flagged: bool | None = None,
+    ) -> None:
+        """Translate flag changes into Gmail label add/remove operations."""
+        add: list[str] = []
+        remove: list[str] = []
+        if is_read is not None:
+            (remove if is_read else add).append("UNREAD")
+        if is_starred is not None:
+            (add if is_starred else remove).append("STARRED")
+        if is_flagged is not None:
+            # Gmail's closest analogue to a flag is the IMPORTANT marker.
+            (add if is_flagged else remove).append("IMPORTANT")
+        if add or remove:
+            await self.modify_message(
+                provider_message_id, add_labels=add or None, remove_labels=remove or None
+            )
+
+    async def move_to_folder(self, provider_message_id: str, folder: str) -> None:
+        """Move via Gmail label mutation (Gmail has labels, not folders)."""
+        folder = (folder or "").lower()
+        if folder == "trash":
+            await self.trash_message(provider_message_id)
+        elif folder == "archive":
+            # Archiving in Gmail = removing the INBOX label.
+            await self.modify_message(provider_message_id, remove_labels=["INBOX"])
+        elif folder == "inbox":
+            await self.modify_message(
+                provider_message_id, add_labels=["INBOX"], remove_labels=["TRASH", "SPAM"]
+            )
+        elif folder in ("junk", "spam"):
+            await self.modify_message(
+                provider_message_id, add_labels=["SPAM"], remove_labels=["INBOX"]
+            )
+
     async def sync_messages(
         self,
         history_id: str | None = None,
@@ -299,18 +339,17 @@ class GmailProvider(BaseEmailProvider):
             result.messages_synced += len(message_ids_deleted)
             return result
         else:
-            # Initial full sync — list all messages
-            messages, _ = await self.list_messages(
-                folder="INBOX", max_results=max_results
-            )
-            # Also fetch sent mail
-            try:
-                sent_messages, _ = await self.list_messages(
-                    folder="SENT", max_results=max_results
-                )
-                messages.extend(sent_messages)
-            except Exception:
-                pass
+            # Initial full sync — fetch the standard system labels so messages
+            # land in the right folder in the UI (not just inbox/sent).
+            messages: list[EmailMessage] = []
+            for label in ("INBOX", "SENT", "DRAFT", "SPAM", "TRASH"):
+                try:
+                    label_msgs, _ = await self.list_messages(
+                        folder=label, max_results=max_results
+                    )
+                    messages.extend(label_msgs)
+                except Exception:
+                    continue
 
             return SyncResult(
                 messages_synced=len(messages),
@@ -376,6 +415,10 @@ class GmailProvider(BaseEmailProvider):
         is_read = "UNREAD" not in label_ids
         is_starred = "STARRED" in label_ids
         is_flagged = "IMPORTANT" in label_ids
+        importance = "high" if "IMPORTANT" in label_ids else "normal"
+        # Gmail user-label *names* require a separate label-map lookup; expose
+        # only the raw IDs as labels and leave categories empty for now.
+        categories: list[str] = []
 
         return EmailMessage(
             provider_message_id=raw["id"],
@@ -398,6 +441,8 @@ class GmailProvider(BaseEmailProvider):
             is_read=is_read,
             is_starred=is_starred,
             is_flagged=is_flagged,
+            importance=importance,
+            categories=categories,
             received_at=self._parse_internal_date(raw.get("internalDate")),
             raw=raw,
         )

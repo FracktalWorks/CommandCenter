@@ -3,7 +3,8 @@
 import { useState } from "react";
 import {
   Inbox, Send, FileText, Trash2, Star, Archive, Tag,
-  Search, Plus, ChevronDown, ChevronRight, Settings2, Check
+  Search, Plus, ChevronDown, ChevronRight, Settings2, Check,
+  ShieldAlert, Folder,
 } from "lucide-react";
 import { EmailAccount, EmailFolder } from "../lib/types";
 
@@ -15,6 +16,7 @@ interface AccountSidebarProps {
   selectedFolder: string;
   onFolderSelect: (folder: string) => void;
   onAddAccount?: () => void;
+  onSearch?: (query: string) => void;
 }
 
 export function AccountSidebar({
@@ -25,6 +27,7 @@ export function AccountSidebar({
   selectedFolder,
   onFolderSelect,
   onAddAccount,
+  onSearch,
 }: AccountSidebarProps) {
   const [accountsExpanded, setAccountsExpanded] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -55,7 +58,10 @@ export function AccountSidebar({
             type="text"
             placeholder="Search emails..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              onSearch?.(e.target.value);
+            }}
             className="bg-transparent outline-none text-xs w-full text-foreground placeholder:text-muted-foreground"
           />
         </div>
@@ -117,9 +123,8 @@ export function AccountSidebar({
 
       {/* Folders */}
       <div className="flex-1 overflow-y-auto px-2 space-y-0.5 scrollbar-hide">
-        {folders.map(({ icon: Icon, label, key, count }) => {
-          // Dynamic icon import pattern — using the icon name string
-          const IconComponent = getFolderIcon(key);
+        {folders.map(({ label, key, count, type }) => {
+          const IconComponent = getFolderIcon(key, type);
           return (
             <button
               key={key}
@@ -159,16 +164,19 @@ export function AccountSidebar({
   );
 }
 
-// Helper to map folder key to Lucide icon component
-function getFolderIcon(key: string): React.ElementType {
+// Helper to map folder key to Lucide icon component.
+function getFolderIcon(key: string, type?: "system" | "user"): React.ElementType {
   const map: Record<string, React.ElementType> = {
     inbox: Inbox,
     starred: Star,
     sent: Send,
     drafts: FileText,
     archive: Archive,
+    junk: ShieldAlert,
     labels: Tag,
     trash: Trash2,
   };
-  return map[key] || Inbox;
+  if (map[key]) return map[key];
+  // User-created provider folders/labels get a generic folder icon.
+  return type === "user" ? Folder : Inbox;
 }

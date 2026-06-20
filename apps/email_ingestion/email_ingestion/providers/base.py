@@ -83,6 +83,8 @@ class EmailMessage:
     is_read: bool = False
     is_starred: bool = False
     is_flagged: bool = False
+    importance: str = "normal"  # 'high' | 'normal' | 'low'
+    categories: list[str] = field(default_factory=list)
     received_at: datetime | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -186,6 +188,30 @@ class BaseEmailProvider(ABC):
     async def trash_message(self, provider_message_id: str) -> None:
         """Move message to trash."""
         ...
+
+    async def apply_flags(
+        self,
+        provider_message_id: str,
+        *,
+        is_read: bool | None = None,
+        is_starred: bool | None = None,
+        is_flagged: bool | None = None,
+    ) -> None:
+        """Push read/star/flag state changes to the provider (two-way sync).
+
+        Default implementation is a no-op so providers that don't support a
+        given flag (e.g. IMAP stars) degrade gracefully.  Gmail/Outlook override.
+        """
+        return None
+
+    async def move_to_folder(self, provider_message_id: str, folder: str) -> None:
+        """Move a message to the given canonical folder on the provider.
+
+        ``folder`` is a canonical key (inbox/archive/trash/junk/...).  Default
+        implementation is a no-op; providers override with their semantics
+        (Gmail = label changes, Outlook = /move, IMAP = COPY+EXPUNGE).
+        """
+        return None
 
     @abstractmethod
     async def sync_messages(

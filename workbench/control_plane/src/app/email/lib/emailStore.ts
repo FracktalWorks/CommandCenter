@@ -4,53 +4,95 @@ import * as api from "./api";
 import type { EmailFolderRaw } from "./api";
 import { QUICK_ACTIONS } from "./mockData";
 
-/** System folder icons mapped by canonical key. */
-const SYSTEM_FOLDER_ICONS: Record<string, string> = {
-  inbox: "Inbox", INBOX: "Inbox",
-  sent: "Send", drafts: "FileText", archive: "Archive",
-  trash: "Trash2", junk: "ShieldAlert", spam: "ShieldAlert",
-  starred: "Star", important: "AlertTriangle",
+/**
+ * Canonical folder keys shared with the backend (`providers/base.py`).
+ * Provider folder names map onto these so the inbox/sent/etc. tabs line up
+ * regardless of provider-specific naming ("Sent Items" vs "SENT").
+ */
+const CANONICAL_ALIASES: Record<string, string> = {
+  inbox: "inbox",
+  "sent items": "sent", sentitems: "sent", "sent mail": "sent", sent: "sent",
+  drafts: "drafts", draft: "drafts",
+  "deleted items": "trash", deleteditems: "trash", trash: "trash", bin: "trash",
+  archive: "archive",
+  "junk email": "junk", junkemail: "junk", junk: "junk", spam: "junk",
 };
 
-/** Default system folders that always appear even before sync. */
+function toCanonical(name: string): string {
+  return CANONICAL_ALIASES[name.trim().toLowerCase()] ?? name.trim().toLowerCase();
+}
+
+/** Default system folders that always appear even before sync, in display order. */
 const DEFAULT_SYSTEM_FOLDERS: EmailFolder[] = [
-  { icon: "Inbox", label: "Inbox", key: "inbox", count: 0 },
-  { icon: "Star", label: "Starred", key: "starred", count: 0 },
-  { icon: "Send", label: "Sent", key: "sent", count: 0 },
-  { icon: "FileText", label: "Drafts", key: "drafts", count: 0 },
-  { icon: "Archive", label: "Archive", key: "archive", count: 0 },
-  { icon: "Tag", label: "Labels", key: "labels", count: 0 },
-  { icon: "Trash2", label: "Trash", key: "trash", count: 0 },
+  { icon: "Inbox", label: "Inbox", key: "inbox", count: 0, type: "system" },
+  { icon: "Star", label: "Starred", key: "starred", count: 0, type: "system" },
+  { icon: "Send", label: "Sent", key: "sent", count: 0, type: "system" },
+  { icon: "FileText", label: "Drafts", key: "drafts", count: 0, type: "system" },
+  { icon: "Archive", label: "Archive", key: "archive", count: 0, type: "system" },
+  { icon: "ShieldAlert", label: "Junk", key: "junk", count: 0, type: "system" },
+  { icon: "Trash2", label: "Trash", key: "trash", count: 0, type: "system" },
 ];
 
+const SYSTEM_KEYS = new Set(DEFAULT_SYSTEM_FOLDERS.map((f) => f.key));
+
+// Gmail's reserved system labels — never surfaced as user folders.
+const GMAIL_SYSTEM_LABELS = new Set([
+  "chat", "important", "starred", "unread", "category_personal",
+  "category_social", "category_promotions", "category_updates",
+  "category_forums", "unwanted",
+]);
+
 /**
- * Merge real provider folders with default system folders.
- * Provider folders are mapped by their canonical name (lowercased).
- * Folders not in the provider list keep their counts from email data.
+ * Merge real provider folders with the canonical system folders, and append the
+ * provider's *own* user folders/labels so the sidebar mirrors the real mailbox
+ * structure (two-way: what you see in Outlook/Gmail, you see here).
  */
 function mergeFolders(
   providerFolders: EmailFolderRaw[],
   emailCounts: Record<string, number>,
 ): EmailFolder[] {
-  const providerMap = new Map<string, EmailFolderRaw>();
+  // Index provider folders by canonical key for system-folder count/labels.
+  const canonProvider = new Map<string, EmailFolderRaw>();
   for (const f of providerFolders) {
-    providerMap.set(f.name.toLowerCase(), f);
+    const key = toCanonical(f.name);
+    // Prefer the entry with the most messages if duplicates collapse to one key.
+    const existing = canonProvider.get(key);
+    if (!existing || (f.message_count || 0) > (existing.message_count || 0)) {
+      canonProvider.set(key, f);
+    }
   }
 
-  return DEFAULT_SYSTEM_FOLDERS.map((df) => {
-    const pf = providerMap.get(df.key);
-    if (pf) {
-      return {
-        ...df,
-        count: pf.message_count || emailCounts[df.key] || 0,
-        label: pf.name, // use provider's display name
-      };
-    }
+  const systemFolders = DEFAULT_SYSTEM_FOLDERS.map((df) => {
+    const pf = canonProvider.get(df.key);
     return {
       ...df,
-      count: emailCounts[df.key] || 0,
+      count: pf?.message_count || emailCounts[df.key] || 0,
+      unread: pf?.unread_count ?? undefined,
     };
   });
+
+  // Append user-created provider folders/labels (anything not a system key).
+  const userFolders: EmailFolder[] = [];
+  const seen = new Set<string>();
+  for (const f of providerFolders) {
+    const key = toCanonical(f.name);
+    if (SYSTEM_KEYS.has(key) || key === "starred") continue;
+    if (f.type === "system") continue; // skip provider system folders
+    if (GMAIL_SYSTEM_LABELS.has(key) || /^category_/.test(key)) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    userFolders.push({
+      icon: "Folder",
+      label: f.name,
+      key,
+      count: f.message_count || emailCounts[key] || 0,
+      unread: f.unread_count ?? undefined,
+      type: "user",
+    });
+  }
+  userFolders.sort((a, b) => a.label.localeCompare(b.label));
+
+  return [...systemFolders, ...userFolders];
 }
 
 /**
@@ -105,6 +147,7 @@ interface EmailState {
   setSearchQuery: (q: string) => void;
   openCompose: (defaults?: { to: string; subject: string; replyToBody?: string; replyToMessageId?: string }) => void;
   closeCompose: () => void;
+  hydrateEmail: (email: Email) => void;
   updateEmail: (id: string, updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>) => Promise<void>;
   deleteEmail: (id: string) => Promise<void>;
   sendEmail: (params: api.SendEmailParams) => Promise<void>;
@@ -188,7 +231,10 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         query: searchQuery || undefined,
       });
       const emails = result.emails;
-      const folders = buildFolders(emails);
+      // Don't clobber the provider folder tree (system + user folders) fetched
+      // by fetchFolders — only seed a system-folder fallback if we have none yet.
+      const existing = get().folders;
+      const folders = existing.length > 0 ? existing : buildFolders(emails);
       set({ emails, folders, emailsLoading: false });
     } catch (err: any) {
       set({ emailsLoading: false, error: err.message || "Failed to load emails" });
@@ -235,6 +281,14 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     set({ composeOpen: false, composeDefaults: null });
   },
 
+  hydrateEmail: (full) => {
+    // Merge a fully-fetched message (body + attachments) into the cached list
+    // so reply quoting and re-opens use the complete copy without re-fetching.
+    set({
+      emails: get().emails.map((e) => (e.id === full.id ? { ...e, ...full } : e)),
+    });
+  },
+
   updateEmail: async (id, updates) => {
     // Optimistic update
     const prevEmails = get().emails;
@@ -249,7 +303,6 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         emails: get().emails.map((e) =>
           e.id === id ? { ...e, ...updated } : e
         ),
-        folders: buildFolders(get().emails),
       });
     } catch (err: any) {
       // Revert on failure
@@ -262,7 +315,6 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     set({ emails: prevEmails.filter((e) => e.id !== id) });
     try {
       await api.deleteEmail(id);
-      set({ folders: buildFolders(get().emails) });
       // Clear selection if deleted was selected
       if (get().selectedEmailId === id) {
         set({ selectedEmailId: get().emails[0]?.id ?? null });

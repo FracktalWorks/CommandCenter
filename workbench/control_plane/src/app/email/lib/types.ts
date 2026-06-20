@@ -30,7 +30,12 @@ export interface Email {
   isRead: boolean;
   isStarred: boolean;
   isFlagged: boolean;
+  /** Provider importance: 'high' | 'normal' | 'low' (Outlook), mapped for Gmail. */
+  importance: "high" | "normal" | "low";
+  /** Provider labels (Gmail) — used for folder/label chips. */
   labels: string[];
+  /** Outlook categories / Gmail user labels with optional colors. */
+  categories: string[];
   folder: string;
   receivedAt: string; // ISO 8601
   syncedAt: string;
@@ -67,4 +72,8 @@ export interface EmailFolder {
   label: string;
   key: string;
   count: number;
+  /** 'system' for canonical folders, 'user' for provider-created folders/labels. */
+  type?: "system" | "user";
+  /** Unread count from the provider, when available. */
+  unread?: number;
 }

@@ -1,22 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Star, Reply, Forward, Trash2, Archive, MoreHorizontal,
   Paperclip, Download, ReplyAll, Flag, FolderInput,
-  MailOpen, Tag, Printer, ExternalLink, X,
+  MailOpen, Tag, Printer, ExternalLink, X, AlertTriangle, Loader2,
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { fullDateLabel, initials } from "../lib/utils";
 import { useEmailStore } from "../lib/emailStore";
-import { getAttachmentDownloadUrl, fetchFullBody } from "../lib/api";
+import { getAttachmentDownloadUrl, fetchFullBody, getEmail } from "../lib/api";
+import { MessageContent } from "./MessageContent";
 
 interface EmailDetailProps {
   email: Email | null;
 }
 
 export function EmailDetail({ email }: EmailDetailProps) {
-  const { updateEmail, deleteEmail, openCompose } = useEmailStore();
+  const { updateEmail, deleteEmail, openCompose, hydrateEmail } = useEmailStore();
   const [starred, setStarred] = useState(email?.isStarred ?? false);
   const [read, setRead] = useState(email?.isRead ?? true);
   const [flagged, setFlagged] = useState(email?.isFlagged ?? false);
@@ -29,6 +30,46 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const [replySending, setReplySending] = useState(false);
   const [loadingFullBody, setLoadingFullBody] = useState(false);
   const [fullBodyText, setFullBodyText] = useState<string | null>(null);
+  // Full message detail (body + attachments) fetched lazily on selection. The
+  // list row often carries an empty body (Outlook syncs headers only), so we
+  // always fetch the authoritative copy from the gateway when an email opens.
+  const [detail, setDetail] = useState<Email | null>(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+
+  // Fetch full content whenever the selected email changes.
+  useEffect(() => {
+    if (!email) {
+      setDetail(null);
+      return;
+    }
+    let cancelled = false;
+    setDetail(null);
+    setFullBodyText(null);
+    setReplyMode(null);
+    const needsBody = !email.bodyHtml && !email.bodyText;
+    const needsAttachments = email.hasAttachments && (!email.attachments || email.attachments.length === 0);
+    if (!needsBody && !needsAttachments) {
+      setDetail(email);
+      return;
+    }
+    setLoadingDetail(true);
+    getEmail(email.id)
+      .then((full) => {
+        if (!cancelled) {
+          setDetail(full);
+          hydrateEmail(full);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setDetail(email); // fall back to list row
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDetail(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [email?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep state in sync when email changes
   if (email && starred !== email.isStarred) setStarred(email.isStarred);
@@ -55,6 +96,9 @@ export function EmailDetail({ email }: EmailDetailProps) {
       </div>
     );
   }
+
+  // Render the fullest copy we have (the lazily-fetched detail, or the list row).
+  const view: Email = detail ?? email;
 
   const replyLabel =
     replyMode === "forward"
@@ -180,17 +224,43 @@ export function EmailDetail({ email }: EmailDetailProps) {
 
       {/* ── Email content ── */}
       <div className="flex-1 overflow-y-auto scrollbar-hide px-6 py-5">
-        {/* Subject */}
+        {/* Subject + status badges */}
         <div className="flex items-start gap-2 mb-4">
           <h2 className="flex-1 text-foreground text-lg font-semibold">
             {email.subject}
           </h2>
-          {!read && (
-            <span className="flex-shrink-0 text-[9px] px-1.5 py-0.5 bg-primary/15 text-primary rounded-full mt-1">
-              Unread
-            </span>
-          )}
+          <div className="flex items-center gap-1 flex-shrink-0 mt-1">
+            {view.importance === "high" && (
+              <span className="inline-flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 bg-red-500/15 text-red-400 rounded-full">
+                <AlertTriangle size={9} /> Important
+              </span>
+            )}
+            {flagged && (
+              <span className="inline-flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 bg-amber-500/15 text-amber-400 rounded-full">
+                <Flag size={9} /> Flagged
+              </span>
+            )}
+            {!read && (
+              <span className="text-[9px] px-1.5 py-0.5 bg-primary/15 text-primary rounded-full">
+                Unread
+              </span>
+            )}
+          </div>
         </div>
+
+        {/* Categories / labels */}
+        {view.categories && view.categories.length > 0 && (
+          <div className="flex flex-wrap gap-1 mb-4">
+            {view.categories.map((cat) => (
+              <span
+                key={cat}
+                className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-secondary text-foreground/80 border border-border"
+              >
+                <Tag size={9} /> {cat}
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* Sender info */}
         <div className="flex items-start gap-3 mb-6">
@@ -221,18 +291,46 @@ export function EmailDetail({ email }: EmailDetailProps) {
         </div>
 
         {/* Body */}
-        <div className="text-sm text-foreground/85 leading-relaxed whitespace-pre-wrap max-w-2xl">
-          {fullBodyText ?? email.bodyText}
-        </div>
+        {loadingDetail ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground py-6">
+            <Loader2 size={14} className="animate-spin" /> Loading message…
+          </div>
+        ) : fullBodyText ? (
+          <div className="text-sm text-foreground/85 leading-relaxed whitespace-pre-wrap max-w-2xl">
+            {fullBodyText}
+          </div>
+        ) : !view.bodyHtml && !view.bodyText ? (
+          <div className="text-sm text-muted-foreground italic py-4">
+            This message has no preview text.{" "}
+            <button
+              onClick={async () => {
+                setLoadingFullBody(true);
+                try {
+                  const fb = await fetchFullBody(view.id);
+                  setFullBodyText(fb.body_text || "(empty message)");
+                } catch {
+                  setFullBodyText("(failed to load message)");
+                } finally {
+                  setLoadingFullBody(false);
+                }
+              }}
+              className="text-primary hover:opacity-80 not-italic"
+            >
+              {loadingFullBody ? "Loading…" : "Load from provider"}
+            </button>
+          </div>
+        ) : (
+          <MessageContent html={view.bodyHtml} text={view.bodyText} />
+        )}
 
         {/* "Load full message" button — appears when body was truncated at sync */}
-        {email.bodyTruncated && !fullBodyText && (
+        {view.bodyTruncated && !fullBodyText && (
           <div className="mt-2">
             <button
               onClick={async () => {
                 setLoadingFullBody(true);
                 try {
-                  const fb = await fetchFullBody(email.id);
+                  const fb = await fetchFullBody(view.id);
                   setFullBodyText(fb.body_text);
                 } catch {
                   // keep truncated body on failure
@@ -253,12 +351,12 @@ export function EmailDetail({ email }: EmailDetailProps) {
         )}
 
         {/* Attachment */}
-        {email.hasAttachments && email.attachments && email.attachments.length > 0 && (
+        {view.hasAttachments && view.attachments && view.attachments.length > 0 && (
           <div className="mt-6 pt-4 border-t border-border">
             <p className="text-xs text-muted-foreground mb-2">
-              Attachments ({email.attachments.length})
+              Attachments ({view.attachments.length})
             </p>
-            {email.attachments.map((att) => (
+            {view.attachments.map((att) => (
               <div
                 key={att.id}
                 className="flex items-center gap-2 bg-secondary rounded-md px-3 py-2 w-fit mb-1.5"
@@ -341,7 +439,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                         const fwdSubject = email.subject.startsWith("Fwd:")
                           ? email.subject
                           : `Fwd: ${email.subject}`;
-                        const fwdBody = `\n\n---------- Forwarded message ----------\nFrom: ${email.from.name} <${email.from.email}>\nDate: ${email.receivedAt}\nSubject: ${email.subject}\n\n${email.bodyText}`;
+                        const fwdBody = `\n\n---------- Forwarded message ----------\nFrom: ${view.from.name} <${view.from.email}>\nDate: ${view.receivedAt}\nSubject: ${view.subject}\n\n${view.bodyText}`;
                         await openCompose({
                           to: forwardTo || "",
                           subject: fwdSubject,
@@ -354,7 +452,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                         const reSubject = email.subject.startsWith("Re:")
                           ? email.subject
                           : `Re: ${email.subject}`;
-                        const quotedBody = `\n\nOn ${email.receivedAt}, ${email.from.name} wrote:\n> ${email.bodyText.replace(/\n/g, "\n> ")}`;
+                        const quotedBody = `\n\nOn ${view.receivedAt}, ${view.from.name} wrote:\n> ${view.bodyText.replace(/\n/g, "\n> ")}`;
                         await openCompose({
                           to: replyTo,
                           subject: reSubject,

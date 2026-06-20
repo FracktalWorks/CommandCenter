@@ -157,14 +157,16 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
                         text(
                             """INSERT INTO email_messages
                                (id, account_id, provider_message_id, thread_id,
-                                folder, labels, from_address, to_addresses,
+                                folder, labels, categories, importance,
+                                from_address, to_addresses,
                                 cc_addresses, bcc_addresses, subject,
                                 body_text, body_html, snippet,
                                 has_attachments, is_read, is_starred, is_flagged,
                                 received_at, synced_at)
                                VALUES
                                (:id, :account_id, :provider_id, :thread_id,
-                                :folder, :labels, :from_addr, :to_addrs,
+                                :folder, :labels, :categories, :importance,
+                                :from_addr, :to_addrs,
                                 :cc_addrs, :bcc_addrs, :subject,
                                 :body_text, :body_html, :snippet,
                                 :has_attachments, :is_read, :is_starred, :is_flagged,
@@ -174,6 +176,8 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
                                 thread_id = EXCLUDED.thread_id,
                                 folder = EXCLUDED.folder,
                                 labels = EXCLUDED.labels,
+                                categories = EXCLUDED.categories,
+                                importance = EXCLUDED.importance,
                                 from_address = EXCLUDED.from_address,
                                 to_addresses = EXCLUDED.to_addresses,
                                 cc_addresses = EXCLUDED.cc_addresses,
@@ -196,6 +200,8 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
                             "thread_id": msg.thread_id,
                             "folder": msg.folder or "INBOX",
                             "labels": msg.labels,
+                            "categories": getattr(msg, "categories", []) or [],
+                            "importance": getattr(msg, "importance", "normal") or "normal",
                             "from_addr": json.dumps({
                                 "name": msg.from_address.name if msg.from_address else "",
                                 "email": msg.from_address.email if msg.from_address else "",

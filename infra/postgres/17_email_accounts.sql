@@ -55,6 +55,8 @@ CREATE TABLE IF NOT EXISTS email_messages (
     is_read BOOLEAN DEFAULT false,
     is_starred BOOLEAN DEFAULT false,
     is_flagged BOOLEAN DEFAULT false,
+    importance TEXT NOT NULL DEFAULT 'normal',  -- 'high' | 'normal' | 'low'
+    categories TEXT[] NOT NULL DEFAULT '{}',    -- Outlook user categories
     received_at TIMESTAMPTZ,
     synced_at TIMESTAMPTZ DEFAULT now(),
     created_at TIMESTAMPTZ DEFAULT now(),

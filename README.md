@@ -83,12 +83,12 @@ Each **skill repo** is a Python package — pip-installable, single well-typed e
 
 ```
 ai-company-brain/        # Planning docs — start here
-  product_requirements.md
-  project_plan.md
-  system_architecture.md
-  wbs.md                 # Live work-breakdown with PERT estimates
-  risk_register.md
-  research_summary.md
+  AGENTS.md              # Navigation + current build status (read first)
+  project_plan.md        # Requirements + roadmap + WBS (single source)
+  system_architecture.md # C4 diagrams, data model, ADRs
+  agent_repo_compatibility.md  # How to build a compatible agent repo
+  reference.md           # MAF / Copilot SDK / memory library notes
+  specs/                 # Per-feature specs (email app, chat UX, etc.)
 
 apps/                    # Deployable services (one container each)
   gateway/               # FastAPI + Google SSO — event routing, pull queries, approvals
@@ -258,13 +258,13 @@ See [`Makefile`](Makefile) for convenience targets.
 
 ## Planning docs
 
-All planning artefacts live in [`ai-company-brain/`](ai-company-brain/):
+All planning artefacts live in [`ai-company-brain/`](ai-company-brain/) (consolidated 2026-06-20). Start with `AGENTS.md`.
 
 | Doc | Purpose |
 |---|---|
-| [`product_requirements.md`](ai-company-brain/product_requirements.md) | Full PRD — L1 through L4 requirements |
-| [`project_plan.md`](ai-company-brain/project_plan.md) | Phased delivery plan + ADR log |
+| [`AGENTS.md`](ai-company-brain/AGENTS.md) | Navigation + current build status + glossary (read first) |
+| [`project_plan.md`](ai-company-brain/project_plan.md) | Requirements (L1–L4) + milestones + phased WBS + risks — single source |
 | [`system_architecture.md`](ai-company-brain/system_architecture.md) | C4 diagrams, data model, ADRs |
-| [`wbs.md`](ai-company-brain/wbs.md) | Live WBS with PERT estimates |
-| [`risk_register.md`](ai-company-brain/risk_register.md) | Risk register |
-| [`research_summary.md`](ai-company-brain/research_summary.md) | Technology research + decisions |
+| [`agent_repo_compatibility.md`](ai-company-brain/agent_repo_compatibility.md) | How to build a compatible agent repo |
+| [`reference.md`](ai-company-brain/reference.md) | MAF / Copilot SDK / memory library notes |
+| [`specs/`](ai-company-brain/specs/) | Per-feature specs (email app, chat UX, stream reconnection, VS Code tools, LLM caching, MCP/plugins, artifact viewer) |

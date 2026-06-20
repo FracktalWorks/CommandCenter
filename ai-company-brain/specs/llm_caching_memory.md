@@ -417,7 +417,7 @@ For each phase:
 
 When each phase is implemented:
 - Update `ai-company-brain/system_architecture.md` ADR-008 status from "approved / unimplemented" to "implemented"
-- Update `ai-company-brain/wbs.md` WBS 2.6 status
+- Update `ai-company-brain/project_plan.md` WBS 2.6 status (§6 Phase 2)
 - Update `apps/orchestrator/AGENTS.md` to note sentinel marker convention
 - Update `packages/acb_llm/AGENTS.md` (or create if absent) to document cache parameters
 - Update `packages/acb_memory/` AGENTS.md to document session-scoped memory TTL contract

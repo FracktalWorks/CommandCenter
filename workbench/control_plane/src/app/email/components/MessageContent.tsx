@@ -14,19 +14,47 @@ interface MessageContentProps {
 /** Matches a remote (http/https) URL inside src/srcset/poster/background or CSS url(). */
 const REMOTE_RE = /(?:src|srcset|poster|background)\s*=\s*["']?\s*https?:|url\(\s*["']?\s*https?:/i;
 
+/** Rewrite a remote image URL to go through our gateway image proxy. */
+function proxify(u: string): string {
+  const origin =
+    typeof window !== "undefined" ? window.location.origin : "";
+  return `${origin}/api/email/image-proxy?url=${encodeURIComponent(u)}`;
+}
+
 /**
  * Sanitize an untrusted HTML email body. Runs only in the browser (DOMPurify
  * needs a DOM). Strips scripts/handlers/dangerous tags; keeps <style>/inline
  * styles so the email still looks like the email. Forces links to open in a new
- * tab. Remote-resource *loading* is gated separately by the iframe CSP — here we
- * only sanitize and report whether remote content is present.
+ * tab.
+ *
+ * When ``proxyRemote`` is true (the user clicked "Show images"), remote image
+ * URLs are rewritten through our gateway proxy so the sender's tracking pixel
+ * never sees the user's IP. When false, remote loading is blocked by the iframe
+ * CSP and we just report that remote content is present.
  */
-function sanitizeEmailHtml(raw: string): { clean: string; hasRemote: boolean } {
-  const hadAnchorHook = "afterSanitizeAttributes";
-  DOMPurify.addHook(hadAnchorHook, (node) => {
-    if ((node as Element).tagName === "A") {
-      node.setAttribute("target", "_blank");
-      node.setAttribute("rel", "noopener noreferrer nofollow");
+function sanitizeEmailHtml(
+  raw: string,
+  proxyRemote: boolean
+): { clean: string; hasRemote: boolean } {
+  let hasRemote = false;
+  const hook = "afterSanitizeAttributes";
+  DOMPurify.addHook(hook, (node) => {
+    const el = node as Element;
+    if (el.tagName === "A") {
+      el.setAttribute("target", "_blank");
+      el.setAttribute("rel", "noopener noreferrer nofollow");
+    }
+    for (const attr of ["src", "poster", "background"]) {
+      const v = el.getAttribute?.(attr);
+      if (v && /^https?:/i.test(v)) {
+        hasRemote = true;
+        if (proxyRemote) el.setAttribute(attr, proxify(v));
+      }
+    }
+    // srcset carries multiple remote URLs — drop it and rely on src.
+    if (el.getAttribute?.("srcset")) {
+      hasRemote = true;
+      el.removeAttribute("srcset");
     }
   });
   const clean = DOMPurify.sanitize(raw, {
@@ -38,8 +66,10 @@ function sanitizeEmailHtml(raw: string): { clean: string; hasRemote: boolean } {
     ALLOW_DATA_ATTR: false,
     WHOLE_DOCUMENT: false,
   });
-  DOMPurify.removeHook(hadAnchorHook);
-  return { clean, hasRemote: REMOTE_RE.test(clean) };
+  DOMPurify.removeHook(hook);
+  // CSS url() backgrounds aren't rewritten; flag them so the banner still shows.
+  if (!hasRemote) hasRemote = REMOTE_RE.test(clean);
+  return { clean, hasRemote };
 }
 
 /**
@@ -79,15 +109,25 @@ export function MessageContent({ html, text }: MessageContentProps) {
 
   const sanitized = useMemo(() => {
     if (!hasHtml || !mounted) return null;
-    return sanitizeEmailHtml(html as string);
-  }, [hasHtml, mounted, html]);
+    // When showing images, rewrite them through our proxy (same-origin), so the
+    // CSP only ever needs to allow 'self' — remote hosts never load directly.
+    return sanitizeEmailHtml(html as string, showImages);
+  }, [hasHtml, mounted, html, showImages]);
 
   const srcDoc = useMemo(() => {
     if (!sanitized) return "";
     // CSP: no scripts ever; styles inline (emails rely on them); images gated.
-    const imgSrc = showImages ? "img-src data: https: http:;" : "img-src data:;";
-    const mediaSrc = showImages ? "media-src https: http:;" : "media-src 'none';";
-    const fontSrc = showImages ? "font-src data: https: http:;" : "font-src data:;";
+    // Shown images come from our same-origin proxy, so we only allow self/our
+    // origin — remote image hosts can never see the user's IP.
+    const origin =
+      typeof window !== "undefined" ? window.location.origin : "";
+    const imgSrc = showImages
+      ? `img-src 'self' ${origin} data:;`
+      : "img-src data:;";
+    const mediaSrc = showImages
+      ? `media-src 'self' ${origin} data:;`
+      : "media-src 'none';";
+    const fontSrc = "font-src data:;";
     const csp =
       "default-src 'none'; script-src 'none'; object-src 'none'; " +
       "base-uri 'none'; form-action 'none'; style-src 'unsafe-inline'; " +

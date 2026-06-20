@@ -315,6 +315,45 @@ class OutlookProvider(BaseEmailProvider):
         )
         resp.raise_for_status()
 
+    # ── Labels (Outlook categories) ──────────────────────────────────────
+
+    async def list_labels(self) -> list[str]:
+        """Outlook master category names."""
+        client = await self._get_client()
+        resp = await client.get("/me/outlook/masterCategories")
+        resp.raise_for_status()
+        return sorted(
+            c.get("displayName")
+            for c in resp.json().get("value", [])
+            if c.get("displayName")
+        )
+
+    async def set_labels(
+        self,
+        provider_message_id: str,
+        add: list[str] | None = None,
+        remove: list[str] | None = None,
+    ) -> None:
+        """Add/remove categories on a message (categories are plain names)."""
+        client = await self._get_client()
+        resp = await client.get(
+            f"/me/messages/{provider_message_id}",
+            params={"$select": "categories"},
+        )
+        resp.raise_for_status()
+        current: list[str] = list(resp.json().get("categories", []) or [])
+        for name in add or []:
+            if name not in current:
+                current.append(name)
+        for name in remove or []:
+            if name in current:
+                current.remove(name)
+        patch = await client.patch(
+            f"/me/messages/{provider_message_id}",
+            json={"categories": current},
+        )
+        patch.raise_for_status()
+
     async def sync_messages(
         self,
         history_id: str | None = None,

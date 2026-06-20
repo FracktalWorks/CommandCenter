@@ -123,6 +123,8 @@ interface EmailState {
   emailsTotal: number;
   emailsPage: number;
   folders: EmailFolder[];
+  /** User-applicable label/category names for the selected account. */
+  availableLabels: string[];
   quickActions: typeof QUICK_ACTIONS;
 
   // Loading states
@@ -168,6 +170,8 @@ interface EmailState {
   closeCompose: () => void;
   hydrateEmail: (email: Email) => void;
   updateEmail: (id: string, updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>) => Promise<void>;
+  fetchLabels: (accountId?: string) => Promise<void>;
+  applyLabel: (id: string, name: string, add: boolean) => Promise<void>;
   deleteEmail: (id: string) => Promise<void>;
   sendEmail: (params: api.SendEmailParams) => Promise<void>;
   undoSend: () => void;
@@ -189,6 +193,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   emailsTotal: 0,
   emailsPage: 1,
   folders: [],
+  availableLabels: [],
   quickActions: QUICK_ACTIONS,
 
   // Loading states
@@ -224,8 +229,9 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       const { selectedAccountId } = get();
       if (!selectedAccountId && accounts.length > 0) {
         set({ selectedAccountId: accounts[0].id });
-        // Fetch folders for the auto-selected account
+        // Fetch folders + labels for the auto-selected account
         get().fetchFolders(accounts[0].id);
+        get().fetchLabels(accounts[0].id);
       }
     } catch (err: any) {
       set({ accountsLoading: false, error: err.message || "Failed to load accounts" });
@@ -376,8 +382,9 @@ export const useEmailStore = create<EmailState>((set, get) => ({
 
   selectAccount: (id: string) => {
     set({ selectedAccountId: id, selectedEmailId: null });
-    // Fetch folders and emails for the newly selected account
+    // Fetch folders, labels and emails for the newly selected account
     get().fetchFolders(id);
+    get().fetchLabels(id);
     get().fetchEmails();
   },
 
@@ -451,6 +458,48 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     } catch (err: any) {
       // Revert on failure
       set({ emails: prevEmails, error: err.message || "Failed to update email" });
+    }
+  },
+
+  fetchLabels: async (accountId?: string) => {
+    const aid = accountId ?? get().selectedAccountId;
+    if (!aid) return;
+    try {
+      const labels = await api.listLabels(aid);
+      set({ availableLabels: labels });
+    } catch {
+      // Non-fatal — labels just won't be offered.
+    }
+  },
+
+  applyLabel: async (id, name, add) => {
+    const prevEmails = get().emails;
+    // Optimistically update the message's category chips.
+    set({
+      emails: prevEmails.map((e) => {
+        if (e.id !== id) return e;
+        const cats = e.categories || [];
+        const next = add
+          ? cats.includes(name) ? cats : [...cats, name]
+          : cats.filter((c) => c !== name);
+        return { ...e, categories: next };
+      }),
+    });
+    // Track a brand-new label so it's offered for other messages immediately.
+    if (add && !get().availableLabels.includes(name)) {
+      set({ availableLabels: [...get().availableLabels, name].sort() });
+    }
+    try {
+      const updated = await api.updateEmailLabels(
+        id,
+        add ? [name] : [],
+        add ? [] : [name],
+      );
+      set({
+        emails: get().emails.map((e) => (e.id === id ? { ...e, ...updated } : e)),
+      });
+    } catch (err: any) {
+      set({ emails: prevEmails, error: err.message || "Failed to update label" });
     }
   },
 

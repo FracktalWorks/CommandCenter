@@ -9,6 +9,7 @@ import {
 import { Email } from "../lib/types";
 import { timeLabel } from "../lib/utils";
 import { useEmailStore } from "../lib/emailStore";
+import { LabelMenu } from "./LabelMenu";
 
 interface EmailListProps {
   emails: Email[];
@@ -356,6 +357,7 @@ function ContextMenu({
 }) {
   const { email } = ctx;
   const [moveOpen, setMoveOpen] = useState(false);
+  const [labelOpen, setLabelOpen] = useState(false);
   const run = (fn: () => void) => {
     fn();
     onClose();
@@ -433,6 +435,25 @@ function ContextMenu({
             )}
           </div>
         )}
+        {/* Label → */}
+        <button
+          className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-foreground/80 hover:text-foreground hover:bg-secondary transition-colors"
+          onClick={() => setLabelOpen((v) => !v)}
+        >
+          <span className="flex items-center gap-2">
+            <Tag size={13} /> Label…
+          </span>
+          <ChevronRight
+            size={12}
+            className={`transition-transform ${labelOpen ? "rotate-90" : ""}`}
+          />
+        </button>
+        {labelOpen && (
+          <div onClick={(e) => e.stopPropagation()}>
+            <LabelMenu email={email} />
+          </div>
+        )}
+
         <CtxItem
           icon={Archive}
           label="Archive"

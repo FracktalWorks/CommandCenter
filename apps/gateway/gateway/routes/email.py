@@ -23,10 +23,13 @@ GET    /email/oauth/{provider}/callback  — OAuth callback
 """
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import json
 import io
 import os
 import secrets
+import socket
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -34,7 +37,7 @@ from uuid import uuid4
 import httpx
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger, get_settings
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse, StreamingResponse
@@ -612,6 +615,79 @@ async def list_folders(
         await db.close()
 
 
+# ── Labels ───────────────────────────────────────────────────────────────
+
+@router.get("/accounts/{account_id}/labels", response_model=list[str])
+async def list_labels(
+    account_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """List user-applicable label/category names for an account.
+
+    Gmail = user labels, Outlook = master categories, IMAP = none.
+    """
+    db = await _get_db()
+    try:
+        result = await db.execute(
+            text(
+                """SELECT provider, credentials_encrypted
+                   FROM email_accounts
+                   WHERE id = :id AND user_id = :user_id"""
+            ),
+            {"id": account_id, "user_id": user.email or "anonymous"},
+        )
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        from acb_llm.key_store import get_key_store
+        store = get_key_store()
+        creds = json.loads(store.decrypt(row.credentials_encrypted))
+
+        if row.provider == "gmail":
+            from email_ingestion.providers.gmail import GmailProvider
+            provider = GmailProvider(creds)
+        elif row.provider == "microsoft":
+            from email_ingestion.providers.outlook import OutlookProvider
+            provider = OutlookProvider(creds)
+        elif row.provider == "imap":
+            from email_ingestion.providers.imap import IMAPProvider
+            provider = IMAPProvider(creds)
+        else:
+            return []
+
+        if not await provider.authenticate():
+            raise HTTPException(
+                status_code=401,
+                detail="Email account authentication failed — reconnect.",
+            )
+        labels = await provider.list_labels()
+
+        if provider.credentials_dirty():
+            await db.execute(
+                text(
+                    """UPDATE email_accounts
+                       SET credentials_encrypted = :creds, updated_at = now()
+                       WHERE id = :id"""
+                ),
+                {
+                    "id": account_id,
+                    "creds": store.encrypt(
+                        json.dumps(provider.export_credentials())
+                    ),
+                },
+            )
+            await db.commit()
+        return labels
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.error("list_labels.failed", account_id=account_id, error=str(exc)[:200])
+        raise HTTPException(status_code=500, detail=f"Failed to list labels: {exc}")
+    finally:
+        await db.close()
+
+
 # ── History backfill ─────────────────────────────────────────────────────
 
 @router.post("/accounts/{account_id}/backfill")
@@ -986,6 +1062,30 @@ async def update_message(
         )
         await db.commit()
 
+        # Apply label add/remove locally — the categories column drives the
+        # label chips shown in the UI.
+        if updates.add_labels or updates.remove_labels:
+            cat_res = await db.execute(
+                text("SELECT categories FROM email_messages WHERE id = :id"),
+                {"id": message_id},
+            )
+            crow = cat_res.fetchone()
+            cats = list(crow.categories or []) if crow else []
+            for name in updates.add_labels or []:
+                if name not in cats:
+                    cats.append(name)
+            for name in updates.remove_labels or []:
+                if name in cats:
+                    cats.remove(name)
+            await db.execute(
+                text(
+                    """UPDATE email_messages SET categories = :cats,
+                       updated_at = now() WHERE id = :id"""
+                ),
+                {"id": message_id, "cats": cats},
+            )
+            await db.commit()
+
         # ── Two-way sync: push the change to the provider (best-effort) ──
         # The local DB is already updated; if the provider write fails we keep the
         # local state and log, rather than failing the user's action.
@@ -1007,6 +1107,12 @@ async def update_message(
                     )
                 if updates.folder is not None:
                     await provider.move_to_folder(provider_msg_id, updates.folder.lower())
+                if updates.add_labels or updates.remove_labels:
+                    await provider.set_labels(
+                        provider_msg_id,
+                        add=updates.add_labels or [],
+                        remove=updates.remove_labels or [],
+                    )
                 await _persist_rotated_creds(db, store, account_id, provider)
                 await db.commit()
         except HTTPException:
@@ -1063,6 +1169,86 @@ async def delete_message(
             )
     finally:
         await db.close()
+
+
+# ── Remote image proxy ─────────────────────────────────────────────────────
+
+MAX_PROXY_IMAGE_BYTES = 15 * 1024 * 1024  # 15 MB
+
+
+def _resolve_is_public(host: str) -> bool:
+    """True only if every A/AAAA record for host is a public, routable IP.
+
+    Blocks SSRF to loopback/private/link-local/metadata endpoints.
+    """
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        ip_str = info[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return False
+        if (
+            ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+        ):
+            return False
+    return True
+
+
+@router.get("/image-proxy")
+async def image_proxy(
+    url: str = Query(..., max_length=4096),
+    user: UserContext = Depends(get_current_user),
+):
+    """Fetch a remote email image server-side and stream it back.
+
+    Lets the reading pane show images without the sender's tracking pixel
+    seeing the *user's* IP — only the gateway's IP is exposed.  Guarded
+    against SSRF (scheme + private-IP checks) and size-capped.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Invalid image URL")
+    if not await asyncio.to_thread(_resolve_is_public, parsed.hostname):
+        raise HTTPException(status_code=400, detail="Blocked image host")
+
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=15.0, max_redirects=3
+        ) as client:
+            resp = await client.get(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (CommandCenter image proxy)",
+                    "Accept": "image/*",
+                },
+            )
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "")
+            if not content_type.startswith("image/"):
+                raise HTTPException(status_code=415, detail="Not an image")
+            content = resp.content
+            if len(content) > MAX_PROXY_IMAGE_BYTES:
+                raise HTTPException(status_code=413, detail="Image too large")
+            return StreamingResponse(
+                io.BytesIO(content),
+                media_type=content_type,
+                headers={
+                    "Content-Length": str(len(content)),
+                    "Cache-Control": "private, max-age=3600",
+                },
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.warning("image_proxy.failed", error=str(exc)[:200])
+        raise HTTPException(status_code=502, detail="Failed to fetch image")
 
 
 # ── Attachments ───────────────────────────────────────────────────────────

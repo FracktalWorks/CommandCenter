@@ -292,6 +292,81 @@ class GmailProvider(BaseEmailProvider):
                 provider_message_id, add_labels=["SPAM"], remove_labels=["INBOX"]
             )
 
+    # ── Labels ───────────────────────────────────────────────────────────
+
+    # Gmail's reserved label ids never offered as user-applicable labels.
+    _GMAIL_RESERVED = {
+        "INBOX", "SENT", "DRAFT", "TRASH", "SPAM", "UNREAD", "STARRED",
+        "IMPORTANT", "CHAT",
+    }
+
+    async def list_labels(self) -> list[str]:
+        """User label names (excludes Gmail system labels and categories)."""
+        client = await self._get_client()
+        resp = await client.get("/users/me/labels")
+        resp.raise_for_status()
+        names: list[str] = []
+        for lbl in resp.json().get("labels", []):
+            if lbl.get("type") == "user" and not lbl.get("name", "").startswith(
+                "CATEGORY_"
+            ):
+                names.append(lbl["name"])
+        return sorted(names)
+
+    async def _label_name_id_map(self) -> dict[str, str]:
+        """Lower-cased label name → id for the account's labels."""
+        client = await self._get_client()
+        resp = await client.get("/users/me/labels")
+        resp.raise_for_status()
+        return {
+            lbl.get("name", "").lower(): lbl["id"]
+            for lbl in resp.json().get("labels", [])
+            if lbl.get("name")
+        }
+
+    async def _ensure_label_id(self, name: str) -> str | None:
+        """Resolve a label name to its id, creating the label if it's new."""
+        existing = await self._label_name_id_map()
+        if name.lower() in existing:
+            return existing[name.lower()]
+        client = await self._get_client()
+        resp = await client.post(
+            "/users/me/labels",
+            json={
+                "name": name,
+                "labelListVisibility": "labelShow",
+                "messageListVisibility": "show",
+            },
+        )
+        if resp.is_success:
+            return resp.json().get("id")
+        return None
+
+    async def set_labels(
+        self,
+        provider_message_id: str,
+        add: list[str] | None = None,
+        remove: list[str] | None = None,
+    ) -> None:
+        add_ids: list[str] = []
+        for name in add or []:
+            lid = await self._ensure_label_id(name)
+            if lid:
+                add_ids.append(lid)
+        remove_ids: list[str] = []
+        if remove:
+            name_to_id = await self._label_name_id_map()
+            for name in remove:
+                lid = name_to_id.get(name.lower())
+                if lid:
+                    remove_ids.append(lid)
+        if add_ids or remove_ids:
+            await self.modify_message(
+                provider_message_id,
+                add_labels=add_ids or None,
+                remove_labels=remove_ids or None,
+            )
+
     async def sync_messages(
         self,
         history_id: str | None = None,

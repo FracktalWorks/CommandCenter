@@ -213,6 +213,26 @@ class BaseEmailProvider(ABC):
         """
         return None
 
+    async def list_labels(self) -> list[str]:
+        """User-applicable label/category *names*.
+
+        Gmail = user labels, Outlook = master categories.  Default (e.g. generic
+        IMAP, which has no label concept) returns nothing.
+        """
+        return []
+
+    async def set_labels(
+        self,
+        provider_message_id: str,
+        add: list[str] | None = None,
+        remove: list[str] | None = None,
+    ) -> None:
+        """Apply/remove labels (by name) on a message; creating labels if needed.
+
+        Default is a no-op so providers without labels degrade gracefully.
+        """
+        return None
+
     @abstractmethod
     async def sync_messages(
         self,

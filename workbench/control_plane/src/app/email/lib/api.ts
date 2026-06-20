@@ -297,6 +297,27 @@ export async function updateEmail(
   return mapEmail(raw);
 }
 
+/** User-applicable label/category names for an account. */
+export async function listLabels(accountId: string): Promise<string[]> {
+  return gatewayFetch<string[]>(`/email/accounts/${accountId}/labels`);
+}
+
+/** Add/remove labels (by name) on a message; syncs to the provider. */
+export async function updateEmailLabels(
+  id: string,
+  add: string[],
+  remove: string[]
+): Promise<Email> {
+  const body: Record<string, unknown> = {};
+  if (add.length) body.add_labels = add;
+  if (remove.length) body.remove_labels = remove;
+  const raw = await gatewayFetch<Record<string, unknown>>(
+    `/email/messages/${id}`,
+    { method: "PATCH", body: JSON.stringify(body) }
+  );
+  return mapEmail(raw);
+}
+
 export async function deleteEmail(id: string): Promise<void> {
   await gatewayFetch(`/email/messages/${id}`, { method: "DELETE" });
 }

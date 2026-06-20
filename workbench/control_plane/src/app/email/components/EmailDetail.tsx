@@ -14,6 +14,7 @@ import {
 } from "../lib/api";
 import { MessageContent } from "./MessageContent";
 import { ConversationView } from "./ConversationView";
+import { LabelMenu } from "./LabelMenu";
 
 interface EmailDetailProps {
   email: Email | null;
@@ -29,6 +30,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const [flagged, setFlagged] = useState(email?.isFlagged ?? false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showMoveMenu, setShowMoveMenu] = useState(false);
+  const [showLabelMenu, setShowLabelMenu] = useState(false);
   const [replyMode, setReplyMode] = useState<"reply" | "reply-all" | "forward" | null>(
     null
   );
@@ -320,7 +322,25 @@ export function EmailDetail({ email }: EmailDetailProps) {
             }}
             active={!read}
           />
-          <TBtn icon={Tag} label="Label" onClick={() => {}} />
+          <div className="relative">
+            <TBtn
+              icon={Tag}
+              label="Label"
+              onClick={() => setShowLabelMenu((v) => !v)}
+              active={showLabelMenu}
+            />
+            {showLabelMenu && email && (
+              <>
+                <div
+                  className="fixed inset-0 z-10"
+                  onClick={() => setShowLabelMenu(false)}
+                />
+                <div className="absolute left-0 top-full mt-1 z-20">
+                  <LabelMenu email={email} />
+                </div>
+              </>
+            )}
+          </div>
 
           <Divider />
 

@@ -65,6 +65,30 @@ const CONTEXT_LIMITS: [string, number][] = [
   ["auto",                    128_000],
 ];
 
+/** Marker prefixes for a compaction checkpoint (system message). */
+const COMPACTION_MARKERS = ["[CONTEXT SUMMARY", "[CONTEXT COMPACTED"];
+
+export function isCompactionCheckpoint(m: { role: string; content?: string }): boolean {
+  return m.role === "system" && COMPACTION_MARKERS.some((p) => (m.content ?? "").startsWith(p));
+}
+
+/**
+ * The ACTIVE context window: everything from the most recent compaction
+ * checkpoint onward (inclusive of the checkpoint summary).  Mirrors how Claude
+ * Code / Copilot CLI manage context — the full transcript stays visible for
+ * scrollback, but only the summary + post-checkpoint turns are sent to the
+ * model and counted toward context usage.  Returns the full array when no
+ * checkpoint exists.
+ */
+export function activeContextSlice<T extends { role: string; content?: string }>(
+  messages: T[],
+): T[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (isCompactionCheckpoint(messages[i])) return messages.slice(i);
+  }
+  return messages;
+}
+
 export function getContextLimit(modelId: string): number {
   const lower = modelId.toLowerCase();
   for (const [key, limit] of CONTEXT_LIMITS) {

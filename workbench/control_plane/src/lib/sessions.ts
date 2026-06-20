@@ -24,6 +24,16 @@ export interface ChatSession {
 
 const STORAGE_KEY = "cc-chat-sessions";
 
+/** Write to localStorage without letting a QuotaExceededError crash the caller
+ *  (the session list / message cache can fill the quota on heavy users). */
+function safeSetItem(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* quota exceeded or storage unavailable — Postgres remains the durable store */
+  }
+}
+
 export function getSessions(): ChatSession[] {
   if (typeof window === "undefined") return [];
   try {
@@ -41,14 +51,14 @@ export function upsertSession(session: ChatSession): void {
   } else {
     sessions.unshift(session);
   }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+  safeSetItem(STORAGE_KEY, JSON.stringify(sessions));
   // Background sync to Postgres — never blocks the UI.
   _syncSessionToDb(session).catch(() => {});
 }
 
 export function deleteSession(id: string): void {
   const sessions = getSessions().filter((s) => s.id !== id);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+  safeSetItem(STORAGE_KEY, JSON.stringify(sessions));
   // Also remove the persisted messages for this session.
   deleteMessages(id);
   // Background delete from Postgres.
@@ -78,7 +88,7 @@ export function touchSession(id: string, messageCount?: number): void {
   if (!s) return;
   s.updatedAt = new Date().toISOString();
   if (messageCount !== undefined) s.messageCount = messageCount;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+  safeSetItem(STORAGE_KEY, JSON.stringify(sessions));
 }
 
 /** Truncate text at a word boundary, appending an ellipsis when cut. */
@@ -110,7 +120,7 @@ export function enrichSession(
   }
   if (info.messageCount !== undefined) s.messageCount = info.messageCount;
   s.updatedAt = new Date().toISOString();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+  safeSetItem(STORAGE_KEY, JSON.stringify(sessions));
   // Sync enriched metadata to Postgres in background.
   _patchSessionInDb(id, {
     title: s.title,
@@ -194,7 +204,7 @@ export async function fetchAndMergeSessionsFromDb(): Promise<ChatSession[]> {
 
     // Sort by updatedAt descending.
     local.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(local));
+    safeSetItem(STORAGE_KEY, JSON.stringify(local));
     return local;
   } catch (_e) {
     return getSessions();

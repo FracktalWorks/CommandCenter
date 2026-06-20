@@ -33,7 +33,7 @@ import TodoPanel from "@/components/TodoPanel";
 import { parseAgentError } from "@/lib/parseAgentError";
 import type { ParsedAgentError } from "@/lib/parseAgentError";
 import { getMessages, saveMessages, fetchMessagesFromDb, type PersistedMessage } from "@/lib/sessions";
-import { computeContextUsage } from "@/lib/tokenCount";
+import { computeContextUsage, activeContextSlice, isCompactionCheckpoint } from "@/lib/tokenCount";
 import { useAgentEvents } from "@/lib/agentEvents";
 import { buildFrontendToolsAddendum } from "@/hooks/useFrontendTool";
 
@@ -670,9 +670,13 @@ export default function AgentChat({
   // changes (different context limit), or when the system context changes.
   // Using settled length (non-streaming messages only) avoids thrashing on every
   // streaming delta while still updating promptly after each turn completes.
-  const settledCount = messages.filter((m) => !m.streaming).length;
+  // Context usage reflects only the ACTIVE window (from the last compaction
+  // checkpoint forward) — the same set sent to the model — so the ring drops
+  // after a compaction, exactly like Claude Code / Copilot CLI.
+  const activeMessages = useMemo(() => activeContextSlice(messages), [messages]);
+  const settledCount = activeMessages.filter((m) => !m.streaming).length;
   const settledContentLen = useMemo(
-    () => messages
+    () => activeMessages
       .filter((m) => !m.streaming)
       .reduce((s, m) => {
         let len = m.content?.length ?? 0;
@@ -683,15 +687,15 @@ export default function AgentChat({
         return s + len;
       }, 0),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [messages.length, settledCount],
+    [activeMessages.length, settledCount],
   );
   // Real per-model context window (dynamically loaded from the gateway via
   // /api/models/all).  Falls back to the static estimate when unknown.
   const currentModelContextWindow = selectedModel?.contextWindow;
   const contextUsage = useMemo(
-    () => computeContextUsage(messages, currentModel, systemContext, currentModelContextWindow),
+    () => computeContextUsage(activeMessages, currentModel, systemContext, currentModelContextWindow),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [settledContentLen, messages.length, currentModel, systemContext, currentModelContextWindow],
+    [settledContentLen, activeMessages.length, currentModel, systemContext, currentModelContextWindow],
   );
   const [compacting, setCompacting] = useState(false);
   // Armed = allowed to auto-compact.  Disarmed after a compaction fires and
@@ -709,62 +713,66 @@ export default function AgentChat({
     compactArmedRef.current = true;
   }, [currentModel]);
 
-  // Auto-compact when context reaches the high-water mark (75%).  Uses a 70/75
-  // hysteresis band so it fires once per fill-up rather than thrashing, and
-  // re-arms after a compaction drops usage back down.  Runs only between turns
-  // (never mid-stream).  Because contextUsage uses the model's REAL context
-  // window (dynamically loaded), switching mid-chat to a smaller-context model
-  // recomputes usage and triggers compaction if the history now overflows.
+  // ── Compaction (Claude Code / Copilot CLI checkpoint model) ────────────────
+  // Summarise the ACTIVE window (from the last checkpoint) into a new summary
+  // checkpoint, INSERTED before the last few turns.  The full transcript stays
+  // visible for scrollback; only [summary + recent turns] are sent to the model
+  // and counted toward context usage.  Returns true if a checkpoint was added.
+  const KEEP_LAST = 6;
+  const applyCompaction = useCallback(async (): Promise<boolean> => {
+    const forSession = sessionId;
+    const active = activeContextSlice(messagesRef.current);
+    if (active.length <= KEEP_LAST + 1) return false; // not enough to compact
+    setCompacting(true);
+    try {
+      const res = await fetch(`/api/chat/sessions/${sessionId}/compact`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Summarise only the active window — bounds the summariser's input and
+        // subsumes any earlier checkpoint it contains.
+        body: JSON.stringify({ messages: active, keepLast: KEEP_LAST }),
+      });
+      const data = (await res.json()) as { messages?: ChatMessage[]; compacted?: boolean };
+      if (forSession !== sessionIdRef.current) return false; // session switched
+      if (!data.compacted || !Array.isArray(data.messages)) return false;
+      const summaryMsg = data.messages.find((m) => isCompactionCheckpoint(m));
+      if (!summaryMsg) return false;
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === summaryMsg.id)) return prev;
+        const keep = Math.min(KEEP_LAST, prev.length);
+        // Insert the checkpoint before the kept tail: active window becomes
+        // [summary + last KEEP_LAST turns]; everything older stays for scrollback.
+        return [...prev.slice(0, prev.length - keep), summaryMsg, ...prev.slice(prev.length - keep)];
+      });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setCompacting(false);
+    }
+  }, [sessionId, setMessages]);
+
+  // Auto-compact at 80% of the model's context window (GitHub Copilot CLI
+  // parity; Claude Code uses ~83%).  70/80 hysteresis so it fires once per
+  // fill-up and re-arms after a compaction drops usage.  Between turns only.
+  // Because contextUsage uses the model's REAL window, switching mid-chat to a
+  // smaller-context model re-triggers compaction if the history now overflows.
   useEffect(() => {
-    // Re-arm when usage falls below the lower band (hysteresis).
     if (contextUsage.pct < 70) compactArmedRef.current = true;
-    if (contextUsage.pct < 75) return;
+    if (contextUsage.pct < 80) return;
     if (isLoading || compacting) return;
     if (!compactArmedRef.current) return;
     compactArmedRef.current = false;
-
-    setCompacting(true);
-    const currentMessages = messagesRef.current;
-    const forSession = sessionId; // guard against applying to a switched session
-    fetch(`/api/chat/sessions/${sessionId}/compact`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: currentMessages, keepLast: 6 }),
-    })
-      .then((r) => r.json() as Promise<{ messages?: ChatMessage[]; compacted?: boolean }>)
-      .then((data) => {
-        if (forSession !== sessionIdRef.current) return; // session switched mid-compaction
-        if (data.compacted && Array.isArray(data.messages) && data.messages.length > 0) {
-          setMessages(data.messages);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setCompacting(false));
+    void applyCompaction();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contextUsage.pct, isLoading, compacting, sessionId]);
+  }, [contextUsage.pct, isLoading, compacting, applyCompaction]);
 
   /** Manual /compact trigger — user clicks the context ring when it's high. */
   const handleCompact = useCallback(() => {
     if (compacting || isLoading) return;
-    setCompacting(true);
-    const currentMessages = messagesRef.current;
-    const forSession = sessionId; // guard against applying to a switched session
-    fetch(`/api/chat/sessions/${sessionId}/compact`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: currentMessages, keepLast: 6 }),
-    })
-      .then((r) => r.json() as Promise<{ messages?: ChatMessage[]; compacted?: boolean }>)
-      .then((data) => {
-        if (forSession !== sessionIdRef.current) return; // session switched mid-compaction
-        if (data.compacted && Array.isArray(data.messages) && data.messages.length > 0) {
-          setMessages(data.messages);
-          compactArmedRef.current = false; // prevent auto-fire right after manual compact
-        }
-      })
-      .catch(() => {})
-      .finally(() => setCompacting(false));
-  }, [compacting, isLoading, sessionId, setMessages]);
+    compactArmedRef.current = false; // prevent auto-fire right after manual compact
+    void applyCompaction();
+  }, [compacting, isLoading, applyCompaction]);
 
   // ── HITL (Human-in-the-Loop) confirmation state ────────────────────────
   const [confirmation, setConfirmation] = useState<{

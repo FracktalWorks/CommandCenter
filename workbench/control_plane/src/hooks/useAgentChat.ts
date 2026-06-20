@@ -21,6 +21,7 @@ import {
 } from "@/lib/chatStore";
 import type { ChatMessage, ToolEvent } from "@/lib/chatStore";
 import { parseAgentError } from "@/lib/parseAgentError";
+import { activeContextSlice, isCompactionCheckpoint } from "@/lib/tokenCount";
 import { emitAgentEvent } from "@/lib/agentEvents";
 import { applyStateSnapshot, applyStateDelta } from "@/hooks/useAgentState";
 
@@ -176,9 +177,15 @@ export function useAgentChat({
       emitAgentEvent("onRunStarted", { runId: assistantId });
 
       try {
-        const history = getSessionState(threadId).messages
-          .slice(0, -1)
-          .filter((m) => m.role !== "system")
+        // Build the history sent to the model from the ACTIVE context window
+        // (everything from the most recent compaction checkpoint onward), so a
+        // compacted conversation sends [summary + recent turns] instead of the
+        // whole transcript — matching Claude Code / Copilot CLI.  The checkpoint
+        // summary (a system message) is kept; other system messages are dropped.
+        const prior = getSessionState(threadId).messages.slice(0, -1);
+        const active = activeContextSlice(prior);
+        const history = active
+          .filter((m, idx) => m.role !== "system" || (idx === 0 && isCompactionCheckpoint(m)))
           .map((m) => ({ role: m.role, content: m.content }));
 
         const res = await fetch("/api/agent/chat", {
@@ -647,8 +654,8 @@ export function useAgentChat({
           body: JSON.stringify({
             agentName: agentNameRef.current,
             message: lastContent || "(reconnect)",
-            messages: curState.messages
-              .filter((m) => m.role !== "system")
+            messages: activeContextSlice(curState.messages)
+              .filter((m, idx) => m.role !== "system" || (idx === 0 && isCompactionCheckpoint(m)))
               .map((m) => ({ role: m.role, content: m.content })),
             threadId,
             mode: modeRef.current,

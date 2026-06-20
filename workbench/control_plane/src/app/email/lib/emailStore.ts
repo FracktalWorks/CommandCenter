@@ -9,6 +9,9 @@ import { QUICK_ACTIONS } from "./mockData";
  * Provider folder names map onto these so the inbox/sent/etc. tabs line up
  * regardless of provider-specific naming ("Sent Items" vs "SENT").
  */
+/** How many messages to request per page (and per "Load more" click). */
+const PAGE_SIZE = 100;
+
 const CANONICAL_ALIASES: Record<string, string> = {
   inbox: "inbox",
   "sent items": "sent", sentitems: "sent", "sent mail": "sent", sent: "sent",
@@ -117,12 +120,15 @@ interface EmailState {
   // Data
   accounts: EmailAccount[];
   emails: Email[];
+  emailsTotal: number;
+  emailsPage: number;
   folders: EmailFolder[];
   quickActions: typeof QUICK_ACTIONS;
 
   // Loading states
   accountsLoading: boolean;
   emailsLoading: boolean;
+  loadingMore: boolean;
   foldersLoading: boolean;
   syncStatus: Record<string, "idle" | "syncing" | "error">;
   /** Accounts whose live provider calls returned 401/403 (stale OAuth), keyed
@@ -145,6 +151,7 @@ interface EmailState {
   fetchAccounts: () => Promise<void>;
   fetchFolders: (accountId?: string) => Promise<void>;
   fetchEmails: () => Promise<void>;
+  loadMoreEmails: () => Promise<void>;
   selectAccount: (id: string) => void;
   selectFolder: (folder: string) => void;
   selectEmail: (id: string | null) => void;
@@ -166,12 +173,15 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   // Data
   accounts: [],
   emails: [],
+  emailsTotal: 0,
+  emailsPage: 1,
   folders: [],
   quickActions: QUICK_ACTIONS,
 
   // Loading states
   accountsLoading: false,
   emailsLoading: false,
+  loadingMore: false,
   foldersLoading: false,
   syncStatus: {},
   authErrors: {},
@@ -251,15 +261,53 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         accountId: selectedAccountId || undefined,
         folder: selectedFolder,
         query: searchQuery || undefined,
+        page: 1,
+        pageSize: PAGE_SIZE,
       });
       const emails = result.emails;
       // Don't clobber the provider folder tree (system + user folders) fetched
       // by fetchFolders — only seed a system-folder fallback if we have none yet.
       const existing = get().folders;
       const folders = existing.length > 0 ? existing : buildFolders(emails);
-      set({ emails, folders, emailsLoading: false });
+      set({
+        emails,
+        folders,
+        emailsLoading: false,
+        emailsTotal: result.total,
+        emailsPage: 1,
+      });
     } catch (err: any) {
       set({ emailsLoading: false, error: err.message || "Failed to load emails" });
+    }
+  },
+
+  loadMoreEmails: async () => {
+    const {
+      selectedAccountId, selectedFolder, searchQuery,
+      emailsPage, emails, loadingMore, emailsTotal,
+    } = get();
+    if (loadingMore || emails.length >= emailsTotal) return;
+    set({ loadingMore: true });
+    try {
+      const nextPage = emailsPage + 1;
+      const result = await api.listEmails({
+        accountId: selectedAccountId || undefined,
+        folder: selectedFolder,
+        query: searchQuery || undefined,
+        page: nextPage,
+        pageSize: PAGE_SIZE,
+      });
+      // Append, de-duping by id in case a sync shifted the window mid-scroll.
+      const seen = new Set(emails.map((e) => e.id));
+      const merged = [...emails, ...result.emails.filter((e) => !seen.has(e.id))];
+      set({
+        emails: merged,
+        emailsPage: nextPage,
+        emailsTotal: result.total,
+        loadingMore: false,
+      });
+    } catch (err: any) {
+      set({ loadingMore: false, error: err.message || "Failed to load more emails" });
     }
   },
 
@@ -312,20 +360,31 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   updateEmail: async (id, updates) => {
-    // Optimistic update
+    // Optimistic update. When an email is moved to a *different* folder than the
+    // one we're viewing (archive / move-to / etc.), drop it from the list so it
+    // visibly leaves the current folder — except in the virtual "starred" view.
     const prevEmails = get().emails;
+    const movedAway =
+      updates.folder !== undefined &&
+      updates.folder !== get().selectedFolder &&
+      get().selectedFolder !== "starred";
     set({
-      emails: prevEmails.map((e) =>
-        e.id === id ? { ...e, ...updates } : e
-      ),
+      emails: movedAway
+        ? prevEmails.filter((e) => e.id !== id)
+        : prevEmails.map((e) => (e.id === id ? { ...e, ...updates } : e)),
+      emailsTotal: movedAway
+        ? Math.max(0, get().emailsTotal - 1)
+        : get().emailsTotal,
     });
     try {
       const updated = await api.updateEmail(id, updates);
-      set({
-        emails: get().emails.map((e) =>
-          e.id === id ? { ...e, ...updated } : e
-        ),
-      });
+      if (!movedAway) {
+        set({
+          emails: get().emails.map((e) =>
+            e.id === id ? { ...e, ...updated } : e
+          ),
+        });
+      }
     } catch (err: any) {
       // Revert on failure
       set({ emails: prevEmails, error: err.message || "Failed to update email" });

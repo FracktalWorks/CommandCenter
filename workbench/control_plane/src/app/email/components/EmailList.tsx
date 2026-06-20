@@ -1,12 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import {
   Pencil, Trash2, Archive, Flag, FolderInput,
-  Reply, ReplyAll, Forward, MailOpen, Tag, MoreHorizontal,
-  Paperclip, Star, AlertTriangle,
+  Reply, ReplyAll, Forward, MailOpen, Mail, Tag, MoreHorizontal,
+  Paperclip, Star, AlertTriangle, ChevronRight, Loader2,
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { timeLabel } from "../lib/utils";
+import { useEmailStore } from "../lib/emailStore";
 
 interface EmailListProps {
   emails: Email[];
@@ -15,6 +17,9 @@ interface EmailListProps {
   onCompose: () => void;
   onToolbarAction: (action: string, email: Email | null) => void;
   loading?: boolean;
+  total?: number;
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
 }
 
 const TOOLBAR_PRIMARY = [
@@ -32,6 +37,12 @@ const TOOLBAR_SECONDARY = [
   { icon: Tag, label: "Label", key: "label" },
 ];
 
+interface CtxState {
+  x: number;
+  y: number;
+  email: Email;
+}
+
 export function EmailList({
   emails,
   selectedId,
@@ -39,14 +50,30 @@ export function EmailList({
   onCompose,
   onToolbarAction,
   loading = false,
+  total,
+  onLoadMore,
+  loadingMore = false,
 }: EmailListProps) {
-  const selectedEmail = emails.find(e => e.id === selectedId) || null;
+  const selectedEmail = emails.find((e) => e.id === selectedId) || null;
+  const { updateEmail, deleteEmail, folders } = useEmailStore();
+  const [ctx, setCtx] = useState<CtxState | null>(null);
+
+  const openContext = (e: React.MouseEvent, email: Email) => {
+    e.preventDefault();
+    // Clamp so the menu stays on-screen.
+    const menuW = 210;
+    const menuH = 380;
+    const x = Math.min(e.clientX, window.innerWidth - menuW);
+    const y = Math.min(e.clientY, window.innerHeight - menuH);
+    setCtx({ x: Math.max(8, x), y: Math.max(8, y), email });
+  };
+
+  const hasMore = total !== undefined && emails.length < total;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Primary toolbar row */}
       <div className="flex items-center gap-0.5 px-2 pt-2 pb-1 border-b border-border flex-shrink-0">
-        {/* Compose button — primary highlight */}
         <button
           title="New Email"
           onClick={onCompose}
@@ -77,7 +104,8 @@ export function EmailList({
         ))}
         <div className="flex-1" />
         <span className="text-[10px] text-muted-foreground pr-1">
-          {emails.length} msgs
+          {emails.length}
+          {total !== undefined && total > emails.length ? ` of ${total}` : ""} msgs
         </span>
       </div>
 
@@ -94,82 +122,256 @@ export function EmailList({
             <p className="text-xs">No emails to show</p>
           </div>
         ) : (
-          emails.map((email) => (
-            <button
-              key={email.id}
-              onClick={() => onSelect(email.id)}
-              className={`w-full text-left border-b border-border px-3 py-3 transition-colors flex flex-col gap-1 ${
-                selectedId === email.id
-                  ? "bg-primary/10 border-l-2 border-l-primary"
-                  : "hover:bg-secondary/50"
-              }`}
-            >
-              {/* Sender + indicators + time */}
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  {!email.isRead && (
-                    <div className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0 mt-0.5" />
-                  )}
-                  <span
-                    className={`text-xs truncate ${
-                      email.isRead ? "text-foreground/70" : "text-foreground font-medium"
-                    }`}
-                  >
-                    {email.from.name}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5 flex-shrink-0">
-                  {email.importance === "high" && (
-                    <AlertTriangle size={10} className="text-red-400" />
-                  )}
-                  {email.hasAttachments && (
-                    <Paperclip size={10} className="text-muted-foreground" />
-                  )}
-                  {email.isFlagged && (
-                    <Flag size={10} className="text-amber-400 fill-amber-400" />
-                  )}
-                  {email.isStarred && (
-                    <Star size={10} className="text-amber-400 fill-amber-400" />
-                  )}
-                  <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                    {timeLabel(email.receivedAt)}
-                  </span>
-                </div>
-              </div>
-
-              {/* Subject */}
-              <div
-                className={`text-xs truncate ${
-                  email.isRead ? "text-foreground/60" : "text-foreground"
+          <>
+            {emails.map((email) => (
+              <button
+                key={email.id}
+                onClick={() => onSelect(email.id)}
+                onContextMenu={(e) => openContext(e, email)}
+                className={`w-full text-left border-b border-border px-3 py-3 transition-colors flex flex-col gap-1 ${
+                  selectedId === email.id
+                    ? "bg-primary/10 border-l-2 border-l-primary"
+                    : "hover:bg-secondary/50"
                 }`}
               >
-                {email.subject}
-              </div>
-
-              {/* Preview */}
-              <div className="text-[11px] text-muted-foreground truncate leading-relaxed">
-                {email.snippet}
-              </div>
-
-              {/* Categories / user labels */}
-              {email.categories.length > 0 && (
-                <div className="flex flex-wrap gap-1 mt-0.5">
-                  {email.categories.slice(0, 3).map((label) => (
+                {/* Sender + indicators + time */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    {!email.isRead && (
+                      <div className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0 mt-0.5" />
+                    )}
                     <span
-                      key={label}
-                      className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary/15 text-primary"
+                      className={`text-xs truncate ${
+                        email.isRead ? "text-foreground/70" : "text-foreground font-medium"
+                      }`}
                     >
-                      {label}
+                      {email.from.name}
                     </span>
-                  ))}
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {email.importance === "high" && (
+                      <AlertTriangle size={10} className="text-red-400" />
+                    )}
+                    {email.hasAttachments && (
+                      <Paperclip size={10} className="text-muted-foreground" />
+                    )}
+                    {email.isFlagged && (
+                      <Flag size={10} className="text-amber-400 fill-amber-400" />
+                    )}
+                    {email.isStarred && (
+                      <Star size={10} className="text-amber-400 fill-amber-400" />
+                    )}
+                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                      {timeLabel(email.receivedAt)}
+                    </span>
+                  </div>
                 </div>
-              )}
-            </button>
-          ))
+
+                {/* Subject */}
+                <div
+                  className={`text-xs truncate ${
+                    email.isRead ? "text-foreground/60" : "text-foreground"
+                  }`}
+                >
+                  {email.subject}
+                </div>
+
+                {/* Preview */}
+                <div className="text-[11px] text-muted-foreground truncate leading-relaxed">
+                  {email.snippet}
+                </div>
+
+                {/* Categories / user labels */}
+                {email.categories.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-0.5">
+                    {email.categories.slice(0, 3).map((label) => (
+                      <span
+                        key={label}
+                        className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary/15 text-primary"
+                      >
+                        {label}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </button>
+            ))}
+
+            {/* Load more */}
+            {hasMore && (
+              <div className="p-2">
+                <button
+                  onClick={onLoadMore}
+                  disabled={loadingMore}
+                  className="w-full flex items-center justify-center gap-1.5 py-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+                >
+                  {loadingMore && <Loader2 size={12} className="animate-spin" />}
+                  {loadingMore ? "Loading…" : `Load more (${emails.length} of ${total})`}
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
+
+      {/* Right-click context menu */}
+      {ctx && (
+        <ContextMenu
+          ctx={ctx}
+          folders={folders}
+          onClose={() => setCtx(null)}
+          onReply={(k) => onToolbarAction(k, ctx.email)}
+          onUpdate={(u) => updateEmail(ctx.email.id, u)}
+          onDelete={() => deleteEmail(ctx.email.id)}
+        />
+      )}
     </div>
   );
+}
+
+function ContextMenu({
+  ctx,
+  folders,
+  onClose,
+  onReply,
+  onUpdate,
+  onDelete,
+}: {
+  ctx: CtxState;
+  folders: { key: string; label: string }[];
+  onClose: () => void;
+  onReply: (action: string) => void;
+  onUpdate: (
+    updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>
+  ) => void;
+  onDelete: () => void;
+}) {
+  const { email } = ctx;
+  const [moveOpen, setMoveOpen] = useState(false);
+  const run = (fn: () => void) => {
+    fn();
+    onClose();
+  };
+  const moveTargets = folders.filter(
+    (f) => f.key !== "starred" && f.key !== email.folder
+  );
+
+  return (
+    <>
+      {/* Outside-click / right-click catcher */}
+      <div
+        className="fixed inset-0 z-[80]"
+        onClick={onClose}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
+      />
+      <div
+        className="fixed z-[81] w-52 bg-popover border border-border rounded-lg shadow-xl py-1 text-xs"
+        style={{ left: ctx.x, top: ctx.y }}
+      >
+        <CtxItem icon={Reply} label="Reply" onClick={() => run(() => onReply("reply"))} />
+        <CtxItem icon={ReplyAll} label="Reply All" onClick={() => run(() => onReply("reply-all"))} />
+        <CtxItem icon={Forward} label="Forward" onClick={() => run(() => onReply("forward"))} />
+
+        <CtxDivider />
+
+        <CtxItem
+          icon={email.isRead ? Mail : MailOpen}
+          label={email.isRead ? "Mark as unread" : "Mark as read"}
+          onClick={() => run(() => onUpdate({ isRead: !email.isRead }))}
+        />
+        <CtxItem
+          icon={Flag}
+          label={email.isFlagged ? "Clear flag" : "Flag / mark important"}
+          onClick={() => run(() => onUpdate({ isFlagged: !email.isFlagged }))}
+        />
+        <CtxItem
+          icon={Star}
+          label={email.isStarred ? "Remove star" : "Add star"}
+          onClick={() => run(() => onUpdate({ isStarred: !email.isStarred }))}
+        />
+
+        <CtxDivider />
+
+        {/* Move to → */}
+        <button
+          className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-foreground/80 hover:text-foreground hover:bg-secondary transition-colors"
+          onClick={() => setMoveOpen((v) => !v)}
+        >
+          <span className="flex items-center gap-2">
+            <FolderInput size={13} /> Move to…
+          </span>
+          <ChevronRight
+            size={12}
+            className={`transition-transform ${moveOpen ? "rotate-90" : ""}`}
+          />
+        </button>
+        {moveOpen && (
+          <div className="max-h-40 overflow-y-auto bg-secondary/40 border-y border-border">
+            {moveTargets.length === 0 ? (
+              <div className="px-3 py-1.5 text-muted-foreground">No other folders</div>
+            ) : (
+              moveTargets.map((f) => (
+                <button
+                  key={f.key}
+                  className="w-full text-left pl-8 pr-3 py-1.5 text-foreground/80 hover:text-foreground hover:bg-secondary transition-colors"
+                  onClick={() => run(() => onUpdate({ folder: f.key }))}
+                >
+                  {f.label}
+                </button>
+              ))
+            )}
+          </div>
+        )}
+        <CtxItem
+          icon={Archive}
+          label="Archive"
+          onClick={() => run(() => onUpdate({ folder: "archive" }))}
+        />
+
+        <CtxDivider />
+
+        <CtxItem
+          icon={Trash2}
+          label="Delete"
+          danger
+          onClick={() => run(onDelete)}
+        />
+      </div>
+    </>
+  );
+}
+
+function CtxItem({
+  icon: Icon,
+  label,
+  onClick,
+  danger,
+}: {
+  icon: React.ElementType;
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center gap-2 px-3 py-1.5 transition-colors hover:bg-secondary ${
+        danger
+          ? "text-red-500 hover:text-red-400"
+          : "text-foreground/80 hover:text-foreground"
+      }`}
+    >
+      <Icon size={13} className="flex-shrink-0" />
+      {label}
+    </button>
+  );
+}
+
+function CtxDivider() {
+  return <div className="my-1 border-t border-border" />;
 }
 
 function ToolbarBtn({

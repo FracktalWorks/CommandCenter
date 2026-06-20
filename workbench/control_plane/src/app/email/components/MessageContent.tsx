@@ -94,21 +94,26 @@ export function MessageContent({ html, text }: MessageContentProps) {
       imgSrc +
       mediaSrc +
       fontSrc;
+    // Render on a white "sheet" with dark text — email HTML is authored for a
+    // white background, so this stays readable in BOTH app themes (no more
+    // white-on-white in light mode or dark-on-dark when mail sets its own
+    // black text). This mirrors how Gmail/Outlook render message bodies.
     return `<!doctype html><html><head>
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta charset="utf-8">
 <base target="_blank">
 <style>
-  :root { color-scheme: light dark; }
+  :root { color-scheme: light; }
   html,body { margin:0; padding:0; }
   body {
     font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-    font-size: 14px; line-height: 1.6; color: #e5e7eb; background: transparent;
+    font-size: 14px; line-height: 1.6; color: #1f2937; background: #ffffff;
+    padding: 12px 14px;
     word-wrap: break-word; overflow-wrap: anywhere;
   }
   img, table { max-width: 100% !important; height: auto; }
-  a { color: #93c5fd; }
-  blockquote { border-left: 3px solid #4b5563; margin: 0; padding-left: 12px; color: #9ca3af; }
+  a { color: #2563eb; }
+  blockquote { border-left: 3px solid #d1d5db; margin: 0; padding-left: 12px; color: #6b7280; }
   pre { white-space: pre-wrap; }
 </style></head><body>${sanitized.clean}</body></html>`;
   }, [sanitized, showImages]);
@@ -177,7 +182,7 @@ export function MessageContent({ html, text }: MessageContentProps) {
             // allow-same-origin (without allow-scripts) lets us measure content
             // height for auto-sizing; scripts still never run.
             sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-            className="w-full border-0 bg-transparent"
+            className="w-full border border-border rounded-md bg-white"
             style={{ height, minHeight: 200 }}
           />
         ) : (

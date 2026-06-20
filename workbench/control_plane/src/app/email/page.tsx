@@ -55,9 +55,11 @@ export default function EmailPage() {
   const {
     accounts,
     emails,
+    emailsTotal,
     folders,
     accountsLoading,
     emailsLoading,
+    loadingMore,
     selectedAccountId,
     selectedFolder,
     selectedEmailId,
@@ -67,6 +69,7 @@ export default function EmailPage() {
     authErrors,
     fetchAccounts,
     fetchEmails,
+    loadMoreEmails,
     selectAccount,
     selectFolder,
     selectEmail,
@@ -578,6 +581,9 @@ export default function EmailPage() {
                   onCompose={() => openCompose()}
                   onToolbarAction={handleToolbarAction}
                   loading={emailsLoading}
+                  total={emailsTotal}
+                  onLoadMore={loadMoreEmails}
+                  loadingMore={loadingMore}
                 />
               )}
             </div>
@@ -593,6 +599,9 @@ export default function EmailPage() {
                 onCompose={() => openCompose()}
                 onToolbarAction={handleToolbarAction}
                 loading={emailsLoading}
+                total={emailsTotal}
+                onLoadMore={loadMoreEmails}
+                loadingMore={loadingMore}
               />
             </div>
           )}

@@ -758,6 +758,13 @@ export default function AgentChat({
   // Because contextUsage uses the model's REAL window, switching mid-chat to a
   // smaller-context model re-triggers compaction if the history now overflows.
   useEffect(() => {
+    // GitHub Copilot SDK agents keep server-side session state and run their
+    // OWN native compaction (Copilot CLI compacts ~80%); when resuming a
+    // session they ignore the frontend-sent history entirely.  Running our
+    // compaction there is redundant and would make the ring misleading, so we
+    // defer to the SDK.  Our compaction is authoritative for MAF agents and the
+    // orchestrator (stateless per request — they use the messages we send).
+    if (agentRuntime === "github-copilot") return;
     if (contextUsage.pct < 70) compactArmedRef.current = true;
     if (contextUsage.pct < 80) return;
     if (isLoading || compacting) return;
@@ -765,7 +772,7 @@ export default function AgentChat({
     compactArmedRef.current = false;
     void applyCompaction();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contextUsage.pct, isLoading, compacting, applyCompaction]);
+  }, [contextUsage.pct, isLoading, compacting, applyCompaction, agentRuntime]);
 
   /** Manual /compact trigger — user clicks the context ring when it's high. */
   const handleCompact = useCallback(() => {

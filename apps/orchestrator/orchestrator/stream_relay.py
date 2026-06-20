@@ -61,10 +61,27 @@ def _active_key(thread_id: str) -> str:
     return f"{ACTIVE_PREFIX}:{thread_id}"
 
 
+# Shared, process-wide async Redis client with an internal connection pool.
+# A single agent run emits hundreds of events; opening/closing a TCP connection
+# per call (the old behaviour) churns ephemeral ports and can exhaust Redis
+# maxclients under load.  redis.asyncio multiplexes concurrent commands over the
+# pool and is safe to share across coroutines, so we create it once and never
+# close it per-call (process exit tears it down).
+_client: aioredis.Redis | None = None
+
+
 async def _get_client() -> aioredis.Redis:
-    """Return a fresh async Redis client.  Callers should close it."""
-    settings = get_settings()
-    return aioredis.from_url(settings.redis_url, decode_responses=True)
+    """Return the shared pooled async Redis client (created once)."""
+    global _client
+    if _client is None:
+        settings = get_settings()
+        _client = aioredis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            max_connections=64,
+            health_check_interval=30,
+        )
+    return _client
 
 
 async def push_event(thread_id: str, event: dict[str, Any]) -> str:
@@ -89,7 +106,7 @@ async def push_event(thread_id: str, event: dict[str, Any]) -> str:
         await r.expire(_stream_key(thread_id), STREAM_TTL_SECONDS)
         return eid
     finally:
-        await r.aclose()
+        pass  # shared pooled client — never closed per-call
 
 
 async def replay_events(
@@ -136,7 +153,7 @@ async def replay_events(
         # Stream doesn't exist (expired or never created).
         return []
     finally:
-        await r.aclose()
+        pass  # shared pooled client — never closed per-call
 
 
 async def subscribe_events(
@@ -223,7 +240,7 @@ async def subscribe_events(
                 # Stream disappeared.
                 return
     finally:
-        await r.aclose()
+        pass  # shared pooled client — never closed per-call
 
 
 async def mark_active(thread_id: str, *, reset: bool = False) -> None:
@@ -243,7 +260,7 @@ async def mark_active(thread_id: str, *, reset: bool = False) -> None:
             await r.delete(_stream_key(thread_id))
         await r.set(_active_key(thread_id), "1", ex=STREAM_TTL_SECONDS)
     finally:
-        await r.aclose()
+        pass  # shared pooled client — never closed per-call
 
 
 async def mark_inactive(thread_id: str) -> None:
@@ -254,7 +271,7 @@ async def mark_inactive(thread_id: str) -> None:
         # Also refresh the stream TTL so late reconnectors can still replay.
         await r.expire(_stream_key(thread_id), STREAM_TTL_SECONDS)
     finally:
-        await r.aclose()
+        pass  # shared pooled client — never closed per-call
 
 
 async def is_active(thread_id: str) -> bool:
@@ -264,7 +281,7 @@ async def is_active(thread_id: str) -> bool:
         val = await r.get(_active_key(thread_id))
         return val == "1"
     finally:
-        await r.aclose()
+        pass  # shared pooled client — never closed per-call
 
 
 async def stream_exists(thread_id: str) -> bool:
@@ -273,7 +290,7 @@ async def stream_exists(thread_id: str) -> bool:
     try:
         return bool(await r.exists(_stream_key(thread_id)))
     finally:
-        await r.aclose()
+        pass  # shared pooled client — never closed per-call
 
 
 async def push_sse_event(thread_id: str, sse_line: str) -> str:

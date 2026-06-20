@@ -27,22 +27,8 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
 CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled ON mcp_servers (enabled);
 CREATE INDEX IF NOT EXISTS idx_mcp_servers_transport ON mcp_servers (transport);
 
--- Seed a few well-known MCP servers as disabled examples (user enables them).
-INSERT INTO mcp_servers (name, label, description, transport, url, enabled)
-VALUES
-    ('brave-search', 'Brave Search',
-     'Live web search via Brave. Agents can research current topics and fetch fresh information.',
-     'http-sse', 'https://api.search.brave.com/sse', false),
-    ('filesystem', 'Filesystem',
-     'Read and write local files. Gives agents persistent workspace storage.',
-     'http-sse', null, false),
-    ('postgres', 'Postgres',
-     'Query PostgreSQL databases directly. Agents can run SQL for reporting and operational queries.',
-     'http-sse', null, false),
-    ('github', 'GitHub',
-     'Full GitHub API access — PRs, issues, code review, commit history.',
-     'http-sse', 'https://api.github.com/mcp', false),
-    ('slack', 'Slack',
-     'Read and post to Slack channels. Agents can coordinate with your team.',
-     'http-sse', 'https://slack.com/api/mcp', false)
-ON CONFLICT (name) DO NOTHING;
+-- No seed rows: example MCP servers are not provisioned. The table is kept so
+-- existing code paths (executor injection, integrations CRUD) keep working;
+-- servers can be registered via the API/UI if/when MCP is adopted. (The prior
+-- seed shipped invalid rows — http-sse with a NULL url — which violated
+-- mcp_servers_transport_check and broke idempotent migration replays.)

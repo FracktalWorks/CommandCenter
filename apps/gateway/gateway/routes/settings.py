@@ -1432,30 +1432,43 @@ async def get_context_windows(
     """
     out: dict[str, int] = {}
 
-    def _put(model_id: str, cw: int) -> None:
+    def _put_full(model_id: str, cw: int) -> None:
+        """Set the exact id only (no bare-suffix derivation)."""
+        if model_id and cw > 0:
+            out[model_id] = cw
+
+    def _put_with_bare(model_id: str, cw: int) -> None:
+        """Set the exact id AND its bare suffix — only safe for CURATED sources
+        (the static map + tiers) where the value is trustworthy."""
         if not model_id or cw <= 0:
             return
         out[model_id] = cw
         bare = model_id.split("/")[-1]
-        # Don't clobber a full-id entry with a less-specific bare one.
         out.setdefault(bare, cw)
 
-    # 1. Static capabilities.
-    for mid, caps in _MODEL_CAPABILITIES.items():
-        _put(mid, int(caps.get("context_window", 0) or 0))
-
-    # 2. Live cache (provider-models refresh results).
+    # 1. Live cache FIRST (least trusted) — full id ONLY.  Deriving bare
+    #    suffixes here would mis-assign inflated/beta numbers (e.g.
+    #    openrouter/auto=2M, openrouter Claude=1M-beta) to the picker's generic
+    #    "auto" / copilot "claude-*" entries.  Curated values below override.
     try:
         cache = _load_models_cache()
         for entry in cache.values():
             for m in entry.get("models", []):
-                _put(str(m.get("id", "")), int(m.get("context_window", 0) or 0))
+                _put_full(str(m.get("id", "")), int(m.get("context_window", 0) or 0))
     except Exception:  # noqa: BLE001
         pass
 
-    # 3. Tier aliases.
+    # 2. Static capabilities (curated, trusted) — overrides cache, adds bare.
+    for mid, caps in _MODEL_CAPABILITIES.items():
+        _put_with_bare(mid, int(caps.get("context_window", 0) or 0))
+
+    # 3. Tier aliases (curated).
     for mid, cw in _TIER_CONTEXT_WINDOWS.items():
-        _put(mid, cw)
+        _put_with_bare(mid, cw)
+
+    # "auto" means the SDK picks the model at runtime — never pin it to a
+    # (mis)matched window; let the frontend apply a conservative default.
+    out.pop("auto", None)
 
     return out
 

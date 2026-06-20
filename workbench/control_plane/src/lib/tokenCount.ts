@@ -20,25 +20,30 @@ export interface ContextUsage {
  * (e.g. "claude-sonnet" matches "claude-sonnet-4.6").
  */
 const CONTEXT_LIMITS: [string, number][] = [
-  // Claude
+  // Claude (incl. current 4.x naming variants)
   ["claude-opus-4",           200_000],
   ["claude-sonnet-4",         200_000],
+  ["claude-haiku-4",          200_000],
   ["claude-haiku",            200_000],
   ["claude-3-5-sonnet",       200_000],
   ["claude-3-7-sonnet",       200_000],
   ["claude",                  200_000],
-  // GPT-4 / OpenAI
+  // GPT / OpenAI (incl. GPT-5 family — 400k context)
+  ["gpt-5",                   400_000],
   ["gpt-4.1",               1_000_000],
   ["gpt-4o",                  128_000],
   ["gpt-4-turbo",             128_000],
   ["gpt-4",                     8_192],
+  ["o4",                      200_000],
   ["o3",                      200_000],
   ["o1",                      200_000],
   ["gpt-3.5",                  16_385],
-  // Gemini
+  // Gemini (incl. 3.x — 1M context)
+  ["gemini-3",              1_000_000],
   ["gemini-2.5-pro",        1_000_000],
   ["gemini-2.5-flash",      1_000_000],
   ["gemini-2.0-flash",      1_000_000],
+  ["gemini-1.5-pro",        2_000_000],
   ["gemini",                  128_000],
   // DeepSeek
   ["deepseek-r1",             128_000],

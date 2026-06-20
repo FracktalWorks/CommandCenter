@@ -33,7 +33,7 @@ import TodoPanel from "@/components/TodoPanel";
 import { parseAgentError } from "@/lib/parseAgentError";
 import type { ParsedAgentError } from "@/lib/parseAgentError";
 import { getMessages, saveMessages, fetchMessagesFromDb, type PersistedMessage } from "@/lib/sessions";
-import { computeContextUsage, formatTokenCount } from "@/lib/tokenCount";
+import { computeContextUsage } from "@/lib/tokenCount";
 import { useAgentEvents } from "@/lib/agentEvents";
 import { buildFrontendToolsAddendum } from "@/hooks/useFrontendTool";
 
@@ -73,7 +73,6 @@ function ContextRing({
       : pct >= 60
         ? "hsl(var(--warning))"
         : "hsl(var(--primary))";
-  const label = formatTokenCount(usedTokens, totalTokens);
   const canCompact = pct >= 60 && onCompact && !compacting;
 
   // ── Popup state ──────────────────────────────────────────────────────
@@ -164,31 +163,31 @@ function ContextRing({
     },
   };
 
-  // ── Ring content (SVG + label) ───────────────────────────────────────
+  // ── Ring content (filling donut gauge + % label) ─────────────────────
+  // The arc fills clockwise from 12 o'clock as context is consumed.  The
+  // PRIMARY label is the percentage (so the user reads "how full") — the raw
+  // token fraction lives in the hover popup.
   const ring = (
-    <span className="shrink-0 flex items-center gap-1">
-      <svg width="16" height="16" viewBox="0 0 24 24">
+    <span className="shrink-0 flex items-center gap-1.5">
+      <svg width="18" height="18" viewBox="0 0 24 24" className="shrink-0">
         {/* Background track */}
-        <circle cx="12" cy="12" r={r} fill="none" strokeWidth="2"
+        <circle cx="12" cy="12" r={r} fill="none" strokeWidth="3"
           style={{ stroke: "hsl(var(--border))" } as React.CSSProperties} />
-        {/* Progress arc */}
+        {/* Progress arc — starts at 12 o'clock, fills clockwise */}
         <circle
           cx="12" cy="12" r={r}
           fill="none"
-          strokeWidth="2"
+          strokeWidth="3"
           strokeDasharray={`${filled} ${circ}`}
           strokeLinecap="round"
-          style={{
-            stroke: color,
-            transform: "rotate(-90deg)",
-            transformOrigin: "center",
-          } as React.CSSProperties}
+          transform="rotate(-90 12 12)"
+          style={{ stroke: color, transition: "stroke-dasharray 0.4s ease" } as React.CSSProperties}
         />
       </svg>
-      <span className={`text-[10px] font-mono font-medium ${
+      <span className={`text-[11px] font-mono font-semibold tabular-nums ${
         pct >= 80 ? "text-destructive" : pct >= 60 ? "text-warning" : "text-muted-foreground"
       }`}>
-        {label}
+        {pct}%
       </span>
     </span>
   );
@@ -536,13 +535,6 @@ export default function AgentChat({
       ),
     [sessionId],
   );
-  // Show only the most recent window initially — older messages lazy-load on
-  // scroll-up.  This keeps restore snappy for very long sessions.
-  const cachedInitial = useMemo(
-    () => cachedFull.slice(-HISTORY_PAGE_SIZE),
-    [cachedFull],
-  );
-
   const { messages, isLoading, error, sendMessage, stopGeneration, setMessages, recovering, runStatus } = useAgentChat({
     agentName: currentAgentName,
     threadId: sessionId,
@@ -551,24 +543,28 @@ export default function AgentChat({
     systemContext,
     thinkMode,
     onArtifact,
-    // Load persisted messages so switching sessions restores history instantly.
-    initialMessages: cachedInitial,
+    // Load the FULL persisted history into memory so the context sent to the
+    // model and the context-usage estimate are both accurate.  We only window
+    // the RENDERING (below) for performance — not the data.
+    initialMessages: cachedFull,
   });
 
-  // ── Lazy history paging state ──────────────────────────────────────────────
-  // hasMoreHistory: there are older messages not yet loaded (show "load older"
-  // affordance + enable scroll-up fetch).  loadingOlder: a page fetch is in
-  // flight.  oldestTimestampRef: cursor for the next backwards page.
-  const [hasMoreHistory, setHasMoreHistory] = useState(
-    () => cachedFull.length > HISTORY_PAGE_SIZE,
-  );
-  const [loadingOlder, setLoadingOlder] = useState(false);
-  const loadingOlderRef = useRef(false);
-  // Scroll-position preservation when prepending older messages: holds the
-  // pre-prepend scrollHeight so a layout effect can keep the viewport anchored.
+  // ── Windowed RENDERING (perf) ───────────────────────────────────────────────
+  // The full conversation lives in `messages`; we render only the most recent
+  // `renderLimit` to keep very long sessions snappy.  Scrolling near the top
+  // reveals older messages (no refetch — they're already in memory).
+  const [renderLimit, setRenderLimit] = useState(HISTORY_PAGE_SIZE);
+  const hasMoreHistory = renderLimit < messages.length;
+  // Scroll-position preservation when revealing older messages: holds the
+  // pre-expand scrollHeight so a layout effect can keep the viewport anchored.
   const pendingPrependRef = useRef<number | null>(null);
-  // Latest loadOlderHistory, callable from the (deps:[]) scroll handler.
+  // Latest reveal-older fn, callable from the (deps:[]) scroll handler.
   const loadOlderHistoryRef = useRef<() => void>(() => {});
+
+  // Reset the render window when switching sessions.
+  useEffect(() => {
+    setRenderLimit(HISTORY_PAGE_SIZE);
+  }, [sessionId]);
 
   // History-loading state: always true when the sidebar says this session has
   // prior messages.  When localStorage has cached messages we show them right
@@ -580,30 +576,24 @@ export default function AgentChat({
     () => (expectedMessageCount ?? 0) > 0,
   );
 
-  // On mount, fetch the most recent WINDOW of authoritative history from
-  // Postgres (not the full session — that's slow for long chats).  Older
-  // messages load on scroll-up via loadOlderHistory().  We still sync the
-  // window if Postgres has richer data than the local cache (more messages OR
+  // On mount, fetch the authoritative FULL message history from Postgres and
+  // sync into memory if it's richer than the local cache (more messages OR
   // longer content — refresh-recovery where persistAssistantMessage grew the
-  // assistant record in-place during streaming).
+  // assistant record in-place during streaming).  The cached window paints
+  // instantly; this background load keeps the full context + token estimate
+  // accurate.  Rendering stays windowed regardless of how many we hold.
   useEffect(() => {
     let cancelled = false;
-    // Fetch one extra so we can reliably tell whether older messages exist.
-    fetchMessagesFromDb(sessionId, { limit: HISTORY_PAGE_SIZE + 1 }).then((remoteRaw) => {
+    fetchMessagesFromDb(sessionId).then((remoteRaw) => {
       if (cancelled || remoteRaw.length === 0) return;
       // Drop stale __ERROR__ system messages persisted by older builds —
       // transient errors must never resurface on reload.
-      const remoteAll = (remoteRaw as ChatMessage[]).filter(
+      const remote = (remoteRaw as ChatMessage[]).filter(
         (m) => !(m.role === "system" && m.content?.startsWith("__ERROR__")),
       );
-      if (remoteAll.length === 0) return;
-      // If we got more than a page, there's older history to lazy-load.
-      const moreExist = remoteAll.length > HISTORY_PAGE_SIZE;
-      const remote = remoteAll.slice(-HISTORY_PAGE_SIZE);
-      if (!cancelled) setHasMoreHistory(moreExist);
-
+      if (remote.length === 0) return;
       const local = messages;
-      // Quick check: window has more messages than what's shown → use it.
+      // Quick check: more messages → definitely use DB.
       if (remote.length > local.length) {
         setMessages(remote as ChatMessage[]);
         return;
@@ -1043,52 +1033,21 @@ export default function AgentChat({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
-  // ── Load older history (scroll-up lazy paging) ─────────────────────────────
-  const loadOlderHistory = useCallback(async () => {
-    if (loadingOlderRef.current || !hasMoreHistory) return;
-    // Cursor = timestamp of the oldest message currently shown.
-    const cursor = messages.length > 0 ? messages[0].timestamp : undefined;
-    if (!cursor) return;
-    loadingOlderRef.current = true;
-    setLoadingOlder(true);
+  // ── Reveal older history (scroll-up) — expand the render window ────────────
+  // The full conversation is already in memory; this just renders more of it.
+  const loadOlderHistory = useCallback(() => {
+    if (renderLimit >= messages.length) return;
     const el = threadRef.current;
-    const prevHeight = el ? el.scrollHeight : 0;
-    try {
-      // Fetch one extra to detect whether still-older messages remain.
-      const olderRaw = await fetchMessagesFromDb(sessionId, {
-        limit: HISTORY_PAGE_SIZE + 1,
-        before: cursor,
-      });
-      const older = (olderRaw as ChatMessage[]).filter(
-        (m) => !(m.role === "system" && m.content?.startsWith("__ERROR__")),
-      );
-      const moreOlder = older.length > HISTORY_PAGE_SIZE;
-      // Drop the peek element (oldest) when more remain — it's re-fetched on the
-      // next page via the new cursor, so nothing is lost.
-      const batch = moreOlder ? older.slice(1) : older;
-      setHasMoreHistory(moreOlder);
-      if (batch.length > 0) {
-        pendingPrependRef.current = prevHeight; // anchor viewport after prepend
-        setMessages((prev) => {
-          const existing = new Set(prev.map((m) => m.id));
-          const fresh = batch.filter((m) => !existing.has(m.id));
-          return fresh.length > 0 ? [...fresh, ...prev] : prev;
-        });
-      }
-    } catch {
-      /* network error — leave hasMoreHistory as-is so the user can retry */
-    } finally {
-      loadingOlderRef.current = false;
-      setLoadingOlder(false);
-    }
-  }, [hasMoreHistory, messages, sessionId, setMessages]);
+    pendingPrependRef.current = el ? el.scrollHeight : null; // anchor viewport
+    setRenderLimit((r) => Math.min(r + HISTORY_PAGE_SIZE, messages.length));
+  }, [renderLimit, messages.length]);
 
   // Keep the scroll-handler-callable ref pointing at the latest closure.
   useEffect(() => {
     loadOlderHistoryRef.current = loadOlderHistory;
   }, [loadOlderHistory]);
 
-  // After prepending older messages, keep the viewport anchored where the user
+  // After revealing older messages, keep the viewport anchored where the user
   // was reading (offset by the height that was just added at the top).
   React.useLayoutEffect(() => {
     if (pendingPrependRef.current != null) {
@@ -1096,7 +1055,13 @@ export default function AgentChat({
       if (el) el.scrollTop += el.scrollHeight - pendingPrependRef.current;
       pendingPrependRef.current = null;
     }
-  }, [messages]);
+  }, [renderLimit, messages]);
+
+  // The slice of messages actually rendered (most recent `renderLimit`).
+  const visibleMessages = useMemo(
+    () => (messages.length > renderLimit ? messages.slice(-renderLimit) : messages),
+    [messages, renderLimit],
+  );
 
   const enqueue = useCallback((text: string, front = false) => {
     if (front) queueRef.current.unshift(text);
@@ -1350,33 +1315,27 @@ export default function AgentChat({
             </div>
           )}
 
-          {/* Older-history affordance — auto-loads on scroll-up; also clickable. */}
-          {hasMoreHistory && messages.length > 0 && (
+          {/* Older-history affordance — auto-reveals on scroll-up; also clickable.
+              Messages are already in memory; this just renders more of them. */}
+          {hasMoreHistory && visibleMessages.length > 0 && (
             <div className="flex items-center justify-center py-2">
-              {loadingOlder ? (
-                <span className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <span className="w-3 h-3 rounded-full border-2 border-muted border-t-primary animate-spin" />
-                  Loading earlier messages…
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => loadOlderHistory()}
-                  className="text-[11px] text-muted-foreground hover:text-foreground px-3 py-1 rounded-full border border-border/60 hover:border-primary/40 tech-transition"
-                >
-                  ↑ Load earlier messages
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => loadOlderHistory()}
+                className="text-[11px] text-muted-foreground hover:text-foreground px-3 py-1 rounded-full border border-border/60 hover:border-primary/40 tech-transition"
+              >
+                ↑ Show earlier messages ({messages.length - renderLimit} more)
+              </button>
             </div>
           )}
 
-          {messages.map((msg, i) => {
-            const prevMsg = i > 0 ? messages[i - 1] : null;
+          {visibleMessages.map((msg, i) => {
+            const prevMsg = i > 0 ? visibleMessages[i - 1] : null;
             // Find the preceding user message for retry (walk back to the
             // most recent user message before this assistant message).
             const prevUserMsg =
               msg.role === "assistant"
-                ? [...messages.slice(0, i)].reverse().find((m) => m.role === "user")
+                ? [...visibleMessages.slice(0, i)].reverse().find((m) => m.role === "user")
                 : null;
             const showDateDivider = prevMsg &&
               new Date(msg.timestamp).toDateString() !== new Date(prevMsg.timestamp).toDateString();

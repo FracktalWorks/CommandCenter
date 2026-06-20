@@ -1,7 +1,7 @@
 # AGENTS.md — Planning Folder Navigation Guide
 
 > **For AI agents:** Read this file first. It tells you what this project is, what has been built, and which file to read for each concern.
-> **Organisation:** Fracktal Works · **Project:** CommandCenter · **Last updated:** 2026-06-05
+> **Organisation:** Fracktal Works · **Project:** CommandCenter · **Last updated:** 2026-06-20
 
 ---
 
@@ -20,7 +20,7 @@ Operators interact via a thin **Control Plane** (Next.js browser UI) with chat Q
 
 ---
 
-## What Has Already Been Built (as of 2026-06-05)
+## What Has Already Been Built (as of 2026-06-20)
 
 | Component | Status | Location |
 |---|---|---|
@@ -48,6 +48,12 @@ Operators interact via a thin **Control Plane** (Next.js browser UI) with chat Q
 | **Integration configure/test UI** | ✅ Done | `workbench/control_plane/src/app/integrations/` — live test against real APIs; writes to root `.env`; hot-reload |
 | **LLM settings UI (tier picker, Gemini/OpenAI key save)** | ✅ Done | `workbench/control_plane/src/app/settings/models/` — per-tier model assignment; provider key save; LiteLLM health |
 | **AG-UI → SSE translation (chat properly streams tool calls)** | ✅ Done | `workbench/control_plane/src/app/api/agent/chat/route.ts` — translates AG-UI events to delta/tool_start/tool_end for the UI hook |
+| **Memory: Mem0 episodic + Graphiti bi-temporal KG** | ✅ Done | M2.8 — pgvector backend, Neo4j `--profile memory`, `/memory/*` API, injected into orchestrator + Copilot agents. See [`reference.md`](reference.md) §3 |
+| **Fire-and-forget chat + live stream reconnection** | ✅ Done | Redis Streams + Postgres; agent continues after tab close, resumes live on reopen. See [`specs/stream_reconnection.md`](specs/stream_reconnection.md) |
+| **Chat session history (auto-title + last-turn preview)** | ✅ Done | M2.6 — `chat_sessions.title`/`last_preview`; session list UI |
+| **Integration OAuth framework (authorize→callback→refresh)** | ✅ Done | M2.6 — `routes/oauth.py`, HMAC-signed state, zoho-crm/clickup/google |
+| **VS Code Copilot tools in chat (HITL Q, errors, repo memory, history, GitHub search, images)** | 🔄 Mostly done | See [`specs/vscode_tool_integration.md`](specs/vscode_tool_integration.md) |
+| **Email app — multi-account client (Gmail/Outlook/IMAP) + AI assistant** | 🔄 In progress | M2.9 — `workbench/control_plane/src/app/email/`, gateway `routes/email.py`, `apps/email_ingestion/`. Outlook display bugs fixed (PR #4). See [`specs/email_ai_assistant.md`](specs/email_ai_assistant.md) |
 | `agent-sales` + `skill-zoho-ingest` | 🔲 Phase 2 | Phase 2 (WBS 2.2) |
 | `agent-triage` + `skill-gmail-capture` | 🔲 Phase 2 | Phase 2 (WBS 2.3) |
 | Meeting bot (Vexa + WhisperX) | 🔲 Phase 3 | Phase 3 (WBS 3.1) |
@@ -58,8 +64,11 @@ Operators interact via a thin **Control Plane** (Next.js browser UI) with chat Q
 **M1 milestone (Core Engine live) — PASSED 2026-05-25.**
 Real cross-system cited Q&A over live Fracktal data confirmed. 22/22 tests green.
 
-**M2 milestone (Self-Mutation + Multi-Agent) — IN PROGRESS as of 2026-06-05.**
-`Self_Mutation_Node` + Copilot SDK mutation container ✅ done. Dynamic multi-agent (`as_tool()` registry) ✅ done. `spawn_copilot_agent` + `delegate_to_agent` tools ✅ done. Agent auto-repair (researcher+editor pattern) ✅ done. GitHub PR automation (WBS 1.3) and eval CI gate (WBS 1.4) remaining.
+**M2 milestone (Self-Mutation + Multi-Agent) — PASSED 2026-06-12.**
+`Self_Mutation_Node` + Copilot SDK mutation container, dynamic multi-agent (`as_tool()` registry), `spawn_copilot_agent` + `delegate_to_agent`, agent auto-repair, and the inline eval gate are all ✅ done. Remaining Phase-1 cleanup: GitHub PR automation (WBS 1.3) and BYOK-forced metering (WBS 1.7).
+
+**Since M2 (all ✅):** M2.5 unified Copilot SDK Tier 1.5 streaming (CopilotKit removed) · M2.6 foundation hardening (chat history, cloud sandbox, integration OAuth, AG-UI generative events) · M2.7 universal tool injection · M2.8 Mem0 + Graphiti memory.
+**M2.9 (🔄 in progress):** email app — multi-account client + AI assistant; Outlook end-to-end fixed (PR #4).
 
 **Dynamic multi-agent orchestration — DONE.**
 Every registered agent (static + GitHub-registered) is exposed as a MAF `FunctionTool` via `agent.as_tool()` at gateway startup. LLM routes to the right specialist by description alone — no hard-coded routing table. WorkflowBuilder available for explicit sequential/fan-out pipelines.
@@ -68,15 +77,15 @@ Every registered agent (static + GitHub-registered) is exposed as a MAF `Functio
 
 ## File Index — What to Read for Each Concern
 
+The planning folder was consolidated on 2026-06-20 (15 files → 5 + `specs/`).
+
 | Concern | File |
 |---|---|
-| **What the product must do (requirements)** | [`product_requirements.md`](product_requirements.md) |
-| **How/when it will be built (phases, timeline)** | [`project_plan.md`](project_plan.md) |
-| **Detailed engineering tasks with estimates** | [`wbs.md`](wbs.md) |
+| **Requirements + roadmap + WBS** (what / when / how much — single source) | [`project_plan.md`](project_plan.md) |
 | **System design: containers, data model, ADRs** | [`system_architecture.md`](system_architecture.md) |
-| **MCP & Plugin integration design** | [`spec_mcp_plugin_integration.md`](spec_mcp_plugin_integration.md) |
-| **LLM prompt caching + memory system plan** | [`spec_llm_caching_memory.md`](spec_llm_caching_memory.md) |
-| **Agent repo compatibility guide** | [`agent_repo_compatibility.md`](agent_repo_compatibility.md) |
+| **How to build a compatible agent repo** | [`agent_repo_compatibility.md`](agent_repo_compatibility.md) |
+| **Library notes: MAF, Copilot SDK, memory** | [`reference.md`](reference.md) |
+| **Per-feature specs** (email app, chat UX, stream reconnection, VS Code tools, LLM caching, MCP/plugins, artifact viewer) | [`specs/`](specs/) |
 
 ---
 
@@ -142,17 +151,12 @@ CommandCenter uses **one execution runtime: MAF**. Interactive chat (via AG-UI e
 
 ---
 
-## Current Phase: Phase 1 — Self-Mutation Loop
+## Current Phase
 
-Phase 0 (Core Engine) is complete. The team is now in **Phase 1: Self-Mutation Loop**.
+Phases 0, 1, 1.5, 1.6 are complete and **M2 is closed**. Active work is **M2.9 (email app)** plus **Phase 2 (Full Agent Ecosystem)** platform work toward **M3**. See [`project_plan.md`](project_plan.md) §6 for the full phased WBS and status.
 
-**Remaining Phase 1 work (from WBS):**
-- ~~WBS 1.1 `Self_Mutation_Node`~~ ✅ **Done** — `mutation.py` fully wired; Copilot SDK container spawned via `docker run --rm -d`. (Migration to MAF DurableTask activity is WBS 0.7 work, tracked separately.)
-- ~~WBS 1.2 Mutation sandbox integration~~ ✅ **Done** — `Dockerfile.mutation` + `mutation_runner.py`; host Docker socket mapped; no DinD required.
-- WBS 1.3 GitHub PR automation: GitHub API create branch → commit fix → open PR with telemetry body; no self-merge permission. **NEXT.**
-- WBS 1.4 Eval CI gate: Promptfoo + Inspect AI on every `agent-*` / `skill-*` PR; merge blocked on regression.
-- WBS 1.5 Mutation audit log: log to Postgres; surface in Control Plane HITL queue.
-- ~~WBS 1.6 Webhook → MAF dispatch~~ ✅ **Done** — `agent.py` dispatches webhook events to the MAF executor (`orchestrator.executor.run_agent`); the old Copilot-runtime arm was removed.
-- WBS 1.7 LiteLLM BYOK forced for mutation Copilot SDK sessions: route all SDK sessions through the LiteLLM `copilot/claude-sonnet` alias for consistent cost metering.
-
-**Phase 1 exit milestone (M2 — Self-Mutation live):** A deliberate error in `skill-clickup-sync` causes `Self_Mutation_Node` to open a GitHub PR with a plausible fix within 5 minutes; `max_mutation_attempts = 1` enforced; human merges → CI passes → live.
+**Immediate priorities:**
+- M2.9 — email app: post-deploy mailbox reconnect, Drafts/Junk sync, entity-graph linkage.
+- Phase 2 — Zoho + Gmail ingestion pipelines (WBS 2.1/2.2), cross-source entity resolution (2.3), Action Broker hardening (2.4).
+- Phase 1 cleanup — GitHub PR automation (WBS 1.3), BYOK-forced metering (WBS 1.7).
+- Hardening — **SEC-1: lock down public Postgres/Redis (5432/6379) on the VPS** (see project_plan §6 / R-06).

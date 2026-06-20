@@ -1,7 +1,8 @@
 # Email AI Assistant — Project Plan
 
-> **Product:** CommandCenter · **Feature:** Email AI Assistant App · **Date:** 2026-06-17 · **Version:** 1.0
-> **Status:** 🔲 Planned — Boilerplate integrated
+> **Product:** CommandCenter · **Feature:** Email AI Assistant App · **Updated:** 2026-06-20 · **Version:** 1.1
+> **Status:** 🔄 In progress — UI, multi-account OAuth (Gmail/Outlook/IMAP), background sync, and AI chat shipped and live on the VPS.
+> **Current state (2026-06-20):** Outlook end-to-end works after fixing five bugs that hid synced mail — doubled `/api/email` proxy path (404s), provider folders persisted as opaque IDs vs the canonical `inbox` key, the background sync scheduler crashing at boot (stdlib-logger kwargs `TypeError`), OAuth callback not storing client_id/secret/tenant (token refresh impossible), and Gmail `received_at` always null. Fixes in PR #4. **Remaining:** reconnect mailboxes post-deploy; Drafts/Junk sync; entity-graph linkage (email → CUSTOMER/DEAL) tracked under M3.
 
 ---
 

@@ -69,6 +69,7 @@ export default function EmailPage() {
     selectedEmailId,
     composeOpen,
     composeDefaults,
+    pendingSend,
     error,
     authErrors,
     fetchAccounts,
@@ -765,6 +766,19 @@ export default function EmailPage() {
         onClose={() => setPaletteOpen(false)}
         commands={commands}
       />
+
+      {/* Undo-send toast */}
+      {pendingSend && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[80] flex items-center gap-3 bg-card border border-border shadow-xl rounded-lg px-4 py-2.5 text-xs">
+          <span className="text-foreground">Sending message…</span>
+          <button
+            onClick={() => useEmailStore.getState().undoSend()}
+            className="text-primary font-medium hover:opacity-80"
+          >
+            Undo
+          </button>
+        </div>
+      )}
 
       <ComposePanel
         open={composeOpen}

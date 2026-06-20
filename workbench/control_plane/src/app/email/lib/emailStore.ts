@@ -150,6 +150,8 @@ interface EmailState {
   // UI
   composeOpen: boolean;
   composeDefaults: { to: string; subject: string; replyToBody?: string; replyToMessageId?: string } | null;
+  /** A message queued to send, shown with an "Undo" toast until the timer fires. */
+  pendingSend: api.SendEmailParams | null;
   error: string | null;
 
   // Actions
@@ -168,12 +170,17 @@ interface EmailState {
   updateEmail: (id: string, updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>) => Promise<void>;
   deleteEmail: (id: string) => Promise<void>;
   sendEmail: (params: api.SendEmailParams) => Promise<void>;
+  undoSend: () => void;
   triggerSync: (accountId: string) => Promise<void>;
   deleteAccount: (id: string) => Promise<void>;
   clearError: () => void;
 }
 
 let _debounceTimer: ReturnType<typeof setTimeout> | undefined;
+/** Pending "Undo send" timer — fires the real send after the undo window. */
+let _sendTimer: ReturnType<typeof setTimeout> | undefined;
+/** How long the user has to undo a send. */
+const UNDO_SEND_MS = 5000;
 
 export const useEmailStore = create<EmailState>((set, get) => ({
   // Data
@@ -204,6 +211,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   // UI
   composeOpen: false,
   composeDefaults: null,
+  pendingSend: null,
   error: null,
 
   // Actions
@@ -461,14 +469,46 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   sendEmail: async (params) => {
-    set({ error: null });
-    try {
-      await api.sendEmail(params);
-      set({ composeOpen: false, composeDefaults: null });
-      // Refresh emails to show sent item
-      get().fetchEmails();
-    } catch (err: any) {
-      set({ error: err.message || "Failed to send email" });
+    // Optimistically close the composer and hold the message for a few seconds
+    // so it can be undone before it actually leaves.
+    set({
+      composeOpen: false,
+      composeDefaults: null,
+      pendingSend: params,
+      error: null,
+    });
+    if (_sendTimer) clearTimeout(_sendTimer);
+    _sendTimer = setTimeout(async () => {
+      const p = get().pendingSend;
+      if (!p) return;
+      set({ pendingSend: null });
+      try {
+        await api.sendEmail(p);
+        get().fetchEmails(); // surface the sent item
+      } catch (err: any) {
+        set({ error: err.message || "Failed to send email" });
+      }
+    }, UNDO_SEND_MS);
+  },
+
+  undoSend: () => {
+    if (_sendTimer) {
+      clearTimeout(_sendTimer);
+      _sendTimer = undefined;
+    }
+    const p = get().pendingSend;
+    set({ pendingSend: null });
+    // Reopen the composer with the draft so it can be edited and re-sent.
+    if (p) {
+      set({
+        composeOpen: true,
+        composeDefaults: {
+          to: p.to.join(", "),
+          subject: p.subject,
+          replyToBody: p.bodyText,
+          replyToMessageId: p.replyToMessageId,
+        },
+      });
     }
   },
 

@@ -734,11 +734,16 @@ async def list_messages(
     account_id: str | None = Query(None),
     folder: str = Query("INBOX"),
     query: str | None = Query(None),
+    thread_id: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     user: UserContext = Depends(get_current_user),
 ):
-    """List/search emails across accounts."""
+    """List/search emails across accounts.
+
+    When ``thread_id`` is given the result is the whole conversation (across
+    folders), oldest-first — used by the reading pane's conversation view.
+    """
     db = await _get_db()
     try:
         where_clauses = [
@@ -753,7 +758,12 @@ async def list_messages(
         if account_id:
             where_clauses.append("em.account_id = :account_id")
             params["account_id"] = account_id
-        if folder:
+        if thread_id:
+            # Conversation view: every message in the thread, ignore the folder
+            # filter (a thread spans inbox/sent/etc.).
+            where_clauses.append("em.thread_id = :thread_id")
+            params["thread_id"] = thread_id
+        elif folder:
             # "starred" is a flag, not a stored folder; everything else is matched
             # case-insensitively against the canonical folder key persisted by the
             # providers (inbox/sent/drafts/trash/archive/junk + user folders).
@@ -802,7 +812,7 @@ async def list_messages(
                    FROM email_messages em
                    JOIN email_accounts ea ON em.account_id = ea.id
                    WHERE {where_sql}
-                   ORDER BY em.received_at DESC
+                   ORDER BY em.received_at {"ASC" if thread_id else "DESC"}
                    LIMIT :limit OFFSET :offset"""
             ),
             params,

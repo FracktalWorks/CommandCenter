@@ -225,6 +225,21 @@ export async function getEmail(id: string): Promise<Email> {
   return mapEmail(raw);
 }
 
+/** All messages in a conversation (across folders), oldest-first. */
+export async function listThread(
+  accountId: string | undefined,
+  threadId: string
+): Promise<Email[]> {
+  const sp = new URLSearchParams();
+  if (accountId) sp.set("account_id", accountId);
+  sp.set("thread_id", threadId);
+  sp.set("page_size", "100");
+  const raw = await gatewayFetch<{ emails: Record<string, unknown>[] }>(
+    `/email/messages?${sp.toString()}`
+  );
+  return (raw.emails ?? []).map(mapEmail);
+}
+
 export interface BackfillResult {
   synced: number;
   next_page_token: string | null;

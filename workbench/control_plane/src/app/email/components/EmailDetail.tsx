@@ -10,10 +10,10 @@ import { Email } from "../lib/types";
 import { fullDateLabel, initials } from "../lib/utils";
 import { useEmailStore } from "../lib/emailStore";
 import {
-  getAttachmentDownloadUrl, fetchFullBody, getEmail,
-  sendEmail as apiSendEmail,
+  getAttachmentDownloadUrl, fetchFullBody, getEmail, listThread,
 } from "../lib/api";
 import { MessageContent } from "./MessageContent";
+import { ConversationView } from "./ConversationView";
 
 interface EmailDetailProps {
   email: Email | null;
@@ -22,7 +22,7 @@ interface EmailDetailProps {
 export function EmailDetail({ email }: EmailDetailProps) {
   const {
     updateEmail, deleteEmail, openCompose, hydrateEmail, folders,
-    accounts, selectedAccountId, fetchEmails,
+    accounts, selectedAccountId, sendEmail,
   } = useEmailStore();
   const [starred, setStarred] = useState(email?.isStarred ?? false);
   const [read, setRead] = useState(email?.isRead ?? true);
@@ -36,7 +36,6 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const [replyTo, setReplyTo] = useState("");
   const [replyCc, setReplyCc] = useState("");
   const [sendErr, setSendErr] = useState<string | null>(null);
-  const [replySending, setReplySending] = useState(false);
   const [loadingFullBody, setLoadingFullBody] = useState(false);
   const [fullBodyText, setFullBodyText] = useState<string | null>(null);
   // Full message detail (body + attachments) fetched lazily on selection. The
@@ -44,17 +43,27 @@ export function EmailDetail({ email }: EmailDetailProps) {
   // always fetch the authoritative copy from the gateway when an email opens.
   const [detail, setDetail] = useState<Email | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  // The full conversation (all messages sharing this thread_id), if any.
+  const [thread, setThread] = useState<Email[] | null>(null);
 
   // Fetch full content whenever the selected email changes.
   useEffect(() => {
     if (!email) {
       setDetail(null);
+      setThread(null);
       return;
     }
     let cancelled = false;
     setDetail(null);
+    setThread(null);
     setFullBodyText(null);
     setReplyMode(null);
+    // Pull the whole conversation so we can show a Gmail-style thread view.
+    if (email.threadId) {
+      listThread(selectedAccountId ?? undefined, email.threadId)
+        .then((t) => { if (!cancelled) setThread(t); })
+        .catch(() => { if (!cancelled) setThread(null); });
+    }
     const needsBody = !email.bodyHtml && !email.bodyText;
     const needsAttachments = email.hasAttachments && (!email.attachments || email.attachments.length === 0);
     if (!needsBody && !needsAttachments) {
@@ -167,9 +176,9 @@ export function EmailDetail({ email }: EmailDetailProps) {
         ? email.subject
         : `Re: ${email.subject}`;
 
-  /** Send the inline reply/forward directly (no detour through the modal). */
-  const handleInlineSend = async () => {
-    if (!email || replySending) return;
+  /** Queue the inline reply/forward (the store shows an Undo toast). */
+  const handleInlineSend = () => {
+    if (!email) return;
     if (!selectedAccountId) {
       setSendErr("No account selected");
       return;
@@ -180,28 +189,19 @@ export function EmailDetail({ email }: EmailDetailProps) {
       return;
     }
     const ccArr = replyCc.split(",").map((s) => s.trim()).filter(Boolean);
-    setReplySending(true);
-    setSendErr(null);
-    try {
-      await apiSendEmail({
-        accountId: selectedAccountId,
-        to: toArr,
-        cc: ccArr.length ? ccArr : undefined,
-        subject: replySubject(),
-        bodyText: replyBody,
-        replyToMessageId:
-          replyMode === "forward" ? undefined : email.providerMessageId,
-      });
-      setReplyMode(null);
-      setReplyBody("");
-      setReplyTo("");
-      setReplyCc("");
-      fetchEmails();
-    } catch (err) {
-      setSendErr(err instanceof Error ? err.message : "Failed to send");
-    } finally {
-      setReplySending(false);
-    }
+    sendEmail({
+      accountId: selectedAccountId,
+      to: toArr,
+      cc: ccArr.length ? ccArr : undefined,
+      subject: replySubject(),
+      bodyText: replyBody,
+      replyToMessageId:
+        replyMode === "forward" ? undefined : email.providerMessageId,
+    });
+    setReplyMode(null);
+    setReplyBody("");
+    setReplyTo("");
+    setReplyCc("");
   };
 
   /** Hand the current draft off to the full composer (Cc/Bcc, attachments). */
@@ -405,6 +405,11 @@ export function EmailDetail({ email }: EmailDetailProps) {
           </div>
         )}
 
+        {thread && thread.length > 1 ? (
+          /* Conversation view — the whole thread, stacked */
+          <ConversationView messages={thread} openedId={email.id} />
+        ) : (
+        <>
         {/* Sender info */}
         <div className="flex items-start gap-3 mb-6">
           <div className="w-9 h-9 rounded-full bg-primary/20 text-primary flex items-center justify-center flex-shrink-0 text-xs font-semibold">
@@ -556,6 +561,8 @@ export function EmailDetail({ email }: EmailDetailProps) {
             </div>
           </div>
         )}
+        </>
+        )}
 
         {/* Reply / Forward composer */}
         {replyMode && (
@@ -636,15 +643,11 @@ export function EmailDetail({ email }: EmailDetailProps) {
                 </button>
                 <button
                   className="px-4 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-1.5"
-                  disabled={replySending || !replyTo.trim() || !replyBody.trim()}
-                  onClick={() => void handleInlineSend()}
+                  disabled={!replyTo.trim() || !replyBody.trim()}
+                  onClick={handleInlineSend}
                 >
-                  {replySending ? (
-                    <Loader2 size={12} className="animate-spin" />
-                  ) : (
-                    <Send size={12} />
-                  )}
-                  {replySending ? "Sending…" : "Send"}
+                  <Send size={12} />
+                  Send
                 </button>
               </div>
             </div>

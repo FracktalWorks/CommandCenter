@@ -62,6 +62,8 @@ export default function EmailPage() {
     accountsLoading,
     emailsLoading,
     loadingMore,
+    backfilling,
+    backfillExhausted,
     selectedAccountId,
     selectedFolder,
     selectedEmailId,
@@ -72,6 +74,7 @@ export default function EmailPage() {
     fetchAccounts,
     fetchEmails,
     loadMoreEmails,
+    backfillOlder,
     selectAccount,
     selectFolder,
     selectEmail,
@@ -723,6 +726,9 @@ export default function EmailPage() {
                 total={emailsTotal}
                 onLoadMore={loadMoreEmails}
                 loadingMore={loadingMore}
+                onBackfill={backfillOlder}
+                backfilling={backfilling}
+                canBackfill={!backfillExhausted[selectedFolder]}
               />
             </div>
           )}

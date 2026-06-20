@@ -129,7 +129,12 @@ interface EmailState {
   accountsLoading: boolean;
   emailsLoading: boolean;
   loadingMore: boolean;
+  backfilling: boolean;
   foldersLoading: boolean;
+  /** Per-folder cursor for paging older provider history (client-held). */
+  backfillToken: Record<string, string | null>;
+  /** Per-folder flag: the provider has no older mail left to fetch. */
+  backfillExhausted: Record<string, boolean>;
   syncStatus: Record<string, "idle" | "syncing" | "error">;
   /** Accounts whose live provider calls returned 401/403 (stale OAuth), keyed
    *  by account id → error message. Drives the in-app reconnect banner
@@ -152,6 +157,7 @@ interface EmailState {
   fetchFolders: (accountId?: string) => Promise<void>;
   fetchEmails: () => Promise<void>;
   loadMoreEmails: () => Promise<void>;
+  backfillOlder: () => Promise<void>;
   selectAccount: (id: string) => void;
   selectFolder: (folder: string) => void;
   selectEmail: (id: string | null) => void;
@@ -182,7 +188,10 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   accountsLoading: false,
   emailsLoading: false,
   loadingMore: false,
+  backfilling: false,
   foldersLoading: false,
+  backfillToken: {},
+  backfillExhausted: {},
   syncStatus: {},
   authErrors: {},
 
@@ -308,6 +317,52 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       });
     } catch (err: any) {
       set({ loadingMore: false, error: err.message || "Failed to load more emails" });
+    }
+  },
+
+  backfillOlder: async () => {
+    const {
+      selectedAccountId, selectedFolder, backfilling,
+      backfillToken, emails, emailsPage,
+    } = get();
+    if (backfilling || !selectedAccountId) return;
+    set({ backfilling: true, error: null });
+    try {
+      // 1) Pull older mail from the provider into the DB.
+      const res = await api.backfillFolder(
+        selectedAccountId,
+        selectedFolder,
+        backfillToken[selectedFolder] ?? undefined,
+      );
+      // 2) Surface the freshly-persisted older page from the DB and append it.
+      const nextPage = emailsPage + 1;
+      const result = await api.listEmails({
+        accountId: selectedAccountId,
+        folder: selectedFolder,
+        page: nextPage,
+        pageSize: PAGE_SIZE,
+      });
+      const seen = new Set(emails.map((e) => e.id));
+      const merged = [...emails, ...result.emails.filter((e) => !seen.has(e.id))];
+      set({
+        emails: merged,
+        emailsPage: nextPage,
+        emailsTotal: result.total,
+        backfilling: false,
+        backfillToken: {
+          ...get().backfillToken,
+          [selectedFolder]: res.next_page_token,
+        },
+        backfillExhausted: {
+          ...get().backfillExhausted,
+          [selectedFolder]: res.exhausted,
+        },
+      });
+    } catch (err: any) {
+      set({
+        backfilling: false,
+        error: err.message || "Failed to load older emails",
+      });
     }
   },
 

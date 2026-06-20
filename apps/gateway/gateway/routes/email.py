@@ -129,6 +129,11 @@ class MessageUpdateModel(BaseModel):
 class SyncRequest(BaseModel):
     account_id: str
 
+class BackfillRequest(BaseModel):
+    folder: str = "inbox"
+    page_token: str | None = None
+    max_pages: int = Field(default=3, ge=1, le=10)
+
 class ListMessagesParams(BaseModel):
     account_id: str | None = None
     folder: str = "INBOX"
@@ -603,6 +608,121 @@ async def list_folders(
             status_code=500,
             detail=f"Failed to list folders: {str(exc)}",
         )
+    finally:
+        await db.close()
+
+
+# ── History backfill ─────────────────────────────────────────────────────
+
+@router.post("/accounts/{account_id}/backfill")
+async def backfill_folder(
+    account_id: str,
+    req: BackfillRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Fetch OLDER messages for a folder from the provider and persist them.
+
+    The list view is DB-backed and the initial sync only grabs the newest
+    ~100 per folder, so this pages further back through the provider's history
+    on demand.  Returns the next page token so the client can keep loading
+    older mail until ``exhausted`` is true.
+    """
+    from email_ingestion.providers.base import canonical_folder
+
+    db = await _get_db()
+    try:
+        result = await db.execute(
+            text(
+                """SELECT provider, credentials_encrypted
+                   FROM email_accounts
+                   WHERE id = :id AND user_id = :user_id"""
+            ),
+            {"id": account_id, "user_id": user.email or "anonymous"},
+        )
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        from acb_llm.key_store import get_key_store
+        store = get_key_store()
+        creds = json.loads(store.decrypt(row.credentials_encrypted))
+
+        if row.provider == "gmail":
+            from email_ingestion.providers.gmail import GmailProvider
+            provider = GmailProvider(creds)
+        elif row.provider == "microsoft":
+            from email_ingestion.providers.outlook import OutlookProvider
+            provider = OutlookProvider(creds)
+        elif row.provider == "imap":
+            from email_ingestion.providers.imap import IMAPProvider
+            provider = IMAPProvider(creds)
+        else:
+            raise HTTPException(
+                status_code=400, detail=f"Unknown provider: {row.provider}"
+            )
+
+        if not await provider.authenticate():
+            raise HTTPException(
+                status_code=401,
+                detail="Email account authentication failed — reconnect.",
+            )
+
+        canon_req = canonical_folder(req.folder)
+
+        # Resolve the provider-native folder id/label for the canonical key so
+        # both system and user folders page correctly (Gmail label id, Graph
+        # folder id, IMAP mailbox name).
+        provider_folder = req.folder
+        try:
+            for f in await provider.list_folders():
+                if canonical_folder(f.name) == canon_req:
+                    provider_folder = f.provider_folder_id
+                    break
+        except Exception:
+            pass
+
+        token = req.page_token
+        synced = 0
+        for _ in range(req.max_pages):
+            msgs, token = await provider.list_messages(
+                folder=provider_folder,
+                max_results=100,
+                page_token=token,
+                canonical_override=canon_req,
+            )
+            for msg in msgs:
+                await _upsert_message(db, account_id, msg)
+                synced += 1
+            if not token:
+                break
+        await db.commit()
+
+        if provider.credentials_dirty():
+            await db.execute(
+                text(
+                    """UPDATE email_accounts
+                       SET credentials_encrypted = :creds, updated_at = now()
+                       WHERE id = :id"""
+                ),
+                {
+                    "id": account_id,
+                    "creds": store.encrypt(
+                        json.dumps(provider.export_credentials())
+                    ),
+                },
+            )
+            await db.commit()
+
+        return {
+            "synced": synced,
+            "next_page_token": token,
+            "exhausted": token is None,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.error("backfill.failed", account_id=account_id, error=str(exc)[:200])
+        raise HTTPException(status_code=500, detail=f"Backfill failed: {str(exc)}")
     finally:
         await db.close()
 
@@ -2166,6 +2286,108 @@ def _row_to_message(row: Any) -> EmailMessageModel:
         received_at=row.received_at.isoformat() if row.received_at else None,
         synced_at=row.synced_at.isoformat() if row.synced_at else None,
     )
+
+
+async def _upsert_message(db: Any, account_id: str, msg: Any) -> None:
+    """Insert/update one normalized provider message into email_messages.
+
+    Mirrors the persist logic in /sync; used by the on-demand history backfill.
+    """
+    await db.execute(
+        text(
+            """INSERT INTO email_messages
+               (id, account_id, provider_message_id, thread_id,
+                folder, labels, categories, importance,
+                from_address, to_addresses,
+                cc_addresses, bcc_addresses, subject,
+                body_text, body_html, snippet,
+                has_attachments, is_read, is_starred, is_flagged,
+                received_at, synced_at)
+               VALUES
+               (:id, :account_id, :provider_id, :thread_id,
+                :folder, :labels, :categories, :importance,
+                :from_addr, :to_addrs,
+                :cc_addrs, :bcc_addrs, :subject,
+                :body_text, :body_html, :snippet,
+                :has_attachments, :is_read, :is_starred, :is_flagged,
+                :received_at, now())
+               ON CONFLICT (account_id, provider_message_id)
+               DO UPDATE SET
+                thread_id = EXCLUDED.thread_id,
+                folder = EXCLUDED.folder,
+                labels = EXCLUDED.labels,
+                categories = EXCLUDED.categories,
+                importance = EXCLUDED.importance,
+                from_address = EXCLUDED.from_address,
+                to_addresses = EXCLUDED.to_addresses,
+                cc_addresses = EXCLUDED.cc_addresses,
+                bcc_addresses = EXCLUDED.bcc_addresses,
+                subject = EXCLUDED.subject,
+                snippet = EXCLUDED.snippet,
+                has_attachments = EXCLUDED.has_attachments,
+                is_read = EXCLUDED.is_read,
+                is_starred = EXCLUDED.is_starred,
+                is_flagged = EXCLUDED.is_flagged,
+                received_at = EXCLUDED.received_at,
+                updated_at = now()"""
+        ),
+        {
+            "id": str(uuid4()),
+            "account_id": account_id,
+            "provider_id": msg.provider_message_id,
+            "thread_id": msg.thread_id,
+            "folder": msg.folder or "INBOX",
+            "labels": msg.labels,
+            "categories": getattr(msg, "categories", []) or [],
+            "importance": getattr(msg, "importance", "normal") or "normal",
+            "from_addr": json.dumps({
+                "name": msg.from_address.name if msg.from_address else "",
+                "email": msg.from_address.email if msg.from_address else "",
+            }),
+            "to_addrs": json.dumps(
+                [{"name": a.name, "email": a.email} for a in msg.to_addresses]
+            ),
+            "cc_addrs": json.dumps(
+                [{"name": a.name, "email": a.email} for a in msg.cc_addresses]
+            ),
+            "bcc_addrs": json.dumps(
+                [{"name": a.name, "email": a.email} for a in msg.bcc_addresses]
+            ),
+            "subject": msg.subject,
+            "body_text": _truncate_body(msg.body_text, MAX_BODY_TEXT_BYTES),
+            "body_html": _truncate_body(msg.body_html, MAX_BODY_HTML_BYTES)
+            if msg.body_html else None,
+            "snippet": msg.snippet[:200] if msg.snippet else "",
+            "has_attachments": msg.has_attachments,
+            "is_read": msg.is_read,
+            "is_starred": msg.is_starred,
+            "is_flagged": msg.is_flagged,
+            "received_at": msg.received_at,
+        },
+    )
+    for att in msg.attachments:
+        await db.execute(
+            text(
+                """INSERT INTO email_attachments
+                   (message_id, filename, mime_type, size_bytes,
+                    provider_attachment_id)
+                   VALUES (
+                    (SELECT id FROM email_messages
+                     WHERE account_id = :account_id
+                       AND provider_message_id = :provider_id),
+                    :filename, :mime_type, :size_bytes, :provider_attachment_id
+                   )
+                   ON CONFLICT DO NOTHING"""
+            ),
+            {
+                "account_id": account_id,
+                "provider_id": msg.provider_message_id,
+                "filename": att.filename,
+                "mime_type": att.mime_type,
+                "size_bytes": att.size_bytes,
+                "provider_attachment_id": att.provider_attachment_id,
+            },
+        )
 
 
 async def _fetch_attachments(db: Any, message_id: str) -> list[AttachmentModel]:

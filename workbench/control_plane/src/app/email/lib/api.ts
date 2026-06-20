@@ -225,6 +225,31 @@ export async function getEmail(id: string): Promise<Email> {
   return mapEmail(raw);
 }
 
+export interface BackfillResult {
+  synced: number;
+  next_page_token: string | null;
+  exhausted: boolean;
+}
+
+/** Page further back through the provider's history for a folder. */
+export async function backfillFolder(
+  accountId: string,
+  folder: string,
+  pageToken?: string | null
+): Promise<BackfillResult> {
+  return gatewayFetch<BackfillResult>(
+    `/email/accounts/${accountId}/backfill`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        folder,
+        page_token: pageToken ?? null,
+        max_pages: 3,
+      }),
+    }
+  );
+}
+
 // ── Full-body fetch (for truncated messages) ────────────────────────────
 
 export interface FullBodyResponse {

@@ -20,6 +20,9 @@ interface EmailListProps {
   total?: number;
   onLoadMore?: () => void;
   loadingMore?: boolean;
+  onBackfill?: () => void;
+  backfilling?: boolean;
+  canBackfill?: boolean;
 }
 
 const TOOLBAR_PRIMARY = [
@@ -53,6 +56,9 @@ export function EmailList({
   total,
   onLoadMore,
   loadingMore = false,
+  onBackfill,
+  backfilling = false,
+  canBackfill = false,
 }: EmailListProps) {
   const selectedEmail = emails.find((e) => e.id === selectedId) || null;
   const { updateEmail, deleteEmail, folders, selectedFolder } = useEmailStore();
@@ -284,8 +290,8 @@ export function EmailList({
               );
             })}
 
-            {/* Load more */}
-            {hasMore && (
+            {/* Load more (from what's already synced) */}
+            {hasMore ? (
               <div className="p-2">
                 <button
                   onClick={onLoadMore}
@@ -296,6 +302,21 @@ export function EmailList({
                   {loadingMore ? "Loading…" : `Load more (${emails.length} of ${total})`}
                 </button>
               </div>
+            ) : (
+              /* DB exhausted — offer to page further back through the provider */
+              canBackfill &&
+              onBackfill && (
+                <div className="p-2">
+                  <button
+                    onClick={onBackfill}
+                    disabled={backfilling}
+                    className="w-full flex items-center justify-center gap-1.5 py-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+                  >
+                    {backfilling && <Loader2 size={12} className="animate-spin" />}
+                    {backfilling ? "Fetching older…" : "Load older messages from server"}
+                  </button>
+                </div>
+              )
             )}
           </>
         )}

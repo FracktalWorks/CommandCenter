@@ -237,6 +237,12 @@ jobs:
     if: success()
     steps:
       - name: Health check
+        # Informational only. The deploy job already gates on the gateway,
+        # workbench and infra being healthy *on the box* before it completes;
+        # this probe hits the PUBLIC URL, which can be transiently unreachable
+        # for minutes while the concurrent Next.js rebuild saturates the 4GB
+        # VPS. A flap here must not mark an otherwise-successful deploy failed.
+        continue-on-error: true
         run: |
           GATEWAY_URL="${GATEWAY_URL:-https://api.commandcenter.fracktal.in}"
           echo "Hitting $GATEWAY_URL/health (with retries for cold start)..."

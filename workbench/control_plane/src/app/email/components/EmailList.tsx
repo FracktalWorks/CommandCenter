@@ -4,7 +4,7 @@ import { useState } from "react";
 import {
   Pencil, Trash2, Archive, Flag, FolderInput,
   Reply, ReplyAll, Forward, MailOpen, Mail, Tag, MoreHorizontal,
-  Paperclip, Star, AlertTriangle, ChevronRight, Loader2,
+  Paperclip, Star, AlertTriangle, ChevronRight, Loader2, Check, CheckSquare, X,
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { timeLabel } from "../lib/utils";
@@ -55,8 +55,38 @@ export function EmailList({
   loadingMore = false,
 }: EmailListProps) {
   const selectedEmail = emails.find((e) => e.id === selectedId) || null;
-  const { updateEmail, deleteEmail, folders } = useEmailStore();
+  const { updateEmail, deleteEmail, folders, selectedFolder } = useEmailStore();
   const [ctx, setCtx] = useState<CtxState | null>(null);
+
+  // ── Bulk selection ──
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Clear the selection when the folder changes (render-time reset, not effect).
+  const [prevFolder, setPrevFolder] = useState(selectedFolder);
+  if (selectedFolder !== prevFolder) {
+    setPrevFolder(selectedFolder);
+    setSelected(new Set());
+  }
+  const toggleOne = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const allSelected = emails.length > 0 && emails.every((e) => selected.has(e.id));
+  const toggleAll = () =>
+    setSelected(allSelected ? new Set() : new Set(emails.map((e) => e.id)));
+  const clearSelection = () => setSelected(new Set());
+  const bulkUpdate = (
+    updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>
+  ) => {
+    selected.forEach((id) => updateEmail(id, updates));
+    clearSelection();
+  };
+  const bulkDelete = () => {
+    selected.forEach((id) => deleteEmail(id));
+    clearSelection();
+  };
 
   const openContext = (e: React.MouseEvent, email: Email) => {
     e.preventDefault();
@@ -97,17 +127,45 @@ export function EmailList({
         </button>
       </div>
 
-      {/* Secondary toolbar row */}
-      <div className="flex items-center gap-0.5 px-2 py-1 border-b border-border flex-shrink-0 bg-secondary/30">
-        {TOOLBAR_SECONDARY.map(({ icon: Icon, label, key }) => (
-          <ToolbarBtn key={key} icon={Icon} label={label} onClick={() => onToolbarAction(key, selectedEmail)} />
-        ))}
-        <div className="flex-1" />
-        <span className="text-[10px] text-muted-foreground pr-1">
-          {emails.length}
-          {total !== undefined && total > emails.length ? ` of ${total}` : ""} msgs
-        </span>
-      </div>
+      {/* Secondary toolbar row — becomes a bulk-action bar when rows are picked */}
+      {selected.size > 0 ? (
+        <div className="flex items-center gap-0.5 px-2 py-1 border-b border-border flex-shrink-0 bg-primary/10">
+          <button
+            onClick={toggleAll}
+            title={allSelected ? "Deselect all" : "Select all"}
+            className="p-1.5 rounded text-primary hover:bg-secondary transition-colors"
+          >
+            <CheckSquare size={13} />
+          </button>
+          <span className="text-[10px] font-medium text-foreground px-1">
+            {selected.size} selected
+          </span>
+          <div className="flex-1" />
+          <ToolbarBtn icon={MailOpen} label="Mark read" onClick={() => bulkUpdate({ isRead: true })} />
+          <ToolbarBtn icon={Mail} label="Mark unread" onClick={() => bulkUpdate({ isRead: false })} />
+          <ToolbarBtn icon={Flag} label="Flag" onClick={() => bulkUpdate({ isFlagged: true })} />
+          <ToolbarBtn icon={Archive} label="Archive" onClick={() => bulkUpdate({ folder: "archive" })} />
+          <ToolbarBtn icon={Trash2} label="Delete" onClick={bulkDelete} />
+          <button
+            onClick={clearSelection}
+            title="Clear selection"
+            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+          >
+            <X size={13} />
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-0.5 px-2 py-1 border-b border-border flex-shrink-0 bg-secondary/30">
+          {TOOLBAR_SECONDARY.map(({ icon: Icon, label, key }) => (
+            <ToolbarBtn key={key} icon={Icon} label={label} onClick={() => onToolbarAction(key, selectedEmail)} />
+          ))}
+          <div className="flex-1" />
+          <span className="text-[10px] text-muted-foreground pr-1">
+            {emails.length}
+            {total !== undefined && total > emails.length ? ` of ${total}` : ""} msgs
+          </span>
+        </div>
+      )}
 
       {/* Email rows */}
       <div className="flex-1 overflow-y-auto scrollbar-hide">
@@ -123,12 +181,39 @@ export function EmailList({
           </div>
         ) : (
           <>
-            {emails.map((email) => (
-              <button
+            {emails.map((email) => {
+              const isSel = selected.has(email.id);
+              return (
+              <div
                 key={email.id}
+                className={`group flex items-stretch border-b border-border ${
+                  isSel ? "bg-primary/5" : ""
+                }`}
+              >
+                {/* Selection checkbox — shown on hover or when selected */}
+                <button
+                  onClick={() => toggleOne(email.id)}
+                  title={isSel ? "Deselect" : "Select"}
+                  className={`flex items-center pl-2 pr-1 flex-shrink-0 transition-opacity ${
+                    isSel || selected.size > 0
+                      ? "opacity-100"
+                      : "opacity-0 group-hover:opacity-100"
+                  }`}
+                >
+                  <span
+                    className={`w-4 h-4 rounded border flex items-center justify-center ${
+                      isSel
+                        ? "bg-primary border-primary text-primary-foreground"
+                        : "border-muted-foreground/40"
+                    }`}
+                  >
+                    {isSel && <Check size={11} />}
+                  </span>
+                </button>
+              <button
                 onClick={() => onSelect(email.id)}
                 onContextMenu={(e) => openContext(e, email)}
-                className={`w-full text-left border-b border-border px-3 py-3 transition-colors flex flex-col gap-1 ${
+                className={`flex-1 min-w-0 text-left pr-3 pl-1 py-3 transition-colors flex flex-col gap-1 ${
                   selectedId === email.id
                     ? "bg-primary/10 border-l-2 border-l-primary"
                     : "hover:bg-secondary/50"
@@ -195,7 +280,9 @@ export function EmailList({
                   </div>
                 )}
               </button>
-            ))}
+              </div>
+              );
+            })}
 
             {/* Load more */}
             {hasMore && (

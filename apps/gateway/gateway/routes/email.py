@@ -1511,8 +1511,15 @@ async def oauth_authorize(
     provider: str,
     user: UserContext = Depends(get_current_user),
     redirect_after: str = Query(default=""),
+    user_email: str = Query(default=""),
 ):
-    """Start OAuth flow for an email provider."""
+    """Start OAuth flow for an email provider.
+
+    Accepts an optional ``user_email`` query parameter so the workbench can
+    pass the authenticated user's email when the browser navigates directly
+    to the gateway (bypassing the Next.js proxy).  Falls back to the
+    ``X-User-Email`` header (proxy path) or ``"anonymous"``.
+    """
     state = secrets.token_urlsafe(32)
     redirect_uri = _build_redirect_uri(provider)
 
@@ -1581,7 +1588,7 @@ async def oauth_authorize(
 
     _oauth_states[state] = {
         "provider": provider,
-        "user_id": user.email or "anonymous",
+        "user_id": user_email or user.email or "anonymous",
         "redirect_after": redirect_after,
     }
 

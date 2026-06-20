@@ -11,6 +11,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useSession } from "next-auth/react";
 import {
   AlertCircle,
   ArrowRight,
@@ -822,6 +823,7 @@ function ApisTab() {
 // ===========================================================================
 
 function EmailTab() {
+  const { data: session } = useSession();
   const [accounts, setAccounts] = useState<Array<{
     id: string; provider: string; emailAddress: string; label: string;
     unreadCount: number; syncEnabled: boolean; lastSyncedAt?: string;
@@ -887,9 +889,13 @@ function EmailTab() {
       setShowIMAP(true);
     } else {
       const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
-      window.location.href = `${gatewayUrl}/email/oauth/${provider}/authorize?redirect_after=${encodeURIComponent(window.location.href)}`;
+      const params = new URLSearchParams({
+        redirect_after: encodeURIComponent(window.location.href),
+      });
+      if (session?.user?.email) params.set("user_email", session.user.email);
+      window.location.href = `${gatewayUrl}/email/oauth/${provider}/authorize?${params.toString()}`;
     }
-  }, []);
+  }, [session]);
 
   const handleDelete = useCallback(async (id: string) => {
     if (!confirm("Remove this email account?")) return;

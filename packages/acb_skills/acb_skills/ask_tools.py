@@ -205,6 +205,22 @@ async def ask_questions(questions: str) -> str:
             _pending_user_input,
         )
         _req_id = _active_elicitation_request_id.get(None)
+        # ── Poll for the executor bridge ──────────────────────────
+        # The Copilot SDK fires tool execution concurrently with the
+        # executor's streaming loop.  If we check _req_id before the
+        # executor has processed the EXTERNAL_TOOL_REQUESTED event
+        # and set the ContextVar, we fall through to the non-blocking
+        # Path B2 and the agent doesn't pause.  Poll for up to 3s at
+        # 50 ms intervals — same pattern used by the Copilot SDK's
+        # native ask_user bridge.
+        if _req_id is None:
+            import asyncio as _asyncio
+            _deadline = _asyncio.get_running_loop().time() + 3.0
+            while _req_id is None:
+                await _asyncio.sleep(0.05)
+                _req_id = _active_elicitation_request_id.get(None)
+                if _asyncio.get_running_loop().time() >= _deadline:
+                    break
         if _req_id:
             _fut = _pending_user_input.get(_req_id)
             if _fut is not None:

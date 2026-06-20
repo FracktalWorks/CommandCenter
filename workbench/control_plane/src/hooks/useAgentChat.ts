@@ -570,6 +570,16 @@ export function useAgentChat({
       if (cancelled) return;
       if (!localInterrupted && !serverActive) return;
 
+      // ── Surface loading state so the stop button appears ──────────
+      // When an agent is still running on the server, the user needs a
+      // way to abort it.  Store the abort controller so stopGeneration()
+      // can tear down the reconnect SSE + polling.
+      setSessionState(threadId, (prev) => ({
+        ...prev,
+        isLoading: true,
+        abortController: abortCtrl,
+      }));
+
       // Ensure there's an assistant message to stream the replay into.
       let lastId: string;
       let lastContent: string;
@@ -582,6 +592,8 @@ export function useAgentChat({
           error: null,
           recovering: true,
           runStatus: "recovering",
+          isLoading: true,
+          abortController: abortCtrl,
           messages: prev.messages.map((m) =>
             m.id === lastId ? { ...m, streaming: false, isThinkingActive: false } : m
           ),
@@ -600,6 +612,8 @@ export function useAgentChat({
           error: null,
           recovering: true,
           runStatus: "running",
+          isLoading: true,
+          abortController: abortCtrl,
           messages: [...prev.messages, placeholder],
         }));
       }
@@ -788,6 +802,8 @@ export function useAgentChat({
                   ...prev,
                   recovering: hasRecoveredContent ? false : prev.recovering,
                   runStatus: hasRecoveredContent ? "idle" : "recovering",
+                  isLoading: hasRecoveredContent ? false : prev.isLoading,
+                  abortController: hasRecoveredContent ? null : prev.abortController,
                 }));
                 break;
               }
@@ -822,10 +838,20 @@ export function useAgentChat({
             ...prev,
             recovering: hasContent ? false : prev.recovering,
             runStatus: hasContent ? "idle" : "recovering",
+            isLoading: hasContent ? false : prev.isLoading,
+            abortController: hasContent ? null : prev.abortController,
           }));
         }
       } catch {
         // Reconnect failed (network error, timeout, etc.) — polling handles it.
+        // Clear loading state so the stop button doesn't linger.
+        if (!cancelled) {
+          setSessionState(threadId, (prev) => ({
+            ...prev,
+            isLoading: false,
+            abortController: null,
+          }));
+        }
       } finally {
         // If we never reconnected, make sure recovering is set for polling.
         if (!reconnected && !cancelled) {

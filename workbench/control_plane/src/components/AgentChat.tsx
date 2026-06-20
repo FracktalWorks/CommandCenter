@@ -53,6 +53,7 @@ function ContextRing({
   compacting,
   onCompact,
   modelId,
+  isLoading,
 }: {
   pct: number;
   usedTokens: number;
@@ -60,6 +61,8 @@ function ContextRing({
   compacting: boolean;
   onCompact?: () => void;
   modelId?: string;
+  /** When true, show an animated spinner instead of the static ring. */
+  isLoading?: boolean;
 }) {
   const r = 9;
   const circ = 2 * Math.PI * r;
@@ -202,6 +205,21 @@ function ContextRing({
             style={{ stroke: "hsl(var(--primary))" } as React.CSSProperties} />
         </svg>
         <span className="hidden sm:inline">Compacting…</span>
+      </span>
+    );
+  }
+
+  // ── Loading spinner (agent is streaming) ───────────────────────────
+  if (isLoading && !compacting) {
+    return (
+      <span className="shrink-0 flex items-center gap-1 text-[10px] text-primary/70 animate-pulse px-1.5 py-0.5 rounded-md">
+        <svg width="16" height="16" viewBox="0 0 24 24" className="animate-spin" fill="none">
+          <circle cx="12" cy="12" r="9" strokeWidth="2"
+            style={{ stroke: "hsl(var(--border))" } as React.CSSProperties} />
+          <path d="M12 3a9 9 0 0 1 9 9" strokeWidth="2" strokeLinecap="round"
+            style={{ stroke: "hsl(var(--primary))" } as React.CSSProperties} />
+        </svg>
+        <span className="hidden sm:inline">{label}</span>
       </span>
     );
   }
@@ -1607,6 +1625,7 @@ export default function AgentChat({
                 compacting={compacting}
                 onCompact={handleCompact}
                 modelId={currentModel}
+                isLoading={isLoading}
               />
 
               {isLoading && sendMode !== "send" && (

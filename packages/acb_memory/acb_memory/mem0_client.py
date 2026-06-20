@@ -70,11 +70,15 @@ class MemoryClient:
             litellm_key: str = settings.litellm_master_key
 
             # Use the gateway's /v1/chat/completions endpoint (LiteLLM tiers).
-            # Uses tier-balanced (DeepSeek on VPS) — reliable, fast, cheap.
-            # No OPENAI_API_KEY needed — the gateway handles routing.
+            # Send a tier ALIAS (not a raw provider model) so the gateway routes
+            # through its configured tier → provider mapping.  A raw model name
+            # the gateway doesn't have in its model_list falls back to OpenRouter
+            # (which can be out of credits → 402).  tier-fast currently maps to
+            # deepseek/deepseek-chat — cheap & fast, right for high-volume
+            # background fact extraction.  No OPENAI_API_KEY needed.
             _llm_url = litellm_url.rstrip("/") + "/v1"
             _llm_key = litellm_key
-            _llm_model = "deepseek/deepseek-chat"
+            _llm_model = "tier-fast"
 
             config: dict[str, Any] = {
                 "vector_store": {

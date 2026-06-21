@@ -127,7 +127,11 @@ Concrete bugs found in the current email UI:
 - Tests: `test_email_messages_filter.py` (gateway label-filter SQL builds the
   ANY clause). Frontend covered by Playwright in a later pass.
 
-### Phase 1 — Assistant data model (Migration 26)
+### Phase 1 — Assistant data model (Migration 26) — ✅ SHIPPED
+Migration 26 added `personal_instructions`, `writing_style`, `draft_replies` to
+`email_assistant_settings` and a new `email_knowledge` table. `learned_patterns`
+deferred to Phase 7.
+
 Add the storage the missing settings need:
 - `email_assistant_settings`: `personal_instructions TEXT`, `writing_style TEXT`,
   `draft_replies BOOL`, `learn_patterns BOOL`.
@@ -137,7 +141,12 @@ Add the storage the missing settings need:
 - Acceptance: settings round-trip all new fields; KB CRUD endpoints work.
 - Tests: settings serialization round-trip; KB CRUD; migration idempotency.
 
-### Phase 2 — Drafting overhaul (the email agent)
+### Phase 2 — Drafting overhaul (the email agent) — 🟡 PARTLY SHIPPED
+Done: writing style + personal instructions + knowledge base now injected into
+the drafter (tagged blocks in the shared `about` context that feeds both the LLM
+drafter and the MAF agent); `_llm_draft_reply` prompt honors them; a
+"Generate writing style from sent mail" endpoint. Still pending below: the
+first-class needs-reply (Reply Zero) classifier independent of a rule.
 - First-class **needs-reply classifier** (Reply Zero) independent of a rule
   existing; surfaces a "To Reply" set and feeds the drafter.
 - Route **all** drafting through the MAF agent with context injected: writing
@@ -157,7 +166,12 @@ Add the storage the missing settings need:
   generates a reminder entry.
 - Tests: awaiting detection; reminder window logic; no reminder once replied.
 
-### Phase 4 — Rules engine + rule UI/UX parity
+### Phase 4 — Rules engine + rule UI/UX parity — 🟡 UI + PRESETS SHIPPED
+Done: presets aligned to inbox-zero's system rules incl. FYI (To Reply, FYI,
+Newsletter, Marketing, Calendar, Receipt, Notification, Cold Email); rule editor
+rebuilt to the "When I get an email → Then…" shape with a full condition builder
+(AI Prompt + From/To/Subject/Body), ALL/ANY operator, threads toggle, cc/bcc.
+Still pending: multi-rule apply + drag-to-reorder priority (below).
 - Multi-condition rules (AI instruction + static from/to/subject + category)
   with AND/OR; rule ordering/priority; optional multi-rule apply.
 - **Default rule presets** matching inbox-zero (seed on first use / a "Add

@@ -721,7 +721,68 @@ schemas. Key prompts to study:
 - [ ] **Gmail Pub/Sub push notifications** → instant sync
 - [ ] Outlook webhooks → instant sync
 - [ ] Attachment handling (download, preview, save to Drive)
-- [ ] Email analytics dashboard (volume, response time, top senders)
+- [x] Email analytics dashboard (volume, response time, top senders)
 - [ ] Slack integration: manage inbox from Slack
 - [ ] Email templates + scheduled send
 - [ ] Offline support (service worker cache)
+
+---
+
+## 14. Email Automation — Shipped (2026-06-21) + Backlog
+
+The **Email Automation** section (sidebar of `/email`) reached broad inbox-zero
+parity in this milestone. All of the following are live on the VPS and were
+live-tested against the connected Microsoft account:
+
+### Shipped ✅
+- **Assistant** (rules/test/history/settings): plain-English + static + sender-
+  **category** conditions, AND/OR, per-rule **Auto/Manual**, default-rule
+  installer (To Reply, Newsletter, Marketing, Calendar, Receipt, Notification,
+  Cold Email), **Test** (single email + recent-inbox), **History + approval
+  queue**, **auto-run on arrival** (sync-loop hook, gated by setting).
+- **Sender categorization** (LLM) + category counts; **cold-email blocker**
+  (first-time/unreplied senders) + whitelist.
+- **Reply Zero** (needs-reply / awaiting-reply) + **follow-up drafting**.
+- **Bulk Unsubscribe** (real `List-Unsubscribe`: Gmail + Outlook + IMAP) and
+  **Bulk Archive** (by age/read/sender).
+- **Analytics** (volume, read-rate, top senders, by-folder).
+- **AI drafting** via the **`email-assistant` MAF agent** — context from Mem0
+  memory + hand-off to `sales`/`task-manager` (`call_agent`); REPLY/FORWARD/
+  DRAFT_EMAIL create provider **drafts** (Gmail/Outlook/IMAP), never auto-send.
+- **Assistant chat** with the full inbox-zero tool surface (search/read/manage-
+  inbox/draft/categorize/rules-CRUD/settings) — user-scoped, verified reading
+  the live inbox.
+- **Model selection**: all configured LiteLLM tiers/models in Settings;
+  **default `tier-balanced` → DeepSeek**, routed BYOK through the gateway `/v1`
+  (agents flipped to `github-copilot` runtime; `copilot_chat_model` default set).
+- **Digests**: view + email-to-self + scheduled (Off/Daily/Weekly) via sync loop.
+- Tables: `email_rules`/`email_actions`/`email_executed_rules`,
+  `email_newsletters`, `email_senders`, `email_cold_senders`,
+  `email_assistant_settings`; migrations `19`–`24`.
+
+### Backlog — build later 🔲
+Priority order (highest automation value first):
+1. **Learned patterns** — update rules from approve/reject corrections so
+   matching improves over time (inbox-zero `getLearnedPatterns`/`updateLearnedPatterns`).
+2. **Knowledge base for drafting** — upload docs (pricing, FAQs, policies) the
+   drafter cites; currently only Mem0 memory is used.
+3. **Calendar tools in replies** — availability + booking links when drafting.
+4. **AI "Clean" flow** — AI-scored bulk inbox cleanup with a review queue
+   (beyond rule-based Bulk Archive).
+5. **Attachment auto-filing** → Drive/OneDrive.
+6. **Meeting briefs** (email + calendar context).
+7. **Slack/Telegram** inbox control; **scheduled send / snooze**.
+
+### Known limitations / follow-ups 🛠
+- **Non-streaming `run_agent` BYOK**: the chat (`run_agent_stream`) routes
+  DeepSeek-primary; the background draft path (`run_agent`) still detours through
+  Copilot → 402 → self-anneal to DeepSeek (works, wasteful). Mirror the BYOK
+  pre-injection block into `run_agent` to make it DeepSeek-primary.
+- **Multi-user tool scoping**: agent tools resolve the user via the memory
+  ContextVar with an `ACB_AGENT_USER_EMAIL` env fallback (reliable for the
+  single-user VPS; multi-user needs the ContextVar to propagate into the Copilot
+  SDK tool-callback context).
+- **Outlook/IMAP draft creation + `List-Unsubscribe`**: implemented but not
+  end-to-end verified against live Outlook/IMAP (capture needs a re-sync).
+- **Cold-email/categorization LLM cost**: bounded per run, but watch token usage
+  on large inboxes when auto-run is enabled.

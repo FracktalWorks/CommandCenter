@@ -732,3 +732,22 @@ export async function getReplyZero(
   );
   return res.threads ?? [];
 }
+
+/**
+ * Draft a context-aware reply using the orchestrating drafter (memory +
+ * sales/task-manager agents). Optionally also saves it to the provider Drafts.
+ */
+export async function draftReplySmart(
+  accountId: string,
+  messageId: string,
+  createDraft = false
+): Promise<{ draft: string; created: boolean }> {
+  return gatewayFetch("/email/draft-reply", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: accountId,
+      message_id: messageId,
+      create_draft: createDraft,
+    }),
+  });
+}

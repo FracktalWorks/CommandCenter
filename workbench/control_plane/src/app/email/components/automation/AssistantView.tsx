@@ -61,7 +61,7 @@ const PRESET_RULES: PresetRule[] = [
     conditional_operator: "OR",
     category_filters: [],
     sort_order: 0,
-    actions: [{ type: "LABEL", label: "To Reply" }],
+    actions: [{ type: "LABEL", label: "To Reply" }, { type: "DRAFT_EMAIL" }],
   },
   {
     name: "Newsletter",

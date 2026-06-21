@@ -3001,7 +3001,7 @@ async def approve_execution(
             """SELECT er.status, er.rule_id, er.message_id, er.provider_message_id,
                       er.thread_id, er.subject, er.from_address, er.account_id,
                       er.reason, ea.provider, ea.credentials_encrypted,
-                      em.body_text
+                      ea.user_id, em.body_text
                FROM email_executed_rules er
                JOIN email_accounts ea ON er.account_id = ea.id
                LEFT JOIN email_messages em ON er.message_id = em.id
@@ -3032,7 +3032,7 @@ async def approve_execution(
                  "body": row.body_text or "", "thread_id": row.thread_id or ""}
         taken = await _apply_rule_actions(
             db, provider, str(row.message_id), row.provider_message_id,
-            actions, email, about, signature,
+            actions, email, about, signature, row.user_id,
         )
         await db.execute(text(
             "UPDATE email_executed_rules SET status='APPLIED', actions_taken=:acts "
@@ -3113,9 +3113,11 @@ async def _load_assistant_about(db: Any, account_id: str) -> tuple[str, str]:
 
 
 async def _llm_draft_reply(
-    email: dict[str, str], about: str, signature: str, instructions: str = ""
+    email: dict[str, str], about: str, signature: str,
+    instructions: str = "", context: str = "",
 ) -> str:
-    """Draft a reply body with the LLM, using the user's About context.
+    """Draft a reply body with the LLM, using the user's About context plus any
+    extra `context` gathered from memory / specialist agents.
 
     Falls back to a neutral template if the LLM is unavailable.
     """
@@ -3129,9 +3131,14 @@ async def _llm_draft_reply(
         ensure_model_registered(model)
         sys_prompt = (
             "You draft professional, concise email replies on behalf of the user. "
-            "Write ONLY the reply body — no subject line. Match a natural, polite tone."
+            "Write ONLY the reply body — no subject line. Match a natural, polite "
+            "tone. Use the supplied context (about the user, memory, and notes from "
+            "internal systems) to make the reply specific and well-informed; never "
+            "invent facts that aren't supported by the context or the email."
         )
         ctx = f"About the user: {about}\n\n" if about else ""
+        if context:
+            ctx += f"Context gathered for this reply:\n{context}\n\n"
         user_prompt = (
             f"{ctx}Draft a reply to this email.\n"
             f"From: {email.get('from', '')}\n"
@@ -3144,7 +3151,7 @@ async def _llm_draft_reply(
             model=model,
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": user_prompt}],
-            temperature=0.3, max_tokens=600,
+            temperature=0.3, max_tokens=700,
         )
         body = (resp.choices[0].message.content or "").strip()
     except Exception as exc:  # noqa: BLE001
@@ -3153,6 +3160,129 @@ async def _llm_draft_reply(
     if signature:
         body = f"{body}\n\n{signature}"
     return body
+
+
+async def _draft_consult_plan(email: dict[str, str]) -> list[dict[str, str]]:
+    """Decide which specialist agents (if any) could improve this reply.
+
+    Returns [{"agent": "sales"|"task-manager", "question": "..."}], capped at 2.
+    """
+    try:
+        import litellm as _litellm  # noqa: PLC0415
+        from litellm import acompletion  # noqa: PLC0415
+        from acb_llm.client import ensure_model_registered, _TIER_MODEL  # noqa: PLC0415
+        _litellm.drop_params = True
+        _litellm.suppress_debug_info = True
+        model = _TIER_MODEL.get("tier1") or _TIER_MODEL.get("tier2") or "gpt-4o-mini"
+        ensure_model_registered(model)
+        sys_prompt = (
+            "You plan how to draft an email reply. Decide which internal specialist "
+            "agents, if any, would provide context that materially improves the "
+            "reply. Available agents:\n"
+            "- sales: CRM, deals, pipeline, quotes, customer/account status (Zoho).\n"
+            "- task-manager: projects, tasks, deadlines, delivery status (ClickUp).\n"
+            "Only include an agent when the email clearly relates to its domain. "
+            'Respond ONLY JSON: {"consult": [{"agent": "<name>", "question": '
+            '"<specific question to ask that agent>"}]} (empty list if none).'
+        )
+        user_prompt = (
+            f"From: {email.get('from', '')}\nSubject: {email.get('subject', '')}\n"
+            f"Body:\n{(email.get('body', '') or '')[:1500]}"
+        )
+        resp = await acompletion(
+            model=model,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": user_prompt}],
+            temperature=0, max_tokens=300,
+        )
+        data = _safe_json(resp.choices[0].message.content or "")
+        consult = data.get("consult", []) if isinstance(data, dict) else []
+        out = []
+        for c in consult:
+            if isinstance(c, dict) and c.get("agent") in ("sales", "task-manager") \
+                    and c.get("question"):
+                out.append({"agent": c["agent"], "question": str(c["question"])})
+        return out[:2]
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.draft_plan_failed", error=str(exc)[:200])
+        return []
+
+
+async def _agent_draft_reply(
+    email: dict[str, str], about: str, signature: str, user_email: str,
+    *, max_agents: int = 2, agent_timeout: float = 90.0,
+) -> str:
+    """Orchestrating drafter: gather context from memory + specialist agents
+    (sales / task-manager), then draft the reply.
+
+    Each context source is best-effort — if memory or an agent is unavailable the
+    drafter degrades gracefully to an About-only draft.
+    """
+    context_parts: list[str] = []
+
+    # 1) Memory: what do we know about this sender / relationship?
+    try:
+        from acb_skills.memory_tools import (  # noqa: PLC0415
+            _set_memory_user_id, remember,
+        )
+        _set_memory_user_id(user_email or "")
+        mem = await remember(
+            f"past context, agreements, and preferences relevant to "
+            f"{email.get('from', '')} and: {email.get('subject', '')}"
+        )
+        if mem and "no relevant" not in mem.lower():
+            context_parts.append(f"From memory:\n{mem[:1500]}")
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.draft_memory_failed", error=str(exc)[:160])
+
+    # 2) Specialist agents: delegate via the orchestrator's run_agent.
+    plan = await _draft_consult_plan(email)
+    if plan:
+        try:
+            from orchestrator.executor import run_agent  # noqa: PLC0415
+            for item in plan[:max_agents]:
+                try:
+                    res = await asyncio.wait_for(
+                        run_agent(
+                            item["agent"],
+                            {"message": item["question"], "user_email": user_email},
+                        ),
+                        timeout=agent_timeout,
+                    )
+                    ans = ""
+                    if isinstance(res, dict):
+                        ans = str(res.get("answer") or res.get("result") or "")
+                    if ans.strip():
+                        context_parts.append(
+                            f"From the {item['agent']} agent "
+                            f"(asked: {item['question']}):\n{ans[:1500]}"
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    _log.warning("email.draft_agent_failed",
+                                 agent=item.get("agent"), error=str(exc)[:160])
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("email.draft_orchestrator_unavailable", error=str(exc)[:160])
+
+    draft = await _llm_draft_reply(
+        email, about, signature, context="\n\n".join(context_parts)
+    )
+
+    # 3) Record the interaction so future drafts have more context.
+    try:
+        from acb_memory import add_episode  # noqa: PLC0415
+        await add_episode(
+            name=f"email-draft:{(user_email or 'user')[:24]}",
+            content=(
+                f"Drafted a reply to {email.get('from', '')} regarding "
+                f"'{email.get('subject', '')}'."
+            ),
+            source_description="email-reply-drafter",
+            group_id=user_email or "default",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+    return draft
 
 
 async def _run_rules_job(
@@ -3178,6 +3308,10 @@ async def _run_rules_job(
             return
 
         about, signature = await _load_assistant_about(db, account_id)
+        owner_row = (await db.execute(text(
+            "SELECT user_id FROM email_accounts WHERE id = :aid"
+        ), {"aid": account_id})).fetchone()
+        account_user = owner_row.user_id if owner_row else (user_email or "")
         cold_blocker = "OFF"
         cb_row = (await db.execute(text(
             "SELECT cold_email_blocker FROM email_assistant_settings "
@@ -3216,7 +3350,7 @@ async def _run_rules_job(
                 if apply:
                     actions_taken = await _apply_rule_actions(
                         db, provider, str(r.id), r.provider_message_id,
-                        rule["actions"], email, about, signature,
+                        rule["actions"], email, about, signature, account_user,
                     )
                     status = "APPLIED"
                 else:
@@ -3261,7 +3395,7 @@ async def _run_rules_job(
 async def _apply_rule_actions(
     db: Any, provider: Any, message_id: str, provider_msg_id: str,
     actions: list[dict[str, Any]], email: dict[str, str] | None = None,
-    about: str = "", signature: str = "",
+    about: str = "", signature: str = "", user_email: str = "",
 ) -> list[str]:
     """Apply a rule's actions. Reply/forward/draft create provider DRAFTS (never
     auto-send) so a misfiring rule can't email anyone without review."""
@@ -3292,8 +3426,10 @@ async def _apply_rule_actions(
                 await provider.set_labels(provider_msg_id, add=[a["label"]], remove=[])
             elif t in ("REPLY", "DRAFT_EMAIL"):
                 tmpl = (a.get("content") or "").strip()
-                body = tmpl if tmpl else await _llm_draft_reply(
-                    email, about, signature, a.get("subject") or ""
+                # Static template wins; otherwise the orchestrating drafter
+                # (memory + sales/task-manager) writes a context-aware reply.
+                body = tmpl if tmpl else await _agent_draft_reply(
+                    email, about, signature, user_email,
                 )
                 subj = a.get("subject") or f"Re: {email.get('subject', '')}"
                 to = a.get("to_address") or email.get("from", "")
@@ -3732,6 +3868,71 @@ async def reply_zero(
                 "is_read": r.is_read,
             })
         return {"threads": out, "type": type}
+    finally:
+        await db.close()
+
+
+class DraftReplyRequest(BaseModel):
+    account_id: str
+    message_id: str
+    create_draft: bool = False  # also save a provider draft (lands in Drafts)
+
+
+@router.post("/draft-reply")
+async def draft_reply_smart(
+    req: DraftReplyRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Draft a context-aware reply with the orchestrating drafter (memory +
+    sales/task-manager). Returns the draft text; optionally also creates a
+    provider draft in the user's Drafts."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        row = (await db.execute(text(
+            """SELECT em.provider_message_id, em.thread_id, em.subject,
+                      em.body_text, em.snippet, em.from_address
+               FROM email_messages em
+               WHERE em.id = :mid AND em.account_id = :aid"""
+        ), {"mid": req.message_id, "aid": req.account_id})).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Message not found")
+        frm = row.from_address if isinstance(row.from_address, dict) \
+            else json.loads(row.from_address or "{}")
+        email = {
+            "subject": row.subject or "", "from": frm.get("email", ""),
+            "body": row.body_text or row.snippet or "",
+            "thread_id": row.thread_id or "",
+        }
+        about, signature = await _load_assistant_about(db, req.account_id)
+        # Synchronous request → keep the orchestration budget under the proxy
+        # timeout (one specialist agent, short timeout).
+        draft = await _agent_draft_reply(
+            email, about, signature, user.email or "",
+            max_agents=1, agent_timeout=18.0,
+        )
+
+        created = False
+        if req.create_draft:
+            try:
+                provider, pmid, account_id, store = await _provider_for_message(
+                    db, req.message_id, user.email or "anonymous"
+                )
+                if await provider.authenticate():
+                    await provider.create_draft(
+                        to=[email["from"]],
+                        subject=f"Re: {email['subject']}",
+                        body_text=draft,
+                        reply_to_message_id=pmid,
+                        thread_id=email["thread_id"] or None,
+                    )
+                    await _persist_rotated_creds(db, store, account_id, provider)
+                    await db.commit()
+                    created = True
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("email.draft_reply_create_failed", error=str(exc)[:160])
+
+        return {"draft": draft, "created": created}
     finally:
         await db.close()
 

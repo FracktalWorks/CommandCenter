@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Loader2, Reply, Clock, PenLine, Mail } from "lucide-react";
-import { getReplyZero, triggerQuickAction } from "../../lib/api";
+import { Loader2, Reply, Clock, PenLine, Mail, Check } from "lucide-react";
+import { getReplyZero, draftReplySmart } from "../../lib/api";
 import { ReplyZeroThread } from "../../lib/types";
 import { timeLabel } from "../../lib/utils";
 
@@ -23,6 +23,8 @@ export function ReplyZeroView({ accountId }: ReplyZeroViewProps) {
   const [loading, setLoading] = useState(true);
   const [drafting, setDrafting] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState<string | null>(null);
+  const [savedTo, setSavedTo] = useState<Record<string, boolean>>({});
 
   const load = useCallback(() => {
     if (!accountId) {
@@ -42,12 +44,25 @@ export function ReplyZeroView({ accountId }: ReplyZeroViewProps) {
     if (!accountId) return;
     setDrafting(t.message_id);
     try {
-      const res = await triggerQuickAction("draft_reply", accountId, t.message_id);
-      setDrafts((prev) => ({ ...prev, [t.message_id]: res.result || "(no draft)" }));
+      const res = await draftReplySmart(accountId, t.message_id, false);
+      setDrafts((prev) => ({ ...prev, [t.message_id]: res.draft || "(no draft)" }));
     } catch {
       setDrafts((prev) => ({ ...prev, [t.message_id]: "Failed to draft a reply." }));
     } finally {
       setDrafting(null);
+    }
+  };
+
+  const saveToDrafts = async (t: ReplyZeroThread) => {
+    if (!accountId) return;
+    setSaving(t.message_id);
+    try {
+      await draftReplySmart(accountId, t.message_id, true);
+      setSavedTo((prev) => ({ ...prev, [t.message_id]: true }));
+    } catch {
+      // leave the preview visible; user can retry
+    } finally {
+      setSaving(null);
     }
   };
 
@@ -121,8 +136,33 @@ export function ReplyZeroView({ accountId }: ReplyZeroViewProps) {
                   )}
                 </div>
                 {drafts[t.message_id] && (
-                  <div className="mt-2 text-[11px] text-foreground bg-secondary/50 border border-border rounded-lg p-2 whitespace-pre-wrap">
-                    {drafts[t.message_id]}
+                  <div className="mt-2">
+                    <div className="text-[11px] text-foreground bg-secondary/50 border border-border rounded-lg p-2 whitespace-pre-wrap">
+                      {drafts[t.message_id]}
+                    </div>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      {savedTo[t.message_id] ? (
+                        <span className="flex items-center gap-1 text-[11px] text-emerald-400">
+                          <Check size={12} /> Saved to your Drafts
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => saveToDrafts(t)}
+                          disabled={saving === t.message_id}
+                          className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-50"
+                        >
+                          {saving === t.message_id ? (
+                            <Loader2 className="animate-spin" size={12} />
+                          ) : (
+                            <PenLine size={12} />
+                          )}
+                          Save to Drafts
+                        </button>
+                      )}
+                      <span className="text-[10px] text-muted-foreground">
+                        Drafted with memory + specialist agents
+                      </span>
+                    </div>
                   </div>
                 )}
               </div>

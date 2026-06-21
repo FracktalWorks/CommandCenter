@@ -258,23 +258,39 @@ async def _persist_rotated_creds(db: Any, store: Any, account_id: str, provider)
         )
 
 
-async def _get_db(request_id: str | None = None):
-    """Get an async database session."""
-    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+# A single shared async engine + session factory for the whole module. Creating
+# an engine per request (as this used to) spins up a fresh connection pool each
+# call and never disposes it → connection-pool exhaustion. The engine owns the
+# pool and is created exactly once.
+_ENGINE = None
+_SESSION_FACTORY = None
 
-    settings = get_settings()
-    # Convert the sync psycopg URL to async asyncpg URL
-    db_url = os.environ.get("DATABASE_URL", settings.database_url)
-    if "postgresql+psycopg" in db_url:
-        db_url = db_url.replace("postgresql+psycopg", "postgresql+asyncpg")
-    elif db_url.startswith("postgresql://"):
-        db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
-    elif "+asyncpg" not in db_url and "postgresql" in db_url:
-        # Insert asyncpg driver if no driver specified
-        db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
-    engine = create_async_engine(db_url, echo=False)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    return session_factory()
+
+def _get_session_factory():
+    global _ENGINE, _SESSION_FACTORY
+    if _SESSION_FACTORY is None:
+        from sqlalchemy.ext.asyncio import (
+            async_sessionmaker, create_async_engine,
+        )
+        settings = get_settings()
+        db_url = os.environ.get("DATABASE_URL", settings.database_url)
+        if "postgresql+psycopg" in db_url:
+            db_url = db_url.replace("postgresql+psycopg", "postgresql+asyncpg")
+        elif db_url.startswith("postgresql://"):
+            db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
+        elif "+asyncpg" not in db_url and "postgresql" in db_url:
+            db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
+        _ENGINE = create_async_engine(
+            db_url, echo=False, pool_pre_ping=True,
+            pool_size=10, max_overflow=20, pool_recycle=1800,
+        )
+        _SESSION_FACTORY = async_sessionmaker(_ENGINE, expire_on_commit=False)
+    return _SESSION_FACTORY
+
+
+async def _get_db(request_id: str | None = None):
+    """Return a new async session from the shared, pooled engine."""
+    return _get_session_factory()()
 
 
 # ── Account CRUD ─────────────────────────────────────────────────────────
@@ -1532,6 +1548,11 @@ async def send_email(
             reply_to_message_id=req.reply_to_message_id,
         )
 
+        # Persist any refreshed/rotated OAuth token from authenticate().
+        if provider.credentials_dirty():
+            await _persist_rotated_creds(db, store, str(row.id), provider)
+            await db.commit()
+
         return {"id": msg_id, "ok": True}
     finally:
         await db.close()
@@ -1917,10 +1938,13 @@ async def ai_chat(
             db = await _get_db()
             result = await db.execute(
                 text(
-                    """SELECT subject, body_text, from_address, received_at
-                       FROM email_messages WHERE id = :id"""
+                    """SELECT em.subject, em.body_text, em.from_address,
+                              em.received_at
+                       FROM email_messages em
+                       JOIN email_accounts ea ON em.account_id = ea.id
+                       WHERE em.id = :id AND ea.user_id = :uid"""
                 ),
-                {"id": req.email_context_id},
+                {"id": req.email_context_id, "uid": user.email or "anonymous"},
             )
             email_row = result.fetchone()
             if email_row:
@@ -4823,10 +4847,12 @@ async def _maybe_send_digest(account_id: str) -> None:
         if not row or (row.digest_frequency or "OFF") == "OFF":
             return
         period_days = 7 if row.digest_frequency == "WEEKLY" else 1
-        due = (await db.execute(text(
-            "SELECT last_digest_at IS NULL OR "
-            "last_digest_at < now() - make_interval(days => :d) AS due"
-        ), {"d": period_days})).scalar()
+        # Compute due-ness from the already-fetched value (a bare SELECT of a
+        # column with no FROM raises, so this can't be done in SQL here).
+        last = row.last_digest_at
+        due = last is None or last < (
+            datetime.now(timezone.utc) - timedelta(days=period_days)
+        )
         if not due:
             return
         digest = await _generate_digest(db, account_id, period_days)
@@ -5473,6 +5499,10 @@ async def _upsert_message(db: Any, account_id: str, msg: Any) -> None:
                 cc_addresses = EXCLUDED.cc_addresses,
                 bcc_addresses = EXCLUDED.bcc_addresses,
                 subject = EXCLUDED.subject,
+                body_text = COALESCE(NULLIF(EXCLUDED.body_text, ''),
+                                     email_messages.body_text),
+                body_html = COALESCE(NULLIF(EXCLUDED.body_html, ''),
+                                     email_messages.body_html),
                 snippet = EXCLUDED.snippet,
                 has_attachments = EXCLUDED.has_attachments,
                 is_read = EXCLUDED.is_read,

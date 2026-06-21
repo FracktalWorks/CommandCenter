@@ -455,10 +455,19 @@ class OutlookProvider(BaseEmailProvider):
         client = await self._get_client()
 
         if history_id:
+            # We persist Graph's @odata.deltaLink (a full URL) as history_id, but
+            # the delta endpoint wants only the bare $deltatoken value — extract
+            # it (handles both a stored deltaLink URL and an already-bare token).
+            token = history_id
+            if "://" in history_id:
+                from urllib.parse import parse_qs, urlparse  # noqa: PLC0415
+                token = parse_qs(urlparse(history_id).query).get(
+                    "$deltatoken", [history_id]
+                )[0]
             # Delta query for incremental sync
             resp = await client.get(
                 "/me/mailFolders/inbox/messages/delta",
-                params={"$deltatoken": history_id, "$top": max_results},
+                params={"$deltatoken": token, "$top": max_results},
             )
             resp.raise_for_status()
             data = resp.json()

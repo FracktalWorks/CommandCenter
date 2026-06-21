@@ -398,6 +398,7 @@ async def update_assistant_settings(
         # Preserve fields this tool doesn't edit so a PUT doesn't reset them.
         "agent_model": cur.get("agent_model", "tier-balanced"),
         "digest_frequency": cur.get("digest_frequency", "OFF"),
+        "follow_up_days": cur.get("follow_up_days", 0),
         "personal_instructions": pick(
             personal_instructions, "personal_instructions", ""),
         "writing_style": pick(writing_style, "writing_style", ""),

@@ -141,12 +141,15 @@ Add the storage the missing settings need:
 - Acceptance: settings round-trip all new fields; KB CRUD endpoints work.
 - Tests: settings serialization round-trip; KB CRUD; migration idempotency.
 
-### Phase 2 — Drafting overhaul (the email agent) — 🟡 PARTLY SHIPPED
-Done: writing style + personal instructions + knowledge base now injected into
-the drafter (tagged blocks in the shared `about` context that feeds both the LLM
-drafter and the MAF agent); `_llm_draft_reply` prompt honors them; a
-"Generate writing style from sent mail" endpoint. Still pending below: the
-first-class needs-reply (Reply Zero) classifier independent of a rule.
+### Phase 2 — Drafting overhaul (the email agent) — ✅ SHIPPED
+Writing style + personal instructions + knowledge base injected into the drafter
+(tagged blocks in the shared `about` context that feeds both the LLM drafter and
+the MAF agent); a "Generate writing style from sent mail" endpoint; and a
+first-class **needs-reply classifier** (Reply Zero, Migration 27): a sync-loop
+job classifies threads NEEDS_REPLY / FYI / AWAITING and stores them, so the
+needs-reply list excludes FYI/automated mail. The email **agent can now
+configure all of this by chat** (install presets, set writing style / personal
+instructions, manage the knowledge base — Chunk A).
 - First-class **needs-reply classifier** (Reply Zero) independent of a rule
   existing; surfaces a "To Reply" set and feeds the drafter.
 - Route **all** drafting through the MAF agent with context injected: writing
@@ -159,7 +162,10 @@ first-class needs-reply (Reply Zero) classifier independent of a rule.
   includes KB/style/personal-instructions; draft action creates a draft only
   for needs-reply.
 
-### Phase 3 — Follow-up reminders
+### Phase 3 — Follow-up reminders — ✅ SHIPPED
+`follow_up_days` setting; awaiting threads older than the window are flagged
+(`needs_follow_up` + `awaiting_days`) and surfaced in the Reply Zero "awaiting"
+tab with a "Follow up · Nd" badge.
 - Track sent mail awaiting a reply; resurface after a configurable window;
   optional digest/notification entry. Async (sync-loop driven).
 - Acceptance: a sent email with no reply after N days appears in "awaiting" and
@@ -195,7 +201,10 @@ Still pending: multi-rule apply + drag-to-reorder priority (below).
 - Acceptance: backfill since a chosen date categorizes senders in that window.
 - Tests: date-bounded selection; idempotent re-run.
 
-### Phase 6 — History + Test parity
+### Phase 6 — History + Test parity — 🟡 MOSTLY SHIPPED
+Done: History shows the AI rationale and an **Undo** (restore to inbox / remove
+labels) on applied executions; the Test tab's recent-inbox preview shows the
+match rationale per email. Pending: full per-message timeline view.
 - History: per-message timeline with the rule, actions, **AI reasoning**, and
   **undo** of applied actions.
 - Test: interactive run of rules against real recent emails (and a pasted
@@ -204,7 +213,10 @@ Still pending: multi-rule apply + drag-to-reorder priority (below).
 - Tests: undo restores prior folder/flags; test endpoint returns match+reason
   without mutating.
 
-### Phase 7 — Learned patterns + writing-style derivation
+### Phase 7 — Learned patterns + writing-style derivation — ⬜ REMAINING
+Writing-style derivation shipped (Phase 2). Still to do: learn from the user's
+*edits* to drafts. This needs a draft-edit capture hook (diff the assistant's
+draft vs what the user actually sent) — a dedicated design, deferred.
 - Derive writing style from sent mail; learn from user edits to drafts; feed
   back into the drafter.
 - Acceptance: style summary generated from sent corpus; edited-draft deltas

@@ -589,6 +589,24 @@ export async function installPresetRules(
   );
 }
 
+export async function reorderRules(
+  accountId: string,
+  ruleIds: string[]
+): Promise<void> {
+  await gatewayFetch("/email/rules/reorder", {
+    method: "PATCH",
+    body: JSON.stringify({ account_id: accountId, rule_ids: ruleIds }),
+  });
+}
+
+export async function undoExecution(
+  execId: string
+): Promise<{ status: string; reversed: string[] }> {
+  return gatewayFetch(`/email/rules/history/${execId}/undo`, {
+    method: "POST",
+  });
+}
+
 export async function testRules(params: {
   accountId: string;
   emailId?: string;

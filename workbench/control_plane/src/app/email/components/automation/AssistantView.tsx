@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import {
   Loader2, Plus, Trash2, Pencil, Play, Check, X, FlaskConical,
   History as HistoryIcon, Settings2, Sparkles, Wand2, BookOpen,
+  ArrowUp, ArrowDown, Undo2,
 } from "lucide-react";
 import {
   listRules, createRule, updateRule, deleteRule, testRules,
@@ -11,7 +12,7 @@ import {
   approveExecution, rejectExecution, testRulesRecent,
   listColdSenders, upsertColdSender, generateWritingStyle,
   listKnowledge, createKnowledge, updateKnowledge, deleteKnowledge,
-  installPresetRules,
+  installPresetRules, reorderRules, undoExecution,
 } from "../../lib/api";
 import {
   AutomationRule, RuleAction, RuleActionType, RuleTestResult, ExecutedRule,
@@ -277,6 +278,23 @@ function RulesTab({ accountId }: { accountId: string | null }) {
     }
   };
 
+  const move = async (index: number, dir: -1 | 1) => {
+    if (!accountId) return;
+    const j = index + dir;
+    if (j < 0 || j >= rules.length) return;
+    const next = [...rules];
+    [next[index], next[j]] = [next[j], next[index]];
+    setRules(next);
+    try {
+      await reorderRules(
+        accountId,
+        next.map((r) => r.id).filter((id): id is string => !!id)
+      );
+    } catch {
+      load();
+    }
+  };
+
   const doRun = async () => {
     if (!accountId) return;
     setRunning(true);
@@ -367,11 +385,29 @@ function RulesTab({ accountId }: { accountId: string | null }) {
             </button>
           </div>
         )}
-        {rules.map((rule) => (
+        {rules.map((rule, idx) => (
           <div
             key={rule.id}
             className="flex items-start gap-3 bg-card border border-border rounded-xl px-4 py-3"
           >
+            <div className="flex flex-col -my-0.5">
+              <button
+                onClick={() => move(idx, -1)}
+                disabled={idx === 0}
+                title="Move up (higher priority)"
+                className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+              >
+                <ArrowUp size={12} />
+              </button>
+              <button
+                onClick={() => move(idx, 1)}
+                disabled={idx === rules.length - 1}
+                title="Move down (lower priority)"
+                className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+              >
+                <ArrowDown size={12} />
+              </button>
+            </div>
             <button
               onClick={() => toggle(rule)}
               title={rule.enabled ? "Disable" : "Enable"}
@@ -925,6 +961,11 @@ function TestTab({
                     <div className="text-[11px] text-muted-foreground truncate">
                       {r.from}
                     </div>
+                    {r.matched && r.reason && (
+                      <div className="text-[10px] text-muted-foreground/80 italic truncate">
+                        {r.reason}
+                      </div>
+                    )}
                   </div>
                   {r.matched ? (
                     <div className="flex items-center gap-1 flex-shrink-0">
@@ -1096,6 +1137,20 @@ function HistoryTab({ accountId }: { accountId: string | null }) {
     }
   };
 
+  const undo = async (id: string) => {
+    setBusy(id);
+    try {
+      await undoExecution(id);
+      setHistory((prev) =>
+        prev.map((h) => (h.id === id ? { ...h, status: "UNDONE" } : h))
+      );
+    } catch {
+      load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
   if (loading) return <Spinner label="Loading history…" />;
 
   const pendingCount = history.filter((h) => h.status === "PENDING").length;
@@ -1143,6 +1198,11 @@ function HistoryTab({ accountId }: { accountId: string | null }) {
                 <div className="text-[11px] text-muted-foreground truncate">
                   {h.from} · {h.rule_name}
                 </div>
+                {h.reason && (
+                  <div className="text-[10px] text-muted-foreground/80 italic truncate">
+                    {h.reason}
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-1 flex-shrink-0">
                 {h.status === "PENDING" ? (
@@ -1167,14 +1227,31 @@ function HistoryTab({ accountId }: { accountId: string | null }) {
                     </>
                   )
                 ) : (
-                  h.actions.map((a, i) => (
-                    <span
-                      key={i}
-                      className="text-[9px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground"
-                    >
-                      {a}
-                    </span>
-                  ))
+                  <>
+                    {h.actions.map((a, i) => (
+                      <span
+                        key={i}
+                        className="text-[9px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground"
+                      >
+                        {a}
+                      </span>
+                    ))}
+                    {h.status === "APPLIED" &&
+                      (busy === h.id ? (
+                        <Loader2
+                          className="animate-spin text-muted-foreground"
+                          size={13}
+                        />
+                      ) : (
+                        <button
+                          onClick={() => undo(h.id)}
+                          title="Undo — restore to inbox / remove labels"
+                          className="flex items-center gap-1 px-1.5 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:text-foreground hover:bg-secondary transition-colors"
+                        >
+                          <Undo2 size={12} /> Undo
+                        </button>
+                      ))}
+                  </>
                 )}
               </div>
             </div>

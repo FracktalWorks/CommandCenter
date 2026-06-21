@@ -3192,6 +3192,96 @@ async def reject_execution(
         await db.close()
 
 
+class RuleReorderRequest(BaseModel):
+    account_id: str
+    rule_ids: list[str]  # desired order; index becomes sort_order
+
+
+@router.patch("/rules/reorder")
+async def reorder_rules(
+    req: RuleReorderRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Persist a new rule priority order (lower sort_order = evaluated first)."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        for i, rid in enumerate(req.rule_ids):
+            await db.execute(text(
+                "UPDATE email_rules SET sort_order = :so, updated_at = now() "
+                "WHERE id = :id AND account_id = :aid"
+            ), {"so": i, "id": rid, "aid": req.account_id})
+        await db.commit()
+        return {"reordered": len(req.rule_ids)}
+    finally:
+        await db.close()
+
+
+@router.post("/rules/history/{exec_id}/undo")
+async def undo_execution(
+    exec_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Reverse an APPLIED rule execution where possible: restore the message to
+    the inbox (archive/move/trash/spam) and remove any labels the rule added."""
+    db = await _get_db()
+    try:
+        row = (await db.execute(text(
+            """SELECT er.status, er.rule_id, er.message_id, er.provider_message_id,
+                      er.actions_taken, ea.provider, ea.credentials_encrypted
+               FROM email_executed_rules er
+               JOIN email_accounts ea ON er.account_id = ea.id
+               WHERE er.id = :eid AND ea.user_id = :uid"""
+        ), {"eid": exec_id, "uid": user.email or "anonymous"})).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Execution not found")
+        if row.status != "APPLIED":
+            raise HTTPException(
+                status_code=400,
+                detail="Only applied executions can be undone")
+        taken = row.actions_taken if isinstance(row.actions_taken, list) \
+            else json.loads(row.actions_taken or "[]")
+
+        from acb_llm.key_store import get_key_store  # noqa: PLC0415
+        store = get_key_store()
+        creds = json.loads(store.decrypt(row.credentials_encrypted))
+        provider = _instantiate_provider(row.provider, creds)
+        if not await provider.authenticate():
+            raise HTTPException(status_code=502, detail="Provider auth failed")
+
+        pmid = row.provider_message_id
+        reversed_actions: list[str] = []
+        if any(t in ("ARCHIVE", "MOVE_FOLDER", "TRASH", "MARK_SPAM")
+               for t in taken):
+            await provider.move_to_folder(pmid, "inbox")
+            if row.message_id:
+                await db.execute(text(
+                    "UPDATE email_messages SET folder='inbox', updated_at=now() "
+                    "WHERE id=:id"
+                ), {"id": str(row.message_id)})
+            reversed_actions.append("restored to inbox")
+        if "LABEL" in taken and row.rule_id:
+            lbl_rows = (await db.execute(text(
+                "SELECT label FROM email_actions WHERE rule_id = :rid "
+                "AND type = 'LABEL' AND label IS NOT NULL"
+            ), {"rid": str(row.rule_id)})).fetchall()
+            labels = [r.label for r in lbl_rows if r.label]
+            if labels:
+                try:
+                    await provider.set_labels(pmid, add=[], remove=labels)
+                    reversed_actions.append(
+                        f"removed label(s): {', '.join(labels)}")
+                except Exception:  # noqa: BLE001
+                    pass
+        await db.execute(text(
+            "UPDATE email_executed_rules SET status='UNDONE' WHERE id=:eid"
+        ), {"eid": exec_id})
+        await db.commit()
+        return {"status": "UNDONE", "reversed": reversed_actions}
+    finally:
+        await db.close()
+
+
 class RuleRunRequest(BaseModel):
     account_id: str
     limit: int = 20

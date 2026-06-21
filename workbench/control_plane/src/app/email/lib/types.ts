@@ -177,6 +177,13 @@ export interface ExecutedRule {
   created_at: string | null;
 }
 
+export interface AssistantSettings {
+  account_id: string;
+  about: string;
+  signature: string;
+  auto_run: boolean;
+}
+
 export interface EmailFolder {
   icon: string; // Lucide icon name
   label: string;

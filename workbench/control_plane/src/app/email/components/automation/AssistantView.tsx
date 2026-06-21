@@ -7,10 +7,11 @@ import {
 } from "lucide-react";
 import {
   listRules, createRule, updateRule, deleteRule, testRules,
-  getRulesHistory, runRules,
+  getRulesHistory, runRules, getAssistantSettings, saveAssistantSettings,
 } from "../../lib/api";
 import {
   AutomationRule, RuleAction, RuleActionType, RuleTestResult, ExecutedRule,
+  AssistantSettings,
 } from "../../lib/types";
 
 interface AssistantViewProps {
@@ -35,6 +36,87 @@ const ACTION_TYPES: RuleActionType[] = [
 const INPUT_CLS =
   "w-full bg-secondary border border-border rounded-lg px-2.5 py-2 text-xs " +
   "text-foreground outline-none focus:border-primary transition-colors";
+
+/**
+ * Default rule set, mirroring inbox-zero's presets. Installed on demand into the
+ * selected account; each rule is then fully editable.
+ */
+type PresetRule = Omit<AutomationRule, "account_id">;
+
+const PRESET_RULES: PresetRule[] = [
+  {
+    name: "To Reply",
+    instructions:
+      "Emails that need a reply or response from me — a person asking a " +
+      "question, making a request, or awaiting my input. Not automated mail.",
+    enabled: true,
+    run_on_threads: false,
+    conditional_operator: "OR",
+    sort_order: 0,
+    actions: [{ type: "LABEL", label: "To Reply" }],
+  },
+  {
+    name: "Newsletter",
+    instructions:
+      "Newsletters, digests, and content subscriptions I've signed up for.",
+    enabled: true,
+    run_on_threads: false,
+    conditional_operator: "OR",
+    sort_order: 1,
+    actions: [{ type: "LABEL", label: "Newsletter" }, { type: "ARCHIVE" }],
+  },
+  {
+    name: "Marketing",
+    instructions:
+      "Marketing, promotional and sales emails — discounts, offers, product " +
+      "announcements and campaigns.",
+    enabled: true,
+    run_on_threads: false,
+    conditional_operator: "OR",
+    sort_order: 2,
+    actions: [{ type: "LABEL", label: "Marketing" }, { type: "ARCHIVE" }],
+  },
+  {
+    name: "Calendar",
+    instructions: "Calendar invites, meeting requests and event notifications.",
+    enabled: true,
+    run_on_threads: false,
+    conditional_operator: "OR",
+    sort_order: 3,
+    actions: [{ type: "LABEL", label: "Calendar" }],
+  },
+  {
+    name: "Receipt",
+    instructions:
+      "Receipts, invoices, order confirmations and payment notifications.",
+    enabled: true,
+    run_on_threads: false,
+    conditional_operator: "OR",
+    sort_order: 4,
+    actions: [{ type: "LABEL", label: "Receipt" }],
+  },
+  {
+    name: "Notification",
+    instructions:
+      "Automated notifications, alerts and updates from apps and services.",
+    enabled: true,
+    run_on_threads: false,
+    conditional_operator: "OR",
+    sort_order: 5,
+    actions: [{ type: "LABEL", label: "Notification" }],
+  },
+  {
+    name: "Cold Email",
+    instructions:
+      "Cold outreach — unsolicited sales, marketing or recruiting emails from " +
+      "people or companies I have no prior relationship with.",
+    enabled: true,
+    run_on_threads: false,
+    conditional_operator: "OR",
+    sort_order: 6,
+    actions: [{ type: "LABEL", label: "Cold Email" }, { type: "ARCHIVE" }],
+  },
+];
 
 export function AssistantView({ accountId, selectedEmailId }: AssistantViewProps) {
   const [tab, setTab] = useState<Tab>("rules");
@@ -91,6 +173,7 @@ function RulesTab({ accountId }: { accountId: string | null }) {
   const [editing, setEditing] = useState<AutomationRule | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [installing, setInstalling] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -104,6 +187,28 @@ function RulesTab({ accountId }: { accountId: string | null }) {
       .catch((e) => setError(e.message || "Failed to load rules"))
       .finally(() => setLoading(false));
   }, [accountId]);
+
+  const missingDefaults = PRESET_RULES.some(
+    (p) => !rules.some((r) => r.name.toLowerCase() === p.name.toLowerCase())
+  );
+
+  const installDefaults = async () => {
+    if (!accountId) return;
+    setInstalling(true);
+    setError(null);
+    try {
+      const existing = new Set(rules.map((r) => r.name.toLowerCase()));
+      for (const p of PRESET_RULES) {
+        if (existing.has(p.name.toLowerCase())) continue;
+        await createRule({ ...p, account_id: accountId });
+      }
+      load();
+    } catch (e) {
+      setError((e as Error).message || "Failed to install default rules");
+    } finally {
+      setInstalling(false);
+    }
+  };
 
   useEffect(load, [load]);
 
@@ -173,6 +278,16 @@ function RulesTab({ accountId }: { accountId: string | null }) {
           Rules run on inbox mail; the AI matches your plain-English conditions.
         </p>
         <div className="flex items-center gap-2">
+          {missingDefaults && rules.length > 0 && (
+            <button
+              onClick={installDefaults}
+              disabled={installing}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+            >
+              {installing ? <Loader2 className="animate-spin" size={13} /> : <Sparkles size={13} />}
+              Add defaults
+            </button>
+          )}
           <button
             onClick={doRun}
             disabled={running || rules.length === 0}
@@ -198,8 +313,25 @@ function RulesTab({ accountId }: { accountId: string | null }) {
 
       <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
         {rules.length === 0 && (
-          <div className="text-center text-sm text-muted-foreground py-10">
-            No rules yet. Create one to automate your inbox.
+          <div className="flex flex-col items-center text-center py-10 gap-3">
+            <Sparkles size={22} className="text-primary/60" />
+            <div className="text-sm text-muted-foreground max-w-xs">
+              No rules yet. Install the recommended set (To Reply, Newsletter,
+              Marketing, Calendar, Receipt, Notification, Cold Email) or create
+              your own.
+            </div>
+            <button
+              onClick={installDefaults}
+              disabled={installing}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+            >
+              {installing ? (
+                <Loader2 className="animate-spin" size={13} />
+              ) : (
+                <Sparkles size={13} />
+              )}
+              Install default rules
+            </button>
           </div>
         )}
         {rules.map((rule) => (
@@ -626,8 +758,103 @@ function HistoryTab({ accountId }: { accountId: string | null }) {
 // ── Settings tab ────────────────────────────────────────────────────────────
 
 function SettingsTab({ accountId }: { accountId: string | null }) {
+  const [settings, setSettings] = useState<AssistantSettings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!accountId) {
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    getAssistantSettings(accountId)
+      .then((s) => !cancelled && setSettings(s))
+      .catch((e) => !cancelled && setError(e.message || "Failed to load settings"))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId]);
+
+  const save = async () => {
+    if (!settings) return;
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const res = await saveAssistantSettings(settings);
+      setSettings(res);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError((e as Error).message || "Failed to save settings");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!accountId) return <Empty>Select an account first.</Empty>;
+  if (loading || !settings) return <Spinner label="Loading settings…" />;
+
   return (
-    <div className="h-full overflow-y-auto px-5 py-4 space-y-4">
+    <div className="h-full overflow-y-auto px-4 sm:px-5 py-4 space-y-4">
+      <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+        <Field label="About you (context the assistant uses when drafting replies)">
+          <textarea
+            value={settings.about}
+            onChange={(e) => setSettings({ ...settings, about: e.target.value })}
+            rows={3}
+            placeholder="e.g. I'm the founder of Acme. Keep replies concise and friendly; I prefer to handle anything financial myself."
+            className={`${INPUT_CLS} resize-none`}
+          />
+        </Field>
+        <Field label="Signature">
+          <textarea
+            value={settings.signature}
+            onChange={(e) =>
+              setSettings({ ...settings, signature: e.target.value })
+            }
+            rows={2}
+            placeholder={"Best,\nAlex"}
+            className={`${INPUT_CLS} resize-none`}
+          />
+        </Field>
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.auto_run}
+            onChange={(e) =>
+              setSettings({ ...settings, auto_run: e.target.checked })
+            }
+            className="accent-primary mt-0.5"
+          />
+          <span>
+            <span className="text-xs text-foreground">
+              Run rules automatically on new mail
+            </span>
+            <span className="block text-[11px] text-muted-foreground">
+              Processes incoming inbox mail with your enabled rules as it arrives.
+            </span>
+          </span>
+        </label>
+        <div className="flex items-center gap-2 pt-1">
+          <button
+            onClick={save}
+            disabled={saving}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="animate-spin" size={13} /> : <Check size={13} />}
+            Save settings
+          </button>
+          {saved && <span className="text-[11px] text-emerald-400">Saved ✓</span>}
+          {error && <span className="text-[11px] text-destructive">{error}</span>}
+        </div>
+      </div>
+
       <div className="bg-card border border-border rounded-xl p-4">
         <h3 className="text-sm font-medium text-foreground mb-1">
           How the assistant works
@@ -641,33 +868,9 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
         </p>
       </div>
 
-      <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-        <SettingRow
-          title="Account"
-          desc={accountId ? "Rules apply to the selected account." : "No account selected."}
-        />
-        <SettingRow
-          title="Supported actions"
-          desc="Archive, Label, Mark read, Star, Mark spam, Trash, Move folder, Webhook."
-        />
-        <SettingRow
-          title="Safe by default"
-          desc="Dry run only logs what would happen. Live runs apply the actions and sync to your provider."
-        />
-      </div>
-
       <p className="text-[11px] text-muted-foreground flex items-center gap-1">
         <ChevronRight size={11} /> Reply/forward/draft actions are coming soon.
       </p>
-    </div>
-  );
-}
-
-function SettingRow({ title, desc }: { title: string; desc: string }) {
-  return (
-    <div>
-      <div className="text-xs font-medium text-foreground">{title}</div>
-      <div className="text-[11px] text-muted-foreground">{desc}</div>
     </div>
   );
 }

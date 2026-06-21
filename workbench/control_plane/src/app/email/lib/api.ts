@@ -1,7 +1,7 @@
 import {
   ChatMessage, Email, EmailAccount,
   AnalyticsOverview, SenderStat, NewsletterStatus,
-  AutomationRule, RuleTestResult, ExecutedRule,
+  AutomationRule, RuleTestResult, ExecutedRule, AssistantSettings,
 } from "./types";
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
@@ -619,5 +619,24 @@ export async function runRules(params: {
       limit: params.limit ?? 20,
       dry_run: params.dryRun ?? true,
     }),
+  });
+}
+
+// ── Assistant: settings ─────────────────────────────────────────────────────
+
+export async function getAssistantSettings(
+  accountId: string
+): Promise<AssistantSettings> {
+  return gatewayFetch<AssistantSettings>(
+    `/email/assistant/settings?account_id=${encodeURIComponent(accountId)}`
+  );
+}
+
+export async function saveAssistantSettings(
+  settings: AssistantSettings
+): Promise<AssistantSettings> {
+  return gatewayFetch<AssistantSettings>("/email/assistant/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings),
   });
 }

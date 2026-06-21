@@ -3021,6 +3021,69 @@ async def _apply_rule_actions(
     return done
 
 
+# ── Assistant: per-account settings ─────────────────────────────────────────
+
+class AssistantSettingsModel(BaseModel):
+    account_id: str
+    about: str | None = None
+    signature: str | None = None
+    auto_run: bool = False
+
+
+@router.get("/assistant/settings")
+async def get_assistant_settings(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """Get the assistant's About/signature/auto-run settings for an account."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        row = (await db.execute(text(
+            """SELECT about, signature, auto_run
+               FROM email_assistant_settings WHERE account_id = :aid"""
+        ), {"aid": account_id})).fetchone()
+        return {
+            "account_id": account_id,
+            "about": row.about if row else "",
+            "signature": row.signature if row else "",
+            "auto_run": bool(row.auto_run) if row else False,
+        }
+    finally:
+        await db.close()
+
+
+@router.put("/assistant/settings")
+async def put_assistant_settings(
+    req: AssistantSettingsModel,
+    user: UserContext = Depends(get_current_user),
+):
+    """Upsert the assistant settings for an account."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        await db.execute(text(
+            """INSERT INTO email_assistant_settings
+                 (account_id, about, signature, auto_run, updated_at)
+               VALUES (:aid, :about, :sig, :auto, now())
+               ON CONFLICT (account_id) DO UPDATE SET
+                 about = EXCLUDED.about,
+                 signature = EXCLUDED.signature,
+                 auto_run = EXCLUDED.auto_run,
+                 updated_at = now()"""
+        ), {"aid": req.account_id, "about": req.about, "sig": req.signature,
+            "auto": req.auto_run})
+        await db.commit()
+        return {
+            "account_id": req.account_id,
+            "about": req.about or "",
+            "signature": req.signature or "",
+            "auto_run": req.auto_run,
+        }
+    finally:
+        await db.close()
+
+
 # ── OAuth ────────────────────────────────────────────────────────────────
 
 # In-memory state store (use Redis in production)

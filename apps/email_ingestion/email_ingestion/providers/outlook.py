@@ -25,6 +25,10 @@ from .base import (
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
 GRAPH_SCOPES = [
+    # offline_access is REQUIRED on refresh — without it Microsoft returns a new
+    # access token but NOT a renewed refresh token, so the refresh chain expires
+    # and the account eventually needs a manual "reconnect".
+    "offline_access",
     "https://graph.microsoft.com/Mail.ReadWrite",
     "https://graph.microsoft.com/Mail.Send",
     "https://graph.microsoft.com/User.Read",

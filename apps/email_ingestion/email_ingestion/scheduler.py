@@ -133,6 +133,26 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
             if not await provider.authenticate():
                 raise RuntimeError("Provider authentication failed")
 
+            # Persist a rotated refresh token IMMEDIATELY after auth — Microsoft
+            # rotates it on refresh, and if a later sync step fails before the
+            # end-of-sync persist, the new token would be lost and the account
+            # would need a manual reconnect.
+            if provider.credentials_dirty():
+                await db.execute(
+                    text(
+                        """UPDATE email_accounts
+                           SET credentials_encrypted = :creds, updated_at = now()
+                           WHERE id = :id"""
+                    ),
+                    {
+                        "id": account_id,
+                        "creds": store.encrypt(
+                            json.dumps(provider.export_credentials())
+                        ),
+                    },
+                )
+                await db.commit()
+
             sync_result = await provider.sync_messages(
                 history_id=row.last_history_id,
                 max_results=100,

@@ -138,30 +138,37 @@ def _agent_workspace_dir(agent_name: str) -> Path | None:
     exactly why generated files were invisible in the UI.
 
     Tries the bare agent name first, then the ``agent-`` prefixed variant,
-    since older clones may use either convention.  Returns ``None`` when no
-    clone exists yet (the agent has never run, so it has no artefacts).
+    since older clones may use either convention.  Each name is looked up
+    under BOTH the configured ``agents_clone_dir`` and the legacy
+    ``/tmp/acb_agents`` default — older clones (created before the clone root
+    moved under ``$HOME``) still live in ``/tmp`` until the agent next runs,
+    and we must still surface their files.  Returns ``None`` when no clone
+    exists yet (the agent has never run, so it has no artefacts).
     """
     from acb_common import get_settings  # noqa: PLC0415
 
     settings = get_settings()
-    clone_root = (
-        Path(
-            getattr(
-                settings,
-                "agents_clone_dir",
-                str(Path.home() / ".acb" / "agents"),
-            )
-        )
-        / "repos"
+    configured = getattr(
+        settings, "agents_clone_dir", str(Path.home() / ".acb" / "agents")
     )
-    candidates = [clone_root / agent_name]
+    # Search the configured clone root first, then the legacy /tmp default so
+    # clones stranded there before the relocation are still found.
+    clone_roots: list[Path] = [Path(configured) / "repos"]
+    legacy = Path("/tmp/acb_agents") / "repos"
+    if legacy not in clone_roots:
+        clone_roots.append(legacy)
+
+    names = [agent_name]
     if agent_name.startswith("agent-"):
-        candidates.append(clone_root / agent_name[len("agent-"):])
+        names.append(agent_name[len("agent-"):])
     else:
-        candidates.append(clone_root / f"agent-{agent_name}")
-    for candidate in candidates:
-        if candidate.is_dir():
-            return candidate
+        names.append(f"agent-{agent_name}")
+
+    for clone_root in clone_roots:
+        for name in names:
+            candidate = clone_root / name
+            if candidate.is_dir():
+                return candidate
     return None
 
 

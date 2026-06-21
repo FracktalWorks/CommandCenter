@@ -4339,6 +4339,7 @@ async def oauth_authorize(
             f"?client_id={client_id}"
             "&response_type=code"
             "&scope=offline_access+https://graph.microsoft.com/Mail.ReadWrite"
+            "+https://graph.microsoft.com/Mail.Send"
             "+https://graph.microsoft.com/User.Read"
             f"&redirect_uri={redirect_uri}"
             f"&state={state}"

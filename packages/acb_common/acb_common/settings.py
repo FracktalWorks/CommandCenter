@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
@@ -104,7 +105,13 @@ class Settings(BaseSettings):
     github_installation_id: str = ""          # org installation ID (visible in GitHub App settings)
 
     github_org: str = "FracktalWorks"         # org that owns agent-* and skill-* repos
-    agents_clone_dir: str = "/tmp/acb_agents" # persistent clone root (survives between events)
+    # Persistent clone root for agent workspaces + generated artifacts.
+    # MUST NOT live under /tmp: systemd-tmpfiles wipes /tmp on every reboot,
+    # which destroys all agent clones AND their artifacts at once. Defaults to
+    # a dir under $HOME so it survives reboots; override with AGENTS_CLONE_DIR.
+    agents_clone_dir: str = Field(
+        default_factory=lambda: str(Path.home() / ".acb" / "agents")
+    )
 
     # -- Bot git identity (written into every local clone via git config) --
     # Commits and PRs opened by Self_Mutation_Node carry this identity.

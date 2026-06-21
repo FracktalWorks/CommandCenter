@@ -46,10 +46,20 @@ def _current_user_email() -> str:
         return ""
 
 
-def _headers() -> dict[str, str]:
+def _internal_token() -> str:
+    """The gateway's internal bearer token. The Settings field is
+    ``litellm_master_key``; ``gateway_internal_token`` isn't a real attribute."""
     settings = get_settings()
+    return (
+        getattr(settings, "gateway_internal_token", "")
+        or getattr(settings, "litellm_master_key", "")
+        or "sk-local"
+    )
+
+
+def _headers() -> dict[str, str]:
     headers = {
-        "Authorization": f"Bearer {settings.gateway_internal_token}",
+        "Authorization": f"Bearer {_internal_token()}",
         "Content-Type": "application/json",
     }
     user = _current_user_email()

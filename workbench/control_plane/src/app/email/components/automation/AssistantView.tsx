@@ -11,6 +11,7 @@ import {
   approveExecution, rejectExecution, testRulesRecent,
   listColdSenders, upsertColdSender, generateWritingStyle,
   listKnowledge, createKnowledge, updateKnowledge, deleteKnowledge,
+  installPresetRules,
 } from "../../lib/api";
 import {
   AutomationRule, RuleAction, RuleActionType, RuleTestResult, ExecutedRule,
@@ -232,11 +233,8 @@ function RulesTab({ accountId }: { accountId: string | null }) {
     setInstalling(true);
     setError(null);
     try {
-      const existing = new Set(rules.map((r) => r.name.toLowerCase()));
-      for (const p of PRESET_RULES) {
-        if (existing.has(p.name.toLowerCase())) continue;
-        await createRule({ ...p, account_id: accountId });
-      }
+      // Backend owns the canonical preset set (also used by the AI assistant).
+      await installPresetRules(accountId);
       load();
     } catch (e) {
       setError((e as Error).message || "Failed to install default rules");

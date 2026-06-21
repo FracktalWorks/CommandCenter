@@ -2629,6 +2629,77 @@ async def list_rules(
         await db.close()
 
 
+# Default rule set, mirroring inbox-zero's system rules. Single source of truth
+# so the agent's install tool and the UI's "Add defaults" button stay in sync.
+_PRESET_RULES: list[dict[str, Any]] = [
+    {"name": "To Reply", "instructions": "Emails I need to respond to.",
+     "run_on_threads": True,
+     "actions": [{"type": "LABEL", "label": "To Reply"}, {"type": "DRAFT_EMAIL"}]},
+    {"name": "FYI", "run_on_threads": True,
+     "instructions": "Important emails I should know about, but don't need to "
+                     "reply to.",
+     "actions": [{"type": "LABEL", "label": "FYI"}]},
+    {"name": "Newsletter",
+     "instructions": "Newsletters: regular content from publications, blogs, or "
+                     "services I've subscribed to.",
+     "actions": [{"type": "LABEL", "label": "Newsletter"}]},
+    {"name": "Marketing",
+     "instructions": "Marketing: promotional emails about products, services, "
+                     "sales, or offers.",
+     "actions": [{"type": "LABEL", "label": "Marketing"}, {"type": "ARCHIVE"}]},
+    {"name": "Calendar",
+     "instructions": "Calendar: any email related to scheduling, meeting "
+                     "invites, or calendar notifications.",
+     "actions": [{"type": "LABEL", "label": "Calendar"}]},
+    {"name": "Receipt",
+     "instructions": "Receipts: purchase confirmations, payment receipts, "
+                     "transaction records or invoices.",
+     "actions": [{"type": "LABEL", "label": "Receipt"}]},
+    {"name": "Notification",
+     "instructions": "Notifications: alerts, status updates, or system messages.",
+     "actions": [{"type": "LABEL", "label": "Notification"}]},
+    {"name": "Cold Email",
+     "instructions": "Cold emails: unsolicited sales pitches and outreach from "
+                     "people or companies I have no prior relationship with.",
+     "actions": [{"type": "LABEL", "label": "Cold Email"}, {"type": "ARCHIVE"}]},
+]
+
+
+@router.post("/rules/install-presets")
+async def install_preset_rules(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """Install the default inbox-zero-style rule set (skips ones already present
+    by name). Used by the UI's 'Add defaults' and the assistant's setup flow."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        existing = {r["name"].lower() for r in await _load_rules(db, account_id)}
+        installed: list[str] = []
+        for i, p in enumerate(_PRESET_RULES):
+            if p["name"].lower() in existing:
+                continue
+            rid = str(uuid4())
+            await db.execute(text(
+                """INSERT INTO email_rules
+                     (id, account_id, name, instructions, run_on_threads,
+                      sort_order)
+                   VALUES (:id, :aid, :name, :instr, :rot, :so)"""
+            ), {"id": rid, "aid": account_id, "name": p["name"],
+                "instr": p["instructions"], "rot": p.get("run_on_threads", False),
+                "so": i})
+            await _replace_actions(
+                db, rid, [RuleActionModel(**a) for a in p["actions"]]
+            )
+            installed.append(p["name"])
+        await db.commit()
+        return {"installed": installed,
+                "total_presets": len(_PRESET_RULES)}
+    finally:
+        await db.close()
+
+
 async def _replace_actions(db: Any, rule_id: str, actions: list[RuleActionModel]) -> None:
     await db.execute(text("DELETE FROM email_actions WHERE rule_id = :rid"),
                      {"rid": rule_id})

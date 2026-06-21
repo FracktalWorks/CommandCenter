@@ -580,6 +580,15 @@ export async function deleteRule(id: string): Promise<void> {
   await gatewayFetch(`/email/rules/${id}`, { method: "DELETE" });
 }
 
+export async function installPresetRules(
+  accountId: string
+): Promise<{ installed: string[]; total_presets: number }> {
+  return gatewayFetch(
+    `/email/rules/install-presets?account_id=${encodeURIComponent(accountId)}`,
+    { method: "POST" }
+  );
+}
+
 export async function testRules(params: {
   accountId: string;
   emailId?: string;

@@ -367,21 +367,94 @@ async def update_assistant_settings(
     signature: str | None = None,
     auto_run: bool | None = None,
     cold_email_blocker: str | None = None,
+    personal_instructions: str | None = None,
+    writing_style: str | None = None,
+    draft_replies: bool | None = None,
 ) -> str:
-    """Update assistant settings (about-you, signature, auto-run, cold-blocker)."""
-    current = await _get("/email/assistant/settings", {"account_id": account_id})
+    """Update assistant settings. Only the fields you pass change; the rest are
+    preserved.
+
+    Args:
+        about: free-text context about the user (used when drafting).
+        signature: signature appended to drafted replies.
+        auto_run: run rules automatically on new mail.
+        cold_email_blocker: OFF | LABEL | ARCHIVE.
+        personal_instructions: global rules the assistant ALWAYS follows
+            (e.g. "Never commit to dates without checking with me.").
+        writing_style: tone/length/style guide for drafted replies.
+        draft_replies: auto-draft replies for emails that need one.
+    """
+    cur = await _get("/email/assistant/settings", {"account_id": account_id})
+
+    def pick(val: Any, key: str, default: Any) -> Any:
+        return val if val is not None else cur.get(key, default)
+
     body = {
         "account_id": account_id,
-        "about": about if about is not None else current.get("about", ""),
-        "signature": signature if signature is not None
-        else current.get("signature", ""),
-        "auto_run": auto_run if auto_run is not None
-        else current.get("auto_run", False),
-        "cold_email_blocker": cold_email_blocker if cold_email_blocker is not None
-        else current.get("cold_email_blocker", "OFF"),
+        "about": pick(about, "about", ""),
+        "signature": pick(signature, "signature", ""),
+        "auto_run": pick(auto_run, "auto_run", False),
+        "cold_email_blocker": pick(cold_email_blocker, "cold_email_blocker", "OFF"),
+        # Preserve fields this tool doesn't edit so a PUT doesn't reset them.
+        "agent_model": cur.get("agent_model", "tier-balanced"),
+        "digest_frequency": cur.get("digest_frequency", "OFF"),
+        "personal_instructions": pick(
+            personal_instructions, "personal_instructions", ""),
+        "writing_style": pick(writing_style, "writing_style", ""),
+        "draft_replies": pick(draft_replies, "draft_replies", True),
     }
     await _patch_settings(body)
     return "Assistant settings updated."
+
+
+async def list_knowledge(account_id: str) -> str:
+    """List the account's knowledge-base entries (reference snippets the
+    assistant draws on when drafting replies)."""
+    entries = (await _get(
+        "/email/knowledge", {"account_id": account_id}
+    )).get("entries", [])
+    if not entries:
+        return "Knowledge base is empty."
+    return "Knowledge base:\n" + "\n".join(
+        f"• {e.get('title')}: {(e.get('content') or '')[:80]}" for e in entries
+    )
+
+
+async def add_knowledge(account_id: str, title: str, content: str) -> str:
+    """Add (or overwrite by title) a knowledge-base entry the assistant uses when
+    drafting replies — e.g. pricing, FAQs, policies, boilerplate, product facts."""
+    await _post("/email/knowledge", {
+        "account_id": account_id, "title": title, "content": content,
+    })
+    return f"Saved knowledge entry '{title}'."
+
+
+async def generate_writing_style(account_id: str) -> str:
+    """Analyze the user's recent sent emails and save a writing-style guide the
+    assistant follows when drafting. Use when the user asks you to learn or match
+    their writing style."""
+    res = await _post(
+        f"/email/assistant/writing-style/generate?account_id={account_id}", {}
+    )
+    style = res.get("writing_style", "")
+    if style:
+        return f"Derived and saved this writing style:\n{style}"
+    return "Could not derive a writing style yet (no sent mail to analyze)."
+
+
+async def install_default_rules(account_id: str) -> str:
+    """Install the recommended default rule set: To Reply, FYI, Newsletter,
+    Marketing, Calendar, Receipt, Notification, Cold Email. Skips any the user
+    already has."""
+    res = await _post(
+        f"/email/rules/install-presets?account_id={account_id}", {}
+    )
+    installed = res.get("installed", [])
+    if not installed:
+        return "The default rules are already installed."
+    return (
+        f"Installed {len(installed)} default rule(s): {', '.join(installed)}."
+    )
 
 
 async def _patch_settings(body: dict[str, Any]) -> Any:
@@ -436,6 +509,10 @@ _TOOLS = [
     create_rule,
     update_rule_state,
     update_assistant_settings,
+    install_default_rules,
+    list_knowledge,
+    add_knowledge,
+    generate_writing_style,
     suggest_unsubscribes,
 ]
 

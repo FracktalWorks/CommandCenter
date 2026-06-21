@@ -4365,14 +4365,24 @@ async def _ensure_subscription(account_id: str) -> None:
         if data is None:
             data = await provider.create_subscription(notify_url, client_state)
             sub_id = data.get("id")
-        exp = data.get("expirationDateTime")
+        # Graph returns expirationDateTime as an ISO string; asyncpg needs a
+        # real datetime for the TIMESTAMPTZ column.
+        exp_raw = data.get("expirationDateTime")
+        exp_dt = None
+        if exp_raw:
+            try:
+                exp_dt = datetime.fromisoformat(
+                    str(exp_raw).replace("Z", "+00:00")
+                )
+            except Exception:  # noqa: BLE001
+                exp_dt = None
         await _persist_rotated_creds(db, store, account_id, provider)
         await db.execute(text(
             """UPDATE email_accounts
                SET webhook_subscription_id = :sid, webhook_client_state = :cs,
                    webhook_expires_at = :exp, updated_at = now()
                WHERE id = :id"""
-        ), {"id": account_id, "sid": sub_id, "cs": client_state, "exp": exp})
+        ), {"id": account_id, "sid": sub_id, "cs": client_state, "exp": exp_dt})
         await db.commit()
         _log.info("email.subscription_ready", account_id=account_id,
                   sub=str(sub_id)[:12], expires=exp)

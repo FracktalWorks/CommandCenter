@@ -3152,13 +3152,50 @@ async def run_rules(
 
 
 async def _load_assistant_about(db: Any, account_id: str) -> tuple[str, str]:
-    """Return (about, signature) for draft context; empty strings if unset."""
+    """Return (enriched_about, signature) for draft context.
+
+    `enriched_about` bundles the user's About text with their personal
+    instructions, writing style, and knowledge base as tagged blocks, so the
+    single `about` string carries the full drafting context into both the LLM
+    drafter and the MAF agent. Empty string if nothing is set.
+    """
     row = (await db.execute(text(
-        "SELECT about, signature FROM email_assistant_settings WHERE account_id = :aid"
+        """SELECT about, signature, personal_instructions, writing_style
+           FROM email_assistant_settings WHERE account_id = :aid"""
     ), {"aid": account_id})).fetchone()
-    if not row:
-        return "", ""
-    return row.about or "", row.signature or ""
+    about = (row.about if row else "") or ""
+    signature = (row.signature if row else "") or ""
+    personal = (getattr(row, "personal_instructions", None) or "") if row else ""
+    style = (getattr(row, "writing_style", None) or "") if row else ""
+
+    kb_rows = (await db.execute(text(
+        """SELECT title, content FROM email_knowledge
+           WHERE account_id = :aid ORDER BY updated_at DESC LIMIT 20"""
+    ), {"aid": account_id})).fetchall()
+
+    parts: list[str] = []
+    if about.strip():
+        parts.append(f"<about>\n{about.strip()}\n</about>")
+    if personal.strip():
+        parts.append(
+            "<personal_instructions>\n"
+            f"{personal.strip()}\n</personal_instructions>"
+        )
+    if style.strip():
+        parts.append(f"<writing_style>\n{style.strip()}\n</writing_style>")
+    if kb_rows:
+        kb_text, budget = [], 4000
+        for k in kb_rows:
+            chunk = f"## {k.title}\n{(k.content or '').strip()}"
+            if budget - len(chunk) < 0:
+                break
+            kb_text.append(chunk)
+            budget -= len(chunk)
+        if kb_text:
+            parts.append(
+                "<knowledge_base>\n" + "\n\n".join(kb_text) + "\n</knowledge_base>"
+            )
+    return "\n\n".join(parts), signature
 
 
 async def _llm_draft_reply(
@@ -3187,9 +3224,13 @@ async def _llm_draft_reply(
             "it; plain text only (markdown links allowed), paragraphs separated by "
             "blank lines; be concise; match the language of the email; ground "
             "every fact in the email or the supplied context and never invent "
-            "specifics — if something is missing, keep it open or ask for it."
+            "specifics — if something is missing, keep it open or ask for it. "
+            "If the context contains <personal_instructions>, follow them. If it "
+            "contains <writing_style>, match that tone, length, and phrasing. If "
+            "it contains a <knowledge_base>, use it for facts and details but only "
+            "where relevant to this email."
         )
-        ctx = f"About the user: {about}\n\n" if about else ""
+        ctx = f"User context:\n{about}\n\n" if about else ""
         if context:
             ctx += f"Context gathered for this reply:\n{context}\n\n"
         user_prompt = (
@@ -3612,6 +3653,9 @@ class AssistantSettingsModel(BaseModel):
     cold_email_blocker: str = "OFF"  # OFF | LABEL | ARCHIVE
     agent_model: str = "tier-balanced"  # tier-fast | tier-balanced | tier-powerful
     digest_frequency: str = "OFF"  # OFF | DAILY | WEEKLY
+    personal_instructions: str | None = None
+    writing_style: str | None = None
+    draft_replies: bool = True
 
 
 @router.get("/assistant/settings")
@@ -3625,7 +3669,8 @@ async def get_assistant_settings(
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         row = (await db.execute(text(
             """SELECT about, signature, auto_run, cold_email_blocker, agent_model,
-                      digest_frequency
+                      digest_frequency, personal_instructions, writing_style,
+                      draft_replies
                FROM email_assistant_settings WHERE account_id = :aid"""
         ), {"aid": account_id})).fetchone()
         return {
@@ -3637,6 +3682,16 @@ async def get_assistant_settings(
             "agent_model": (row.agent_model if row else "tier-balanced")
             or "tier-balanced",
             "digest_frequency": (row.digest_frequency if row else "OFF") or "OFF",
+            "personal_instructions": (
+                getattr(row, "personal_instructions", None) if row else ""
+            ) or "",
+            "writing_style": (
+                getattr(row, "writing_style", None) if row else ""
+            ) or "",
+            "draft_replies": (
+                bool(row.draft_replies) if row and row.draft_replies is not None
+                else True
+            ),
         }
     finally:
         await db.close()
@@ -3654,8 +3709,10 @@ async def put_assistant_settings(
         await db.execute(text(
             """INSERT INTO email_assistant_settings
                  (account_id, about, signature, auto_run, cold_email_blocker,
-                  agent_model, digest_frequency, updated_at)
-               VALUES (:aid, :about, :sig, :auto, :cold, :model, :digest, now())
+                  agent_model, digest_frequency, personal_instructions,
+                  writing_style, draft_replies, updated_at)
+               VALUES (:aid, :about, :sig, :auto, :cold, :model, :digest,
+                       :pi, :ws, :dr, now())
                ON CONFLICT (account_id) DO UPDATE SET
                  about = EXCLUDED.about,
                  signature = EXCLUDED.signature,
@@ -3663,11 +3720,16 @@ async def put_assistant_settings(
                  cold_email_blocker = EXCLUDED.cold_email_blocker,
                  agent_model = EXCLUDED.agent_model,
                  digest_frequency = EXCLUDED.digest_frequency,
+                 personal_instructions = EXCLUDED.personal_instructions,
+                 writing_style = EXCLUDED.writing_style,
+                 draft_replies = EXCLUDED.draft_replies,
                  updated_at = now()"""
         ), {"aid": req.account_id, "about": req.about, "sig": req.signature,
             "auto": req.auto_run, "cold": req.cold_email_blocker or "OFF",
             "model": req.agent_model or "tier-balanced",
-            "digest": req.digest_frequency or "OFF"})
+            "digest": req.digest_frequency or "OFF",
+            "pi": req.personal_instructions, "ws": req.writing_style,
+            "dr": req.draft_replies})
         await db.commit()
         return {
             "account_id": req.account_id,
@@ -3677,7 +3739,182 @@ async def put_assistant_settings(
             "cold_email_blocker": req.cold_email_blocker or "OFF",
             "agent_model": req.agent_model or "tier-balanced",
             "digest_frequency": req.digest_frequency or "OFF",
+            "personal_instructions": req.personal_instructions or "",
+            "writing_style": req.writing_style or "",
+            "draft_replies": req.draft_replies,
         }
+    finally:
+        await db.close()
+
+
+# ── Draft knowledge base ────────────────────────────────────────────────────
+
+class KnowledgeModel(BaseModel):
+    id: str | None = None
+    account_id: str
+    title: str
+    content: str
+
+
+@router.get("/knowledge")
+async def list_knowledge(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """List the account's knowledge-base entries (used when drafting replies)."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        rows = (await db.execute(text(
+            """SELECT id, title, content, updated_at FROM email_knowledge
+               WHERE account_id = :aid ORDER BY updated_at DESC"""
+        ), {"aid": account_id})).fetchall()
+        return {"entries": [
+            {"id": str(r.id), "account_id": account_id, "title": r.title,
+             "content": r.content,
+             "updated_at": r.updated_at.isoformat() if r.updated_at else None}
+            for r in rows
+        ]}
+    finally:
+        await db.close()
+
+
+@router.post("/knowledge")
+async def create_knowledge(
+    req: KnowledgeModel,
+    user: UserContext = Depends(get_current_user),
+):
+    """Add (or overwrite by title) a knowledge-base entry."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        kid = str(uuid4())
+        await db.execute(text(
+            """INSERT INTO email_knowledge (id, account_id, title, content)
+               VALUES (:id, :aid, :title, :content)
+               ON CONFLICT (account_id, title) DO UPDATE SET
+                 content = EXCLUDED.content, updated_at = now()"""
+        ), {"id": kid, "aid": req.account_id, "title": req.title,
+            "content": req.content})
+        await db.commit()
+        return {"id": kid, "account_id": req.account_id, "title": req.title,
+                "content": req.content}
+    finally:
+        await db.close()
+
+
+@router.patch("/knowledge/{kid}")
+async def update_knowledge(
+    kid: str,
+    req: KnowledgeModel,
+    user: UserContext = Depends(get_current_user),
+):
+    """Edit a knowledge-base entry."""
+    db = await _get_db()
+    try:
+        owner = (await db.execute(text(
+            """SELECT ek.id FROM email_knowledge ek
+               JOIN email_accounts ea ON ek.account_id = ea.id
+               WHERE ek.id = :id AND ea.user_id = :uid"""
+        ), {"id": kid, "uid": user.email or "anonymous"})).fetchone()
+        if not owner:
+            raise HTTPException(status_code=404, detail="Not found")
+        await db.execute(text(
+            """UPDATE email_knowledge SET title = :title, content = :content,
+                      updated_at = now() WHERE id = :id"""
+        ), {"id": kid, "title": req.title, "content": req.content})
+        await db.commit()
+        return {"id": kid, "account_id": req.account_id, "title": req.title,
+                "content": req.content}
+    finally:
+        await db.close()
+
+
+@router.delete("/knowledge/{kid}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_knowledge(
+    kid: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Delete a knowledge-base entry."""
+    db = await _get_db()
+    try:
+        res = await db.execute(text(
+            """DELETE FROM email_knowledge ek USING email_accounts ea
+               WHERE ek.id = :id AND ek.account_id = ea.id
+                 AND ea.user_id = :uid"""
+        ), {"id": kid, "uid": user.email or "anonymous"})
+        await db.commit()
+        if res.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Not found")
+    finally:
+        await db.close()
+
+
+async def _llm_writing_style(samples: list[str]) -> str:
+    """Summarize the user's writing style from sample sent emails."""
+    try:
+        import litellm as _litellm  # noqa: PLC0415
+        from litellm import acompletion  # noqa: PLC0415
+        from acb_llm.client import ensure_model_registered, _TIER_MODEL  # noqa: PLC0415
+        _litellm.drop_params = True
+        _litellm.suppress_debug_info = True
+        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
+        ensure_model_registered(model)
+        joined = "\n\n---\n\n".join(samples)
+        sys_prompt = (
+            "Analyze the user's sent emails and describe their writing style as a "
+            "short, reusable style guide (4-6 bullet points). Cover typical "
+            "length, greeting/sign-off habits, formality, sentence style, and any "
+            "distinctive traits. Phrase each point as an instruction a writer "
+            "could follow, e.g. 'Keep replies to 2-3 short sentences.' Output ONLY "
+            "the guide."
+        )
+        resp = await acompletion(
+            model=model,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": joined[:8000]}],
+            temperature=0, max_tokens=400,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.writing_style_failed", error=str(exc)[:200])
+        return ""
+
+
+@router.post("/assistant/writing-style/generate")
+async def generate_writing_style(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """Derive a writing-style guide from the account's recent sent mail + save it."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        rows = (await db.execute(text(
+            """SELECT body_text FROM email_messages
+               WHERE account_id = :aid AND LOWER(folder) = 'sent'
+               ORDER BY received_at DESC LIMIT 25"""
+        ), {"aid": account_id})).fetchall()
+        samples = [
+            (r.body_text or "").strip()[:1200]
+            for r in rows if (r.body_text or "").strip()
+        ][:15]
+        if not samples:
+            raise HTTPException(
+                status_code=400, detail="No sent emails to analyze yet.")
+        style = await _llm_writing_style(samples)
+        if not style:
+            raise HTTPException(
+                status_code=502, detail="Could not derive a writing style.")
+        await db.execute(text(
+            """INSERT INTO email_assistant_settings
+                 (account_id, writing_style, updated_at)
+               VALUES (:aid, :ws, now())
+               ON CONFLICT (account_id) DO UPDATE SET
+                 writing_style = EXCLUDED.writing_style, updated_at = now()"""
+        ), {"aid": account_id, "ws": style})
+        await db.commit()
+        return {"writing_style": style}
     finally:
         await db.close()
 

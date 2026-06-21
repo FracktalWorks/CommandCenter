@@ -3,18 +3,19 @@
 import { useEffect, useState, useCallback } from "react";
 import {
   Loader2, Plus, Trash2, Pencil, Play, Check, X, FlaskConical,
-  History as HistoryIcon, Settings2, Sparkles,
+  History as HistoryIcon, Settings2, Sparkles, Wand2, BookOpen,
 } from "lucide-react";
 import {
   listRules, createRule, updateRule, deleteRule, testRules,
   getRulesHistory, runRules, getAssistantSettings, saveAssistantSettings,
   approveExecution, rejectExecution, testRulesRecent,
-  listColdSenders, upsertColdSender,
+  listColdSenders, upsertColdSender, generateWritingStyle,
+  listKnowledge, createKnowledge, updateKnowledge, deleteKnowledge,
 } from "../../lib/api";
 import {
   AutomationRule, RuleAction, RuleActionType, RuleTestResult, ExecutedRule,
   AssistantSettings, RecentTestResult, EMAIL_CATEGORIES, ColdBlockerMode,
-  ColdSender, LLMConfigResponse,
+  ColdSender, LLMConfigResponse, KnowledgeEntry,
 } from "../../lib/types";
 
 interface AssistantViewProps {
@@ -1262,6 +1263,49 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
             className={`${INPUT_CLS} resize-none`}
           />
         </Field>
+        <Field label="Personal instructions (global rules the assistant always follows)">
+          <textarea
+            value={settings.personal_instructions}
+            onChange={(e) =>
+              setSettings({ ...settings, personal_instructions: e.target.value })
+            }
+            rows={3}
+            placeholder="e.g. Never commit to dates without checking with me. Always offer a call for anything technical. Don't discuss pricing over email."
+            className={`${INPUT_CLS} resize-none`}
+          />
+        </Field>
+        <Field label="Writing style (tone & length the AI matches when drafting)">
+          <textarea
+            value={settings.writing_style}
+            onChange={(e) =>
+              setSettings({ ...settings, writing_style: e.target.value })
+            }
+            rows={3}
+            placeholder="e.g. Concise and friendly. 2–3 short sentences. No corporate jargon. Sign off with just my first name."
+            className={`${INPUT_CLS} resize-none`}
+          />
+        </Field>
+        <WritingStyleGenerator
+          accountId={accountId}
+          onGenerated={(ws) => setSettings({ ...settings, writing_style: ws })}
+        />
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.draft_replies}
+            onChange={(e) =>
+              setSettings({ ...settings, draft_replies: e.target.checked })
+            }
+            className="accent-primary mt-0.5"
+          />
+          <span>
+            <span className="text-xs text-foreground">Draft replies automatically</span>
+            <span className="block text-[11px] text-muted-foreground">
+              For emails that need a reply, the assistant prepares a draft (using
+              your writing style + knowledge base) for you to review — never sent.
+            </span>
+          </span>
+        </label>
         <label className="flex items-start gap-2 cursor-pointer">
           <input
             type="checkbox"
@@ -1372,6 +1416,8 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
         </div>
       </div>
 
+      <KnowledgeBase accountId={accountId} />
+
       <ColdSendersList accountId={accountId} />
 
       <div className="bg-card border border-border rounded-xl p-4">
@@ -1386,6 +1432,187 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
           History tab without changing anything.
         </p>
       </div>
+    </div>
+  );
+}
+
+function WritingStyleGenerator({
+  accountId,
+  onGenerated,
+}: {
+  accountId: string;
+  onGenerated: (style: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const generate = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await generateWritingStyle(accountId);
+      onGenerated(res.writing_style);
+    } catch (e) {
+      setErr((e as Error).message || "Could not analyze your sent mail.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2 -mt-2">
+      <button
+        onClick={generate}
+        disabled={busy}
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-[11px] text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+      >
+        {busy ? (
+          <Loader2 className="animate-spin" size={12} />
+        ) : (
+          <Wand2 size={12} />
+        )}
+        Generate from my sent mail
+      </button>
+      <span className="text-[10px] text-muted-foreground">
+        Analyzes recent sent emails — review before saving.
+      </span>
+      {err && <span className="text-[10px] text-destructive">{err}</span>}
+    </div>
+  );
+}
+
+function KnowledgeBase({ accountId }: { accountId: string | null }) {
+  const [entries, setEntries] = useState<KnowledgeEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<KnowledgeEntry | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    if (!accountId) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    listKnowledge(accountId)
+      .then(setEntries)
+      .catch(() => setEntries([]))
+      .finally(() => setLoading(false));
+  }, [accountId]);
+
+  useEffect(load, [load]);
+
+  const save = async () => {
+    if (!editing || !accountId || !editing.title.trim()) return;
+    setBusy(true);
+    try {
+      if (editing.id) await updateKnowledge(editing.id, editing);
+      else await createKnowledge({ ...editing, account_id: accountId });
+      setEditing(null);
+      load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (entry: KnowledgeEntry) => {
+    if (!entry.id || !confirm(`Delete “${entry.title}”?`)) return;
+    setEntries((prev) => prev.filter((e) => e.id !== entry.id));
+    try {
+      await deleteKnowledge(entry.id);
+    } catch {
+      load();
+    }
+  };
+
+  if (!accountId) return null;
+
+  return (
+    <div className="bg-card border border-border rounded-xl p-4">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+          <BookOpen size={14} className="text-primary" /> Knowledge base
+        </h3>
+        {!editing && (
+          <button
+            onClick={() => setEditing({ account_id: accountId, title: "", content: "" })}
+            className="flex items-center gap-1 text-xs text-primary hover:opacity-80"
+          >
+            <Plus size={12} /> Add entry
+          </button>
+        )}
+      </div>
+      <p className="text-[11px] text-muted-foreground mb-3">
+        Reference snippets (pricing, FAQs, policies, boilerplate) the assistant
+        draws on when drafting replies.
+      </p>
+
+      {editing ? (
+        <div className="space-y-2 border border-border rounded-lg p-2.5 bg-secondary/30">
+          <input
+            value={editing.title}
+            onChange={(e) => setEditing({ ...editing, title: e.target.value })}
+            placeholder="Title — e.g. Pricing & plans"
+            className={INPUT_CLS}
+          />
+          <textarea
+            value={editing.content}
+            onChange={(e) => setEditing({ ...editing, content: e.target.value })}
+            rows={4}
+            placeholder="The facts the assistant should use when this topic comes up…"
+            className={`${INPUT_CLS} resize-none`}
+          />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={save}
+              disabled={busy || !editing.title.trim()}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="animate-spin" size={13} /> : <Check size={13} />}
+              Save
+            </button>
+            <button
+              onClick={() => setEditing(null)}
+              className="px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:bg-secondary transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : loading ? (
+        <div className="text-xs text-muted-foreground">Loading…</div>
+      ) : entries.length === 0 ? (
+        <div className="text-xs text-muted-foreground">No entries yet.</div>
+      ) : (
+        <div className="space-y-1.5">
+          {entries.map((entry) => (
+            <div
+              key={entry.id}
+              className="flex items-start gap-2 border border-border rounded-lg px-3 py-2"
+            >
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-medium text-foreground truncate">
+                  {entry.title}
+                </div>
+                <div className="text-[11px] text-muted-foreground line-clamp-2">
+                  {entry.content}
+                </div>
+              </div>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <IconAction title="Edit" onClick={() => setEditing(entry)}>
+                  <Pencil size={12} />
+                </IconAction>
+                <IconAction
+                  title="Delete"
+                  onClick={() => remove(entry)}
+                  className="hover:text-destructive"
+                >
+                  <Trash2 size={12} />
+                </IconAction>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

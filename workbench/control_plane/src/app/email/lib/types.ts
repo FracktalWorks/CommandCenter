@@ -234,6 +234,21 @@ export interface AssistantSettings {
   agent_model: string;
   /** Scheduled inbox-digest cadence. */
   digest_frequency: DigestFrequency;
+  /** Global "always do this" guidance for the assistant. */
+  personal_instructions: string;
+  /** Tone/length/style guidance for drafted replies (can be auto-derived). */
+  writing_style: string;
+  /** Whether the assistant drafts replies for emails that need one. */
+  draft_replies: boolean;
+}
+
+/** A draft knowledge-base entry the assistant draws on when writing replies. */
+export interface KnowledgeEntry {
+  id?: string;
+  account_id: string;
+  title: string;
+  content: string;
+  updated_at?: string | null;
 }
 
 /** A configurable LLM tier/provider, from GET /api/settings/llm. */

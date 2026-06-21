@@ -2,7 +2,7 @@ import {
   ChatMessage, Email, EmailAccount,
   AnalyticsOverview, SenderStat, NewsletterStatus,
   AutomationRule, RuleTestResult, ExecutedRule, AssistantSettings,
-  RecentTestResult, ColdSender, ReplyZeroThread,
+  RecentTestResult, ColdSender, ReplyZeroThread, KnowledgeEntry,
 } from "./types";
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
@@ -670,6 +670,49 @@ export async function saveAssistantSettings(
     method: "PUT",
     body: JSON.stringify(settings),
   });
+}
+
+export async function generateWritingStyle(
+  accountId: string
+): Promise<{ writing_style: string }> {
+  return gatewayFetch<{ writing_style: string }>(
+    `/email/assistant/writing-style/generate?account_id=${encodeURIComponent(accountId)}`,
+    { method: "POST" }
+  );
+}
+
+// ── Assistant: knowledge base ───────────────────────────────────────────────
+
+export async function listKnowledge(
+  accountId: string
+): Promise<KnowledgeEntry[]> {
+  const res = await gatewayFetch<{ entries: KnowledgeEntry[] }>(
+    `/email/knowledge?account_id=${encodeURIComponent(accountId)}`
+  );
+  return res.entries ?? [];
+}
+
+export async function createKnowledge(
+  entry: KnowledgeEntry
+): Promise<KnowledgeEntry> {
+  return gatewayFetch<KnowledgeEntry>("/email/knowledge", {
+    method: "POST",
+    body: JSON.stringify(entry),
+  });
+}
+
+export async function updateKnowledge(
+  id: string,
+  entry: KnowledgeEntry
+): Promise<KnowledgeEntry> {
+  return gatewayFetch<KnowledgeEntry>(`/email/knowledge/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(entry),
+  });
+}
+
+export async function deleteKnowledge(id: string): Promise<void> {
+  await gatewayFetch(`/email/knowledge/${id}`, { method: "DELETE" });
 }
 
 // ── Sender categorization ───────────────────────────────────────────────────

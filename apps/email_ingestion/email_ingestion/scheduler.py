@@ -433,6 +433,19 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
                         "sync.categorize_failed account_id=%s error=%s",
                         account_id, str(exc),
                     )
+            # Reply Zero: classify thread reply-status (needs reply / FYI /
+            # awaiting) on new mail so the view reflects real intent.
+            if new_mail:
+                try:
+                    from gateway.routes.email import (  # noqa: PLC0415
+                        _maybe_classify_threads,
+                    )
+                    await _maybe_classify_threads(account_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "sync.classify_threads_failed account_id=%s error=%s",
+                        account_id, str(exc),
+                    )
             # Send a scheduled digest if one is due (opt-in per account).
             try:
                 from gateway.routes.email import _maybe_send_digest  # noqa: PLC0415

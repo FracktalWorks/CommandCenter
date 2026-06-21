@@ -3727,6 +3727,7 @@ class AssistantSettingsModel(BaseModel):
     personal_instructions: str | None = None
     writing_style: str | None = None
     draft_replies: bool = True
+    follow_up_days: int = 0  # 0 = off; remind on awaiting threads older than N
 
 
 @router.get("/assistant/settings")
@@ -3741,7 +3742,7 @@ async def get_assistant_settings(
         row = (await db.execute(text(
             """SELECT about, signature, auto_run, cold_email_blocker, agent_model,
                       digest_frequency, personal_instructions, writing_style,
-                      draft_replies
+                      draft_replies, follow_up_days
                FROM email_assistant_settings WHERE account_id = :aid"""
         ), {"aid": account_id})).fetchone()
         return {
@@ -3763,6 +3764,9 @@ async def get_assistant_settings(
                 bool(row.draft_replies) if row and row.draft_replies is not None
                 else True
             ),
+            "follow_up_days": (
+                getattr(row, "follow_up_days", 0) if row else 0
+            ) or 0,
         }
     finally:
         await db.close()
@@ -3781,9 +3785,9 @@ async def put_assistant_settings(
             """INSERT INTO email_assistant_settings
                  (account_id, about, signature, auto_run, cold_email_blocker,
                   agent_model, digest_frequency, personal_instructions,
-                  writing_style, draft_replies, updated_at)
+                  writing_style, draft_replies, follow_up_days, updated_at)
                VALUES (:aid, :about, :sig, :auto, :cold, :model, :digest,
-                       :pi, :ws, :dr, now())
+                       :pi, :ws, :dr, :fu, now())
                ON CONFLICT (account_id) DO UPDATE SET
                  about = EXCLUDED.about,
                  signature = EXCLUDED.signature,
@@ -3794,13 +3798,14 @@ async def put_assistant_settings(
                  personal_instructions = EXCLUDED.personal_instructions,
                  writing_style = EXCLUDED.writing_style,
                  draft_replies = EXCLUDED.draft_replies,
+                 follow_up_days = EXCLUDED.follow_up_days,
                  updated_at = now()"""
         ), {"aid": req.account_id, "about": req.about, "sig": req.signature,
             "auto": req.auto_run, "cold": req.cold_email_blocker or "OFF",
             "model": req.agent_model or "tier-balanced",
             "digest": req.digest_frequency or "OFF",
             "pi": req.personal_instructions, "ws": req.writing_style,
-            "dr": req.draft_replies})
+            "dr": req.draft_replies, "fu": req.follow_up_days or 0})
         await db.commit()
         return {
             "account_id": req.account_id,
@@ -3813,6 +3818,7 @@ async def put_assistant_settings(
             "personal_instructions": req.personal_instructions or "",
             "writing_style": req.writing_style or "",
             "draft_replies": req.draft_replies,
+            "follow_up_days": req.follow_up_days or 0,
         }
     finally:
         await db.close()
@@ -4285,6 +4291,144 @@ async def upsert_cold_sender(
 
 # ── Reply Zero (reply tracking) ──────────────────────────────────────────────
 
+def _addr_dict(raw: Any) -> dict:
+    return raw if isinstance(raw, dict) else json.loads(raw or "{}")
+
+
+async def _llm_needs_reply(items: list[dict[str, str]]) -> dict[int, dict[str, Any]]:
+    """Classify which inbound emails actually need a personal reply.
+
+    items: [{subject, from, body}]. Returns {index: {"needs": bool,
+    "reason": str}}; empty on LLM failure (callers default to needs=True).
+    """
+    if not items:
+        return {}
+    try:
+        import litellm as _litellm  # noqa: PLC0415
+        from litellm import acompletion  # noqa: PLC0415
+        from acb_llm.client import ensure_model_registered, _TIER_MODEL  # noqa: PLC0415
+        _litellm.drop_params = True
+        _litellm.suppress_debug_info = True
+        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
+        ensure_model_registered(model)
+        listing = "\n\n".join(
+            f"{i}. From: {it['from']}\nSubject: {it['subject']}\n"
+            f"Body: {(it['body'] or '')[:800]}"
+            for i, it in enumerate(items)
+        )
+        sys_prompt = (
+            "For each email decide if it NEEDS a personal reply from the "
+            "recipient — a real person asking a question, making a request, or "
+            "expecting a response — versus FYI / automated / no-action mail "
+            "(newsletters, notifications, receipts, marketing, confirmations, "
+            "calendar invites). Respond ONLY with a JSON array of "
+            '{"index": <n>, "needs_reply": <bool>, "reason": "<short why>"}.'
+        )
+        resp = await acompletion(
+            model=model,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": listing}],
+            temperature=0, max_tokens=700,
+        )
+        data = _safe_json(resp.choices[0].message.content or "")
+        out: dict[int, dict[str, Any]] = {}
+        if isinstance(data, list):
+            for d in data:
+                if not isinstance(d, dict):
+                    continue
+                idx = d.get("index")
+                if isinstance(idx, int) and 0 <= idx < len(items):
+                    out[idx] = {"needs": bool(d.get("needs_reply")),
+                                "reason": str(d.get("reason", ""))[:200]}
+        return out
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.needs_reply_failed", error=str(exc)[:200])
+        return {}
+
+
+async def _upsert_thread_status(
+    db: Any, account_id: str, thread_id: str, status: str,
+    msg_id: Any, msg_at: Any, reason: str,
+) -> None:
+    await db.execute(text(
+        """INSERT INTO email_thread_status
+             (account_id, thread_id, status, last_message_id, last_message_at,
+              reason, classified_at)
+           VALUES (:aid, :tid, :st, :mid, :mat, :reason, now())
+           ON CONFLICT (account_id, thread_id) DO UPDATE SET
+             status = EXCLUDED.status,
+             last_message_id = EXCLUDED.last_message_id,
+             last_message_at = EXCLUDED.last_message_at,
+             reason = EXCLUDED.reason, classified_at = now()"""
+    ), {"aid": account_id, "tid": thread_id, "st": status, "mid": msg_id,
+        "mat": msg_at, "reason": reason})
+
+
+async def _maybe_classify_threads(account_id: str) -> None:
+    """Reply Zero: store a per-thread status (NEEDS_REPLY / FYI / AWAITING).
+
+    Sent-last threads are AWAITING; inbound-last threads are AI-classified into
+    NEEDS_REPLY vs FYI. Only re-classifies a thread when its latest message
+    changed; caps the LLM work per cycle. Best-effort (never raises to caller)."""
+    db = await _get_db()
+    try:
+        rows = (await db.execute(text(
+            """WITH latest AS (
+                 SELECT DISTINCT ON (thread_id) thread_id, id, subject,
+                        from_address, body_text, snippet, folder, received_at
+                 FROM email_messages
+                 WHERE account_id = :aid AND thread_id IS NOT NULL
+                   AND received_at > now() - interval '30 days'
+                 ORDER BY thread_id, received_at DESC
+               )
+               SELECT * FROM latest ORDER BY received_at DESC LIMIT 200"""
+        ), {"aid": account_id})).fetchall()
+        if not rows:
+            return
+        existing = {
+            r.thread_id: str(r.last_message_id)
+            for r in (await db.execute(text(
+                "SELECT thread_id, last_message_id FROM email_thread_status "
+                "WHERE account_id = :aid"
+            ), {"aid": account_id})).fetchall()
+        }
+        to_classify = []
+        for r in rows:
+            if existing.get(r.thread_id) == str(r.id):
+                continue  # latest message unchanged → status still valid
+            folder = (r.folder or "").lower()
+            if folder == "sent":
+                await _upsert_thread_status(
+                    db, account_id, r.thread_id, "AWAITING", r.id,
+                    r.received_at, "")
+            elif folder == "inbox":
+                to_classify.append(r)
+        await db.commit()
+
+        to_classify = to_classify[:25]  # cap LLM work per cycle
+        for i in range(0, len(to_classify), 10):
+            batch = to_classify[i:i + 10]
+            items = [
+                {"subject": r.subject or "",
+                 "from": _addr_dict(r.from_address).get("email", ""),
+                 "body": r.body_text or r.snippet or ""}
+                for r in batch
+            ]
+            verdicts = await _llm_needs_reply(items)
+            for j, r in enumerate(batch):
+                v = verdicts.get(j, {"needs": True, "reason": ""})
+                status = "NEEDS_REPLY" if v["needs"] else "FYI"
+                await _upsert_thread_status(
+                    db, account_id, r.thread_id, status, r.id,
+                    r.received_at, v.get("reason", ""))
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.classify_threads_failed",
+                     account_id=account_id, error=str(exc)[:200])
+    finally:
+        await db.close()
+
+
 @router.get("/reply-zero")
 async def reply_zero(
     account_id: str = Query(...),
@@ -4292,11 +4436,54 @@ async def reply_zero(
     limit: int = Query(50, ge=1, le=200),
     user: UserContext = Depends(get_current_user),
 ):
-    """Threads needing a reply (last message inbound) or awaiting one (last
-    message sent). Computed live from the latest message per thread."""
+    """Threads that need a reply or are awaiting one. Prefers the stored,
+    AI-classified status (Reply Zero); falls back to the folder heuristic until
+    the first classification pass has run."""
     db = await _get_db()
     try:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
+        has_status = (await db.execute(text(
+            "SELECT 1 FROM email_thread_status WHERE account_id = :aid LIMIT 1"
+        ), {"aid": account_id})).fetchone() is not None
+
+        if has_status:
+            want = "AWAITING" if type == "awaiting" else "NEEDS_REPLY"
+            rows = (await db.execute(text(
+                """SELECT ts.thread_id, ts.reason, ts.last_message_at,
+                          em.id, em.subject, em.from_address, em.is_read
+                   FROM email_thread_status ts
+                   JOIN email_messages em ON em.id = ts.last_message_id
+                   WHERE ts.account_id = :aid AND ts.status = :st
+                   ORDER BY ts.last_message_at DESC NULLS LAST LIMIT :limit"""
+            ), {"aid": account_id, "st": want, "limit": limit})).fetchall()
+            fu_days = 0
+            if type == "awaiting":
+                fu_row = (await db.execute(text(
+                    "SELECT follow_up_days FROM email_assistant_settings "
+                    "WHERE account_id = :aid"
+                ), {"aid": account_id})).fetchone()
+                fu_days = (fu_row.follow_up_days if fu_row else 0) or 0
+            now = datetime.now(timezone.utc)
+            out = []
+            for r in rows:
+                frm = _addr_dict(r.from_address)
+                days = (now - r.last_message_at).days if r.last_message_at else None
+                out.append({
+                    "thread_id": r.thread_id, "message_id": str(r.id),
+                    "subject": r.subject or "(no subject)",
+                    "from": frm.get("name") or frm.get("email", ""),
+                    "from_email": frm.get("email", ""),
+                    "received_at": (
+                        r.last_message_at.isoformat() if r.last_message_at else None
+                    ),
+                    "is_read": r.is_read, "reason": r.reason or "",
+                    "awaiting_days": days,
+                    "needs_follow_up": bool(
+                        fu_days and days is not None and days >= fu_days),
+                })
+            return {"threads": out, "type": type}
+
+        # Fallback: folder heuristic (before the first classification pass).
         folder = "sent" if type == "awaiting" else "inbox"
         rows = (await db.execute(text(
             """WITH latest AS (
@@ -4313,15 +4500,15 @@ async def reply_zero(
         ), {"aid": account_id, "folder": folder, "limit": limit})).fetchall()
         out = []
         for r in rows:
-            frm = r.from_address if isinstance(r.from_address, dict) \
-                else json.loads(r.from_address or "{}")
+            frm = _addr_dict(r.from_address)
             out.append({
                 "thread_id": r.thread_id, "message_id": str(r.id),
                 "subject": r.subject or "(no subject)",
                 "from": frm.get("name") or frm.get("email", ""),
                 "from_email": frm.get("email", ""),
                 "received_at": r.received_at.isoformat() if r.received_at else None,
-                "is_read": r.is_read,
+                "is_read": r.is_read, "reason": "",
+                "awaiting_days": None, "needs_follow_up": False,
             })
         return {"threads": out, "type": type}
     finally:

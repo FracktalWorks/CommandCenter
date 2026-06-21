@@ -120,6 +120,12 @@ export interface ReplyZeroThread {
   from_email: string;
   received_at: string | null;
   is_read: boolean;
+  /** Why the classifier flagged this thread (needs-reply rationale). */
+  reason?: string;
+  /** Days since the last message (used for the follow-up window). */
+  awaiting_days?: number | null;
+  /** True when an awaiting thread is older than the follow-up window. */
+  needs_follow_up?: boolean;
 }
 
 // ── Analytics ──────────────────────────────────────────────────────────────
@@ -240,6 +246,8 @@ export interface AssistantSettings {
   writing_style: string;
   /** Whether the assistant drafts replies for emails that need one. */
   draft_replies: boolean;
+  /** Remind about sent threads awaiting a reply older than N days (0 = off). */
+  follow_up_days: number;
 }
 
 /** A draft knowledge-base entry the assistant draws on when writing replies. */

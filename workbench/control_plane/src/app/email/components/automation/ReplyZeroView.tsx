@@ -113,12 +113,27 @@ export function ReplyZeroView({ accountId }: ReplyZeroViewProps) {
               <div key={t.message_id} className="px-3 sm:px-5 py-2.5">
                 <div className="flex items-center gap-3">
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs font-medium text-foreground truncate">
-                      {t.subject}
+                    <div className="flex items-center gap-1.5">
+                      <div className="text-xs font-medium text-foreground truncate">
+                        {t.subject}
+                      </div>
+                      {t.needs_follow_up && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 flex-shrink-0">
+                          Follow up
+                          {typeof t.awaiting_days === "number"
+                            ? ` · ${t.awaiting_days}d`
+                            : ""}
+                        </span>
+                      )}
                     </div>
                     <div className="text-[11px] text-muted-foreground truncate">
                       {t.from} · {t.received_at ? timeLabel(t.received_at) : ""}
                     </div>
+                    {t.reason && (
+                      <div className="text-[10px] text-muted-foreground/80 italic truncate">
+                        {t.reason}
+                      </div>
+                    )}
                   </div>
                   <button
                     onClick={() => draft(t, mode === "awaiting")}

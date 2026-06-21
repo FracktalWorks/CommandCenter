@@ -1400,6 +1400,21 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
             <option value="WEEKLY">Weekly</option>
           </select>
         </Field>
+        <Field label="Follow-up reminder (days before nudging an awaiting reply; 0 = off)">
+          <input
+            type="number"
+            min={0}
+            max={60}
+            value={settings.follow_up_days}
+            onChange={(e) =>
+              setSettings({
+                ...settings,
+                follow_up_days: parseInt(e.target.value || "0", 10) || 0,
+              })
+            }
+            className={INPUT_CLS}
+          />
+        </Field>
         <div className="flex items-center gap-2 pt-1">
           <button
             onClick={save}

@@ -251,6 +251,30 @@ class GmailProvider(BaseEmailProvider):
         data = resp.json()
         return data["id"]
 
+    async def create_draft(
+        self,
+        to: list[str],
+        subject: str,
+        body_text: str,
+        body_html: str | None = None,
+        reply_to_message_id: str | None = None,
+        thread_id: str | None = None,
+    ) -> str:
+        """Create a Gmail draft (drafts.create); threads it when a thread id is
+        given so the reply lands in the right conversation."""
+        msg = MIMEText(body_text, "plain" if not body_html else "html")
+        msg["To"] = ", ".join(to)
+        msg["Subject"] = subject
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        message: dict[str, Any] = {"raw": raw}
+        tid = thread_id or reply_to_message_id
+        if tid:
+            message["threadId"] = tid
+        client = await self._get_client()
+        resp = await client.post("/users/me/drafts", json={"message": message})
+        resp.raise_for_status()
+        return resp.json().get("id", "")
+
     async def modify_message(
         self,
         provider_message_id: str,

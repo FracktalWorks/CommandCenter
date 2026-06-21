@@ -8,10 +8,11 @@ import {
 import {
   listRules, createRule, updateRule, deleteRule, testRules,
   getRulesHistory, runRules, getAssistantSettings, saveAssistantSettings,
+  approveExecution, rejectExecution, testRulesRecent,
 } from "../../lib/api";
 import {
   AutomationRule, RuleAction, RuleActionType, RuleTestResult, ExecutedRule,
-  AssistantSettings,
+  AssistantSettings, RecentTestResult,
 } from "../../lib/types";
 
 interface AssistantViewProps {
@@ -30,8 +31,11 @@ const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
 
 const ACTION_TYPES: RuleActionType[] = [
   "ARCHIVE", "LABEL", "MARK_READ", "STAR", "MARK_SPAM", "TRASH",
-  "MOVE_FOLDER", "CALL_WEBHOOK",
+  "MOVE_FOLDER", "REPLY", "FORWARD", "DRAFT_EMAIL", "CALL_WEBHOOK",
 ];
+
+/** Action types that draft an email and expose to/subject/content fields. */
+const DRAFT_ACTIONS = new Set<RuleActionType>(["REPLY", "FORWARD", "DRAFT_EMAIL"]);
 
 const INPUT_CLS =
   "w-full bg-secondary border border-border rounded-lg px-2.5 py-2 text-xs " +
@@ -50,6 +54,7 @@ const PRESET_RULES: PresetRule[] = [
       "Emails that need a reply or response from me — a person asking a " +
       "question, making a request, or awaiting my input. Not automated mail.",
     enabled: true,
+    automated: true,
     run_on_threads: false,
     conditional_operator: "OR",
     sort_order: 0,
@@ -60,6 +65,7 @@ const PRESET_RULES: PresetRule[] = [
     instructions:
       "Newsletters, digests, and content subscriptions I've signed up for.",
     enabled: true,
+    automated: true,
     run_on_threads: false,
     conditional_operator: "OR",
     sort_order: 1,
@@ -71,6 +77,7 @@ const PRESET_RULES: PresetRule[] = [
       "Marketing, promotional and sales emails — discounts, offers, product " +
       "announcements and campaigns.",
     enabled: true,
+    automated: true,
     run_on_threads: false,
     conditional_operator: "OR",
     sort_order: 2,
@@ -80,6 +87,7 @@ const PRESET_RULES: PresetRule[] = [
     name: "Calendar",
     instructions: "Calendar invites, meeting requests and event notifications.",
     enabled: true,
+    automated: true,
     run_on_threads: false,
     conditional_operator: "OR",
     sort_order: 3,
@@ -90,6 +98,7 @@ const PRESET_RULES: PresetRule[] = [
     instructions:
       "Receipts, invoices, order confirmations and payment notifications.",
     enabled: true,
+    automated: true,
     run_on_threads: false,
     conditional_operator: "OR",
     sort_order: 4,
@@ -100,6 +109,7 @@ const PRESET_RULES: PresetRule[] = [
     instructions:
       "Automated notifications, alerts and updates from apps and services.",
     enabled: true,
+    automated: true,
     run_on_threads: false,
     conditional_operator: "OR",
     sort_order: 5,
@@ -111,6 +121,7 @@ const PRESET_RULES: PresetRule[] = [
       "Cold outreach — unsolicited sales, marketing or recruiting emails from " +
       "people or companies I have no prior relationship with.",
     enabled: true,
+    automated: true,
     run_on_threads: false,
     conditional_operator: "OR",
     sort_order: 6,
@@ -159,6 +170,7 @@ const emptyRule = (accountId: string): AutomationRule => ({
   name: "",
   instructions: "",
   enabled: true,
+  automated: true,
   run_on_threads: false,
   conditional_operator: "AND",
   from_pattern: "",
@@ -354,7 +366,25 @@ function RulesTab({ accountId }: { accountId: string | null }) {
               />
             </button>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-foreground">{rule.name}</div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-foreground">
+                  {rule.name}
+                </span>
+                <span
+                  className={`text-[9px] px-1.5 py-0.5 rounded-full ${
+                    rule.automated
+                      ? "bg-primary/15 text-primary"
+                      : "bg-amber-500/15 text-amber-400"
+                  }`}
+                  title={
+                    rule.automated
+                      ? "Runs automatically"
+                      : "Proposes actions for your approval"
+                  }
+                >
+                  {rule.automated ? "Auto" : "Manual"}
+                </span>
+              </div>
               {rule.instructions && (
                 <div className="text-xs text-muted-foreground mt-0.5">
                   {rule.instructions}
@@ -462,6 +492,22 @@ function RuleEditor({
         </Field>
       </div>
 
+      <label className="flex items-start gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={draft.automated}
+          onChange={(e) => set({ automated: e.target.checked })}
+          className="accent-primary mt-0.5"
+        />
+        <span>
+          <span className="text-xs text-foreground">Run automatically</span>
+          <span className="block text-[11px] text-muted-foreground">
+            On: matching mail gets these actions applied automatically. Off: the
+            assistant proposes them in History for your approval.
+          </span>
+        </span>
+      </label>
+
       {/* Actions */}
       <div>
         <div className="flex items-center justify-between mb-2">
@@ -477,26 +523,40 @@ function RuleEditor({
         </div>
         <div className="space-y-2">
           {draft.actions.map((a, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <select
-                value={a.type}
-                onChange={(e) =>
-                  setAction(i, { type: e.target.value as RuleActionType })
-                }
-                className={`${INPUT_CLS} flex-shrink-0 w-40`}
-              >
-                {ACTION_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
+            <div
+              key={i}
+              className="border border-border rounded-lg p-2 space-y-2 bg-secondary/30"
+            >
+              <div className="flex items-center gap-2">
+                <select
+                  value={a.type}
+                  onChange={(e) =>
+                    setAction(i, { type: e.target.value as RuleActionType })
+                  }
+                  className={`${INPUT_CLS} flex-1`}
+                >
+                  {ACTION_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() =>
+                    set({ actions: draft.actions.filter((_, idx) => idx !== i) })
+                  }
+                  className="p-1.5 text-muted-foreground hover:text-destructive flex-shrink-0"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+
               {(a.type === "LABEL" || a.type === "MOVE_FOLDER") && (
                 <input
                   value={a.label ?? ""}
                   onChange={(e) => setAction(i, { label: e.target.value })}
                   placeholder={a.type === "LABEL" ? "Label name" : "Folder key"}
-                  className={`${INPUT_CLS} flex-1`}
+                  className={INPUT_CLS}
                 />
               )}
               {a.type === "CALL_WEBHOOK" && (
@@ -504,17 +564,43 @@ function RuleEditor({
                   value={a.url ?? ""}
                   onChange={(e) => setAction(i, { url: e.target.value })}
                   placeholder="https://…"
-                  className={`${INPUT_CLS} flex-1`}
+                  className={INPUT_CLS}
                 />
               )}
-              <button
-                onClick={() =>
-                  set({ actions: draft.actions.filter((_, idx) => idx !== i) })
-                }
-                className="p-1.5 text-muted-foreground hover:text-destructive"
-              >
-                <X size={13} />
-              </button>
+              {DRAFT_ACTIONS.has(a.type) && (
+                <div className="space-y-2">
+                  <input
+                    value={a.to_address ?? ""}
+                    onChange={(e) => setAction(i, { to_address: e.target.value })}
+                    placeholder={
+                      a.type === "FORWARD"
+                        ? "Forward to (email)"
+                        : "To (defaults to the sender)"
+                    }
+                    className={INPUT_CLS}
+                  />
+                  <input
+                    value={a.subject ?? ""}
+                    onChange={(e) => setAction(i, { subject: e.target.value })}
+                    placeholder="Subject (optional)"
+                    className={INPUT_CLS}
+                  />
+                  <textarea
+                    value={a.content ?? ""}
+                    onChange={(e) => setAction(i, { content: e.target.value })}
+                    rows={2}
+                    placeholder={
+                      a.type === "FORWARD"
+                        ? "Note to add above the forwarded message (optional)"
+                        : "Draft text — leave blank to let the AI write the reply"
+                    }
+                    className={`${INPUT_CLS} resize-none`}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Creates a draft for review — never auto-sends.
+                  </p>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -548,11 +634,13 @@ function TestTab({
   accountId: string | null;
   selectedEmailId: string | null;
 }) {
+  const [mode, setMode] = useState<"single" | "recent">("single");
   const [from, setFrom] = useState("");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [useSelected, setUseSelected] = useState(!!selectedEmailId);
   const [result, setResult] = useState<RuleTestResult | null>(null);
+  const [recent, setRecent] = useState<RecentTestResult[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -577,10 +665,96 @@ function TestTab({
     }
   };
 
+  const runRecent = async () => {
+    if (!accountId) return;
+    setLoading(true);
+    setError(null);
+    setRecent(null);
+    try {
+      setRecent(await testRulesRecent(accountId, 10));
+    } catch (e) {
+      setError((e as Error).message || "Test failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (!accountId) return <Empty>Select an account first.</Empty>;
 
   return (
-    <div className="h-full overflow-y-auto px-5 py-4 space-y-4">
+    <div className="h-full overflow-y-auto px-4 sm:px-5 py-4 space-y-4">
+      <div className="flex items-center gap-1 bg-secondary rounded-lg p-0.5 w-fit">
+        {(["single", "recent"] as const).map((m) => (
+          <button
+            key={m}
+            onClick={() => setMode(m)}
+            className={`px-3 py-1 rounded-md text-xs transition-colors ${
+              mode === m
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {m === "single" ? "Single email" : "Recent inbox"}
+          </button>
+        ))}
+      </div>
+
+      {mode === "recent" ? (
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Run your rules against the 10 most recent inbox emails — nothing is
+            applied.
+          </p>
+          <button
+            onClick={runRecent}
+            disabled={loading}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            {loading ? <Loader2 className="animate-spin" size={13} /> : <FlaskConical size={13} />}
+            Test on recent inbox
+          </button>
+          {error && <div className="text-xs text-destructive">{error}</div>}
+          {recent && (
+            <div className="space-y-1.5">
+              {recent.map((r) => (
+                <div
+                  key={r.email_id}
+                  className="flex items-center gap-3 bg-card border border-border rounded-lg px-3 py-2"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-foreground truncate">
+                      {r.subject}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground truncate">
+                      {r.from}
+                    </div>
+                  </div>
+                  {r.matched ? (
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-primary/15 text-primary">
+                        {r.rule?.name}
+                      </span>
+                      {r.actions.map((a, i) => (
+                        <span
+                          key={i}
+                          className="text-[9px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground"
+                        >
+                          {a}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                      no match
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+      <>
       <p className="text-xs text-muted-foreground">
         Test which rule would match an email before turning it loose on your inbox.
       </p>
@@ -672,6 +846,8 @@ function TestTab({
           )}
         </div>
       )}
+      </>
+      )}
     </div>
   );
 }
@@ -681,6 +857,7 @@ function TestTab({
 function HistoryTab({ accountId }: { accountId: string | null }) {
   const [history, setHistory] = useState<ExecutedRule[]>([]);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -692,18 +869,49 @@ function HistoryTab({ accountId }: { accountId: string | null }) {
 
   useEffect(load, [load]);
 
+  const approve = async (id: string) => {
+    setBusy(id);
+    try {
+      const res = await approveExecution(id);
+      setHistory((prev) =>
+        prev.map((h) =>
+          h.id === id ? { ...h, status: "APPLIED", actions: res.actions } : h
+        )
+      );
+    } catch {
+      load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const reject = async (id: string) => {
+    setBusy(id);
+    try {
+      await rejectExecution(id);
+      setHistory((prev) =>
+        prev.map((h) => (h.id === id ? { ...h, status: "REJECTED" } : h))
+      );
+    } catch {
+      load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
   if (loading) return <Spinner label="Loading history…" />;
 
+  const pendingCount = history.filter((h) => h.status === "PENDING").length;
+
   return (
-    <div className="h-full overflow-y-auto px-5 py-3">
+    <div className="h-full overflow-y-auto px-3 sm:px-5 py-3">
       <div className="flex items-center justify-between mb-3">
         <p className="text-xs text-muted-foreground">
-          Every time a rule fired, with the actions taken.
+          {pendingCount > 0
+            ? `${pendingCount} proposed action${pendingCount > 1 ? "s" : ""} awaiting approval.`
+            : "Every time a rule fired, with the actions taken."}
         </p>
-        <button
-          onClick={load}
-          className="text-xs text-primary hover:opacity-80"
-        >
+        <button onClick={load} className="text-xs text-primary hover:opacity-80">
           Refresh
         </button>
       </div>
@@ -724,7 +932,9 @@ function HistoryTab({ accountId }: { accountId: string | null }) {
                     ? "bg-emerald-500/15 text-emerald-400"
                     : h.status === "PENDING"
                       ? "bg-amber-500/15 text-amber-400"
-                      : "bg-secondary text-muted-foreground"
+                      : h.status === "REJECTED"
+                        ? "bg-red-500/15 text-red-400"
+                        : "bg-secondary text-muted-foreground"
                 }`}
               >
                 {h.status}
@@ -738,14 +948,37 @@ function HistoryTab({ accountId }: { accountId: string | null }) {
                 </div>
               </div>
               <div className="flex items-center gap-1 flex-shrink-0">
-                {h.actions.map((a, i) => (
-                  <span
-                    key={i}
-                    className="text-[9px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground"
-                  >
-                    {a}
-                  </span>
-                ))}
+                {h.status === "PENDING" ? (
+                  busy === h.id ? (
+                    <Loader2 className="animate-spin text-muted-foreground" size={13} />
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => approve(h.id)}
+                        title="Apply these actions"
+                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-emerald-400 border border-border hover:bg-emerald-500/10 transition-colors"
+                      >
+                        <Check size={12} /> Approve
+                      </button>
+                      <button
+                        onClick={() => reject(h.id)}
+                        title="Dismiss"
+                        className="p-1.5 rounded-md text-muted-foreground hover:text-destructive border border-border"
+                      >
+                        <X size={12} />
+                      </button>
+                    </>
+                  )
+                ) : (
+                  h.actions.map((a, i) => (
+                    <span
+                      key={i}
+                      className="text-[9px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground"
+                    >
+                      {a}
+                    </span>
+                  ))
+                )}
               </div>
             </div>
           ))}

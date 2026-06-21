@@ -2505,6 +2505,7 @@ class RuleModel(BaseModel):
     name: str
     instructions: str | None = None
     enabled: bool = True
+    automated: bool = True
     run_on_threads: bool = False
     conditional_operator: str = "AND"
     from_pattern: str | None = None
@@ -2520,9 +2521,10 @@ class RuleModel(BaseModel):
 async def _load_rules(db: Any, account_id: str) -> list[dict[str, Any]]:
     """Load rules + their actions for an account, ordered by sort_order."""
     rule_rows = (await db.execute(text(
-        """SELECT id, account_id, name, instructions, enabled, run_on_threads,
-                  conditional_operator, from_pattern, to_pattern, subject_pattern,
-                  body_pattern, category_filter_type, system_type, sort_order
+        """SELECT id, account_id, name, instructions, enabled, automated,
+                  run_on_threads, conditional_operator, from_pattern, to_pattern,
+                  subject_pattern, body_pattern, category_filter_type,
+                  system_type, sort_order
            FROM email_rules WHERE account_id = :aid
            ORDER BY sort_order, created_at"""
     ), {"aid": account_id})).fetchall()
@@ -2536,6 +2538,7 @@ async def _load_rules(db: Any, account_id: str) -> list[dict[str, Any]]:
         rules.append({
             "id": str(r.id), "account_id": str(r.account_id), "name": r.name,
             "instructions": r.instructions, "enabled": r.enabled,
+            "automated": r.automated,
             "run_on_threads": r.run_on_threads,
             "conditional_operator": r.conditional_operator,
             "from_pattern": r.from_pattern, "to_pattern": r.to_pattern,
@@ -2594,14 +2597,16 @@ async def create_rule(
         rule_id = str(uuid4())
         await db.execute(text(
             """INSERT INTO email_rules
-                 (id, account_id, name, instructions, enabled, run_on_threads,
-                  conditional_operator, from_pattern, to_pattern, subject_pattern,
-                  body_pattern, category_filter_type, system_type, sort_order)
-               VALUES (:id, :aid, :name, :instr, :enabled, :rot, :op, :fp, :tp,
-                       :sp, :bp, :cft, :st, :so)"""
+                 (id, account_id, name, instructions, enabled, automated,
+                  run_on_threads, conditional_operator, from_pattern, to_pattern,
+                  subject_pattern, body_pattern, category_filter_type,
+                  system_type, sort_order)
+               VALUES (:id, :aid, :name, :instr, :enabled, :auto, :rot, :op,
+                       :fp, :tp, :sp, :bp, :cft, :st, :so)"""
         ), {"id": rule_id, "aid": req.account_id, "name": req.name,
             "instr": req.instructions, "enabled": req.enabled,
-            "rot": req.run_on_threads, "op": req.conditional_operator,
+            "auto": req.automated, "rot": req.run_on_threads,
+            "op": req.conditional_operator,
             "fp": req.from_pattern, "tp": req.to_pattern, "sp": req.subject_pattern,
             "bp": req.body_pattern, "cft": req.category_filter_type,
             "st": req.system_type, "so": req.sort_order})
@@ -2632,13 +2637,15 @@ async def update_rule(
         await db.execute(text(
             """UPDATE email_rules SET
                  name = :name, instructions = :instr, enabled = :enabled,
-                 run_on_threads = :rot, conditional_operator = :op,
+                 automated = :auto, run_on_threads = :rot,
+                 conditional_operator = :op,
                  from_pattern = :fp, to_pattern = :tp, subject_pattern = :sp,
                  body_pattern = :bp, category_filter_type = :cft,
                  system_type = :st, sort_order = :so, updated_at = now()
                WHERE id = :rid"""
         ), {"rid": rule_id, "name": req.name, "instr": req.instructions,
-            "enabled": req.enabled, "rot": req.run_on_threads,
+            "enabled": req.enabled, "auto": req.automated,
+            "rot": req.run_on_threads,
             "op": req.conditional_operator, "fp": req.from_pattern,
             "tp": req.to_pattern, "sp": req.subject_pattern, "bp": req.body_pattern,
             "cft": req.category_filter_type, "st": req.system_type,
@@ -2848,6 +2855,53 @@ async def test_rules(
         await db.close()
 
 
+class RuleTestRecentRequest(BaseModel):
+    account_id: str
+    limit: int = 8
+
+
+@router.post("/rules/test/recent")
+async def test_rules_recent(
+    req: RuleTestRecentRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Test the rules against the most recent inbox messages (read-only).
+
+    Returns, per email, which rule would match and the actions it would take —
+    inbox-zero's "test on your real inbox" preview. Applies nothing.
+    """
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        rows = (await db.execute(text(
+            """SELECT id, subject, body_text, snippet, from_address
+               FROM email_messages
+               WHERE account_id = :aid AND LOWER(folder) = 'inbox'
+               ORDER BY received_at DESC LIMIT :limit"""
+        ), {"aid": req.account_id, "limit": min(req.limit, 15)})).fetchall()
+        results = []
+        for r in rows:
+            frm = r.from_address if isinstance(r.from_address, dict) \
+                else json.loads(r.from_address or "{}")
+            email = {"subject": r.subject or "", "from": frm.get("email", ""),
+                     "body": r.body_text or r.snippet or "", "to": ""}
+            match = await _match_email_to_rule(db, req.account_id, email)
+            results.append({
+                "email_id": str(r.id),
+                "subject": r.subject or "(no subject)",
+                "from": frm.get("name") or frm.get("email", ""),
+                "matched": bool(match),
+                "rule": {"id": match["rule"]["id"], "name": match["rule"]["name"]}
+                if match else None,
+                "reason": match["reason"] if match else "",
+                "actions": [a["type"] for a in match["rule"]["actions"]]
+                if match else [],
+            })
+        return {"results": results}
+    finally:
+        await db.close()
+
+
 @router.get("/rules/history")
 async def rules_history(
     account_id: str | None = Query(None),
@@ -2884,6 +2938,89 @@ async def rules_history(
         await db.close()
 
 
+@router.post("/rules/history/{exec_id}/approve")
+async def approve_execution(
+    exec_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Apply a PENDING (proposed) rule execution — the approval queue."""
+    db = await _get_db()
+    try:
+        row = (await db.execute(text(
+            """SELECT er.status, er.rule_id, er.message_id, er.provider_message_id,
+                      er.thread_id, er.subject, er.from_address, er.account_id,
+                      er.reason, ea.provider, ea.credentials_encrypted,
+                      em.body_text
+               FROM email_executed_rules er
+               JOIN email_accounts ea ON er.account_id = ea.id
+               LEFT JOIN email_messages em ON er.message_id = em.id
+               WHERE er.id = :eid AND ea.user_id = :uid"""
+        ), {"eid": exec_id, "uid": user.email or "anonymous"})).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Execution not found")
+        if row.status != "PENDING":
+            raise HTTPException(status_code=400, detail="Not pending")
+        if not row.rule_id:
+            raise HTTPException(status_code=400, detail="Rule no longer exists")
+
+        act_rows = (await db.execute(text(
+            """SELECT type, label, subject, content, to_address, cc_address,
+                      bcc_address, url FROM email_actions WHERE rule_id = :rid"""
+        ), {"rid": row.rule_id})).fetchall()
+        actions = [dict(a._mapping) for a in act_rows]
+
+        from acb_llm.key_store import get_key_store
+        store = get_key_store()
+        creds = json.loads(store.decrypt(row.credentials_encrypted))
+        provider = _instantiate_provider(row.provider, creds)
+        if not await provider.authenticate():
+            raise HTTPException(status_code=502, detail="Provider auth failed")
+
+        about, signature = await _load_assistant_about(db, str(row.account_id))
+        email = {"subject": row.subject or "", "from": row.from_address or "",
+                 "body": row.body_text or "", "thread_id": row.thread_id or ""}
+        taken = await _apply_rule_actions(
+            db, provider, str(row.message_id), row.provider_message_id,
+            actions, email, about, signature,
+        )
+        await db.execute(text(
+            "UPDATE email_executed_rules SET status='APPLIED', actions_taken=:acts "
+            "WHERE id=:eid"
+        ), {"eid": exec_id, "acts": json.dumps(taken)})
+        if row.message_id:
+            await db.execute(text(
+                "UPDATE email_messages SET rules_processed_at = now() WHERE id=:mid"
+            ), {"mid": str(row.message_id)})
+        await _persist_rotated_creds(db, store, str(row.account_id), provider)
+        await db.commit()
+        return {"ok": True, "status": "APPLIED", "actions": taken}
+    finally:
+        await db.close()
+
+
+@router.post("/rules/history/{exec_id}/reject")
+async def reject_execution(
+    exec_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Dismiss a PENDING rule execution without applying it."""
+    db = await _get_db()
+    try:
+        res = await db.execute(text(
+            """UPDATE email_executed_rules er
+               SET status = 'REJECTED'
+               FROM email_accounts ea
+               WHERE er.id = :eid AND er.account_id = ea.id
+                 AND ea.user_id = :uid AND er.status = 'PENDING'"""
+        ), {"eid": exec_id, "uid": user.email or "anonymous"})
+        await db.commit()
+        if res.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Pending execution not found")
+        return {"ok": True, "status": "REJECTED"}
+    finally:
+        await db.close()
+
+
 class RuleRunRequest(BaseModel):
     account_id: str
     limit: int = 20
@@ -2914,10 +3051,68 @@ async def run_rules(
     return {"scheduled": True, "dry_run": req.dry_run}
 
 
+async def _load_assistant_about(db: Any, account_id: str) -> tuple[str, str]:
+    """Return (about, signature) for draft context; empty strings if unset."""
+    row = (await db.execute(text(
+        "SELECT about, signature FROM email_assistant_settings WHERE account_id = :aid"
+    ), {"aid": account_id})).fetchone()
+    if not row:
+        return "", ""
+    return row.about or "", row.signature or ""
+
+
+async def _llm_draft_reply(
+    email: dict[str, str], about: str, signature: str, instructions: str = ""
+) -> str:
+    """Draft a reply body with the LLM, using the user's About context.
+
+    Falls back to a neutral template if the LLM is unavailable.
+    """
+    try:
+        import litellm as _litellm  # noqa: PLC0415
+        from litellm import acompletion  # noqa: PLC0415
+        from acb_llm.client import ensure_model_registered, _TIER_MODEL  # noqa: PLC0415
+        _litellm.drop_params = True
+        _litellm.suppress_debug_info = True
+        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
+        ensure_model_registered(model)
+        sys_prompt = (
+            "You draft professional, concise email replies on behalf of the user. "
+            "Write ONLY the reply body — no subject line. Match a natural, polite tone."
+        )
+        ctx = f"About the user: {about}\n\n" if about else ""
+        user_prompt = (
+            f"{ctx}Draft a reply to this email.\n"
+            f"From: {email.get('from', '')}\n"
+            f"Subject: {email.get('subject', '')}\n"
+            f"Body:\n{(email.get('body', '') or '')[:2000]}\n"
+        )
+        if instructions:
+            user_prompt += f"\nExtra instructions: {instructions}\n"
+        resp = await acompletion(
+            model=model,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": user_prompt}],
+            temperature=0.3, max_tokens=600,
+        )
+        body = (resp.choices[0].message.content or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.llm_draft_failed", error=str(exc)[:200])
+        body = "Hi,\n\nThanks for your email — I'll review this and get back to you shortly."
+    if signature:
+        body = f"{body}\n\n{signature}"
+    return body
+
+
 async def _run_rules_job(
     account_id: str, limit: int, dry_run: bool, user_email: str
 ) -> None:
-    """Background worker: match recent inbox messages to rules and log/apply."""
+    """Background worker: match UNPROCESSED inbox mail to rules and log/apply.
+
+    Live runs (dry_run=False) apply the actions of *automated* rules and mark the
+    message processed; matched non-automated rules are logged PENDING for
+    approval. Dry runs only log PENDING and never mark messages processed.
+    """
     db = await _get_db()
     try:
         rows = (await db.execute(text(
@@ -2925,8 +3120,13 @@ async def _run_rules_job(
                       em.body_text, em.snippet, em.from_address
                FROM email_messages em
                WHERE em.account_id = :aid AND LOWER(em.folder) = 'inbox'
+                 AND em.rules_processed_at IS NULL
                ORDER BY em.received_at DESC LIMIT :limit"""
         ), {"aid": account_id, "limit": limit})).fetchall()
+        if not rows:
+            return
+
+        about, signature = await _load_assistant_about(db, account_id)
 
         provider = None
         store = None
@@ -2945,32 +3145,45 @@ async def _run_rules_job(
         for r in rows:
             frm = r.from_address if isinstance(r.from_address, dict) \
                 else json.loads(r.from_address or "{}")
-            email = {"subject": r.subject or "", "from": frm.get("email", ""),
-                     "body": r.body_text or r.snippet or "", "to": ""}
+            email = {
+                "subject": r.subject or "", "from": frm.get("email", ""),
+                "body": r.body_text or r.snippet or "", "to": "",
+                "thread_id": r.thread_id or "",
+            }
             match = await _match_email_to_rule(db, account_id, email)
-            if not match:
-                continue
-            rule = match["rule"]
-            actions_taken: list[str] = []
-            if not dry_run and provider is not None:
-                actions_taken = await _apply_rule_actions(
-                    db, provider, str(r.id), r.provider_message_id, rule["actions"]
-                )
-            else:
-                actions_taken = [a["type"] for a in rule["actions"]]
-            await db.execute(text(
-                """INSERT INTO email_executed_rules
-                     (account_id, rule_id, rule_name, message_id, provider_message_id,
-                      thread_id, subject, from_address, status, automated,
-                      actions_taken, reason)
-                   VALUES (:aid, :rid, :rname, :mid, :pmid, :tid, :subj, :frm,
-                           :status, true, :acts, :reason)"""
-            ), {"aid": account_id, "rid": rule["id"], "rname": rule["name"],
-                "mid": str(r.id), "pmid": r.provider_message_id, "tid": r.thread_id,
-                "subj": r.subject or "", "frm": frm.get("email", ""),
-                "status": "PENDING" if dry_run else "APPLIED",
-                "acts": json.dumps(actions_taken), "reason": match["reason"]})
+            if match:
+                rule = match["rule"]
+                automated = bool(rule.get("automated", True))
+                apply = (not dry_run) and automated and provider is not None
+                if apply:
+                    actions_taken = await _apply_rule_actions(
+                        db, provider, str(r.id), r.provider_message_id,
+                        rule["actions"], email, about, signature,
+                    )
+                    status = "APPLIED"
+                else:
+                    actions_taken = [a["type"] for a in rule["actions"]]
+                    status = "PENDING"
+                await db.execute(text(
+                    """INSERT INTO email_executed_rules
+                         (account_id, rule_id, rule_name, message_id,
+                          provider_message_id, thread_id, subject, from_address,
+                          status, automated, actions_taken, reason)
+                       VALUES (:aid, :rid, :rname, :mid, :pmid, :tid, :subj, :frm,
+                               :status, :auto, :acts, :reason)"""
+                ), {"aid": account_id, "rid": rule["id"], "rname": rule["name"],
+                    "mid": str(r.id), "pmid": r.provider_message_id,
+                    "tid": r.thread_id, "subj": r.subject or "",
+                    "frm": frm.get("email", ""), "status": status,
+                    "auto": automated, "acts": json.dumps(actions_taken),
+                    "reason": match["reason"]})
+            if not dry_run:
+                await db.execute(text(
+                    "UPDATE email_messages SET rules_processed_at = now() "
+                    "WHERE id = :id"
+                ), {"id": str(r.id)})
             await db.commit()
+
         if provider is not None and store is not None:
             await _persist_rotated_creds(db, store, account_id, provider)
             await db.commit()
@@ -2983,9 +3196,12 @@ async def _run_rules_job(
 
 async def _apply_rule_actions(
     db: Any, provider: Any, message_id: str, provider_msg_id: str,
-    actions: list[dict[str, Any]],
+    actions: list[dict[str, Any]], email: dict[str, str] | None = None,
+    about: str = "", signature: str = "",
 ) -> list[str]:
-    """Apply the safe subset of rule actions (archive/trash/read/star/label/move)."""
+    """Apply a rule's actions. Reply/forward/draft create provider DRAFTS (never
+    auto-send) so a misfiring rule can't email anyone without review."""
+    email = email or {}
     done: list[str] = []
     for a in actions:
         t = a.get("type")
@@ -3010,6 +3226,35 @@ async def _apply_rule_actions(
                 await provider.move_to_folder(provider_msg_id, a["label"].lower())
             elif t == "LABEL" and a.get("label"):
                 await provider.set_labels(provider_msg_id, add=[a["label"]], remove=[])
+            elif t in ("REPLY", "DRAFT_EMAIL"):
+                tmpl = (a.get("content") or "").strip()
+                body = tmpl if tmpl else await _llm_draft_reply(
+                    email, about, signature, a.get("subject") or ""
+                )
+                subj = a.get("subject") or f"Re: {email.get('subject', '')}"
+                to = a.get("to_address") or email.get("from", "")
+                if not to:
+                    continue
+                await provider.create_draft(
+                    to=[to], subject=subj, body_text=body,
+                    reply_to_message_id=provider_msg_id,
+                    thread_id=email.get("thread_id") or None,
+                )
+            elif t == "FORWARD" and a.get("to_address"):
+                note = (a.get("content") or "").strip()
+                fwd = (
+                    f"{note}\n\n" if note else ""
+                ) + (
+                    "---------- Forwarded message ----------\n"
+                    f"From: {email.get('from', '')}\n"
+                    f"Subject: {email.get('subject', '')}\n\n"
+                    f"{(email.get('body', '') or '')[:4000]}"
+                )
+                await provider.create_draft(
+                    to=[a["to_address"]],
+                    subject=a.get("subject") or f"Fwd: {email.get('subject', '')}",
+                    body_text=fwd,
+                )
             elif t == "CALL_WEBHOOK" and a.get("url"):
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     await client.post(a["url"], json={"message_id": message_id})

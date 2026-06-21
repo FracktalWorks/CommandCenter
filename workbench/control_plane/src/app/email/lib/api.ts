@@ -2,6 +2,7 @@ import {
   ChatMessage, Email, EmailAccount,
   AnalyticsOverview, SenderStat, NewsletterStatus,
   AutomationRule, RuleTestResult, ExecutedRule, AssistantSettings,
+  RecentTestResult,
 } from "./types";
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
@@ -605,6 +606,33 @@ export async function getRulesHistory(
     `/email/rules/history?${sp}`
   );
   return res.history ?? [];
+}
+
+export async function approveExecution(
+  execId: string
+): Promise<{ ok: boolean; status: string; actions: string[] }> {
+  return gatewayFetch(`/email/rules/history/${execId}/approve`, {
+    method: "POST",
+  });
+}
+
+export async function rejectExecution(
+  execId: string
+): Promise<{ ok: boolean; status: string }> {
+  return gatewayFetch(`/email/rules/history/${execId}/reject`, {
+    method: "POST",
+  });
+}
+
+export async function testRulesRecent(
+  accountId: string,
+  limit = 8
+): Promise<RecentTestResult[]> {
+  const res = await gatewayFetch<{ results: RecentTestResult[] }>(
+    "/email/rules/test/recent",
+    { method: "POST", body: JSON.stringify({ account_id: accountId, limit }) }
+  );
+  return res.results ?? [];
 }
 
 export async function runRules(params: {

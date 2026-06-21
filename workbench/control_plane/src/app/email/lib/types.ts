@@ -146,6 +146,8 @@ export interface AutomationRule {
   name: string;
   instructions?: string | null;
   enabled: boolean;
+  /** Apply actions automatically (true) or only propose for approval (false). */
+  automated: boolean;
   run_on_threads: boolean;
   conditional_operator: "AND" | "OR";
   from_pattern?: string | null;
@@ -182,6 +184,16 @@ export interface AssistantSettings {
   about: string;
   signature: string;
   auto_run: boolean;
+}
+
+export interface RecentTestResult {
+  email_id: string;
+  subject: string;
+  from: string;
+  matched: boolean;
+  rule: { id: string; name: string } | null;
+  reason: string;
+  actions: string[];
 }
 
 export interface EmailFolder {

@@ -348,6 +348,44 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
 # -- Per-account sync loop ----------------------------------------------------
 
 
+async def _maybe_auto_run_rules(account_id: str) -> None:
+    """If the account has auto-run enabled and ≥1 enabled rule, process the
+    freshly-synced inbox mail with the Assistant rules engine.
+
+    The rules worker lives in the gateway; it's imported lazily so the email
+    ingestion package keeps no static dependency on the gateway package.
+    """
+    try:
+        from gateway.routes.email import _get_db, _run_rules_job  # noqa: PLC0415
+        db = await _get_db()
+        try:
+            settings = (await db.execute(
+                text(
+                    "SELECT auto_run FROM email_assistant_settings "
+                    "WHERE account_id = :aid"
+                ),
+                {"aid": account_id},
+            )).fetchone()
+            if not settings or not settings.auto_run:
+                return
+            has_rule = (await db.execute(
+                text(
+                    "SELECT 1 FROM email_rules "
+                    "WHERE account_id = :aid AND enabled = true LIMIT 1"
+                ),
+                {"aid": account_id},
+            )).fetchone()
+            if not has_rule:
+                return
+        finally:
+            await db.close()
+        await _run_rules_job(account_id, 50, False, "scheduler")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "sync.auto_run_failed account_id=%s error=%s", account_id, str(exc)
+        )
+
+
 async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
     """Run sync in a loop for a single account forever."""
     logger.info(
@@ -356,7 +394,10 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
     )
     while True:
         try:
-            await _sync_account(account_id)
+            result = await _sync_account(account_id)
+            # Auto-run Assistant rules on newly-synced mail (opt-in per account).
+            if isinstance(result, dict) and result.get("synced", 0):
+                await _maybe_auto_run_rules(account_id)
         except Exception as exc:
             logger.warning(
                 "sync.loop_iteration_failed account_id=%s error=%s",

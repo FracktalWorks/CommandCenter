@@ -239,6 +239,44 @@ class OutlookProvider(BaseEmailProvider):
         resp.raise_for_status()
         return "sent"  # Graph API doesn't return the sent message ID
 
+    async def create_draft(
+        self,
+        to: list[str],
+        subject: str,
+        body_text: str,
+        body_html: str | None = None,
+        reply_to_message_id: str | None = None,
+        thread_id: str | None = None,
+    ) -> str:
+        """Create an Outlook draft. For replies, use createReply (keeps threading)
+        then set the body; otherwise create a standalone draft message."""
+        client = await self._get_client()
+        body_block = {
+            "contentType": "html" if body_html else "text",
+            "content": body_html or body_text,
+        }
+        if reply_to_message_id:
+            resp = await client.post(
+                f"/me/messages/{reply_to_message_id}/createReply"
+            )
+            resp.raise_for_status()
+            draft_id = resp.json().get("id", "")
+            patch = await client.patch(
+                f"/me/messages/{draft_id}", json={"body": body_block}
+            )
+            patch.raise_for_status()
+            return draft_id
+        message: dict[str, Any] = {
+            "subject": subject,
+            "body": body_block,
+            "toRecipients": [
+                {"emailAddress": {"address": addr}} for addr in to
+            ],
+        }
+        resp = await client.post("/me/messages", json=message)
+        resp.raise_for_status()
+        return resp.json().get("id", "")
+
     async def modify_message(
         self,
         provider_message_id: str,

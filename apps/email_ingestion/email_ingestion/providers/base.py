@@ -236,6 +236,25 @@ class BaseEmailProvider(ABC):
         """
         return None
 
+    async def create_draft(
+        self,
+        to: list[str],
+        subject: str,
+        body_text: str,
+        body_html: str | None = None,
+        reply_to_message_id: str | None = None,
+        thread_id: str | None = None,
+    ) -> str:
+        """Create a DRAFT message (not sent) on the provider; return its id.
+
+        Used by Assistant reply/forward/draft rule actions. Raises
+        NotImplementedError if the provider doesn't support drafts so the caller
+        can log and skip rather than fail the whole rule.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support drafts"
+        )
+
     @abstractmethod
     async def sync_messages(
         self,

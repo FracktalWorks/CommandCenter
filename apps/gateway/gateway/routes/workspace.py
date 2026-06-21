@@ -201,16 +201,49 @@ def _safe_resolve(root: Path, rel: str) -> Path:
     return resolved
 
 
-# The three workspace directories that are visible in the Files Viewer sidebar.
-# Agents read/write artefacts to inputs/, outputs/, and agent-data/ — ONLY
-# these directories (and their contents) are exposed to the frontend user.
-# All other files (agent source, configs, skills, .github/, etc.) remain
-# accessible to the agent itself but are hidden from the chat UI.
+# The three "special" workspace directories.  Agents are encouraged to write
+# deliverables to outputs/ (uploads land in inputs/, reference data in
+# agent-data/), and these are always created up-front so they show in the UI.
+# NOTE: the Files Viewer is NOT limited to these — GitHub Copilot SDK agents
+# create/edit files directly in the working-directory root (reports, scripts,
+# code), so the viewer surfaces the whole working tree (minus the excludes
+# below).  These three are kept only for up-front creation and categorisation.
 _VISIBLE_WORKSPACE_DIRS = frozenset({"inputs", "outputs", "agent-data"})
 
-# Directories explicitly excluded from traversal within the visible workspace
-# dirs (cache / tooling noise).
-_EXCLUDED_DIRS = frozenset({"__pycache__", "node_modules", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache"})
+# Directories excluded from traversal: VCS, dependency, build, and cache noise.
+# Pruned wherever they appear so a whole-repo clone (e.g. the dev agent that
+# clones the entire monorepo) doesn't flood the UI with node_modules/.git/etc.
+_EXCLUDED_DIRS = frozenset({
+    "__pycache__", "node_modules", ".git", ".mypy_cache", ".pytest_cache",
+    ".ruff_cache", ".venv", "venv", ".next", ".turbo", ".cache", "dist",
+    "build", ".idea", ".vscode", "coverage", ".nyc_output", "test-results",
+    "playwright-report", ".pnpm-store", ".gradle", ".terraform",
+    "site-packages", ".egg-info",
+})
+
+# File suffixes never surfaced (compiled junk + key/cert material).
+_EXCLUDED_FILE_SUFFIXES = (".pid", ".pem", ".key", ".crt", ".pyc", ".pyo")
+
+# Substrings that mark a file as secret/credential material to hide from the UI.
+_SECRET_FILE_MARKERS = ("token_cache", "credential", "secret", "id_rsa", "id_ed25519")
+
+# Hard cap on files returned per workspace walk — bounds huge monorepo clones.
+_MAX_TREE_FILES = 4000
+
+
+def _is_hidden_or_secret_file(name: str) -> bool:
+    """True if *name* is a dotfile, secret/credential, or compiled-junk file.
+
+    Dotfiles (``.env``, ``.zoho_token_cache.json``, ``.git-credentials`` …)
+    are hidden wholesale — this is the primary guard against leaking secrets
+    that live in an agent's working-directory root into the file browser.
+    """
+    if name.startswith("."):
+        return True
+    if name.endswith(_EXCLUDED_FILE_SUFFIXES):
+        return True
+    low = name.lower()
+    return any(m in low for m in _SECRET_FILE_MARKERS)
 
 
 def _ensure_workspace_dirs(root: Path) -> None:
@@ -220,49 +253,56 @@ def _ensure_workspace_dirs(root: Path) -> None:
 
 
 def _walk_tree(root: Path) -> list[FileEntry]:
-    """Walk ONLY the visible workspace directories and return a flat list of
-    FileEntry objects.
+    """Walk the agent's whole working tree and return a flat list of files.
 
-    Only ``inputs/``, ``outputs/``, and ``agent-data/`` are traversed.
-    All other top-level files and directories are intentionally hidden from
-    the frontend user (but remain accessible to the agent itself).
+    Unlike the old behaviour (which only traversed ``inputs/``, ``outputs/``,
+    and ``agent-data/``), this surfaces every file the agent created or edited
+    — GitHub Copilot SDK agents write reports, scripts, and code directly in
+    the working-directory root, so restricting to the three special dirs hid
+    all of their output.  ``_EXCLUDED_DIRS`` (VCS/deps/build/cache) and
+    :func:`_is_hidden_or_secret_file` (dotfiles, keys, credential caches) keep
+    the listing useful and prevent secret leakage.  Capped at
+    ``_MAX_TREE_FILES``.
     """
     entries: list[FileEntry] = []
     try:
         _ensure_workspace_dirs(root)
 
-        for visible_dir in sorted(_VISIBLE_WORKSPACE_DIRS):
-            dir_path = root / visible_dir
-            if not dir_path.is_dir():
-                continue
+        for dirpath, dirnames, filenames in os.walk(root):
+            # Prune VCS / dependency / build / cache directories everywhere.
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if not d.startswith(".") and d not in _EXCLUDED_DIRS
+            )
+            dp = Path(dirpath)
+            rel_dir = dp.relative_to(root)
 
-            for dirpath, dirnames, filenames in os.walk(dir_path):
-                # Skip cache / tooling noise directories.
-                dirnames[:] = [
-                    d for d in dirnames
-                    if not d.startswith(".") and d not in _EXCLUDED_DIRS
-                ]
-                dp = Path(dirpath)
-                rel_dir = dp.relative_to(root)
-
-                for fname in sorted(filenames):
-                    fpath = dp / fname
-                    try:
-                        stat = fpath.stat()
-                        rel_path = str((rel_dir / fname)).replace("\\", "/")
-                        mime, _ = mimetypes.guess_type(fname)
-                        entries.append(FileEntry(
-                            path=rel_path,
-                            name=fname,
-                            size=stat.st_size,
-                            modified_at=__import__("datetime").datetime.fromtimestamp(
-                                stat.st_mtime, tz=__import__("datetime").timezone.utc
-                            ).isoformat(),
-                            mime_type=mime or "application/octet-stream",
-                            is_dir=False,
-                        ))
-                    except OSError:
-                        continue
+            for fname in sorted(filenames):
+                if _is_hidden_or_secret_file(fname):
+                    continue
+                fpath = dp / fname
+                try:
+                    stat = fpath.stat()
+                    rel_path = str((rel_dir / fname)).replace("\\", "/")
+                    mime, _ = mimetypes.guess_type(fname)
+                    entries.append(FileEntry(
+                        path=rel_path,
+                        name=fname,
+                        size=stat.st_size,
+                        modified_at=__import__("datetime").datetime.fromtimestamp(
+                            stat.st_mtime, tz=__import__("datetime").timezone.utc
+                        ).isoformat(),
+                        mime_type=mime or "application/octet-stream",
+                        is_dir=False,
+                    ))
+                    if len(entries) >= _MAX_TREE_FILES:
+                        _log.warning(
+                            "workspace.walk_capped",
+                            root=str(root), cap=_MAX_TREE_FILES,
+                        )
+                        return entries
+                except OSError:
+                    continue
     except Exception as exc:
         _log.warning("workspace.walk_failed", root=str(root), error=str(exc))
     return entries
@@ -275,6 +315,24 @@ def _is_visible_workspace_path(rel_path: str) -> bool:
         clean == d or clean.startswith(d + "/")
         for d in _VISIBLE_WORKSPACE_DIRS
     )
+
+
+def _is_blocked_path(rel_path: str) -> bool:
+    """True if *rel_path* points into excluded/secret territory.
+
+    The file browser now lists the whole working tree, so the raw-file
+    endpoints must independently refuse anything the walkers hide — otherwise
+    a crafted ``?path=.env`` would still stream a secret that never appeared
+    in any listing.  Blocks excluded/dot directories anywhere in the path and
+    secret/dot/junk basenames.
+    """
+    parts = [p for p in rel_path.replace("\\", "/").split("/") if p not in ("", ".")]
+    if not parts:
+        return True
+    for seg in parts[:-1]:
+        if seg.startswith(".") or seg in _EXCLUDED_DIRS:
+            return True
+    return _is_hidden_or_secret_file(parts[-1])
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +373,8 @@ async def get_workspace_file(
     if workspace is None or not workspace.exists():
         raise HTTPException(status_code=404, detail="Workspace not found for session")
 
+    if _is_blocked_path(path):
+        raise HTTPException(status_code=404, detail="File not found")
     file_path = _safe_resolve(workspace, path)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
@@ -773,96 +833,102 @@ def _discover_agent_workspaces() -> dict[str, Path]:
     return workspaces
 
 
+def _category_for(rel_path: str) -> str:
+    """Label an entry by its top-level segment: one of the three special dirs,
+    or ``"workspace"`` for everything in the working-directory root/tree."""
+    first = rel_path.replace("\\", "/").split("/", 1)[0]
+    return first if first in _VISIBLE_WORKSPACE_DIRS else "workspace"
+
+
 def _walk_agent_artifacts(
     agent_name: str,
     workspace: Path,
     category_filter: str | None = None,
 ) -> list[ArtifactEntry]:
-    """Walk the visible workspace dirs for a single agent and return
-    ArtifactEntry objects (both files and directories)."""
-    entries: list[ArtifactEntry] = []
-    categories = (
-        [category_filter]
-        if category_filter and category_filter in _VISIBLE_WORKSPACE_DIRS
-        else sorted(_VISIBLE_WORKSPACE_DIRS)
-    )
+    """Walk an agent's whole working tree and return ArtifactEntry objects
+    (files + directories).
 
-    for cat in categories:
-        cat_dir = workspace / cat
-        if not cat_dir.is_dir():
+    Surfaces every file the agent created or edited — not just ``inputs/``,
+    ``outputs/``, ``agent-data/`` — because GitHub Copilot SDK agents write
+    reports, scripts, and code directly into the working-directory root.
+    ``_EXCLUDED_DIRS`` and :func:`_is_hidden_or_secret_file` strip VCS/build
+    noise and secrets; the listing is capped at ``_MAX_TREE_FILES``.  When
+    *category_filter* names a special dir, only that subtree is walked.
+    """
+    import datetime as _dt  # noqa: PLC0415
+
+    entries: list[ArtifactEntry] = []
+
+    if category_filter and category_filter in _VISIBLE_WORKSPACE_DIRS:
+        start = workspace / category_filter
+        if not start.is_dir():
+            return entries
+    else:
+        start = workspace
+
+    file_count = 0
+    for dirpath, dirnames, filenames in os.walk(start):
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if not d.startswith(".") and d not in _EXCLUDED_DIRS
+        )
+        dp = Path(dirpath)
+        try:
+            rel_dir = dp.relative_to(workspace)
+        except ValueError:
             continue
 
-        # Add the category root directory itself
-        try:
-            stat = cat_dir.stat()
+        # Directory entries (the root itself is skipped — only its children).
+        for dname in dirnames:
+            dpath = dp / dname
+            try:
+                dstat = dpath.stat()
+            except OSError:
+                continue
+            rel_dpath = str((rel_dir / dname)).replace("\\", "/")
             entries.append(ArtifactEntry(
                 agent_name=agent_name,
-                path=cat,
-                name=cat,
+                path=rel_dpath,
+                name=dname,
                 size=0,
-                modified_at=__import__("datetime").datetime.fromtimestamp(
-                    stat.st_mtime,
-                    tz=__import__("datetime").timezone.utc,
+                modified_at=_dt.datetime.fromtimestamp(
+                    dstat.st_mtime, tz=_dt.timezone.utc,
                 ).isoformat(),
                 mime_type="inode/directory",
-                category=cat,
+                category=_category_for(rel_dpath),
                 is_dir=True,
             ))
-        except OSError:
-            pass
 
-        for dirpath, dirnames, filenames in os.walk(cat_dir):
-            dirnames[:] = [
-                d for d in dirnames
-                if not d.startswith(".") and d not in _EXCLUDED_DIRS
-            ]
-            dp = Path(dirpath)
-            rel_dir = dp.relative_to(workspace)
-
-            # Yield sub-directory entries
-            for dname in sorted(dirnames):
-                try:
-                    dpath = dp / dname
-                    dstat = dpath.stat()
-                    rel_dpath = str((rel_dir / dname)).replace("\\", "/")
-                    entries.append(ArtifactEntry(
-                        agent_name=agent_name,
-                        path=rel_dpath,
-                        name=dname,
-                        size=0,
-                        modified_at=__import__("datetime").datetime.fromtimestamp(
-                            dstat.st_mtime,
-                            tz=__import__("datetime").timezone.utc,
-                        ).isoformat(),
-                        mime_type="inode/directory",
-                        category=cat,
-                        is_dir=True,
-                    ))
-                except OSError:
-                    continue
-
-            # Yield file entries
-            for fname in sorted(filenames):
-                fpath = dp / fname
-                try:
-                    stat = fpath.stat()
-                    rel_path = str((rel_dir / fname)).replace("\\", "/")
-                    mime, _ = mimetypes.guess_type(fname)
-                    entries.append(ArtifactEntry(
-                        agent_name=agent_name,
-                        path=rel_path,
-                        name=fname,
-                        size=stat.st_size,
-                        modified_at=__import__("datetime").datetime.fromtimestamp(
-                            stat.st_mtime,
-                            tz=__import__("datetime").timezone.utc,
-                        ).isoformat(),
-                        mime_type=mime or "application/octet-stream",
-                        category=cat,
-                        is_dir=False,
-                    ))
-                except OSError:
-                    continue
+        # File entries.
+        for fname in sorted(filenames):
+            if _is_hidden_or_secret_file(fname):
+                continue
+            fpath = dp / fname
+            try:
+                stat = fpath.stat()
+            except OSError:
+                continue
+            rel_path = str((rel_dir / fname)).replace("\\", "/")
+            mime, _ = mimetypes.guess_type(fname)
+            entries.append(ArtifactEntry(
+                agent_name=agent_name,
+                path=rel_path,
+                name=fname,
+                size=stat.st_size,
+                modified_at=_dt.datetime.fromtimestamp(
+                    stat.st_mtime, tz=_dt.timezone.utc,
+                ).isoformat(),
+                mime_type=mime or "application/octet-stream",
+                category=_category_for(rel_path),
+                is_dir=False,
+            ))
+            file_count += 1
+            if file_count >= _MAX_TREE_FILES:
+                _log.warning(
+                    "workspace.artifacts_walk_capped",
+                    agent=agent_name, cap=_MAX_TREE_FILES,
+                )
+                return entries
 
     return entries
 
@@ -931,6 +997,8 @@ async def get_artifact_file(
             status_code=404, detail=f"Agent workspace not found: {agent}"
         )
 
+    if _is_blocked_path(path):
+        raise HTTPException(status_code=404, detail="File not found")
     file_path = _safe_resolve(workspace, path)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")

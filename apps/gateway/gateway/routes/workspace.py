@@ -41,7 +41,6 @@ import mimetypes
 import os
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger
@@ -125,66 +124,58 @@ def _get_workspace_path(session_id: str) -> Path | None:
     return None
 
 
+def _agent_workspace_dir(agent_name: str) -> Path | None:
+    """Return the on-disk workspace (clone-cache) directory for an agent.
+
+    This MUST mirror ``loader.load_agent``, which ALWAYS runs an agent from
+    ``{agents_clone_dir}/repos/{agent_name}`` (``clone_as=agent_name``) —
+    whether the agent is sourced from a GitHub repo or a local ``local_path``.
+    The registry's ``local_path`` is only a *load-time source pointer*: the
+    loader copies it into the clone-cache and runs from there, so the agent
+    and all its artefacts (``outputs/``, ``inputs/``, ``agent-data/``) live in
+    the cache, NOT at ``local_path``.  Using ``local_path`` as the workspace
+    points the file browsers at the (artefact-free) monorepo source — which is
+    exactly why generated files were invisible in the UI.
+
+    Tries the bare agent name first, then the ``agent-`` prefixed variant,
+    since older clones may use either convention.  Returns ``None`` when no
+    clone exists yet (the agent has never run, so it has no artefacts).
+    """
+    from acb_common import get_settings  # noqa: PLC0415
+
+    settings = get_settings()
+    clone_root = (
+        Path(
+            getattr(
+                settings,
+                "agents_clone_dir",
+                str(Path.home() / ".acb" / "agents"),
+            )
+        )
+        / "repos"
+    )
+    candidates = [clone_root / agent_name]
+    if agent_name.startswith("agent-"):
+        candidates.append(clone_root / agent_name[len("agent-"):])
+    else:
+        candidates.append(clone_root / f"agent-{agent_name}")
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
 def _resolve_agent_workspace(agent_name: str) -> Path | None:
     """Return the workspace directory for a named agent.
 
-    Checks (in order):
-    1. Static agent registry (``_AGENT_REGISTRY``) for ``local_path`` overrides.
-    2. Dynamic agent registry (Postgres-backed) for ``local_path`` entries.
-    3. Clone-cache convention: ``{agents_clone_dir}/repos/{agent_name}``.
+    Always resolves to the clone-cache directory the loader actually runs the
+    agent from (``{agents_clone_dir}/repos/{agent_name}``).  See
+    :func:`_agent_workspace_dir` for why the registry ``local_path`` is never
+    used here.
     """
     try:
-        from acb_common import get_settings  # noqa: PLC0415
-
-        # ── 1. Static registry (in-code _AGENT_REGISTRY) ──────────────────
-        try:
-            from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
-            for entry in _AGENT_REGISTRY:
-                if entry.get("name") == agent_name:
-                    lp = entry.get("local_path")
-                    if lp:
-                        p = Path(lp)
-                        if p.exists():
-                            return p
-                    break
-        except Exception:  # noqa: BLE001
-            pass
-
-        # ── 2. Dynamic registry (Postgres-backed) ─────────────────────────
-        try:
-            from gateway.routes.agent import \
-                _load_dynamic_agents  # noqa: PLC0415
-            for entry in _load_dynamic_agents():
-                if entry.get("name") == agent_name:
-                    lp = entry.get("local_path")
-                    if lp:
-                        p = Path(lp)
-                        if p.exists():
-                            return p
-                    # For GitHub-registered agents, the clone dir
-                    # follows the clone-cache convention checked below.
-                    break
-        except Exception:  # noqa: BLE001
-            pass
-
-        # ── 3. Clone-cache convention ─────────────────────────────────────
-        settings = get_settings()
-        clone_root = (
-            Path(getattr(settings, "agents_clone_dir", "/tmp/acb_agents"))
-            / "repos"
-        )
-        # Try exact agent_name first; also try with "agent-" prefix stripped
-        # since clone directories may use either convention.
-        candidates = [clone_root / agent_name]
-        if agent_name.startswith("agent-"):
-            candidates.append(clone_root / agent_name[len("agent-"):])
-        else:
-            candidates.append(clone_root / f"agent-{agent_name}")
-        for candidate in candidates:
-            if candidate.exists():
-                return candidate
-
-    except Exception as exc:
+        return _agent_workspace_dir(agent_name)
+    except Exception as exc:  # noqa: BLE001
         _log.warning(
             "workspace.agent_resolve_failed",
             agent=agent_name,
@@ -710,46 +701,37 @@ class ArtifactListResponse(BaseModel):
 def _discover_agent_workspaces() -> dict[str, Path]:
     """Return a dict of {agent_name: workspace_path} for all *live* agents.
 
-    Discovery sources (in order):
-    1. Static agent registry (``_AGENT_REGISTRY``) — local_path entries.
-    2. Dynamic agent registry (Postgres-backed) — local_path entries
-       filtered to ``status == 'live'`` only.
-    3. Agents.json file — local_path entries (legacy fallback).
-    4. Clone-cache directory — only directories matching a registered
-       live agent name (cross-referenced with sources 1-3).
+    Collects the names of every live agent from the registries, then resolves
+    each to its clone-cache directory via :func:`_agent_workspace_dir` — the
+    same path the loader runs the agent from and writes artefacts to.  The
+    registry ``local_path`` is deliberately ignored as a workspace (it is only
+    a load-time source pointer; see :func:`_agent_workspace_dir`).
+
+    Name sources:
+    1. Static agent registry (``_AGENT_REGISTRY``) — all entries are live.
+    2. Dynamic agent registry (Postgres-backed) — ``status == 'live'`` only.
+    3. Agents.json file (legacy fallback) — all listed names.
     """
-    workspaces: dict[str, Path] = {}
+    names: set[str] = set()
 
     # ── 1. Static registry (in-code _AGENT_REGISTRY) ──────────────────────
     try:
         from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
         for entry in _AGENT_REGISTRY:
             name = entry.get("name")
-            lp = entry.get("local_path")
-            if name and lp:
-                p = Path(lp)
-                if p.exists():
-                    workspaces[name] = p
+            if name:
+                names.add(name)
     except Exception:  # noqa: BLE001
         pass
 
     # ── 2. Dynamic registry (Postgres-backed) — live agents only ──────────
-    live_dynamic_names: set[str] = set()
     try:
         from gateway.routes.agent import \
             _load_dynamic_agents  # noqa: PLC0415
         for entry in _load_dynamic_agents():
             name = entry.get("name")
-            status = entry.get("status", "live")
-            if status != "live":
-                continue
-            lp = entry.get("local_path")
-            if name:
-                live_dynamic_names.add(name)
-                if lp:
-                    p = Path(lp)
-                    if p.exists() and name not in workspaces:
-                        workspaces[name] = p
+            if name and entry.get("status", "live") == "live":
+                names.add(name)
     except Exception:  # noqa: BLE001
         pass
 
@@ -766,32 +748,20 @@ def _discover_agent_workspaces() -> dict[str, Path]:
             entries = _json.loads(agents_file.read_text(encoding="utf-8"))
             for entry in entries:
                 name = entry.get("name")
-                lp = entry.get("local_path")
-                if name and lp and name not in workspaces:
-                    p = Path(lp)
-                    if p.exists():
-                        workspaces[name] = p
-                        live_dynamic_names.add(name)
+                if name:
+                    names.add(name)
     except Exception:  # noqa: BLE001
         pass
 
-    # ── 4. Clone-cache directory — only for registered live agents ──────
-    try:
-        from acb_common import get_settings  # noqa: PLC0415
-        settings = get_settings()
-        clone_root = Path(
-            getattr(settings, "agents_clone_dir", "/tmp/acb_agents")
-        ) / "repos"
-        if clone_root.is_dir():
-            for child in clone_root.iterdir():
-                if child.is_dir() and not child.name.startswith("."):
-                    if (
-                        child.name in live_dynamic_names
-                        and child.name not in workspaces
-                    ):
-                        workspaces[child.name] = child
-    except Exception:  # noqa: BLE001
-        pass
+    # ── Resolve each name to its clone-cache workspace (where artefacts live).
+    workspaces: dict[str, Path] = {}
+    for name in names:
+        try:
+            ws = _agent_workspace_dir(name)
+        except Exception:  # noqa: BLE001
+            ws = None
+        if ws is not None:
+            workspaces[name] = ws
 
     return workspaces
 

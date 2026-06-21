@@ -1,9 +1,12 @@
 "use client";
 
-import { ArrowLeft, Sparkles, MailMinus, Archive, BarChart3, Reply } from "lucide-react";
+import {
+  ArrowLeft, Sparkles, MailMinus, Archive, BarChart3, Reply, Newspaper,
+} from "lucide-react";
 import { AutomationFeature } from "../../lib/types";
 import { AssistantView } from "./AssistantView";
 import { ReplyZeroView } from "./ReplyZeroView";
+import { DigestView } from "./DigestView";
 import { BulkUnsubscribeView } from "./BulkUnsubscribeView";
 import { BulkArchiveView } from "./BulkArchiveView";
 import { AnalyticsView } from "./AnalyticsView";
@@ -29,6 +32,11 @@ const META: Record<
     title: "Reply Zero",
     subtitle: "Threads that need a reply",
     icon: Reply,
+  },
+  digest: {
+    title: "Digest",
+    subtitle: "Inbox summary — view or email it",
+    icon: Newspaper,
   },
   unsubscribe: {
     title: "Bulk Unsubscribe",
@@ -87,6 +95,7 @@ export function AutomationView({
           <AssistantView accountId={accountId} selectedEmailId={selectedEmailId} />
         )}
         {feature === "reply-zero" && <ReplyZeroView accountId={accountId} />}
+        {feature === "digest" && <DigestView accountId={accountId} />}
         {feature === "unsubscribe" && (
           <BulkUnsubscribeView accountId={accountId} />
         )}

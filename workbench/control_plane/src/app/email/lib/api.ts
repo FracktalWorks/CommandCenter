@@ -740,7 +740,8 @@ export async function getReplyZero(
 export async function draftReplySmart(
   accountId: string,
   messageId: string,
-  createDraft = false
+  createDraft = false,
+  followUp = false
 ): Promise<{ draft: string; created: boolean }> {
   return gatewayFetch("/email/draft-reply", {
     method: "POST",
@@ -748,6 +749,28 @@ export async function draftReplySmart(
       account_id: accountId,
       message_id: messageId,
       create_draft: createDraft,
+      follow_up: followUp,
     }),
+  });
+}
+
+// ── Digest ──────────────────────────────────────────────────────────────────
+
+export async function getDigest(
+  accountId: string,
+  period: "day" | "week" = "day"
+): Promise<import("./types").DigestData> {
+  return gatewayFetch(
+    `/email/digest?account_id=${encodeURIComponent(accountId)}&period=${period}`
+  );
+}
+
+export async function sendDigest(
+  accountId: string,
+  period: "day" | "week" = "day"
+): Promise<{ sent: boolean; to: string }> {
+  return gatewayFetch("/email/digest/send", {
+    method: "POST",
+    body: JSON.stringify({ account_id: accountId, period }),
   });
 }

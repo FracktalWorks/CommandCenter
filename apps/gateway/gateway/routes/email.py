@@ -3257,6 +3257,7 @@ def _strip_draft_markers(text: str) -> str:
 
 async def _draft_via_maf_agent(
     email: dict[str, str], about: str, signature: str, user_email: str,
+    *, instructions: str = "",
 ) -> str | None:
     """Draft by running the email-assistant MAF agent (which can hand off to
     sales / task-manager and read memory). Returns None on any failure so the
@@ -3268,12 +3269,14 @@ async def _draft_via_maf_agent(
         pass
     try:
         from orchestrator.executor import run_agent  # noqa: PLC0415
-        msg = (
+        task = instructions or (
             "Draft a reply to the email below. First gather context: use "
             "remember() for the sender, and call_agent('sales' or 'task-manager') "
-            "ONLY if the email is clearly about a deal or a project. Then write "
-            "ONLY the reply body — no subject line, no preamble, no '---' fences, "
-            "no confidence line.\n\n"
+            "ONLY if the email is clearly about a deal or a project."
+        )
+        msg = (
+            f"{task} Then write ONLY the message body — no subject line, no "
+            "preamble, no '---' fences, no confidence line.\n\n"
             f"From: {email.get('from', '')}\nSubject: {email.get('subject', '')}\n"
             f"Body:\n{(email.get('body', '') or '')[:3000]}"
         )
@@ -3302,26 +3305,38 @@ async def _draft_via_maf_agent(
     return None
 
 
+_FOLLOW_UP_INSTRUCTION = (
+    "This is my OWN earlier email that hasn't received a reply yet. Write a "
+    "brief, polite follow-up that nudges for a response — keep it short, "
+    "reference the original subject, and do NOT repeat the full original message."
+)
+
+
 async def _agent_draft_reply(
     email: dict[str, str], about: str, signature: str, user_email: str,
     *, use_agent: bool = False, max_agents: int = 2, agent_timeout: float = 90.0,
+    follow_up: bool = False,
 ) -> str:
-    """Draft a reply. When ``use_agent`` is set (background rule actions), run the
-    email-assistant MAF agent first; otherwise — and on any agent failure — use
-    the fast in-gateway orchestrator."""
+    """Draft a reply (or a follow-up nudge). When ``use_agent`` is set (background
+    rule actions), run the email-assistant MAF agent first; otherwise — and on any
+    agent failure — use the fast in-gateway orchestrator."""
+    instructions = _FOLLOW_UP_INSTRUCTION if follow_up else ""
     if use_agent:
-        drafted = await _draft_via_maf_agent(email, about, signature, user_email)
+        drafted = await _draft_via_maf_agent(
+            email, about, signature, user_email, instructions=instructions,
+        )
         if drafted:
             return drafted
     return await _orchestrate_draft(
         email, about, signature, user_email,
         max_agents=max_agents, agent_timeout=agent_timeout,
+        instructions=instructions,
     )
 
 
 async def _orchestrate_draft(
     email: dict[str, str], about: str, signature: str, user_email: str,
-    *, max_agents: int = 2, agent_timeout: float = 90.0,
+    *, max_agents: int = 2, agent_timeout: float = 90.0, instructions: str = "",
 ) -> str:
     """In-gateway orchestrating drafter: gather context from memory + specialist
     agents (sales / task-manager), then draft. Best-effort; degrades to an
@@ -3372,7 +3387,8 @@ async def _orchestrate_draft(
             _log.warning("email.draft_orchestrator_unavailable", error=str(exc)[:160])
 
     draft = await _llm_draft_reply(
-        email, about, signature, context="\n\n".join(context_parts)
+        email, about, signature, instructions=instructions,
+        context="\n\n".join(context_parts),
     )
 
     # 3) Record the interaction so future drafts have more context.
@@ -3583,6 +3599,7 @@ class AssistantSettingsModel(BaseModel):
     auto_run: bool = False
     cold_email_blocker: str = "OFF"  # OFF | LABEL | ARCHIVE
     agent_model: str = "tier-balanced"  # tier-fast | tier-balanced | tier-powerful
+    digest_frequency: str = "OFF"  # OFF | DAILY | WEEKLY
 
 
 @router.get("/assistant/settings")
@@ -3595,7 +3612,8 @@ async def get_assistant_settings(
     try:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         row = (await db.execute(text(
-            """SELECT about, signature, auto_run, cold_email_blocker, agent_model
+            """SELECT about, signature, auto_run, cold_email_blocker, agent_model,
+                      digest_frequency
                FROM email_assistant_settings WHERE account_id = :aid"""
         ), {"aid": account_id})).fetchone()
         return {
@@ -3606,6 +3624,7 @@ async def get_assistant_settings(
             "cold_email_blocker": (row.cold_email_blocker if row else "OFF") or "OFF",
             "agent_model": (row.agent_model if row else "tier-balanced")
             or "tier-balanced",
+            "digest_frequency": (row.digest_frequency if row else "OFF") or "OFF",
         }
     finally:
         await db.close()
@@ -3623,18 +3642,20 @@ async def put_assistant_settings(
         await db.execute(text(
             """INSERT INTO email_assistant_settings
                  (account_id, about, signature, auto_run, cold_email_blocker,
-                  agent_model, updated_at)
-               VALUES (:aid, :about, :sig, :auto, :cold, :model, now())
+                  agent_model, digest_frequency, updated_at)
+               VALUES (:aid, :about, :sig, :auto, :cold, :model, :digest, now())
                ON CONFLICT (account_id) DO UPDATE SET
                  about = EXCLUDED.about,
                  signature = EXCLUDED.signature,
                  auto_run = EXCLUDED.auto_run,
                  cold_email_blocker = EXCLUDED.cold_email_blocker,
                  agent_model = EXCLUDED.agent_model,
+                 digest_frequency = EXCLUDED.digest_frequency,
                  updated_at = now()"""
         ), {"aid": req.account_id, "about": req.about, "sig": req.signature,
             "auto": req.auto_run, "cold": req.cold_email_blocker or "OFF",
-            "model": req.agent_model or "tier-balanced"})
+            "model": req.agent_model or "tier-balanced",
+            "digest": req.digest_frequency or "OFF"})
         await db.commit()
         return {
             "account_id": req.account_id,
@@ -3643,6 +3664,7 @@ async def put_assistant_settings(
             "auto_run": req.auto_run,
             "cold_email_blocker": req.cold_email_blocker or "OFF",
             "agent_model": req.agent_model or "tier-balanced",
+            "digest_frequency": req.digest_frequency or "OFF",
         }
     finally:
         await db.close()
@@ -3990,6 +4012,7 @@ class DraftReplyRequest(BaseModel):
     account_id: str
     message_id: str
     create_draft: bool = False  # also save a provider draft (lands in Drafts)
+    follow_up: bool = False  # draft a nudge for my own unanswered email instead
 
 
 @router.post("/draft-reply")
@@ -4023,7 +4046,7 @@ async def draft_reply_smart(
         # timeout (one specialist agent, short timeout).
         draft = await _agent_draft_reply(
             email, about, signature, user.email or "",
-            max_agents=1, agent_timeout=18.0,
+            max_agents=1, agent_timeout=18.0, follow_up=req.follow_up,
         )
 
         created = False
@@ -4047,6 +4070,195 @@ async def draft_reply_smart(
                 _log.warning("email.draft_reply_create_failed", error=str(exc)[:160])
 
         return {"draft": draft, "created": created}
+    finally:
+        await db.close()
+
+
+# ── Digests ──────────────────────────────────────────────────────────────────
+
+async def _generate_digest(db: Any, account_id: str, period_days: int) -> dict:
+    """Build an inbox digest for the window: totals, category breakdown, top
+    senders, and how many threads need a reply. Deterministic (no LLM)."""
+    params: dict[str, Any] = {"aid": account_id, "days": period_days}
+    win = ("em.account_id = :aid AND em.received_at >= "
+           "now() - make_interval(days => :days)")
+
+    totals = (await db.execute(text(
+        f"""SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE is_read = false) AS unread,
+                   COUNT(*) FILTER (WHERE LOWER(folder) = 'inbox') AS inbox,
+                   COUNT(*) FILTER (WHERE has_attachments) AS attachments
+            FROM email_messages em WHERE {win}"""
+    ), params)).fetchone()
+
+    cat_rows = (await db.execute(text(
+        f"""SELECT COALESCE(s.category, 'Unknown') AS category, COUNT(*) AS c
+            FROM email_messages em
+            LEFT JOIN email_senders s
+              ON s.account_id = em.account_id
+             AND s.email = LOWER(em.from_address->>'email')
+            WHERE {win} AND LOWER(em.folder) = 'inbox'
+            GROUP BY 1 ORDER BY 2 DESC"""
+    ), params)).fetchall()
+
+    sender_rows = (await db.execute(text(
+        f"""SELECT MAX(from_address->>'name') AS name,
+                   LOWER(from_address->>'email') AS email, COUNT(*) AS c
+            FROM email_messages em
+            WHERE {win} AND LOWER(folder) = 'inbox'
+              AND COALESCE(from_address->>'email','') <> ''
+            GROUP BY 2 ORDER BY 3 DESC LIMIT 8"""
+    ), params)).fetchall()
+
+    needs = (await db.execute(text(
+        """WITH latest AS (
+             SELECT DISTINCT ON (thread_id) thread_id, folder
+             FROM email_messages
+             WHERE account_id = :aid AND thread_id IS NOT NULL
+             ORDER BY thread_id, received_at DESC)
+           SELECT COUNT(*) AS c FROM latest WHERE LOWER(folder) = 'inbox'"""
+    ), {"aid": account_id})).scalar() or 0
+
+    period = "day" if period_days <= 1 else ("week" if period_days <= 7 else f"{period_days} days")
+    by_category = [{"category": r.category, "count": r.c} for r in cat_rows]
+    top_senders = [
+        {"name": r.name or r.email, "email": r.email, "count": r.c}
+        for r in sender_rows
+    ]
+
+    lines = [
+        f"# Inbox digest — last {period}",
+        "",
+        f"**{totals.inbox or 0}** new in inbox · **{totals.unread or 0}** unread · "
+        f"**{needs}** threads awaiting your reply · "
+        f"**{totals.attachments or 0}** with attachments",
+        "",
+        "## By category",
+    ]
+    lines += [f"- **{c['category']}**: {c['count']}" for c in by_category] or ["- (none)"]
+    lines += ["", "## Top senders"]
+    lines += [f"- {s['name']} — {s['count']}" for s in top_senders] or ["- (none)"]
+
+    return {
+        "period_days": period_days,
+        "totals": {
+            "inbox": totals.inbox or 0,
+            "unread": totals.unread or 0,
+            "attachments": totals.attachments or 0,
+            "needs_reply": needs,
+        },
+        "by_category": by_category,
+        "top_senders": top_senders,
+        "markdown": "\n".join(lines),
+    }
+
+
+@router.get("/digest")
+async def get_digest(
+    account_id: str = Query(...),
+    period: str = Query("day"),  # day | week
+    user: UserContext = Depends(get_current_user),
+):
+    """Generate an inbox digest for the account (day or week window)."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        days = 7 if period == "week" else 1
+        return await _generate_digest(db, account_id, days)
+    finally:
+        await db.close()
+
+
+class DigestSendRequest(BaseModel):
+    account_id: str
+    period: str = "day"
+
+
+@router.post("/digest/send")
+async def send_digest(
+    req: DigestSendRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Generate the digest and email it to the account's own address."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        days = 7 if req.period == "week" else 1
+        digest = await _generate_digest(db, req.account_id, days)
+        acc = (await db.execute(text(
+            "SELECT provider, credentials_encrypted, email_address "
+            "FROM email_accounts WHERE id = :id"
+        ), {"id": req.account_id})).fetchone()
+        if not acc:
+            raise HTTPException(status_code=404, detail="Account not found")
+        from acb_llm.key_store import get_key_store
+        store = get_key_store()
+        creds = json.loads(store.decrypt(acc.credentials_encrypted))
+        provider = _instantiate_provider(acc.provider, creds)
+        if not await provider.authenticate():
+            raise HTTPException(status_code=502, detail="Provider auth failed")
+        await provider.send_message(
+            to=[acc.email_address],
+            subject=f"📥 Your inbox digest — last {'week' if days > 1 else 'day'}",
+            body_text=digest["markdown"],
+        )
+        await _persist_rotated_creds(db, store, req.account_id, provider)
+        await db.execute(text(
+            "UPDATE email_assistant_settings SET last_digest_at = now() "
+            "WHERE account_id = :aid"
+        ), {"aid": req.account_id})
+        await db.commit()
+        return {"sent": True, "to": acc.email_address}
+    finally:
+        await db.close()
+
+
+async def _maybe_send_digest(account_id: str) -> None:
+    """Background: send a digest if one is due per the account's frequency."""
+    db = await _get_db()
+    try:
+        row = (await db.execute(text(
+            "SELECT digest_frequency, last_digest_at FROM email_assistant_settings "
+            "WHERE account_id = :aid"
+        ), {"aid": account_id})).fetchone()
+        if not row or (row.digest_frequency or "OFF") == "OFF":
+            return
+        period_days = 7 if row.digest_frequency == "WEEKLY" else 1
+        due = (await db.execute(text(
+            "SELECT last_digest_at IS NULL OR "
+            "last_digest_at < now() - make_interval(days => :d) AS due"
+        ), {"d": period_days})).scalar()
+        if not due:
+            return
+        digest = await _generate_digest(db, account_id, period_days)
+        acc = (await db.execute(text(
+            "SELECT provider, credentials_encrypted, email_address "
+            "FROM email_accounts WHERE id = :id"
+        ), {"id": account_id})).fetchone()
+        if not acc:
+            return
+        from acb_llm.key_store import get_key_store
+        store = get_key_store()
+        creds = json.loads(store.decrypt(acc.credentials_encrypted))
+        provider = _instantiate_provider(acc.provider, creds)
+        if not await provider.authenticate():
+            return
+        await provider.send_message(
+            to=[acc.email_address],
+            subject=f"📥 Your inbox digest — last "
+                    f"{'week' if period_days > 1 else 'day'}",
+            body_text=digest["markdown"],
+        )
+        await _persist_rotated_creds(db, store, account_id, provider)
+        await db.execute(text(
+            "UPDATE email_assistant_settings SET last_digest_at = now() "
+            "WHERE account_id = :aid"
+        ), {"aid": account_id})
+        await db.commit()
+        _log.info("email.digest_sent", account_id=account_id)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.digest_send_failed", account_id=account_id,
+                     error=str(exc)[:200])
     finally:
         await db.close()
 

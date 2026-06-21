@@ -398,6 +398,15 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
             # Auto-run Assistant rules on newly-synced mail (opt-in per account).
             if isinstance(result, dict) and result.get("synced", 0):
                 await _maybe_auto_run_rules(account_id)
+            # Send a scheduled digest if one is due (opt-in per account).
+            try:
+                from gateway.routes.email import _maybe_send_digest  # noqa: PLC0415
+                await _maybe_send_digest(account_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "sync.digest_check_failed account_id=%s error=%s",
+                    account_id, str(exc),
+                )
         except Exception as exc:
             logger.warning(
                 "sync.loop_iteration_failed account_id=%s error=%s",

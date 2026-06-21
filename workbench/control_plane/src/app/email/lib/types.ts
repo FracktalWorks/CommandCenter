@@ -77,9 +77,25 @@ export interface QuickAction {
 export type AutomationFeature =
   | "assistant"
   | "reply-zero"
+  | "digest"
   | "unsubscribe"
   | "archive"
   | "analytics";
+
+export type DigestFrequency = "OFF" | "DAILY" | "WEEKLY";
+
+export interface DigestData {
+  period_days: number;
+  totals: {
+    inbox: number;
+    unread: number;
+    attachments: number;
+    needs_reply: number;
+  };
+  by_category: { category: string; count: number }[];
+  top_senders: { name: string; email: string; count: number }[];
+  markdown: string;
+}
 
 /** Sender categories assigned by the LLM categorizer (mirrors the backend). */
 export const EMAIL_CATEGORIES = [
@@ -216,6 +232,8 @@ export interface AssistantSettings {
   /** Which LiteLLM tier or model id the assistant agent/chat uses
    *  (e.g. "tier-balanced" or "deepseek/deepseek-chat"). */
   agent_model: string;
+  /** Scheduled inbox-digest cadence. */
+  digest_frequency: DigestFrequency;
 }
 
 /** A configurable LLM tier/provider, from GET /api/settings/llm. */

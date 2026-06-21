@@ -40,14 +40,14 @@ export function ReplyZeroView({ accountId }: ReplyZeroViewProps) {
 
   useEffect(load, [load]);
 
-  const draft = async (t: ReplyZeroThread) => {
+  const draft = async (t: ReplyZeroThread, followUp = false) => {
     if (!accountId) return;
     setDrafting(t.message_id);
     try {
-      const res = await draftReplySmart(accountId, t.message_id, false);
+      const res = await draftReplySmart(accountId, t.message_id, false, followUp);
       setDrafts((prev) => ({ ...prev, [t.message_id]: res.draft || "(no draft)" }));
     } catch {
-      setDrafts((prev) => ({ ...prev, [t.message_id]: "Failed to draft a reply." }));
+      setDrafts((prev) => ({ ...prev, [t.message_id]: "Failed to draft." }));
     } finally {
       setDrafting(null);
     }
@@ -120,20 +120,18 @@ export function ReplyZeroView({ accountId }: ReplyZeroViewProps) {
                       {t.from} · {t.received_at ? timeLabel(t.received_at) : ""}
                     </div>
                   </div>
-                  {mode === "needs_reply" && (
-                    <button
-                      onClick={() => draft(t)}
-                      disabled={drafting === t.message_id}
-                      className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-50 flex-shrink-0"
-                    >
-                      {drafting === t.message_id ? (
-                        <Loader2 className="animate-spin" size={12} />
-                      ) : (
-                        <PenLine size={12} />
-                      )}
-                      Draft reply
-                    </button>
-                  )}
+                  <button
+                    onClick={() => draft(t, mode === "awaiting")}
+                    disabled={drafting === t.message_id}
+                    className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-50 flex-shrink-0"
+                  >
+                    {drafting === t.message_id ? (
+                      <Loader2 className="animate-spin" size={12} />
+                    ) : (
+                      <PenLine size={12} />
+                    )}
+                    {mode === "awaiting" ? "Draft follow-up" : "Draft reply"}
+                  </button>
                 </div>
                 {drafts[t.message_id] && (
                   <div className="mt-2">

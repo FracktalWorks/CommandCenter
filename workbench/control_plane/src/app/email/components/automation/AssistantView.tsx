@@ -1201,6 +1201,22 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
             )}
           </select>
         </Field>
+        <Field label="Digest frequency (emailed inbox summary)">
+          <select
+            value={settings.digest_frequency}
+            onChange={(e) =>
+              setSettings({
+                ...settings,
+                digest_frequency: e.target.value as AssistantSettings["digest_frequency"],
+              })
+            }
+            className={INPUT_CLS}
+          >
+            <option value="OFF">Off</option>
+            <option value="DAILY">Daily</option>
+            <option value="WEEKLY">Weekly</option>
+          </select>
+        </Field>
         <div className="flex items-center gap-2 pt-1">
           <button
             onClick={save}

@@ -1,9 +1,12 @@
 """Email Assistant Agent.
 
-An AI-powered email management agent that helps users read, search, summarize,
-and draft replies across connected Gmail and Microsoft email accounts.
+A MAF agent that checks the inbox, categorizes mail, manages automation rules,
+takes inbox actions, and drafts context-aware replies — handing off to the
+sales / task-manager agents and reading memory when an email needs their
+context. Modeled on inbox-zero's (elie222/inbox-zero) assistant tool surface.
 
-Registered as a MAF agent at /agent/run/stream with name "email-assistant".
+Registered as a MAF agent (name "email-assistant"); build_agents() is the
+Dynamic Agent Loader entry point.
 """
 
 from __future__ import annotations
@@ -11,6 +14,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from acb_common import get_logger, get_settings
 
@@ -25,299 +30,407 @@ INSTRUCTIONS = (
 )
 
 
-async def search_emails(
-    query: str,
-    folder: str = "INBOX",
-    account_id: str | None = None,
-) -> str:
-    """Search emails across connected accounts.
+# ── Gateway access (user-scoped) ─────────────────────────────────────────────
 
-    Args:
-        query: Search query (matches subject, body, sender)
-        folder: Folder to search (INBOX, SENT, DRAFTS, etc.)
-        account_id: Optional specific account to search
+def _gateway_url() -> str:
+    return os.environ.get("GATEWAY_URL", "http://localhost:8080").rstrip("/")
 
-    Returns:
-        JSON list of matching emails with id, subject, sender, snippet, date
-    """
+
+def _current_user_email() -> str:
+    """The user the agent is acting for — reused from the memory ContextVar the
+    gateway sets before each run. Without it, gateway calls are unscoped."""
+    try:
+        from acb_skills.memory_tools import _get_memory_user_id  # noqa: PLC0415
+        return _get_memory_user_id() or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _headers() -> dict[str, str]:
     settings = get_settings()
-    gateway_url = os.environ.get(
-        "GATEWAY_URL", "http://localhost:8080"
-    ).rstrip("/")
+    headers = {
+        "Authorization": f"Bearer {settings.gateway_internal_token}",
+        "Content-Type": "application/json",
+    }
+    user = _current_user_email()
+    if user:
+        headers["X-User-Email"] = user
+    return headers
 
-    import httpx
-    params: dict[str, str] = {"query": query, "folder": folder}
+
+async def _get(path: str, params: dict[str, Any] | None = None) -> Any:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(
+            f"{_gateway_url()}{path}", params=params or {}, headers=_headers()
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _post(path: str, body: dict[str, Any]) -> Any:
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            f"{_gateway_url()}{path}", json=body, headers=_headers()
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _patch(path: str, body: dict[str, Any]) -> Any:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.patch(
+            f"{_gateway_url()}{path}", json=body, headers=_headers()
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+# ── Read / triage tools ──────────────────────────────────────────────────────
+
+async def list_accounts() -> str:
+    """List the user's connected email accounts (id, address, unread count)."""
+    accounts = await _get("/email/accounts")
+    if not accounts:
+        return "No email accounts are connected."
+    lines = ["Connected accounts:"]
+    for a in accounts:
+        lines.append(
+            f"• {a.get('label') or a.get('email_address')} "
+            f"({a.get('email_address')}) — id={a.get('id')}, "
+            f"{a.get('unread_count', 0)} unread"
+        )
+    return "\n".join(lines)
+
+
+async def search_emails(
+    query: str, folder: str = "inbox", account_id: str | None = None
+) -> str:
+    """Search emails (subject/body/sender). Returns matches with their ids."""
+    params: dict[str, Any] = {"query": query, "folder": folder}
     if account_id:
         params["account_id"] = account_id
-
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(
-            f"{gateway_url}/email/messages",
-            params=params,
-            headers={"Authorization": f"Bearer {settings.gateway_internal_token}"},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
+    data = await _get("/email/messages", params)
     emails = data.get("emails", [])
     total = data.get("total", 0)
-
-    summary = [f"Found {total} emails matching '{query}' in {folder}:"]
+    lines = [f"Found {total} emails matching '{query}' in {folder}:"]
     for e in emails[:10]:
-        sender = e.get("from_address", {}).get("name", "Unknown")
-        subject = e.get("subject", "(no subject)")
-        snippet = (e.get("snippet", "") or "")[:100]
-        summary.append(f"• {sender}: {subject} — {snippet}")
-
-    if total > 10:
-        summary.append(f"... and {total - 10} more")
-
-    return "\n".join(summary)
-
-
-async def get_email(email_id: str) -> str:
-    """Fetch the full content of a specific email.
-
-    Args:
-        email_id: The email's unique ID
-
-    Returns:
-        Full email content with headers and body
-    """
-    settings = get_settings()
-    gateway_url = os.environ.get(
-        "GATEWAY_URL", "http://localhost:8080"
-    ).rstrip("/")
-
-    import httpx
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(
-            f"{gateway_url}/email/messages/{email_id}",
-            headers={"Authorization": f"Bearer {settings.gateway_internal_token}"},
+        frm = e.get("from_address", {}) or {}
+        lines.append(
+            f"• id={e.get('id')} | {frm.get('name') or frm.get('email')}: "
+            f"{e.get('subject', '(no subject)')} — {(e.get('snippet') or '')[:90]}"
         )
-        resp.raise_for_status()
-        email = resp.json()
+    if total > 10:
+        lines.append(f"… and {total - 10} more")
+    return "\n".join(lines)
 
-    sender = email.get("from_address", {}).get("name", "Unknown")
-    sender_email = email.get("from_address", {}).get("email", "")
-    subject = email.get("subject", "(no subject)")
-    body = email.get("body_text", "")[:3000]
 
+async def read_email(email_id: str) -> str:
+    """Fetch the full content of one email by id."""
+    e = await _get(f"/email/messages/{email_id}")
+    frm = e.get("from_address", {}) or {}
     return (
-        f"From: {sender} <{sender_email}>\n"
-        f"Subject: {subject}\n"
-        f"---\n{body}"
+        f"From: {frm.get('name')} <{frm.get('email')}>\n"
+        f"Subject: {e.get('subject', '(no subject)')}\n"
+        f"Date: {e.get('received_at', '')}\n---\n"
+        f"{(e.get('body_text') or '')[:4000]}"
     )
 
 
 async def find_urgent(account_id: str | None = None) -> str:
-    """Find emails that need urgent attention.
-
-    Args:
-        account_id: Optional specific account to check
-
-    Returns:
-        Ranked list of urgent emails
-    """
-    settings = get_settings()
-    gateway_url = os.environ.get(
-        "GATEWAY_URL", "http://localhost:8080"
-    ).rstrip("/")
-
-    import httpx
-    # Search for emails with urgent/important signals
-    urgent_keywords = "urgent OR deadline OR ASAP OR action required OR by Friday OR by EOD"
-    params: dict[str, str] = {"query": urgent_keywords, "page_size": "20"}
-    if account_id:
-        params["account_id"] = account_id
-
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(
-            f"{gateway_url}/email/messages",
-            params=params,
-            headers={"Authorization": f"Bearer {settings.gateway_internal_token}"},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-    emails = data.get("emails", [])
-    if not emails:
-        return "No urgent emails found. Your inbox looks clear! 🎉"
-
-    lines = ["🔴 **Urgent / Needs Attention**\n"]
-    for e in emails[:10]:
-        sender = e.get("from_address", {}).get("name", "Unknown")
-        subject = e.get("subject", "(no subject)")
-        snippet = (e.get("snippet", "") or "")[:120]
-        lines.append(f"— **{sender}**: {subject}")
-        lines.append(f"  {snippet}\n")
-
-    return "\n".join(lines)
-
-
-async def draft_reply(
-    email_id: str,
-    tone: str = "professional",
-    instructions: str = "",
-) -> str:
-    """Generate a professional reply draft for an email.
-
-    Args:
-        email_id: The email to reply to
-        tone: 'formal', 'casual', 'concise', or 'detailed'
-        instructions: Any specific points to include in the reply
-
-    Returns:
-        Draft reply text
-    """
-    # Fetch the email first
-    email_content = await get_email(email_id)
-
-    # Build a simple reply template (in production, this would use the LLM)
-    tone_guidance = {
-        "formal": "Use formal language. Keep it professional and respectful.",
-        "casual": "Use casual, friendly language. Keep it conversational.",
-        "concise": "Be brief and to the point. Max 3-4 sentences.",
-        "detailed": "Be thorough. Address all points raised in the original email.",
-    }.get(tone, "Be professional and concise.")
-
-    reply = (
-        f"Here's a draft reply ({tone} tone):\n\n"
-        f"---\n"
-        f"Hi [Name],\n\n"
-        f"Thank you for your email. "
-        f"[I'll review this and get back to you / This looks good / I've noted the details].\n\n"
-        f"{instructions}\n\n"
-        f"Best regards,\n"
-        f"[Your name]\n"
-        f"---\n\n"
-        f"Guidance: {tone_guidance}\n\n"
-        f"Would you like me to adjust the tone or add specific details? "
-        f"I have the full email content loaded for context."
-    )
-
-    return reply
-
-
-async def suggest_unsubscribes(account_id: str | None = None) -> str:
-    """Find newsletter subscriptions to consider unsubscribing from.
-
-    Args:
-        account_id: Optional specific account
-
-    Returns:
-        List of suggested unsubscribes
-    """
-    settings = get_settings()
-    gateway_url = os.environ.get(
-        "GATEWAY_URL", "http://localhost:8080"
-    ).rstrip("/")
-
-    import httpx
-    # Search for newsletter-like emails
-    params: dict[str, str] = {
-        "query": "unsubscribe OR digest OR newsletter OR weekly",
-        "page_size": "30",
+    """Find emails that look urgent / need attention soon."""
+    params: dict[str, Any] = {
+        "query": "urgent OR deadline OR ASAP OR action required OR by EOD",
+        "page_size": "20",
     }
     if account_id:
         params["account_id"] = account_id
-
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(
-            f"{gateway_url}/email/messages",
-            params=params,
-            headers={"Authorization": f"Bearer {settings.gateway_internal_token}"},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
+    data = await _get("/email/messages", params)
     emails = data.get("emails", [])
     if not emails:
-        return "No newsletter subscriptions detected. You're doing great!"
+        return "No urgent emails found."
+    lines = ["Urgent / needs attention:"]
+    for e in emails[:10]:
+        frm = e.get("from_address", {}) or {}
+        lines.append(
+            f"• id={e.get('id')} | {frm.get('name') or frm.get('email')}: "
+            f"{e.get('subject', '(no subject)')}"
+        )
+    return "\n".join(lines)
 
-    lines = ["📬 **Newsletter / Subscription suggestions**\n"]
-    for e in emails[:8]:
-        sender = e.get("from_address", {}).get("name", "Unknown")
-        subject = e.get("subject", "(no subject)")
-        lines.append(f"• **{sender}** — {subject}")
 
-    lines.append(
-        "\nThese are based on common newsletter patterns in your inbox. "
-        "I can help draft unsubscribe requests for any of these."
+async def find_needs_reply(account_id: str) -> str:
+    """List threads whose latest message is inbound and awaiting your reply."""
+    data = await _get(
+        "/email/reply-zero",
+        {"account_id": account_id, "type": "needs_reply", "limit": "30"},
     )
-
+    threads = data.get("threads", [])
+    if not threads:
+        return "Nothing needs a reply — inbox zero!"
+    lines = ["Needs reply:"]
+    for t in threads[:15]:
+        lines.append(
+            f"• id={t.get('message_id')} | {t.get('from')}: {t.get('subject')}"
+        )
     return "\n".join(lines)
 
 
 async def get_unread_count(account_id: str | None = None) -> str:
-    """Get unread email count for connected accounts.
-
-    Args:
-        account_id: Optional specific account
-
-    Returns:
-        Unread count summary
-    """
-    settings = get_settings()
-    gateway_url = os.environ.get(
-        "GATEWAY_URL", "http://localhost:8080"
-    ).rstrip("/")
-
-    import httpx
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(
-            f"{gateway_url}/email/accounts",
-            headers={"Authorization": f"Bearer {settings.gateway_internal_token}"},
-        )
-        resp.raise_for_status()
-        accounts = resp.json()
-
+    """Unread totals across the user's accounts."""
+    accounts = await _get("/email/accounts")
     if account_id:
-        accounts = [a for a in accounts if a["id"] == account_id]
-
+        accounts = [a for a in accounts if a.get("id") == account_id]
     total = sum(a.get("unread_count", 0) for a in accounts)
-    lines = [f"📧 **{total} unread** across {len(accounts)} account(s):"]
+    lines = [f"{total} unread across {len(accounts)} account(s):"]
     for a in accounts:
-        lines.append(
-            f"• {a['label']} ({a['email_address']}): "
-            f"{a['unread_count']} unread"
-        )
-
+        lines.append(f"• {a.get('email_address')}: {a.get('unread_count', 0)} unread")
     return "\n".join(lines)
 
 
-def _register_agent_tools() -> dict[str, Any]:
-    """Return the tool definitions for this agent.
+async def get_account_overview(account_id: str) -> str:
+    """High-level snapshot: totals, read-rate, top senders, sender categories."""
+    overview = await _get(
+        "/email/analytics/overview", {"account_id": account_id, "days": "30"}
+    )
+    cats = await _get("/email/senders/categories", {"account_id": account_id})
+    t = overview.get("totals", {})
+    lines = [
+        f"Account overview (30d): {t.get('total', 0)} messages, "
+        f"{t.get('unread', 0)} unread, "
+        f"{round(t.get('read_rate', 0) * 100)}% read.",
+        "Top senders: "
+        + ", ".join(
+            f"{s.get('name') or s.get('email')} ({s.get('count')})"
+            for s in overview.get("top_senders", [])[:5]
+        ),
+    ]
+    counts = cats.get("counts", {})
+    if counts:
+        lines.append(
+            "Sender categories: "
+            + ", ".join(f"{k}: {v}" for k, v in counts.items())
+        )
+    return "\n".join(lines)
 
-    Called by the orchestrator executor to inject email-specific tools.
+
+# ── Inbox action tools ───────────────────────────────────────────────────────
+
+async def manage_inbox(
+    action: str, message_ids: list[str], account_id: str | None = None
+) -> str:
+    """Apply an action to one or more messages.
+
+    Args:
+        action: archive | trash | read | unread | star | unstar
+        message_ids: ids of the messages to act on
+        account_id: optional account scope
     """
-    return {
-        "search_emails": search_emails,
-        "get_email": get_email,
-        "find_urgent": find_urgent,
-        "draft_reply": draft_reply,
-        "suggest_unsubscribes": suggest_unsubscribes,
-        "get_unread_count": get_unread_count,
+    body: dict[str, Any] = {"action": action, "message_ids": message_ids}
+    if account_id:
+        body["account_id"] = account_id
+    res = await _post("/email/messages/bulk", body)
+    return f"{action}: affected {res.get('affected', 0)} message(s)."
+
+
+async def draft_reply(email_id: str, account_id: str, save: bool = False) -> str:
+    """Draft a context-aware reply to an email. Set save=true to also create a
+    provider draft in the user's Drafts folder."""
+    res = await _post(
+        "/email/draft-reply",
+        {"account_id": account_id, "message_id": email_id, "create_draft": save},
+    )
+    note = " (saved to Drafts)" if res.get("created") else ""
+    return f"Draft{note}:\n\n{res.get('draft', '')}"
+
+
+# ── Sender categorization tools ──────────────────────────────────────────────
+
+async def categorize_senders(account_id: str) -> str:
+    """Kick off AI categorization of the account's senders (runs in background)."""
+    await _post("/email/senders/categorize", {"account_id": account_id, "limit": 100})
+    return (
+        "Categorization started in the background. Ask for the account overview "
+        "in a moment to see category counts."
+    )
+
+
+async def get_sender_categories(account_id: str) -> str:
+    """Show the category vocabulary and how many senders fall in each."""
+    data = await _get("/email/senders/categories", {"account_id": account_id})
+    counts = data.get("counts", {})
+    if not counts:
+        return (
+            "No senders categorized yet. Run categorize_senders first. "
+            f"Categories: {', '.join(data.get('categories', []))}."
+        )
+    return "Sender categories:\n" + "\n".join(
+        f"• {k}: {v}" for k, v in counts.items()
+    )
+
+
+# ── Rule / automation tools ──────────────────────────────────────────────────
+
+async def get_rules_and_settings(account_id: str) -> str:
+    """List the account's automation rules and assistant settings."""
+    rules = (await _get("/email/rules", {"account_id": account_id})).get("rules", [])
+    settings_obj = await _get(
+        "/email/assistant/settings", {"account_id": account_id}
+    )
+    lines = [f"{len(rules)} rule(s):"]
+    for r in rules:
+        actions = ", ".join(
+            a["type"] + (f":{a['label']}" if a.get("label") else "")
+            for a in r.get("actions", [])
+        )
+        state = "auto" if r.get("automated") else "manual"
+        on = "on" if r.get("enabled") else "off"
+        lines.append(
+            f"• id={r.get('id')} | {r.get('name')} [{state}/{on}] — "
+            f"if: {r.get('instructions') or '(static)'} → {actions}"
+        )
+    lines.append(
+        f"\nSettings: auto-run={settings_obj.get('auto_run')}, "
+        f"cold-blocker={settings_obj.get('cold_email_blocker')}, "
+        f"about set={'yes' if settings_obj.get('about') else 'no'}."
+    )
+    return "\n".join(lines)
+
+
+async def create_rule(
+    account_id: str,
+    name: str,
+    instructions: str,
+    action_type: str,
+    label: str | None = None,
+    automated: bool = True,
+) -> str:
+    """Create an automation rule.
+
+    Args:
+        name: short rule name.
+        instructions: plain-English condition the AI matches mail against.
+        action_type: ARCHIVE | LABEL | MARK_READ | STAR | MARK_SPAM | TRASH |
+                     DRAFT_EMAIL | REPLY | FORWARD.
+        label: label/folder name for LABEL/MOVE_FOLDER actions.
+        automated: true = apply automatically; false = propose for approval.
+    """
+    action: dict[str, Any] = {"type": action_type}
+    if label:
+        action["label"] = label
+    rule = {
+        "account_id": account_id,
+        "name": name,
+        "instructions": instructions,
+        "enabled": True,
+        "automated": automated,
+        "run_on_threads": False,
+        "conditional_operator": "OR",
+        "category_filters": [],
+        "sort_order": 0,
+        "actions": [action],
     }
+    res = await _post("/email/rules", rule)
+    return f"Created rule '{name}' (id={res.get('id')})."
 
 
-# ---------------------------------------------------------------------------
-# MAF agent factory — Dynamic Agent Loader entry point (build_agents)
-# ---------------------------------------------------------------------------
-#
-# The loader requires agents.py to export build_agents() -> list[Agent].
-# call_agent / memory / web_search are injected by the executor at run time,
-# so this agent can hand off to the sales / task-manager agents and read the
-# user's memory without listing those tools here.
+async def update_rule_state(
+    account_id: str, rule_id: str, enabled: bool
+) -> str:
+    """Enable or disable an existing rule by id."""
+    rules = (await _get("/email/rules", {"account_id": account_id})).get("rules", [])
+    rule = next((r for r in rules if r.get("id") == rule_id), None)
+    if not rule:
+        return f"Rule {rule_id} not found."
+    rule["enabled"] = enabled
+    await _patch(f"/email/rules/{rule_id}", rule)
+    return f"Rule '{rule.get('name')}' is now {'enabled' if enabled else 'disabled'}."
 
+
+async def update_assistant_settings(
+    account_id: str,
+    about: str | None = None,
+    signature: str | None = None,
+    auto_run: bool | None = None,
+    cold_email_blocker: str | None = None,
+) -> str:
+    """Update assistant settings (about-you, signature, auto-run, cold-blocker)."""
+    current = await _get("/email/assistant/settings", {"account_id": account_id})
+    body = {
+        "account_id": account_id,
+        "about": about if about is not None else current.get("about", ""),
+        "signature": signature if signature is not None
+        else current.get("signature", ""),
+        "auto_run": auto_run if auto_run is not None
+        else current.get("auto_run", False),
+        "cold_email_blocker": cold_email_blocker if cold_email_blocker is not None
+        else current.get("cold_email_blocker", "OFF"),
+    }
+    await _patch_settings(body)
+    return "Assistant settings updated."
+
+
+async def _patch_settings(body: dict[str, Any]) -> Any:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.put(
+            f"{_gateway_url()}/email/assistant/settings",
+            json=body, headers=_headers(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def suggest_unsubscribes(account_id: str | None = None) -> str:
+    """Surface likely newsletters/subscriptions to consider unsubscribing from."""
+    params: dict[str, Any] = {"folder": "inbox", "limit": "200"}
+    if account_id:
+        params["account_id"] = account_id
+    data = await _get("/email/senders", params)
+    senders = [
+        s for s in data.get("senders", [])
+        if s.get("unsubscribe_link") or s.get("read_rate", 1) < 0.4
+    ]
+    if not senders:
+        return "No obvious newsletters to unsubscribe from."
+    lines = ["Unsubscribe candidates (low read-rate / has unsubscribe link):"]
+    for s in senders[:10]:
+        lines.append(
+            f"• {s.get('name') or s.get('email')} — {s.get('count')} emails, "
+            f"{round(s.get('read_rate', 0) * 100)}% read"
+        )
+    return "\n".join(lines)
+
+
+# ── Tool registry ────────────────────────────────────────────────────────────
+
+# Tools attached to the MAF agent. call_agent / remember / save_memory /
+# web_search are injected by the executor, so the agent can hand off to the
+# sales / task-manager agents and read memory without listing them here.
 _TOOLS = [
+    list_accounts,
     search_emails,
-    get_email,
+    read_email,
     find_urgent,
+    find_needs_reply,
     get_unread_count,
+    get_account_overview,
+    manage_inbox,
+    draft_reply,
+    categorize_senders,
+    get_sender_categories,
+    get_rules_and_settings,
+    create_rule,
+    update_rule_state,
+    update_assistant_settings,
     suggest_unsubscribes,
 ]
 
+
+def _register_agent_tools() -> dict[str, Any]:
+    """Tool map for the gateway's direct quick-action calls (importlib path)."""
+    return {fn.__name__: fn for fn in _TOOLS}
+
+
+# ── MAF agent factory (Dynamic Agent Loader entry point) ─────────────────────
 
 def _llm_provider() -> dict[str, Any]:
     """BYOK provider config pointing at the gateway's /v1 (litellm SDK)."""
@@ -327,11 +440,8 @@ def _llm_provider() -> dict[str, Any]:
 
 
 def build_agents() -> list[Any]:
-    """Construct the Email Assistant MAF agent.
-
-    Imported lazily so the module still loads (for the gateway's direct
-    quick-action tool calls) even where the Copilot SDK isn't importable.
-    """
+    """Construct the Email Assistant MAF agent. Imported lazily so the module
+    still loads where the Copilot SDK isn't importable."""
     from agent_framework_github_copilot import GitHubCopilotAgent  # noqa: PLC0415
     from copilot.types import PermissionHandler  # noqa: PLC0415
 

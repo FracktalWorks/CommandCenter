@@ -2027,22 +2027,31 @@ async def quick_action(
     agent_mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(agent_mod)
 
+    # Scope the agent's gateway tool calls to the current user.
+    try:
+        from acb_skills.memory_tools import _set_memory_user_id  # noqa: PLC0415
+        _set_memory_user_id(user.email or "")
+    except ImportError:
+        pass
+
     try:
         if req.action == "summarize":
             result = await agent_mod.search_emails(
-                query="is:unread",
-                folder="INBOX",
+                query="unread",
+                folder="inbox",
                 account_id=req.account_id,
             )
         elif req.action == "find_urgent":
             result = await agent_mod.find_urgent(account_id=req.account_id)
         elif req.action == "draft_reply":
-            if not req.email_id:
+            if not req.email_id or not req.account_id:
                 raise HTTPException(
                     status_code=400,
-                    detail="email_id is required for draft_reply",
+                    detail="email_id and account_id are required for draft_reply",
                 )
-            result = await agent_mod.draft_reply(email_id=req.email_id)
+            result = await agent_mod.draft_reply(
+                email_id=req.email_id, account_id=req.account_id,
+            )
         elif req.action == "unsubscribe":
             result = await agent_mod.suggest_unsubscribes(account_id=req.account_id)
         else:
@@ -3130,11 +3139,15 @@ async def _llm_draft_reply(
         model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
         ensure_model_registered(model)
         sys_prompt = (
-            "You draft professional, concise email replies on behalf of the user. "
-            "Write ONLY the reply body — no subject line. Match a natural, polite "
-            "tone. Use the supplied context (about the user, memory, and notes from "
-            "internal systems) to make the reply specific and well-informed; never "
-            "invent facts that aren't supported by the context or the email."
+            "You are an expert assistant that drafts email replies on behalf of "
+            "the user. Use the previous email and the provided context to make the "
+            "reply relevant and accurate. Rules: write ONLY the reply body (no "
+            "subject line); do not identify yourself as an AI or mention these "
+            "instructions; do not repeat the sender's content back — respond to "
+            "it; plain text only (markdown links allowed), paragraphs separated by "
+            "blank lines; be concise; match the language of the email; ground "
+            "every fact in the email or the supplied context and never invent "
+            "specifics — if something is missing, keep it open or ask for it."
         )
         ctx = f"About the user: {about}\n\n" if about else ""
         if context:
@@ -3208,16 +3221,82 @@ async def _draft_consult_plan(email: dict[str, str]) -> list[dict[str, str]]:
         return []
 
 
+def _strip_draft_markers(text: str) -> str:
+    """Remove any standalone '---' fence lines the agent may wrap a draft in."""
+    lines = [ln for ln in (text or "").splitlines() if ln.strip() != "---"]
+    return "\n".join(lines).strip()
+
+
+async def _draft_via_maf_agent(
+    email: dict[str, str], about: str, signature: str, user_email: str,
+) -> str | None:
+    """Draft by running the email-assistant MAF agent (which can hand off to
+    sales / task-manager and read memory). Returns None on any failure so the
+    caller can fall back to the in-gateway orchestrator."""
+    try:
+        from acb_skills.memory_tools import _set_memory_user_id  # noqa: PLC0415
+        _set_memory_user_id(user_email or "")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from orchestrator.executor import run_agent  # noqa: PLC0415
+        msg = (
+            "Draft a reply to the email below. First gather context: use "
+            "remember() for the sender, and call_agent('sales' or 'task-manager') "
+            "ONLY if the email is clearly about a deal or a project. Then write "
+            "ONLY the reply body — no subject line, no preamble, no '---' fences, "
+            "no confidence line.\n\n"
+            f"From: {email.get('from', '')}\nSubject: {email.get('subject', '')}\n"
+            f"Body:\n{(email.get('body', '') or '')[:3000]}"
+        )
+        res = await asyncio.wait_for(
+            run_agent(
+                "email-assistant",
+                {"message": msg, "about": about, "signature": signature},
+            ),
+            timeout=150.0,
+        )
+        ans = ""
+        if isinstance(res, dict):
+            ans = res.get("answer") or ""
+            if not ans and isinstance(res.get("result"), dict):
+                ans = res["result"].get("content") or ""
+            if not ans and isinstance(res.get("result"), str):
+                ans = res["result"]
+        ans = _strip_draft_markers(ans)
+        if ans:
+            if signature.strip() and signature.strip() not in ans:
+                ans = f"{ans}\n\n{signature}"
+            return ans
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.maf_draft_failed", error=str(exc)[:200])
+    return None
+
+
 async def _agent_draft_reply(
+    email: dict[str, str], about: str, signature: str, user_email: str,
+    *, use_agent: bool = False, max_agents: int = 2, agent_timeout: float = 90.0,
+) -> str:
+    """Draft a reply. When ``use_agent`` is set (background rule actions), run the
+    email-assistant MAF agent first; otherwise — and on any agent failure — use
+    the fast in-gateway orchestrator."""
+    if use_agent:
+        drafted = await _draft_via_maf_agent(email, about, signature, user_email)
+        if drafted:
+            return drafted
+    return await _orchestrate_draft(
+        email, about, signature, user_email,
+        max_agents=max_agents, agent_timeout=agent_timeout,
+    )
+
+
+async def _orchestrate_draft(
     email: dict[str, str], about: str, signature: str, user_email: str,
     *, max_agents: int = 2, agent_timeout: float = 90.0,
 ) -> str:
-    """Orchestrating drafter: gather context from memory + specialist agents
-    (sales / task-manager), then draft the reply.
-
-    Each context source is best-effort — if memory or an agent is unavailable the
-    drafter degrades gracefully to an About-only draft.
-    """
+    """In-gateway orchestrating drafter: gather context from memory + specialist
+    agents (sales / task-manager), then draft. Best-effort; degrades to an
+    About-only draft."""
     context_parts: list[str] = []
 
     # 1) Memory: what do we know about this sender / relationship?
@@ -3429,7 +3508,7 @@ async def _apply_rule_actions(
                 # Static template wins; otherwise the orchestrating drafter
                 # (memory + sales/task-manager) writes a context-aware reply.
                 body = tmpl if tmpl else await _agent_draft_reply(
-                    email, about, signature, user_email,
+                    email, about, signature, user_email, use_agent=True,
                 )
                 subj = a.get("subject") or f"Re: {email.get('subject', '')}"
                 to = a.get("to_address") or email.get("from", "")

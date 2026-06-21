@@ -203,6 +203,57 @@ _AGENT_REGISTRY: list[dict] = [
 # Falls back to agents.json on first read for backward-compatible migration.
 # ---------------------------------------------------------------------------
 
+def _normalize_runtime(val: object) -> str | None:
+    """Normalize a declared runtime string to 'maf' or 'github-copilot'.
+
+    Returns None for anything unrecognised/empty so callers can fall back.
+    """
+    if not isinstance(val, str):
+        return None
+    v = val.strip().lower()
+    if v == "maf":
+        return "maf"
+    if v in ("github-copilot", "github_copilot", "githubcopilot",
+             "copilot", "copilot-sdk"):
+        return "github-copilot"
+    return None
+
+
+def _declared_runtime(agent_name: str, local_path: str | None = None) -> str | None:
+    """Return the runtime an agent DECLARES in its config.json (normalized), or
+    None if it declares nothing.
+
+    An agent's own ``config.json`` ``runtime`` field is authoritative over the
+    registration-time heuristic (which only knew "came from GitHub" vs "local
+    path" and so mislabelled MAF agents — e.g. email-assistant, which declares
+    ``"runtime": "maf"`` — as Copilot SDK).  Checked in the clone first (always
+    reflects the current repo), then the ``local_path`` source.
+    """
+    candidates: list[Path] = []
+    try:
+        from gateway.routes.workspace import \
+            _agent_workspace_dir  # noqa: PLC0415
+        ws = _agent_workspace_dir(agent_name)
+        if ws is not None:
+            candidates.append(ws / "config.json")
+    except Exception:  # noqa: BLE001
+        pass
+    if local_path:
+        candidates.append(Path(local_path) / "config.json")
+    for cfg_path in candidates:
+        try:
+            if cfg_path.is_file():
+                data = json.loads(
+                    cfg_path.read_text(encoding="utf-8", errors="replace")
+                )
+                rt = _normalize_runtime(data.get("runtime"))
+                if rt:
+                    return rt
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
 def _load_dynamic_agents() -> list[dict]:
     """Return user-registered agents from the dynamic_agents Postgres table.
 
@@ -229,7 +280,7 @@ def _load_dynamic_agents() -> list[dict]:
                 )
             ).fetchall()
         if rows:
-            return [
+            out = [
                 {
                     "name": (r[0] or "").strip(),
                     "description": (r[1] or "").strip(),
@@ -247,6 +298,14 @@ def _load_dynamic_agents() -> list[dict]:
                 }
                 for r in rows
             ]
+            # Honor each agent's declared config.json runtime over the stored
+            # value, so the executor and the UI route/label by what the agent
+            # actually is rather than the registration heuristic.
+            for a in out:
+                rt = _declared_runtime(a["name"], a.get("local_path"))
+                if rt:
+                    a["agent_runtime"] = rt
+            return out
         # DB empty — import everything from file
         return _migrate_from_file()
     except Exception:  # noqa: BLE001
@@ -565,6 +624,16 @@ async def list_agents(
                 else "maf"
             )
     merged = static + dynamic
+
+    # Honor each agent's declared config.json runtime (authoritative over the
+    # registration heuristic) so the picker groups MAF vs Copilot SDK by what
+    # the agent actually is.  Covers static built-ins too (e.g. email-assistant
+    # declares "runtime": "maf").  _load_dynamic_agents already applied this to
+    # dynamic entries; re-applying here is idempotent and also fixes statics.
+    for a in merged:
+        rt = _declared_runtime(a["name"], a.get("local_path"))
+        if rt:
+            a["agent_runtime"] = rt
 
     # ── Git status: how many commits behind is each agent's clone? ─────
     settings = get_settings()

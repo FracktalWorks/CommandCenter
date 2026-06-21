@@ -4385,7 +4385,7 @@ async def _ensure_subscription(account_id: str) -> None:
         ), {"id": account_id, "sid": sub_id, "cs": client_state, "exp": exp_dt})
         await db.commit()
         _log.info("email.subscription_ready", account_id=account_id,
-                  sub=str(sub_id)[:12], expires=exp)
+                  sub=str(sub_id)[:12], expires=exp_raw)
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.subscription_failed", account_id=account_id,
                      error=str(exc)[:200])

@@ -14,7 +14,7 @@ import {
 import {
   AutomationRule, RuleAction, RuleActionType, RuleTestResult, ExecutedRule,
   AssistantSettings, RecentTestResult, EMAIL_CATEGORIES, ColdBlockerMode,
-  ColdSender, AgentModelTier,
+  ColdSender, LLMConfigResponse,
 } from "../../lib/types";
 
 interface AssistantViewProps {
@@ -1053,6 +1053,14 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [llm, setLlm] = useState<LLMConfigResponse | null>(null);
+
+  useEffect(() => {
+    fetch("/api/settings/llm")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setLlm(d))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!accountId) {
@@ -1147,20 +1155,50 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
             <option value="ARCHIVE">Label and archive</option>
           </select>
         </Field>
-        <Field label="Assistant model (LiteLLM tier)">
+        <Field label="Assistant model (tier or specific model)">
           <select
             value={settings.agent_model}
             onChange={(e) =>
-              setSettings({
-                ...settings,
-                agent_model: e.target.value as AgentModelTier,
-              })
+              setSettings({ ...settings, agent_model: e.target.value })
             }
             className={INPUT_CLS}
           >
-            <option value="tier-fast">Fast — tier-fast</option>
-            <option value="tier-balanced">Balanced — DeepSeek (default)</option>
-            <option value="tier-powerful">Powerful — tier-powerful</option>
+            {llm ? (
+              <>
+                <optgroup label="LiteLLM tiers">
+                  {llm.tiers.map((t) => (
+                    <option key={t.tier_name} value={t.tier_name}>
+                      {t.tier_name}
+                      {t.tier_name === "tier-balanced" ? " (default)" : ""} — {t.model}
+                    </option>
+                  ))}
+                </optgroup>
+                {llm.providers
+                  .filter((p) => p.configured && p.models.length > 0)
+                  .map((p) => (
+                    <optgroup key={p.id} label={p.label || p.id}>
+                      {p.models.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                {/* Ensure the saved value is always selectable even if not listed */}
+                {!llm.tiers.some((t) => t.tier_name === settings.agent_model) &&
+                  !llm.providers.some((p) =>
+                    p.models.includes(settings.agent_model)
+                  ) && (
+                    <option value={settings.agent_model}>
+                      {settings.agent_model}
+                    </option>
+                  )}
+              </>
+            ) : (
+              <option value={settings.agent_model || "tier-balanced"}>
+                {settings.agent_model || "tier-balanced"} (default)
+              </option>
+            )}
           </select>
         </Field>
         <div className="flex items-center gap-2 pt-1">

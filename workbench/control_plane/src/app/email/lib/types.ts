@@ -207,16 +207,36 @@ export interface ExecutedRule {
   created_at: string | null;
 }
 
-export type AgentModelTier = "tier-fast" | "tier-balanced" | "tier-powerful";
-
 export interface AssistantSettings {
   account_id: string;
   about: string;
   signature: string;
   auto_run: boolean;
   cold_email_blocker: ColdBlockerMode;
-  /** Which LiteLLM tier the assistant agent/chat uses. */
-  agent_model: AgentModelTier;
+  /** Which LiteLLM tier or model id the assistant agent/chat uses
+   *  (e.g. "tier-balanced" or "deepseek/deepseek-chat"). */
+  agent_model: string;
+}
+
+/** A configurable LLM tier/provider, from GET /api/settings/llm. */
+export interface LLMTier {
+  tier_name: string;
+  tier_id: string;
+  model: string;
+  provider: string;
+  provider_configured: boolean;
+}
+
+export interface LLMProvider {
+  id: string;
+  label: string;
+  configured: boolean;
+  models: string[];
+}
+
+export interface LLMConfigResponse {
+  tiers: LLMTier[];
+  providers: LLMProvider[];
 }
 
 export interface RecentTestResult {

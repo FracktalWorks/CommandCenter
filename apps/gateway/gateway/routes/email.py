@@ -813,6 +813,7 @@ async def backfill_folder(
 async def list_messages(
     account_id: str | None = Query(None),
     folder: str = Query("INBOX"),
+    label: str | None = Query(None),
     query: str | None = Query(None),
     thread_id: str | None = Query(None),
     page: int = Query(1, ge=1),
@@ -852,6 +853,13 @@ async def list_messages(
             else:
                 where_clauses.append("LOWER(em.folder) = LOWER(:folder)")
                 params["folder"] = folder
+        if label:
+            # Match either a user label or an assigned category (both TEXT[]).
+            where_clauses.append(
+                "(:label = ANY(COALESCE(em.labels, '{}'))"
+                " OR :label = ANY(em.categories))"
+            )
+            params["label"] = label
         if query:
             where_clauses.append(
                 """to_tsvector('english',

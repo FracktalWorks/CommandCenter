@@ -146,6 +146,8 @@ interface EmailState {
   // Selection
   selectedAccountId: string | null;
   selectedFolder: string;
+  /** Active label/category filter (null = no label filter). */
+  selectedLabel: string | null;
   selectedEmailId: string | null;
   searchQuery: string;
 
@@ -164,6 +166,8 @@ interface EmailState {
   backfillOlder: () => Promise<void>;
   selectAccount: (id: string) => void;
   selectFolder: (folder: string) => void;
+  /** Filter the list by a label/category (null clears the filter). */
+  selectLabel: (label: string | null) => void;
   selectEmail: (id: string | null) => void;
   setSearchQuery: (q: string) => void;
   openCompose: (defaults?: { to: string; subject: string; replyToBody?: string; replyToMessageId?: string }) => void;
@@ -210,6 +214,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   // Selection
   selectedAccountId: null,
   selectedFolder: "inbox",
+  selectedLabel: null,
   selectedEmailId: null,
   searchQuery: "",
 
@@ -277,12 +282,13 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   fetchEmails: async () => {
-    const { selectedAccountId, selectedFolder, searchQuery } = get();
+    const { selectedAccountId, selectedFolder, selectedLabel, searchQuery } = get();
     set({ emailsLoading: true, error: null });
     try {
       const result = await api.listEmails({
         accountId: selectedAccountId || undefined,
         folder: selectedFolder,
+        label: selectedLabel || undefined,
         query: searchQuery || undefined,
         page: 1,
         pageSize: PAGE_SIZE,
@@ -292,9 +298,15 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       // by fetchFolders — only seed a system-folder fallback if we have none yet.
       const existing = get().folders;
       const folders = existing.length > 0 ? existing : buildFolders(emails);
+      // Seed the label picker from categories actually present on messages —
+      // providers like Outlook expose no master categories, so without this the
+      // right-click "Label" menu would stay empty even when mail is categorized.
+      const labelSet = new Set(get().availableLabels);
+      for (const e of emails) for (const c of e.categories || []) labelSet.add(c);
       set({
         emails,
         folders,
+        availableLabels: [...labelSet].sort(),
         emailsLoading: false,
         emailsTotal: result.total,
         emailsPage: 1,
@@ -316,6 +328,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       const result = await api.listEmails({
         accountId: selectedAccountId || undefined,
         folder: selectedFolder,
+        label: get().selectedLabel || undefined,
         query: searchQuery || undefined,
         page: nextPage,
         pageSize: PAGE_SIZE,
@@ -389,7 +402,13 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   selectFolder: (folder: string) => {
-    set({ selectedFolder: folder, selectedEmailId: null });
+    // Switching folders clears any active label filter.
+    set({ selectedFolder: folder, selectedLabel: null, selectedEmailId: null });
+    get().fetchEmails();
+  },
+
+  selectLabel: (label: string | null) => {
+    set({ selectedLabel: label, selectedEmailId: null });
     get().fetchEmails();
   },
 

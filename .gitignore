@@ -21,6 +21,9 @@ infra/litellm/tier_overrides.yaml  # Settings UI tier changes — survives deplo
 *.key
 secrets/
 
+# Local reference checkouts (e.g. upstream inbox-zero for parity work)
+reference/
+
 # IDE
 .vscode/mcp.json
 .idea/

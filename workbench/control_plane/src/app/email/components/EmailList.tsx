@@ -63,7 +63,10 @@ export function EmailList({
   canBackfill = false,
 }: EmailListProps) {
   const selectedEmail = emails.find((e) => e.id === selectedId) || null;
-  const { updateEmail, deleteEmail, folders, selectedFolder } = useEmailStore();
+  const {
+    updateEmail, deleteEmail, folders, selectedFolder,
+    selectedLabel, selectLabel,
+  } = useEmailStore();
   const [ctx, setCtx] = useState<CtxState | null>(null);
 
   // ── Bulk selection ──
@@ -192,13 +195,45 @@ export function EmailList({
       ) : (
         <div className="flex items-center gap-0.5 px-2 py-1 border-b border-border flex-shrink-0 bg-secondary/30">
           {TOOLBAR_SECONDARY.map(({ icon: Icon, label, key }) => (
-            <ToolbarBtn key={key} icon={Icon} label={label} onClick={() => onToolbarAction(key, selectedEmail)} />
+            <ToolbarBtn
+              key={key}
+              icon={Icon}
+              label={label}
+              onClick={(e) => {
+                // "Label" opens the label picker (the context menu, which hosts
+                // LabelMenu) anchored at the button for the selected message.
+                if (key === "label") {
+                  if (selectedEmail) {
+                    setCtx({ x: e.clientX, y: e.clientY + 12, email: selectedEmail });
+                  }
+                } else {
+                  onToolbarAction(key, selectedEmail);
+                }
+              }}
+            />
           ))}
           <div className="flex-1" />
           <span className="text-[10px] text-muted-foreground pr-1">
             {emails.length}
             {total !== undefined && total > emails.length ? ` of ${total}` : ""} msgs
           </span>
+        </div>
+      )}
+
+      {/* Active label filter */}
+      {selectedLabel && (
+        <div className="flex items-center gap-1.5 px-2 py-1 border-b border-border flex-shrink-0 bg-primary/5 text-[11px]">
+          <Tag size={11} className="text-primary flex-shrink-0" />
+          <span className="text-foreground/70">
+            Filtered by label <b className="text-primary">{selectedLabel}</b>
+          </span>
+          <button
+            onClick={() => selectLabel(null)}
+            title="Clear label filter"
+            className="ml-auto flex items-center gap-0.5 text-muted-foreground hover:text-foreground"
+          >
+            <X size={11} /> Clear
+          </button>
         </div>
       )}
 
@@ -310,13 +345,25 @@ export function EmailList({
                   {email.snippet}
                 </div>
 
-                {/* Categories / user labels */}
+                {/* Categories / user labels — click to filter the list */}
                 {email.categories.length > 0 && (
                   <div className="flex flex-wrap gap-1 mt-0.5">
                     {email.categories.slice(0, 3).map((label) => (
                       <span
                         key={label}
-                        className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary/15 text-primary"
+                        role="button"
+                        tabIndex={0}
+                        title={`Filter by “${label}”`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          selectLabel(label);
+                        }}
+                        className={`text-[9px] px-1.5 py-0.5 rounded-full cursor-pointer transition-colors ${
+                          selectedLabel === label
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-primary/15 text-primary hover:bg-primary/30"
+                        }`}
                       >
                         {label}
                       </span>
@@ -541,7 +588,7 @@ function ToolbarBtn({
 }: {
   icon: React.ElementType;
   label: string;
-  onClick?: () => void;
+  onClick?: (e: React.MouseEvent) => void;
 }) {
   return (
     <button

@@ -1,0 +1,102 @@
+"""Unit tests for the rule-action dispatcher (`_apply_rule_actions`).
+
+These verify that each rule action maps to the correct provider call and that
+reply/draft actions never auto-send (they create provider drafts). The provider
+and DB session are mocked, so no mailbox or network is touched.
+"""
+from __future__ import annotations
+
+from unittest.mock import AsyncMock
+
+from gateway.routes import email as m
+
+_EMAIL = {
+    "from": "sender@example.com",
+    "subject": "Quote request",
+    "body": "Can you send pricing?",
+    "thread_id": "thread-1",
+}
+
+
+async def test_archive_moves_to_archive() -> None:
+    db, provider = AsyncMock(), AsyncMock()
+    done = await m._apply_rule_actions(
+        db, provider, "mid", "pmid", [{"type": "ARCHIVE"}], _EMAIL
+    )
+    assert done == ["ARCHIVE"]
+    provider.move_to_folder.assert_awaited_once_with("pmid", "archive")
+
+
+async def test_mark_read_sets_flag() -> None:
+    db, provider = AsyncMock(), AsyncMock()
+    done = await m._apply_rule_actions(
+        db, provider, "mid", "pmid", [{"type": "MARK_READ"}], _EMAIL
+    )
+    assert done == ["MARK_READ"]
+    provider.apply_flags.assert_awaited_once_with("pmid", is_read=True)
+
+
+async def test_label_adds_label() -> None:
+    db, provider = AsyncMock(), AsyncMock()
+    done = await m._apply_rule_actions(
+        db, provider, "mid", "pmid",
+        [{"type": "LABEL", "label": "Work"}], _EMAIL,
+    )
+    assert done == ["LABEL"]
+    provider.set_labels.assert_awaited_once_with("pmid", add=["Work"], remove=[])
+
+
+async def test_draft_with_static_content_creates_draft_without_llm() -> None:
+    db, provider = AsyncMock(), AsyncMock()
+    done = await m._apply_rule_actions(
+        db, provider, "mid", "pmid",
+        [{"type": "DRAFT_EMAIL", "content": "Thanks, pricing attached.",
+          "to_address": "sender@example.com"}],
+        _EMAIL,
+    )
+    assert done == ["DRAFT_EMAIL"]
+    provider.create_draft.assert_awaited_once()
+    kwargs = provider.create_draft.await_args.kwargs
+    # Static template is used verbatim — the LLM drafter is not invoked.
+    assert kwargs["body_text"] == "Thanks, pricing attached."
+    assert kwargs["to"] == ["sender@example.com"]
+
+
+async def test_draft_skipped_when_no_recipient() -> None:
+    db, provider = AsyncMock(), AsyncMock()
+    no_sender = {**_EMAIL, "from": ""}
+    done = await m._apply_rule_actions(
+        db, provider, "mid", "pmid",
+        [{"type": "DRAFT_EMAIL", "content": "Hi"}], no_sender,
+    )
+    assert done == []
+    provider.create_draft.assert_not_awaited()
+
+
+async def test_forward_creates_draft_never_sends() -> None:
+    db, provider = AsyncMock(), AsyncMock()
+    done = await m._apply_rule_actions(
+        db, provider, "mid", "pmid",
+        [{"type": "FORWARD", "to_address": "boss@example.com"}], _EMAIL,
+    )
+    assert done == ["FORWARD"]
+    provider.create_draft.assert_awaited_once()
+    # Forward must go out as a DRAFT, not a live send.
+    assert not provider.send_message.called
+
+
+async def test_unknown_action_is_ignored() -> None:
+    db, provider = AsyncMock(), AsyncMock()
+    done = await m._apply_rule_actions(
+        db, provider, "mid", "pmid", [{"type": "NONSENSE"}], _EMAIL
+    )
+    assert done == []
+
+
+async def test_multiple_actions_all_applied_in_order() -> None:
+    db, provider = AsyncMock(), AsyncMock()
+    done = await m._apply_rule_actions(
+        db, provider, "mid", "pmid",
+        [{"type": "MARK_READ"}, {"type": "ARCHIVE"}], _EMAIL,
+    )
+    assert done == ["MARK_READ", "ARCHIVE"]

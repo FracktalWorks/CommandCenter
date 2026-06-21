@@ -415,9 +415,24 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
     while True:
         try:
             result = await _sync_account(account_id)
+            new_mail = isinstance(result, dict) and result.get("synced", 0)
             # Auto-run Assistant rules on newly-synced mail (opt-in per account).
-            if isinstance(result, dict) and result.get("synced", 0):
+            if new_mail:
                 await _maybe_auto_run_rules(account_id)
+            # Auto-categorize senders newly seen this cycle (just-in-time). The
+            # job only touches uncategorized senders and makes no LLM call when
+            # there is nothing new, so it is cheap to run every cycle.
+            if new_mail:
+                try:
+                    from gateway.routes.email import (  # noqa: PLC0415
+                        _categorize_senders_job,
+                    )
+                    await _categorize_senders_job(account_id, 25)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "sync.categorize_failed account_id=%s error=%s",
+                        account_id, str(exc),
+                    )
             # Send a scheduled digest if one is due (opt-in per account).
             try:
                 from gateway.routes.email import _maybe_send_digest  # noqa: PLC0415

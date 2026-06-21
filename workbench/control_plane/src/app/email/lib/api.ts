@@ -189,6 +189,8 @@ export async function listEmailFolders(
 export interface ListEmailsParams {
   accountId?: string;
   folder?: string;
+  /** Filter to messages carrying this label/category. */
+  label?: string;
   query?: string;
   page?: number;
   pageSize?: number;
@@ -207,6 +209,7 @@ export async function listEmails(
   const searchParams = new URLSearchParams();
   if (params.accountId) searchParams.set("account_id", params.accountId);
   if (params.folder) searchParams.set("folder", params.folder);
+  if (params.label) searchParams.set("label", params.label);
   if (params.query) searchParams.set("query", params.query);
   if (params.page) searchParams.set("page", String(params.page));
   if (params.pageSize) searchParams.set("page_size", String(params.pageSize));

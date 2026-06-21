@@ -52,88 +52,100 @@ type PresetRule = Omit<AutomationRule, "account_id">;
 const PRESET_RULES: PresetRule[] = [
   {
     name: "To Reply",
-    instructions:
-      "Emails that need a reply or response from me — a person asking a " +
-      "question, making a request, or awaiting my input. Not automated mail.",
+    instructions: "Emails I need to respond to.",
     enabled: true,
     automated: true,
-    run_on_threads: false,
-    conditional_operator: "OR",
+    run_on_threads: true,
+    conditional_operator: "AND",
     category_filters: [],
     sort_order: 0,
     actions: [{ type: "LABEL", label: "To Reply" }, { type: "DRAFT_EMAIL" }],
   },
   {
+    name: "FYI",
+    instructions:
+      "Important emails I should know about, but don't need to reply to.",
+    enabled: true,
+    automated: true,
+    run_on_threads: true,
+    conditional_operator: "AND",
+    category_filters: [],
+    sort_order: 1,
+    actions: [{ type: "LABEL", label: "FYI" }],
+  },
+  {
     name: "Newsletter",
     instructions:
-      "Newsletters, digests, and content subscriptions I've signed up for.",
+      "Newsletters: regular content from publications, blogs, or services " +
+      "I've subscribed to.",
     enabled: true,
     automated: true,
     run_on_threads: false,
-    conditional_operator: "OR",
+    conditional_operator: "AND",
     category_filters: [],
-    sort_order: 1,
-    actions: [{ type: "LABEL", label: "Newsletter" }, { type: "ARCHIVE" }],
+    sort_order: 2,
+    actions: [{ type: "LABEL", label: "Newsletter" }],
   },
   {
     name: "Marketing",
     instructions:
-      "Marketing, promotional and sales emails — discounts, offers, product " +
-      "announcements and campaigns.",
+      "Marketing: promotional emails about products, services, sales, or offers.",
     enabled: true,
     automated: true,
     run_on_threads: false,
-    conditional_operator: "OR",
+    conditional_operator: "AND",
     category_filters: [],
-    sort_order: 2,
+    sort_order: 3,
     actions: [{ type: "LABEL", label: "Marketing" }, { type: "ARCHIVE" }],
   },
   {
     name: "Calendar",
-    instructions: "Calendar invites, meeting requests and event notifications.",
+    instructions:
+      "Calendar: any email related to scheduling, meeting invites, or " +
+      "calendar notifications.",
     enabled: true,
     automated: true,
     run_on_threads: false,
-    conditional_operator: "OR",
+    conditional_operator: "AND",
     category_filters: [],
-    sort_order: 3,
+    sort_order: 4,
     actions: [{ type: "LABEL", label: "Calendar" }],
   },
   {
     name: "Receipt",
     instructions:
-      "Receipts, invoices, order confirmations and payment notifications.",
+      "Receipts: purchase confirmations, payment receipts, transaction " +
+      "records or invoices.",
     enabled: true,
     automated: true,
     run_on_threads: false,
-    conditional_operator: "OR",
+    conditional_operator: "AND",
     category_filters: [],
-    sort_order: 4,
+    sort_order: 5,
     actions: [{ type: "LABEL", label: "Receipt" }],
   },
   {
     name: "Notification",
-    instructions:
-      "Automated notifications, alerts and updates from apps and services.",
+    instructions: "Notifications: alerts, status updates, or system messages.",
     enabled: true,
     automated: true,
     run_on_threads: false,
-    conditional_operator: "OR",
+    conditional_operator: "AND",
     category_filters: [],
-    sort_order: 5,
+    sort_order: 6,
     actions: [{ type: "LABEL", label: "Notification" }],
   },
   {
     name: "Cold Email",
     instructions:
-      "Cold outreach — unsolicited sales, marketing or recruiting emails from " +
-      "people or companies I have no prior relationship with.",
+      "Cold emails: unsolicited sales pitches and outreach from people or " +
+      "companies I have no prior relationship with.",
     enabled: true,
     automated: true,
     run_on_threads: false,
-    conditional_operator: "OR",
+    conditional_operator: "AND",
     category_filters: [],
-    sort_order: 6,
+    sort_order: 7,
     actions: [{ type: "LABEL", label: "Cold Email" }, { type: "ARCHIVE" }],
   },
 ];
@@ -338,9 +350,9 @@ function RulesTab({ accountId }: { accountId: string | null }) {
           <div className="flex flex-col items-center text-center py-10 gap-3">
             <Sparkles size={22} className="text-primary/60" />
             <div className="text-sm text-muted-foreground max-w-xs">
-              No rules yet. Install the recommended set (To Reply, Newsletter,
-              Marketing, Calendar, Receipt, Notification, Cold Email) or create
-              your own.
+              No rules yet. Install the recommended set (To Reply, FYI,
+              Newsletter, Marketing, Calendar, Receipt, Notification, Cold Email)
+              or create your own.
             </div>
             <button
               onClick={installDefaults}
@@ -437,6 +449,32 @@ function RulesTab({ accountId }: { accountId: string | null }) {
   );
 }
 
+/** Condition types exposed in the rule editor, mapped to the flat rule fields. */
+type CondType = "prompt" | "from" | "to" | "subject" | "body";
+
+const COND_META: Record<
+  CondType,
+  {
+    label: string;
+    field: "instructions" | "from_pattern" | "to_pattern" | "subject_pattern" | "body_pattern";
+    placeholder: string;
+    textarea?: boolean;
+  }
+> = {
+  prompt: {
+    label: "AI Prompt",
+    field: "instructions",
+    placeholder: "Describe the emails this matches, in plain English…",
+    textarea: true,
+  },
+  from: { label: "From", field: "from_pattern", placeholder: "newsletter@ or @vendor.com" },
+  to: { label: "To", field: "to_pattern", placeholder: "me@company.com" },
+  subject: { label: "Subject", field: "subject_pattern", placeholder: "invoice" },
+  body: { label: "Body", field: "body_pattern", placeholder: "unsubscribe" },
+};
+
+const COND_ORDER: CondType[] = ["prompt", "from", "to", "subject", "body"];
+
 function RuleEditor({
   rule,
   onSave,
@@ -449,12 +487,28 @@ function RuleEditor({
   const [draft, setDraft] = useState<AutomationRule>(rule);
   const set = (patch: Partial<AutomationRule>) =>
     setDraft((d) => ({ ...d, ...patch }));
+  const setField = (field: CondType, value: string) =>
+    setDraft((d) => ({ ...d, [COND_META[field].field]: value }));
 
   const setAction = (i: number, patch: Partial<RuleAction>) =>
     setDraft((d) => ({
       ...d,
       actions: d.actions.map((a, idx) => (idx === i ? { ...a, ...patch } : a)),
     }));
+
+  // Conditions visible in the builder: any pre-filled field, plus ones the user
+  // explicitly adds. A new rule starts with the AI Prompt row.
+  const prefilled = COND_ORDER.filter(
+    (t) => ((draft[COND_META[t].field] ?? "") as string).trim() !== ""
+  );
+  const [shown, setShown] = useState<CondType[]>(
+    prefilled.length ? prefilled : ["prompt"]
+  );
+  const addable = COND_ORDER.filter((t) => !shown.includes(t));
+  const removeCondition = (t: CondType) => {
+    setShown((s) => s.filter((x) => x !== t));
+    setField(t, "");
+  };
 
   const valid = draft.name.trim().length > 0 && draft.actions.length > 0;
 
@@ -473,102 +527,139 @@ function RuleEditor({
         />
       </Field>
 
-      <Field label="Instructions (plain English — matched by AI)">
-        <textarea
-          value={draft.instructions ?? ""}
-          onChange={(e) => set({ instructions: e.target.value })}
-          placeholder="e.g. Marketing or promotional emails, sales and discounts"
-          rows={2}
-          className={`${INPUT_CLS} resize-none`}
-        />
-      </Field>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <Field label="From contains">
-          <input
-            value={draft.from_pattern ?? ""}
-            onChange={(e) => set({ from_pattern: e.target.value })}
-            placeholder="newsletter@"
-            className={INPUT_CLS}
-          />
-        </Field>
-        <Field label="Subject contains">
-          <input
-            value={draft.subject_pattern ?? ""}
-            onChange={(e) => set({ subject_pattern: e.target.value })}
-            placeholder="invoice"
-            className={INPUT_CLS}
-          />
-        </Field>
-      </div>
-
-      <label className="flex items-start gap-2 cursor-pointer">
-        <input
-          type="checkbox"
-          checked={draft.automated}
-          onChange={(e) => set({ automated: e.target.checked })}
-          className="accent-primary mt-0.5"
-        />
-        <span>
-          <span className="text-xs text-foreground">Run automatically</span>
-          <span className="block text-[11px] text-muted-foreground">
-            On: matching mail gets these actions applied automatically. Off: the
-            assistant proposes them in History for your approval.
+      {/* When — conditions */}
+      <div className="bg-card border border-border rounded-xl p-3 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-foreground">
+            When I get an email…
           </span>
-        </span>
-      </label>
+          {shown.length > 1 && (
+            <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+              <span>match</span>
+              <select
+                value={draft.conditional_operator}
+                onChange={(e) =>
+                  set({ conditional_operator: e.target.value as "AND" | "OR" })
+                }
+                className="bg-secondary border border-border rounded px-1.5 py-0.5 text-foreground outline-none"
+              >
+                <option value="AND">ALL</option>
+                <option value="OR">ANY</option>
+              </select>
+              <span>of these</span>
+            </div>
+          )}
+        </div>
 
-      {/* Category condition */}
-      <div>
-        <span className="text-xs font-medium text-foreground">
-          Category condition (optional)
-        </span>
-        <select
-          value={draft.category_filter_type ?? ""}
-          onChange={(e) =>
-            set({
-              category_filter_type:
-                (e.target.value || null) as "INCLUDE" | "EXCLUDE" | null,
-            })
-          }
-          className={`${INPUT_CLS} mt-1.5`}
-        >
-          <option value="">No category filter</option>
-          <option value="INCLUDE">Only these categories</option>
-          <option value="EXCLUDE">Except these categories</option>
-        </select>
-        {draft.category_filter_type && (
-          <div className="flex flex-wrap gap-1.5 mt-2">
-            {EMAIL_CATEGORIES.map((c) => {
-              const on = draft.category_filters.includes(c);
-              return (
+        {shown.map((t) => {
+          const meta = COND_META[t];
+          const value = (draft[meta.field] ?? "") as string;
+          return (
+            <div key={t} className="flex items-start gap-2">
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground w-12 pt-2 flex-shrink-0">
+                {meta.label}
+              </span>
+              {meta.textarea ? (
+                <textarea
+                  value={value}
+                  onChange={(e) => setField(t, e.target.value)}
+                  rows={2}
+                  placeholder={meta.placeholder}
+                  className={`${INPUT_CLS} resize-none flex-1`}
+                />
+              ) : (
+                <input
+                  value={value}
+                  onChange={(e) => setField(t, e.target.value)}
+                  placeholder={meta.placeholder}
+                  className={`${INPUT_CLS} flex-1`}
+                />
+              )}
+              {shown.length > 1 && (
                 <button
-                  key={c}
-                  onClick={() =>
-                    set({
-                      category_filters: on
-                        ? draft.category_filters.filter((x) => x !== c)
-                        : [...draft.category_filters, c],
-                    })
-                  }
-                  className={`text-[10px] px-2 py-1 rounded-full border transition-colors ${
-                    on
-                      ? "bg-primary/15 text-primary border-primary/40"
-                      : "border-border text-muted-foreground hover:text-foreground"
-                  }`}
+                  onClick={() => removeCondition(t)}
+                  title="Remove condition"
+                  className="p-1.5 text-muted-foreground hover:text-destructive flex-shrink-0 mt-0.5"
                 >
-                  {c}
+                  <X size={13} />
                 </button>
-              );
-            })}
+              )}
+            </div>
+          );
+        })}
+
+        {addable.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] text-muted-foreground">Add:</span>
+            {addable.map((t) => (
+              <button
+                key={t}
+                onClick={() => setShown((s) => [...s, t])}
+                className="text-[11px] px-2 py-1 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+              >
+                <Plus size={10} className="inline -mt-0.5" /> {COND_META[t].label}
+              </button>
+            ))}
           </div>
         )}
+
+        <p className="text-[10px] text-muted-foreground">
+          AI Prompt is matched by the assistant; From/To/Subject/Body are literal
+          text matches.
+        </p>
+
+        {/* Category condition */}
+        <div className="pt-2 border-t border-border/60">
+          <span className="text-xs font-medium text-foreground">
+            Sender category (optional)
+          </span>
+          <select
+            value={draft.category_filter_type ?? ""}
+            onChange={(e) =>
+              set({
+                category_filter_type:
+                  (e.target.value || null) as "INCLUDE" | "EXCLUDE" | null,
+              })
+            }
+            className={`${INPUT_CLS} mt-1.5`}
+          >
+            <option value="">No category filter</option>
+            <option value="INCLUDE">Only these categories</option>
+            <option value="EXCLUDE">Except these categories</option>
+          </select>
+          {draft.category_filter_type && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {EMAIL_CATEGORIES.map((c) => {
+                const on = draft.category_filters.includes(c);
+                return (
+                  <button
+                    key={c}
+                    onClick={() =>
+                      set({
+                        category_filters: on
+                          ? draft.category_filters.filter((x) => x !== c)
+                          : [...draft.category_filters, c],
+                      })
+                    }
+                    className={`text-[10px] px-2 py-1 rounded-full border transition-colors ${
+                      on
+                        ? "bg-primary/15 text-primary border-primary/40"
+                        : "border-border text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {c}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Actions */}
-      <div>
+      {/* Then — actions */}
+      <div className="bg-card border border-border rounded-xl p-3">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-medium text-foreground">Actions</span>
+          <span className="text-xs font-medium text-foreground">Then…</span>
           <button
             onClick={() =>
               set({ actions: [...draft.actions, { type: "ARCHIVE" }] })
@@ -636,6 +727,22 @@ function RuleEditor({
                     }
                     className={INPUT_CLS}
                   />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      value={a.cc_address ?? ""}
+                      onChange={(e) => setAction(i, { cc_address: e.target.value })}
+                      placeholder="Cc (optional)"
+                      className={INPUT_CLS}
+                    />
+                    <input
+                      value={a.bcc_address ?? ""}
+                      onChange={(e) =>
+                        setAction(i, { bcc_address: e.target.value })
+                      }
+                      placeholder="Bcc (optional)"
+                      className={INPUT_CLS}
+                    />
+                  </div>
                   <input
                     value={a.subject ?? ""}
                     onChange={(e) => setAction(i, { subject: e.target.value })}
@@ -661,6 +768,40 @@ function RuleEditor({
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Options */}
+      <div className="space-y-2">
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={draft.automated}
+            onChange={(e) => set({ automated: e.target.checked })}
+            className="accent-primary mt-0.5"
+          />
+          <span>
+            <span className="text-xs text-foreground">Run automatically</span>
+            <span className="block text-[11px] text-muted-foreground">
+              On: matching mail gets these actions applied automatically. Off: the
+              assistant proposes them in History for your approval.
+            </span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={draft.run_on_threads}
+            onChange={(e) => set({ run_on_threads: e.target.checked })}
+            className="accent-primary mt-0.5"
+          />
+          <span>
+            <span className="text-xs text-foreground">Apply to replies in a thread</span>
+            <span className="block text-[11px] text-muted-foreground">
+              Re-evaluate this rule on every new message in an ongoing
+              conversation (recommended for “To Reply” / “FYI”).
+            </span>
+          </span>
+        </label>
       </div>
 
       <div className="flex items-center gap-2 pt-2">

@@ -427,6 +427,16 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
                     "sync.digest_check_failed account_id=%s error=%s",
                     account_id, str(exc),
                 )
+            # Ensure a Graph push subscription exists / is renewed so new mail
+            # is processed in near real time (polling stays as a fallback).
+            try:
+                from gateway.routes.email import _ensure_subscription  # noqa: PLC0415
+                await _ensure_subscription(account_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "sync.subscription_check_failed account_id=%s error=%s",
+                    account_id, str(exc),
+                )
         except Exception as exc:
             logger.warning(
                 "sync.loop_iteration_failed account_id=%s error=%s",

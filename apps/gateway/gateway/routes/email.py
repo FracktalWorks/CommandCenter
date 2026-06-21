@@ -30,7 +30,7 @@ import io
 import os
 import secrets
 import socket
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -39,8 +39,12 @@ from acb_auth import UserContext, get_current_user
 from acb_common import get_logger, get_settings
 from urllib.parse import urlencode, urlparse
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi import (
+    APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status,
+)
+from fastapi.responses import (
+    PlainTextResponse, RedirectResponse, StreamingResponse,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -4258,6 +4262,122 @@ async def _maybe_send_digest(account_id: str) -> None:
         _log.info("email.digest_sent", account_id=account_id)
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.digest_send_failed", account_id=account_id,
+                     error=str(exc)[:200])
+    finally:
+        await db.close()
+
+
+# ── Push notifications (Microsoft Graph change subscriptions) ────────────────
+
+async def _webhook_sync(account_id: str) -> None:
+    """Triggered by a Graph notification: incremental sync + auto-run rules."""
+    try:
+        from email_ingestion.scheduler import (  # noqa: PLC0415
+            _maybe_auto_run_rules, _sync_account,
+        )
+        res = await _sync_account(account_id)
+        if isinstance(res, dict) and res.get("synced", 0):
+            await _maybe_auto_run_rules(account_id)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.webhook_sync_failed", account_id=account_id,
+                     error=str(exc)[:200])
+
+
+@router.api_route("/webhook/microsoft", methods=["GET", "POST"])
+async def microsoft_webhook(request: Request, background: BackgroundTasks):
+    """Public Microsoft Graph change-notification endpoint (no auth).
+
+    Handles the validation handshake (echo validationToken) and incoming
+    notifications (validate clientState → background incremental sync)."""
+    token = request.query_params.get("validationToken")
+    if token:
+        return PlainTextResponse(content=token, status_code=200)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return PlainTextResponse("", status_code=202)
+    notifications = body.get("value", []) if isinstance(body, dict) else []
+    affected: set[str] = set()
+    for n in notifications:
+        if not isinstance(n, dict):
+            continue
+        sub_id = n.get("subscriptionId")
+        client_state = n.get("clientState")
+        if not sub_id:
+            continue
+        db = await _get_db()
+        try:
+            row = (await db.execute(text(
+                "SELECT id, webhook_client_state FROM email_accounts "
+                "WHERE webhook_subscription_id = :sid"
+            ), {"sid": sub_id})).fetchone()
+        finally:
+            await db.close()
+        if not row:
+            continue
+        if row.webhook_client_state and client_state != row.webhook_client_state:
+            _log.warning("email.webhook_bad_client_state", sub=str(sub_id)[:12])
+            continue
+        affected.add(str(row.id))
+    for aid in affected:
+        background.add_task(_webhook_sync, aid)
+    return PlainTextResponse("", status_code=202)
+
+
+async def _ensure_subscription(account_id: str) -> None:
+    """Create or renew the account's Graph push subscription (Microsoft only)."""
+    public = (
+        os.environ.get("GATEWAY_PUBLIC_URL", "")
+        or getattr(get_settings(), "gateway_public_url", "")
+    ).rstrip("/")
+    if not public:
+        return
+    db = await _get_db()
+    try:
+        row = (await db.execute(text(
+            """SELECT provider, credentials_encrypted, webhook_subscription_id,
+                      webhook_client_state, webhook_expires_at
+               FROM email_accounts WHERE id = :id"""
+        ), {"id": account_id})).fetchone()
+        if not row or row.provider != "microsoft":
+            return
+        now = datetime.now(timezone.utc)
+        if (row.webhook_subscription_id and row.webhook_expires_at
+                and row.webhook_expires_at > now + timedelta(hours=12)):
+            return  # still valid, not expiring soon
+
+        from acb_llm.key_store import get_key_store  # noqa: PLC0415
+        store = get_key_store()
+        creds = json.loads(store.decrypt(row.credentials_encrypted))
+        provider = _instantiate_provider("microsoft", creds)
+        if not await provider.authenticate():
+            return
+        notify_url = f"{public}/email/webhook/microsoft"
+        client_state = row.webhook_client_state or secrets.token_urlsafe(24)
+
+        data = None
+        sub_id = row.webhook_subscription_id
+        if sub_id:
+            try:
+                data = await provider.renew_subscription(sub_id)
+            except Exception:  # noqa: BLE001
+                data = None
+        if data is None:
+            data = await provider.create_subscription(notify_url, client_state)
+            sub_id = data.get("id")
+        exp = data.get("expirationDateTime")
+        await _persist_rotated_creds(db, store, account_id, provider)
+        await db.execute(text(
+            """UPDATE email_accounts
+               SET webhook_subscription_id = :sid, webhook_client_state = :cs,
+                   webhook_expires_at = :exp, updated_at = now()
+               WHERE id = :id"""
+        ), {"id": account_id, "sid": sub_id, "cs": client_state, "exp": exp})
+        await db.commit()
+        _log.info("email.subscription_ready", account_id=account_id,
+                  sub=str(sub_id)[:12], expires=exp)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.subscription_failed", account_id=account_id,
                      error=str(exc)[:200])
     finally:
         await db.close()

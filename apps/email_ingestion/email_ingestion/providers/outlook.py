@@ -281,6 +281,57 @@ class OutlookProvider(BaseEmailProvider):
         resp.raise_for_status()
         return resp.json().get("id", "")
 
+    # ── Change-notification subscriptions (push) ─────────────────────────────
+
+    async def create_subscription(
+        self,
+        notification_url: str,
+        client_state: str,
+        resource: str = "/me/mailFolders('inbox')/messages",
+        minutes: int = 4000,
+    ) -> dict[str, Any]:
+        """Create a Graph change-notification subscription for new inbox mail.
+
+        Graph validates ``notification_url`` synchronously (it POSTs a
+        validationToken that the endpoint must echo within 10s). Mail
+        subscriptions live at most ~4230 min, so callers must renew.
+        """
+        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+        exp = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+        body = {
+            "changeType": "created",
+            "notificationUrl": notification_url,
+            "resource": resource,
+            "expirationDateTime": exp,
+            "clientState": client_state,
+        }
+        client = await self._get_client()
+        resp = await client.post("/subscriptions", json=body)
+        resp.raise_for_status()
+        return resp.json()
+
+    async def renew_subscription(
+        self, subscription_id: str, minutes: int = 4000
+    ) -> dict[str, Any]:
+        """Extend a subscription's expiry."""
+        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+        exp = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+        client = await self._get_client()
+        resp = await client.patch(
+            f"/subscriptions/{subscription_id}",
+            json={"expirationDateTime": exp},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def delete_subscription(self, subscription_id: str) -> None:
+        """Best-effort delete of a subscription."""
+        client = await self._get_client()
+        try:
+            await client.delete(f"/subscriptions/{subscription_id}")
+        except Exception:  # noqa: BLE001
+            pass
+
     async def modify_message(
         self,
         provider_message_id: str,

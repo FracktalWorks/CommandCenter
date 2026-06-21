@@ -1939,6 +1939,15 @@ async def ai_chat(
 
     async def event_stream():
         """Translate AG-UI protocol events to frontend SSE format."""
+        # Set the memory/user ContextVar HERE — this generator runs in Starlette's
+        # streaming context (not the handler body), so the agent's tools and
+        # memory see the right user only if it's set inside the stream.
+        try:
+            from acb_skills.memory_tools import _set_memory_user_id  # noqa: PLC0415
+            _set_memory_user_id(user_id)
+        except Exception:  # noqa: BLE001
+            pass
+
         yield f"data: {json.dumps({'type': 'start'})}\n\n"
 
         content_buffer: list[str] = []

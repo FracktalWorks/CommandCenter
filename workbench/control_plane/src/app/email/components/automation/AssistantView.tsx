@@ -14,7 +14,7 @@ import {
 import {
   AutomationRule, RuleAction, RuleActionType, RuleTestResult, ExecutedRule,
   AssistantSettings, RecentTestResult, EMAIL_CATEGORIES, ColdBlockerMode,
-  ColdSender,
+  ColdSender, AgentModelTier,
 } from "../../lib/types";
 
 interface AssistantViewProps {
@@ -1145,6 +1145,22 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
             <option value="OFF">Off</option>
             <option value="LABEL">Label as “Cold Email”</option>
             <option value="ARCHIVE">Label and archive</option>
+          </select>
+        </Field>
+        <Field label="Assistant model (LiteLLM tier)">
+          <select
+            value={settings.agent_model}
+            onChange={(e) =>
+              setSettings({
+                ...settings,
+                agent_model: e.target.value as AgentModelTier,
+              })
+            }
+            className={INPUT_CLS}
+          >
+            <option value="tier-fast">Fast — tier-fast</option>
+            <option value="tier-balanced">Balanced — DeepSeek (default)</option>
+            <option value="tier-powerful">Powerful — tier-powerful</option>
           </select>
         </Field>
         <div className="flex items-center gap-2 pt-1">

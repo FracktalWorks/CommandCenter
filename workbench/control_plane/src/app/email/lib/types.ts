@@ -207,12 +207,16 @@ export interface ExecutedRule {
   created_at: string | null;
 }
 
+export type AgentModelTier = "tier-fast" | "tier-balanced" | "tier-powerful";
+
 export interface AssistantSettings {
   account_id: string;
   about: string;
   signature: string;
   auto_run: boolean;
   cold_email_blocker: ColdBlockerMode;
+  /** Which LiteLLM tier the assistant agent/chat uses. */
+  agent_model: AgentModelTier;
 }
 
 export interface RecentTestResult {

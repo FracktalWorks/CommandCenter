@@ -1928,6 +1928,23 @@ async def ai_chat(
         except Exception:  # noqa: BLE001
             pass
 
+    # ── Resolve which LiteLLM tier the agent should use (per-account) ──
+    agent_model = "tier-balanced"
+    if req.account_id:
+        try:
+            _mdb = await _get_db()
+            try:
+                _mrow = (await _mdb.execute(text(
+                    "SELECT agent_model FROM email_assistant_settings "
+                    "WHERE account_id = :aid"
+                ), {"aid": req.account_id})).fetchone()
+                if _mrow and _mrow.agent_model:
+                    agent_model = _mrow.agent_model
+            finally:
+                await _mdb.close()
+        except Exception:  # noqa: BLE001
+            pass
+
     # ── Run the agent through the orchestrator ──
     from orchestrator.executor import run_agent_stream  # noqa: PLC0415
 
@@ -1936,6 +1953,7 @@ async def ai_chat(
         payload,
         run_id=run_id,
         thread_id=f"email-chat:{user_id}:{run_id}",
+        model=agent_model,
     )
 
     async def event_stream():
@@ -3564,6 +3582,7 @@ class AssistantSettingsModel(BaseModel):
     signature: str | None = None
     auto_run: bool = False
     cold_email_blocker: str = "OFF"  # OFF | LABEL | ARCHIVE
+    agent_model: str = "tier-balanced"  # tier-fast | tier-balanced | tier-powerful
 
 
 @router.get("/assistant/settings")
@@ -3576,7 +3595,7 @@ async def get_assistant_settings(
     try:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         row = (await db.execute(text(
-            """SELECT about, signature, auto_run, cold_email_blocker
+            """SELECT about, signature, auto_run, cold_email_blocker, agent_model
                FROM email_assistant_settings WHERE account_id = :aid"""
         ), {"aid": account_id})).fetchone()
         return {
@@ -3585,6 +3604,8 @@ async def get_assistant_settings(
             "signature": row.signature if row else "",
             "auto_run": bool(row.auto_run) if row else False,
             "cold_email_blocker": (row.cold_email_blocker if row else "OFF") or "OFF",
+            "agent_model": (row.agent_model if row else "tier-balanced")
+            or "tier-balanced",
         }
     finally:
         await db.close()
@@ -3602,16 +3623,18 @@ async def put_assistant_settings(
         await db.execute(text(
             """INSERT INTO email_assistant_settings
                  (account_id, about, signature, auto_run, cold_email_blocker,
-                  updated_at)
-               VALUES (:aid, :about, :sig, :auto, :cold, now())
+                  agent_model, updated_at)
+               VALUES (:aid, :about, :sig, :auto, :cold, :model, now())
                ON CONFLICT (account_id) DO UPDATE SET
                  about = EXCLUDED.about,
                  signature = EXCLUDED.signature,
                  auto_run = EXCLUDED.auto_run,
                  cold_email_blocker = EXCLUDED.cold_email_blocker,
+                 agent_model = EXCLUDED.agent_model,
                  updated_at = now()"""
         ), {"aid": req.account_id, "about": req.about, "sig": req.signature,
-            "auto": req.auto_run, "cold": req.cold_email_blocker or "OFF"})
+            "auto": req.auto_run, "cold": req.cold_email_blocker or "OFF",
+            "model": req.agent_model or "tier-balanced"})
         await db.commit()
         return {
             "account_id": req.account_id,
@@ -3619,6 +3642,7 @@ async def put_assistant_settings(
             "signature": req.signature or "",
             "auto_run": req.auto_run,
             "cold_email_blocker": req.cold_email_blocker or "OFF",
+            "agent_model": req.agent_model or "tier-balanced",
         }
     finally:
         await db.close()

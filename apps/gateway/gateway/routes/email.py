@@ -2232,6 +2232,13 @@ async def list_senders(
         ), nl_params)).fetchall()
         status_by_email = {r.email: r.status for r in nl_rows}
 
+        # Merge assigned categories (same account scope as newsletters).
+        cat_rows = (await db.execute(text(
+            f"SELECT LOWER(email) AS email, category FROM email_senders "
+            f"WHERE {nl_scope}"
+        ), nl_params)).fetchall()
+        category_by_email = {r.email: r.category for r in cat_rows if r.category}
+
         return {
             "senders": [
                 {
@@ -2246,6 +2253,7 @@ async def list_senders(
                     if r.last_received else None,
                     "unsubscribe_link": r.unsubscribe_link,
                     "status": status_by_email.get(r.email, "APPROVED"),
+                    "category": category_by_email.get(r.email),
                 }
                 for r in rows
             ]
@@ -2513,6 +2521,7 @@ class RuleModel(BaseModel):
     subject_pattern: str | None = None
     body_pattern: str | None = None
     category_filter_type: str | None = None
+    category_filters: list[str] = []
     system_type: str | None = None
     sort_order: int = 0
     actions: list[RuleActionModel] = []
@@ -2524,7 +2533,7 @@ async def _load_rules(db: Any, account_id: str) -> list[dict[str, Any]]:
         """SELECT id, account_id, name, instructions, enabled, automated,
                   run_on_threads, conditional_operator, from_pattern, to_pattern,
                   subject_pattern, body_pattern, category_filter_type,
-                  system_type, sort_order
+                  category_filters, system_type, sort_order
            FROM email_rules WHERE account_id = :aid
            ORDER BY sort_order, created_at"""
     ), {"aid": account_id})).fetchall()
@@ -2544,6 +2553,7 @@ async def _load_rules(db: Any, account_id: str) -> list[dict[str, Any]]:
             "from_pattern": r.from_pattern, "to_pattern": r.to_pattern,
             "subject_pattern": r.subject_pattern, "body_pattern": r.body_pattern,
             "category_filter_type": r.category_filter_type,
+            "category_filters": list(r.category_filters) if r.category_filters else [],
             "system_type": r.system_type, "sort_order": r.sort_order,
             "actions": [
                 {"id": str(a.id), "type": a.type, "label": a.label,
@@ -2600,16 +2610,17 @@ async def create_rule(
                  (id, account_id, name, instructions, enabled, automated,
                   run_on_threads, conditional_operator, from_pattern, to_pattern,
                   subject_pattern, body_pattern, category_filter_type,
-                  system_type, sort_order)
+                  category_filters, system_type, sort_order)
                VALUES (:id, :aid, :name, :instr, :enabled, :auto, :rot, :op,
-                       :fp, :tp, :sp, :bp, :cft, :st, :so)"""
+                       :fp, :tp, :sp, :bp, :cft, :cfs, :st, :so)"""
         ), {"id": rule_id, "aid": req.account_id, "name": req.name,
             "instr": req.instructions, "enabled": req.enabled,
             "auto": req.automated, "rot": req.run_on_threads,
             "op": req.conditional_operator,
             "fp": req.from_pattern, "tp": req.to_pattern, "sp": req.subject_pattern,
             "bp": req.body_pattern, "cft": req.category_filter_type,
-            "st": req.system_type, "so": req.sort_order})
+            "cfs": req.category_filters, "st": req.system_type,
+            "so": req.sort_order})
         await _replace_actions(db, rule_id, req.actions)
         await db.commit()
         rules = await _load_rules(db, req.account_id)
@@ -2641,6 +2652,7 @@ async def update_rule(
                  conditional_operator = :op,
                  from_pattern = :fp, to_pattern = :tp, subject_pattern = :sp,
                  body_pattern = :bp, category_filter_type = :cft,
+                 category_filters = :cfs,
                  system_type = :st, sort_order = :so, updated_at = now()
                WHERE id = :rid"""
         ), {"rid": rule_id, "name": req.name, "instr": req.instructions,
@@ -2648,8 +2660,8 @@ async def update_rule(
             "rot": req.run_on_threads,
             "op": req.conditional_operator, "fp": req.from_pattern,
             "tp": req.to_pattern, "sp": req.subject_pattern, "bp": req.body_pattern,
-            "cft": req.category_filter_type, "st": req.system_type,
-            "so": req.sort_order})
+            "cft": req.category_filter_type, "cfs": req.category_filters,
+            "st": req.system_type, "so": req.sort_order})
         await _replace_actions(db, rule_id, req.actions)
         await db.commit()
         rules = await _load_rules(db, str(owner.account_id))
@@ -2769,30 +2781,69 @@ def _static_match(rule: dict[str, Any], email: dict[str, str]) -> bool | None:
     return all(checks) if rule.get("conditional_operator", "AND") == "AND" else any(checks)
 
 
+def _category_ok(rule: dict[str, Any], sender_category: str) -> bool:
+    """Whether the sender's category satisfies the rule's category condition."""
+    cft = rule.get("category_filter_type")
+    cfs = rule.get("category_filters") or []
+    if not cft or not cfs:
+        return True
+    sc = sender_category or "Unknown"
+    if cft == "INCLUDE":
+        return sc in cfs
+    if cft == "EXCLUDE":
+        return sc not in cfs
+    return True
+
+
+async def _sender_category(db: Any, account_id: str, sender_email: str) -> str:
+    """Look up a sender's assigned category, defaulting to 'Unknown'."""
+    if not sender_email:
+        return "Unknown"
+    row = (await db.execute(text(
+        "SELECT category FROM email_senders "
+        "WHERE account_id = :aid AND email = LOWER(:e)"
+    ), {"aid": account_id, "e": sender_email})).fetchone()
+    return (row.category if row and row.category else "Unknown")
+
+
 async def _match_email_to_rule(
     db: Any, account_id: str, email: dict[str, str]
 ) -> dict[str, Any] | None:
     """Return the first matching rule + reason, or None.
 
-    Static-only rules are evaluated locally; rules with NL instructions are
-    resolved with a single LLM call. Static-first keeps it cheap & deterministic.
+    Evaluation order per rule: category condition (if any) must pass, then static
+    patterns (local), then NL instructions (one batched LLM call). Static/category
+    first keeps it cheap & deterministic.
     """
     rules = [r for r in await _load_rules(db, account_id) if r["enabled"]]
     if not rules:
         return None
 
+    # Resolve the sender's category once, only if a rule actually filters on it.
+    sender_category = "Unknown"
+    if any(r.get("category_filter_type") and r.get("category_filters") for r in rules):
+        sender_category = await _sender_category(db, account_id, email.get("from", ""))
+
     instruction_rules: list[dict[str, Any]] = []
     for rule in rules:
+        if not _category_ok(rule, sender_category):
+            continue
         sm = _static_match(rule, email)
         has_instr = bool((rule.get("instructions") or "").strip())
-        if sm is True and not has_instr:
-            return {"rule": rule, "reason": "Matched static conditions."}
-        if sm is False and not has_instr:
-            continue
+        has_cat = bool(rule.get("category_filter_type") and rule.get("category_filters"))
         if has_instr:
             # Static (if any) must not contradict; let the LLM decide.
             if sm is not False:
                 instruction_rules.append(rule)
+            continue
+        if sm is True:
+            return {"rule": rule, "reason": "Matched static conditions."}
+        if sm is False:
+            continue
+        # No static patterns and no instructions: a passing category filter alone
+        # is a match.
+        if has_cat:
+            return {"rule": rule, "reason": f"Matched category: {sender_category}."}
 
     if instruction_rules:
         pick = await _llm_pick_rule(email, instruction_rules)
@@ -3127,6 +3178,13 @@ async def _run_rules_job(
             return
 
         about, signature = await _load_assistant_about(db, account_id)
+        cold_blocker = "OFF"
+        cb_row = (await db.execute(text(
+            "SELECT cold_email_blocker FROM email_assistant_settings "
+            "WHERE account_id = :aid"
+        ), {"aid": account_id})).fetchone()
+        if cb_row and cb_row.cold_email_blocker:
+            cold_blocker = cb_row.cold_email_blocker
 
         provider = None
         store = None
@@ -3177,6 +3235,12 @@ async def _run_rules_job(
                     "frm": frm.get("email", ""), "status": status,
                     "auto": automated, "acts": json.dumps(actions_taken),
                     "reason": match["reason"]})
+            elif (not dry_run) and provider is not None and cold_blocker != "OFF":
+                # No rule matched — let the cold-email blocker have a look.
+                await _maybe_block_cold(
+                    db, provider, account_id, str(r.id),
+                    r.provider_message_id, email, cold_blocker,
+                )
             if not dry_run:
                 await db.execute(text(
                     "UPDATE email_messages SET rules_processed_at = now() "
@@ -3273,6 +3337,7 @@ class AssistantSettingsModel(BaseModel):
     about: str | None = None
     signature: str | None = None
     auto_run: bool = False
+    cold_email_blocker: str = "OFF"  # OFF | LABEL | ARCHIVE
 
 
 @router.get("/assistant/settings")
@@ -3285,7 +3350,7 @@ async def get_assistant_settings(
     try:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         row = (await db.execute(text(
-            """SELECT about, signature, auto_run
+            """SELECT about, signature, auto_run, cold_email_blocker
                FROM email_assistant_settings WHERE account_id = :aid"""
         ), {"aid": account_id})).fetchone()
         return {
@@ -3293,6 +3358,7 @@ async def get_assistant_settings(
             "about": row.about if row else "",
             "signature": row.signature if row else "",
             "auto_run": bool(row.auto_run) if row else False,
+            "cold_email_blocker": (row.cold_email_blocker if row else "OFF") or "OFF",
         }
     finally:
         await db.close()
@@ -3309,22 +3375,363 @@ async def put_assistant_settings(
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         await db.execute(text(
             """INSERT INTO email_assistant_settings
-                 (account_id, about, signature, auto_run, updated_at)
-               VALUES (:aid, :about, :sig, :auto, now())
+                 (account_id, about, signature, auto_run, cold_email_blocker,
+                  updated_at)
+               VALUES (:aid, :about, :sig, :auto, :cold, now())
                ON CONFLICT (account_id) DO UPDATE SET
                  about = EXCLUDED.about,
                  signature = EXCLUDED.signature,
                  auto_run = EXCLUDED.auto_run,
+                 cold_email_blocker = EXCLUDED.cold_email_blocker,
                  updated_at = now()"""
         ), {"aid": req.account_id, "about": req.about, "sig": req.signature,
-            "auto": req.auto_run})
+            "auto": req.auto_run, "cold": req.cold_email_blocker or "OFF"})
         await db.commit()
         return {
             "account_id": req.account_id,
             "about": req.about or "",
             "signature": req.signature or "",
             "auto_run": req.auto_run,
+            "cold_email_blocker": req.cold_email_blocker or "OFF",
         }
+    finally:
+        await db.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Sender categorization · Cold-email blocker · Reply Zero
+# ══════════════════════════════════════════════════════════════════════════
+
+EMAIL_CATEGORIES = [
+    "Newsletter", "Marketing", "Receipt", "Calendar", "Notification",
+    "Cold Email", "Personal", "Support", "Unknown",
+]
+
+
+async def _llm_categorize_senders(
+    items: list[dict[str, Any]]
+) -> dict[str, str]:
+    """Categorize a batch of senders. items: [{email, name, subjects}].
+
+    Returns {email: category}; empty dict on LLM failure (callers default to
+    'Unknown').
+    """
+    if not items:
+        return {}
+    try:
+        import litellm as _litellm  # noqa: PLC0415
+        from litellm import acompletion  # noqa: PLC0415
+        from acb_llm.client import ensure_model_registered, _TIER_MODEL  # noqa: PLC0415
+        _litellm.drop_params = True
+        _litellm.suppress_debug_info = True
+        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
+        ensure_model_registered(model)
+        listing = "\n".join(
+            f"{i}. {it.get('name') or ''} <{it['email']}> — subjects: "
+            f"{'; '.join((it.get('subjects') or [])[:3])}"
+            for i, it in enumerate(items)
+        )
+        sys_prompt = (
+            "Classify each email sender into exactly one category from: "
+            f"{', '.join(EMAIL_CATEGORIES)}. Use the sender address and recent "
+            "subjects. Respond with ONLY a JSON array of "
+            '{"index": <n>, "category": "<one category>"}.'
+        )
+        resp = await acompletion(
+            model=model,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": listing}],
+            temperature=0, max_tokens=800,
+        )
+        data = _safe_json(resp.choices[0].message.content or "")
+        out: dict[str, str] = {}
+        if isinstance(data, list):
+            for d in data:
+                idx = d.get("index") if isinstance(d, dict) else None
+                cat = d.get("category") if isinstance(d, dict) else None
+                if isinstance(idx, int) and 0 <= idx < len(items) \
+                        and cat in EMAIL_CATEGORIES:
+                    out[items[idx]["email"]] = cat
+        return out
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.categorize_failed", error=str(exc)[:200])
+        return {}
+
+
+async def _categorize_senders_job(account_id: str, limit: int) -> None:
+    """Background: assign categories to the account's busiest uncategorized senders."""
+    db = await _get_db()
+    try:
+        rows = (await db.execute(text(
+            """SELECT LOWER(from_address->>'email') AS email,
+                      MAX(from_address->>'name') AS name,
+                      (array_agg(subject ORDER BY received_at DESC))[1:3] AS subjects
+               FROM email_messages
+               WHERE account_id = :aid
+                 AND COALESCE(from_address->>'email','') <> ''
+                 AND LOWER(from_address->>'email') NOT IN (
+                   SELECT email FROM email_senders
+                   WHERE account_id = :aid AND category IS NOT NULL)
+               GROUP BY LOWER(from_address->>'email')
+               ORDER BY COUNT(*) DESC LIMIT :limit"""
+        ), {"aid": account_id, "limit": limit})).fetchall()
+        items = [
+            {"email": r.email, "name": r.name or "",
+             "subjects": [s for s in (r.subjects or []) if s]}
+            for r in rows
+        ]
+        for i in range(0, len(items), 10):
+            batch = items[i:i + 10]
+            cats = await _llm_categorize_senders(batch)
+            for it in batch:
+                await db.execute(text(
+                    """INSERT INTO email_senders
+                         (account_id, email, name, category, categorized_at)
+                       VALUES (:aid, :email, :name, :cat, now())
+                       ON CONFLICT (account_id, email) DO UPDATE SET
+                         name = COALESCE(EXCLUDED.name, email_senders.name),
+                         category = EXCLUDED.category,
+                         categorized_at = now(), updated_at = now()"""
+                ), {"aid": account_id, "email": it["email"], "name": it["name"],
+                    "cat": cats.get(it["email"], "Unknown")})
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.categorize_job_failed", account_id=account_id,
+                     error=str(exc)[:200])
+    finally:
+        await db.close()
+
+
+class CategorizeRequest(BaseModel):
+    account_id: str
+    limit: int = 60
+
+
+@router.post("/senders/categorize")
+async def categorize_senders(
+    req: CategorizeRequest,
+    background: BackgroundTasks,
+    user: UserContext = Depends(get_current_user),
+):
+    """Schedule LLM categorization of the account's senders (background)."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+    finally:
+        await db.close()
+    background.add_task(_categorize_senders_job, req.account_id, min(req.limit, 300))
+    return {"scheduled": True}
+
+
+@router.get("/senders/categories")
+async def sender_categories(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """List the category vocabulary + per-category sender counts."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        rows = (await db.execute(text(
+            """SELECT category, COUNT(*) AS c FROM email_senders
+               WHERE account_id = :aid AND category IS NOT NULL
+               GROUP BY category"""
+        ), {"aid": account_id})).fetchall()
+        return {
+            "categories": EMAIL_CATEGORIES,
+            "counts": {r.category: r.c for r in rows},
+        }
+    finally:
+        await db.close()
+
+
+# ── Cold-email blocker ───────────────────────────────────────────────────────
+
+async def _llm_is_cold(email: dict[str, str]) -> tuple[bool, str]:
+    """Classify whether an email is cold outreach. (is_cold, reason)."""
+    try:
+        import litellm as _litellm  # noqa: PLC0415
+        from litellm import acompletion  # noqa: PLC0415
+        from acb_llm.client import ensure_model_registered, _TIER_MODEL  # noqa: PLC0415
+        _litellm.drop_params = True
+        _litellm.suppress_debug_info = True
+        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
+        ensure_model_registered(model)
+        sys_prompt = (
+            "Decide if this is a COLD email: unsolicited sales, marketing, or "
+            "recruiting outreach from someone with no prior relationship to the "
+            'recipient. Respond ONLY JSON {"cold": <bool>, "reason": "<short>"}.'
+        )
+        user_prompt = (
+            f"From: {email.get('from', '')}\nSubject: {email.get('subject', '')}\n"
+            f"Body:\n{(email.get('body', '') or '')[:1500]}"
+        )
+        resp = await acompletion(
+            model=model,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": user_prompt}],
+            temperature=0, max_tokens=200,
+        )
+        data = _safe_json(resp.choices[0].message.content or "")
+        if isinstance(data, dict):
+            return bool(data.get("cold")), str(data.get("reason", ""))[:300]
+        return False, ""
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.cold_classify_failed", error=str(exc)[:200])
+        return False, ""
+
+
+async def _maybe_block_cold(
+    db: Any, provider: Any, account_id: str, message_id: str,
+    provider_msg_id: str, email: dict[str, str], blocker: str,
+) -> None:
+    """Cold-email gate: for a first-time, non-whitelisted sender, LLM-classify
+    and (if cold) label/archive + record. Runs only when no rule matched."""
+    sender = (email.get("from") or "").lower()
+    if not sender:
+        return
+    # Already known to the cold-sender table (flagged or whitelisted) → skip.
+    seen = (await db.execute(text(
+        "SELECT status FROM email_cold_senders "
+        "WHERE account_id = :aid AND from_email = :e"
+    ), {"aid": account_id, "e": sender})).fetchone()
+    if seen:
+        return
+    # Replied-to / known sender (we've emailed them) → not cold.
+    replied = (await db.execute(text(
+        """SELECT 1 FROM email_messages
+           WHERE account_id = :aid AND LOWER(folder) = 'sent'
+             AND to_addresses @> :tojson LIMIT 1"""
+    ), {"aid": account_id, "tojson": json.dumps([{"email": sender}])})).fetchone()
+    if replied:
+        return
+    is_cold, reason = await _llm_is_cold(email)
+    if not is_cold:
+        return
+    await db.execute(text(
+        """INSERT INTO email_cold_senders (account_id, from_email, status, reason)
+           VALUES (:aid, :e, 'AI_LABELED_COLD', :reason)
+           ON CONFLICT (account_id, from_email) DO NOTHING"""
+    ), {"aid": account_id, "e": sender, "reason": reason})
+    actions: list[str] = []
+    try:
+        if blocker == "ARCHIVE":
+            await db.execute(text(
+                "UPDATE email_messages SET folder='archive', updated_at=now() "
+                "WHERE id=:id"), {"id": message_id})
+            await provider.move_to_folder(provider_msg_id, "archive")
+            actions = ["ARCHIVE", "LABEL"]
+        else:
+            actions = ["LABEL"]
+        await provider.set_labels(provider_msg_id, add=["Cold Email"], remove=[])
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.cold_action_failed", error=str(exc)[:120])
+    await db.execute(text(
+        """INSERT INTO email_executed_rules
+             (account_id, rule_id, rule_name, message_id, provider_message_id,
+              subject, from_address, status, automated, actions_taken, reason)
+           VALUES (:aid, NULL, 'Cold Email Blocker', :mid, :pmid, :subj, :frm,
+                   'APPLIED', true, :acts, :reason)"""
+    ), {"aid": account_id, "mid": message_id, "pmid": provider_msg_id,
+        "subj": email.get("subject", ""), "frm": sender,
+        "acts": json.dumps(actions), "reason": reason})
+
+
+class ColdSenderUpdate(BaseModel):
+    account_id: str
+    from_email: str
+    status: str  # AI_LABELED_COLD | USER_REJECTED_COLD
+
+
+@router.get("/cold-senders")
+async def list_cold_senders(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """List cold-email verdicts (flagged + whitelisted) for an account."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        rows = (await db.execute(text(
+            """SELECT from_email, status, reason, updated_at
+               FROM email_cold_senders WHERE account_id = :aid
+               ORDER BY updated_at DESC LIMIT 500"""
+        ), {"aid": account_id})).fetchall()
+        return {
+            "cold_senders": [
+                {"from_email": r.from_email, "status": r.status,
+                 "reason": r.reason,
+                 "updated_at": r.updated_at.isoformat() if r.updated_at else None}
+                for r in rows
+            ]
+        }
+    finally:
+        await db.close()
+
+
+@router.post("/cold-senders")
+async def upsert_cold_sender(
+    req: ColdSenderUpdate,
+    user: UserContext = Depends(get_current_user),
+):
+    """Set a sender's cold verdict — USER_REJECTED_COLD whitelists them."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        await db.execute(text(
+            """INSERT INTO email_cold_senders
+                 (account_id, from_email, status, updated_at)
+               VALUES (:aid, LOWER(:e), :status, now())
+               ON CONFLICT (account_id, from_email) DO UPDATE SET
+                 status = EXCLUDED.status, updated_at = now()"""
+        ), {"aid": req.account_id, "e": req.from_email, "status": req.status})
+        await db.commit()
+        return {"ok": True, "status": req.status}
+    finally:
+        await db.close()
+
+
+# ── Reply Zero (reply tracking) ──────────────────────────────────────────────
+
+@router.get("/reply-zero")
+async def reply_zero(
+    account_id: str = Query(...),
+    type: str = Query("needs_reply"),  # needs_reply | awaiting
+    limit: int = Query(50, ge=1, le=200),
+    user: UserContext = Depends(get_current_user),
+):
+    """Threads needing a reply (last message inbound) or awaiting one (last
+    message sent). Computed live from the latest message per thread."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        folder = "sent" if type == "awaiting" else "inbox"
+        rows = (await db.execute(text(
+            """WITH latest AS (
+                 SELECT DISTINCT ON (thread_id)
+                        thread_id, id, subject, from_address, folder,
+                        received_at, is_read
+                 FROM email_messages
+                 WHERE account_id = :aid AND thread_id IS NOT NULL
+                 ORDER BY thread_id, received_at DESC
+               )
+               SELECT thread_id, id, subject, from_address, received_at, is_read
+               FROM latest WHERE LOWER(folder) = :folder
+               ORDER BY received_at DESC LIMIT :limit"""
+        ), {"aid": account_id, "folder": folder, "limit": limit})).fetchall()
+        out = []
+        for r in rows:
+            frm = r.from_address if isinstance(r.from_address, dict) \
+                else json.loads(r.from_address or "{}")
+            out.append({
+                "thread_id": r.thread_id, "message_id": str(r.id),
+                "subject": r.subject or "(no subject)",
+                "from": frm.get("name") or frm.get("email", ""),
+                "from_email": frm.get("email", ""),
+                "received_at": r.received_at.isoformat() if r.received_at else None,
+                "is_read": r.is_read,
+            })
+        return {"threads": out, "type": type}
     finally:
         await db.close()
 

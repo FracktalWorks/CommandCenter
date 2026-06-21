@@ -2,9 +2,9 @@
 
 import { useEffect, useState, useCallback } from "react";
 import {
-  Loader2, MailMinus, Archive, Check, ExternalLink, Search, ShieldX,
+  Loader2, MailMinus, Archive, Check, ExternalLink, Search, ShieldX, Tags,
 } from "lucide-react";
-import { listSenders, upsertNewsletter } from "../../lib/api";
+import { listSenders, upsertNewsletter, categorizeSenders } from "../../lib/api";
 import { SenderStat, NewsletterStatus } from "../../lib/types";
 
 interface BulkUnsubscribeViewProps {
@@ -24,6 +24,7 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [onlyNewsletters, setOnlyNewsletters] = useState(true);
+  const [categorizing, setCategorizing] = useState(false);
 
   const load = useCallback(() => {
     if (!accountId) {
@@ -65,6 +66,21 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
       setError((e as Error).message || "Action failed");
     } finally {
       setBusy(null);
+    }
+  };
+
+  const runCategorize = async () => {
+    if (!accountId) return;
+    setCategorizing(true);
+    try {
+      await categorizeSenders(accountId, 100);
+      // Categorization runs in the background; refresh after it's had a moment.
+      setTimeout(() => {
+        load();
+        setCategorizing(false);
+      }, 8000);
+    } catch {
+      setCategorizing(false);
     }
   };
 
@@ -117,7 +133,20 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
           />
           Newsletters only
         </label>
-        <span className="text-[11px] text-muted-foreground ml-auto">
+        <button
+          onClick={runCategorize}
+          disabled={categorizing}
+          title="Auto-categorize senders with AI"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50 ml-auto"
+        >
+          {categorizing ? (
+            <Loader2 className="animate-spin" size={13} />
+          ) : (
+            <Tags size={13} />
+          )}
+          {categorizing ? "Categorizing…" : "Categorize"}
+        </button>
+        <span className="text-[11px] text-muted-foreground">
           {visible.length} senders
         </span>
       </div>
@@ -153,6 +182,11 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
                     >
                       {STATUS_META[s.status].label}
                     </span>
+                    {s.category && s.category !== "Unknown" && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary/15 text-primary">
+                        {s.category}
+                      </span>
+                    )}
                   </div>
                   <div className="text-[11px] text-muted-foreground truncate">
                     {s.email}

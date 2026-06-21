@@ -73,12 +73,38 @@ export interface QuickAction {
   icon: string; // Lucide icon name
 }
 
-/** The four Email Automation features surfaced in the sidebar. */
+/** The Email Automation features surfaced in the sidebar. */
 export type AutomationFeature =
   | "assistant"
+  | "reply-zero"
   | "unsubscribe"
   | "archive"
   | "analytics";
+
+/** Sender categories assigned by the LLM categorizer (mirrors the backend). */
+export const EMAIL_CATEGORIES = [
+  "Newsletter", "Marketing", "Receipt", "Calendar", "Notification",
+  "Cold Email", "Personal", "Support", "Unknown",
+] as const;
+
+export type ColdBlockerMode = "OFF" | "LABEL" | "ARCHIVE";
+
+export interface ColdSender {
+  from_email: string;
+  status: "AI_LABELED_COLD" | "USER_REJECTED_COLD";
+  reason: string | null;
+  updated_at: string | null;
+}
+
+export interface ReplyZeroThread {
+  thread_id: string;
+  message_id: string;
+  subject: string;
+  from: string;
+  from_email: string;
+  received_at: string | null;
+  is_read: boolean;
+}
 
 // ── Analytics ──────────────────────────────────────────────────────────────
 
@@ -111,6 +137,7 @@ export interface SenderStat {
   last_received: string | null;
   unsubscribe_link: string | null;
   status: NewsletterStatus;
+  category?: string | null;
 }
 
 // ── Assistant rules ─────────────────────────────────────────────────────────
@@ -154,7 +181,8 @@ export interface AutomationRule {
   to_pattern?: string | null;
   subject_pattern?: string | null;
   body_pattern?: string | null;
-  category_filter_type?: string | null;
+  category_filter_type?: "INCLUDE" | "EXCLUDE" | null;
+  category_filters: string[];
   system_type?: string | null;
   sort_order: number;
   actions: RuleAction[];
@@ -184,6 +212,7 @@ export interface AssistantSettings {
   about: string;
   signature: string;
   auto_run: boolean;
+  cold_email_blocker: ColdBlockerMode;
 }
 
 export interface RecentTestResult {

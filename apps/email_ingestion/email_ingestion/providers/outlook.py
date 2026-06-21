@@ -165,7 +165,7 @@ class OutlookProvider(BaseEmailProvider):
             "$select": "id,subject,from,toRecipients,ccRecipients,"
                        "bccRecipients,receivedDateTime,isRead,hasAttachments,"
                        "flag,bodyPreview,categories,parentFolderId,"
-                       "conversationId,importance",
+                       "conversationId,importance,internetMessageHeaders",
         }
         if query:
             params["$search"] = f'"{query}"'
@@ -547,6 +547,13 @@ class OutlookProvider(BaseEmailProvider):
         body_text = body.get("content", "") if body.get("contentType") == "text" else ""
         body_html = body.get("content") if body.get("contentType") == "html" else None
 
+        # List-Unsubscribe (present when internetMessageHeaders was $select'd).
+        unsubscribe_link = None
+        for h in raw.get("internetMessageHeaders", []) or []:
+            if str(h.get("name", "")).lower() == "list-unsubscribe":
+                unsubscribe_link = _parse_list_unsubscribe(h.get("value", ""))
+                break
+
         return EmailMessage(
             provider_message_id=raw["id"],
             thread_id=raw.get("conversationId"),
@@ -567,6 +574,27 @@ class OutlookProvider(BaseEmailProvider):
             is_flagged=is_flagged,
             importance=importance,
             categories=categories,
+            unsubscribe_link=unsubscribe_link,
             received_at=self._parse_received_datetime(raw.get("receivedDateTime")),
             raw=raw,
         )
+
+
+def _parse_list_unsubscribe(header: str) -> str | None:
+    """Pick the best link from a List-Unsubscribe header (https preferred)."""
+    if not header:
+        return None
+    targets: list[str] = []
+    for part in header.split(","):
+        p = part.strip()
+        if p.startswith("<") and p.endswith(">"):
+            p = p[1:-1].strip()
+        if p:
+            targets.append(p)
+    for t in targets:
+        if t.lower().startswith("http"):
+            return t
+    for t in targets:
+        if t.lower().startswith("mailto:"):
+            return t
+    return targets[0] if targets else None

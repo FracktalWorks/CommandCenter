@@ -2,7 +2,7 @@ import {
   ChatMessage, Email, EmailAccount,
   AnalyticsOverview, SenderStat, NewsletterStatus,
   AutomationRule, RuleTestResult, ExecutedRule, AssistantSettings,
-  RecentTestResult,
+  RecentTestResult, ColdSender, ReplyZeroThread,
 } from "./types";
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
@@ -667,4 +667,68 @@ export async function saveAssistantSettings(
     method: "PUT",
     body: JSON.stringify(settings),
   });
+}
+
+// ── Sender categorization ───────────────────────────────────────────────────
+
+export async function categorizeSenders(
+  accountId: string,
+  limit = 60
+): Promise<{ scheduled: boolean }> {
+  return gatewayFetch("/email/senders/categorize", {
+    method: "POST",
+    body: JSON.stringify({ account_id: accountId, limit }),
+  });
+}
+
+export async function getSenderCategories(
+  accountId: string
+): Promise<{ categories: string[]; counts: Record<string, number> }> {
+  return gatewayFetch(
+    `/email/senders/categories?account_id=${encodeURIComponent(accountId)}`
+  );
+}
+
+// ── Cold-email blocker ──────────────────────────────────────────────────────
+
+export async function listColdSenders(
+  accountId: string
+): Promise<ColdSender[]> {
+  const res = await gatewayFetch<{ cold_senders: ColdSender[] }>(
+    `/email/cold-senders?account_id=${encodeURIComponent(accountId)}`
+  );
+  return res.cold_senders ?? [];
+}
+
+export async function upsertColdSender(params: {
+  accountId: string;
+  fromEmail: string;
+  status: "AI_LABELED_COLD" | "USER_REJECTED_COLD";
+}): Promise<{ ok: boolean }> {
+  return gatewayFetch("/email/cold-senders", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: params.accountId,
+      from_email: params.fromEmail,
+      status: params.status,
+    }),
+  });
+}
+
+// ── Reply Zero ──────────────────────────────────────────────────────────────
+
+export async function getReplyZero(
+  accountId: string,
+  type: "needs_reply" | "awaiting" = "needs_reply",
+  limit = 50
+): Promise<ReplyZeroThread[]> {
+  const sp = new URLSearchParams({
+    account_id: accountId,
+    type,
+    limit: String(limit),
+  });
+  const res = await gatewayFetch<{ threads: ReplyZeroThread[] }>(
+    `/email/reply-zero?${sp}`
+  );
+  return res.threads ?? [];
 }

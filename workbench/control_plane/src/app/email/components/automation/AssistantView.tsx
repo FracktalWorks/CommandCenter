@@ -3,16 +3,18 @@
 import { useEffect, useState, useCallback } from "react";
 import {
   Loader2, Plus, Trash2, Pencil, Play, Check, X, FlaskConical,
-  History as HistoryIcon, Settings2, Sparkles, ChevronRight,
+  History as HistoryIcon, Settings2, Sparkles,
 } from "lucide-react";
 import {
   listRules, createRule, updateRule, deleteRule, testRules,
   getRulesHistory, runRules, getAssistantSettings, saveAssistantSettings,
   approveExecution, rejectExecution, testRulesRecent,
+  listColdSenders, upsertColdSender,
 } from "../../lib/api";
 import {
   AutomationRule, RuleAction, RuleActionType, RuleTestResult, ExecutedRule,
-  AssistantSettings, RecentTestResult,
+  AssistantSettings, RecentTestResult, EMAIL_CATEGORIES, ColdBlockerMode,
+  ColdSender,
 } from "../../lib/types";
 
 interface AssistantViewProps {
@@ -57,6 +59,7 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "OR",
+    category_filters: [],
     sort_order: 0,
     actions: [{ type: "LABEL", label: "To Reply" }],
   },
@@ -68,6 +71,7 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "OR",
+    category_filters: [],
     sort_order: 1,
     actions: [{ type: "LABEL", label: "Newsletter" }, { type: "ARCHIVE" }],
   },
@@ -80,6 +84,7 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "OR",
+    category_filters: [],
     sort_order: 2,
     actions: [{ type: "LABEL", label: "Marketing" }, { type: "ARCHIVE" }],
   },
@@ -90,6 +95,7 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "OR",
+    category_filters: [],
     sort_order: 3,
     actions: [{ type: "LABEL", label: "Calendar" }],
   },
@@ -101,6 +107,7 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "OR",
+    category_filters: [],
     sort_order: 4,
     actions: [{ type: "LABEL", label: "Receipt" }],
   },
@@ -112,6 +119,7 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "OR",
+    category_filters: [],
     sort_order: 5,
     actions: [{ type: "LABEL", label: "Notification" }],
   },
@@ -124,6 +132,7 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "OR",
+    category_filters: [],
     sort_order: 6,
     actions: [{ type: "LABEL", label: "Cold Email" }, { type: "ARCHIVE" }],
   },
@@ -173,6 +182,7 @@ const emptyRule = (accountId: string): AutomationRule => ({
   automated: true,
   run_on_threads: false,
   conditional_operator: "AND",
+  category_filters: [],
   from_pattern: "",
   subject_pattern: "",
   sort_order: 0,
@@ -507,6 +517,53 @@ function RuleEditor({
           </span>
         </span>
       </label>
+
+      {/* Category condition */}
+      <div>
+        <span className="text-xs font-medium text-foreground">
+          Category condition (optional)
+        </span>
+        <select
+          value={draft.category_filter_type ?? ""}
+          onChange={(e) =>
+            set({
+              category_filter_type:
+                (e.target.value || null) as "INCLUDE" | "EXCLUDE" | null,
+            })
+          }
+          className={`${INPUT_CLS} mt-1.5`}
+        >
+          <option value="">No category filter</option>
+          <option value="INCLUDE">Only these categories</option>
+          <option value="EXCLUDE">Except these categories</option>
+        </select>
+        {draft.category_filter_type && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {EMAIL_CATEGORIES.map((c) => {
+              const on = draft.category_filters.includes(c);
+              return (
+                <button
+                  key={c}
+                  onClick={() =>
+                    set({
+                      category_filters: on
+                        ? draft.category_filters.filter((x) => x !== c)
+                        : [...draft.category_filters, c],
+                    })
+                  }
+                  className={`text-[10px] px-2 py-1 rounded-full border transition-colors ${
+                    on
+                      ? "bg-primary/15 text-primary border-primary/40"
+                      : "border-border text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {c}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Actions */}
       <div>
@@ -1074,6 +1131,22 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
             </span>
           </span>
         </label>
+        <Field label="Cold-email blocker (first-time, unsolicited senders)">
+          <select
+            value={settings.cold_email_blocker}
+            onChange={(e) =>
+              setSettings({
+                ...settings,
+                cold_email_blocker: e.target.value as ColdBlockerMode,
+              })
+            }
+            className={INPUT_CLS}
+          >
+            <option value="OFF">Off</option>
+            <option value="LABEL">Label as “Cold Email”</option>
+            <option value="ARCHIVE">Label and archive</option>
+          </select>
+        </Field>
         <div className="flex items-center gap-2 pt-1">
           <button
             onClick={save}
@@ -1088,22 +1161,97 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
         </div>
       </div>
 
+      <ColdSendersList accountId={accountId} />
+
       <div className="bg-card border border-border rounded-xl p-4">
         <h3 className="text-sm font-medium text-foreground mb-1">
           How the assistant works
         </h3>
         <p className="text-xs text-muted-foreground leading-relaxed">
-          Rules combine plain-English instructions (matched by the AI) with optional
-          static conditions (sender / subject contains). When you run rules, each
-          recent inbox message is matched to the best rule and its actions are applied.
-          Use <span className="text-foreground">Dry run</span> to preview matches in
-          the History tab without changing anything.
+          Rules combine plain-English instructions (matched by the AI) with static
+          conditions (sender / subject) and sender categories. Reply/forward/draft
+          actions create drafts for review. Use{" "}
+          <span className="text-foreground">Dry run</span> to preview matches in the
+          History tab without changing anything.
         </p>
       </div>
+    </div>
+  );
+}
 
-      <p className="text-[11px] text-muted-foreground flex items-center gap-1">
-        <ChevronRight size={11} /> Reply/forward/draft actions are coming soon.
-      </p>
+function ColdSendersList({ accountId }: { accountId: string | null }) {
+  const [cold, setCold] = useState<ColdSender[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    if (!accountId) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    listColdSenders(accountId)
+      .then(setCold)
+      .catch(() => setCold([]))
+      .finally(() => setLoading(false));
+  }, [accountId]);
+
+  useEffect(load, [load]);
+
+  const whitelist = async (email: string) => {
+    if (!accountId) return;
+    setBusy(email);
+    try {
+      await upsertColdSender({
+        accountId,
+        fromEmail: email,
+        status: "USER_REJECTED_COLD",
+      });
+      setCold((prev) =>
+        prev.map((c) =>
+          c.from_email === email ? { ...c, status: "USER_REJECTED_COLD" } : c
+        )
+      );
+    } catch {
+      load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (loading || cold.length === 0) return null;
+
+  return (
+    <div className="bg-card border border-border rounded-xl p-4">
+      <h3 className="text-sm font-medium text-foreground mb-2">Cold senders</h3>
+      <div className="space-y-1.5">
+        {cold.map((c) => (
+          <div key={c.from_email} className="flex items-center gap-2">
+            <div className="flex-1 min-w-0">
+              <div className="text-xs text-foreground truncate">{c.from_email}</div>
+              {c.reason && (
+                <div className="text-[10px] text-muted-foreground truncate">
+                  {c.reason}
+                </div>
+              )}
+            </div>
+            {c.status === "USER_REJECTED_COLD" ? (
+              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 flex-shrink-0">
+                Not cold
+              </span>
+            ) : busy === c.from_email ? (
+              <Loader2 className="animate-spin text-muted-foreground" size={13} />
+            ) : (
+              <button
+                onClick={() => whitelist(c.from_email)}
+                className="text-[10px] px-2 py-1 rounded-md border border-border text-muted-foreground hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors flex-shrink-0"
+              >
+                Not cold
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

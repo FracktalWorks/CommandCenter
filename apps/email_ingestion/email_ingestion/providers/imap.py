@@ -286,6 +286,46 @@ class IMAPProvider(BaseEmailProvider):
 
         return await asyncio.to_thread(_send)
 
+    async def create_draft(
+        self,
+        to: list[str],
+        subject: str,
+        body_text: str,
+        body_html: str | None = None,
+        reply_to_message_id: str | None = None,
+        thread_id: str | None = None,
+    ) -> str:
+        """Save a draft by APPENDing it to the Drafts mailbox with the \\Draft flag."""
+        username = self.credentials.get(
+            "imap_username", self.credentials.get("smtp_username", "")
+        )
+        msg = MIMEText(body_text, "plain" if not body_html else "html")
+        msg["From"] = username
+        msg["To"] = ", ".join(to)
+        msg["Subject"] = subject
+        if reply_to_message_id:
+            msg["In-Reply-To"] = reply_to_message_id
+            msg["References"] = reply_to_message_id
+
+        imap = await self._get_imap()
+
+        def _append() -> str:
+            import imaplib  # noqa: PLC0415
+            import time  # noqa: PLC0415
+            stamp = imaplib.Time2Internaldate(time.time())
+            for folder in ("Drafts", "INBOX.Drafts", "[Gmail]/Drafts"):
+                try:
+                    typ, _ = imap.append(
+                        folder, "(\\Draft)", stamp, msg.as_bytes()
+                    )
+                    if typ == "OK":
+                        return f"draft-{folder}"
+                except Exception:  # noqa: BLE001
+                    continue
+            raise RuntimeError("No Drafts mailbox available for APPEND")
+
+        return await asyncio.to_thread(_append)
+
     async def modify_message(
         self,
         provider_message_id: str,
@@ -675,6 +715,10 @@ def _parse_imap_raw_message(
     # Use thread_id from In-Reply-To if Message-ID not present
     thread_id = thread_id_raw if thread_id_raw else (in_reply_to if in_reply_to else None)
 
+    unsubscribe_link = _parse_list_unsubscribe(
+        str(parsed.get("List-Unsubscribe", ""))
+    )
+
     return EmailMessage(
         provider_message_id=uid,
         thread_id=thread_id,
@@ -693,5 +737,26 @@ def _parse_imap_raw_message(
         is_read=is_seen,
         is_starred=is_flagged,
         is_flagged=is_flagged,
+        unsubscribe_link=unsubscribe_link,
         received_at=_parse_imap_internaldate(internaldate),
     )
+
+
+def _parse_list_unsubscribe(header: str) -> str | None:
+    """Pick the best link from a List-Unsubscribe header (https preferred)."""
+    if not header:
+        return None
+    targets: list[str] = []
+    for part in header.split(","):
+        p = part.strip()
+        if p.startswith("<") and p.endswith(">"):
+            p = p[1:-1].strip()
+        if p:
+            targets.append(p)
+    for t in targets:
+        if t.lower().startswith("http"):
+            return t
+    for t in targets:
+        if t.lower().startswith("mailto:"):
+            return t
+    return targets[0] if targets else None

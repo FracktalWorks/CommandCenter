@@ -83,6 +83,60 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     import asyncio as _asyncio
     _asyncio.ensure_future(_warmup_copilot_models())
 
+    # Warm-clone every live agent that has a source (GitHub repo or local path)
+    # but no clone on disk yet.  Clones are created lazily on first run, so a
+    # reboot/deploy that wiped the cache leaves registered agents invisible in
+    # the Files/Artifacts viewers until they happen to run again.  This restores
+    # them on startup so their workspace is browsable without a manual pull.
+    async def _warm_clone_agents() -> None:
+        try:
+            from acb_skills.loader import load_agent  # noqa: PLC0415
+            from gateway.routes.agent import (  # noqa: PLC0415
+                _AGENT_REGISTRY, _load_dynamic_agents)
+            from gateway.routes.workspace import \
+                _agent_workspace_dir  # noqa: PLC0415
+
+            entries = list(_AGENT_REGISTRY)
+            try:
+                entries = _load_dynamic_agents() + entries
+            except Exception:  # noqa: BLE001
+                pass
+
+            seen: set[str] = set()
+            for entry in entries:
+                name = entry.get("name")
+                if not name or name in seen:
+                    continue
+                seen.add(name)
+                if entry.get("status", "live") != "live":
+                    continue
+                repo_name = entry.get("repo_name")
+                local_path = entry.get("local_path")
+                # Only agents we know how to fetch; skip if already on disk.
+                if not repo_name and not local_path:
+                    continue
+                try:
+                    if _agent_workspace_dir(name) is not None:
+                        continue
+                except Exception:  # noqa: BLE001
+                    continue
+
+                def _clone(n: str, r: str | None, lp: str | None) -> None:
+                    with load_agent(n, repo_name=r, local_path=lp):
+                        pass
+
+                try:
+                    await _asyncio.to_thread(_clone, name, repo_name, local_path)
+                    _log.info("gateway.warm_clone_done", agent=name)
+                except Exception as exc:  # noqa: BLE001
+                    _log.warning(
+                        "gateway.warm_clone_failed", agent=name, error=str(exc)
+                    )
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("gateway.warm_clone_skipped", error=str(exc))
+
+    _asyncio.ensure_future(_warm_clone_agents())
+
     # Load provider API keys from encrypted Postgres store into litellm SDK.
     try:
         from acb_llm.key_store import get_key_store

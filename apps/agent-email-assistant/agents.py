@@ -37,13 +37,18 @@ def _gateway_url() -> str:
 
 
 def _current_user_email() -> str:
-    """The user the agent is acting for — reused from the memory ContextVar the
-    gateway sets before each run. Without it, gateway calls are unscoped."""
+    """The user the agent is acting for. Primary source is the memory ContextVar
+    the executor sets; the Copilot SDK runs tool callbacks in a context that can
+    drop ContextVars, so fall back to ACB_AGENT_USER_EMAIL (set by the gateway
+    per run). Without either, gateway calls are unscoped."""
     try:
         from acb_skills.memory_tools import _get_memory_user_id  # noqa: PLC0415
-        return _get_memory_user_id() or ""
+        user = _get_memory_user_id() or ""
+        if user:
+            return user
     except Exception:  # noqa: BLE001
-        return ""
+        pass
+    return os.environ.get("ACB_AGENT_USER_EMAIL", "")
 
 
 def _internal_token() -> str:

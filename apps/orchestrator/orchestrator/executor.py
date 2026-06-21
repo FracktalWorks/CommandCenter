@@ -1500,6 +1500,7 @@ async def run_agent(
         ) if isinstance(event_payload, dict) else ""
         if _mu:
             _set_memory_user_id(_mu)
+            os.environ["ACB_AGENT_USER_EMAIL"] = _mu
     except Exception:  # noqa: BLE001
         pass
 
@@ -1841,6 +1842,9 @@ async def run_agent_stream(
             )
         if _mu:
             _set_memory_user_id(_mu)
+            # Fallback for tool callbacks the Copilot SDK runs outside this
+            # ContextVar's reach (single-user deployments).
+            os.environ["ACB_AGENT_USER_EMAIL"] = _mu
     except Exception:  # noqa: BLE001
         pass
 

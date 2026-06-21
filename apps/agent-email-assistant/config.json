@@ -4,10 +4,9 @@
   "version": "0.1.0",
   "author": "CommandCenter",
   "tags": ["email", "gmail", "outlook", "productivity"],
-  "integrations": ["gmail", "microsoft"],
+  "integrations": [],
   "optional_integrations": [],
   "runtime": "maf",
-  "tool_scope": "email",
   "icon": "Mail",
   "category": "apps"
 }

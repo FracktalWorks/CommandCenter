@@ -8,13 +8,21 @@ Registered as a MAF agent at /agent/run/stream with name "email-assistant".
 
 from __future__ import annotations
 
-import json
 import os
+from pathlib import Path
 from typing import Any
 
 from acb_common import get_logger, get_settings
 
 _log = get_logger("agent.email_assistant")
+
+_INSTRUCTIONS_FILE = Path(__file__).parent / "instructions.md"
+INSTRUCTIONS = (
+    _INSTRUCTIONS_FILE.read_text(encoding="utf-8")
+    if _INSTRUCTIONS_FILE.exists()
+    else "You are the Email Assistant. Help the user check, categorize, and "
+    "reply to their email using the provided tools."
+)
 
 
 async def search_emails(
@@ -291,3 +299,54 @@ def _register_agent_tools() -> dict[str, Any]:
         "suggest_unsubscribes": suggest_unsubscribes,
         "get_unread_count": get_unread_count,
     }
+
+
+# ---------------------------------------------------------------------------
+# MAF agent factory — Dynamic Agent Loader entry point (build_agents)
+# ---------------------------------------------------------------------------
+#
+# The loader requires agents.py to export build_agents() -> list[Agent].
+# call_agent / memory / web_search are injected by the executor at run time,
+# so this agent can hand off to the sales / task-manager agents and read the
+# user's memory without listing those tools here.
+
+_TOOLS = [
+    search_emails,
+    get_email,
+    find_urgent,
+    get_unread_count,
+    suggest_unsubscribes,
+]
+
+
+def _llm_provider() -> dict[str, Any]:
+    """BYOK provider config pointing at the gateway's /v1 (litellm SDK)."""
+    base_url = os.environ.get("LITELLM_BASE_URL", "http://127.0.0.1:8080")
+    api_key = os.environ.get("LITELLM_MASTER_KEY", "sk-local")
+    return {"type": "openai", "base_url": f"{base_url}/v1", "api_key": api_key}
+
+
+def build_agents() -> list[Any]:
+    """Construct the Email Assistant MAF agent.
+
+    Imported lazily so the module still loads (for the gateway's direct
+    quick-action tool calls) even where the Copilot SDK isn't importable.
+    """
+    from agent_framework_github_copilot import GitHubCopilotAgent  # noqa: PLC0415
+    from copilot.types import PermissionHandler  # noqa: PLC0415
+
+    return [
+        GitHubCopilotAgent(
+            instructions=INSTRUCTIONS,
+            tools=_TOOLS,
+            default_options={
+                "model": "tier-balanced",
+                "provider": _llm_provider(),
+                "mcp_servers": {},
+                "on_permission_request": PermissionHandler.approve_all,
+            },
+        )
+    ]
+
+
+__all__ = ["build_agents", "INSTRUCTIONS", "_register_agent_tools"]

@@ -89,6 +89,7 @@ _KNOWN_AGENTS: frozenset[str] = frozenset(
         "reconciler",
         "strategy",
         "apis-config",
+        "email-assistant",
     ]
 )
 
@@ -178,6 +179,20 @@ _AGENT_REGISTRY: list[dict] = [
         "local_path": "apps/agent-apis-config",
         "integrations": [],
         "optional_integrations": ["serpapi"],
+    },
+    {
+        "name": "email-assistant",
+        "description": (
+            "Email Assistant — checks the inbox, categorizes mail, and drafts "
+            "context-aware replies, handing off to the sales and task-manager "
+            "agents and reading memory when an email needs their context."
+        ),
+        "tags": ["email", "gmail", "outlook", "drafting", "apps"],
+        "status": "live",
+        "agent_runtime": "maf",
+        "local_path": "apps/agent-email-assistant",
+        "integrations": [],
+        "optional_integrations": [],
     },
 ]
 

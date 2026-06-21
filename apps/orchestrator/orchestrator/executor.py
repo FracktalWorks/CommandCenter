@@ -1490,6 +1490,19 @@ async def run_agent(
     run_id = run_id or str(uuid.uuid4())
     thread_id = thread_id or f"{agent_name}:{run_id}"
 
+    # Set the memory/user ContextVar from the payload so user-scoped tools and
+    # memory resolve the acting user (mirrors run_agent_stream).
+    try:
+        from acb_skills.memory_tools import _set_memory_user_id  # noqa: PLC0415
+        _mu = str(
+            event_payload.get("user_email")
+            or event_payload.get("user_id") or ""
+        ) if isinstance(event_payload, dict) else ""
+        if _mu:
+            _set_memory_user_id(_mu)
+    except Exception:  # noqa: BLE001
+        pass
+
     record(
         AuditEvent(
             actor="system:gateway",
@@ -1812,6 +1825,24 @@ async def run_agent_stream(
     thread_id = thread_id or f"{agent_name}:{run_id}"
 
     settings = get_settings()
+
+    # ── User context for tools/memory ──────────────────────────────────────
+    # Set the memory ContextVar HERE (inside the generator, before any agent
+    # task spawns) from the payload, so user-scoped tools and memory see the
+    # acting user. Setting it in the calling route doesn't survive into the
+    # streaming/agent execution context.
+    try:
+        from acb_skills.memory_tools import _set_memory_user_id  # noqa: PLC0415
+        _mu = ""
+        if isinstance(event_payload, dict):
+            _mu = str(
+                event_payload.get("user_email")
+                or event_payload.get("user_id") or ""
+            )
+        if _mu:
+            _set_memory_user_id(_mu)
+    except Exception:  # noqa: BLE001
+        pass
 
     # ── Stream relay: tee all SSE events to Redis for reconnection support ─
     _relay_token = _stream_relay_thread_id.set(thread_id)

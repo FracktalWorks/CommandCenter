@@ -1896,6 +1896,7 @@ async def ai_chat(
         "conversation_history": conversation_context,
         "account_id": req.account_id,
         "email_context_id": req.email_context_id,
+        "user_email": user_id,
     }
 
     # If an email is in context, fetch its full content for the agent
@@ -3261,7 +3262,8 @@ async def _draft_via_maf_agent(
         res = await asyncio.wait_for(
             run_agent(
                 "email-assistant",
-                {"message": msg, "about": about, "signature": signature},
+                {"message": msg, "about": about, "signature": signature,
+                 "user_email": user_email},
             ),
             timeout=150.0,
         )

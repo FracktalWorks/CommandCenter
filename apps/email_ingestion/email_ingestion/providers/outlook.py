@@ -421,13 +421,46 @@ class OutlookProvider(BaseEmailProvider):
             if c.get("displayName")
         )
 
+    async def _ensure_categories(self, names: list[str]) -> None:
+        """Create any missing Outlook master categories so an applied category is
+        a real, coloured category (matches Gmail's label-on-apply behaviour)."""
+        if not names:
+            return
+        client = await self._get_client()
+        try:
+            resp = await client.get("/me/outlook/masterCategories")
+            resp.raise_for_status()
+            existing = {
+                (c.get("displayName") or "").lower()
+                for c in resp.json().get("value", [])
+            }
+        except Exception:  # noqa: BLE001
+            existing = set()
+        for name in names:
+            if not name or name.lower() in existing:
+                continue
+            # Stable colour from the name so the same category is consistent.
+            color = f"preset{sum(ord(ch) for ch in name) % 25}"
+            try:
+                await client.post(
+                    "/me/outlook/masterCategories",
+                    json={"displayName": name, "color": color},
+                )
+                existing.add(name.lower())
+            except Exception:  # noqa: BLE001
+                pass  # best-effort — applying the category still works
+
     async def set_labels(
         self,
         provider_message_id: str,
         add: list[str] | None = None,
         remove: list[str] | None = None,
     ) -> None:
-        """Add/remove categories on a message (categories are plain names)."""
+        """Add/remove categories on a message (categories are plain names).
+
+        Missing categories are first created in the account's master category
+        list so they show up as real, coloured Outlook categories."""
+        await self._ensure_categories(add or [])
         client = await self._get_client()
         resp = await client.get(
             f"/me/messages/{provider_message_id}",

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { Email, EmailAccount, EmailFolder } from "./types";
+import { Email, EmailAccount, EmailFolder, EMAIL_CATEGORIES } from "./types";
 import * as api from "./api";
 import type { EmailFolderRaw } from "./api";
 import { QUICK_ACTIONS } from "./mockData";
@@ -485,9 +485,17 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     if (!aid) return;
     try {
       const labels = await api.listLabels(aid);
-      set({ availableLabels: labels });
+      // Always offer the standard categories too, so they're available to apply
+      // (applying creates the real Gmail label / Outlook category upstream).
+      const merged = Array.from(
+        new Set([...labels, ...EMAIL_CATEGORIES])
+      ).sort();
+      set({ availableLabels: merged });
     } catch {
-      // Non-fatal — labels just won't be offered.
+      // Even if the provider list fails, offer the standard categories.
+      set({
+        availableLabels: Array.from(new Set([...EMAIL_CATEGORIES])).sort(),
+      });
     }
   },
 

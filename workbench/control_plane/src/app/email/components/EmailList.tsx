@@ -99,14 +99,36 @@ export function EmailList({
     clearSelection();
   };
 
-  const openContext = (e: React.MouseEvent, email: Email) => {
-    e.preventDefault();
+  const openContextAt = (px: number, py: number, email: Email) => {
     // Clamp so the menu stays on-screen.
     const menuW = 210;
     const menuH = 380;
-    const x = Math.min(e.clientX, window.innerWidth - menuW);
-    const y = Math.min(e.clientY, window.innerHeight - menuH);
+    const x = Math.min(px, window.innerWidth - menuW);
+    const y = Math.min(py, window.innerHeight - menuH);
     setCtx({ x: Math.max(8, x), y: Math.max(8, y), email });
+  };
+  const openContext = (e: React.MouseEvent, email: Email) => {
+    e.preventDefault();
+    openContextAt(e.clientX, e.clientY, email);
+  };
+
+  // Long-press → context menu on touch devices (mirrors right-click).
+  const lpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lpFired = useRef(false);
+  const startLongPress = (e: React.TouchEvent, email: Email) => {
+    const t = e.touches[0];
+    lpFired.current = false;
+    const { clientX, clientY } = t;
+    lpTimer.current = setTimeout(() => {
+      lpFired.current = true;
+      openContextAt(clientX, clientY, email);
+    }, 500);
+  };
+  const cancelLongPress = () => {
+    if (lpTimer.current) {
+      clearTimeout(lpTimer.current);
+      lpTimer.current = null;
+    }
   };
 
   const hasMore = total !== undefined && emails.length < total;
@@ -167,7 +189,7 @@ export function EmailList({
 
       {/* Secondary toolbar row — becomes a bulk-action bar when rows are picked */}
       {selected.size > 0 ? (
-        <div className="flex items-center gap-0.5 px-2 py-1 border-b border-border flex-shrink-0 bg-primary/10">
+        <div className="flex items-center gap-0.5 px-2 py-1 border-b border-border flex-shrink-0 bg-primary/10 overflow-x-auto scrollbar-hide">
           <button
             onClick={toggleAll}
             title={allSelected ? "Deselect all" : "Select all"}
@@ -193,7 +215,7 @@ export function EmailList({
           </button>
         </div>
       ) : (
-        <div className="flex items-center gap-0.5 px-2 py-1 border-b border-border flex-shrink-0 bg-secondary/30">
+        <div className="flex items-center gap-0.5 px-2 py-1 border-b border-border flex-shrink-0 bg-secondary/30 overflow-x-auto scrollbar-hide">
           {TOOLBAR_SECONDARY.map(({ icon: Icon, label, key }) => (
             <ToolbarBtn
               key={key}
@@ -281,9 +303,20 @@ export function EmailList({
                   </span>
                 </button>
               <button
-                onClick={() => onSelect(email.id)}
+                onClick={() => {
+                  // Suppress the tap-click that follows a long-press.
+                  if (lpFired.current) {
+                    lpFired.current = false;
+                    return;
+                  }
+                  onSelect(email.id);
+                }}
                 onContextMenu={(e) => openContext(e, email)}
-                className={`flex-1 min-w-0 text-left pr-3 pl-1 py-3 transition-colors flex flex-col gap-1 ${
+                onTouchStart={(e) => startLongPress(e, email)}
+                onTouchMove={cancelLongPress}
+                onTouchEnd={cancelLongPress}
+                onTouchCancel={cancelLongPress}
+                className={`flex-1 min-w-0 text-left pr-3 pl-1 py-3 transition-colors flex flex-col gap-1 select-none ${
                   selectedId === email.id
                     ? "bg-primary/10 border-l-2 border-l-primary"
                     : "hover:bg-secondary/50"

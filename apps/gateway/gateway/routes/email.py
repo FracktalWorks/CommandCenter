@@ -3090,8 +3090,10 @@ async def rules_history(
         scope += ")"
         rows = (await db.execute(text(
             f"""SELECT er.id, er.rule_name, er.subject, er.from_address, er.status,
-                       er.automated, er.actions_taken, er.reason, er.created_at
+                       er.automated, er.actions_taken, er.reason, er.created_at,
+                       em.snippet
                 FROM email_executed_rules er
+                LEFT JOIN email_messages em ON er.message_id = em.id
                 WHERE {scope} ORDER BY er.created_at DESC LIMIT :limit"""
         ), params)).fetchall()
         return {
@@ -3100,7 +3102,7 @@ async def rules_history(
                  "from": r.from_address, "status": r.status, "automated": r.automated,
                  "actions": r.actions_taken if isinstance(r.actions_taken, list)
                  else json.loads(r.actions_taken or "[]"),
-                 "reason": r.reason,
+                 "reason": r.reason, "snippet": r.snippet or "",
                  "created_at": r.created_at.isoformat() if r.created_at else None}
                 for r in rows
             ]

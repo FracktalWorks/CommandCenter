@@ -226,6 +226,7 @@ export interface ExecutedRule {
   automated: boolean;
   actions: string[];
   reason: string | null;
+  snippet?: string;
   created_at: string | null;
 }
 

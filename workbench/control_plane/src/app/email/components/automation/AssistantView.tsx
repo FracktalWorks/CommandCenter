@@ -1096,6 +1096,8 @@ function HistoryTab({ accountId }: { accountId: string | null }) {
   const [history, setHistory] = useState<ExecutedRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
+  const [ruleFilter, setRuleFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1154,110 +1156,223 @@ function HistoryTab({ accountId }: { accountId: string | null }) {
   if (loading) return <Spinner label="Loading history…" />;
 
   const pendingCount = history.filter((h) => h.status === "PENDING").length;
+  const ruleNames = Array.from(
+    new Set(history.map((h) => h.rule_name).filter((n): n is string => !!n))
+  ).sort();
+  const filtered = history.filter(
+    (h) =>
+      (ruleFilter === "all" || h.rule_name === ruleFilter) &&
+      (statusFilter === "all" || h.status === statusFilter)
+  );
+  const groups = groupHistoryByDate(filtered);
 
   return (
     <div className="h-full overflow-y-auto px-3 sm:px-5 py-3">
-      <div className="flex items-center justify-between mb-3">
-        <p className="text-xs text-muted-foreground">
-          {pendingCount > 0
-            ? `${pendingCount} proposed action${pendingCount > 1 ? "s" : ""} awaiting approval.`
-            : "Every time a rule fired, with the actions taken."}
-        </p>
-        <button onClick={load} className="text-xs text-primary hover:opacity-80">
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <select
+          value={ruleFilter}
+          onChange={(e) => setRuleFilter(e.target.value)}
+          className={`${INPUT_CLS} w-auto py-1`}
+        >
+          <option value="all">All rules</option>
+          {ruleNames.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className={`${INPUT_CLS} w-auto py-1`}
+        >
+          <option value="all">All statuses</option>
+          <option value="PENDING">
+            Pending{pendingCount ? ` (${pendingCount})` : ""}
+          </option>
+          <option value="APPLIED">Applied</option>
+          <option value="UNDONE">Undone</option>
+          <option value="REJECTED">Rejected</option>
+        </select>
+        <button
+          onClick={load}
+          className="ml-auto text-xs text-primary hover:opacity-80"
+        >
           Refresh
         </button>
       </div>
-      {history.length === 0 ? (
+
+      {filtered.length === 0 ? (
         <div className="text-center text-sm text-muted-foreground py-10">
-          No rule executions yet.
+          {history.length === 0
+            ? "No rule executions yet."
+            : "No entries match this filter."}
         </div>
       ) : (
-        <div className="space-y-1.5">
-          {history.map((h) => (
-            <div
-              key={h.id}
-              className="flex items-center gap-3 bg-card border border-border rounded-lg px-3 py-2"
-            >
-              <span
-                className={`text-[9px] px-1.5 py-0.5 rounded-full flex-shrink-0 ${
-                  h.status === "APPLIED"
-                    ? "bg-emerald-500/15 text-emerald-400"
-                    : h.status === "PENDING"
-                      ? "bg-amber-500/15 text-amber-400"
-                      : h.status === "REJECTED"
-                        ? "bg-red-500/15 text-red-400"
-                        : "bg-secondary text-muted-foreground"
-                }`}
-              >
-                {h.status}
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="text-xs text-foreground truncate">
-                  {h.subject || "(no subject)"}
-                </div>
-                <div className="text-[11px] text-muted-foreground truncate">
-                  {h.from} · {h.rule_name}
-                </div>
-                {h.reason && (
-                  <div className="text-[10px] text-muted-foreground/80 italic truncate">
-                    {h.reason}
-                  </div>
-                )}
+        <div className="space-y-4">
+          {groups.map((g) => (
+            <div key={g.key}>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5 px-0.5">
+                {g.label}
               </div>
-              <div className="flex items-center gap-1 flex-shrink-0">
-                {h.status === "PENDING" ? (
-                  busy === h.id ? (
-                    <Loader2 className="animate-spin text-muted-foreground" size={13} />
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => approve(h.id)}
-                        title="Apply these actions"
-                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-emerald-400 border border-border hover:bg-emerald-500/10 transition-colors"
-                      >
-                        <Check size={12} /> Approve
-                      </button>
-                      <button
-                        onClick={() => reject(h.id)}
-                        title="Dismiss"
-                        className="p-1.5 rounded-md text-muted-foreground hover:text-destructive border border-border"
-                      >
-                        <X size={12} />
-                      </button>
-                    </>
-                  )
-                ) : (
-                  <>
-                    {h.actions.map((a, i) => (
-                      <span
-                        key={i}
-                        className="text-[9px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground"
-                      >
-                        {a}
-                      </span>
-                    ))}
-                    {h.status === "APPLIED" &&
-                      (busy === h.id ? (
-                        <Loader2
-                          className="animate-spin text-muted-foreground"
-                          size={13}
-                        />
-                      ) : (
-                        <button
-                          onClick={() => undo(h.id)}
-                          title="Undo — restore to inbox / remove labels"
-                          className="flex items-center gap-1 px-1.5 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:text-foreground hover:bg-secondary transition-colors"
-                        >
-                          <Undo2 size={12} /> Undo
-                        </button>
-                      ))}
-                  </>
-                )}
+              <div className="space-y-1.5">
+                {g.items.map((h) => (
+                  <HistoryRow
+                    key={h.id}
+                    h={h}
+                    busy={busy === h.id}
+                    onApprove={() => approve(h.id)}
+                    onReject={() => reject(h.id)}
+                    onUndo={() => undo(h.id)}
+                  />
+                ))}
               </div>
             </div>
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function groupHistoryByDate(items: ExecutedRule[]) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const yest = new Date(today);
+  yest.setDate(yest.getDate() - 1);
+  const groups: { key: string; label: string; items: ExecutedRule[] }[] = [];
+  const byKey: Record<string, (typeof groups)[number]> = {};
+  for (const h of items) {
+    const d = h.created_at ? new Date(h.created_at) : null;
+    let key = "unknown";
+    let label = "Earlier";
+    if (d && !isNaN(d.getTime())) {
+      const day = new Date(d);
+      day.setHours(0, 0, 0, 0);
+      key = day.toISOString().slice(0, 10);
+      if (day.getTime() === today.getTime()) label = "Today";
+      else if (day.getTime() === yest.getTime()) label = "Yesterday";
+      else
+        label = day.toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+    }
+    if (!byKey[key]) {
+      byKey[key] = { key, label, items: [] };
+      groups.push(byKey[key]);
+    }
+    byKey[key].items.push(h);
+  }
+  return groups;
+}
+
+function HistoryRow({
+  h,
+  busy,
+  onApprove,
+  onReject,
+  onUndo,
+}: {
+  h: ExecutedRule;
+  busy: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+  onUndo: () => void;
+}) {
+  const statusCls =
+    h.status === "APPLIED"
+      ? "bg-emerald-500/15 text-emerald-400"
+      : h.status === "PENDING"
+        ? "bg-amber-500/15 text-amber-400"
+        : h.status === "REJECTED"
+          ? "bg-red-500/15 text-red-400"
+          : "bg-secondary text-muted-foreground";
+  return (
+    <div className="flex items-start gap-3 bg-card border border-border rounded-lg px-3 py-2">
+      <span
+        className={`mt-0.5 text-[9px] px-1.5 py-0.5 rounded-full flex-shrink-0 ${statusCls}`}
+      >
+        {h.status}
+      </span>
+      <div className="flex-1 min-w-0">
+        <div className="text-xs text-foreground truncate">
+          {h.subject || "(no subject)"}
+        </div>
+        <div className="text-[11px] text-muted-foreground truncate">
+          {h.from}
+          {h.rule_name ? (
+            <>
+              {" · "}
+              <span className="text-primary/80">{h.rule_name}</span>
+            </>
+          ) : null}
+          {!h.automated && (
+            <span className="ml-1 text-amber-400/80">· manual</span>
+          )}
+        </div>
+        {h.snippet && (
+          <div className="text-[10px] text-muted-foreground/70 line-clamp-1 mt-0.5">
+            {h.snippet}
+          </div>
+        )}
+        {h.reason && (
+          <div className="text-[10px] text-muted-foreground/80 italic line-clamp-2 mt-0.5">
+            {h.reason}
+          </div>
+        )}
+      </div>
+      <div className="flex items-center gap-1 flex-shrink-0">
+        {h.status === "PENDING" ? (
+          busy ? (
+            <Loader2 className="animate-spin text-muted-foreground" size={13} />
+          ) : (
+            <>
+              <button
+                onClick={onApprove}
+                title="Apply these actions"
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-emerald-400 border border-border hover:bg-emerald-500/10 transition-colors"
+              >
+                <Check size={12} /> Approve
+              </button>
+              <button
+                onClick={onReject}
+                title="Dismiss"
+                className="p-1.5 rounded-md text-muted-foreground hover:text-destructive border border-border"
+              >
+                <X size={12} />
+              </button>
+            </>
+          )
+        ) : (
+          <>
+            {h.actions.map((a, i) => (
+              <span
+                key={i}
+                className="text-[9px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground"
+              >
+                {a}
+              </span>
+            ))}
+            {h.status === "APPLIED" &&
+              (busy ? (
+                <Loader2
+                  className="animate-spin text-muted-foreground"
+                  size={13}
+                />
+              ) : (
+                <button
+                  onClick={onUndo}
+                  title="Undo — restore to inbox / remove labels"
+                  className="flex items-center gap-1 px-1.5 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:text-foreground hover:bg-secondary transition-colors"
+                >
+                  <Undo2 size={12} /> Undo
+                </button>
+              ))}
+          </>
+        )}
+      </div>
     </div>
   );
 }

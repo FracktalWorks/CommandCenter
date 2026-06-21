@@ -172,6 +172,24 @@ def _agent_workspace_dir(agent_name: str) -> Path | None:
     return None
 
 
+def _canonical_workspace_dir(agent_name: str) -> Path:
+    """The path the loader WOULD use for *agent_name* — whether or not it
+    exists on disk yet.
+
+    Equals ``{agents_clone_dir}/repos/{agent_name}`` (the loader always clones
+    with ``clone_as=agent_name``).  Used so a registered-but-never-run agent
+    still appears in the artifacts viewer with empty folders, instead of
+    vanishing entirely just because it has no clone yet.
+    """
+    from acb_common import get_settings  # noqa: PLC0415
+
+    settings = get_settings()
+    configured = getattr(
+        settings, "agents_clone_dir", str(Path.home() / ".acb" / "agents")
+    )
+    return Path(configured) / "repos" / agent_name
+
+
 def _resolve_agent_workspace(agent_name: str) -> Path | None:
     """Return the workspace directory for a named agent.
 
@@ -820,15 +838,18 @@ def _discover_agent_workspaces() -> dict[str, Path]:
     except Exception:  # noqa: BLE001
         pass
 
-    # ── Resolve each name to its clone-cache workspace (where artefacts live).
+    # ── Resolve each name to its workspace.  Prefer an existing clone; fall
+    # back to the canonical path so a registered-but-never-run agent (no clone
+    # on disk yet) STILL appears in the artifacts viewer, instead of silently
+    # vanishing.  _walk_agent_artifacts surfaces the three empty folders for
+    # such agents; real files appear once the agent runs and gets cloned.
     workspaces: dict[str, Path] = {}
     for name in names:
         try:
-            ws = _agent_workspace_dir(name)
+            ws = _agent_workspace_dir(name) or _canonical_workspace_dir(name)
         except Exception:  # noqa: BLE001
-            ws = None
-        if ws is not None:
-            workspaces[name] = ws
+            continue
+        workspaces[name] = ws
 
     return workspaces
 
@@ -858,6 +879,35 @@ def _walk_agent_artifacts(
     import datetime as _dt  # noqa: PLC0415
 
     entries: list[ArtifactEntry] = []
+    emitted_dirs: set[str] = set()
+
+    # Always surface the three special folders FIRST so every agent renders in
+    # the viewer — even one with no clone on disk yet (never run / wiped).
+    # Real mtime when the folder exists, else epoch (synthetic placeholder).
+    synth_cats = (
+        [category_filter]
+        if category_filter and category_filter in _VISIBLE_WORKSPACE_DIRS
+        else sorted(_VISIBLE_WORKSPACE_DIRS)
+    )
+    for cat in synth_cats:
+        cat_dir = workspace / cat
+        try:
+            mtime = cat_dir.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        entries.append(ArtifactEntry(
+            agent_name=agent_name,
+            path=cat,
+            name=cat,
+            size=0,
+            modified_at=_dt.datetime.fromtimestamp(
+                mtime, tz=_dt.timezone.utc,
+            ).isoformat(),
+            mime_type="inode/directory",
+            category=cat,
+            is_dir=True,
+        ))
+        emitted_dirs.add(cat)
 
     if category_filter and category_filter in _VISIBLE_WORKSPACE_DIRS:
         start = workspace / category_filter
@@ -865,6 +915,9 @@ def _walk_agent_artifacts(
             return entries
     else:
         start = workspace
+
+    if not start.exists():
+        return entries  # no clone yet — the synthetic folders above are all we have
 
     file_count = 0
     for dirpath, dirnames, filenames in os.walk(start):
@@ -886,6 +939,9 @@ def _walk_agent_artifacts(
             except OSError:
                 continue
             rel_dpath = str((rel_dir / dname)).replace("\\", "/")
+            if rel_dpath in emitted_dirs:
+                continue  # already emitted as a synthetic special folder
+            emitted_dirs.add(rel_dpath)
             entries.append(ArtifactEntry(
                 agent_name=agent_name,
                 path=rel_dpath,

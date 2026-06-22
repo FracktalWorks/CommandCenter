@@ -379,6 +379,7 @@ remember(query), recall_timeline(entity,query), save_memory(fact), save_episode(
 manage_todo_list(todoList) — structured task tracking panel (JSON array)
 ask_user(question,choices?) — HITL: pause and ask the user one question (blocking; the run resumes with their answer)
 get_errors(filePaths?) — check Python files for syntax/lint errors
+install_dependency(packages) — install Python package(s) into the agent venv at runtime
 save_note(path,fact), recall_notes(path,query?) — repo-scoped working memory
 query_history(sql) — SELECT-only query against chat history DB
 github_search(q,scope?,max?), github_repo_search(repo,q?) — code search
@@ -429,6 +430,9 @@ Function calls trigger real-time UI (TodoPanel, ElicitationCard) — text does n
 
 ### Code quality & error checking
 - **get_errors(filePaths?)** — Check Python files for syntax, type, and lint errors.  Call after editing or creating files.  Pass a JSON array of file paths (e.g. ``'["executor.py"]'``) or ``'[]'`` to auto-discover recently changed files.  Runs ``py_compile`` (syntax) and ``ruff`` (lint, if installed).  Returns structured errors or ``"No errors found."``.
+
+### Runtime dependencies
+- **install_dependency(packages)** — Install Python package(s) into the agent runtime so your imports/tools work.  Use this when you hit a ``ModuleNotFoundError`` or know a task needs a package that isn't installed.  Pass space- or comma-separated specs, e.g. ``"pandas openpyxl"`` or ``"requests==2.31.0"`` (plain names + optional version; no flags/URLs).  Installs into the shared agent venv via ``uv``; the package is importable immediately.  Prefer this over shell ``pip install`` (the venv has no pip).
 
 ### Working memory (repo-scoped notes)
 - **save_note(path, fact)** — Append a dated bullet to a markdown notes file under ``agent-data/``.  Your canonical working memory is ``agent-data/NOTES.md`` — read it at session start with ``recall_notes("NOTES.md")``.
@@ -563,6 +567,14 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
     try:
         from acb_skills.error_tools import get_errors  # noqa: PLC0415
         _all_tools = _all_tools + [get_errors]
+    except ImportError:
+        pass
+
+    # Runtime dependency install — agents can add a Python package mid-task
+    # (installed into the shared agent venv, importable immediately).
+    try:
+        from acb_skills.dep_tools import install_dependency  # noqa: PLC0415
+        _all_tools = _all_tools + [install_dependency]
     except ImportError:
         pass
 

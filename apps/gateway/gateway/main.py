@@ -35,6 +35,24 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     os.environ.setdefault("PYTHONUTF8", "1")
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
+    # Expose the gateway's venv to every child process (the Copilot CLI, agent
+    # shells, install_dependency).  `uv pip install` needs a target venv; the
+    # service env often lacks VIRTUAL_ENV, so a bare `uv pip install` from an
+    # agent would have nowhere to install.  Point VIRTUAL_ENV at this venv and
+    # put its bin first on PATH so runtime dependency installs land here and are
+    # importable in-process.
+    try:
+        import sys as _sys  # noqa: PLC0415
+        from pathlib import Path as _Path  # noqa: PLC0415
+        _venv = _Path(_sys.executable).resolve().parent.parent
+        if (_venv / "pyvenv.cfg").is_file():
+            os.environ.setdefault("VIRTUAL_ENV", str(_venv))
+            _bin = str(_venv / "bin")
+            if _bin not in os.environ.get("PATH", "").split(os.pathsep):
+                os.environ["PATH"] = _bin + os.pathsep + os.environ.get("PATH", "")
+    except Exception:  # noqa: BLE001
+        pass
+
     settings = get_settings()
     configure_logging(settings.log_level)
     _log.info("gateway.startup", env=settings.acb_env)

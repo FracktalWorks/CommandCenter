@@ -7,6 +7,7 @@ import {
 import { ChatMessage } from "../lib/types";
 import { QUICK_ACTIONS } from "../lib/mockData";
 import { streamAIChat, triggerQuickAction } from "../lib/api";
+import { useEmailStore } from "../lib/emailStore";
 import {
   EmailChatSession, StoredChatMessage, getSessions, createSession,
   deleteSession, getMessages, saveMessages, fetchActiveSessionIds,
@@ -46,6 +47,17 @@ export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelP
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // The Assistant's "Fix" flow hands a correction prompt through the store;
+  // drop it into the input (the user reviews & sends it).
+  const pendingChatPrompt = useEmailStore((s) => s.pendingChatPrompt);
+  const setPendingChatPrompt = useEmailStore((s) => s.setPendingChatPrompt);
+  useEffect(() => {
+    if (pendingChatPrompt) {
+      setInput(pendingChatPrompt);
+      setPendingChatPrompt(null);
+    }
+  }, [pendingChatPrompt, setPendingChatPrompt]);
 
   // Restore the most recent session (or start one) on mount.
   useEffect(() => {

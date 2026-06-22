@@ -1,25 +1,29 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Loader2, Plus, Trash2, Pencil, Play, Check, X, FlaskConical,
-  History as HistoryIcon, Settings2, Sparkles, Wand2, BookOpen,
-  ArrowUp, ArrowDown, Undo2,
+  History as HistoryIcon, Settings2, Settings, Sparkles, Wand2, BookOpen,
+  ArrowUp, ArrowDown, Eye, MessageCircle, RefreshCcw, Square,
 } from "lucide-react";
 import {
-  listRules, createRule, updateRule, deleteRule, testRules,
+  listRules, createRule, updateRule, deleteRule, runRuleOnMessage,
   getRulesHistory, runRules, getAssistantSettings, saveAssistantSettings,
-  approveExecution, rejectExecution, testRulesRecent,
-  listColdSenders, upsertColdSender, generateWritingStyle,
+  listColdSenders, upsertColdSender, generateWritingStyle, listEmails,
   listKnowledge, createKnowledge, updateKnowledge, deleteKnowledge,
-  installPresetRules, reorderRules, undoExecution,
+  installPresetRules, reorderRules,
   listLearnedPatterns, deleteLearnedPattern,
 } from "../../lib/api";
 import {
-  AutomationRule, RuleAction, RuleActionType, RuleTestResult, ExecutedRule,
-  AssistantSettings, RecentTestResult, EMAIL_CATEGORIES, ColdBlockerMode,
+  AutomationRule, RuleAction, RuleActionType, ExecutedRule, Email,
+  AssistantSettings, EMAIL_CATEGORIES, ColdBlockerMode, RunMessageResult,
   ColdSender, LLMConfigResponse, KnowledgeEntry, LearnedPattern,
+  RuleConditions, DraftConfidence, DRAFT_CONFIDENCE_OPTIONS, WEEKDAYS,
 } from "../../lib/types";
+import { useEmailStore } from "../../lib/emailStore";
+import {
+  Modal, Toggle, LabeledToggle, HoverPopover, SettingCard, SectionHeader,
+} from "./ui";
 
 interface AssistantViewProps {
   accountId: string | null;
@@ -39,6 +43,25 @@ const ACTION_TYPES: RuleActionType[] = [
   "ARCHIVE", "LABEL", "MARK_READ", "STAR", "MARK_SPAM", "TRASH",
   "MOVE_FOLDER", "REPLY", "FORWARD", "DRAFT_EMAIL", "CALL_WEBHOOK",
 ];
+
+/**
+ * Human-friendly name + one-line explanation for each rule action, so the UI
+ * never shows raw enum values like DRAFT_EMAIL / CALL_WEBHOOK. The description
+ * is surfaced as a tooltip and under the action editor.
+ */
+const ACTION_META: Record<RuleActionType, { label: string; description: string }> = {
+  ARCHIVE: { label: "Archive", description: "Remove the email from the inbox." },
+  LABEL: { label: "Apply label", description: "Add a label / category to the email." },
+  MARK_READ: { label: "Mark as read", description: "Mark the email as read." },
+  STAR: { label: "Star", description: "Star / flag the email." },
+  MARK_SPAM: { label: "Mark as spam", description: "Move the email to the spam folder." },
+  TRASH: { label: "Move to trash", description: "Send the email to trash." },
+  MOVE_FOLDER: { label: "Move to folder", description: "Move the email to a specific folder." },
+  REPLY: { label: "Reply", description: "Create a reply draft for your review — never auto-sent." },
+  FORWARD: { label: "Forward", description: "Create a forward draft to someone — never auto-sent." },
+  DRAFT_EMAIL: { label: "Draft a reply", description: "Let the AI write a reply draft for your review — never auto-sent." },
+  CALL_WEBHOOK: { label: "Call webhook", description: "POST the email to a URL you specify." },
+};
 
 /** Action types that draft an email and expose to/subject/content fields. */
 const DRAFT_ACTIONS = new Set<RuleActionType>(["REPLY", "FORWARD", "DRAFT_EMAIL"]);
@@ -154,7 +177,7 @@ const PRESET_RULES: PresetRule[] = [
   },
 ];
 
-export function AssistantView({ accountId, selectedEmailId }: AssistantViewProps) {
+export function AssistantView({ accountId }: AssistantViewProps) {
   const [tab, setTab] = useState<Tab>("rules");
 
   return (
@@ -178,9 +201,7 @@ export function AssistantView({ accountId, selectedEmailId }: AssistantViewProps
 
       <div className="flex-1 overflow-hidden">
         {tab === "rules" && <RulesTab accountId={accountId} />}
-        {tab === "test" && (
-          <TestTab accountId={accountId} selectedEmailId={selectedEmailId} />
-        )}
+        {tab === "test" && <TestTab accountId={accountId} />}
         {tab === "history" && <HistoryTab accountId={accountId} />}
         {tab === "settings" && <SettingsTab accountId={accountId} />}
       </div>
@@ -428,20 +449,6 @@ function RulesTab({ accountId }: { accountId: string | null }) {
                 <span className="text-sm font-medium text-foreground">
                   {rule.name}
                 </span>
-                <span
-                  className={`text-[9px] px-1.5 py-0.5 rounded-full ${
-                    rule.automated
-                      ? "bg-primary/15 text-primary"
-                      : "bg-amber-500/15 text-amber-400"
-                  }`}
-                  title={
-                    rule.automated
-                      ? "Runs automatically"
-                      : "Proposes actions for your approval"
-                  }
-                >
-                  {rule.automated ? "Auto" : "Manual"}
-                </span>
               </div>
               {rule.instructions && (
                 <div className="text-xs text-muted-foreground mt-0.5">
@@ -452,10 +459,10 @@ function RulesTab({ accountId }: { accountId: string | null }) {
                 {rule.actions.map((a, i) => (
                   <span
                     key={i}
+                    title={actionDescription(a.type)}
                     className="text-[10px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground"
                   >
-                    {a.type}
-                    {a.label ? `: ${a.label}` : ""}
+                    {actionText(a)}
                   </span>
                 ))}
               </div>
@@ -717,11 +724,12 @@ function RuleEditor({
                   onChange={(e) =>
                     setAction(i, { type: e.target.value as RuleActionType })
                   }
+                  title={ACTION_META[a.type].description}
                   className={`${INPUT_CLS} flex-1`}
                 >
                   {ACTION_TYPES.map((t) => (
                     <option key={t} value={t}>
-                      {t}
+                      {ACTION_META[t].label}
                     </option>
                   ))}
                 </select>
@@ -734,6 +742,9 @@ function RuleEditor({
                   <X size={13} />
                 </button>
               </div>
+              <p className="text-[10px] text-muted-foreground -mt-0.5">
+                {ACTION_META[a.type].description}
+              </p>
 
               {(a.type === "LABEL" || a.type === "MOVE_FOLDER") && (
                 <input
@@ -811,21 +822,6 @@ function RuleEditor({
         <label className="flex items-start gap-2 cursor-pointer">
           <input
             type="checkbox"
-            checked={draft.automated}
-            onChange={(e) => set({ automated: e.target.checked })}
-            className="accent-primary mt-0.5"
-          />
-          <span>
-            <span className="text-xs text-foreground">Run automatically</span>
-            <span className="block text-[11px] text-muted-foreground">
-              On: matching mail gets these actions applied automatically. Off: the
-              assistant proposes them in History for your approval.
-            </span>
-          </span>
-        </label>
-        <label className="flex items-start gap-2 cursor-pointer">
-          <input
-            type="checkbox"
             checked={draft.run_on_threads}
             onChange={(e) => set({ run_on_threads: e.target.checked })}
             className="accent-primary mt-0.5"
@@ -859,234 +855,525 @@ function RuleEditor({
   );
 }
 
+// ── Shared result pills + Fix flow (used by Test & History) ──────────────────
+
+/** Friendly name for an action type string (handles unknowns gracefully). */
+function actionLabel(type: string): string {
+  return ACTION_META[type as RuleActionType]?.label ?? type;
+}
+
+/** Friendly description for an action type string. */
+function actionDescription(type: string): string {
+  return ACTION_META[type as RuleActionType]?.description ?? "";
+}
+
+/** Human label for an action spec (e.g. `Label as "Receipt"`). */
+function actionText(a: RuleAction): string {
+  if (a.type === "LABEL" && a.label) return `Label as "${a.label}"`;
+  if (a.type === "MOVE_FOLDER" && a.label) return `Move to "${a.label}"`;
+  if (a.type === "FORWARD" && a.to_address) return `Forward to ${a.to_address}`;
+  return actionLabel(a.type);
+}
+
+/** Render a rule's conditions the way inbox-zero's popover does. */
+function PrettyConditions({ c }: { c: RuleConditions }) {
+  const parts: { k: string; v: string }[] = [];
+  if (c.instructions) parts.push({ k: "AI", v: c.instructions });
+  if (c.from_pattern) parts.push({ k: "From", v: c.from_pattern });
+  if (c.to_pattern) parts.push({ k: "To", v: c.to_pattern });
+  if (c.subject_pattern) parts.push({ k: "Subject", v: c.subject_pattern });
+  if (c.body_pattern) parts.push({ k: "Body", v: c.body_pattern });
+  if (c.category_filter_type && c.category_filters.length)
+    parts.push({
+      k: c.category_filter_type === "INCLUDE" ? "Category in" : "Category not in",
+      v: c.category_filters.join(", "),
+    });
+  if (parts.length === 0) return null;
+  const op = c.conditional_operator === "OR" ? "ANY" : "ALL";
+  return (
+    <div className="text-[11px] text-muted-foreground space-y-0.5">
+      {parts.length > 1 && (
+        <div className="text-[9px] uppercase tracking-wide text-muted-foreground/70">
+          Match {op}:
+        </div>
+      )}
+      {parts.map((p, i) => (
+        <div key={i}>
+          <span className="text-foreground/80">{p.k}:</span> {p.v}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A green (matched) / red (no match) rule pill that reveals the rule's
+ * conditions, the actions taken, and the AI's reasoning on hover/tap.
+ */
+function RuleResultPill({
+  matched,
+  ruleName,
+  reason,
+  conditions,
+  actionSpecs,
+  takenTypes,
+}: {
+  matched: boolean;
+  ruleName: string | null;
+  reason?: string | null;
+  conditions?: RuleConditions | null;
+  actionSpecs?: RuleAction[];
+  takenTypes?: string[];
+}) {
+  const pill = (
+    <span
+      className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap ${
+        matched
+          ? "bg-emerald-500/15 text-emerald-400"
+          : "bg-red-500/15 text-red-400"
+      }`}
+    >
+      {matched ? ruleName || "Matched" : "No match found"}
+      <Eye size={11} className="opacity-70" />
+    </span>
+  );
+  const specs = actionSpecs ?? [];
+  const types = takenTypes ?? [];
+  return (
+    <HoverPopover trigger={pill}>
+      <div className="space-y-2">
+        <div className="text-xs font-medium text-foreground">
+          {matched ? ruleName || "Matched rule" : "No rule matched"}
+        </div>
+        {conditions && <PrettyConditions c={conditions} />}
+        {(specs.length > 0 || types.length > 0) && (
+          <div>
+            <div className="text-[9px] uppercase tracking-wide text-muted-foreground/70 mb-1">
+              Actions
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {specs.length > 0
+                ? specs.map((a, i) => (
+                    <span
+                      key={i}
+                      title={actionDescription(a.type)}
+                      className="text-[10px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground"
+                    >
+                      {actionText(a)}
+                    </span>
+                  ))
+                : types.map((t, i) => (
+                    <span
+                      key={i}
+                      title={actionDescription(t)}
+                      className="text-[10px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground"
+                    >
+                      {actionLabel(t)}
+                    </span>
+                  ))}
+            </div>
+          </div>
+        )}
+        {reason && (
+          <div className="text-[10px] text-muted-foreground/80 bg-secondary/40 rounded-md px-2 py-1.5 italic">
+            <span className="not-italic text-muted-foreground/60">
+              Reason for choosing this rule:{" "}
+            </span>
+            {reason}
+          </div>
+        )}
+      </div>
+    </HoverPopover>
+  );
+}
+
+type Expected = "none" | "new" | { id: string; name: string };
+
+function buildFixPrompt(
+  expected: Expected,
+  explanation: string,
+  email: { subject: string; from: string },
+): string {
+  const ctx = `For the email "${email.subject || "(no subject)"}" from ${
+    email.from || "unknown sender"
+  }, `;
+  const why = explanation.trim() ? ` because ${explanation.trim()}` : ".";
+  if (expected === "new")
+    return `${ctx}create a new rule for emails like this${why}`;
+  if (expected === "none")
+    return `${ctx}this email shouldn't have matched any rule${why}`;
+  return `${ctx}this email should have matched the "${expected.name}" rule${why}`;
+}
+
+/** The inbox-zero "Improve Rules" dialog — hands a correction to the AI chat. */
+function FixDialog({
+  accountId,
+  email,
+  current,
+  onClose,
+}: {
+  accountId: string;
+  email: { subject: string; from: string };
+  current: { matched: boolean; ruleName: string | null };
+  onClose: () => void;
+}) {
+  const [rules, setRules] = useState<AutomationRule[]>([]);
+  const [expected, setExpected] = useState<Expected | null>(null);
+  const [explanation, setExplanation] = useState("");
+  const setPendingChatPrompt = useEmailStore((s) => s.setPendingChatPrompt);
+
+  useEffect(() => {
+    listRules(accountId).then(setRules).catch(() => {});
+  }, [accountId]);
+
+  const submit = () => {
+    if (!expected) return;
+    setPendingChatPrompt(buildFixPrompt(expected, explanation, email));
+    onClose();
+  };
+
+  const expectedLabel =
+    expected === "new"
+      ? "✨ New rule"
+      : expected === "none"
+        ? "❌ None"
+        : expected
+          ? expected.name
+          : "";
+
+  return (
+    <Modal
+      title="Improve Rules"
+      onClose={onClose}
+      footer={
+        expected ? (
+          <>
+            <button
+              onClick={() => setExpected(null)}
+              className="px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:bg-secondary transition-colors"
+            >
+              Back
+            </button>
+            <button
+              onClick={submit}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
+            >
+              <MessageCircle size={13} /> Send to assistant
+            </button>
+          </>
+        ) : undefined
+      }
+    >
+      <div>
+        <div className="text-[11px] text-muted-foreground mb-1">Matched:</div>
+        <span
+          className={`inline-block text-[10px] px-1.5 py-0.5 rounded-md ${
+            current.matched
+              ? "bg-emerald-500/15 text-emerald-400"
+              : "bg-red-500/15 text-red-400"
+          }`}
+        >
+          {current.matched ? current.ruleName || "Matched" : "No match found"}
+        </span>
+      </div>
+
+      {!expected ? (
+        <div>
+          <div className="text-xs font-medium text-foreground mb-2">
+            Which rule did you expect it to match?
+          </div>
+          <div className="space-y-1.5">
+            <FixOption onClick={() => setExpected("none")}>❌ None</FixOption>
+            <FixOption onClick={() => setExpected("new")}>✨ New rule</FixOption>
+            {rules.map((r) => (
+              <FixOption
+                key={r.id}
+                onClick={() => setExpected({ id: r.id!, name: r.name })}
+              >
+                {r.name}
+              </FixOption>
+            ))}
+            {rules.length === 0 && (
+              <div className="text-[11px] text-muted-foreground">
+                You haven&apos;t created any rules yet.
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="text-xs text-foreground">
+            Selected rule:{" "}
+            <span className="text-primary">{expectedLabel}</span>
+          </div>
+          <textarea
+            value={explanation}
+            onChange={(e) => setExplanation(e.target.value)}
+            rows={3}
+            placeholder="Why should this rule have been applied? (optional)"
+            className={`${INPUT_CLS} resize-none`}
+          />
+          <p className="text-[10px] text-muted-foreground">
+            Providing an explanation helps the AI understand your intent better.
+          </p>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function FixOption({
+  children,
+  onClick,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="w-full text-left text-xs px-3 py-2 rounded-lg border border-border text-foreground hover:bg-secondary transition-colors"
+    >
+      {children}
+    </button>
+  );
+}
+
+/** The "Fix" button that opens the Improve Rules dialog for one email. */
+function FixButton({
+  accountId,
+  email,
+  current,
+}: {
+  accountId: string;
+  email: { subject: string; from: string };
+  current: { matched: boolean; ruleName: string | null };
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        title="Tell the assistant this was wrong"
+        className="flex items-center gap-1 px-1.5 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:text-foreground hover:bg-secondary transition-colors"
+      >
+        <MessageCircle size={12} /> Fix
+      </button>
+      {open && (
+        <FixDialog
+          accountId={accountId}
+          email={email}
+          current={current}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
 // ── Test tab ────────────────────────────────────────────────────────────────
 
-function TestTab({
-  accountId,
-  selectedEmailId,
-}: {
-  accountId: string | null;
-  selectedEmailId: string | null;
-}) {
-  const [mode, setMode] = useState<"single" | "recent">("single");
-  const [from, setFrom] = useState("");
-  const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
-  const [useSelected, setUseSelected] = useState(!!selectedEmailId);
-  const [result, setResult] = useState<RuleTestResult | null>(null);
-  const [recent, setRecent] = useState<RecentTestResult[] | null>(null);
-  const [loading, setLoading] = useState(false);
+function TestTab({ accountId }: { accountId: string | null }) {
+  const [applyMode, setApplyMode] = useState(false); // false = Test, true = Apply
+  const [emails, setEmails] = useState<Email[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<Record<string, RunMessageResult>>({});
+  const [running, setRunning] = useState<Set<string>>(new Set());
+  const [bulk, setBulk] = useState(false);
+  const [search, setSearch] = useState("");
+  const stopRef = useRef(false);
 
-  const run = async () => {
-    if (!accountId) return;
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    try {
-      const res = await testRules({
-        accountId,
-        emailId: useSelected && selectedEmailId ? selectedEmailId : undefined,
-        fromEmail: from,
-        subject,
-        body,
-      });
-      setResult(res);
-    } catch (e) {
-      setError((e as Error).message || "Test failed");
-    } finally {
+  const load = useCallback(() => {
+    if (!accountId) {
       setLoading(false);
+      return;
     }
-  };
+    setLoading(true);
+    listEmails({ accountId, folder: "inbox", pageSize: 25 })
+      .then((r) => setEmails(r.emails))
+      .catch((e) => setError((e as Error).message || "Failed to load emails"))
+      .finally(() => setLoading(false));
+  }, [accountId]);
+  useEffect(load, [load]);
 
-  const runRecent = async () => {
-    if (!accountId) return;
-    setLoading(true);
-    setError(null);
-    setRecent(null);
-    try {
-      setRecent(await testRulesRecent(accountId, 10));
-    } catch (e) {
-      setError((e as Error).message || "Test failed");
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Switching Test↔Apply invalidates prior previews (the action changes).
+  useEffect(() => setResults({}), [applyMode]);
+
+  const runOne = useCallback(
+    async (id: string) => {
+      if (!accountId) return;
+      setRunning((s) => new Set(s).add(id));
+      try {
+        const res = await runRuleOnMessage({
+          accountId,
+          messageId: id,
+          isTest: !applyMode,
+        });
+        setResults((r) => ({ ...r, [id]: res }));
+      } catch (e) {
+        setError((e as Error).message || "Run failed");
+      } finally {
+        setRunning((s) => {
+          const n = new Set(s);
+          n.delete(id);
+          return n;
+        });
+      }
+    },
+    [accountId, applyMode],
+  );
 
   if (!accountId) return <Empty>Select an account first.</Empty>;
 
+  const visible = emails.filter((e) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      e.subject.toLowerCase().includes(q) ||
+      (e.from.name || e.from.email).toLowerCase().includes(q)
+    );
+  });
+
+  const runAll = async () => {
+    setBulk(true);
+    stopRef.current = false;
+    for (const e of visible) {
+      if (stopRef.current) break;
+      await runOne(e.id);
+    }
+    setBulk(false);
+  };
+
   return (
-    <div className="h-full overflow-y-auto px-4 sm:px-5 py-4 space-y-4">
-      <div className="flex items-center gap-1 bg-secondary rounded-lg p-0.5 w-fit">
-        {(["single", "recent"] as const).map((m) => (
-          <button
-            key={m}
-            onClick={() => setMode(m)}
-            className={`px-3 py-1 rounded-md text-xs transition-colors ${
-              mode === m
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {m === "single" ? "Single email" : "Recent inbox"}
-          </button>
-        ))}
+    <div className="h-full flex flex-col">
+      {/* Header: mode-aware description + Test/Apply toggle */}
+      <div className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3 border-b border-border flex-shrink-0">
+        <p className="text-xs text-muted-foreground">
+          {applyMode
+            ? "Run your rules on previous emails."
+            : "Check how your rules perform against previous emails."}
+        </p>
+        <LabeledToggle
+          label="Test"
+          labelRight="Apply"
+          enabled={applyMode}
+          onChange={setApplyMode}
+        />
       </div>
 
-      {mode === "recent" ? (
-        <div className="space-y-3">
-          <p className="text-xs text-muted-foreground">
-            Run your rules against the 10 most recent inbox emails — nothing is
-            applied.
-          </p>
+      {/* Toolbar */}
+      <div className="flex items-center justify-between gap-2 px-4 sm:px-5 py-2 border-b border-border flex-shrink-0">
+        {bulk ? (
           <button
-            onClick={runRecent}
-            disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+            onClick={() => {
+              stopRef.current = true;
+            }}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
           >
-            {loading ? <Loader2 className="animate-spin" size={13} /> : <FlaskConical size={13} />}
-            Test on recent inbox
+            <Square size={12} /> Stop
           </button>
-          {error && <div className="text-xs text-destructive">{error}</div>}
-          {recent && (
-            <div className="space-y-1.5">
-              {recent.map((r) => (
-                <div
-                  key={r.email_id}
-                  className="flex items-center gap-3 bg-card border border-border rounded-lg px-3 py-2"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs text-foreground truncate">
-                      {r.subject}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground truncate">
-                      {r.from}
-                    </div>
-                    {r.matched && r.reason && (
-                      <div className="text-[10px] text-muted-foreground/80 italic truncate">
-                        {r.reason}
-                      </div>
-                    )}
+        ) : (
+          <button
+            onClick={runAll}
+            disabled={visible.length === 0}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+          >
+            <Play size={12} /> {applyMode ? "Run on all" : "Test all"}
+          </button>
+        )}
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search…"
+          className={`${INPUT_CLS} w-40 py-1`}
+        />
+      </div>
+
+      {error && (
+        <div className="px-5 py-2 text-xs text-destructive bg-destructive/10">
+          {error}
+        </div>
+      )}
+
+      <div className="flex-1 overflow-y-auto px-4 sm:px-5 py-3 space-y-1.5">
+        {loading ? (
+          <Spinner label="Loading inbox…" />
+        ) : visible.length === 0 ? (
+          <div className="text-center text-sm text-muted-foreground py-10">
+            No emails found.
+          </div>
+        ) : (
+          visible.map((e) => {
+            const res = results[e.id];
+            const isRunning = running.has(e.id);
+            return (
+              <div
+                key={e.id}
+                className={`flex items-start gap-3 bg-card border border-border rounded-lg px-3 py-2 ${
+                  isRunning ? "animate-pulse" : ""
+                }`}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-foreground truncate">
+                    {e.subject || "(no subject)"}
                   </div>
-                  {r.matched ? (
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-primary/15 text-primary">
-                        {r.rule?.name}
-                      </span>
-                      {r.actions.map((a, i) => (
-                        <span
-                          key={i}
-                          className="text-[9px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground"
-                        >
-                          {a}
-                        </span>
-                      ))}
+                  <div className="text-[11px] text-muted-foreground truncate">
+                    {e.from.name || e.from.email}
+                  </div>
+                  {e.snippet && (
+                    <div className="text-[10px] text-muted-foreground/70 line-clamp-1 mt-0.5">
+                      {e.snippet}
                     </div>
-                  ) : (
-                    <span className="text-[10px] text-muted-foreground flex-shrink-0">
-                      no match
-                    </span>
                   )}
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-      ) : (
-      <>
-      <p className="text-xs text-muted-foreground">
-        Test which rule would match an email before turning it loose on your inbox.
-      </p>
-
-      {selectedEmailId && (
-        <label className="flex items-center gap-2 text-xs text-foreground cursor-pointer">
-          <input
-            type="checkbox"
-            checked={useSelected}
-            onChange={(e) => setUseSelected(e.target.checked)}
-            className="accent-primary"
-          />
-          Use the currently selected email
-        </label>
-      )}
-
-      {!useSelected && (
-        <div className="space-y-3">
-          <Field label="From">
-            <input
-              value={from}
-              onChange={(e) => setFrom(e.target.value)}
-              placeholder="sender@example.com"
-              className={INPUT_CLS}
-            />
-          </Field>
-          <Field label="Subject">
-            <input
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              placeholder="Subject line"
-              className={INPUT_CLS}
-            />
-          </Field>
-          <Field label="Body">
-            <textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              rows={4}
-              placeholder="Email body…"
-              className={`${INPUT_CLS} resize-none`}
-            />
-          </Field>
-        </div>
-      )}
-
-      <button
-        onClick={run}
-        disabled={loading}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-      >
-        {loading ? <Loader2 className="animate-spin" size={13} /> : <FlaskConical size={13} />}
-        Test rules
-      </button>
-
-      {error && <div className="text-xs text-destructive">{error}</div>}
-
-      {result && (
-        <div
-          className={`rounded-xl border p-4 ${
-            result.matched
-              ? "border-primary/30 bg-primary/5"
-              : "border-border bg-card"
-          }`}
-        >
-          {result.matched ? (
-            <>
-              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                <Check size={14} className="text-primary" />
-                Matched: {result.rule?.name}
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {res ? (
+                    <>
+                      <RuleResultPill
+                        matched={res.matched}
+                        ruleName={res.rule?.name ?? null}
+                        reason={res.reason}
+                        actionSpecs={res.actions.filter(
+                          (a): a is RuleAction => typeof a !== "string",
+                        )}
+                        takenTypes={res.actions.filter(
+                          (a): a is string => typeof a === "string",
+                        )}
+                      />
+                      <FixButton
+                        accountId={accountId}
+                        email={{ subject: e.subject, from: e.from.email }}
+                        current={{
+                          matched: res.matched,
+                          ruleName: res.rule?.name ?? null,
+                        }}
+                      />
+                      <button
+                        onClick={() => runOne(e.id)}
+                        disabled={isRunning}
+                        title={applyMode ? "Rerun" : "Retest"}
+                        className="p-1.5 rounded-md text-muted-foreground border border-border hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+                      >
+                        <RefreshCcw size={12} />
+                      </button>
+                    </>
+                  ) : isRunning ? (
+                    <Loader2 className="animate-spin text-muted-foreground" size={14} />
+                  ) : (
+                    <button
+                      onClick={() => runOne(e.id)}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90 transition-colors"
+                    >
+                      <Sparkles size={12} /> {applyMode ? "Run" : "Test"}
+                    </button>
+                  )}
+                </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-1">{result.reason}</p>
-              <div className="flex flex-wrap items-center gap-1 mt-2">
-                {result.actions.map((a, i) => (
-                  <span
-                    key={i}
-                    className="text-[10px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground"
-                  >
-                    {a.type}
-                    {a.label ? `: ${a.label}` : ""}
-                  </span>
-                ))}
-              </div>
-            </>
-          ) : (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <X size={14} /> No rule matched this email.
-            </div>
-          )}
-        </div>
-      )}
-      </>
-      )}
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }
@@ -1096,9 +1383,8 @@ function TestTab({
 function HistoryTab({ accountId }: { accountId: string | null }) {
   const [history, setHistory] = useState<ExecutedRule[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<string | null>(null);
+  // "all" | "skipped" (No match) | a rule name.
   const [ruleFilter, setRuleFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1110,60 +1396,22 @@ function HistoryTab({ accountId }: { accountId: string | null }) {
 
   useEffect(load, [load]);
 
-  const approve = async (id: string) => {
-    setBusy(id);
-    try {
-      const res = await approveExecution(id);
-      setHistory((prev) =>
-        prev.map((h) =>
-          h.id === id ? { ...h, status: "APPLIED", actions: res.actions } : h
-        )
-      );
-    } catch {
-      load();
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const reject = async (id: string) => {
-    setBusy(id);
-    try {
-      await rejectExecution(id);
-      setHistory((prev) =>
-        prev.map((h) => (h.id === id ? { ...h, status: "REJECTED" } : h))
-      );
-    } catch {
-      load();
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const undo = async (id: string) => {
-    setBusy(id);
-    try {
-      await undoExecution(id);
-      setHistory((prev) =>
-        prev.map((h) => (h.id === id ? { ...h, status: "UNDONE" } : h))
-      );
-    } catch {
-      load();
-    } finally {
-      setBusy(null);
-    }
-  };
-
   if (loading) return <Spinner label="Loading history…" />;
 
-  const pendingCount = history.filter((h) => h.status === "PENDING").length;
+  // History is a LOG of what the assistant did — actions it applied and the
+  // emails where nothing matched (inbox-zero has no approval queue).
+  const log = history.filter(
+    (h) => h.status === "APPLIED" || h.status === "SKIPPED"
+  );
   const ruleNames = Array.from(
-    new Set(history.map((h) => h.rule_name).filter((n): n is string => !!n))
+    new Set(log.map((h) => h.rule_name).filter((n): n is string => !!n))
   ).sort();
-  const filtered = history.filter(
-    (h) =>
-      (ruleFilter === "all" || h.rule_name === ruleFilter) &&
-      (statusFilter === "all" || h.status === statusFilter)
+  const filtered = log.filter((h) =>
+    ruleFilter === "all"
+      ? true
+      : ruleFilter === "skipped"
+        ? h.status === "SKIPPED"
+        : h.rule_name === ruleFilter
   );
   const groups = groupHistoryByDate(filtered);
 
@@ -1176,24 +1424,12 @@ function HistoryTab({ accountId }: { accountId: string | null }) {
           className={`${INPUT_CLS} w-auto py-1`}
         >
           <option value="all">All rules</option>
+          <option value="skipped">No match</option>
           {ruleNames.map((n) => (
             <option key={n} value={n}>
               {n}
             </option>
           ))}
-        </select>
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className={`${INPUT_CLS} w-auto py-1`}
-        >
-          <option value="all">All statuses</option>
-          <option value="PENDING">
-            Pending{pendingCount ? ` (${pendingCount})` : ""}
-          </option>
-          <option value="APPLIED">Applied</option>
-          <option value="UNDONE">Undone</option>
-          <option value="REJECTED">Rejected</option>
         </select>
         <button
           onClick={load}
@@ -1205,8 +1441,8 @@ function HistoryTab({ accountId }: { accountId: string | null }) {
 
       {filtered.length === 0 ? (
         <div className="text-center text-sm text-muted-foreground py-10">
-          {history.length === 0
-            ? "No rule executions yet."
+          {log.length === 0
+            ? "No emails have been processed yet."
             : "No entries match this filter."}
         </div>
       ) : (
@@ -1218,14 +1454,7 @@ function HistoryTab({ accountId }: { accountId: string | null }) {
               </div>
               <div className="space-y-1.5">
                 {g.items.map((h) => (
-                  <HistoryRow
-                    key={h.id}
-                    h={h}
-                    busy={busy === h.id}
-                    onApprove={() => approve(h.id)}
-                    onReject={() => reject(h.id)}
-                    onUndo={() => undo(h.id)}
-                  />
+                  <HistoryRow key={h.id} h={h} accountId={accountId} />
                 ))}
               </div>
             </div>
@@ -1271,107 +1500,45 @@ function groupHistoryByDate(items: ExecutedRule[]) {
 
 function HistoryRow({
   h,
-  busy,
-  onApprove,
-  onReject,
-  onUndo,
+  accountId,
 }: {
   h: ExecutedRule;
-  busy: boolean;
-  onApprove: () => void;
-  onReject: () => void;
-  onUndo: () => void;
+  accountId: string | null;
 }) {
-  const statusCls =
-    h.status === "APPLIED"
-      ? "bg-emerald-500/15 text-emerald-400"
-      : h.status === "PENDING"
-        ? "bg-amber-500/15 text-amber-400"
-        : h.status === "REJECTED"
-          ? "bg-red-500/15 text-red-400"
-          : "bg-secondary text-muted-foreground";
+  const matched = h.status !== "SKIPPED";
   return (
     <div className="flex items-start gap-3 bg-card border border-border rounded-lg px-3 py-2">
-      <span
-        className={`mt-0.5 text-[9px] px-1.5 py-0.5 rounded-full flex-shrink-0 ${statusCls}`}
-      >
-        {h.status}
-      </span>
       <div className="flex-1 min-w-0">
         <div className="text-xs text-foreground truncate">
           {h.subject || "(no subject)"}
         </div>
-        <div className="text-[11px] text-muted-foreground truncate">
-          {h.from}
-          {h.rule_name ? (
-            <>
-              {" · "}
-              <span className="text-primary/80">{h.rule_name}</span>
-            </>
-          ) : null}
-          {!h.automated && (
-            <span className="ml-1 text-amber-400/80">· manual</span>
-          )}
-        </div>
+        <div className="text-[11px] text-muted-foreground truncate">{h.from}</div>
         {h.snippet && (
           <div className="text-[10px] text-muted-foreground/70 line-clamp-1 mt-0.5">
             {h.snippet}
           </div>
         )}
-        {h.reason && (
-          <div className="text-[10px] text-muted-foreground/80 italic line-clamp-2 mt-0.5">
-            {h.reason}
-          </div>
+        {!h.automated && (
+          <span className="inline-block mt-1 text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400">
+            Applied manually
+          </span>
         )}
       </div>
-      <div className="flex items-center gap-1 flex-shrink-0">
-        {h.status === "PENDING" ? (
-          busy ? (
-            <Loader2 className="animate-spin text-muted-foreground" size={13} />
-          ) : (
-            <>
-              <button
-                onClick={onApprove}
-                title="Apply these actions"
-                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-emerald-400 border border-border hover:bg-emerald-500/10 transition-colors"
-              >
-                <Check size={12} /> Approve
-              </button>
-              <button
-                onClick={onReject}
-                title="Dismiss"
-                className="p-1.5 rounded-md text-muted-foreground hover:text-destructive border border-border"
-              >
-                <X size={12} />
-              </button>
-            </>
-          )
-        ) : (
-          <>
-            {h.actions.map((a, i) => (
-              <span
-                key={i}
-                className="text-[9px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground"
-              >
-                {a}
-              </span>
-            ))}
-            {h.status === "APPLIED" &&
-              (busy ? (
-                <Loader2
-                  className="animate-spin text-muted-foreground"
-                  size={13}
-                />
-              ) : (
-                <button
-                  onClick={onUndo}
-                  title="Undo — restore to inbox / remove labels"
-                  className="flex items-center gap-1 px-1.5 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:text-foreground hover:bg-secondary transition-colors"
-                >
-                  <Undo2 size={12} /> Undo
-                </button>
-              ))}
-          </>
+      <div className="flex items-center gap-1.5 flex-shrink-0">
+        <RuleResultPill
+          matched={matched}
+          ruleName={h.rule_name}
+          reason={h.reason}
+          conditions={h.conditions ?? undefined}
+          actionSpecs={h.rule_actions}
+          takenTypes={h.actions}
+        />
+        {accountId && (
+          <FixButton
+            accountId={accountId}
+            email={{ subject: h.subject || "", from: h.from || "" }}
+            current={{ matched, ruleName: h.rule_name }}
+          />
         )}
       </div>
     </div>
@@ -1380,6 +1547,11 @@ function HistoryRow({
 
 // ── Settings tab ────────────────────────────────────────────────────────────
 
+const CONFIGURE_BTN =
+  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border " +
+  "text-xs text-muted-foreground hover:text-foreground hover:bg-secondary " +
+  "transition-colors";
+
 function SettingsTab({ accountId }: { accountId: string | null }) {
   const [settings, setSettings] = useState<AssistantSettings | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1387,6 +1559,8 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [llm, setLlm] = useState<LLMConfigResponse | null>(null);
+  const [ruleNames, setRuleNames] = useState<string[]>([]);
+  const [dialog, setDialog] = useState<"followup" | "digest" | null>(null);
 
   useEffect(() => {
     fetch("/api/settings/llm")
@@ -1406,21 +1580,26 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
       .then((s) => !cancelled && setSettings(s))
       .catch((e) => !cancelled && setError(e.message || "Failed to load settings"))
       .finally(() => !cancelled && setLoading(false));
+    listRules(accountId)
+      .then((rs) => !cancelled && setRuleNames(rs.map((r) => r.name)))
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [accountId]);
 
-  const save = async () => {
-    if (!settings) return;
+  // Persist the whole settings object. Toggles/selects persist immediately;
+  // the free-text cards rely on the bottom "Save settings" button.
+  const persist = async (next: AssistantSettings) => {
+    setSettings(next);
     setSaving(true);
     setError(null);
     setSaved(false);
     try {
-      const res = await saveAssistantSettings(settings);
+      const res = await saveAssistantSettings(next);
       setSettings(res);
       setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
+      setTimeout(() => setSaved(false), 2000);
     } catch (e) {
       setError((e as Error).message || "Failed to save settings");
     } finally {
@@ -1431,186 +1610,242 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
   if (!accountId) return <Empty>Select an account first.</Empty>;
   if (loading || !settings) return <Spinner label="Loading settings…" />;
 
+  const s = settings; // narrowed
+  const patch = (p: Partial<AssistantSettings>) => setSettings({ ...s, ...p });
+  const persistPatch = (p: Partial<AssistantSettings>) => persist({ ...s, ...p });
+  const followUpOn = s.follow_up_awaiting_days > 0 || s.follow_up_needs_reply_days > 0;
+  const digestOn = s.digest_frequency !== "OFF";
+
   return (
-    <div className="h-full overflow-y-auto px-4 sm:px-5 py-4 space-y-4">
-      <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-        <Field label="About you (context the assistant uses when drafting replies)">
-          <textarea
-            value={settings.about}
-            onChange={(e) => setSettings({ ...settings, about: e.target.value })}
-            rows={3}
-            placeholder="e.g. I'm the founder of Acme. Keep replies concise and friendly; I prefer to handle anything financial myself."
-            className={`${INPUT_CLS} resize-none`}
-          />
-        </Field>
-        <Field label="Signature">
-          <textarea
-            value={settings.signature}
-            onChange={(e) =>
-              setSettings({ ...settings, signature: e.target.value })
+    <div className="h-full overflow-y-auto px-4 sm:px-5 py-4">
+      <div className="max-w-3xl mx-auto space-y-6">
+        {/* ── Drafting ── */}
+        <div className="space-y-2">
+          <SettingCard
+            title="Auto draft replies"
+            description="Automatically draft replies written in your tone to emails needing a reply."
+            right={
+              <Toggle
+                enabled={s.draft_replies}
+                onChange={(v) => persistPatch({ draft_replies: v })}
+              />
             }
-            rows={2}
-            placeholder={"Best,\nAlex"}
-            className={`${INPUT_CLS} resize-none`}
           />
-        </Field>
-        <Field label="Personal instructions (global rules the assistant always follows)">
-          <textarea
-            value={settings.personal_instructions}
-            onChange={(e) =>
-              setSettings({ ...settings, personal_instructions: e.target.value })
+          <SettingCard
+            title="Draft confidence"
+            description="How sure should the AI be before drafting a reply?"
+            right={
+              <select
+                value={s.draft_confidence}
+                onChange={(e) =>
+                  persistPatch({
+                    draft_confidence: e.target.value as DraftConfidence,
+                  })
+                }
+                className={`${INPUT_CLS} w-44 py-1`}
+              >
+                {DRAFT_CONFIDENCE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
             }
-            rows={3}
-            placeholder="e.g. Never commit to dates without checking with me. Always offer a call for anything technical. Don't discuss pricing over email."
-            className={`${INPUT_CLS} resize-none`}
           />
-        </Field>
-        <Field label="Writing style (tone & length the AI matches when drafting)">
-          <textarea
-            value={settings.writing_style}
-            onChange={(e) =>
-              setSettings({ ...settings, writing_style: e.target.value })
+        </div>
+
+        {/* ── Updates ── */}
+        <div className="space-y-2">
+          <SectionHeader>Updates</SectionHeader>
+          <SettingCard
+            title="Follow-up reminders"
+            description="Label emails where you haven't heard back or haven't replied."
+            right={
+              <div className="flex items-center gap-2">
+                {followUpOn && (
+                  <button onClick={() => setDialog("followup")} className={CONFIGURE_BTN}>
+                    <Settings size={12} /> Configure
+                  </button>
+                )}
+                <Toggle
+                  enabled={followUpOn}
+                  onChange={(v) =>
+                    persistPatch(
+                      v
+                        ? { follow_up_awaiting_days: 3, follow_up_needs_reply_days: 3 }
+                        : { follow_up_awaiting_days: 0, follow_up_needs_reply_days: 0 }
+                    )
+                  }
+                />
+              </div>
             }
-            rows={3}
-            placeholder="e.g. Concise and friendly. 2–3 short sentences. No corporate jargon. Sign off with just my first name."
-            className={`${INPUT_CLS} resize-none`}
           />
-        </Field>
-        <WritingStyleGenerator
-          accountId={accountId}
-          onGenerated={(ws) => setSettings({ ...settings, writing_style: ws })}
-        />
-        <label className="flex items-start gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={settings.draft_replies}
-            onChange={(e) =>
-              setSettings({ ...settings, draft_replies: e.target.checked })
+          <SettingCard
+            title="Digest"
+            description="Get a daily summary of your emails."
+            right={
+              <div className="flex items-center gap-2">
+                {digestOn && (
+                  <button onClick={() => setDialog("digest")} className={CONFIGURE_BTN}>
+                    <Settings size={12} /> Configure
+                  </button>
+                )}
+                <Toggle
+                  enabled={digestOn}
+                  onChange={(v) =>
+                    persistPatch({ digest_frequency: v ? "DAILY" : "OFF" })
+                  }
+                />
+              </div>
             }
-            className="accent-primary mt-0.5"
           />
-          <span>
-            <span className="text-xs text-foreground">Draft replies automatically</span>
-            <span className="block text-[11px] text-muted-foreground">
-              For emails that need a reply, the assistant prepares a draft (using
-              your writing style + knowledge base) for you to review — never sent.
-            </span>
-          </span>
-        </label>
-        <label className="flex items-start gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={settings.auto_run}
-            onChange={(e) =>
-              setSettings({ ...settings, auto_run: e.target.checked })
-            }
-            className="accent-primary mt-0.5"
-          />
-          <span>
-            <span className="text-xs text-foreground">
-              Run rules automatically on new mail
-            </span>
-            <span className="block text-[11px] text-muted-foreground">
-              Processes incoming inbox mail with your enabled rules as it arrives.
-            </span>
-          </span>
-        </label>
-        <Field label="Cold-email blocker (first-time, unsolicited senders)">
-          <select
-            value={settings.cold_email_blocker}
-            onChange={(e) =>
-              setSettings({
-                ...settings,
-                cold_email_blocker: e.target.value as ColdBlockerMode,
-              })
-            }
-            className={INPUT_CLS}
+        </div>
+
+        {/* ── Your voice ── */}
+        <div className="space-y-2">
+          <SectionHeader>Your voice</SectionHeader>
+          <SettingCard
+            title="Writing style"
+            description="Define your tone and style — used to draft replies in your voice."
           >
-            <option value="OFF">Off</option>
-            <option value="LABEL">Label as “Cold Email”</option>
-            <option value="ARCHIVE">Label and archive</option>
-          </select>
-        </Field>
-        <Field label="Assistant model (tier or specific model)">
-          <select
-            value={settings.agent_model}
-            onChange={(e) =>
-              setSettings({ ...settings, agent_model: e.target.value })
-            }
-            className={INPUT_CLS}
+            <textarea
+              value={s.writing_style}
+              onChange={(e) => patch({ writing_style: e.target.value })}
+              rows={3}
+              placeholder="e.g. Concise and friendly. 2–3 short sentences. No corporate jargon. Sign off with just my first name."
+              className={`${INPUT_CLS} resize-none`}
+            />
+            <div className="mt-2">
+              <WritingStyleGenerator
+                accountId={accountId}
+                onGenerated={(ws) => patch({ writing_style: ws })}
+              />
+            </div>
+          </SettingCard>
+          <SettingCard
+            title="Personal instructions"
+            description="Tell the AI about yourself and how you'd like it to handle your emails."
           >
-            {llm ? (
-              <>
-                <optgroup label="LiteLLM tiers">
-                  {llm.tiers.map((t) => (
-                    <option key={t.tier_name} value={t.tier_name}>
-                      {t.tier_name}
-                      {t.tier_name === "tier-balanced" ? " (default)" : ""} — {t.model}
-                    </option>
-                  ))}
-                </optgroup>
-                {llm.providers
-                  .filter((p) => p.configured && p.models.length > 0)
-                  .map((p) => (
-                    <optgroup key={p.id} label={p.label || p.id}>
-                      {p.models.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
+            <textarea
+              value={s.about}
+              onChange={(e) => patch({ about: e.target.value })}
+              rows={3}
+              placeholder="e.g. I'm the founder of Acme. If I'm CC'd, it's not To Reply. Emails from jane@accounting.com aren't Notifications."
+              className={`${INPUT_CLS} resize-none`}
+            />
+            <textarea
+              value={s.personal_instructions}
+              onChange={(e) => patch({ personal_instructions: e.target.value })}
+              rows={3}
+              placeholder="Global rules the assistant always follows — e.g. Never commit to dates without checking with me. Don't discuss pricing over email."
+              className={`${INPUT_CLS} resize-none mt-2`}
+            />
+          </SettingCard>
+          <SettingCard
+            title="Email signature"
+            description="Set your email signature to include in drafted messages."
+          >
+            <textarea
+              value={s.signature}
+              onChange={(e) => patch({ signature: e.target.value })}
+              rows={2}
+              placeholder={"Best,\nAlex"}
+              className={`${INPUT_CLS} resize-none`}
+            />
+          </SettingCard>
+        </div>
+
+        {/* ── Knowledge ── */}
+        <div className="space-y-2">
+          <SectionHeader>Knowledge</SectionHeader>
+          <KnowledgeBase accountId={accountId} />
+          <LearnedPreferences accountId={accountId} />
+        </div>
+
+        {/* ── Advanced ── */}
+        <div className="space-y-2">
+          <SectionHeader>Advanced</SectionHeader>
+          <SettingCard
+            title="Run rules automatically on new mail"
+            description="Processes incoming inbox mail with your enabled rules as it arrives."
+            right={
+              <Toggle
+                enabled={s.auto_run}
+                onChange={(v) => persistPatch({ auto_run: v })}
+              />
+            }
+          />
+          <SettingCard
+            title="Cold-email blocker"
+            description="Handle first-time, unsolicited senders."
+            right={
+              <select
+                value={s.cold_email_blocker}
+                onChange={(e) =>
+                  persistPatch({
+                    cold_email_blocker: e.target.value as ColdBlockerMode,
+                  })
+                }
+                className={`${INPUT_CLS} w-44 py-1`}
+              >
+                <option value="OFF">Off</option>
+                <option value="LABEL">Label as “Cold Email”</option>
+                <option value="ARCHIVE">Label and archive</option>
+              </select>
+            }
+          />
+          <ColdSendersList accountId={accountId} />
+          <SettingCard
+            title="Assistant model"
+            description="The model tier the assistant agent and chat use."
+            right={
+              <select
+                value={s.agent_model}
+                onChange={(e) => persistPatch({ agent_model: e.target.value })}
+                className={`${INPUT_CLS} w-56 py-1`}
+              >
+                {llm ? (
+                  <>
+                    <optgroup label="LiteLLM tiers">
+                      {llm.tiers.map((t) => (
+                        <option key={t.tier_name} value={t.tier_name}>
+                          {t.tier_name}
+                          {t.tier_name === "tier-balanced" ? " (default)" : ""}
                         </option>
                       ))}
                     </optgroup>
-                  ))}
-                {/* Ensure the saved value is always selectable even if not listed */}
-                {!llm.tiers.some((t) => t.tier_name === settings.agent_model) &&
-                  !llm.providers.some((p) =>
-                    p.models.includes(settings.agent_model)
-                  ) && (
-                    <option value={settings.agent_model}>
-                      {settings.agent_model}
-                    </option>
-                  )}
-              </>
-            ) : (
-              <option value={settings.agent_model || "tier-balanced"}>
-                {settings.agent_model || "tier-balanced"} (default)
-              </option>
-            )}
-          </select>
-        </Field>
-        <Field label="Digest frequency (emailed inbox summary)">
-          <select
-            value={settings.digest_frequency}
-            onChange={(e) =>
-              setSettings({
-                ...settings,
-                digest_frequency: e.target.value as AssistantSettings["digest_frequency"],
-              })
+                    {llm.providers
+                      .filter((p) => p.configured && p.models.length > 0)
+                      .map((p) => (
+                        <optgroup key={p.id} label={p.label || p.id}>
+                          {p.models.map((m) => (
+                            <option key={m} value={m}>
+                              {m}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    {!llm.tiers.some((t) => t.tier_name === s.agent_model) &&
+                      !llm.providers.some((p) =>
+                        p.models.includes(s.agent_model)
+                      ) && (
+                        <option value={s.agent_model}>{s.agent_model}</option>
+                      )}
+                  </>
+                ) : (
+                  <option value={s.agent_model || "tier-balanced"}>
+                    {s.agent_model || "tier-balanced"} (default)
+                  </option>
+                )}
+              </select>
             }
-            className={INPUT_CLS}
-          >
-            <option value="OFF">Off</option>
-            <option value="DAILY">Daily</option>
-            <option value="WEEKLY">Weekly</option>
-          </select>
-        </Field>
-        <Field label="Follow-up reminder (days before nudging an awaiting reply; 0 = off)">
-          <input
-            type="number"
-            min={0}
-            max={60}
-            value={settings.follow_up_days}
-            onChange={(e) =>
-              setSettings({
-                ...settings,
-                follow_up_days: parseInt(e.target.value || "0", 10) || 0,
-              })
-            }
-            className={INPUT_CLS}
           />
-        </Field>
-        <div className="flex items-center gap-2 pt-1">
+        </div>
+
+        {/* Save bar for the free-text cards */}
+        <div className="flex items-center gap-2 pb-2">
           <button
-            onClick={save}
+            onClick={() => persist(s)}
             disabled={saving}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
           >
@@ -1622,25 +1857,218 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
         </div>
       </div>
 
-      <KnowledgeBase accountId={accountId} />
-
-      <LearnedPreferences accountId={accountId} />
-
-      <ColdSendersList accountId={accountId} />
-
-      <div className="bg-card border border-border rounded-xl p-4">
-        <h3 className="text-sm font-medium text-foreground mb-1">
-          How the assistant works
-        </h3>
-        <p className="text-xs text-muted-foreground leading-relaxed">
-          Rules combine plain-English instructions (matched by the AI) with static
-          conditions (sender / subject) and sender categories. Reply/forward/draft
-          actions create drafts for review. Use{" "}
-          <span className="text-foreground">Dry run</span> to preview matches in the
-          History tab without changing anything.
-        </p>
-      </div>
+      {dialog === "followup" && (
+        <FollowUpDialog
+          settings={s}
+          onSave={(next) => {
+            persist(next);
+            setDialog(null);
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog === "digest" && (
+        <DigestDialog
+          settings={s}
+          ruleNames={ruleNames}
+          onSave={(next) => {
+            persist(next);
+            setDialog(null);
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
     </div>
+  );
+}
+
+// ── Settings: Configure dialogs ──────────────────────────────────────────────
+
+function FollowUpDialog({
+  settings,
+  onSave,
+  onClose,
+}: {
+  settings: AssistantSettings;
+  onSave: (next: AssistantSettings) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(settings);
+  const num = (v: string) => Math.max(0, parseInt(v || "0", 10) || 0);
+  return (
+    <Modal
+      title="Follow-up reminders"
+      description="Get reminded about conversations that need attention. Saturdays and Sundays don't count."
+      onClose={onClose}
+      footer={
+        <button
+          onClick={() => onSave(draft)}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
+        >
+          <Check size={13} /> Save
+        </button>
+      }
+    >
+      <Field label="Remind me when they haven't replied after (days)">
+        <input
+          type="number"
+          min={0}
+          max={90}
+          value={draft.follow_up_awaiting_days}
+          onChange={(e) =>
+            setDraft({ ...draft, follow_up_awaiting_days: num(e.target.value) })
+          }
+          className={INPUT_CLS}
+        />
+      </Field>
+      <Field label="Remind me when I haven't replied after (days)">
+        <input
+          type="number"
+          min={0}
+          max={90}
+          value={draft.follow_up_needs_reply_days}
+          onChange={(e) =>
+            setDraft({ ...draft, follow_up_needs_reply_days: num(e.target.value) })
+          }
+          className={INPUT_CLS}
+        />
+      </Field>
+      <label className="flex items-start gap-2 cursor-pointer pt-1">
+        <input
+          type="checkbox"
+          checked={draft.follow_up_auto_draft}
+          onChange={(e) =>
+            setDraft({ ...draft, follow_up_auto_draft: e.target.checked })
+          }
+          className="accent-primary mt-0.5"
+        />
+        <span>
+          <span className="text-xs text-foreground">Auto-generate drafts</span>
+          <span className="block text-[11px] text-muted-foreground">
+            Draft a nudge when you haven&apos;t heard back.
+          </span>
+        </span>
+      </label>
+    </Modal>
+  );
+}
+
+function DigestDialog({
+  settings,
+  ruleNames,
+  onSave,
+  onClose,
+}: {
+  settings: AssistantSettings;
+  ruleNames: string[];
+  onSave: (next: AssistantSettings) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(settings);
+  const options = [...ruleNames, "Cold Emails"];
+  const allSelected = draft.digest_categories.length === 0; // empty = everything
+  const toggleCat = (name: string) => {
+    const has = draft.digest_categories.includes(name);
+    setDraft({
+      ...draft,
+      digest_categories: has
+        ? draft.digest_categories.filter((c) => c !== name)
+        : [...draft.digest_categories, name],
+    });
+  };
+  const weekly = draft.digest_frequency === "WEEKLY";
+  return (
+    <Modal
+      title="Digest settings"
+      description="Configure when your digest is sent and which rules it includes."
+      onClose={onClose}
+      footer={
+        <button
+          onClick={() => onSave(draft)}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
+        >
+          <Check size={13} /> Save
+        </button>
+      }
+    >
+      <div>
+        <span className="text-xs text-muted-foreground mb-1.5 block">
+          What to include in the digest{" "}
+          {allSelected && <span className="text-muted-foreground/70">(all rules)</span>}
+        </span>
+        <div className="flex flex-wrap gap-1.5">
+          {options.map((name) => {
+            const on = draft.digest_categories.includes(name);
+            return (
+              <button
+                key={name}
+                onClick={() => toggleCat(name)}
+                className={`text-[11px] px-2 py-1 rounded-full border transition-colors ${
+                  on
+                    ? "bg-primary/15 text-primary border-primary/40"
+                    : "border-border text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {name}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <Field label="Send the digest">
+        <select
+          value={draft.digest_frequency}
+          onChange={(e) =>
+            setDraft({
+              ...draft,
+              digest_frequency: e.target.value as AssistantSettings["digest_frequency"],
+            })
+          }
+          className={INPUT_CLS}
+        >
+          <option value="DAILY">Every day</option>
+          <option value="WEEKLY">Every week</option>
+        </select>
+      </Field>
+      {weekly && (
+        <Field label="On">
+          <select
+            value={draft.digest_day_of_week}
+            onChange={(e) =>
+              setDraft({ ...draft, digest_day_of_week: parseInt(e.target.value, 10) })
+            }
+            className={INPUT_CLS}
+          >
+            {WEEKDAYS.map((d, i) => (
+              <option key={d} value={i}>
+                {d}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+      <Field label="At">
+        <input
+          type="time"
+          value={draft.digest_time_of_day}
+          onChange={(e) =>
+            setDraft({ ...draft, digest_time_of_day: e.target.value || "09:00" })
+          }
+          className={INPUT_CLS}
+        />
+      </Field>
+      <label className="flex items-start gap-2 cursor-pointer pt-1">
+        <input
+          type="checkbox"
+          checked={draft.digest_send_to_email}
+          onChange={(e) =>
+            setDraft({ ...draft, digest_send_to_email: e.target.checked })
+          }
+          className="accent-primary mt-0.5"
+        />
+        <span className="text-xs text-foreground">Send digest to my email</span>
+      </label>
+    </Modal>
   );
 }
 

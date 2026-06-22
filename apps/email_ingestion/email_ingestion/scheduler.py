@@ -455,6 +455,17 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
                     "sync.digest_check_failed account_id=%s error=%s",
                     account_id, str(exc),
                 )
+            # Label / nudge threads waiting too long for a reply (opt-in).
+            try:
+                from gateway.routes.email import (  # noqa: PLC0415
+                    _maybe_send_follow_up_reminders,
+                )
+                await _maybe_send_follow_up_reminders(account_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "sync.follow_up_check_failed account_id=%s error=%s",
+                    account_id, str(exc),
+                )
             # Ensure a Graph push subscription exists / is renewed so new mail
             # is processed in near real time (polling stays as a fallback).
             try:

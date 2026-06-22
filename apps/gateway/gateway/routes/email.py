@@ -3133,21 +3133,59 @@ async def rules_history(
             params["aid"] = account_id
         scope += ")"
         rows = (await db.execute(text(
-            f"""SELECT er.id, er.rule_name, er.subject, er.from_address, er.status,
-                       er.automated, er.actions_taken, er.reason, er.created_at,
-                       em.snippet
+            f"""SELECT er.id, er.rule_id, er.rule_name, er.subject, er.from_address,
+                       er.status, er.automated, er.actions_taken, er.reason,
+                       er.created_at, em.snippet,
+                       r.instructions, r.from_pattern, r.to_pattern,
+                       r.subject_pattern, r.body_pattern, r.conditional_operator,
+                       r.category_filter_type, r.category_filters
                 FROM email_executed_rules er
                 LEFT JOIN email_messages em ON er.message_id = em.id
+                LEFT JOIN email_rules r ON er.rule_id = r.id
                 WHERE {scope} ORDER BY er.created_at DESC LIMIT :limit"""
         ), params)).fetchall()
+
+        # Fetch each matched rule's action specs once so the hover popover can
+        # render the actions (label / to / subject …), not just their types.
+        rule_ids = sorted({str(r.rule_id) for r in rows if r.rule_id})
+        actions_by_rule: dict[str, list[dict[str, Any]]] = {}
+        if rule_ids:
+            act_rows = (await db.execute(text(
+                """SELECT rule_id, type, label, subject, content, to_address,
+                          cc_address, bcc_address, url
+                   FROM email_actions WHERE rule_id = ANY(:rids)
+                   ORDER BY rule_id"""
+            ), {"rids": rule_ids})).fetchall()
+            for a in act_rows:
+                actions_by_rule.setdefault(str(a.rule_id), []).append({
+                    "type": a.type, "label": a.label, "subject": a.subject,
+                    "content": a.content, "to_address": a.to_address,
+                    "cc_address": a.cc_address, "bcc_address": a.bcc_address,
+                    "url": a.url,
+                })
+
         return {
             "history": [
-                {"id": str(r.id), "rule_name": r.rule_name, "subject": r.subject,
+                {"id": str(r.id),
+                 "rule_id": str(r.rule_id) if r.rule_id else None,
+                 "rule_name": r.rule_name, "subject": r.subject,
                  "from": r.from_address, "status": r.status, "automated": r.automated,
                  "actions": r.actions_taken if isinstance(r.actions_taken, list)
                  else json.loads(r.actions_taken or "[]"),
                  "reason": r.reason, "snippet": r.snippet or "",
-                 "created_at": r.created_at.isoformat() if r.created_at else None}
+                 "created_at": r.created_at.isoformat() if r.created_at else None,
+                 "conditions": {
+                     "instructions": r.instructions,
+                     "from_pattern": r.from_pattern,
+                     "to_pattern": r.to_pattern,
+                     "subject_pattern": r.subject_pattern,
+                     "body_pattern": r.body_pattern,
+                     "conditional_operator": r.conditional_operator or "AND",
+                     "category_filter_type": r.category_filter_type,
+                     "category_filters": list(r.category_filters or []),
+                 } if r.rule_id else None,
+                 "rule_actions": actions_by_rule.get(
+                     str(r.rule_id) if r.rule_id else "", [])}
                 for r in rows
             ]
         }
@@ -3357,6 +3395,117 @@ async def run_rules(
         user.email or "anonymous",
     )
     return {"scheduled": True, "dry_run": req.dry_run}
+
+
+class RuleRunMessageRequest(BaseModel):
+    account_id: str
+    message_id: str
+    is_test: bool = True  # True = dry-run preview; False = apply for real
+
+
+@router.post("/rules/run-message")
+async def run_rules_on_message(
+    req: RuleRunMessageRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Run rules against a single message — the Test tab's per-row Test/Apply.
+
+    `is_test=True` returns the matched rule + actions without touching the
+    mailbox. `is_test=False` applies the matched rule's actions, logs an APPLIED
+    (or SKIPPED) row to the history, and marks the message processed.
+    """
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        row = (await db.execute(text(
+            """SELECT id, provider_message_id, thread_id, subject, body_text,
+                      snippet, from_address
+               FROM email_messages
+               WHERE id = :mid AND account_id = :aid"""
+        ), {"mid": req.message_id, "aid": req.account_id})).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Message not found")
+
+        frm = row.from_address if isinstance(row.from_address, dict) \
+            else json.loads(row.from_address or "{}")
+        email = {
+            "subject": row.subject or "", "from": frm.get("email", ""),
+            "body": row.body_text or row.snippet or "", "to": "",
+            "thread_id": row.thread_id or "",
+        }
+        match = await _match_email_to_rule(db, req.account_id, email)
+
+        if req.is_test:
+            if not match:
+                return {"matched": False, "applied": False, "rule": None,
+                        "reason": "No rule matched.", "actions": []}
+            return {
+                "matched": True, "applied": False,
+                "rule": {"id": match["rule"]["id"], "name": match["rule"]["name"]},
+                "reason": match["reason"],
+                "actions": match["rule"]["actions"],
+            }
+
+        # Apply mode — load the provider and execute.
+        if not match:
+            await db.execute(text(
+                """INSERT INTO email_executed_rules
+                     (account_id, rule_id, rule_name, message_id,
+                      provider_message_id, thread_id, subject, from_address,
+                      status, automated, actions_taken, reason)
+                   VALUES (:aid, NULL, NULL, :mid, :pmid, :tid, :subj, :frm,
+                           'SKIPPED', true, '[]', 'No rule matched this email.')"""
+            ), {"aid": req.account_id, "mid": str(row.id),
+                "pmid": row.provider_message_id, "tid": row.thread_id,
+                "subj": row.subject or "", "frm": frm.get("email", "")})
+            await db.commit()
+            return {"matched": False, "applied": False, "rule": None,
+                    "reason": "No rule matched.", "actions": []}
+
+        acc = (await db.execute(text(
+            "SELECT provider, credentials_encrypted, user_id "
+            "FROM email_accounts WHERE id = :id"
+        ), {"id": req.account_id})).fetchone()
+        if not acc:
+            raise HTTPException(status_code=404, detail="Account not found")
+        from acb_llm.key_store import get_key_store  # noqa: PLC0415
+        store = get_key_store()
+        creds = json.loads(store.decrypt(acc.credentials_encrypted))
+        provider = _instantiate_provider(acc.provider, creds)
+        if not await provider.authenticate():
+            raise HTTPException(status_code=502, detail="Provider auth failed")
+
+        about, signature = await _load_assistant_about(db, req.account_id)
+        rule = match["rule"]
+        taken = await _apply_rule_actions(
+            db, provider, str(row.id), row.provider_message_id,
+            rule["actions"], email, about, signature, acc.user_id,
+            account_id=req.account_id,
+        )
+        await db.execute(text(
+            """INSERT INTO email_executed_rules
+                 (account_id, rule_id, rule_name, message_id, provider_message_id,
+                  thread_id, subject, from_address, status, automated,
+                  actions_taken, reason)
+               VALUES (:aid, :rid, :rname, :mid, :pmid, :tid, :subj, :frm,
+                       'APPLIED', true, :acts, :reason)"""
+        ), {"aid": req.account_id, "rid": rule["id"], "rname": rule["name"],
+            "mid": str(row.id), "pmid": row.provider_message_id,
+            "tid": row.thread_id, "subj": row.subject or "",
+            "frm": frm.get("email", ""), "acts": json.dumps(taken),
+            "reason": match["reason"]})
+        await db.execute(text(
+            "UPDATE email_messages SET rules_processed_at = now() WHERE id = :id"
+        ), {"id": str(row.id)})
+        await _persist_rotated_creds(db, store, req.account_id, provider)
+        await db.commit()
+        return {
+            "matched": True, "applied": True,
+            "rule": {"id": rule["id"], "name": rule["name"]},
+            "reason": match["reason"], "actions": taken,
+        }
+    finally:
+        await db.close()
 
 
 async def _load_assistant_about(db: Any, account_id: str) -> tuple[str, str]:
@@ -3687,15 +3836,40 @@ _FOLLOW_UP_INSTRUCTION = (
 )
 
 
+# Draft-confidence gate. ALL_EMAILS always drafts; STANDARD/HIGH_CONFIDENCE tell
+# the drafter to emit the NO_DRAFT sentinel instead of guessing, and the caller
+# (`_apply_rule_actions`) then skips creating the draft.
+DRAFT_NO_DRAFT_SENTINEL = "NO_DRAFT"
+_CONFIDENCE_INSTRUCTIONS = {
+    "STANDARD": (
+        "Only draft a reply if you clearly understand the email and a reply is "
+        "appropriate. If you are unsure how to respond, output exactly "
+        f"{DRAFT_NO_DRAFT_SENTINEL} and nothing else."
+    ),
+    "HIGH_CONFIDENCE": (
+        "Only draft a reply if you are highly confident a reply is needed and you "
+        "can write an accurate, complete response from the context given. If there "
+        f"is any doubt, output exactly {DRAFT_NO_DRAFT_SENTINEL} and nothing else."
+    ),
+}
+
+
 async def _agent_draft_reply(
     email: dict[str, str], about: str, signature: str, user_email: str,
     *, use_agent: bool = False, max_agents: int = 2, agent_timeout: float = 90.0,
-    follow_up: bool = False,
+    follow_up: bool = False, confidence: str = "ALL_EMAILS",
 ) -> str:
     """Draft a reply (or a follow-up nudge). When ``use_agent`` is set (background
     rule actions), run the email-assistant MAF agent first; otherwise — and on any
-    agent failure — use the fast in-gateway orchestrator."""
+    agent failure — use the fast in-gateway orchestrator.
+
+    ``confidence`` (ALL_EMAILS | STANDARD | HIGH_CONFIDENCE) gates drafting: the
+    higher tiers instruct the drafter to return the NO_DRAFT sentinel when it
+    isn't confident, which the caller treats as "skip this draft"."""
     instructions = _FOLLOW_UP_INSTRUCTION if follow_up else ""
+    conf_note = _CONFIDENCE_INSTRUCTIONS.get(confidence or "ALL_EMAILS", "")
+    if conf_note:
+        instructions = (instructions + "\n" + conf_note).strip()
     if use_agent:
         drafted = await _draft_via_maf_agent(
             email, about, signature, user_email, instructions=instructions,
@@ -3789,9 +3963,10 @@ async def _run_rules_job(
 ) -> None:
     """Background worker: match UNPROCESSED inbox mail to rules and log/apply.
 
-    Live runs (dry_run=False) apply the actions of *automated* rules and mark the
-    message processed; matched non-automated rules are logged PENDING for
-    approval. Dry runs only log PENDING and never mark messages processed.
+    Live runs (dry_run=False) apply every matched rule's actions and mark the
+    message processed; no-match mail is logged SKIPPED so the History feed shows
+    a "No match found" entry (inbox-zero parity). Dry runs only log a PENDING
+    preview and never touch the mailbox.
     """
     db = await _get_db()
     try:
@@ -3844,8 +4019,9 @@ async def _run_rules_job(
             match = await _match_email_to_rule(db, account_id, email)
             if match:
                 rule = match["rule"]
-                automated = bool(rule.get("automated", True))
-                apply = (not dry_run) and automated and provider is not None
+                # Rules auto-apply on live runs (the per-rule "Manual" approval
+                # mode was removed for inbox-zero parity).
+                apply = (not dry_run) and provider is not None
                 if apply:
                     actions_taken = await _apply_rule_actions(
                         db, provider, str(r.id), r.provider_message_id,
@@ -3855,26 +4031,38 @@ async def _run_rules_job(
                     status = "APPLIED"
                 else:
                     actions_taken = [a["type"] for a in rule["actions"]]
-                    status = "PENDING"
+                    status = "PENDING"  # dry-run preview only
                 await db.execute(text(
                     """INSERT INTO email_executed_rules
                          (account_id, rule_id, rule_name, message_id,
                           provider_message_id, thread_id, subject, from_address,
                           status, automated, actions_taken, reason)
                        VALUES (:aid, :rid, :rname, :mid, :pmid, :tid, :subj, :frm,
-                               :status, :auto, :acts, :reason)"""
+                               :status, true, :acts, :reason)"""
                 ), {"aid": account_id, "rid": rule["id"], "rname": rule["name"],
                     "mid": str(r.id), "pmid": r.provider_message_id,
                     "tid": r.thread_id, "subj": r.subject or "",
                     "frm": frm.get("email", ""), "status": status,
-                    "auto": automated, "acts": json.dumps(actions_taken),
+                    "acts": json.dumps(actions_taken),
                     "reason": match["reason"]})
-            elif (not dry_run) and provider is not None and cold_blocker != "OFF":
-                # No rule matched — let the cold-email blocker have a look.
-                await _maybe_block_cold(
-                    db, provider, account_id, str(r.id),
-                    r.provider_message_id, email, cold_blocker,
-                )
+            elif not dry_run:
+                # No rule matched — log a SKIPPED row so History shows a
+                # "No match found" entry, then let the cold-email blocker look.
+                await db.execute(text(
+                    """INSERT INTO email_executed_rules
+                         (account_id, rule_id, rule_name, message_id,
+                          provider_message_id, thread_id, subject, from_address,
+                          status, automated, actions_taken, reason)
+                       VALUES (:aid, NULL, NULL, :mid, :pmid, :tid, :subj, :frm,
+                               'SKIPPED', true, '[]', 'No rule matched this email.')"""
+                ), {"aid": account_id, "mid": str(r.id),
+                    "pmid": r.provider_message_id, "tid": r.thread_id,
+                    "subj": r.subject or "", "frm": frm.get("email", "")})
+                if provider is not None and cold_blocker != "OFF":
+                    await _maybe_block_cold(
+                        db, provider, account_id, str(r.id),
+                        r.provider_message_id, email, cold_blocker,
+                    )
             if not dry_run:
                 await db.execute(text(
                     "UPDATE email_messages SET rules_processed_at = now() "
@@ -3902,6 +4090,18 @@ async def _apply_rule_actions(
     auto-send) so a misfiring rule can't email anyone without review."""
     email = email or {}
     done: list[str] = []
+    # Draft-confidence threshold (gates AI-written REPLY/DRAFT_EMAIL drafts).
+    draft_conf = "ALL_EMAILS"
+    if account_id and any(
+        a.get("type") in ("REPLY", "DRAFT_EMAIL") and not (a.get("content") or "").strip()
+        for a in actions
+    ):
+        cr = (await db.execute(text(
+            "SELECT draft_confidence FROM email_assistant_settings "
+            "WHERE account_id = :aid"
+        ), {"aid": account_id})).fetchone()
+        if cr and cr.draft_confidence:
+            draft_conf = cr.draft_confidence
     for a in actions:
         t = a.get("type")
         try:
@@ -3931,7 +4131,17 @@ async def _apply_rule_actions(
                 # (memory + sales/task-manager) writes a context-aware reply.
                 body = tmpl if tmpl else await _agent_draft_reply(
                     email, about, signature, user_email, use_agent=True,
+                    confidence=draft_conf,
                 )
+                # Draft-confidence gate: the drafter returns the NO_DRAFT
+                # sentinel (or empty) when it isn't confident enough — skip.
+                if not tmpl and (
+                    not body.strip()
+                    or body.strip().upper() == DRAFT_NO_DRAFT_SENTINEL
+                ):
+                    _log.info("email.draft_skipped_low_confidence",
+                              account_id=account_id, confidence=draft_conf)
+                    continue
                 subj = a.get("subject") or f"Re: {email.get('subject', '')}"
                 to = a.get("to_address") or email.get("from", "")
                 if not to:
@@ -3984,7 +4194,16 @@ class AssistantSettingsModel(BaseModel):
     personal_instructions: str | None = None
     writing_style: str | None = None
     draft_replies: bool = True
-    follow_up_days: int = 0  # 0 = off; remind on awaiting threads older than N
+    follow_up_days: int = 0  # legacy alias for follow_up_awaiting_days
+    # inbox-zero parity (migration 29)
+    draft_confidence: str = "ALL_EMAILS"  # ALL_EMAILS | STANDARD | HIGH_CONFIDENCE
+    follow_up_awaiting_days: int = 0  # remind when THEY haven't replied after N days
+    follow_up_needs_reply_days: int = 0  # remind when I haven't replied after N days
+    follow_up_auto_draft: bool = True
+    digest_categories: list[str] = Field(default_factory=list)
+    digest_day_of_week: int = 1  # 0=Sun … 6=Sat (used when WEEKLY)
+    digest_time_of_day: str = "09:00"  # HH:MM, account-local
+    digest_send_to_email: bool = True
 
 
 @router.get("/assistant/settings")
@@ -3999,9 +4218,16 @@ async def get_assistant_settings(
         row = (await db.execute(text(
             """SELECT about, signature, auto_run, cold_email_blocker, agent_model,
                       digest_frequency, personal_instructions, writing_style,
-                      draft_replies, follow_up_days
+                      draft_replies, follow_up_days, draft_confidence,
+                      follow_up_awaiting_days, follow_up_needs_reply_days,
+                      follow_up_auto_draft, digest_categories, digest_day_of_week,
+                      digest_time_of_day, digest_send_to_email
                FROM email_assistant_settings WHERE account_id = :aid"""
         ), {"aid": account_id})).fetchone()
+        awaiting = (getattr(row, "follow_up_awaiting_days", 0) if row else 0) or 0
+        # Fall back to the legacy single field if the new column is still 0.
+        if not awaiting and row:
+            awaiting = getattr(row, "follow_up_days", 0) or 0
         return {
             "account_id": account_id,
             "about": row.about if row else "",
@@ -4021,9 +4247,33 @@ async def get_assistant_settings(
                 bool(row.draft_replies) if row and row.draft_replies is not None
                 else True
             ),
-            "follow_up_days": (
-                getattr(row, "follow_up_days", 0) if row else 0
+            "follow_up_days": awaiting,  # legacy alias
+            "draft_confidence": (
+                getattr(row, "draft_confidence", None) if row else None
+            ) or "ALL_EMAILS",
+            "follow_up_awaiting_days": awaiting,
+            "follow_up_needs_reply_days": (
+                getattr(row, "follow_up_needs_reply_days", 0) if row else 0
             ) or 0,
+            "follow_up_auto_draft": (
+                bool(row.follow_up_auto_draft)
+                if row and getattr(row, "follow_up_auto_draft", None) is not None
+                else True
+            ),
+            "digest_categories": (
+                list(getattr(row, "digest_categories", None) or []) if row else []
+            ),
+            "digest_day_of_week": (
+                getattr(row, "digest_day_of_week", 1) if row else 1
+            ),
+            "digest_time_of_day": (
+                getattr(row, "digest_time_of_day", None) if row else None
+            ) or "09:00",
+            "digest_send_to_email": (
+                bool(row.digest_send_to_email)
+                if row and getattr(row, "digest_send_to_email", None) is not None
+                else True
+            ),
         }
     finally:
         await db.close()
@@ -4038,13 +4288,20 @@ async def put_assistant_settings(
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        # `follow_up_awaiting_days` is canonical; accept the legacy `follow_up_days`
+        # as a fallback so older clients keep working.
+        awaiting = req.follow_up_awaiting_days or req.follow_up_days or 0
         await db.execute(text(
             """INSERT INTO email_assistant_settings
                  (account_id, about, signature, auto_run, cold_email_blocker,
                   agent_model, digest_frequency, personal_instructions,
-                  writing_style, draft_replies, follow_up_days, updated_at)
+                  writing_style, draft_replies, follow_up_days, draft_confidence,
+                  follow_up_awaiting_days, follow_up_needs_reply_days,
+                  follow_up_auto_draft, digest_categories, digest_day_of_week,
+                  digest_time_of_day, digest_send_to_email, updated_at)
                VALUES (:aid, :about, :sig, :auto, :cold, :model, :digest,
-                       :pi, :ws, :dr, :fu, now())
+                       :pi, :ws, :dr, :fu, :dc, :fua, :funr, :fuad, :dcat,
+                       :ddow, :dtod, :dste, now())
                ON CONFLICT (account_id) DO UPDATE SET
                  about = EXCLUDED.about,
                  signature = EXCLUDED.signature,
@@ -4056,13 +4313,28 @@ async def put_assistant_settings(
                  writing_style = EXCLUDED.writing_style,
                  draft_replies = EXCLUDED.draft_replies,
                  follow_up_days = EXCLUDED.follow_up_days,
+                 draft_confidence = EXCLUDED.draft_confidence,
+                 follow_up_awaiting_days = EXCLUDED.follow_up_awaiting_days,
+                 follow_up_needs_reply_days = EXCLUDED.follow_up_needs_reply_days,
+                 follow_up_auto_draft = EXCLUDED.follow_up_auto_draft,
+                 digest_categories = EXCLUDED.digest_categories,
+                 digest_day_of_week = EXCLUDED.digest_day_of_week,
+                 digest_time_of_day = EXCLUDED.digest_time_of_day,
+                 digest_send_to_email = EXCLUDED.digest_send_to_email,
                  updated_at = now()"""
         ), {"aid": req.account_id, "about": req.about, "sig": req.signature,
             "auto": req.auto_run, "cold": req.cold_email_blocker or "OFF",
             "model": req.agent_model or "tier-balanced",
             "digest": req.digest_frequency or "OFF",
             "pi": req.personal_instructions, "ws": req.writing_style,
-            "dr": req.draft_replies, "fu": req.follow_up_days or 0})
+            "dr": req.draft_replies, "fu": awaiting,
+            "dc": req.draft_confidence or "ALL_EMAILS",
+            "fua": awaiting, "funr": req.follow_up_needs_reply_days or 0,
+            "fuad": req.follow_up_auto_draft,
+            "dcat": list(req.digest_categories or []),
+            "ddow": req.digest_day_of_week,
+            "dtod": req.digest_time_of_day or "09:00",
+            "dste": req.digest_send_to_email})
         await db.commit()
         return {
             "account_id": req.account_id,
@@ -4075,7 +4347,15 @@ async def put_assistant_settings(
             "personal_instructions": req.personal_instructions or "",
             "writing_style": req.writing_style or "",
             "draft_replies": req.draft_replies,
-            "follow_up_days": req.follow_up_days or 0,
+            "follow_up_days": awaiting,
+            "draft_confidence": req.draft_confidence or "ALL_EMAILS",
+            "follow_up_awaiting_days": awaiting,
+            "follow_up_needs_reply_days": req.follow_up_needs_reply_days or 0,
+            "follow_up_auto_draft": req.follow_up_auto_draft,
+            "digest_categories": list(req.digest_categories or []),
+            "digest_day_of_week": req.digest_day_of_week,
+            "digest_time_of_day": req.digest_time_of_day or "09:00",
+            "digest_send_to_email": req.digest_send_to_email,
         }
     finally:
         await db.close()
@@ -4658,7 +4938,12 @@ async def _upsert_thread_status(
              status = EXCLUDED.status,
              last_message_id = EXCLUDED.last_message_id,
              last_message_at = EXCLUDED.last_message_at,
-             reason = EXCLUDED.reason, classified_at = now()"""
+             reason = EXCLUDED.reason, classified_at = now(),
+             -- Re-arm the follow-up reminder whenever the thread changes hands.
+             follow_up_reminded_at = CASE
+               WHEN email_thread_status.status IS DISTINCT FROM EXCLUDED.status
+                 OR email_thread_status.last_message_id IS DISTINCT FROM EXCLUDED.last_message_id
+               THEN NULL ELSE email_thread_status.follow_up_reminded_at END"""
     ), {"aid": account_id, "tid": thread_id, "st": status, "mid": msg_id,
         "mat": msg_at, "reason": reason})
 
@@ -4886,12 +5171,25 @@ async def draft_reply_smart(
 
 # ── Digests ──────────────────────────────────────────────────────────────────
 
-async def _generate_digest(db: Any, account_id: str, period_days: int) -> dict:
+async def _generate_digest(
+    db: Any, account_id: str, period_days: int,
+    categories: list[str] | None = None,
+) -> dict:
     """Build an inbox digest for the window: totals, category breakdown, top
-    senders, and how many threads need a reply. Deterministic (no LLM)."""
+    senders, and how many threads need a reply. Deterministic (no LLM).
+
+    `categories` (optional) restricts the category breakdown to the selected
+    sender categories ("Cold Emails" maps to the "Cold Email" category); empty
+    or None includes everything.
+    """
     params: dict[str, Any] = {"aid": account_id, "days": period_days}
     win = ("em.account_id = :aid AND em.received_at >= "
            "now() - make_interval(days => :days)")
+    cats = ["Cold Email" if c == "Cold Emails" else c for c in (categories or [])]
+    cat_clause = ""
+    if cats:
+        params["cats"] = cats
+        cat_clause = " AND COALESCE(s.category, 'Unknown') = ANY(:cats)"
 
     totals = (await db.execute(text(
         f"""SELECT COUNT(*) AS total,
@@ -4907,7 +5205,7 @@ async def _generate_digest(db: Any, account_id: str, period_days: int) -> dict:
             LEFT JOIN email_senders s
               ON s.account_id = em.account_id
              AND s.email = LOWER(em.from_address->>'email')
-            WHERE {win} AND LOWER(em.folder) = 'inbox'
+            WHERE {win} AND LOWER(em.folder) = 'inbox'{cat_clause}
             GROUP BY 1 ORDER BY 2 DESC"""
     ), params)).fetchall()
 
@@ -5024,25 +5322,52 @@ async def send_digest(
 
 
 async def _maybe_send_digest(account_id: str) -> None:
-    """Background: send a digest if one is due per the account's frequency."""
+    """Background: send a digest if one is due per the account's schedule.
+
+    Honors digest_frequency (DAILY/WEEKLY), digest_time_of_day (don't send
+    before that UTC time), digest_day_of_week (WEEKLY only; 0=Sun…6=Sat),
+    digest_categories (which categories to include) and digest_send_to_email.
+    """
     db = await _get_db()
     try:
         row = (await db.execute(text(
-            "SELECT digest_frequency, last_digest_at FROM email_assistant_settings "
-            "WHERE account_id = :aid"
+            """SELECT digest_frequency, last_digest_at, digest_time_of_day,
+                      digest_day_of_week, digest_categories, digest_send_to_email
+               FROM email_assistant_settings WHERE account_id = :aid"""
         ), {"aid": account_id})).fetchone()
         if not row or (row.digest_frequency or "OFF") == "OFF":
             return
+        if not bool(getattr(row, "digest_send_to_email", True)):
+            return  # email is the only channel today; nothing to deliver
         period_days = 7 if row.digest_frequency == "WEEKLY" else 1
-        # Compute due-ness from the already-fetched value (a bare SELECT of a
-        # column with no FROM raises, so this can't be done in SQL here).
+        now = datetime.now(timezone.utc)
+
+        # Parse the configured send time (HH:MM, treated as UTC).
+        try:
+            hh, mm = (getattr(row, "digest_time_of_day", None) or "09:00").split(":")
+            send_at = now.replace(
+                hour=int(hh), minute=int(mm), second=0, microsecond=0)
+        except (ValueError, AttributeError):
+            send_at = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        if now < send_at:
+            return  # too early in the day
+
+        if row.digest_frequency == "WEEKLY":
+            # email_assistant_settings uses JS weekdays (0=Sun); Python's
+            # weekday() is 0=Mon, so shift.
+            js_dow = (now.weekday() + 1) % 7
+            if js_dow != int(getattr(row, "digest_day_of_week", 1) or 1):
+                return
+            min_gap = timedelta(days=6)
+        else:
+            min_gap = timedelta(hours=20)
+
         last = row.last_digest_at
-        due = last is None or last < (
-            datetime.now(timezone.utc) - timedelta(days=period_days)
-        )
-        if not due:
-            return
-        digest = await _generate_digest(db, account_id, period_days)
+        if last is not None and (last > now - min_gap or last >= send_at):
+            return  # already sent recently / already sent today after send time
+
+        categories = list(getattr(row, "digest_categories", None) or [])
+        digest = await _generate_digest(db, account_id, period_days, categories)
         acc = (await db.execute(text(
             "SELECT provider, credentials_encrypted, email_address "
             "FROM email_accounts WHERE id = :id"
@@ -5070,6 +5395,115 @@ async def _maybe_send_digest(account_id: str) -> None:
         _log.info("email.digest_sent", account_id=account_id)
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.digest_send_failed", account_id=account_id,
+                     error=str(exc)[:200])
+    finally:
+        await db.close()
+
+
+async def _maybe_send_follow_up_reminders(account_id: str) -> None:
+    """Background: label (and optionally draft a nudge for) threads waiting too
+    long for a reply.
+
+    AWAITING  → they haven't replied to us after follow_up_awaiting_days.
+    NEEDS_REPLY → we haven't replied after follow_up_needs_reply_days.
+    Each qualifying thread's latest message is labelled "Follow-up"; when
+    follow_up_auto_draft is on, AWAITING threads also get a draft nudge.
+    Idempotent via email_thread_status.follow_up_reminded_at.
+    """
+    db = await _get_db()
+    try:
+        srow = (await db.execute(text(
+            """SELECT follow_up_awaiting_days, follow_up_needs_reply_days,
+                      follow_up_auto_draft
+               FROM email_assistant_settings WHERE account_id = :aid"""
+        ), {"aid": account_id})).fetchone()
+        if not srow:
+            return
+        awaiting_days = int(getattr(srow, "follow_up_awaiting_days", 0) or 0)
+        needs_days = int(getattr(srow, "follow_up_needs_reply_days", 0) or 0)
+        auto_draft = bool(getattr(srow, "follow_up_auto_draft", False))
+        if awaiting_days <= 0 and needs_days <= 0:
+            return
+
+        rows = (await db.execute(text(
+            """SELECT ts.thread_id, ts.status, ts.last_message_id,
+                      em.provider_message_id, em.subject, em.from_address,
+                      em.to_addresses, em.body_text, em.snippet
+               FROM email_thread_status ts
+               LEFT JOIN email_messages em ON ts.last_message_id = em.id
+               WHERE ts.account_id = :aid
+                 AND ts.follow_up_reminded_at IS NULL
+                 AND (
+                   (ts.status = 'AWAITING' AND :ad > 0
+                    AND ts.last_message_at < now() - make_interval(days => :ad))
+                   OR (ts.status = 'NEEDS_REPLY' AND :nd > 0
+                    AND ts.last_message_at < now() - make_interval(days => :nd))
+                 )
+               LIMIT 25"""
+        ), {"aid": account_id, "ad": awaiting_days, "nd": needs_days})).fetchall()
+        if not rows:
+            return
+
+        acc = (await db.execute(text(
+            "SELECT provider, credentials_encrypted, user_id "
+            "FROM email_accounts WHERE id = :id"
+        ), {"id": account_id})).fetchone()
+        if not acc:
+            return
+        from acb_llm.key_store import get_key_store  # noqa: PLC0415
+        store = get_key_store()
+        creds = json.loads(store.decrypt(acc.credentials_encrypted))
+        provider = _instantiate_provider(acc.provider, creds)
+        if not await provider.authenticate():
+            return
+        about, signature = await _load_assistant_about(db, account_id)
+
+        for r in rows:
+            mark = lambda: db.execute(text(  # noqa: E731
+                "UPDATE email_thread_status SET follow_up_reminded_at = now() "
+                "WHERE account_id = :aid AND thread_id = :tid"
+            ), {"aid": account_id, "tid": r.thread_id})
+            if not r.provider_message_id:
+                await mark()
+                continue
+            try:
+                await provider.set_labels(
+                    r.provider_message_id, add=["Follow-up"], remove=[])
+            except Exception:  # noqa: BLE001
+                pass
+            if auto_draft and r.status == "AWAITING":
+                try:
+                    to_list = r.to_addresses if isinstance(r.to_addresses, list) \
+                        else json.loads(r.to_addresses or "[]")
+                    to = (to_list[0].get("email") if to_list else "") or ""
+                    if to:
+                        email = {
+                            "subject": r.subject or "",
+                            "from": to,  # nudging the recipient of our last msg
+                            "body": r.body_text or r.snippet or "",
+                            "thread_id": r.thread_id or "",
+                        }
+                        body = await _agent_draft_reply(
+                            email, about, signature, acc.user_id, use_agent=True,
+                        )
+                        await provider.create_draft(
+                            to=[to],
+                            subject=f"Re: {r.subject or ''}",
+                            body_text=body,
+                            reply_to_message_id=r.provider_message_id,
+                            thread_id=r.thread_id or None,
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    _log.warning("email.follow_up_draft_failed",
+                                 account_id=account_id, error=str(exc)[:160])
+            await mark()
+
+        await _persist_rotated_creds(db, store, account_id, provider)
+        await db.commit()
+        _log.info("email.follow_ups_processed", account_id=account_id,
+                  count=len(rows))
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.follow_up_failed", account_id=account_id,
                      error=str(exc)[:200])
     finally:
         await db.close()

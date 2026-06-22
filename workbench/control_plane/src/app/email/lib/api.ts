@@ -3,7 +3,7 @@ import {
   AnalyticsOverview, SenderStat, NewsletterStatus,
   AutomationRule, RuleTestResult, ExecutedRule, AssistantSettings,
   RecentTestResult, ColdSender, ReplyZeroThread, KnowledgeEntry,
-  LearnedPattern,
+  LearnedPattern, RunMessageResult,
 } from "./types";
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
@@ -686,6 +686,26 @@ export async function runRules(params: {
       account_id: params.accountId,
       limit: params.limit ?? 20,
       dry_run: params.dryRun ?? true,
+    }),
+  });
+}
+
+/**
+ * Run rules against a single message — the Test tab's per-row Test/Apply.
+ * `isTest` true previews the match (nothing changes); false applies the matched
+ * rule's actions and logs an APPLIED row to history.
+ */
+export async function runRuleOnMessage(params: {
+  accountId: string;
+  messageId: string;
+  isTest: boolean;
+}): Promise<RunMessageResult> {
+  return gatewayFetch<RunMessageResult>("/email/rules/run-message", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: params.accountId,
+      message_id: params.messageId,
+      is_test: params.isTest,
     }),
   });
 }

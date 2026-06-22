@@ -156,6 +156,9 @@ interface EmailState {
   composeDefaults: { to: string; subject: string; replyToBody?: string; replyToMessageId?: string } | null;
   /** A message queued to send, shown with an "Undo" toast until the timer fires. */
   pendingSend: api.SendEmailParams | null;
+  /** A prompt handed from the Assistant's "Fix" flow to the AI chat panel, which
+   *  consumes it into its input on the next render then clears it. */
+  pendingChatPrompt: string | null;
   error: string | null;
 
   // Actions
@@ -179,6 +182,8 @@ interface EmailState {
   deleteEmail: (id: string) => Promise<void>;
   sendEmail: (params: api.SendEmailParams) => Promise<void>;
   undoSend: () => void;
+  /** Queue a prompt for the AI chat panel (used by the Assistant "Fix" flow). */
+  setPendingChatPrompt: (prompt: string | null) => void;
   triggerSync: (accountId: string) => Promise<void>;
   deleteAccount: (id: string) => Promise<void>;
   clearError: () => void;
@@ -222,6 +227,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   composeOpen: false,
   composeDefaults: null,
   pendingSend: null,
+  pendingChatPrompt: null,
   error: null,
 
   // Actions
@@ -615,6 +621,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       set({ error: err.message || "Failed to delete account" });
     }
   },
+
+  setPendingChatPrompt: (prompt) => set({ pendingChatPrompt: prompt }),
 
   clearError: () => set({ error: null }),
 }));

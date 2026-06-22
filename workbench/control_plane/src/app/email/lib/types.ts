@@ -217,17 +217,46 @@ export interface RuleTestResult {
   actions: RuleAction[];
 }
 
+/** The rule conditions surfaced in a history row's hover popover. */
+export interface RuleConditions {
+  instructions: string | null;
+  from_pattern: string | null;
+  to_pattern: string | null;
+  subject_pattern: string | null;
+  body_pattern: string | null;
+  conditional_operator: "AND" | "OR";
+  category_filter_type: "INCLUDE" | "EXCLUDE" | null;
+  category_filters: string[];
+}
+
 export interface ExecutedRule {
   id: string;
+  rule_id?: string | null;
   rule_name: string | null;
   subject: string | null;
   from: string | null;
+  /** APPLIED | SKIPPED | PENDING | REJECTED | UNDONE | ERROR */
   status: string;
   automated: boolean;
+  /** Action types actually taken (e.g. ["LABEL", "ARCHIVE"]). */
   actions: string[];
   reason: string | null;
   snippet?: string;
   created_at: string | null;
+  /** Matched rule's conditions, for the hover popover (null when no match). */
+  conditions?: RuleConditions | null;
+  /** Matched rule's full action specs (label/to/subject…), for the popover. */
+  rule_actions?: RuleAction[];
+}
+
+/** Result of running rules against a single message (Test tab Test/Apply). */
+export interface RunMessageResult {
+  matched: boolean;
+  applied: boolean;
+  rule: { id: string; name: string } | null;
+  reason: string;
+  /** Full action specs when matched (test mode) or types taken (apply mode). */
+  actions: (RuleAction | string)[];
 }
 
 export interface AssistantSettings {
@@ -247,9 +276,54 @@ export interface AssistantSettings {
   writing_style: string;
   /** Whether the assistant drafts replies for emails that need one. */
   draft_replies: boolean;
-  /** Remind about sent threads awaiting a reply older than N days (0 = off). */
+  /** Legacy alias for follow_up_awaiting_days (kept for back-compat). */
   follow_up_days: number;
+  /** How sure the AI must be before drafting a reply. */
+  draft_confidence: DraftConfidence;
+  /** Remind when THEY haven't replied after N days (0 = off). */
+  follow_up_awaiting_days: number;
+  /** Remind when I haven't replied after N days (0 = off). */
+  follow_up_needs_reply_days: number;
+  /** Auto-draft a nudge for awaiting threads. */
+  follow_up_auto_draft: boolean;
+  /** Rule names (+ "Cold Emails") to include in the digest; empty = all. */
+  digest_categories: string[];
+  /** 0=Sun … 6=Sat — used when digest_frequency is WEEKLY. */
+  digest_day_of_week: number;
+  /** HH:MM (24h, account-local) the digest is sent. */
+  digest_time_of_day: string;
+  /** Email the digest to the account address. */
+  digest_send_to_email: boolean;
 }
+
+export type DraftConfidence = "ALL_EMAILS" | "STANDARD" | "HIGH_CONFIDENCE";
+
+export const DRAFT_CONFIDENCE_OPTIONS: {
+  value: DraftConfidence;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "ALL_EMAILS",
+    label: "All emails",
+    description: "Draft a reply for every email, even when uncertain.",
+  },
+  {
+    value: "STANDARD",
+    label: "Standard",
+    description: "Skip drafting when the AI is unsure how to respond.",
+  },
+  {
+    value: "HIGH_CONFIDENCE",
+    label: "High confidence",
+    description: "Only draft when the AI is very sure of the right reply.",
+  },
+];
+
+/** Sunday-first weekday labels for the digest day-of-week selector. */
+export const WEEKDAYS = [
+  "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+] as const;
 
 /** A preference the assistant learned from how the user edits its drafts. */
 export interface LearnedPattern {

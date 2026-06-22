@@ -75,6 +75,7 @@ export default function EmailPage() {
     composeOpen,
     composeDefaults,
     pendingSend,
+    pendingChatPrompt,
     error,
     authErrors,
     fetchAccounts,
@@ -223,6 +224,20 @@ export default function EmailPage() {
     window.addEventListener("cc-mobile-nav", handler);
     return () => window.removeEventListener("cc-mobile-nav", handler);
   }, [openDrawer, closeDrawer]);
+
+  // When the Assistant "Fix" flow queues a chat prompt, leave the automation
+  // overlay and surface the AI chat so the prompt lands in its input.
+  useEffect(() => {
+    if (!pendingChatPrompt) return;
+    setAutomationFeature(null);
+    if (isMobile) {
+      window.dispatchEvent(
+        new CustomEvent("cc-mobile-nav", { detail: "email-ai" })
+      );
+    } else {
+      setRightOpen(true);
+    }
+  }, [pendingChatPrompt, isMobile]);
 
   const handleEmailSelect = useCallback(
     (id: string) => {

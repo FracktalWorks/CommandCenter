@@ -617,6 +617,25 @@ export async function undoExecution(
   });
 }
 
+/** Process PAST inbox mail within a date range (inbox-zero "Process past
+ *  emails"). Test = dry-run preview; Apply = execute. Results land in History. */
+export async function processPastEmails(params: {
+  accountId: string;
+  startDate?: string; // YYYY-MM-DD, inclusive
+  endDate?: string; // YYYY-MM-DD, inclusive
+  isTest: boolean;
+}): Promise<{ scheduled: boolean; count: number; dry_run: boolean }> {
+  return gatewayFetch("/email/rules/process-past", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: params.accountId,
+      start_date: params.startDate ?? null,
+      end_date: params.endDate ?? null,
+      is_test: params.isTest,
+    }),
+  });
+}
+
 export async function testRules(params: {
   accountId: string;
   emailId?: string;

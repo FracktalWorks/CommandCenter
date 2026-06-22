@@ -12,7 +12,7 @@ import {
   getRulesHistory, getAssistantSettings, saveAssistantSettings,
   listColdSenders, upsertColdSender, generateWritingStyle, listEmails,
   listKnowledge, createKnowledge, updateKnowledge, deleteKnowledge,
-  installPresetRules, reorderRules,
+  installPresetRules, reorderRules, processPastEmails,
   listLearnedPatterns, deleteLearnedPattern,
 } from "../../lib/api";
 import {
@@ -116,6 +116,32 @@ const PRESET_RULES: PresetRule[] = [
     actions: [{ type: "LABEL", label: "To Reply" }, { type: "DRAFT_EMAIL" }],
   },
   {
+    name: "Awaiting Reply",
+    instructions:
+      "Threads where I've already replied and am now waiting to hear back " +
+      "from the other person.",
+    enabled: true,
+    automated: true,
+    run_on_threads: true,
+    conditional_operator: "AND",
+    category_filters: [],
+    sort_order: 1,
+    actions: [{ type: "LABEL", label: "Awaiting Reply" }],
+  },
+  {
+    name: "Actioned",
+    instructions:
+      "Emails I've already handled or replied to that need no further action " +
+      "from me.",
+    enabled: true,
+    automated: true,
+    run_on_threads: true,
+    conditional_operator: "AND",
+    category_filters: [],
+    sort_order: 2,
+    actions: [{ type: "LABEL", label: "Actioned" }],
+  },
+  {
     name: "FYI",
     instructions:
       "Important emails I should know about, but don't need to reply to.",
@@ -216,30 +242,36 @@ export function AssistantView({ accountId }: AssistantViewProps) {
 
   return (
     <div className="h-full flex flex-col">
-      {/* Sub-tabs */}
-      <div className="flex items-center gap-1 px-3 sm:px-5 py-2 border-b border-border flex-shrink-0 overflow-x-auto scrollbar-hide">
-        {TABS.map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors flex-shrink-0 whitespace-nowrap ${
-              tab === key
-                ? "bg-primary/15 text-primary"
-                : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-            }`}
-          >
-            <Icon size={13} /> {label}
-          </button>
-        ))}
+      {/* Sub-tabs — centered to match the content column on wide screens. */}
+      <div className="border-b border-border flex-shrink-0">
+        <div className="max-w-3xl mx-auto w-full flex items-center gap-1 px-3 sm:px-5 py-2 overflow-x-auto scrollbar-hide">
+          {TABS.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors flex-shrink-0 whitespace-nowrap ${
+                tab === key
+                  ? "bg-primary/15 text-primary"
+                  : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+              }`}
+            >
+              <Icon size={13} /> {label}
+            </button>
+          ))}
+        </div>
       </div>
 
+      {/* Content is centered in a readable column (inbox-zero parity) so the
+          tabs don't stretch edge-to-edge on widescreen monitors. */}
       <div className="flex-1 overflow-hidden">
-        {tab === "rules" && <RulesTab accountId={accountId} onSeeHistory={seeHistory} />}
-        {tab === "test" && <TestTab accountId={accountId} />}
-        {tab === "history" && (
-          <HistoryTab accountId={accountId} initialRuleFilter={historyRuleFilter} />
-        )}
-        {tab === "settings" && <SettingsTab accountId={accountId} />}
+        <div className="h-full max-w-3xl mx-auto w-full">
+          {tab === "rules" && <RulesTab accountId={accountId} onSeeHistory={seeHistory} />}
+          {tab === "test" && <TestTab accountId={accountId} />}
+          {tab === "history" && (
+            <HistoryTab accountId={accountId} initialRuleFilter={historyRuleFilter} />
+          )}
+          {tab === "settings" && <SettingsTab accountId={accountId} />}
+        </div>
       </div>
     </div>
   );
@@ -299,6 +331,7 @@ function RulesTab({
   const [error, setError] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [showPast, setShowPast] = useState(false);
   const setPendingChatPrompt = useEmailStore((s) => s.setPendingChatPrompt);
 
   const duplicate = async (rule: AutomationRule) => {
@@ -436,14 +469,28 @@ function RulesTab({
               Add defaults
             </button>
           )}
+          {rules.length > 0 && (
+            <button
+              onClick={() => setShowPast(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            >
+              <HistoryIcon size={13} /> Past emails
+            </button>
+          )}
           <button
             onClick={() => setEditing(emptyRule(accountId))}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
           >
-            <Plus size={13} /> New rule
+            <Plus size={13} /> Add rule
           </button>
         </div>
       </div>
+      {showPast && accountId && (
+        <ProcessPastEmailsDialog
+          accountId={accountId}
+          onClose={() => setShowPast(false)}
+        />
+      )}
 
       {error && (
         <div className="px-5 py-2 text-xs text-destructive bg-destructive/10">
@@ -957,6 +1004,139 @@ function RuleEditor({
           </span>
         </label>
       </div>
+    </Modal>
+  );
+}
+
+// ── Process past emails (inbox-zero parity) ─────────────────────────────────
+
+const PAST_PRESETS: { label: string; days: number }[] = [
+  { label: "Last 24 hours", days: 1 },
+  { label: "Last 7 days", days: 7 },
+  { label: "Last 30 days", days: 30 },
+  { label: "Last 90 days", days: 90 },
+];
+
+/** ISO YYYY-MM-DD for `daysAgo` days before today (0 = today). */
+function isoDaysAgo(daysAgo: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  return d.toISOString().slice(0, 10);
+}
+
+function ProcessPastEmailsDialog({
+  accountId,
+  onClose,
+}: {
+  accountId: string;
+  onClose: () => void;
+}) {
+  const [applyMode, setApplyMode] = useState(false); // false = Test, true = Apply
+  const [start, setStart] = useState(isoDaysAgo(7));
+  const [end, setEnd] = useState(isoDaysAgo(0));
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const r = await processPastEmails({
+        accountId,
+        startDate: start || undefined,
+        endDate: end || undefined,
+        isTest: !applyMode,
+      });
+      setResult(
+        r.count === 0
+          ? "No emails found in that range."
+          : `${applyMode ? "Applying rules to" : "Testing rules on"} ${r.count} ` +
+              `email${r.count === 1 ? "" : "s"} — results appear in the History tab.`,
+      );
+    } catch (e) {
+      setError((e as Error).message || "Failed to start processing");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="Process past emails"
+      description="Run your rules over older inbox mail in a date range."
+      onClose={onClose}
+      footer={
+        <div className="flex items-center gap-2 w-full">
+          <LabeledToggle
+            label="Test"
+            labelRight="Apply"
+            enabled={applyMode}
+            onChange={setApplyMode}
+          />
+          <button
+            onClick={run}
+            disabled={busy}
+            className={`ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white text-xs font-medium transition-colors disabled:opacity-50 ${
+              applyMode ? "bg-emerald-600 hover:bg-emerald-700" : "bg-primary hover:bg-primary/90"
+            }`}
+          >
+            {busy ? <Loader2 className="animate-spin" size={13} /> : <Play size={13} />}
+            {applyMode ? "Process & apply" : "Test on range"}
+          </button>
+        </div>
+      }
+    >
+      <div className="flex flex-wrap gap-1.5">
+        {PAST_PRESETS.map((p) => (
+          <button
+            key={p.days}
+            onClick={() => {
+              setStart(isoDaysAgo(p.days));
+              setEnd(isoDaysAgo(0));
+            }}
+            className="text-[11px] px-2 py-1 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="From">
+          <input
+            type="date"
+            value={start}
+            max={end || undefined}
+            onChange={(e) => setStart(e.target.value)}
+            className={INPUT_CLS}
+          />
+        </Field>
+        <Field label="To">
+          <input
+            type="date"
+            value={end}
+            min={start || undefined}
+            onChange={(e) => setEnd(e.target.value)}
+            className={INPUT_CLS}
+          />
+        </Field>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        {applyMode
+          ? "Apply mode runs the matched actions (labels, drafts, archive…) on every email in range."
+          : "Test mode previews which rule each email matches without changing anything."}
+      </p>
+      {result && (
+        <div className="text-xs text-emerald-400 bg-emerald-500/10 rounded-md px-2.5 py-2">
+          {result}
+        </div>
+      )}
+      {error && (
+        <div className="text-xs text-destructive bg-destructive/10 rounded-md px-2.5 py-2">
+          {error}
+        </div>
+      )}
     </Modal>
   );
 }

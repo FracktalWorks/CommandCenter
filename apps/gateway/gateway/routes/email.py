@@ -2680,6 +2680,14 @@ _PRESET_RULES: list[dict[str, Any]] = [
     {"name": "To Reply", "instructions": "Emails I need to respond to.",
      "run_on_threads": True,
      "actions": [{"type": "LABEL", "label": "To Reply"}, {"type": "DRAFT_EMAIL"}]},
+    {"name": "Awaiting Reply", "run_on_threads": True,
+     "instructions": "Threads where I've already replied and am now waiting to "
+                     "hear back from the other person.",
+     "actions": [{"type": "LABEL", "label": "Awaiting Reply"}]},
+    {"name": "Actioned", "run_on_threads": True,
+     "instructions": "Emails I've already handled or replied to that need no "
+                     "further action from me.",
+     "actions": [{"type": "LABEL", "label": "Actioned"}]},
     {"name": "FYI", "run_on_threads": True,
      "instructions": "Important emails I should know about, but don't need to "
                      "reply to.",
@@ -3401,6 +3409,48 @@ async def run_rules(
     return {"scheduled": True, "dry_run": req.dry_run}
 
 
+class RuleProcessPastRequest(BaseModel):
+    account_id: str
+    start_date: str | None = None  # ISO date (YYYY-MM-DD), inclusive
+    end_date: str | None = None    # ISO date (YYYY-MM-DD), inclusive
+    is_test: bool = False          # True = dry-run preview; False = apply for real
+    limit: int = 1000
+
+
+@router.post("/rules/process-past")
+async def process_past_emails(
+    req: RuleProcessPastRequest,
+    background: BackgroundTasks,
+    user: UserContext = Depends(get_current_user),
+):
+    """Run rules over PAST inbox mail within a date range (inbox-zero parity).
+
+    Unlike /rules/run (which only touches unprocessed mail), this reprocesses
+    every inbox email whose received_at falls in [start_date, end_date]. Test
+    mode logs a PENDING preview; Apply mode executes the matched actions. Poll
+    GET /email/rules/history for results.
+    """
+    start_dt = _parse_iso_date(req.start_date, end_of_day=False)
+    end_dt = _parse_iso_date(req.end_date, end_of_day=True)
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        # Count what will be processed so the dialog can report it.
+        clause, params = _date_range_clause(req.account_id, start_dt, end_dt)
+        n = (await db.execute(text(
+            f"SELECT COUNT(*) AS c FROM email_messages em "
+            f"WHERE {clause}"
+        ), params)).fetchone()
+        count = int(n.c) if n else 0
+    finally:
+        await db.close()
+    background.add_task(
+        _process_past_emails_job, req.account_id, start_dt, end_dt,
+        min(req.limit, 2000), not req.is_test, user.email or "anonymous",
+    )
+    return {"scheduled": True, "count": count, "dry_run": req.is_test}
+
+
 class RuleRunMessageRequest(BaseModel):
     account_id: str
     message_id: str
@@ -3960,6 +4010,130 @@ async def _orchestrate_draft(
         pass
 
     return draft
+
+
+def _parse_iso_date(s: str | None, end_of_day: bool) -> datetime | None:
+    """Parse a 'YYYY-MM-DD' string into a UTC datetime (or None)."""
+    if not s:
+        return None
+    try:
+        d = datetime.strptime(s.strip()[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        if end_of_day:
+            d = d.replace(hour=23, minute=59, second=59)
+        return d
+    except (ValueError, TypeError):
+        return None
+
+
+def _date_range_clause(
+    account_id: str, start: datetime | None, end: datetime | None,
+) -> tuple[str, dict[str, Any]]:
+    """SQL WHERE clause (+ params) for inbox mail in a received_at date range."""
+    clause = "em.account_id = :aid AND LOWER(em.folder) = 'inbox'"
+    params: dict[str, Any] = {"aid": account_id}
+    if start is not None:
+        clause += " AND em.received_at >= :start"
+        params["start"] = start
+    if end is not None:
+        clause += " AND em.received_at <= :end"
+        params["end"] = end
+    return clause, params
+
+
+async def _process_past_emails_job(
+    account_id: str, start: datetime | None, end: datetime | None,
+    limit: int, dry_run: bool, user_email: str,
+) -> None:
+    """Background worker: reprocess PAST inbox mail in a date range (inbox-zero
+    'Process past emails'). Reprocesses regardless of rules_processed_at."""
+    db = await _get_db()
+    try:
+        clause, params = _date_range_clause(account_id, start, end)
+        params["limit"] = limit
+        rows = (await db.execute(text(
+            f"""SELECT em.id, em.provider_message_id, em.thread_id, em.subject,
+                       em.body_text, em.snippet, em.from_address
+                FROM email_messages em
+                WHERE {clause}
+                ORDER BY em.received_at DESC LIMIT :limit"""
+        ), params)).fetchall()
+        if not rows:
+            return
+
+        about, signature = await _load_assistant_about(db, account_id)
+        owner_row = (await db.execute(text(
+            "SELECT user_id FROM email_accounts WHERE id = :aid"
+        ), {"aid": account_id})).fetchone()
+        account_user = owner_row.user_id if owner_row else (user_email or "")
+
+        provider = None
+        if not dry_run:
+            acc = (await db.execute(text(
+                "SELECT provider, credentials_encrypted FROM email_accounts "
+                "WHERE id = :id"
+            ), {"id": account_id})).fetchone()
+            if acc:
+                from acb_llm.key_store import get_key_store
+                store = get_key_store()
+                creds = json.loads(store.decrypt(acc.credentials_encrypted))
+                provider = _instantiate_provider(acc.provider, creds)
+                if not await provider.authenticate():
+                    provider = None
+
+        for r in rows:
+            frm = r.from_address if isinstance(r.from_address, dict) \
+                else json.loads(r.from_address or "{}")
+            email = {
+                "subject": r.subject or "", "from": frm.get("email", ""),
+                "body": r.body_text or r.snippet or "", "to": "",
+                "thread_id": r.thread_id or "",
+            }
+            match = await _match_email_to_rule(db, account_id, email)
+            apply = (not dry_run) and provider is not None
+            if match:
+                rule = match["rule"]
+                if apply:
+                    actions_taken = await _apply_rule_actions(
+                        db, provider, str(r.id), r.provider_message_id,
+                        rule["actions"], email, about, signature, account_user,
+                        account_id=account_id,
+                    )
+                    status = "APPLIED"
+                else:
+                    actions_taken = [a["type"] for a in rule["actions"]]
+                    status = "PENDING"
+                await db.execute(text(
+                    """INSERT INTO email_executed_rules
+                         (account_id, rule_id, rule_name, message_id,
+                          provider_message_id, thread_id, subject, from_address,
+                          status, automated, actions_taken, reason)
+                       VALUES (:aid, :rid, :rname, :mid, :pmid, :tid, :subj, :frm,
+                               :status, true, :acts, :reason)"""
+                ), {"aid": account_id, "rid": rule["id"], "rname": rule["name"],
+                    "mid": str(r.id), "pmid": r.provider_message_id,
+                    "tid": r.thread_id, "subj": r.subject or "",
+                    "frm": frm.get("email", ""), "status": status,
+                    "acts": json.dumps(actions_taken),
+                    "reason": match["reason"]})
+            elif not dry_run:
+                await db.execute(text(
+                    """INSERT INTO email_executed_rules
+                         (account_id, rule_id, rule_name, message_id,
+                          provider_message_id, thread_id, subject, from_address,
+                          status, automated, actions_taken, reason)
+                       VALUES (:aid, NULL, NULL, :mid, :pmid, :tid, :subj, :frm,
+                               'SKIPPED', true, '[]', 'No rule matched this email.')"""
+                ), {"aid": account_id, "mid": str(r.id),
+                    "pmid": r.provider_message_id, "tid": r.thread_id,
+                    "subj": r.subject or "", "frm": frm.get("email", "")})
+            if not dry_run:
+                await db.execute(text(
+                    "UPDATE email_messages SET rules_processed_at = now() "
+                    "WHERE id = :id"
+                ), {"id": str(r.id)})
+            await db.commit()
+    finally:
+        await db.close()
 
 
 async def _run_rules_job(

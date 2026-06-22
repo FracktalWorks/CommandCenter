@@ -194,6 +194,14 @@ export type RuleActionType =
   | "DRAFT_EMAIL"
   | "CALL_WEBHOOK";
 
+/** A draft attachment sourced from our artifacts system (inbox-zero parity). */
+export interface RuleActionAttachment {
+  artifact_id?: string | null;
+  name?: string | null;
+  /** AI-selected sources the assistant may pick from, vs always-attach. */
+  ai_selected?: boolean;
+}
+
 export interface RuleAction {
   id?: string;
   type: RuleActionType;
@@ -204,6 +212,10 @@ export interface RuleAction {
   cc_address?: string | null;
   bcc_address?: string | null;
   url?: string | null;
+  /** Minutes to wait before running this action (inbox-zero delay). */
+  delay_minutes?: number | null;
+  /** Draft attachments (from artifacts) for draft/reply/forward actions. */
+  attachments?: RuleActionAttachment[];
 }
 
 export interface AutomationRule {

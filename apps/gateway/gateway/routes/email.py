@@ -2591,6 +2591,17 @@ async def upsert_newsletter(
 
 # ── Assistant: rules engine ─────────────────────────────────────────────────
 
+class RuleActionAttachment(BaseModel):
+    """A draft attachment sourced from our artifacts system (inbox-zero parity).
+
+    ``artifact_id`` references a stored artifact; ``name`` is the display name.
+    ``ai_selected`` marks sources the assistant may pick from at draft time
+    rather than always attaching."""
+    artifact_id: str | None = None
+    name: str | None = None
+    ai_selected: bool = False
+
+
 class RuleActionModel(BaseModel):
     id: str | None = None
     type: str
@@ -2601,6 +2612,9 @@ class RuleActionModel(BaseModel):
     cc_address: str | None = None
     bcc_address: str | None = None
     url: str | None = None
+    # inbox-zero parity: optional per-action delay + draft attachments.
+    delay_minutes: int | None = None
+    attachments: list[RuleActionAttachment] = []
 
 
 class RuleModel(BaseModel):
@@ -2637,7 +2651,8 @@ async def _load_rules(db: Any, account_id: str) -> list[dict[str, Any]]:
     for r in rule_rows:
         act_rows = (await db.execute(text(
             """SELECT id, type, label, subject, content, to_address, cc_address,
-                      bcc_address, url FROM email_actions WHERE rule_id = :rid
+                      bcc_address, url, delay_minutes, attachments
+               FROM email_actions WHERE rule_id = :rid
                ORDER BY created_at"""
         ), {"rid": r.id})).fetchall()
         rules.append({
@@ -2655,7 +2670,10 @@ async def _load_rules(db: Any, account_id: str) -> list[dict[str, Any]]:
                 {"id": str(a.id), "type": a.type, "label": a.label,
                  "subject": a.subject, "content": a.content,
                  "to_address": a.to_address, "cc_address": a.cc_address,
-                 "bcc_address": a.bcc_address, "url": a.url}
+                 "bcc_address": a.bcc_address, "url": a.url,
+                 "delay_minutes": a.delay_minutes,
+                 "attachments": a.attachments if isinstance(a.attachments, list)
+                 else json.loads(a.attachments or "[]")}
                 for a in act_rows
             ],
         })
@@ -2762,12 +2780,39 @@ async def _replace_actions(db: Any, rule_id: str, actions: list[RuleActionModel]
         await db.execute(text(
             """INSERT INTO email_actions
                  (rule_id, type, label, subject, content, to_address,
-                  cc_address, bcc_address, url)
+                  cc_address, bcc_address, url, delay_minutes, attachments)
                VALUES (:rid, :type, :label, :subject, :content, :to_addr,
-                       :cc, :bcc, :url)"""
+                       :cc, :bcc, :url, :delay, CAST(:attachments AS JSONB))"""
         ), {"rid": rule_id, "type": a.type, "label": a.label, "subject": a.subject,
             "content": a.content, "to_addr": a.to_address, "cc": a.cc_address,
-            "bcc": a.bcc_address, "url": a.url})
+            "bcc": a.bcc_address, "url": a.url,
+            "delay": a.delay_minutes,
+            "attachments": json.dumps([
+                att.model_dump() for att in (a.attachments or [])
+            ])})
+
+
+async def _insert_rule(db: Any, req: RuleModel) -> str:
+    """Insert a rule + its actions; returns the new rule id. Caller commits."""
+    rule_id = str(uuid4())
+    await db.execute(text(
+        """INSERT INTO email_rules
+             (id, account_id, name, instructions, enabled, automated,
+              run_on_threads, conditional_operator, from_pattern, to_pattern,
+              subject_pattern, body_pattern, category_filter_type,
+              category_filters, system_type, sort_order)
+           VALUES (:id, :aid, :name, :instr, :enabled, :auto, :rot, :op,
+                   :fp, :tp, :sp, :bp, :cft, :cfs, :st, :so)"""
+    ), {"id": rule_id, "aid": req.account_id, "name": req.name,
+        "instr": req.instructions, "enabled": req.enabled,
+        "auto": req.automated, "rot": req.run_on_threads,
+        "op": req.conditional_operator,
+        "fp": req.from_pattern, "tp": req.to_pattern, "sp": req.subject_pattern,
+        "bp": req.body_pattern, "cft": req.category_filter_type,
+        "cfs": req.category_filters, "st": req.system_type,
+        "so": req.sort_order})
+    await _replace_actions(db, rule_id, req.actions)
+    return rule_id
 
 
 @router.post("/rules")
@@ -2779,27 +2824,152 @@ async def create_rule(
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
-        rule_id = str(uuid4())
-        await db.execute(text(
-            """INSERT INTO email_rules
-                 (id, account_id, name, instructions, enabled, automated,
-                  run_on_threads, conditional_operator, from_pattern, to_pattern,
-                  subject_pattern, body_pattern, category_filter_type,
-                  category_filters, system_type, sort_order)
-               VALUES (:id, :aid, :name, :instr, :enabled, :auto, :rot, :op,
-                       :fp, :tp, :sp, :bp, :cft, :cfs, :st, :so)"""
-        ), {"id": rule_id, "aid": req.account_id, "name": req.name,
-            "instr": req.instructions, "enabled": req.enabled,
-            "auto": req.automated, "rot": req.run_on_threads,
-            "op": req.conditional_operator,
-            "fp": req.from_pattern, "tp": req.to_pattern, "sp": req.subject_pattern,
-            "bp": req.body_pattern, "cft": req.category_filter_type,
-            "cfs": req.category_filters, "st": req.system_type,
-            "so": req.sort_order})
-        await _replace_actions(db, rule_id, req.actions)
+        rule_id = await _insert_rule(db, req)
         await db.commit()
         rules = await _load_rules(db, req.account_id)
         return next((r for r in rules if r["id"] == rule_id), {"id": rule_id})
+    finally:
+        await db.close()
+
+
+# Action types the NL generator may emit (a safe subset of our action types).
+_GEN_ACTION_TYPES = {
+    "ARCHIVE", "LABEL", "MARK_READ", "STAR", "MARK_SPAM", "TRASH",
+    "MOVE_FOLDER", "REPLY", "FORWARD", "DRAFT_EMAIL", "CALL_WEBHOOK",
+}
+
+
+async def _llm_generate_rules(prompt: str) -> list[dict[str, Any]]:
+    """Turn a natural-language rule description (one or several, often a bullet
+    list) into structured rule specs — inbox-zero's plain-text → rules flow.
+
+    Returns a list of dicts shaped like RuleModel (minus account_id). Best
+    effort: returns [] if the LLM is unavailable or nothing parses."""
+    try:
+        import litellm as _litellm  # noqa: PLC0415
+        from litellm import acompletion  # noqa: PLC0415
+        from acb_llm.client import ensure_model_registered, _TIER_MODEL  # noqa: PLC0415
+        _litellm.drop_params = True
+        _litellm.suppress_debug_info = True
+        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
+        ensure_model_registered(model)
+        sys_prompt = (
+            "You convert a user's plain-English description of email rules into "
+            "structured automation rules. The user may describe several rules "
+            "(often one per line/bullet). Output ONLY a JSON array; each element:\n"
+            '{"name": "<short name>", "instructions": "<the AI-matched condition '
+            'in plain English, or empty if purely static>", "from_pattern": '
+            '"<sender substring/email, or empty>", "subject_pattern": "<subject '
+            'substring, or empty>", "conditional_operator": "AND"|"OR", '
+            '"actions": [{"type": "<ACTION>", "label": "<label or folder, if '
+            'LABEL/MOVE_FOLDER>", "to_address": "<for FORWARD>", "subject": '
+            '"<optional>", "content": "<optional draft text; leave empty to let '
+            'the AI write it>", "url": "<for CALL_WEBHOOK>"}]}\n'
+            "ACTION must be one of: ARCHIVE, LABEL, MARK_READ, STAR, MARK_SPAM, "
+            "TRASH, MOVE_FOLDER, REPLY, FORWARD, DRAFT_EMAIL, CALL_WEBHOOK.\n"
+            "Rules of thumb: 'label X as Y' → LABEL with label Y; 'archive' → "
+            "ARCHIVE; 'forward to a@b.com' → FORWARD to_address a@b.com; 'draft a "
+            "reply' → DRAFT_EMAIL; 'reply with …' → REPLY content. Prefer an AI "
+            "`instructions` condition for fuzzy intent; use from_pattern/"
+            "subject_pattern only for literal sender/subject text. Keep names "
+            "short. Omit empty fields. Output [] if nothing is parseable."
+        )
+        resp = await acompletion(
+            model=model,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": prompt[:4000]}],
+            temperature=0, max_tokens=1200,
+        )
+        data = _safe_json(resp.choices[0].message.content or "")
+        return _normalize_generated_rules(data)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.generate_rules_failed", error=str(exc)[:200])
+        return []
+
+
+def _normalize_generated_rules(data: Any) -> list[dict[str, Any]]:
+    """Validate/sanitize the LLM's JSON into rule specs (pure; unit-tested).
+
+    Drops specs without a name or any valid action; clamps action types to the
+    supported set; normalizes the conditional operator to AND/OR."""
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for spec in data:
+        if not isinstance(spec, dict) or not str(spec.get("name") or "").strip():
+            continue
+        actions: list[dict[str, Any]] = []
+        for a in spec.get("actions") or []:
+            if not isinstance(a, dict):
+                continue
+            atype = str(a.get("type", "")).upper()
+            if atype not in _GEN_ACTION_TYPES:
+                continue
+            actions.append({
+                "type": atype,
+                "label": a.get("label") or None,
+                "to_address": a.get("to_address") or None,
+                "subject": a.get("subject") or None,
+                "content": a.get("content") or None,
+                "url": a.get("url") or None,
+            })
+        if not actions:
+            continue
+        op = str(spec.get("conditional_operator", "AND")).upper()
+        out.append({
+            "name": str(spec["name"]).strip()[:60],
+            "instructions": (str(spec.get("instructions") or "")).strip() or None,
+            "from_pattern": (str(spec.get("from_pattern") or "")).strip() or None,
+            "subject_pattern": (str(spec.get("subject_pattern") or "")).strip() or None,
+            "conditional_operator": "OR" if op == "OR" else "AND",
+            "actions": actions,
+        })
+    return out
+
+
+class RuleGenerateRequest(BaseModel):
+    account_id: str
+    prompt: str
+
+
+@router.post("/rules/generate")
+async def generate_rules(
+    req: RuleGenerateRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Create rule(s) from a plain-English description (inbox-zero's prompt flow).
+
+    The text may describe several rules at once; each is turned into a
+    structured rule and created. Returns the created rules."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        if not (req.prompt or "").strip():
+            return {"created": [], "error": "Describe at least one rule."}
+        specs = await _llm_generate_rules(req.prompt)
+        if not specs:
+            return {"created": [],
+                    "error": "Couldn't turn that into a rule — try rephrasing."}
+        base = len(await _load_rules(db, req.account_id))
+        created_ids: list[str] = []
+        for i, spec in enumerate(specs):
+            model = RuleModel(
+                account_id=req.account_id,
+                name=spec["name"],
+                instructions=spec.get("instructions"),
+                from_pattern=spec.get("from_pattern"),
+                subject_pattern=spec.get("subject_pattern"),
+                conditional_operator=spec.get("conditional_operator", "AND"),
+                sort_order=base + i,
+                actions=[RuleActionModel(**a) for a in spec["actions"]],
+            )
+            created_ids.append(await _insert_rule(db, model))
+        await db.commit()
+        rules = await _load_rules(db, req.account_id)
+        created = [r for r in rules if r["id"] in set(created_ids)]
+        return {"created": created}
     finally:
         await db.close()
 

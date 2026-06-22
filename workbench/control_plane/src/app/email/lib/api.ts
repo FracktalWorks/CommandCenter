@@ -595,6 +595,18 @@ export async function deleteRule(id: string): Promise<void> {
   await gatewayFetch(`/email/rules/${id}`, { method: "DELETE" });
 }
 
+/** Create rule(s) from a plain-English description (inbox-zero's prompt flow).
+ *  The text may describe several rules at once. */
+export async function generateRules(
+  accountId: string,
+  prompt: string,
+): Promise<{ created: AutomationRule[]; error?: string }> {
+  return gatewayFetch("/email/rules/generate", {
+    method: "POST",
+    body: JSON.stringify({ account_id: accountId, prompt }),
+  });
+}
+
 export async function installPresetRules(
   accountId: string
 ): Promise<{ installed: string[]; total_presets: number }> {

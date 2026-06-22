@@ -4,13 +4,18 @@ import { useEffect, useState } from "react";
 import { ChevronDown, Paperclip, PenLine, Send, Loader2, Trash2 } from "lucide-react";
 import { Email } from "../lib/types";
 import { fullDateLabel, initials } from "../lib/utils";
-import { getEmail } from "../lib/api";
+import { getEmail, fetchFullBody } from "../lib/api";
 import { useEmailStore } from "../lib/emailStore";
 import { MessageContent } from "./MessageContent";
 
 const isDraft = (m: Email) =>
   (m.folder || "").toLowerCase() === "drafts" ||
   (m.folder || "").toLowerCase() === "draft";
+
+const isTrashed = (m: Email) => {
+  const f = (m.folder || "").toLowerCase();
+  return f === "trash" || f === "deleted";
+};
 
 const INPUT =
   "w-full bg-background border border-border rounded-md px-2.5 py-2 text-xs " +
@@ -29,14 +34,17 @@ export function ConversationView({
   messages: Email[];
   openedId: string;
 }) {
-  const lastId = messages[messages.length - 1]?.id;
+  // Hide messages deleted upstream (trash) so the conversation reflects the
+  // live mailbox — except the one the user explicitly opened.
+  const visible = messages.filter((m) => !isTrashed(m) || m.id === openedId);
+  const lastId = visible[visible.length - 1]?.id;
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set([openedId, lastId].filter(Boolean) as string[])
   );
   const [hydrated, setHydrated] = useState<Record<string, Email>>({});
 
   // The newest non-draft message — the one a draft reply is threaded onto.
-  const replyTarget = [...messages].reverse().find((m) => !isDraft(m));
+  const replyTarget = [...visible].reverse().find((m) => !isDraft(m));
 
   const toggle = (id: string) =>
     setExpanded((prev) => {
@@ -49,7 +57,7 @@ export function ConversationView({
   // Hydrate full bodies for expanded messages that arrived body-less.
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    messages.forEach((m) => {
+    visible.forEach((m) => {
       if (
         expanded.has(m.id) &&
         !hydrated[m.id] &&
@@ -62,12 +70,12 @@ export function ConversationView({
           .catch(() => {});
       }
     });
-  }, [expanded, messages, hydrated]);
+  }, [expanded, visible, hydrated]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   return (
     <div className="flex flex-col gap-2">
-      {messages.map((m) => {
+      {visible.map((m) => {
         if (isDraft(m)) {
           return <DraftCard key={m.id} draft={m} replyTo={replyTarget} />;
         }
@@ -144,16 +152,36 @@ export function DraftCard({ draft, replyTo }: { draft: Email; replyTo?: Email })
   const [to, setTo] = useState(draft.to.map((t) => t.email).filter(Boolean).join(", "));
   const [sending, setSending] = useState(false);
 
-  // The draft may have arrived body-less (header-only sync) — hydrate it.
+  // The draft almost always arrives body-less: provider drafts (incl. the ones
+  // the AI agent creates) sync header-only, so the DB copy has no body. Pull the
+  // DB row first, then fall back to the provider's authoritative draft body so
+  // the editor is pre-filled with the actual AI draft — not an empty box.
   useEffect(() => {
-    if (!draft.bodyText && !draft.bodyHtml && hydratedBody === null) {
-      getEmail(draft.id)
-        .then((full) => {
-          setHydratedBody(full.bodyText || "");
-          setBody((b) => (b ? b : full.bodyText || ""));
-        })
-        .catch(() => setHydratedBody(""));
-    }
+    if ((draft.bodyText || draft.bodyHtml) || hydratedBody !== null) return;
+    let cancelled = false;
+    (async () => {
+      let text = "";
+      try {
+        const full = await getEmail(draft.id);
+        text = full.bodyText || "";
+      } catch {
+        /* fall through to provider fetch */
+      }
+      if (!text) {
+        try {
+          const fb = await fetchFullBody(draft.id);
+          text = fb.body_text || "";
+        } catch {
+          /* leave empty */
+        }
+      }
+      if (cancelled) return;
+      setHydratedBody(text);
+      setBody((b) => (b ? b : text));
+    })();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft.id]);
 

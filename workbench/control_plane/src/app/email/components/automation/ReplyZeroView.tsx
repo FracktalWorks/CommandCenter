@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Loader2, Reply, Clock, PenLine, Mail, Check } from "lucide-react";
-import { getReplyZero, draftReplySmart } from "../../lib/api";
+import {
+  Loader2, Reply, Clock, PenLine, Mail, Check, CheckCircle2, RotateCcw,
+} from "lucide-react";
+import { getReplyZero, draftReplySmart, resolveThread } from "../../lib/api";
 import { ReplyZeroThread } from "../../lib/types";
 import { timeLabel } from "../../lib/utils";
 
@@ -10,11 +12,12 @@ interface ReplyZeroViewProps {
   accountId: string | null;
 }
 
-type Mode = "needs_reply" | "awaiting";
+type Mode = "needs_reply" | "awaiting" | "done";
 
 const MODES: { key: Mode; label: string; icon: React.ElementType }[] = [
-  { key: "needs_reply", label: "Needs reply", icon: Reply },
+  { key: "needs_reply", label: "To reply", icon: Reply },
   { key: "awaiting", label: "Awaiting reply", icon: Clock },
+  { key: "done", label: "Done", icon: CheckCircle2 },
 ];
 
 export function ReplyZeroView({ accountId }: ReplyZeroViewProps) {
@@ -25,6 +28,7 @@ export function ReplyZeroView({ accountId }: ReplyZeroViewProps) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
   const [savedTo, setSavedTo] = useState<Record<string, boolean>>({});
+  const [resolving, setResolving] = useState<string | null>(null);
 
   const load = useCallback(() => {
     if (!accountId) {
@@ -50,6 +54,21 @@ export function ReplyZeroView({ accountId }: ReplyZeroViewProps) {
       setDrafts((prev) => ({ ...prev, [t.message_id]: "Failed to draft." }));
     } finally {
       setDrafting(null);
+    }
+  };
+
+  // Mark a thread done (inbox-zero "Mark Done") or reopen it from the Done tab.
+  const resolve = async (t: ReplyZeroThread, done: boolean) => {
+    if (!accountId) return;
+    setResolving(t.message_id);
+    // Optimistic: it leaves the current tab either way.
+    setThreads((prev) => prev.filter((x) => x.thread_id !== t.thread_id));
+    try {
+      await resolveThread(accountId, t.thread_id, done);
+    } catch {
+      load(); // restore on failure
+    } finally {
+      setResolving(null);
     }
   };
 
@@ -105,7 +124,9 @@ export function ReplyZeroView({ accountId }: ReplyZeroViewProps) {
             <Mail size={22} className="opacity-40" />
             {mode === "needs_reply"
               ? "Nothing needs a reply. Inbox zero! 🎉"
-              : "No threads awaiting a reply."}
+              : mode === "awaiting"
+                ? "No threads awaiting a reply."
+                : "Nothing marked done yet."}
           </div>
         ) : (
           <div className="divide-y divide-border">
@@ -135,18 +156,51 @@ export function ReplyZeroView({ accountId }: ReplyZeroViewProps) {
                       </div>
                     )}
                   </div>
-                  <button
-                    onClick={() => draft(t, mode === "awaiting")}
-                    disabled={drafting === t.message_id}
-                    className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-50 flex-shrink-0"
-                  >
-                    {drafting === t.message_id ? (
-                      <Loader2 className="animate-spin" size={12} />
-                    ) : (
-                      <PenLine size={12} />
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {mode !== "done" && (
+                      <button
+                        onClick={() => draft(t, mode === "awaiting")}
+                        disabled={drafting === t.message_id}
+                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-50"
+                      >
+                        {drafting === t.message_id ? (
+                          <Loader2 className="animate-spin" size={12} />
+                        ) : (
+                          <PenLine size={12} />
+                        )}
+                        {mode === "awaiting" ? "Draft follow-up" : "Draft reply"}
+                      </button>
                     )}
-                    {mode === "awaiting" ? "Draft follow-up" : "Draft reply"}
-                  </button>
+                    {mode === "done" ? (
+                      <button
+                        onClick={() => resolve(t, false)}
+                        disabled={resolving === t.message_id}
+                        title="Reopen — move back to To reply / Awaiting"
+                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+                      >
+                        {resolving === t.message_id ? (
+                          <Loader2 className="animate-spin" size={12} />
+                        ) : (
+                          <RotateCcw size={12} />
+                        )}
+                        Reopen
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => resolve(t, true)}
+                        disabled={resolving === t.message_id}
+                        title="Mark done — handled, no further action needed"
+                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:text-emerald-500 hover:bg-emerald-500/10 transition-colors disabled:opacity-50"
+                      >
+                        {resolving === t.message_id ? (
+                          <Loader2 className="animate-spin" size={12} />
+                        ) : (
+                          <Check size={12} />
+                        )}
+                        Mark done
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {drafts[t.message_id] && (
                   <div className="mt-2">

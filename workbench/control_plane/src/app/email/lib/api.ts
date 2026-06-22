@@ -930,7 +930,7 @@ export async function upsertColdSender(params: {
 
 export async function getReplyZero(
   accountId: string,
-  type: "needs_reply" | "awaiting" = "needs_reply",
+  type: "needs_reply" | "awaiting" | "done" = "needs_reply",
   limit = 50
 ): Promise<ReplyZeroThread[]> {
   const sp = new URLSearchParams({
@@ -942,6 +942,22 @@ export async function getReplyZero(
     `/email/reply-zero?${sp}`
   );
   return res.threads ?? [];
+}
+
+/** Mark a thread done (inbox-zero "Mark Done") or reopen it. */
+export async function resolveThread(
+  accountId: string,
+  threadId: string,
+  done = true
+): Promise<void> {
+  await gatewayFetch("/email/reply-zero/resolve", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: accountId,
+      thread_id: threadId,
+      done,
+    }),
+  });
 }
 
 /**

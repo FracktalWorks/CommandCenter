@@ -5864,6 +5864,62 @@ async def _maybe_classify_threads(account_id: str) -> None:
         await db.close()
 
 
+class ThreadResolveRequest(BaseModel):
+    account_id: str
+    thread_id: str
+    done: bool = True  # True = mark done (resolved); False = reopen
+
+
+@router.post("/reply-zero/resolve")
+async def resolve_thread(
+    req: ThreadResolveRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Mark a thread done (inbox-zero's "Mark Done" / resolved=true) or reopen it.
+
+    Done → status='DONE' (shows under the Done tab). Reopen → re-derive
+    NEEDS_REPLY/AWAITING from the latest message's folder."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        if req.done:
+            res = await db.execute(text(
+                "UPDATE email_thread_status SET status = 'DONE', "
+                "classified_at = now() "
+                "WHERE account_id = :aid AND thread_id = :tid"
+            ), {"aid": req.account_id, "tid": req.thread_id})
+            if res.rowcount == 0:
+                # Heuristic mode (no stored status yet) — create one as DONE.
+                lm = (await db.execute(text(
+                    "SELECT id, received_at FROM email_messages "
+                    "WHERE account_id = :aid AND thread_id = :tid "
+                    "ORDER BY received_at DESC LIMIT 1"
+                ), {"aid": req.account_id, "tid": req.thread_id})).fetchone()
+                await db.execute(text(
+                    "INSERT INTO email_thread_status (account_id, thread_id, "
+                    "status, last_message_id, last_message_at, reason) "
+                    "VALUES (:aid, :tid, 'DONE', :lmid, :lmat, 'Marked done') "
+                    "ON CONFLICT (account_id, thread_id) "
+                    "DO UPDATE SET status = 'DONE', classified_at = now()"
+                ), {"aid": req.account_id, "tid": req.thread_id,
+                    "lmid": lm.id if lm else None,
+                    "lmat": lm.received_at if lm else None})
+        else:
+            await db.execute(text(
+                """UPDATE email_thread_status ts
+                   SET status = CASE WHEN lower(em.folder) = 'sent'
+                                     THEN 'AWAITING' ELSE 'NEEDS_REPLY' END,
+                       classified_at = now()
+                   FROM email_messages em
+                   WHERE ts.account_id = :aid AND ts.thread_id = :tid
+                     AND em.id = ts.last_message_id"""
+            ), {"aid": req.account_id, "tid": req.thread_id})
+        await db.commit()
+        return {"ok": True, "thread_id": req.thread_id, "done": req.done}
+    finally:
+        await db.close()
+
+
 @router.get("/reply-zero")
 async def reply_zero(
     account_id: str = Query(...),
@@ -5882,7 +5938,8 @@ async def reply_zero(
         ), {"aid": account_id})).fetchone() is not None
 
         if has_status:
-            want = "AWAITING" if type == "awaiting" else "NEEDS_REPLY"
+            want = {"awaiting": "AWAITING", "done": "DONE"}.get(
+                type, "NEEDS_REPLY")
             rows = (await db.execute(text(
                 """SELECT ts.thread_id, ts.reason, ts.last_message_at,
                           em.id, em.subject, em.from_address, em.is_read
@@ -5917,6 +5974,11 @@ async def reply_zero(
                         fu_days and days is not None and days >= fu_days),
                 })
             return {"threads": out, "type": type}
+
+        # No folder heuristic for "done" — it only exists once a thread has been
+        # explicitly resolved (a stored status).
+        if type == "done":
+            return {"threads": [], "type": type}
 
         # Fallback: folder heuristic (before the first classification pass).
         folder = "sent" if type == "awaiting" else "inbox"

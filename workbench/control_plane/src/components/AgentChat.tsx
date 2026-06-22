@@ -653,10 +653,19 @@ export default function AgentChat({
   }, [messages, sessionId]);
 
   const [input, setInput] = useState("");
-  const [sendMode, setSendMode] = useState<SendMode>("steer");
+  const [sendMode, setSendMode] = useState<SendMode>("send");
   const [showSendMenu, setShowSendMenu] = useState(false);
   const [queuedCount, setQueuedCount] = useState(0);
   const queueRef = useRef<string[]>([]);
+
+  // A run is "active" whenever the agent is streaming, recovering after a page
+  // reload, or the server run is still going.  The Stop control must appear in
+  // ALL of these — gating only on isLoading hid Stop during recovery (isLoading
+  // is false then), which is why the Stop button sometimes never showed up and
+  // appeared to vanish when the input was cleared (it fell back to the idle
+  // Send button, which greys out without text).
+  const isRunActive =
+    isLoading || recovering || (!!runStatus && runStatus !== "idle");
   const prevLoadingRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1584,9 +1593,9 @@ export default function AgentChat({
                 <div className="shrink-0 self-end h-9 w-9 rounded-xl bg-muted flex items-center justify-center">
                   <span className="w-4 h-4 rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground animate-spin" />
                 </div>
-              ) : isLoading ? (
+              ) : isRunActive ? (
                 <div className="shrink-0 flex items-stretch self-end" ref={sendMenuRef}>
-                  {/* Stop button — always visible while loading */}
+                  {/* Stop button — always visible while a run is active */}
                   <button type="button" onClick={handleStop}
                     className="h-9 w-9 rounded-xl bg-destructive/10 border border-destructive/30 text-destructive flex items-center justify-center hover:bg-destructive/20 tech-transition"
                     aria-label="Stop generation" title="Stop generation">
@@ -1774,7 +1783,7 @@ export default function AgentChat({
                 isLoading={isLoading}
               />
 
-              {isLoading && sendMode !== "send" && (
+              {isRunActive && sendMode !== "send" && (
                 <span className="text-amber-400 text-[10px] font-medium">
                   {sendMode === "queue" ? "⏱ Queued" : "⤳ Steering"}
                 </span>

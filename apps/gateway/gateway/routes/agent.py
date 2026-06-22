@@ -82,7 +82,6 @@ class WebhookEvent(BaseModel):
 _KNOWN_AGENTS: frozenset[str] = frozenset(
     [
         "task-manager",
-        "reconciler",
         "apis-config",
         "email-assistant",
     ]
@@ -106,15 +105,6 @@ _AGENT_REGISTRY: list[dict] = [
             {"source": "clickup", "event_type": "taskUpdated"},
             {"source": "clickup", "event_type": "taskDeleted"},
         ],
-    },
-    {
-        "name": "reconciler",
-        "description": "Nightly source-of-truth diff + escalation",
-        "tags": ["ops"],
-        "status": "live",
-        "agent_runtime": "maf",
-        "integrations": ["clickup", "zoho-crm"],
-        "optional_integrations": [],
     },
     {
         "name": "apis-config",

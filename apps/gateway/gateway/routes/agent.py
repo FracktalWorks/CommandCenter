@@ -586,6 +586,23 @@ async def list_agents(
         if behind > 0:
             a["behind_by"] = behind
 
+    # Attach dependency-install health so the agents page can warn about unmet
+    # deps (and any apt/system packages a build needs).
+    try:
+        from acb_skills.loader import read_dep_status  # noqa: PLC0415
+        from gateway.routes.workspace import \
+            _agent_workspace_dir  # noqa: PLC0415
+        for a in merged:
+            try:
+                ws = _agent_workspace_dir(a["name"])
+                ds = read_dep_status(ws) if ws is not None else None
+                if ds:
+                    a["dep_status"] = ds
+            except Exception:  # noqa: BLE001
+                continue
+    except Exception:  # noqa: BLE001
+        pass
+
     return merged
 
 

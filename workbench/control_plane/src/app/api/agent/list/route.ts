@@ -55,6 +55,15 @@ export interface AgentEntry {
   dynamic?: boolean;
   /** Number of commits the local clone is behind origin (0 = up-to-date) */
   behind_by?: number;
+  /** Dependency-install health for this agent's clone. */
+  dep_status?: {
+    ok: boolean;
+    error?: string;
+    /** apt/system packages a failed build needs (e.g. ["build-essential"]). */
+    needs_system_packages?: string[];
+    has_requirements?: boolean;
+    pyproject_dep_count?: number;
+  };
 }
 
 export async function GET(): Promise<NextResponse> {

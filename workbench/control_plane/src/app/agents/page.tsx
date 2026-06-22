@@ -1267,6 +1267,30 @@ function AgentSidePanel({
           </div>
         )}
 
+        {agent.dep_status?.ok === false && (
+          <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5">
+            <AlertTriangle className="w-3.5 h-3.5 text-destructive mt-0.5 shrink-0" />
+            <div className="text-xs text-destructive min-w-0">
+              <span className="font-medium">Dependencies failed to install</span>
+              {(agent.dep_status.needs_system_packages?.length ?? 0) > 0 ? (
+                <>
+                  {" "}— this agent (or a dependency) needs system packages. Run on the server:
+                  <code className="mt-1 block font-mono text-[11px] bg-background/60 rounded px-2 py-1 break-all">
+                    sudo apt-get install -y {agent.dep_status.needs_system_packages!.join(" ")}
+                  </code>
+                </>
+              ) : (
+                <> — some of its tools may not work.</>
+              )}
+              {agent.dep_status.error && (
+                <div className="mt-1 text-[10px] text-muted-foreground font-mono whitespace-pre-wrap break-all max-h-16 overflow-y-auto">
+                  {agent.dep_status.error.slice(-280)}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {(agent.integrations?.length ?? 0) > 0 && (
           <div>
             <div className="text-[10px] text-muted uppercase tracking-wider mb-1.5">Required Integrations</div>

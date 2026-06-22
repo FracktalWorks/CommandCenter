@@ -1014,6 +1014,84 @@ def _find_uv() -> str | None:
     return None
 
 
+def _detect_system_packages(error: str) -> list[str]:
+    """Map a pip/uv build failure to the apt packages that would fix it.
+
+    A package with a native extension and no prebuilt wheel must be compiled,
+    which needs a toolchain (and sometimes -dev headers) that a slim server
+    may lack.  We scan the build error for the tell-tale signs.
+    """
+    e = (error or "").lower()
+    out: list[str] = []
+
+    def _add(pkg: str) -> None:
+        if pkg not in out:
+            out.append(pkg)
+
+    if any(s in e for s in (
+        "gcc", "g++", "cc1", "x86_64-linux-gnu-gcc",
+        "failed building wheel", "command 'cc' failed",
+        "unable to find vcvarsall", "microsoft visual c++",
+    )):
+        _add("build-essential")
+    if "python.h" in e or "python3-dev" in e:
+        _add("python3-dev")
+    if "ffi.h" in e or "libffi" in e:
+        _add("libffi-dev")
+    if "ssl.h" in e or "openssl/" in e:
+        _add("libssl-dev")
+    if "libgl.so" in e or "libgl1" in e:
+        _add("libgl1")
+    if "tesseract" in e:
+        _add("tesseract-ocr")
+    if "cargo" in e or "rustc" in e:
+        _add("cargo")
+    return out
+
+
+def _write_dep_status(
+    agent_dir: Path,
+    *,
+    ok: bool,
+    error: str,
+    needs_system: list[str],
+    has_requirements: bool,
+    pyproject_dep_count: int,
+) -> None:
+    """Persist the dependency-install result to ``.git/acb-deps-status.json``
+    so the agents page can surface unmet dependencies."""
+    try:
+        status = {
+            "ok": ok,
+            "error": error,
+            "needs_system_packages": needs_system,
+            "has_requirements": bool(has_requirements),
+            "pyproject_dep_count": int(pyproject_dep_count),
+        }
+        git_dir = agent_dir / ".git"
+        if git_dir.is_dir():
+            (git_dir / "acb-deps-status.json").write_text(
+                json.dumps(status), encoding="utf-8",
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def read_dep_status(agent_dir: Path) -> dict[str, Any] | None:
+    """Read an agent's persisted dependency-install status, or None.
+
+    Public (no underscore) — consumed by the gateway's agent-list endpoint to
+    show unmet-dependency warnings on the agents page.
+    """
+    try:
+        f = Path(agent_dir) / ".git" / "acb-deps-status.json"
+        if f.is_file():
+            return json.loads(f.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def _install_agent_deps(agent_dir: Path, settings: Any) -> None:
     """Install an agent's (or skill's) declared dependencies into the shared
     gateway venv.
@@ -1089,6 +1167,7 @@ def _install_agent_deps(agent_dir: Path, settings: Any) -> None:
             cmds.append(base + pyproject_deps)
 
         ok = True
+        errors: list[str] = []
         for cmd in cmds:
             try:
                 result = subprocess.run(
@@ -1096,18 +1175,34 @@ def _install_agent_deps(agent_dir: Path, settings: Any) -> None:
                 )
                 if result.returncode != 0:
                     ok = False
+                    err = (result.stderr or result.stdout or "")
+                    errors.append(err)
                     _log.warning(
                         "loader.deps_install_failed",
                         agent=agent_dir.name,
                         tool="uv" if uv else "pip",
-                        error=(result.stderr or result.stdout or "")[-700:],
+                        error=err[-700:],
                     )
             except Exception as exc:  # noqa: BLE001
                 ok = False
+                errors.append(str(exc))
                 _log.warning(
                     "loader.deps_install_error",
                     agent=agent_dir.name, error=str(exc),
                 )
+
+        # Persist a machine-readable status so the agents page can surface
+        # unmet dependencies (and any apt/system packages the build needs).
+        joined_err = "\n".join(errors)
+        needs_system = [] if ok else _detect_system_packages(joined_err)
+        _write_dep_status(
+            agent_dir,
+            ok=ok,
+            error="" if ok else joined_err[-1200:],
+            needs_system=needs_system,
+            has_requirements=req.is_file(),
+            pyproject_dep_count=len(pyproject_deps),
+        )
 
         if ok:
             try:
@@ -1119,6 +1214,11 @@ def _install_agent_deps(agent_dir: Path, settings: Any) -> None:
                 agent=agent_dir.name,
                 requirements=req.is_file(),
                 pyproject_deps=len(pyproject_deps),
+            )
+        else:
+            _log.warning(
+                "loader.deps_unmet",
+                agent=agent_dir.name, needs_system=needs_system,
             )
     except Exception as exc:  # noqa: BLE001
         _log.warning(

@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import {
   listRules, createRule, updateRule, deleteRule, runRuleOnMessage,
-  getRulesHistory, runRules, getAssistantSettings, saveAssistantSettings,
+  getRulesHistory, getAssistantSettings, saveAssistantSettings,
   listColdSenders, upsertColdSender, generateWritingStyle, listEmails,
   listKnowledge, createKnowledge, updateKnowledge, deleteKnowledge,
   installPresetRules, reorderRules,
@@ -231,9 +231,7 @@ function RulesTab({ accountId }: { accountId: string | null }) {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<AutomationRule | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [running, setRunning] = useState(false);
   const [installing, setInstalling] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
 
   const load = useCallback(() => {
     if (!accountId) {
@@ -317,20 +315,6 @@ function RulesTab({ accountId }: { accountId: string | null }) {
     }
   };
 
-  const doRun = async () => {
-    if (!accountId) return;
-    setRunning(true);
-    try {
-      await runRules({ accountId, dryRun: true, limit: 25 });
-      setToast("Dry run scheduled — check the History tab in a moment.");
-      setTimeout(() => setToast(null), 4000);
-    } catch (e) {
-      setError((e as Error).message || "Run failed");
-    } finally {
-      setRunning(false);
-    }
-  };
-
   if (!accountId) return <Empty>Select an account first.</Empty>;
   if (loading) return <Spinner label="Loading rules…" />;
 
@@ -361,14 +345,6 @@ function RulesTab({ accountId }: { accountId: string | null }) {
               Add defaults
             </button>
           )}
-          <button
-            onClick={doRun}
-            disabled={running || rules.length === 0}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
-          >
-            {running ? <Loader2 className="animate-spin" size={13} /> : <Play size={13} />}
-            Dry run
-          </button>
           <button
             onClick={() => setEditing(emptyRule(accountId))}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
@@ -482,12 +458,6 @@ function RulesTab({ accountId }: { accountId: string | null }) {
           </div>
         ))}
       </div>
-
-      {toast && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-card border border-border shadow-xl rounded-lg px-4 py-2 text-xs text-foreground">
-          {toast}
-        </div>
-      )}
     </div>
   );
 }
@@ -1608,6 +1578,10 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [llm, setLlm] = useState<LLMConfigResponse | null>(null);
+  // Only the models the user enabled on the Models page (eye toggle).
+  const [enabledModels, setEnabledModels] = useState<
+    { id: string; label?: string; provider?: string }[]
+  >([]);
   const [ruleNames, setRuleNames] = useState<string[]>([]);
   const [dialog, setDialog] = useState<"followup" | "digest" | null>(null);
 
@@ -1615,6 +1589,12 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
     fetch("/api/settings/llm")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => d && setLlm(d))
+      .catch(() => {});
+    // The model dropdown should offer the LiteLLM tiers + only the models the
+    // user made visible on the Models page (not the full static catalogue).
+    fetch("/api/settings/llm/enabled-models")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setEnabledModels(d.enabled ?? d.custom ?? []))
       .catch(() => {});
   }, []);
 
@@ -1853,31 +1833,31 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
                 onChange={(e) => persistPatch({ agent_model: e.target.value })}
                 className={`${INPUT_CLS} w-56 py-1`}
               >
-                {llm ? (
+                {llm || enabledModels.length > 0 ? (
                   <>
-                    <optgroup label="LiteLLM tiers">
-                      {llm.tiers.map((t) => (
-                        <option key={t.tier_name} value={t.tier_name}>
-                          {t.tier_name}
-                          {t.tier_name === "tier-balanced" ? " (default)" : ""}
-                        </option>
-                      ))}
-                    </optgroup>
-                    {llm.providers
-                      .filter((p) => p.configured && p.models.length > 0)
-                      .map((p) => (
-                        <optgroup key={p.id} label={p.label || p.id}>
-                          {p.models.map((m) => (
-                            <option key={m} value={m}>
-                              {m}
-                            </option>
-                          ))}
-                        </optgroup>
-                      ))}
-                    {!llm.tiers.some((t) => t.tier_name === s.agent_model) &&
-                      !llm.providers.some((p) =>
-                        p.models.includes(s.agent_model)
-                      ) && (
+                    {llm && (
+                      <optgroup label="Tiers (auto-routing)">
+                        {llm.tiers.map((t) => (
+                          <option key={t.tier_name} value={t.tier_name}>
+                            {t.tier_name}
+                            {t.tier_name === "tier-balanced" ? " (default)" : ""}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {enabledModels.length > 0 && (
+                      <optgroup label="Your enabled models">
+                        {enabledModels.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.label || m.id}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {/* Keep a previously-saved value selectable even if it's no
+                        longer a tier or an enabled model. */}
+                    {!llm?.tiers.some((t) => t.tier_name === s.agent_model) &&
+                      !enabledModels.some((m) => m.id === s.agent_model) && (
                         <option value={s.agent_model}>{s.agent_model}</option>
                       )}
                   </>

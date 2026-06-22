@@ -603,9 +603,9 @@ function ContextMenu({
 
         {/* Label → (single-email only; per-message label toggles) */}
         {!bulk && (
-          <CtxSubmenu icon={Tag} label="Label…" flipLeft={flipLeft}>
+          <CtxSubmenu icon={Tag} label="Label…" flipLeft={flipLeft} bare>
             <div onClick={(e) => e.stopPropagation()}>
-              <LabelMenu email={email} />
+              <LabelMenu email={email} embedded />
             </div>
           </CtxSubmenu>
         )}
@@ -634,11 +634,15 @@ function CtxSubmenu({
   icon: Icon,
   label,
   flipLeft,
+  bare = false,
   children,
 }: {
   icon: React.ElementType;
   label: string;
   flipLeft?: boolean;
+  /** When the child manages its own scrolling (e.g. LabelMenu), skip the
+   *  flyout's own max-height/scroll so there's no scrollbar-in-a-scrollbar. */
+  bare?: boolean;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -661,7 +665,9 @@ function CtxSubmenu({
         <div
           className={`absolute top-0 ${
             flipLeft ? "right-full mr-0.5" : "left-full ml-0.5"
-          } w-52 max-h-64 overflow-y-auto bg-popover border border-border rounded-lg shadow-xl py-1 z-[82]`}
+          } w-52 ${
+            bare ? "" : "max-h-72 overflow-y-auto"
+          } bg-popover border border-border rounded-lg shadow-xl py-1 z-[82]`}
         >
           {children}
         </div>

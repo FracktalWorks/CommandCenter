@@ -33,7 +33,12 @@ async function gatewayFetch<T>(
     throw err;
   }
 
-  return res.json();
+  // Many endpoints (DELETE, some PATCH) return 204 / an empty body — calling
+  // res.json() on those throws "Unexpected end of JSON input". Parse only when
+  // there's actually a body.
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }
 
 // ── Snake → CamelCase mappers ────────────────────────────────────────────

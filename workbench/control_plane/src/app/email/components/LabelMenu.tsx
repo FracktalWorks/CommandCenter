@@ -10,7 +10,16 @@ import { useEmailStore } from "../lib/emailStore";
  * open) and create new ones. Applied labels show a check. Writes sync to the
  * provider (Gmail labels / Outlook categories) via the store.
  */
-export function LabelMenu({ email }: { email: Email }) {
+export function LabelMenu({
+  email,
+  embedded = false,
+}: {
+  email: Email;
+  /** When rendered inside another popover/flyout (e.g. the right-click submenu),
+   *  drop this component's own panel chrome + fixed width so it doesn't create a
+   *  box-in-a-box with a nested scrollbar. */
+  embedded?: boolean;
+}) {
   const { availableLabels, applyLabel } = useEmailStore();
   const [newLabel, setNewLabel] = useState("");
   const applied = new Set(email.categories || []);
@@ -23,10 +32,18 @@ export function LabelMenu({ email }: { email: Email }) {
   };
 
   return (
-    <div className="w-52 bg-popover border border-border rounded-lg shadow-xl py-1 text-xs">
+    <div
+      className={
+        embedded
+          ? "text-xs"
+          : "w-52 bg-popover border border-border rounded-lg shadow-xl py-1 text-xs"
+      }
+    >
       <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
         Labels
       </div>
+      {/* Only the label list scrolls (and only when it overflows) — the create
+          row below stays pinned. */}
       <div className="max-h-48 overflow-y-auto">
         {availableLabels.length === 0 ? (
           <div className="px-3 py-1.5 text-muted-foreground">No labels yet</div>

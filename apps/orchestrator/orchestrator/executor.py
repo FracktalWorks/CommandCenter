@@ -375,6 +375,7 @@ def _build_injected_tools_addendum(*, is_sub_agent: bool = False) -> str:
 call_agent(name,msg), call_agents_parallel(tasks), call_agent_background(name,msg)
 web_search(query), fetch_page(url)
 write_artifact(path,content) — files go to outputs/
+share_artifact(path) — show a file you already wrote as a download/preview card
 remember(query), recall_timeline(entity,query), save_memory(fact), save_episode(name,content)
 manage_todo_list(todoList) — structured task tracking panel (JSON array)
 ask_user(question,choices?) — HITL: pause and ask the user one question (blocking; the run resumes with their answer)
@@ -410,7 +411,10 @@ github_search(q,scope?,max?), github_repo_search(repo,q?) — code search
 
 ### Workspace & file writing
 Workspace folders visible in the Files Viewer: **outputs/** (default for generated files), **inputs/** (user uploads, read-only), **agent-data/** (reusable reference data).
-- **write_artifact(path, content, encoding?)** — Writes to outputs/ if path has no prefix. Returns a ``download_url`` — you MUST embed it as a clickable link in your reply.
+- **write_artifact(path, content, encoding?, overwrite?)** — Write a file to outputs/ (if path has no prefix). The chat shows a Download/preview card **automatically** — you do NOT need to build or paste any URL; just say what the file is. It never clobbers an existing file by default (it auto-versions to ``name (1).ext`` and returns the real ``path``); pass ``overwrite=true`` only when you deliberately want to replace a file in place.
+- **share_artifact(path)** — If you created a file with your OWN tools (shell, editor, a script you ran) instead of write_artifact, call this with that file's path (or a folder) to surface it as a Download/preview card. The card appears automatically; do NOT hand-construct links.
+
+**Delivering files to the user:** to give the user a downloadable/previewable file, call ``write_artifact`` (for content you generate) or ``share_artifact`` (for a file you already wrote). That is ALL you need — the card renders itself. Never try to guess or assemble a download URL yourself.
 
 ### Task planning & progress tracking
 - **manage_todo_list(todoList)** — Update the live "Todos (n/m)" panel above the chat input.  Takes a JSON object with ``"todoList"`` (the COMPLETE array of all items) and optional ``"operation"`` (``"write"`` or ``"read"``).  Each item: ``id`` (number, sequential from 1), ``title`` (string, 3-7 words), ``status`` (``"not-started"``, ``"in-progress"``, or ``"completed"``).  Use this tool VERY frequently.  CRITICAL workflow: 1) Plan tasks with specific items. 2) Mark ONE as ``"in-progress"`` before starting. 3) Mark it ``"completed"`` immediately after finishing. 4) Move to next.  Do NOT use for trivial single-step requests.  The user sees this panel update in real time.
@@ -452,7 +456,9 @@ Maintain **`agent-data/NOTES.md`** as your cross-session working memory.
 - Keep entries concise — one line per fact. This file survives context compaction and session resets.
 
 ### Self-improvement & committing
-To persist changes to your own repo: `git add -A`, then `git commit -m "feat: ..."`, then print `COMMIT_SHA: <git rev-parse HEAD>`. Do NOT `git push` — pushes are blocked; your commit queues for human approval in the Control Plane inbox. Never amend; one commit per task.
+To persist changes to your own repo: `git add -A`, then `git commit -m "feat: ..."`, then print `COMMIT_SHA: <git rev-parse HEAD>`. Never amend; one commit per task.
+- **By default, do NOT push** — direct pushes are blocked and the commit queues for human approval in the Control Plane inbox.
+- **If the user explicitly tells you to push (e.g. "commit and push") in this conversation**, then after committing run `git push --no-verify origin HEAD`. The `--no-verify` flag is required to bypass the approval hook. That commit is then recorded as already-approved — the user does not need to approve it again on the Agents page.
 ---"""
 
 
@@ -529,9 +535,13 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
         pass  # duckduckgo-search / httpx not installed — skip gracefully
 
     # File-writing artifact tool — surfaces created files in the UI sidebar.
+    # share_artifact surfaces a file the agent already wrote (via shell/editor)
+    # as a download/preview card so it never hand-builds links.
     try:
-        from acb_skills.write_artifact import write_artifact  # noqa: PLC0415
-        _all_tools = _all_tools + [write_artifact]
+        from acb_skills.write_artifact import (  # noqa: PLC0415
+            share_artifact, write_artifact,
+        )
+        _all_tools = _all_tools + [write_artifact, share_artifact]
     except ImportError:
         pass
 
@@ -1283,6 +1293,27 @@ async def _get_current_head(agent_dir: str) -> str:
         return ""
 
 
+async def _commit_on_remote(agent_dir: str, commit_sha: str) -> bool:
+    """True if *commit_sha* is already on a remote (the agent pushed it).
+
+    A successful ``git push`` updates the local ``origin/<branch>`` tracking ref,
+    so ``git branch -r --contains <sha>`` lists a remote ref when the commit was
+    pushed. Used to auto-approve a commit the user told the agent to push from
+    chat (it lands on origin, so it needs no separate Control-Plane approval).
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "branch", "-r", "--contains", commit_sha,
+            cwd=agent_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        return proc.returncode == 0 and bool(out.decode(errors="replace").strip())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def _install_push_guard(agent_dir: str) -> None:
     """Install git hooks for commit-gate workflow.
 
@@ -1556,6 +1587,12 @@ async def _detect_agent_commits(
             # Capture the diff for inline review
             diff_text = await _git_diff(agent_dir, commit_sha)
 
+            # If the agent already pushed this commit (the user told it to
+            # "commit and push" in chat, so it ran `git push --no-verify`), it's
+            # on origin — record it as already-approved instead of queuing it for
+            # a redundant Control-Plane approval.
+            pushed = await _commit_on_remote(agent_dir, commit_sha)
+
             await _register_pending_commit(
                 agent_name=agent_name,
                 run_id=run_id,
@@ -1564,6 +1601,8 @@ async def _detect_agent_commits(
                 commit_message=commit_message,
                 diff_text=diff_text,
                 test_summary="(agent self-improvement — no test run)",
+                status="approved" if pushed else "pending",
+                reviewed_by="chat:autopush" if pushed else None,
             )
 
         record(

@@ -1,7 +1,9 @@
 """Skill registry (v1) + Dynamic Agent Loader (v2) + Integration Registry."""
 from acb_skills.agent_tools import call_agent, call_agent_background
 from acb_skills.web_tools import fetch_page, web_search
-from acb_skills.write_artifact import write_artifact, _WRITE_ARTIFACT_CONTEXT
+from acb_skills.write_artifact import (
+    write_artifact, share_artifact, _WRITE_ARTIFACT_CONTEXT,
+)
 from acb_skills.todo_tools import manage_todo_list
 from acb_skills.ask_tools import ask_questions
 from acb_skills.error_tools import get_errors
@@ -46,6 +48,7 @@ __all__ = [
     "fetch_page",
     # File-writing tool (auto-injected; also importable explicitly)
     "write_artifact",
+    "share_artifact",
     "_WRITE_ARTIFACT_CONTEXT",
     # Todo-list management tool (auto-injected; also importable explicitly)
     "manage_todo_list",

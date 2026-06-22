@@ -68,6 +68,7 @@ async def write_artifact(
     content: str | bytes,
     *,
     encoding: str | None = "utf-8",
+    overwrite: bool = False,
 ) -> dict:
     """Write a file to the agent's workspace and surface it in the UI file browser.
 
@@ -95,10 +96,16 @@ async def write_artifact(
                   or ``bytes`` (written as-is; set *encoding* to ``None``).
         encoding: Text encoding for ``str`` content.  Default ``"utf-8"``.
                   Pass ``None`` when *content* is already ``bytes``.
+        overwrite: By default (``False``) an existing file is **never**
+                  clobbered — the new file is written to a uniquified name
+                  (``report (1).md``) so originals/user uploads are preserved.
+                  Set ``True`` to deliberately replace the file in place.
 
     Returns:
         ``{"path": str, "size": int, "sha256": str, "download_url": str}``
 
+        ``path``/``download_url`` reflect the file *actually* written (which may
+        be a uniquified name if a file already existed and ``overwrite`` is off).
         *download_url* is a relative URL suitable for a clickable markdown
         link, e.g. ``/api/agent/workspace/{session}/file?path=outputs/x.md``.
     """
@@ -122,6 +129,18 @@ async def write_artifact(
 
     # Ensure parent directory exists
     target.parent.mkdir(parents=True, exist_ok=True)
+
+    # Non-destructive by default: never clobber an existing file (a user upload
+    # in inputs/, or a previously generated artifact). Uniquify to "name (1).ext"
+    # — the same collision policy the upload endpoint uses. Pass overwrite=True to
+    # deliberately replace the file in place.
+    if target.exists() and not overwrite:
+        stem, ext = target.stem, target.suffix
+        counter = 1
+        while target.exists():
+            target = target.parent / f"{stem} ({counter}){ext}"
+            counter += 1
+        clean_path = target.relative_to(root).as_posix()
 
     # Write file
     if isinstance(content, str):
@@ -167,6 +186,105 @@ async def write_artifact(
     result: dict = {"path": clean_path, "size": size, "sha256": digest}
     if download_url:
         result["download_url"] = download_url
+    return result
+
+
+async def share_artifact(path: str) -> dict:
+    """Surface a file you ALREADY created as a downloadable, previewable card in
+    the chat — and get back a download link.
+
+    Use this whenever you produced a file with your own tools (shell, editor,
+    Write, a script you ran) instead of ``write_artifact``.  Do NOT re-create or
+    re-read the file's contents — just point this tool at the path you already
+    wrote and it will appear in the chat with a Download button and an inline
+    preview, with zero extra effort on your part.  You do not need to construct
+    any URL by hand; the returned ``download_url`` is the canonical link.
+
+    Pass a single file, or a directory to share every file inside it.
+
+    Args:
+        path: File or directory path relative to your workspace (e.g.
+              ``"outputs/report.pdf"``, ``"q2_summary.xlsx"``, or ``"outputs"``
+              to share the whole folder).  Absolute paths inside the workspace
+              are also accepted.
+
+    Returns:
+        ``{"artifacts": [{"path","name","size","mime_type","download_url"}, ...],
+        "download_url": <first file's link>}``.  On error,
+        ``{"error": str, "artifacts": []}``.
+    """
+    import asyncio  # noqa: PLC0415
+
+    workspace_root = _WRITE_ARTIFACT_CONTEXT.get("workspace_root")
+    session_id = _WRITE_ARTIFACT_CONTEXT.get("session_id")
+    gateway_url = _WRITE_ARTIFACT_CONTEXT.get("gateway_url", "http://127.0.0.1:8000")
+    gateway_token = _WRITE_ARTIFACT_CONTEXT.get("gateway_token", "sk-local-dev-change-me")
+
+    if not workspace_root:
+        return {"error": "No workspace is configured for this run.", "artifacts": []}
+
+    root = Path(workspace_root).resolve()
+    raw = (path or "").replace("\\", "/").strip().lstrip("/")
+    if not raw:
+        return {"error": "A file or directory path is required.", "artifacts": []}
+    candidate = Path(raw)
+    target = (candidate if candidate.is_absolute() else root / raw).resolve()
+
+    # Path-traversal guard — the target must stay inside the workspace root.
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return {"error": f"Path '{path}' is outside the workspace.", "artifacts": []}
+    if not target.exists():
+        return {"error": f"File not found: {path}", "artifacts": []}
+
+    # Collect the file(s) to share (a directory shares everything within it).
+    files: list[Path] = []
+    if target.is_dir():
+        for p in sorted(target.rglob("*")):
+            if p.is_file():
+                files.append(p)
+                if len(files) >= 50:
+                    break
+    else:
+        files = [target]
+    if not files:
+        return {"error": f"No files found at: {path}", "artifacts": []}
+
+    artifacts: list[dict] = []
+    for f in files:
+        rel = f.resolve().relative_to(root).as_posix()
+        size = f.stat().st_size
+        mime, _ = mimetypes.guess_type(f.name)
+        mime = mime or "application/octet-stream"
+        download_url = (
+            f"/api/agent/workspace/{session_id}/file?path={rel}"
+            if session_id else None
+        )
+        art = {
+            "path": rel,
+            "name": f.name,
+            "size": size,
+            "mime_type": mime,
+            "modified_at": datetime.now(tz=timezone.utc).isoformat(),
+            "is_dir": False,
+        }
+        # Same CUSTOM event write_artifact emits → renders the ArtifactCard.
+        asyncio.ensure_future(_notify(
+            session_id=session_id,
+            workspace_root=workspace_root,
+            artifact=art,
+            gateway_url=gateway_url,
+            gateway_token=gateway_token,
+        ))
+        entry: dict = {"path": rel, "name": f.name, "size": size, "mime_type": mime}
+        if download_url:
+            entry["download_url"] = download_url
+        artifacts.append(entry)
+
+    result: dict = {"artifacts": artifacts}
+    if artifacts and artifacts[0].get("download_url"):
+        result["download_url"] = artifacts[0]["download_url"]
     return result
 
 

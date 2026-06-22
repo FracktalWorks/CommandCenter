@@ -467,20 +467,28 @@ function ChatPageInner() {
   const userId: string = nextAuthSession?.user?.email ?? "dev@fracktal.in";
 
   const { isMobile } = useViewMode();
-  const { open: openDrawer, close: closeDrawer } = useMobileDrawer();
+  const {
+    open: openDrawer, close: closeDrawer, isOpen: drawerIsOpen,
+  } = useMobileDrawer();
   const activeRunIds = useActiveSessions();
 
   // Refs to hold drawer content (defined later in render).
   const conversationsRef = useRef<React.ReactNode>(null);
   const filesRef = useRef<React.ReactNode>(null);
+  // Which tab's content the mobile drawer is currently showing — so we can
+  // re-push fresh content into it when state changes (the drawer holds a frozen
+  // snapshot, so e.g. deleting a session wouldn't otherwise update it).
+  const drawerTabRef = useRef<"chats" | "files" | null>(null);
 
   // Listen for bottom-nav tab events from AppShell MobileBottomNav.
   useEffect(() => {
     const handler = (e: Event) => {
       const tab = (e as CustomEvent<string>).detail;
       if (tab === "chats" && conversationsRef.current) {
+        drawerTabRef.current = "chats";
         openDrawer(conversationsRef.current);
       } else if (tab === "files" && filesRef.current) {
+        drawerTabRef.current = "files";
         openDrawer(filesRef.current);
       }
     };
@@ -739,6 +747,25 @@ function ChatPageInner() {
     conversationsRef.current = conversationsContent;
     filesRef.current = filesContent;
   });
+
+  // The mobile drawer holds a one-time snapshot of its content, so state changes
+  // after it opens (e.g. deleting a session) don't show until it's reopened.
+  // Re-push the live content into the open drawer when the underlying data
+  // changes. Runs after the ref-sync effect above, so the refs are current.
+  useEffect(() => {
+    if (!drawerIsOpen) {
+      drawerTabRef.current = null;
+      return;
+    }
+    if (drawerTabRef.current === "chats" && conversationsRef.current) {
+      openDrawer(conversationsRef.current);
+    } else if (drawerTabRef.current === "files" && filesRef.current) {
+      openDrawer(filesRef.current);
+    }
+    // Keyed on the data that rebuilds the drawer content; openDrawer only
+    // updates AppShell state (won't loop — our own deps don't change from it).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions, artifactUpdates, activeSessionId, drawerIsOpen]);
 
   // ── Render ─────────────────────────────────────────────────────────────
   return (

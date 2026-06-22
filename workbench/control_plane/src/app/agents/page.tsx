@@ -61,10 +61,11 @@ function PendingCommits({ agentName }: { agentName: string }) {
     try {
       const res = await fetch("/api/agent/mutations");
       const all: MutationEntry[] = res.ok ? await res.json() : [];
-      // Show oldest first: when reviewing a commit chain (A→B→C) the earliest
-      // commit in the chain should be reviewed first.
+      // Show newest first: the latest commit is the one to approve — approving it
+      // cascade-approves (and pushes) every earlier commit in the chain (A→B→C),
+      // so the latest is surfaced as the single action.
       const filtered = all.filter((r) => r.agent === agentName);
-      filtered.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+      filtered.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
       setRows(filtered);
     } catch {
       setRows([]);
@@ -168,7 +169,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
   const pendingCount = awaitingDecision.length;
 
   // Separate display order:
-  // 1. Commits awaiting a decision (oldest first — review in commit order A→B→C)
+  // 1. Commits awaiting a decision (newest first — the latest is the action)
   // 2. Terminal/informational entries (approved, rejected, audit) shown below
   const decisionRows = rows.filter(
     (r) => r.type === "pending_commit" && (r.status === "pending" || r.status === "eval_failed")
@@ -176,6 +177,12 @@ function PendingCommits({ agentName }: { agentName: string }) {
   const terminalRows = rows.filter(
     (r) => !(r.type === "pending_commit" && (r.status === "pending" || r.status === "eval_failed"))
   );
+  // Rows are newest-first, so the first plain-pending row is the latest commit.
+  // Approving it cascade-approves every earlier pending commit, so ONLY the
+  // latest exposes Approve/Reject; the earlier ones render as "included".
+  const pendingDecision = decisionRows.filter((r) => r.status === "pending");
+  const latestPendingId = pendingDecision[0]?.id ?? null;
+  const earlierPendingCount = Math.max(0, pendingDecision.length - 1);
 
   return (
     <div className="mt-3 border-t border-border pt-3">
@@ -211,11 +218,9 @@ function PendingCommits({ agentName }: { agentName: string }) {
             const key = m.id ?? m.run_id ?? String(i);
             const isPending = m.status === "pending";
             const isEvalFailed = m.status === "eval_failed";
-            // Is there a later commit in the same agent's chain still awaiting review?
-            // If so, show a note that approving this will also unblock those.
-            const laterCount = decisionRows.filter(
-              (r) => r.id !== m.id && new Date(r.at).getTime() > new Date(m.at).getTime()
-            ).length;
+            // The latest pending commit is the single approval action; earlier
+            // pending commits are merged in automatically when it's approved.
+            const isLatestPending = isPending && m.id === latestPendingId;
 
             return (
               <div
@@ -254,10 +259,10 @@ function PendingCommits({ agentName }: { agentName: string }) {
                   </div>
                 )}
 
-                {/* Cascade hint */}
-                {laterCount > 0 && isPending && (
+                {/* Cascade hint — only on the latest commit (the action) */}
+                {isLatestPending && earlierPendingCount > 0 && (
                   <p className="mt-1 text-[10px] text-primary/60">
-                    Approving will also push {laterCount} later commit{laterCount === 1 ? "" : "s"} in this chain.
+                    Latest commit — approving also approves & pushes {earlierPendingCount} earlier commit{earlierPendingCount === 1 ? "" : "s"} in this chain.
                   </p>
                 )}
 
@@ -312,15 +317,20 @@ function PendingCommits({ agentName }: { agentName: string }) {
                   </div>
                 )}
 
-                {/* pending actions */}
-                {isPending && m.id && (
+                {/* pending actions — only the latest commit is actionable;
+                    approving it cascade-approves the earlier ones */}
+                {isLatestPending && m.id && (
                   <div className="mt-2 flex gap-1.5">
                     <button
                       disabled={!!busy[m.id]}
                       onClick={() => act(m.id!, "approve")}
                       className="rounded bg-success/15 px-2.5 py-1 text-success hover:bg-success/25 disabled:opacity-50 transition-colors"
                     >
-                      {busy[m.id] === "approve" ? "Pushing…" : "Approve & Push"}
+                      {busy[m.id] === "approve"
+                        ? "Pushing…"
+                        : earlierPendingCount > 0
+                        ? `Approve & Push (incl. ${earlierPendingCount} earlier)`
+                        : "Approve & Push"}
                     </button>
                     <button
                       disabled={!!busy[m.id]}
@@ -330,6 +340,14 @@ function PendingCommits({ agentName }: { agentName: string }) {
                       {busy[m.id] === "reject" ? "Rejecting…" : "Reject & Discard"}
                     </button>
                   </div>
+                )}
+
+                {/* Earlier pending commits in the chain — no action; approving
+                    the latest above includes them */}
+                {isPending && !isLatestPending && (
+                  <p className="mt-2 text-[10px] text-muted-foreground/70">
+                    ↑ Included when you approve the latest commit above.
+                  </p>
                 )}
               </div>
             );

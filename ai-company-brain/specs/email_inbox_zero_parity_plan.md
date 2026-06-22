@@ -213,10 +213,12 @@ match rationale per email. Pending: full per-message timeline view.
 - Tests: undo restores prior folder/flags; test endpoint returns match+reason
   without mutating.
 
-### Phase 7 — Learned patterns + writing-style derivation — ⬜ REMAINING
-Writing-style derivation shipped (Phase 2). Still to do: learn from the user's
-*edits* to drafts. This needs a draft-edit capture hook (diff the assistant's
-draft vs what the user actually sent) — a dedicated design, deferred.
+### Phase 7 — Learned patterns + writing-style derivation — ✅ SHIPPED
+Writing-style derivation (Phase 2) + learn-from-edits (Migration 28): the
+assistant's draft is captured per thread (`email_ai_drafts`); on send, the sent
+body is diffed and an LLM distils one durable preference into
+`email_learned_patterns` (deduped/weighted), injected as `<learned_patterns>`
+into the drafter and viewable/removable in Assistant → Settings.
 - Derive writing style from sent mail; learn from user edits to drafts; feed
   back into the drafter.
 - Acceptance: style summary generated from sent corpus; edited-draft deltas
@@ -290,3 +292,66 @@ Email coverage target by phase:
 ## 8. Backlog (post-parity)
 Calendar tools in replies, AI "Clean" flow, attachment auto-filing, meeting
 briefs, Slack / scheduled send. (Carried from `email_ai_assistant.md` §14.)
+
+---
+
+## 9. Deferred backend hardening (from the code review) — TODO later
+
+These came out of the multi-agent code review. The **critical/high bugs were
+already fixed and deployed** (DB-engine leak, Outlook delta token, digest
+due-check, ai_chat IDOR, send_email token persistence, backfill body,
+agent `follow_up_days`). **The items below do NOT affect current functionality**
+at the present single-primary-user scale — they're robustness / scalability /
+maintainability work to do before the email app is opened to many concurrent
+users/accounts. Do the quick correctness wins first, then the structural ones as
+a separate, tested pass.
+
+### Quick correctness wins (low risk)
+- **401-retry on mid-session token expiry** (`providers/outlook.py`,
+  `providers/gmail.py`): the live `AsyncClient` freezes the access token when
+  first built; a token expiring during a long sync 401s with no refresh-and-retry
+  and flips the account to `error` even though the refresh token is valid. Fix:
+  on 401, refresh + rebuild `_http` (or null it after refresh) and retry once.
+- **`find_urgent` / OR-search** (`agents.py` + gateway `list_messages`): the
+  agent sends `"urgent OR deadline OR …"` into `plainto_tsquery`, which ignores
+  `OR` and ANDs all terms → almost never matches. Fix: `websearch_to_tsquery`
+  for that path, or per-term searches merged.
+- **Webhook `clientState` when unset** (`microsoft_webhook`): reject
+  notifications when no `clientState` is stored (currently skips the check if
+  NULL); use `secrets.compare_digest`.
+- **`update_message`/`delete_message` best-effort blocks** re-raise provider
+  `HTTPException`, failing a user action whose local DB change already committed.
+  Don't re-raise inside the best-effort provider block.
+
+### Scalability (do before multi-user scale)
+- **OAuth `state` → Redis** (`email.py` `_oauth_states`): in-memory dict breaks
+  multi-worker deploys and on restart; move to Redis + TTL (`_get_redis()` exists).
+- **Don't hold a DB session across LLM/provider I/O** (`_run_rules_job`,
+  `update_message`): release the connection before slow calls; re-acquire to
+  write results. Prevents pool starvation under concurrency.
+- **LLM batching + global concurrency cap**: rule-matching makes one LLM call
+  *per email* (`_llm_pick_rule`), per cycle, per account, with no shared cap.
+  Batch emails per call; bound concurrent LLM calls with a shared semaphore /
+  per-account daily budget. Biggest cost/latency risk at scale.
+- **N+1 queries + indexes**: `list_accounts` (unread per account), `_load_rules`
+  (actions per rule, re-fetched per email in the match loop), `reorder_rules`
+  (UPDATE per rule) → batch with aggregates / `LEFT JOIN` / `unnest`. Add index
+  `email_messages(account_id, thread_id, received_at DESC)` for the
+  `DISTINCT ON (thread_id)` reply-zero/classifier queries; add a FK + index on
+  `email_thread_status.last_message_id` and make the reply-zero JOIN a LEFT JOIN.
+
+### Maintainability (dev scalability)
+- **Split `email.py`** (~5.6k lines) into a package: `routers/{accounts,messages,
+  rules,senders,oauth,webhook}.py` (thin HTTP) + `services/{db,providers,
+  rules_engine,classify,oauth_state}.py`. Centralize the duplicated
+  provider-instantiation block (use the existing `_instantiate_provider`
+  everywhere). Pair this with the shared session-factory.
+
+### Minor / informational
+- Return generic client errors (some handlers echo raw provider exception text
+  that can embed tokens/URLs); sanitize `sync_error` before persisting; encode
+  `Content-Disposition` filename (header-injection guard).
+- IMAP is INBOX-only and its flag two-way-sync is a base no-op (documented
+  limitation, not a regression) — namespace UIDs by folder before syncing
+  Sent/Drafts.
+- History tab: full per-message timeline view (Phase 6 remainder).

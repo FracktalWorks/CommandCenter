@@ -5,7 +5,7 @@ import {
   Loader2, Plus, Trash2, Pencil, Play, Check, X, FlaskConical,
   History as HistoryIcon, Settings2, Settings, Sparkles, Wand2, BookOpen,
   ArrowUp, ArrowDown, Eye, MessageCircle, RefreshCcw, Square,
-  MoreVertical, Copy,
+  MoreVertical, Copy, Paperclip,
 } from "lucide-react";
 import {
   listRules, createRule, updateRule, deleteRule,
@@ -18,7 +18,7 @@ import {
   generateRules,
 } from "../../lib/api";
 import {
-  AutomationRule, RuleAction, RuleActionType, ExecutedRule, Email,
+  AutomationRule, RuleAction, RuleActionType, RuleActionAttachment, ExecutedRule, Email,
   AssistantSettings, EMAIL_CATEGORIES, ColdBlockerMode,
   ColdSender, LLMConfigResponse, KnowledgeEntry, LearnedPattern,
   LearnedRulePattern,
@@ -1287,8 +1287,33 @@ function RuleEditor({
                   <p className="text-[10px] text-muted-foreground">
                     Creates a draft for review — never auto-sends.
                   </p>
+                  <ActionAttachments
+                    attachments={a.attachments ?? []}
+                    onChange={(att) => setAction(i, { attachments: att })}
+                  />
                 </div>
               )}
+              {/* Delay — wait N minutes before running this action. */}
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-muted-foreground">Run after</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={a.delay_minutes ?? ""}
+                  onChange={(e) =>
+                    setAction(i, {
+                      delay_minutes: e.target.value
+                        ? Math.max(0, parseInt(e.target.value, 10) || 0)
+                        : null,
+                    })
+                  }
+                  placeholder="0"
+                  className={`${INPUT_CLS} w-20`}
+                />
+                <span className="text-[10px] text-muted-foreground">
+                  minutes (0 = immediately)
+                </span>
+              </div>
             </div>
           ))}
         </div>
@@ -1447,6 +1472,87 @@ function ProcessPastEmailsDialog({
         </div>
       )}
     </Modal>
+  );
+}
+
+/**
+ * Attachments for a draft/reply/forward action. In CommandCenter these are
+ * drawn from the artifacts the assistant produces — referenced by name here.
+ * "AI-selected" sources let the assistant choose which to attach at draft time
+ * (inbox-zero parity); otherwise the artifact is always attached.
+ */
+function ActionAttachments({
+  attachments,
+  onChange,
+}: {
+  attachments: RuleActionAttachment[];
+  onChange: (next: RuleActionAttachment[]) => void;
+}) {
+  const [name, setName] = useState("");
+  const add = () => {
+    const v = name.trim();
+    if (!v) return;
+    onChange([...attachments, { name: v, ai_selected: false }]);
+    setName("");
+  };
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap gap-1.5">
+        {attachments.map((att, i) => (
+          <span
+            key={i}
+            className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md border border-border bg-secondary/40 text-foreground"
+          >
+            <Paperclip size={9} className="text-muted-foreground" />
+            {att.name || att.artifact_id || "attachment"}
+            {att.ai_selected && (
+              <span className="text-primary" title="AI-selected source">✨</span>
+            )}
+            <button
+              onClick={() => onChange(attachments.filter((_, j) => j !== i))}
+              className="text-muted-foreground hover:text-destructive"
+            >
+              <X size={9} />
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="flex items-center gap-1.5">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              add();
+            }
+          }}
+          placeholder="Attach an artifact by name…"
+          className={`${INPUT_CLS} flex-1`}
+        />
+        <button
+          onClick={add}
+          disabled={!name.trim()}
+          className="px-2 py-1.5 rounded-lg border border-border text-[11px] text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
+        >
+          Add
+        </button>
+      </div>
+      {attachments.some((a) => !a.ai_selected) && (
+        <button
+          onClick={() =>
+            onChange(
+              attachments.map((a) => ({ ...a, ai_selected: !a.ai_selected })),
+            )
+          }
+          className="text-[10px] text-primary hover:opacity-80"
+        >
+          {attachments.every((a) => a.ai_selected)
+            ? "Always attach these"
+            : "Let the assistant choose which to attach"}
+        </button>
+      )}
+    </div>
   );
 }
 

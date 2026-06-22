@@ -3068,6 +3068,58 @@ async def _sender_category(db: Any, account_id: str, sender_email: str) -> str:
     return (row.category if row and row.category else "Unknown")
 
 
+async def _load_rule_patterns(
+    db: Any, account_id: str,
+) -> dict[str, dict[str, list[tuple[str, str]]]]:
+    """Learned classification patterns per rule (inbox-zero parity).
+
+    Returns ``{rule_id: {"include": [(type, value), …], "exclude": […]}}``.
+    Best-effort: returns {} if the table doesn't exist yet (pre-migration)."""
+    try:
+        rows = (await db.execute(text(
+            "SELECT rule_id, pattern_type, value, exclude "
+            "FROM email_rule_patterns WHERE account_id = :aid"
+        ), {"aid": account_id})).fetchall()
+    except Exception:  # noqa: BLE001
+        return {}
+    out: dict[str, dict[str, list[tuple[str, str]]]] = {}
+    for r in rows:
+        d = out.setdefault(str(r.rule_id), {"include": [], "exclude": []})
+        d["exclude" if r.exclude else "include"].append((r.pattern_type, r.value))
+    return out
+
+
+def _pattern_hit(pat: tuple[str, str], email: dict[str, str]) -> bool:
+    """True if a learned pattern (type, value) matches the email (substring, ci)."""
+    ptype, value = pat
+    v = (value or "").strip().lower()
+    if not v:
+        return False
+    if ptype == "SUBJECT":
+        return v in (email.get("subject", "") or "").lower()
+    return v in (email.get("from", "") or "").lower()  # FROM
+
+
+def _patterns_excluded_rules(
+    patterns: dict[str, dict[str, list[tuple[str, str]]]], email: dict[str, str],
+) -> set[str]:
+    """Rule ids whose learned EXCLUDE pattern matches this email — skip them."""
+    return {
+        rid for rid, p in patterns.items()
+        if any(_pattern_hit(pt, email) for pt in p["exclude"])
+    }
+
+
+def _patterns_included_rule(
+    rule: dict[str, Any],
+    patterns: dict[str, dict[str, list[tuple[str, str]]]],
+    email: dict[str, str],
+) -> bool:
+    """True if a learned INCLUDE pattern for this rule matches the email."""
+    p = patterns.get(str(rule.get("id")))
+    return bool(p and any(_pattern_hit(pt, email) for pt in p["include"]))
+
+
 async def _match_email_to_rule(
     db: Any, account_id: str, email: dict[str, str]
 ) -> dict[str, Any] | None:
@@ -3081,6 +3133,16 @@ async def _match_email_to_rule(
     if not rules:
         return None
 
+    # Learned patterns (inbox-zero parity): an EXCLUDE pattern skips a rule
+    # entirely; an INCLUDE pattern short-circuits to an immediate match (no LLM).
+    patterns = await _load_rule_patterns(db, account_id)
+    excluded = _patterns_excluded_rules(patterns, email)
+    for rule in rules:
+        if str(rule.get("id")) in excluded:
+            continue
+        if _patterns_included_rule(rule, patterns, email):
+            return {"rule": rule, "reason": "Matched a learned pattern."}
+
     # Resolve the sender's category once, only if a rule actually filters on it.
     sender_category = "Unknown"
     if any(r.get("category_filter_type") and r.get("category_filters") for r in rules):
@@ -3088,6 +3150,8 @@ async def _match_email_to_rule(
 
     instruction_rules: list[dict[str, Any]] = []
     for rule in rules:
+        if str(rule.get("id")) in excluded:
+            continue
         if not _category_ok(rule, sender_category):
             continue
         sm = _static_match(rule, email)
@@ -3129,6 +3193,9 @@ async def _match_email_to_rules_multi(
     if not rules:
         return []
 
+    patterns = await _load_rule_patterns(db, account_id)
+    excluded = _patterns_excluded_rules(patterns, email)
+
     sender_category = "Unknown"
     if any(r.get("category_filter_type") and r.get("category_filters") for r in rules):
         sender_category = await _sender_category(db, account_id, email.get("from", ""))
@@ -3143,8 +3210,17 @@ async def _match_email_to_rules_multi(
         seen.add(rid)
         matches.append({"rule": rule, "reason": reason})
 
+    # Learned INCLUDE patterns match immediately (and skip the LLM for that rule).
+    for rule in rules:
+        if str(rule.get("id")) in excluded:
+            continue
+        if _patterns_included_rule(rule, patterns, email):
+            _add(rule, "Matched a learned pattern.")
+
     instruction_rules: list[dict[str, Any]] = []
     for rule in rules:
+        if str(rule.get("id")) in excluded or str(rule.get("id")) in seen:
+            continue
         if not _category_ok(rule, sender_category):
             continue
         sm = _static_match(rule, email)
@@ -3680,6 +3756,137 @@ async def run_rules_on_message(
             "actions": primary["rule"]["actions"],
             "applied_rules": [m["rule"]["name"] for m in matches],
         }
+    finally:
+        await db.close()
+
+
+# ── Learned classification patterns (the real "Learned Patterns" — inbox-zero) ──
+
+async def _upsert_rule_pattern(
+    db: Any, account_id: str, rule_id: str, value: str, exclude: bool,
+    source: str, reason: str | None, message_id: str | None, thread_id: str | None,
+) -> None:
+    """Record a learned FROM pattern for a rule. Removes the opposite (include vs
+    exclude) for the same sender so a correction never contradicts itself."""
+    if not (value or "").strip():
+        return
+    # Drop the opposite disposition for this (rule, sender) first.
+    await db.execute(text(
+        "DELETE FROM email_rule_patterns WHERE account_id = :aid AND rule_id = :rid "
+        "AND pattern_type = 'FROM' AND lower(value) = lower(:val) AND exclude = :opp"
+    ), {"aid": account_id, "rid": rule_id, "val": value, "opp": not exclude})
+    await db.execute(text(
+        """INSERT INTO email_rule_patterns
+             (account_id, rule_id, pattern_type, value, exclude, source, reason,
+              message_id, thread_id)
+           VALUES (:aid, :rid, 'FROM', :val, :exc, :src, :reason, :mid, :tid)
+           ON CONFLICT (account_id, rule_id, pattern_type, lower(value), exclude)
+           DO UPDATE SET source = EXCLUDED.source, reason = EXCLUDED.reason,
+                         created_at = now()"""
+    ), {"aid": account_id, "rid": rule_id, "val": value, "exc": exclude,
+        "src": source, "reason": reason, "mid": message_id, "tid": thread_id})
+
+
+class RuleFeedbackRequest(BaseModel):
+    account_id: str
+    sender: str                       # sender email — the FROM pattern value
+    expected: str                     # rule_id | "none" | "new"
+    matched_rule_ids: list[str] = []  # rules that currently match this email
+    explanation: str | None = None
+    message_id: str | None = None
+    thread_id: str | None = None
+
+
+@router.post("/rules/feedback")
+async def rule_feedback(
+    req: RuleFeedbackRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Persist a Fix correction as learned patterns so it sticks (inbox-zero
+    parity). "expected = rule_id" teaches the matcher to ALWAYS apply that rule
+    to this sender (and to STOP applying any other rule that wrongly matched);
+    "none" teaches it to stop applying the matched rules to this sender; "new"
+    is handled by creating a rule (returns created=False, action="new")."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        sender = (req.sender or "").strip()
+        reason = (req.explanation or "").strip() or "Taught via Fix"
+        if req.expected == "new":
+            return {"created": False, "action": "new"}
+        if not sender:
+            return {"created": False, "reason": "no sender"}
+        learned: list[dict[str, Any]] = []
+        if req.expected == "none":
+            for rid in req.matched_rule_ids:
+                await _upsert_rule_pattern(
+                    db, req.account_id, rid, sender, True, "FIX", reason,
+                    req.message_id, req.thread_id)
+                learned.append({"rule_id": rid, "exclude": True})
+        else:  # a specific rule id should have matched
+            await _upsert_rule_pattern(
+                db, req.account_id, req.expected, sender, False, "FIX", reason,
+                req.message_id, req.thread_id)
+            learned.append({"rule_id": req.expected, "exclude": False})
+            for rid in req.matched_rule_ids:
+                if rid and rid != req.expected:
+                    await _upsert_rule_pattern(
+                        db, req.account_id, rid, sender, True, "FIX", reason,
+                        req.message_id, req.thread_id)
+                    learned.append({"rule_id": rid, "exclude": True})
+        await db.commit()
+        return {"created": True, "learned": learned, "sender": sender}
+    finally:
+        await db.close()
+
+
+@router.get("/rules/patterns")
+async def list_rule_patterns(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """List learned classification patterns (sender → rule include/exclude)."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        try:
+            rows = (await db.execute(text(
+                """SELECT p.id, p.rule_id, r.name AS rule_name, p.pattern_type,
+                          p.value, p.exclude, p.source, p.reason, p.created_at
+                   FROM email_rule_patterns p
+                   LEFT JOIN email_rules r ON p.rule_id = r.id
+                   WHERE p.account_id = :aid
+                   ORDER BY p.created_at DESC"""
+            ), {"aid": account_id})).fetchall()
+        except Exception:  # noqa: BLE001 — table may not exist pre-migration
+            rows = []
+        return {"patterns": [
+            {"id": str(r.id), "rule_id": str(r.rule_id),
+             "rule_name": r.rule_name, "pattern_type": r.pattern_type,
+             "value": r.value, "exclude": bool(r.exclude), "source": r.source,
+             "reason": r.reason,
+             "created_at": r.created_at.isoformat() if r.created_at else None}
+            for r in rows
+        ]}
+    finally:
+        await db.close()
+
+
+@router.delete("/rules/patterns/{pattern_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_rule_pattern(
+    pattern_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Forget a learned classification pattern."""
+    db = await _get_db()
+    try:
+        res = await db.execute(text(
+            """DELETE FROM email_rule_patterns p USING email_accounts ea
+               WHERE p.id = :id AND p.account_id = ea.id AND ea.user_id = :uid"""
+        ), {"id": pattern_id, "uid": user.email or "anonymous"})
+        await db.commit()
+        if res.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Not found")
     finally:
         await db.close()
 

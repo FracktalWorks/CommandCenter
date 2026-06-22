@@ -14,11 +14,13 @@ import {
   listKnowledge, createKnowledge, updateKnowledge, deleteKnowledge,
   installPresetRules, reorderRules, processPastEmails,
   listLearnedPatterns, deleteLearnedPattern,
+  submitRuleFeedback, listRulePatterns, deleteRulePattern,
 } from "../../lib/api";
 import {
   AutomationRule, RuleAction, RuleActionType, ExecutedRule, Email,
   AssistantSettings, EMAIL_CATEGORIES, ColdBlockerMode,
   ColdSender, LLMConfigResponse, KnowledgeEntry, LearnedPattern,
+  LearnedRulePattern,
   RuleConditions, DraftConfidence, DRAFT_CONFIDENCE_OPTIONS, WEEKDAYS,
 } from "../../lib/types";
 import { useEmailStore } from "../../lib/emailStore";
@@ -239,11 +241,17 @@ type RuleExample = {
   name: string;
   summary: string;
   group: string;
+  /** Which persona tabs this example shows under (defaults to "General"). */
+  personas?: string[];
   instructions?: string;
   from_pattern?: string;
   subject_pattern?: string;
   actions: RuleAction[];
 };
+
+const EXAMPLE_PERSONAS = [
+  "General", "Founder", "Sales", "Recruiter", "Developer", "Support", "Investor",
+];
 
 const RULE_EXAMPLES: RuleExample[] = [
   {
@@ -334,6 +342,151 @@ const RULE_EXAMPLES: RuleExample[] = [
     summary: "Suspected spam → move to junk",
     instructions: "Suspected spam, phishing, or scam emails.",
     actions: [{ type: "MARK_SPAM" }],
+  },
+
+  // ── Founder ──
+  {
+    name: "Customer feedback", group: "Leads", personas: ["Founder"],
+    summary: "Feedback about the product → label",
+    instructions: "Feedback or feature requests from customers about our product.",
+    actions: [{ type: "LABEL", label: "Customer Feedback" }],
+  },
+  {
+    name: "Investors", group: "Leads", personas: ["Founder", "Investor"],
+    summary: "Emails from investors → label",
+    instructions: "Emails from investors or VCs.",
+    actions: [{ type: "LABEL", label: "Investor" }],
+  },
+  {
+    name: "Hiring", group: "Ops", personas: ["Founder", "Recruiter"],
+    summary: "Recruitment-related mail → label",
+    instructions: "Recruitment / hiring related emails (candidates, interviews).",
+    actions: [{ type: "LABEL", label: "Hiring" }],
+  },
+  {
+    name: "Legal documents", group: "Ops", personas: ["Founder", "Investor"],
+    summary: "Contracts & legal → label",
+    instructions: "Legal documents, contracts, NDAs, or terms.",
+    actions: [{ type: "LABEL", label: "Legal" }],
+  },
+
+  // ── Sales ──
+  {
+    name: "Prospects", group: "Pipeline", personas: ["Sales"],
+    summary: "Inbound prospects → label",
+    instructions: "Emails from prospects or potential customers.",
+    actions: [{ type: "LABEL", label: "Prospect" }],
+  },
+  {
+    name: "Deal discussion", group: "Pipeline", personas: ["Sales"],
+    summary: "Negotiations → label",
+    instructions: "Emails about deal negotiations, contracts, or terms.",
+    actions: [{ type: "LABEL", label: "Deal" }],
+  },
+  {
+    name: "Pricing requests", group: "Pipeline", personas: ["Sales"],
+    summary: "Asks about pricing → label + draft a reply",
+    instructions: "Someone asking about pricing, plans, or quotes.",
+    actions: [{ type: "LABEL", label: "Pricing" }, { type: "DRAFT_EMAIL" }],
+  },
+  {
+    name: "Demo requests", group: "Pipeline", personas: ["Sales"],
+    summary: "Demo requests → label + draft a reply",
+    instructions: "Someone requesting a demo or a product walkthrough.",
+    actions: [{ type: "LABEL", label: "Demo" }, { type: "DRAFT_EMAIL" }],
+  },
+
+  // ── Recruiter ──
+  {
+    name: "Candidates", group: "Hiring", personas: ["Recruiter"],
+    summary: "Emails from candidates → label",
+    instructions: "Emails from job candidates or applicants.",
+    actions: [{ type: "LABEL", label: "Candidate" }],
+  },
+  {
+    name: "New applications", group: "Hiring", personas: ["Recruiter"],
+    summary: "Job applications → label + acknowledge",
+    instructions: "Someone applying for a job or submitting an application.",
+    actions: [{ type: "LABEL", label: "Application" }, { type: "DRAFT_EMAIL" }],
+  },
+  {
+    name: "Resumes / CVs", group: "Hiring", personas: ["Recruiter"],
+    summary: "Emails with a resume → label",
+    instructions: "Emails containing a resume or CV attachment.",
+    actions: [{ type: "LABEL", label: "Resume" }],
+  },
+  {
+    name: "Interview scheduling", group: "Hiring", personas: ["Recruiter"],
+    summary: "Interview scheduling → label",
+    instructions: "Emails about scheduling or confirming interviews.",
+    actions: [{ type: "LABEL", label: "Interview" }],
+  },
+
+  // ── Developer ──
+  {
+    name: "Server alerts", group: "Signals", personas: ["Developer"],
+    summary: "Errors & alerts → label",
+    instructions: "Server errors, deployment failures, or monitoring alerts.",
+    actions: [{ type: "LABEL", label: "Alert" }],
+  },
+  {
+    name: "Bug reports", group: "Signals", personas: ["Developer", "Support"],
+    summary: "Bug reports → label",
+    instructions: "Bug reports or reproducible issues with the product.",
+    actions: [{ type: "LABEL", label: "Bug" }],
+  },
+  {
+    name: "Security reports", group: "Signals", personas: ["Developer"],
+    summary: "Security/vuln reports → label",
+    instructions: "Reports of a security vulnerability or exposure.",
+    actions: [{ type: "LABEL", label: "Security" }],
+  },
+  {
+    name: "CI / Figma / Slack", group: "Noise", personas: ["Developer"],
+    summary: "Tool notifications → label + archive",
+    instructions:
+      "Automated notifications from dev tools (CI, Figma, Slack, Stripe).",
+    actions: [{ type: "LABEL", label: "Tools" }, { type: "ARCHIVE" }],
+  },
+
+  // ── Support ──
+  {
+    name: "Support tickets", group: "Queue", personas: ["Support"],
+    summary: "Help requests → label + draft a reply",
+    instructions: "A customer requesting help or support.",
+    actions: [{ type: "LABEL", label: "Support Ticket" }, { type: "DRAFT_EMAIL" }],
+  },
+  {
+    name: "Feature requests", group: "Queue", personas: ["Support"],
+    summary: "Feature requests → label",
+    instructions: "A customer requesting a new feature or improvement.",
+    actions: [{ type: "LABEL", label: "Feature Request" }],
+  },
+  {
+    name: "Refund requests", group: "Queue", personas: ["Support"],
+    summary: "Refund asks → label + draft a reply",
+    instructions: "A customer asking for a refund or cancellation.",
+    actions: [{ type: "LABEL", label: "Refund" }, { type: "DRAFT_EMAIL" }],
+  },
+
+  // ── Investor ──
+  {
+    name: "Pitch decks", group: "Dealflow", personas: ["Investor"],
+    summary: "Pitch decks → label",
+    instructions: "Founders sending a pitch deck or fundraising materials.",
+    actions: [{ type: "LABEL", label: "Pitch Deck" }],
+  },
+  {
+    name: "Term sheets", group: "Dealflow", personas: ["Investor"],
+    summary: "Term sheets → label",
+    instructions: "Emails containing or discussing a term sheet.",
+    actions: [{ type: "LABEL", label: "Term Sheet" }],
+  },
+  {
+    name: "LP emails", group: "Dealflow", personas: ["Investor"],
+    summary: "Limited partners → label",
+    instructions: "Emails from limited partners (LPs) of the fund.",
+    actions: [{ type: "LABEL", label: "LP" }],
   },
 ];
 
@@ -1286,7 +1439,11 @@ function ExamplesDialog({
   onPick: (rule: AutomationRule) => void;
   onClose: () => void;
 }) {
-  const groups = Array.from(new Set(RULE_EXAMPLES.map((e) => e.group)));
+  const [persona, setPersona] = useState("General");
+  const inPersona = RULE_EXAMPLES.filter((e) =>
+    (e.personas ?? ["General"]).includes(persona),
+  );
+  const groups = Array.from(new Set(inPersona.map((e) => e.group)));
   return (
     <Modal
       title="Choose from examples"
@@ -1294,10 +1451,26 @@ function ExamplesDialog({
       onClose={onClose}
       maxWidth="max-w-xl"
     >
+      {/* Persona tabs */}
+      <div className="flex flex-wrap gap-1.5 -mt-1">
+        {EXAMPLE_PERSONAS.map((p) => (
+          <button
+            key={p}
+            onClick={() => setPersona(p)}
+            className={`text-[11px] px-2.5 py-1 rounded-full transition-colors ${
+              persona === p
+                ? "bg-primary/15 text-primary"
+                : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+            }`}
+          >
+            {p}
+          </button>
+        ))}
+      </div>
       {groups.map((g) => (
         <div key={g} className="space-y-1.5">
           <SectionHeader>{g}</SectionHeader>
-          {RULE_EXAMPLES.filter((e) => e.group === g).map((ex) => (
+          {inPersona.filter((e) => e.group === g).map((ex) => (
             <button
               key={ex.name}
               onClick={() => onPick(exampleToRule(ex, accountId))}
@@ -1475,7 +1648,11 @@ function buildFixPrompt(
   return `${ctx}this email should have matched the "${expected.name}" rule${why}`;
 }
 
-/** The inbox-zero "Improve Rules" dialog — hands a correction to the AI chat. */
+/**
+ * The "Improve Rules" dialog. For an existing rule / "None" it PERSISTS a
+ * learned classification pattern (so the same sender matches/skips that rule
+ * next time — inbox-zero parity). For "New rule" it hands off to the AI chat.
+ */
 function FixDialog({
   accountId,
   email,
@@ -1484,22 +1661,55 @@ function FixDialog({
 }: {
   accountId: string;
   email: { subject: string; from: string };
-  current: { matched: boolean; ruleName: string | null };
+  current: { matched: boolean; ruleName: string | null; ruleId?: string | null };
   onClose: () => void;
 }) {
   const [rules, setRules] = useState<AutomationRule[]>([]);
   const [expected, setExpected] = useState<Expected | null>(null);
   const [explanation, setExplanation] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const setPendingChatPrompt = useEmailStore((s) => s.setPendingChatPrompt);
 
   useEffect(() => {
     listRules(accountId).then(setRules).catch(() => {});
   }, [accountId]);
 
-  const submit = () => {
+  const submit = async () => {
     if (!expected) return;
-    setPendingChatPrompt(buildFixPrompt(expected, explanation, email));
-    onClose();
+    // "New rule" still routes through the assistant chat (it has to be created).
+    if (expected === "new") {
+      setPendingChatPrompt(buildFixPrompt(expected, explanation, email));
+      onClose();
+      return;
+    }
+    // Existing rule / None → persist a learned pattern so it sticks.
+    setBusy(true);
+    setError(null);
+    try {
+      const matchedIds = current.ruleId ? [current.ruleId] : [];
+      await submitRuleFeedback({
+        accountId,
+        sender: email.from,
+        expected: expected === "none" ? "none" : expected.id,
+        matchedRuleIds: matchedIds,
+        explanation,
+      });
+      setDone(
+        expected === "none"
+          ? `Got it — emails from ${email.from || "this sender"} won't match ${
+              current.ruleName || "that rule"
+            } anymore.`
+          : `Learned — emails from ${email.from || "this sender"} will now match "${
+              expected.name
+            }".`,
+      );
+    } catch (e) {
+      setError((e as Error).message || "Couldn't save the correction.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const expectedLabel =
@@ -1516,19 +1726,35 @@ function FixDialog({
       title="Improve Rules"
       onClose={onClose}
       footer={
-        expected ? (
+        done ? (
+          <button
+            onClick={onClose}
+            className="ml-auto px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
+          >
+            Done
+          </button>
+        ) : expected ? (
           <>
             <button
               onClick={() => setExpected(null)}
-              className="px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:bg-secondary transition-colors"
+              disabled={busy}
+              className="px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:bg-secondary transition-colors disabled:opacity-50"
             >
               Back
             </button>
             <button
               onClick={submit}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
+              disabled={busy}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
             >
-              <MessageCircle size={13} /> Send to assistant
+              {busy ? (
+                <Loader2 className="animate-spin" size={13} />
+              ) : expected === "new" ? (
+                <MessageCircle size={13} />
+              ) : (
+                <Check size={13} />
+              )}
+              {expected === "new" ? "Send to assistant" : "Apply correction"}
             </button>
           </>
         ) : undefined
@@ -1547,7 +1773,11 @@ function FixDialog({
         </span>
       </div>
 
-      {!expected ? (
+      {done ? (
+        <div className="text-xs text-emerald-400 bg-emerald-500/10 rounded-md px-2.5 py-2">
+          {done}
+        </div>
+      ) : !expected ? (
         <div>
           <div className="text-xs font-medium text-foreground mb-2">
             Which rule did you expect it to match?
@@ -1584,8 +1814,15 @@ function FixDialog({
             className={`${INPUT_CLS} resize-none`}
           />
           <p className="text-[10px] text-muted-foreground">
-            Providing an explanation helps the AI understand your intent better.
+            {expected === "new"
+              ? "The assistant will create a rule for emails like this."
+              : "We'll remember this for emails from this sender. An explanation is optional."}
           </p>
+          {error && (
+            <div className="text-[11px] text-destructive bg-destructive/10 rounded-md px-2 py-1.5">
+              {error}
+            </div>
+          )}
         </div>
       )}
     </Modal>
@@ -1617,7 +1854,7 @@ function FixButton({
 }: {
   accountId: string;
   email: { subject: string; from: string };
-  current: { matched: boolean; ruleName: string | null };
+  current: { matched: boolean; ruleName: string | null; ruleId?: string | null };
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -1834,6 +2071,7 @@ function TestTab({ accountId }: { accountId: string | null }) {
                         current={{
                           matched: res.matched,
                           ruleName: res.rule?.name ?? null,
+                          ruleId: res.rule?.id ?? null,
                         }}
                       />
                       <button
@@ -2045,7 +2283,7 @@ function HistoryRow({
           <FixButton
             accountId={accountId}
             email={{ subject: h.subject || "", from: h.from || "" }}
-            current={{ matched, ruleName: h.rule_name }}
+            current={{ matched, ruleName: h.rule_name, ruleId: h.rule_id ?? null }}
           />
         )}
       </div>
@@ -2080,6 +2318,7 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
     | "signature"
     | "knowledge"
     | "learned"
+    | "patterns"
     | null
   >(null);
 
@@ -2260,7 +2499,12 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
           />
           <SettingCard
             title="Learned patterns"
-            description="Preferences the assistant picked up from how you edit its drafts."
+            description="Senders the assistant learned to match (or skip) for a rule, from your Fix corrections."
+            right={<EditBtn onClick={() => setDialog("patterns")} label="Manage" />}
+          />
+          <SettingCard
+            title="Writing preferences"
+            description="How the assistant adapts its drafting from the edits you make before sending."
             right={<EditBtn onClick={() => setDialog("learned")} label="Manage" />}
           />
         </div>
@@ -2440,11 +2684,20 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
       )}
       {dialog === "learned" && (
         <Modal
-          title="Learned patterns"
+          title="Writing preferences"
           description="Preferences picked up from how you edit drafts before sending."
           onClose={() => setDialog(null)}
         >
           <LearnedPreferences accountId={accountId} />
+        </Modal>
+      )}
+      {dialog === "patterns" && (
+        <Modal
+          title="Learned patterns"
+          description="Senders the assistant learned to match (or skip) for a rule, from your Fix corrections."
+          onClose={() => setDialog(null)}
+        >
+          <LearnedPatternsList accountId={accountId} />
         </Modal>
       )}
     </div>
@@ -3028,6 +3281,83 @@ function LearnedPreferences({ accountId }: { accountId: string | null }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Classification patterns learned from Fix corrections (sender → rule
+ *  include/exclude). The real "Learned Patterns", inbox-zero style. */
+function LearnedPatternsList({ accountId }: { accountId: string | null }) {
+  const [patterns, setPatterns] = useState<LearnedRulePattern[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(() => {
+    if (!accountId) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    listRulePatterns(accountId)
+      .then(setPatterns)
+      .catch(() => setPatterns([]))
+      .finally(() => setLoading(false));
+  }, [accountId]);
+
+  useEffect(load, [load]);
+
+  const forget = async (id: string) => {
+    setPatterns((prev) => prev.filter((p) => p.id !== id));
+    try {
+      await deleteRulePattern(id);
+    } catch {
+      load();
+    }
+  };
+
+  if (loading) return <Spinner label="Loading learned patterns…" />;
+  if (patterns.length === 0) {
+    return (
+      <div className="text-center text-xs text-muted-foreground py-6 space-y-1">
+        <p>No learned patterns yet.</p>
+        <p className="text-[11px]">
+          Use the <b>Fix</b> button on a History or Test result to teach the
+          assistant which rule a sender should (or shouldn&apos;t) match — it
+          shows up here and is applied automatically next time.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {patterns.map((p) => (
+        <div
+          key={p.id}
+          className="flex items-center gap-2 bg-card border border-border rounded-lg px-3 py-2"
+        >
+          <span
+            className={`text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap ${
+              p.exclude
+                ? "bg-red-500/15 text-red-400"
+                : "bg-emerald-500/15 text-emerald-400"
+            }`}
+          >
+            {p.exclude ? "Never match" : "Always match"}
+          </span>
+          <div className="flex-1 min-w-0 text-xs text-foreground/80 truncate">
+            <span className="text-muted-foreground">From</span> {p.value}{" "}
+            <span className="text-muted-foreground">→</span>{" "}
+            <span className="text-foreground">{p.rule_name || "(deleted rule)"}</span>
+          </div>
+          <button
+            onClick={() => forget(p.id)}
+            title="Forget this"
+            className="text-muted-foreground hover:text-destructive flex-shrink-0"
+          >
+            <X size={13} />
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

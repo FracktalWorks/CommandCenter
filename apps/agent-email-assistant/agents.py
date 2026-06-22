@@ -361,6 +361,70 @@ async def update_rule_state(
     return f"Rule '{rule.get('name')}' is now {'enabled' if enabled else 'disabled'}."
 
 
+async def update_rule(
+    account_id: str,
+    rule_id: str,
+    instructions: str | None = None,
+    from_pattern: str | None = None,
+    subject_pattern: str | None = None,
+    add_action_type: str | None = None,
+    add_action_label: str | None = None,
+) -> str:
+    """Edit an existing rule's matching conditions and/or add an action.
+
+    Use this to FIX a rule that mis-classifies mail — e.g. tighten its
+    plain-English ``instructions``, add a literal ``from_pattern`` /
+    ``subject_pattern``, or attach another action. Only the fields you pass
+    change; everything else on the rule is preserved.
+
+    Args:
+        instructions: new plain-English condition the AI matches mail against.
+        from_pattern: literal sender substring to match (e.g. "@vendor.com").
+        subject_pattern: literal subject substring to match.
+        add_action_type: ARCHIVE | LABEL | MARK_READ | STAR | MARK_SPAM | TRASH |
+                         MOVE_FOLDER | DRAFT_EMAIL | REPLY | FORWARD.
+        add_action_label: label/folder for an added LABEL / MOVE_FOLDER action.
+    """
+    rules = (await _get("/email/rules", {"account_id": account_id})).get("rules", [])
+    rule = next((r for r in rules if r.get("id") == rule_id), None)
+    if not rule:
+        return f"Rule {rule_id} not found."
+    if instructions is not None:
+        rule["instructions"] = instructions
+    if from_pattern is not None:
+        rule["from_pattern"] = from_pattern
+    if subject_pattern is not None:
+        rule["subject_pattern"] = subject_pattern
+    if add_action_type:
+        action: dict[str, Any] = {"type": add_action_type}
+        if add_action_label:
+            action["label"] = add_action_label
+        rule.setdefault("actions", []).append(action)
+    await _patch(f"/email/rules/{rule_id}", rule)
+    return f"Updated rule '{rule.get('name')}'."
+
+
+async def learn_rule_pattern(
+    account_id: str, sender: str, rule_id: str, exclude: bool = False,
+) -> str:
+    """Teach the matcher a deterministic learned pattern for a sender.
+
+    ``exclude=false`` → ALWAYS apply this rule to mail from ``sender``.
+    ``exclude=true``  → NEVER apply this rule to mail from ``sender``.
+    Use when the user says "emails from X should (or shouldn't) be labelled Y".
+    This persists and short-circuits future classification (no LLM needed).
+    """
+    body = {
+        "account_id": account_id,
+        "sender": sender,
+        "expected": "none" if exclude else rule_id,
+        "matched_rule_ids": [rule_id] if exclude else [],
+    }
+    await _post("/email/rules/feedback", body)
+    verb = "no longer match" if exclude else "always match"
+    return f"Learned: emails from {sender} will {verb} that rule."
+
+
 async def update_assistant_settings(
     account_id: str,
     about: str | None = None,
@@ -509,6 +573,8 @@ _TOOLS = [
     get_rules_and_settings,
     create_rule,
     update_rule_state,
+    update_rule,
+    learn_rule_pattern,
     update_assistant_settings,
     install_default_rules,
     list_knowledge,

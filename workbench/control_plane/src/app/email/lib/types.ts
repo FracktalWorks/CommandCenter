@@ -147,6 +147,20 @@ export interface AnalyticsOverview {
 
 // ── Senders (bulk archive / unsubscribe) ────────────────────────────────────
 
+/** A learned classification pattern (sender → rule include/exclude) — the real
+ *  "Learned Patterns", taught by the Fix flow / label corrections. */
+export interface LearnedRulePattern {
+  id: string;
+  rule_id: string;
+  rule_name: string | null;
+  pattern_type: string; // FROM | SUBJECT
+  value: string;
+  exclude: boolean;
+  source: string; // FIX | LABEL_ADDED | LABEL_REMOVED | AI | USER
+  reason: string | null;
+  created_at: string | null;
+}
+
 export type NewsletterStatus = "APPROVED" | "UNSUBSCRIBED" | "AUTO_ARCHIVED";
 /** Display status for a sender — adds "UNHANDLED" (no decision made yet). Only
  *  the three NewsletterStatus values are ever persisted via upsertNewsletter. */

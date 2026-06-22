@@ -3,7 +3,7 @@ import {
   AnalyticsOverview, SenderStat, NewsletterStatus,
   AutomationRule, RuleTestResult, ExecutedRule, AssistantSettings,
   RecentTestResult, ColdSender, ReplyZeroThread, KnowledgeEntry,
-  LearnedPattern, RunMessageResult,
+  LearnedPattern, RunMessageResult, LearnedRulePattern,
 } from "./types";
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
@@ -620,6 +620,45 @@ export async function undoExecution(
   return gatewayFetch(`/email/rules/history/${execId}/undo`, {
     method: "POST",
   });
+}
+
+/** Persist a Fix correction as a learned classification pattern (inbox-zero
+ *  parity) so the same sender is matched/skipped for that rule next time. */
+export async function submitRuleFeedback(params: {
+  accountId: string;
+  sender: string;
+  expected: string; // rule id | "none" | "new"
+  matchedRuleIds?: string[];
+  explanation?: string;
+  messageId?: string;
+  threadId?: string;
+}): Promise<{ created: boolean; action?: string; learned?: unknown[]; sender?: string }> {
+  return gatewayFetch("/email/rules/feedback", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: params.accountId,
+      sender: params.sender,
+      expected: params.expected,
+      matched_rule_ids: params.matchedRuleIds ?? [],
+      explanation: params.explanation ?? null,
+      message_id: params.messageId ?? null,
+      thread_id: params.threadId ?? null,
+    }),
+  });
+}
+
+/** List learned classification patterns (sender → rule include/exclude). */
+export async function listRulePatterns(
+  accountId: string,
+): Promise<LearnedRulePattern[]> {
+  const res = await gatewayFetch<{ patterns: LearnedRulePattern[] }>(
+    `/email/rules/patterns?account_id=${encodeURIComponent(accountId)}`,
+  );
+  return res.patterns ?? [];
+}
+
+export async function deleteRulePattern(id: string): Promise<void> {
+  await gatewayFetch(`/email/rules/patterns/${id}`, { method: "DELETE" });
 }
 
 /** Process PAST inbox mail within a date range (inbox-zero "Process past

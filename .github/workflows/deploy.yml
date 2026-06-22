@@ -201,6 +201,11 @@ jobs:
 
             echo "==> Deployment complete"
     steps:
+      # The deploy script is idempotent, so we re-attempt the whole SSH deploy
+      # on a failed dial/handshake (the intermittent "dial tcp i/o timeout").
+      # The key is BACKOFF between attempts: an immediate re-dial during a
+      # multi-minute runner↔VPS network blip just fails again, so we wait
+      # progressively longer (0 → 60s → 150s) to outlast it across 3 tries.
       - name: Deploy via SSH (attempt 1)
         id: deploy1
         continue-on-error: true
@@ -214,11 +219,36 @@ jobs:
           timeout: 120s
           command_timeout: 15m
           script: ${{ env.DEPLOY_SCRIPT }}
-      - name: Deploy via SSH (retry once)
-        # Re-attempt the whole SSH deploy if the first dial/handshake failed
-        # (e.g. the intermittent "dial tcp i/o timeout"). The script is
-        # idempotent, so this is safe.
+
+      - name: Back off before attempt 2
         if: steps.deploy1.outcome == 'failure'
+        run: |
+          echo "Attempt 1 failed (likely a transient SSH dial timeout); waiting 60s…"
+          sleep 60
+
+      - name: Deploy via SSH (attempt 2)
+        id: deploy2
+        if: steps.deploy1.outcome == 'failure'
+        continue-on-error: true
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HOSTINGER_HOST }}
+          username: ${{ secrets.HOSTINGER_USER }}
+          key: ${{ secrets.HOSTINGER_SSH_KEY }}
+          port: ${{ secrets.HOSTINGER_SSH_PORT || 22 }}
+          timeout: 120s
+          command_timeout: 15m
+          script: ${{ env.DEPLOY_SCRIPT }}
+
+      - name: Back off before attempt 3
+        if: steps.deploy1.outcome == 'failure' && steps.deploy2.outcome == 'failure'
+        run: |
+          echo "Attempt 2 failed; waiting 150s before the final attempt…"
+          sleep 150
+
+      - name: Deploy via SSH (attempt 3, final)
+        # Not continue-on-error: if the third try fails, the deploy job fails.
+        if: steps.deploy1.outcome == 'failure' && steps.deploy2.outcome == 'failure'
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HOSTINGER_HOST }}

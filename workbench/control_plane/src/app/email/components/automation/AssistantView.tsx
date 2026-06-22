@@ -15,6 +15,7 @@ import {
   installPresetRules, reorderRules, processPastEmails,
   listLearnedPatterns, deleteLearnedPattern,
   submitRuleFeedback, listRulePatterns, deleteRulePattern,
+  generateRules,
 } from "../../lib/api";
 import {
   AutomationRule, RuleAction, RuleActionType, ExecutedRule, Email,
@@ -604,6 +605,7 @@ function RulesTab({
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [showPast, setShowPast] = useState(false);
   const [showExamples, setShowExamples] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
   const setPendingChatPrompt = useEmailStore((s) => s.setPendingChatPrompt);
 
   const duplicate = async (rule: AutomationRule) => {
@@ -756,13 +758,31 @@ function RulesTab({
             <Sparkles size={13} /> Examples
           </button>
           <button
-            onClick={() => setEditing(emptyRule(accountId))}
+            onClick={() => setShowAdd(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
           >
             <Plus size={13} /> Add rule
           </button>
         </div>
       </div>
+      {showAdd && accountId && (
+        <AddRuleDialog
+          accountId={accountId}
+          onManual={() => {
+            setShowAdd(false);
+            setEditing(emptyRule(accountId));
+          }}
+          onBrowseExamples={() => {
+            setShowAdd(false);
+            setShowExamples(true);
+          }}
+          onCreated={() => {
+            setShowAdd(false);
+            load();
+          }}
+          onClose={() => setShowAdd(false)}
+        />
+      )}
       {showPast && accountId && (
         <ProcessPastEmailsDialog
           accountId={accountId}
@@ -1426,6 +1446,148 @@ function ProcessPastEmailsDialog({
           {error}
         </div>
       )}
+    </Modal>
+  );
+}
+
+/**
+ * The primary "Add rule" experience, matching inbox-zero: describe your rules in
+ * plain English (one per line), with clickable example lines that append to the
+ * box. "Create rules" turns the text into structured rules via the AI; "Add rule
+ * manually" opens the structured editor instead.
+ */
+function AddRuleDialog({
+  accountId,
+  onManual,
+  onBrowseExamples,
+  onCreated,
+  onClose,
+}: {
+  accountId: string;
+  onManual: () => void;
+  onBrowseExamples: () => void;
+  onCreated: (created: AutomationRule[]) => void;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState("");
+  const [persona, setPersona] = useState("General");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const inPersona = RULE_EXAMPLES.filter((e) =>
+    (e.personas ?? ["General"]).includes(persona),
+  );
+
+  const append = (line: string) =>
+    setText((t) => {
+      const base = t.replace(/\n+$/, "");
+      return (base ? base + "\n" : "") + "* " + line;
+    });
+
+  const create = async () => {
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await generateRules(accountId, text);
+      if (!res.created || res.created.length === 0) {
+        setError(res.error || "Couldn't create any rules — try rephrasing.");
+        return;
+      }
+      onCreated(res.created);
+    } catch (e) {
+      setError((e as Error).message || "Failed to create rules.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="Add rules"
+      description="Describe what you want, one rule per line. The assistant turns it into rules."
+      onClose={onClose}
+      maxWidth="max-w-xl"
+      footer={
+        <>
+          <button
+            onClick={onManual}
+            disabled={busy}
+            className="px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+          >
+            Add rule manually
+          </button>
+          <button
+            onClick={create}
+            disabled={busy || !text.trim()}
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="animate-spin" size={13} /> : <Wand2 size={13} />}
+            Create rules
+          </button>
+        </>
+      }
+    >
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={6}
+        autoFocus
+        placeholder={
+          '* Label urgent emails from clients as "Urgent" and draft a reply\n' +
+          "* Forward receipts to accounting@example.com\n" +
+          "* Archive newsletters and marketing"
+        }
+        className={`${INPUT_CLS} resize-y leading-relaxed`}
+      />
+      {error && (
+        <div className="text-[11px] text-destructive bg-destructive/10 rounded-md px-2 py-1.5">
+          {error}
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-medium text-foreground">
+            Tap an example to add it
+          </span>
+          <button
+            onClick={onBrowseExamples}
+            className="text-[11px] text-primary hover:opacity-80"
+          >
+            Browse templates →
+          </button>
+        </div>
+        {/* Persona tabs */}
+        <div className="flex flex-wrap gap-1.5">
+          {EXAMPLE_PERSONAS.map((p) => (
+            <button
+              key={p}
+              onClick={() => setPersona(p)}
+              className={`text-[11px] px-2.5 py-1 rounded-full transition-colors ${
+                persona === p
+                  ? "bg-primary/15 text-primary"
+                  : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+              }`}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
+          {inPersona.map((ex) => (
+            <button
+              key={ex.name}
+              onClick={() => append(ex.summary)}
+              title={ex.summary}
+              className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border border-border text-foreground hover:border-primary/40 hover:bg-secondary/40 transition-colors"
+            >
+              <Plus size={10} className="text-muted-foreground" />
+              {ex.name}
+            </button>
+          ))}
+        </div>
+      </div>
     </Modal>
   );
 }

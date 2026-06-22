@@ -2964,6 +2964,65 @@ async def _llm_pick_rule(
         return None
 
 
+async def _llm_pick_rules(
+    email: dict[str, str], rules: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Multi-rule selection (inbox-zero parity): ask the LLM for ALL instruction
+    rules that apply to the email, not just the single best.
+
+    Returns a list of {"index": int, "reason": str} (indexes into `rules`).
+    Fails closed (returns []) when the LLM is unavailable.
+    """
+    if not rules:
+        return []
+    try:
+        import litellm as _litellm  # noqa: PLC0415
+        from litellm import acompletion  # noqa: PLC0415
+        from acb_llm.client import ensure_model_registered, _TIER_MODEL  # noqa: PLC0415
+        _litellm.drop_params = True
+        _litellm.suppress_debug_info = True
+        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
+        ensure_model_registered(model)
+
+        rule_lines = "\n".join(
+            f"{i}. {r['name']}: {r.get('instructions') or '(no description)'}"
+            for i, r in enumerate(rules)
+        )
+        sys_prompt = (
+            "You are an email classifier. Given an email and a numbered list of "
+            "rules, choose EVERY rule that genuinely applies to the email (there "
+            "may be more than one, or none). Do not force a match. Respond with "
+            'ONLY a JSON object: {"matches": [{"index": <number>, "reason": '
+            '"<short why>"}]} — an empty list if none apply.'
+        )
+        user_prompt = (
+            f"EMAIL\nFrom: {email.get('from','')}\nSubject: {email.get('subject','')}\n"
+            f"Body: {(email.get('body','') or '')[:1500]}\n\nRULES\n{rule_lines}"
+        )
+        resp = await acompletion(
+            model=model,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": user_prompt}],
+            temperature=0, max_tokens=500,
+        )
+        content = resp.choices[0].message.content or ""
+        data = _safe_json(content)
+        out: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        if isinstance(data, dict) and isinstance(data.get("matches"), list):
+            for m in data["matches"]:
+                if not isinstance(m, dict):
+                    continue
+                idx = m.get("index")
+                if isinstance(idx, int) and 0 <= idx < len(rules) and idx not in seen:
+                    seen.add(idx)
+                    out.append({"index": idx, "reason": str(m.get("reason", ""))[:300]})
+        return out
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.llm_pick_rules_failed", error=str(exc)[:200])
+        return []
+
+
 def _static_match(rule: dict[str, Any], email: dict[str, str]) -> bool | None:
     """Evaluate a rule's static patterns. Returns None if the rule has none."""
     checks: list[bool] = []
@@ -3052,6 +3111,62 @@ async def _match_email_to_rule(
             return {"rule": instruction_rules[pick["index"]],
                     "reason": pick["reason"] or "Matched by AI."}
     return None
+
+
+async def _match_email_to_rules_multi(
+    db: Any, account_id: str, email: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Multi-rule selection (inbox-zero parity): return ALL matching rules, not
+    just the best one. Each item is {"rule": ..., "reason": ...}.
+
+    Static / category matches are collected locally; the LLM is asked once for
+    EVERY instruction rule that applies (via _llm_pick_rules). De-duped by id and
+    returned in rule sort order.
+    """
+    rules = [r for r in await _load_rules(db, account_id) if r["enabled"]]
+    if not rules:
+        return []
+
+    sender_category = "Unknown"
+    if any(r.get("category_filter_type") and r.get("category_filters") for r in rules):
+        sender_category = await _sender_category(db, account_id, email.get("from", ""))
+
+    matches: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _add(rule: dict[str, Any], reason: str) -> None:
+        rid = str(rule.get("id"))
+        if rid in seen:
+            return
+        seen.add(rid)
+        matches.append({"rule": rule, "reason": reason})
+
+    instruction_rules: list[dict[str, Any]] = []
+    for rule in rules:
+        if not _category_ok(rule, sender_category):
+            continue
+        sm = _static_match(rule, email)
+        has_instr = bool((rule.get("instructions") or "").strip())
+        has_cat = bool(rule.get("category_filter_type") and rule.get("category_filters"))
+        if has_instr:
+            if sm is not False:
+                instruction_rules.append(rule)
+            continue
+        if sm is True:
+            _add(rule, "Matched static conditions.")
+        elif sm is False:
+            continue
+        elif has_cat:
+            _add(rule, f"Matched category: {sender_category}.")
+
+    if instruction_rules:
+        for pick in await _llm_pick_rules(email, instruction_rules):
+            _add(instruction_rules[pick["index"]], pick["reason"] or "Matched by AI.")
+
+    # Preserve rule sort order (rules already arrive ordered by sort_order).
+    order = {str(r.get("id")): i for i, r in enumerate(rules)}
+    matches.sort(key=lambda m: order.get(str(m["rule"].get("id")), 1_000))
+    return matches
 
 
 async def _email_payload_from_id(db: Any, message_id: str, user_email: str) -> dict[str, str]:
@@ -3530,33 +3645,34 @@ async def run_rules_on_message(
             raise HTTPException(status_code=502, detail="Provider auth failed")
 
         about, signature = await _load_assistant_about(db, req.account_id)
-        rule = match["rule"]
-        taken = await _apply_rule_actions(
-            db, provider, str(row.id), row.provider_message_id,
-            rule["actions"], email, about, signature, acc.user_id,
-            account_id=req.account_id,
-        )
-        await db.execute(text(
-            """INSERT INTO email_executed_rules
-                 (account_id, rule_id, rule_name, message_id, provider_message_id,
-                  thread_id, subject, from_address, status, automated,
-                  actions_taken, reason)
-               VALUES (:aid, :rid, :rname, :mid, :pmid, :tid, :subj, :frm,
-                       'APPLIED', true, :acts, :reason)"""
-        ), {"aid": req.account_id, "rid": rule["id"], "rname": rule["name"],
-            "mid": str(row.id), "pmid": row.provider_message_id,
-            "tid": row.thread_id, "subj": row.subject or "",
-            "frm": frm.get("email", ""), "acts": json.dumps(taken),
-            "reason": match["reason"]})
+        # Multi-rule execution (inbox-zero parity): apply EVERY matching rule.
+        mr_row = (await db.execute(text(
+            "SELECT multi_rule_execution FROM email_assistant_settings "
+            "WHERE account_id = :aid"
+        ), {"aid": req.account_id})).fetchone()
+        multi_rule = bool(mr_row and getattr(mr_row, "multi_rule_execution", None))
+        if multi_rule:
+            matches = await _match_email_to_rules_multi(db, req.account_id, email) \
+                or [match]
+        else:
+            matches = [match]
+        for m in matches:
+            await _apply_and_log_match(
+                db, provider, row, frm, email, m, True,
+                about, signature, acc.user_id, req.account_id,
+            )
         await db.execute(text(
             "UPDATE email_messages SET rules_processed_at = now() WHERE id = :id"
         ), {"id": str(row.id)})
         await _persist_rotated_creds(db, store, req.account_id, provider)
         await db.commit()
+        primary = matches[0]
         return {
             "matched": True, "applied": True,
-            "rule": {"id": rule["id"], "name": rule["name"]},
-            "reason": match["reason"], "actions": taken,
+            "rule": {"id": primary["rule"]["id"], "name": primary["rule"]["name"]},
+            "reason": primary["reason"],
+            "actions": primary["rule"]["actions"],
+            "applied_rules": [m["rule"]["name"] for m in matches],
         }
     finally:
         await db.close()
@@ -4012,6 +4128,38 @@ async def _orchestrate_draft(
     return draft
 
 
+async def _apply_and_log_match(
+    db: Any, provider: Any, r: Any, frm: dict[str, Any], email: dict[str, str],
+    match: dict[str, Any], apply: bool, about: str, signature: str,
+    account_user: str, account_id: str,
+) -> None:
+    """Apply one matched rule's actions (or compute a dry-run preview) and log an
+    email_executed_rules row. Shared by the auto-run and process-past jobs so
+    multi-rule execution behaves identically in both."""
+    rule = match["rule"]
+    if apply:
+        actions_taken = await _apply_rule_actions(
+            db, provider, str(r.id), r.provider_message_id,
+            rule["actions"], email, about, signature, account_user,
+            account_id=account_id,
+        )
+        status = "APPLIED"
+    else:
+        actions_taken = [a["type"] for a in rule["actions"]]
+        status = "PENDING"  # dry-run preview only
+    await db.execute(text(
+        """INSERT INTO email_executed_rules
+             (account_id, rule_id, rule_name, message_id, provider_message_id,
+              thread_id, subject, from_address, status, automated, actions_taken,
+              reason)
+           VALUES (:aid, :rid, :rname, :mid, :pmid, :tid, :subj, :frm,
+                   :status, true, :acts, :reason)"""
+    ), {"aid": account_id, "rid": rule["id"], "rname": rule["name"],
+        "mid": str(r.id), "pmid": r.provider_message_id, "tid": r.thread_id,
+        "subj": r.subject or "", "frm": frm.get("email", ""), "status": status,
+        "acts": json.dumps(actions_taken), "reason": match["reason"]})
+
+
 def _parse_iso_date(s: str | None, end_of_day: bool) -> datetime | None:
     """Parse a 'YYYY-MM-DD' string into a UTC datetime (or None)."""
     if not s:
@@ -4065,6 +4213,11 @@ async def _process_past_emails_job(
             "SELECT user_id FROM email_accounts WHERE id = :aid"
         ), {"aid": account_id})).fetchone()
         account_user = owner_row.user_id if owner_row else (user_email or "")
+        mr_row = (await db.execute(text(
+            "SELECT multi_rule_execution FROM email_assistant_settings "
+            "WHERE account_id = :aid"
+        ), {"aid": account_id})).fetchone()
+        multi_rule = bool(mr_row and getattr(mr_row, "multi_rule_execution", None))
 
         provider = None
         if not dry_run:
@@ -4088,33 +4241,18 @@ async def _process_past_emails_job(
                 "body": r.body_text or r.snippet or "", "to": "",
                 "thread_id": r.thread_id or "",
             }
-            match = await _match_email_to_rule(db, account_id, email)
+            if multi_rule:
+                matches = await _match_email_to_rules_multi(db, account_id, email)
+            else:
+                m = await _match_email_to_rule(db, account_id, email)
+                matches = [m] if m else []
             apply = (not dry_run) and provider is not None
-            if match:
-                rule = match["rule"]
-                if apply:
-                    actions_taken = await _apply_rule_actions(
-                        db, provider, str(r.id), r.provider_message_id,
-                        rule["actions"], email, about, signature, account_user,
-                        account_id=account_id,
+            if matches:
+                for match in matches:
+                    await _apply_and_log_match(
+                        db, provider, r, frm, email, match, apply,
+                        about, signature, account_user, account_id,
                     )
-                    status = "APPLIED"
-                else:
-                    actions_taken = [a["type"] for a in rule["actions"]]
-                    status = "PENDING"
-                await db.execute(text(
-                    """INSERT INTO email_executed_rules
-                         (account_id, rule_id, rule_name, message_id,
-                          provider_message_id, thread_id, subject, from_address,
-                          status, automated, actions_taken, reason)
-                       VALUES (:aid, :rid, :rname, :mid, :pmid, :tid, :subj, :frm,
-                               :status, true, :acts, :reason)"""
-                ), {"aid": account_id, "rid": rule["id"], "rname": rule["name"],
-                    "mid": str(r.id), "pmid": r.provider_message_id,
-                    "tid": r.thread_id, "subj": r.subject or "",
-                    "frm": frm.get("email", ""), "status": status,
-                    "acts": json.dumps(actions_taken),
-                    "reason": match["reason"]})
             elif not dry_run:
                 await db.execute(text(
                     """INSERT INTO email_executed_rules
@@ -4174,13 +4312,6 @@ async def _run_rules_job(
             cold_blocker = cb_row.cold_email_blocker
         if cb_row and getattr(cb_row, "multi_rule_execution", None):
             multi_rule = bool(cb_row.multi_rule_execution)
-        # Multi-rule execution: when on, also apply any OTHER enabled rule whose
-        # STATIC conditions match (deterministic, no extra LLM call) beyond the
-        # single best match the matcher returns.
-        extra_rules = (
-            [r for r in await _load_rules(db, account_id) if r["enabled"]]
-            if multi_rule else []
-        )
 
         provider = None
         store = None
@@ -4204,62 +4335,20 @@ async def _run_rules_job(
                 "body": r.body_text or r.snippet or "", "to": "",
                 "thread_id": r.thread_id or "",
             }
-            match = await _match_email_to_rule(db, account_id, email)
-            if match:
-                rule = match["rule"]
-                # Rules auto-apply on live runs (the per-rule "Manual" approval
-                # mode was removed for inbox-zero parity).
+            # Multi-rule execution (inbox-zero parity): when on, every matching
+            # rule applies; otherwise just the single best match.
+            if multi_rule:
+                matches = await _match_email_to_rules_multi(db, account_id, email)
+            else:
+                m = await _match_email_to_rule(db, account_id, email)
+                matches = [m] if m else []
+            if matches:
                 apply = (not dry_run) and provider is not None
-                if apply:
-                    actions_taken = await _apply_rule_actions(
-                        db, provider, str(r.id), r.provider_message_id,
-                        rule["actions"], email, about, signature, account_user,
-                        account_id=account_id,
+                for match in matches:
+                    await _apply_and_log_match(
+                        db, provider, r, frm, email, match, apply,
+                        about, signature, account_user, account_id,
                     )
-                    status = "APPLIED"
-                else:
-                    actions_taken = [a["type"] for a in rule["actions"]]
-                    status = "PENDING"  # dry-run preview only
-                await db.execute(text(
-                    """INSERT INTO email_executed_rules
-                         (account_id, rule_id, rule_name, message_id,
-                          provider_message_id, thread_id, subject, from_address,
-                          status, automated, actions_taken, reason)
-                       VALUES (:aid, :rid, :rname, :mid, :pmid, :tid, :subj, :frm,
-                               :status, true, :acts, :reason)"""
-                ), {"aid": account_id, "rid": rule["id"], "rname": rule["name"],
-                    "mid": str(r.id), "pmid": r.provider_message_id,
-                    "tid": r.thread_id, "subj": r.subject or "",
-                    "frm": frm.get("email", ""), "status": status,
-                    "acts": json.dumps(actions_taken),
-                    "reason": match["reason"]})
-
-                # ── Multi-rule execution: apply additional static-matching rules
-                if multi_rule and apply:
-                    for er in extra_rules:
-                        if er["id"] == rule["id"]:
-                            continue
-                        if _static_match(er, email) is not True:
-                            continue
-                        extra_taken = await _apply_rule_actions(
-                            db, provider, str(r.id), r.provider_message_id,
-                            er["actions"], email, about, signature, account_user,
-                            account_id=account_id,
-                        )
-                        await db.execute(text(
-                            """INSERT INTO email_executed_rules
-                                 (account_id, rule_id, rule_name, message_id,
-                                  provider_message_id, thread_id, subject,
-                                  from_address, status, automated, actions_taken,
-                                  reason)
-                               VALUES (:aid, :rid, :rname, :mid, :pmid, :tid,
-                                       :subj, :frm, 'APPLIED', true, :acts,
-                                       'Matched static conditions (multi-rule).')"""
-                        ), {"aid": account_id, "rid": er["id"],
-                            "rname": er["name"], "mid": str(r.id),
-                            "pmid": r.provider_message_id, "tid": r.thread_id,
-                            "subj": r.subject or "", "frm": frm.get("email", ""),
-                            "acts": json.dumps(extra_taken)})
             elif not dry_run:
                 # No rule matched — log a SKIPPED row so History shows a
                 # "No match found" entry, then let the cold-email blocker look.

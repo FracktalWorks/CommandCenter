@@ -11,8 +11,8 @@ from gateway.routes import email as m
 def test_preset_set_matches_inbox_zero_system_rules() -> None:
     names = [p["name"] for p in m._PRESET_RULES]
     assert names == [
-        "To Reply", "FYI", "Newsletter", "Marketing", "Calendar",
-        "Receipt", "Notification", "Cold Email",
+        "To Reply", "Awaiting Reply", "Actioned", "FYI", "Newsletter",
+        "Marketing", "Calendar", "Receipt", "Notification", "Cold Email",
     ]
     # To Reply drafts a reply; FYI/To Reply run on threads.
     to_reply = next(p for p in m._PRESET_RULES if p["name"] == "To Reply")
@@ -31,8 +31,8 @@ async def test_install_presets_creates_only_missing() -> None:
         res = await m.install_preset_rules(account_id="acc-1", user=user)
     assert "To Reply" not in res["installed"]   # already present → skipped
     assert "FYI" in res["installed"]
-    assert len(res["installed"]) == 7
-    assert res["total_presets"] == 8
+    assert len(res["installed"]) == 9
+    assert res["total_presets"] == 10
     db.commit.assert_awaited()
 
 

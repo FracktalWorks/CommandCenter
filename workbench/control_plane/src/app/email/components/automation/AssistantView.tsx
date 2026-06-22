@@ -2096,7 +2096,7 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
           />
           <SettingCard
             title="Multi-rule execution"
-            description="Let an email match and run more than one rule. Off = only the first matching rule runs."
+            description="When on, the AI applies every rule that matches an email (inbox-zero multi-rule). Off = only the single best-matching rule runs."
             right={
               <Toggle
                 enabled={s.multi_rule_execution}

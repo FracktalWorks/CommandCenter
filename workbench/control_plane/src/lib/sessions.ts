@@ -241,6 +241,36 @@ const MESSAGES_PREFIX = "cc-msgs-";
 /** Maximum messages kept per session to avoid storage bloat. */
 const MAX_MESSAGES_PER_SESSION = 200;
 
+// ── Send-queue persistence ────────────────────────────────────────────────
+// Queued/steered messages live in an in-memory ref while the component is
+// mounted, but that ref is lost on a page refresh or when the user switches
+// to another agent's session (the queue belongs to a specific session).
+// Persist it per-session so a queued message survives both.
+const QUEUE_PREFIX = "cc-queue-";
+
+/** Read the persisted send-queue for a session (survives refresh / switch). */
+export function getQueue(sessionId: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(QUEUE_PREFIX + sessionId);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
+  } catch (_e) {
+    return [];
+  }
+}
+
+/** Persist (or clear, when empty) the send-queue for a session. */
+export function saveQueue(sessionId: string, queue: string[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (queue.length === 0) localStorage.removeItem(QUEUE_PREFIX + sessionId);
+    else localStorage.setItem(QUEUE_PREFIX + sessionId, JSON.stringify(queue));
+  } catch (_e) {
+    // Storage quota exceeded — best-effort only.
+  }
+}
+
 /** Read from localStorage cache (synchronous, instant). */
 export function getMessages(sessionId: string): PersistedMessage[] {
   if (typeof window === "undefined") return [];

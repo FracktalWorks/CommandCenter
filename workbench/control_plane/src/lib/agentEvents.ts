@@ -39,6 +39,14 @@ export interface AgentEventPayload {
   error?: string;
   /** Run identifier */
   runId?: string;
+  /**
+   * Session/thread this event belongs to.  The subscriber registry is global
+   * (a single process-wide list), so when more than one session is streaming
+   * (e.g. a background run on another agent) every subscriber receives every
+   * event.  Subscribers MUST filter on this so an event from another agent's
+   * session never renders in the currently-open one.
+   */
+  threadId?: string;
 }
 
 export interface AgentSubscriber {

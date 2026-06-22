@@ -97,14 +97,15 @@ export default function ElicitationCard({
   const canSubmit = questions.every((q) => {
     const hasOptions = q.options && q.options.length > 0;
     const hasFreeform = q.allowFreeformInput !== false;
-    if (hasOptions) {
-      const selected = answers[q.header]?.selected?.length ?? 0;
-      if (q.multiSelect) return selected > 0;
-      return selected > 0;
-    }
-    if (hasFreeform) {
-      return (freeformTexts[q.header] ?? "").trim().length > 0;
-    }
+    const selected = answers[q.header]?.selected?.length ?? 0;
+    const freeformFilled = (freeformTexts[q.header] ?? "").trim().length > 0;
+    // When BOTH a freeform box and options are offered, typing a custom answer
+    // is a valid response on its own — don't force the user to also pick an
+    // option (previously the Submit button stayed disabled/hidden until an
+    // option was selected, even after typing a custom answer).
+    if (hasOptions && hasFreeform) return selected > 0 || freeformFilled;
+    if (hasOptions) return selected > 0;
+    if (hasFreeform) return freeformFilled;
     return false;
   });
 

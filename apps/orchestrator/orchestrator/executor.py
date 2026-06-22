@@ -886,6 +886,11 @@ async def _run_sub_agent_streaming(
             integrations, _ = build_integrations(mandatory, optional, settings)
             _inject_integrations_to_env(integrations)
             agents = loaded.build_agents()
+            # Honour .github/agents/<name>.agent.md instructions for sub-agents
+            # too, so a delegated Copilot SDK agent keeps its authored identity.
+            _agent_md_spec = _apply_agent_md_overrides(
+                agents, loaded.agent_dir, agent_name,
+            )
             # Technique #3: read tool_scope from config.json to inject only the
             # tools this sub-agent actually needs (avoids the Berkeley leaderboard
             # accuracy degradation from too many tools).
@@ -955,12 +960,19 @@ async def _run_sub_agent_streaming(
             if _runtime == "github-copilot" and hasattr(agent, "run"):
                 # Resolve model with priority:
                 #   1. copilot_chat_model (global setting)
-                #   2. Agent's model_tier from config.json
+                #   2. .github/agents/<name>.agent.md model (authored choice)
+                #   3. Agent's model_tier from config.json
                 _model = (
                     getattr(settings, "copilot_chat_model", "") or ""
                 ).strip() or (
+                    (_agent_md_spec.model or "").strip()
+                    if _agent_md_spec is not None else ""
+                ) or (
                     loaded.config.get("model_tier") or ""
                 ).strip()
+                # BYOK-by-default: normalise bare/empty names to the default
+                # tier and force gateway routing (mirrors the chat path).
+                _model, _is_sub_byok = _byok_default_model(_model, settings)
 
                 if _model:
                     try:
@@ -968,15 +980,10 @@ async def _run_sub_agent_streaming(
                             hasattr(agent, "_default_options")
                             and agent._default_options is not None
                         ):
-                            # BYOK: if the model is a LiteLLM model (contains
-                            # '/' or starts with 'tier'), route through the
+                            # BYOK: route LiteLLM-gateway models through the
                             # gateway's /v1 endpoint so the Copilot SDK session
                             # uses the BYOK provider instead of the default
                             # api.githubcopilot.com endpoint.
-                            _is_sub_byok = (
-                                "/" in _model
-                                or _model.lower().startswith("tier")
-                            )
                             if _is_sub_byok:
                                 _gw_base = (
                                     getattr(
@@ -1153,6 +1160,112 @@ def _resolve_effective_agent_dir(
         fallback=str(agent_dir),
     )
     return str(agent_dir)
+
+
+def _apply_agent_md_overrides(
+    agents: list[Any],
+    agent_dir: Path,
+    agent_name: str,
+) -> Any | None:
+    """Honour ``.github/agents/<name>.agent.md`` for a loaded agent.
+
+    Copilot SDK agents are wrapped inside MAF and author their identity in
+    ``.github/agents/<name>.agent.md`` (instructions, model, tool affinity).
+    Historically the runtime ignored that file and built the agent purely
+    from ``agents.py`` / ``instructions.md``.  This applies the authored
+    definition so a live chat (or any run) reflects it.
+
+    Behaviour (per product decision):
+      * **Instructions** — the inline markdown body *overrides* the repo's
+        ``instructions.md`` content.  It replaces the ``system_message``
+        content while preserving the SDK's append ``mode`` so the Copilot
+        CLI base prompt is retained.  Called *before* tool injection so the
+        platform-tools addendum still appends on top.
+      * **Tools** — the frontmatter ``tools`` list uses VS Code Copilot's
+        vocabulary and is treated as *advisory*: it is logged but never
+        restricts the agent.  Copilot SDK agents keep their native tools and
+        still receive every MAF platform-injected tool (additive).
+
+    Returns the parsed :class:`AgentMd` (so the caller can fold its ``model``
+    into the model-priority chain), or ``None`` when no usable file exists.
+    Fully defensive — never raises.
+    """
+    try:
+        from acb_skills.agent_md import load_agent_md  # noqa: PLC0415
+        spec = load_agent_md(agent_dir, agent_name)
+    except Exception as exc:  # noqa: BLE001
+        _log.debug("executor.agent_md_load_failed", agent=agent_name, error=str(exc))
+        return None
+    if spec is None:
+        return None
+
+    if spec.body:
+        for _ag in agents:
+            try:
+                opts = getattr(_ag, "_default_options", None)
+                if isinstance(opts, dict):
+                    # Preserve the SDK's system_message mode (default "append").
+                    prev = opts.get("system_message")
+                    mode = prev.get("mode", "append") if isinstance(prev, dict) else "append"
+                    opts["system_message"] = {"mode": mode, "content": spec.body}
+                # Pure-MAF agents expose ``instructions`` directly.
+                if hasattr(_ag, "instructions"):
+                    try:
+                        _ag.instructions = spec.body
+                    except (AttributeError, TypeError):
+                        pass
+            except Exception:  # noqa: BLE001
+                pass
+
+    _log.info(
+        "executor.agent_md_applied",
+        agent=agent_name,
+        source=str(spec.path) if spec.path else None,
+        model=spec.model,
+        tools_advisory=spec.tools,
+        body_chars=len(spec.body),
+    )
+    return spec
+
+
+def _is_gateway_model(model: str) -> bool:
+    """True when *model* is a LiteLLM-gateway id (tier-* or provider/model)."""
+    m = (model or "").strip().lower()
+    return bool(m) and ("/" in m or m.startswith("tier"))
+
+
+def _byok_default_model(model: str, settings: Any) -> tuple[str, bool]:
+    """Apply the BYOK-by-default policy to a resolved model string.
+
+    Returns ``(model, is_byok)``.  When ``copilot_byok_default`` is on (the
+    default), every Copilot SDK agent is BYOK-routed through the LiteLLM
+    gateway: a gateway-recognised id (``tier-*`` or ``provider/model``) is kept
+    as-is, while a bare name the gateway does not expose (e.g. an ``.agent.md``
+    ``claude-sonnet-4-5``) — or an empty model — is normalised to
+    ``copilot_chat_model`` (default ``tier-balanced``) so it always resolves.
+
+    With the flag off, the legacy rule applies: only ``tier-*`` / ``provider/``
+    models are BYOK; bare names hit api.githubcopilot.com direct.
+    """
+    model = (model or "").strip()
+    byok_default = bool(getattr(settings, "copilot_byok_default", True))
+    # The coercion target must be a model the gateway actually exposes.  Honour
+    # ``copilot_chat_model`` only when it is itself a gateway id (tier-* /
+    # provider/model); a bare value there (e.g. ``gpt-4o``) is not gateway-
+    # routable, so fall back to the guaranteed ``tier-balanced`` alias.
+    configured = (getattr(settings, "copilot_chat_model", "") or "").strip()
+    default_tier = configured if _is_gateway_model(configured) else "tier-balanced"
+    if byok_default:
+        if not _is_gateway_model(model):
+            if model and model != default_tier:
+                _log.info(
+                    "executor.byok_model_coerced",
+                    requested=model,
+                    coerced_to=default_tier,
+                )
+            model = default_tier
+        return model, True
+    return model, _is_gateway_model(model)
 
 
 async def _get_current_head(agent_dir: str) -> str:
@@ -1607,6 +1720,8 @@ async def run_agent(
                 )
 
             agents = loaded.build_agents()
+            # Honour .github/agents/<name>.agent.md (instructions override).
+            _apply_agent_md_overrides(agents, loaded.agent_dir, agent_name)
             _inject_agent_tools(
                 agents,
                 tool_scope=loaded.config.get("tool_scope") or None,
@@ -1907,6 +2022,12 @@ async def run_agent_stream(
             )
             _inject_integrations_to_env(integrations)
             agents = loaded.build_agents()
+            # Honour .github/agents/<name>.agent.md (Copilot SDK definition):
+            # override instructions + capture model, BEFORE tool injection so
+            # the platform-tools addendum appends on top of the authored body.
+            _agent_md_spec = _apply_agent_md_overrides(
+                agents, loaded.agent_dir, agent_name,
+            )
             _inject_agent_tools(
                 agents,
                 tool_scope=loaded.config.get("tool_scope") or None,
@@ -1984,17 +2105,24 @@ async def run_agent_stream(
             _agent_model_tier = (
                 loaded.config.get("model_tier") or ""
             ).strip()
+            # .github/agents/<name>.agent.md model wins over config.json's
+            # model_tier (the repo's authored choice) but never over an
+            # explicit request/global override, keeping BYOK routing intact.
+            _agent_md_model = (
+                (_agent_md_spec.model or "").strip()
+                if _agent_md_spec is not None
+                else ""
+            )
             _final_model_early = (
                 _requested_model_early
                 or _configured_model_early
+                or _agent_md_model
                 or _agent_model_tier
             )
-            _is_byok_early = bool(
-                _final_model_early
-                and (
-                    "/" in _final_model_early
-                    or _final_model_early.lower().startswith("tier")
-                )
+            # BYOK-by-default: route every Copilot SDK agent through the LiteLLM
+            # gateway and normalise any bare/empty model to the default tier.
+            _final_model_early, _is_byok_early = _byok_default_model(
+                _final_model_early, settings,
             )
             _byok_provider_early: dict[str, Any] | None = None
             _byok_model_id_early = _final_model_early
@@ -3168,6 +3296,9 @@ async def _self_anneal(
                             settings,
                         )
                         agents = loaded.build_agents()
+                        _apply_agent_md_overrides(
+                            agents, loaded.agent_dir, agent_name,
+                        )
                         _inject_agent_tools(agents)
                         result = await _run_with_maf_agent(
                             agents,
@@ -3208,6 +3339,9 @@ async def _self_anneal(
                         settings,
                     )
                     agents = loaded.build_agents()
+                    _apply_agent_md_overrides(
+                        agents, loaded.agent_dir, agent_name,
+                    )
                     _inject_agent_tools(agents)
                     result = await _run_with_maf_agent(
                         agents,

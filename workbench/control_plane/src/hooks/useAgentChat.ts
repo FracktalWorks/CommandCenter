@@ -28,6 +28,16 @@ import { applyStateSnapshot, applyStateDelta } from "@/hooks/useAgentState";
 // Re-export types for backward compatibility with AgentChat.tsx imports.
 export type { ChatMessage, ToolEvent };
 
+// HITL control events drive the inline ElicitationCard / ConfirmationCard — they
+// are interaction signals, not data to display in the generic "Interactive view"
+// AG-UI panel.  Keep them out of message.customEvents so they don't render twice
+// (and linger after the user answers).
+const HITL_CONTROL_EVENTS = new Set([
+  "elicitation_requested",
+  "user_input_requested",
+  "confirmation_requested",
+]);
+
 export interface ArtifactEntry {
   path: string;
   sha256?: string;
@@ -174,7 +184,7 @@ export function useAgentChat({
       }));
 
       // Emit run started event for subscribers
-      emitAgentEvent("onRunStarted", { runId: assistantId });
+      emitAgentEvent("onRunStarted", { runId: assistantId, threadId });
 
       try {
         // Build the history sent to the model from the ACTIVE context window
@@ -434,20 +444,20 @@ export function useAgentChat({
               }
               case "done":
                 upd((m) => ({ ...m, streaming: false, isThinkingActive: false }));
-                emitAgentEvent("onRunFinalized", { runId: String(evt.run_id ?? "") });
+                emitAgentEvent("onRunFinalized", { runId: String(evt.run_id ?? ""), threadId });
                 break;
               case "state":
                 upd((m) => ({ ...m, agentState: (evt.snapshot as Record<string, unknown>) ?? {} }));
                 applyStateSnapshot(threadId, (evt.snapshot as Record<string, unknown>) ?? {});
-                emitAgentEvent("onStateChanged", { state: evt.snapshot as Record<string, unknown> });
+                emitAgentEvent("onStateChanged", { state: evt.snapshot as Record<string, unknown>, threadId });
                 break;
               case "state_delta":
                 applyStateDelta(threadId, (evt.delta as Array<{ op: string; path: string; value?: unknown }>) ?? []);
-                emitAgentEvent("onStateChanged", { stateDelta: evt.delta });
+                emitAgentEvent("onStateChanged", { stateDelta: evt.delta, threadId });
                 break;
               case "custom": {
                 const evtName = String(evt.name ?? "");
-                emitAgentEvent("onCustomEvent", { name: evtName, value: evt.value ?? evt.data });
+                emitAgentEvent("onCustomEvent", { name: evtName, value: evt.value ?? evt.data, threadId });
                 if ((evtName === "artifact_created" || evtName === "artifact_updated") && onArtifactRef.current) {
                   const data = (evt.value ?? evt.data) as Record<string, unknown> | undefined;
                   onArtifactRef.current({
@@ -456,7 +466,15 @@ export function useAgentChat({
                     size: data?.size != null ? Number(data.size) : undefined,
                   });
                 }
-                upd((m) => ({ ...m, customEvents: [...(m.customEvents ?? []), { name: evtName, value: evt.value ?? evt.data }] }));
+                // HITL control events (ask_questions / ask_user / confirm) are
+                // rendered by the inline ElicitationCard — they are NOT data to
+                // display.  Storing them in customEvents made them surface in the
+                // generic "Interactive view" AG-UI panel too, a duplicate that
+                // never cleared after the user answered.  Skip persisting them;
+                // the asking already shows in the thinking stream as a tool call.
+                if (!HITL_CONTROL_EVENTS.has(evtName)) {
+                  upd((m) => ({ ...m, customEvents: [...(m.customEvents ?? []), { name: evtName, value: evt.value ?? evt.data }] }));
+                }
                 break;
               }
               case "error":
@@ -507,7 +525,7 @@ export function useAgentChat({
         }
         const rawMsg = rawErr;
         const parsed = parseAgentError(rawMsg);
-        emitAgentEvent("onError", { error: rawMsg });
+        emitAgentEvent("onError", { error: rawMsg, threadId });
         setSessionState(threadId, (prev) => ({
           ...prev,
           error: rawMsg,
@@ -809,6 +827,27 @@ export function useAgentChat({
                   ),
                 }));
                 break;
+              case "custom": {
+                // Mirror the live loop so a HITL question pending when the page
+                // was refreshed re-shows its card on reconnect (the "restored
+                // question session" path).  HITL control events drive the
+                // ElicitationCard via the subscriber and are NOT stored as
+                // displayable customEvents (no duplicate "Interactive view").
+                const evtName = String(evt.name ?? "");
+                emitAgentEvent("onCustomEvent", { name: evtName, value: evt.value ?? evt.data, threadId });
+                if ((evtName === "artifact_created" || evtName === "artifact_updated") && onArtifactRef.current) {
+                  const data = (evt.value ?? evt.data) as Record<string, unknown> | undefined;
+                  onArtifactRef.current({
+                    path: String(data?.path ?? ""),
+                    sha256: data?.sha256 ? String(data.sha256) : undefined,
+                    size: data?.size != null ? Number(data.size) : undefined,
+                  });
+                }
+                if (!HITL_CONTROL_EVENTS.has(evtName)) {
+                  updLast((m) => ({ ...m, customEvents: [...(m.customEvents ?? []), { name: evtName, value: evt.value ?? evt.data }] }));
+                }
+                break;
+              }
               case "done": {
                 reconnected = true;
                 // Check if we actually recovered content.  When the Redis

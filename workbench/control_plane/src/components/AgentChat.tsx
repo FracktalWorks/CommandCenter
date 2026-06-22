@@ -32,7 +32,7 @@ import type { ElicitationQuestion, ElicitationAnswers } from "@/components/Elici
 import TodoPanel from "@/components/TodoPanel";
 import { parseAgentError } from "@/lib/parseAgentError";
 import type { ParsedAgentError } from "@/lib/parseAgentError";
-import { getMessages, saveMessages, fetchMessagesFromDb, type PersistedMessage } from "@/lib/sessions";
+import { getMessages, saveMessages, fetchMessagesFromDb, getQueue, saveQueue, type PersistedMessage } from "@/lib/sessions";
 import { computeContextUsage, activeContextSlice, isCompactionCheckpoint } from "@/lib/tokenCount";
 import { useAgentEvents } from "@/lib/agentEvents";
 import { buildFrontendToolsAddendum } from "@/hooks/useFrontendTool";
@@ -655,8 +655,11 @@ export default function AgentChat({
   const [input, setInput] = useState("");
   const [sendMode, setSendMode] = useState<SendMode>("send");
   const [showSendMenu, setShowSendMenu] = useState(false);
-  const [queuedCount, setQueuedCount] = useState(0);
-  const queueRef = useRef<string[]>([]);
+  // The send-queue is persisted per-session (localStorage) so a queued/steered
+  // message survives a page refresh or an agent/session switch.  Initialise from
+  // the persisted queue for this session; a session-change effect reloads it.
+  const [queuedCount, setQueuedCount] = useState(() => getQueue(sessionId).length);
+  const queueRef = useRef<string[]>(getQueue(sessionId));
 
   // A run is "active" whenever the agent is streaming, recovering after a page
   // reload, or the server run is still going.  The Stop control must appear in
@@ -818,7 +821,11 @@ export default function AgentChat({
 
   // Subscribe to agent events for HITL detection
   useAgentEvents({
-    onCustomEvent: ({ name, value }) => {
+    onCustomEvent: ({ name, value, threadId }) => {
+      // The subscriber registry is global — ignore events from any session
+      // other than the one this chat is showing, so a background run on a
+      // different agent never injects its question card / HITL state here.
+      if (threadId && threadId !== sessionId) return;
       if (name === "confirmation_requested" && value && typeof value === "object") {
         const v = value as Record<string, unknown>;
         setConfirmation({
@@ -852,7 +859,8 @@ export default function AgentChat({
         }
       }
     },
-    onRunFinalized: () => {
+    onRunFinalized: ({ threadId }) => {
+      if (threadId && threadId !== sessionId) return;
       // Clear any stale HITL state when a run completes — a finished
       // run can never be waiting on input anymore.
       setConfirmation((prev) => prev ? null : prev);
@@ -876,6 +884,15 @@ export default function AgentChat({
   const sessionIdRef = useRef(sessionId);
   useEffect(() => {
     sessionIdRef.current = sessionId;
+  }, [sessionId]);
+
+  // Reload the persisted send-queue when switching sessions/agents so a message
+  // queued on another session doesn't leak in and a queue left on THIS session
+  // is restored.  queueRef + queuedCount are the live mirror of the stored queue.
+  useEffect(() => {
+    const q = getQueue(sessionId);
+    queueRef.current = q;
+    setQueuedCount(q.length);
   }, [sessionId]);
 
   // Save messages on beforeunload so partial streams survive browser close.
@@ -961,6 +978,7 @@ export default function AgentChat({
     if (prevLoadingRef.current && !isLoading && queueRef.current.length > 0) {
       const next = queueRef.current.shift();
       setQueuedCount(queueRef.current.length);
+      saveQueue(sessionIdRef.current, queueRef.current);
       if (next) void sendMessage(next);
     }
     prevLoadingRef.current = isLoading;
@@ -1112,6 +1130,7 @@ export default function AgentChat({
     if (front) queueRef.current.unshift(text);
     else queueRef.current.push(text);
     setQueuedCount(queueRef.current.length);
+    saveQueue(sessionIdRef.current, queueRef.current);
   }, []);
 
   /** Submit honouring the active send mode (Send / Queue / Steer). */
@@ -1145,6 +1164,7 @@ export default function AgentChat({
   const handleStop = useCallback(() => {
     queueRef.current = [];
     setQueuedCount(0);
+    saveQueue(sessionIdRef.current, queueRef.current);
     stopGeneration();
   }, [stopGeneration]);
 
@@ -1553,7 +1573,7 @@ export default function AgentChat({
           <div className="max-w-3xl mx-auto mb-2 flex items-center gap-2 text-[11px] text-amber-400">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
             {queuedCount} message{queuedCount > 1 ? "s" : ""} queued
-            <button type="button" onClick={() => { queueRef.current = []; setQueuedCount(0); }}
+            <button type="button" onClick={() => { queueRef.current = []; setQueuedCount(0); saveQueue(sessionIdRef.current, queueRef.current); }}
               className="text-muted-foreground hover:text-foreground underline">clear</button>
           </div>
         )}

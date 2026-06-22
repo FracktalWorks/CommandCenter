@@ -138,6 +138,14 @@ class Settings(BaseSettings):
     # Override per-deployment in .env (COPILOT_CHAT_MODEL) if needed.
     copilot_chat_model: str = "tier-balanced"
 
+    # BYOK-by-default: route EVERY Copilot SDK agent through the LiteLLM gateway
+    # (/v1 BYOK) instead of api.githubcopilot.com.  When on (the default), any
+    # resolved model is BYOK-routed; a bare model name the gateway doesn't
+    # expose (e.g. an .agent.md ``claude-sonnet-4-5``) is normalized to
+    # ``copilot_chat_model`` (tier-balanced) so it always resolves.  Set
+    # COPILOT_BYOK_DEFAULT=false to allow bare names to hit GitHub Copilot direct.
+    copilot_byok_default: bool = True
+
     # ---------------------------------------------------------------------------
     # OAuth 2.0 authorization-code flow (M2.6) — Integration token exchange.
     # The Control Plane Integration page redirects to each provider's consent

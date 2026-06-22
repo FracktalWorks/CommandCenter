@@ -557,6 +557,19 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                 if isinstance(update, Exception):
                     raise update
                 yield update
+        except (asyncio.CancelledError, GeneratorExit):
+            # Stop pressed (cancel_run cancelled our detached task) or a new run
+            # superseded this one.  Detaching the event handler alone leaves the
+            # Copilot CLI subprocess still generating in the background — a zombie
+            # that burns tokens and keeps writing files.  Abort the in-flight
+            # message so the CLI actually stops; the session itself stays valid
+            # for reuse/resume.  Shield so our own cancellation doesn't interrupt
+            # the abort RPC before the CLI receives it.
+            try:
+                await asyncio.shield(copilot_session.abort())
+            except BaseException:  # noqa: BLE001
+                pass
+            raise
         finally:
             with contextlib.suppress(Exception):
                 copilot_session.off(_on_event)

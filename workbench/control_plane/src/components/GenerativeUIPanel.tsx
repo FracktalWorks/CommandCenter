@@ -82,13 +82,28 @@ function JsonView({ value }: { value: Json }): React.ReactElement {
   return <span className="text-foreground">{String(value)}</span>;
 }
 
+/**
+ * HITL control events (ask_questions / ask_user / confirm) are rendered by the
+ * inline ElicitationCard / ConfirmationCard, not as a generic data view.  Filter
+ * them out here too so sessions persisted by older builds (which stored them in
+ * customEvents) don't keep showing a stale "Interactive view" panel.
+ */
+const HITL_CONTROL_EVENTS = new Set([
+  "elicitation_requested",
+  "user_input_requested",
+  "confirmation_requested",
+]);
+
 export default function GenerativeUIPanel({
   agentState,
   customEvents,
 }: GenerativeUIPanelProps): React.ReactElement | null {
   const [open, setOpen] = useState(false);
+  const displayEvents = (customEvents ?? []).filter(
+    (ev) => !HITL_CONTROL_EVENTS.has(ev.name),
+  );
   const hasState = agentState && Object.keys(agentState).length > 0;
-  const hasCustom = customEvents && customEvents.length > 0;
+  const hasCustom = displayEvents.length > 0;
   if (!hasState && !hasCustom) return null;
 
   return (
@@ -109,7 +124,7 @@ export default function GenerativeUIPanel({
             </div>
           )}
           {hasCustom &&
-            customEvents!.map((ev, i) => (
+            displayEvents.map((ev, i) => (
               <div key={i} className="rounded-md bg-card/50 p-2">
                 <div className="mb-1 text-[10px] uppercase tracking-wide text-sky-400/80">
                   {ev.name || "custom"}

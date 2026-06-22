@@ -2027,6 +2027,8 @@ async def ai_chat(
         yield f"data: {json.dumps({'type': 'start'})}\n\n"
 
         content_buffer: list[str] = []
+        # toolCallId → friendly tool name, so the result event can be labelled.
+        tool_names: dict[str, str] = {}
         try:
             async for sse_line in agent_gen:
                 if not sse_line.startswith("data: "):
@@ -2046,6 +2048,28 @@ async def ai_chat(
                     if delta:
                         content_buffer.append(delta)
                         yield f"data: {json.dumps({'type': 'content', 'text': delta})}\n\n"
+
+                elif evt_type == "TOOL_CALL_START":
+                    # Surface tool activity so the chat can render AG-UI cards
+                    # (searched inbox / read email / drafted reply / created rule).
+                    name = str(evt.get("toolCallName")
+                               or evt.get("tool_call_name") or "tool")
+                    tid = str(evt.get("toolCallId") or "")
+                    tool_names[tid] = name
+                    tool_evt = {"type": "tool", "phase": "start",
+                                "id": tid, "name": name}
+                    yield f"data: {json.dumps(tool_evt)}\n\n"
+
+                elif evt_type in ("TOOL_CALL_END", "TOOL_CALL_RESULT"):
+                    tid = str(evt.get("toolCallId") or "")
+                    result = str(evt.get("content") or evt.get("result") or "")
+                    tool_evt = {
+                        "type": "tool", "phase": "result", "id": tid,
+                        "name": tool_names.get(tid, "tool"),
+                        "result": result[:600],
+                        "success": evt.get("success") is not False,
+                    }
+                    yield f"data: {json.dumps(tool_evt)}\n\n"
 
                 elif evt_type in ("RUN_FINISHED", "done"):
                     # Capture any TOOL_CALL_RESULT that might be the final answer

@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Send, Bot, Sparkles, Plus, MessagesSquare, Trash2, X, Square,
+  Search, Mail, PenLine, Archive, Tag, CheckCircle2, Loader2, Wrench,
+  Settings2, ListChecks,
 } from "lucide-react";
 import { ChatMessage } from "../lib/types";
 import { QUICK_ACTIONS } from "../lib/mockData";
@@ -43,6 +45,10 @@ export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelP
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
+  // AG-UI tool activity: live for the in-flight turn + a per-message archive.
+  const [turnTools, setTurnTools] = useState<ChatToolEvent[]>([]);
+  const turnToolsRef = useRef<ChatToolEvent[]>([]);
+  const [toolsByMsg, setToolsByMsg] = useState<Record<string, ChatToolEvent[]>>({});
   /** Messages typed while a turn is streaming — sent in order once idle. */
   const [queued, setQueued] = useState<string[]>([]);
   const [showSessions, setShowSessions] = useState(false);
@@ -148,6 +154,8 @@ export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelP
       setInput("");
       setIsTyping(true);
       setStreamingContent("");
+      turnToolsRef.current = [];
+      setTurnTools([]);
 
       const apiMessages = updated.map((m) => ({
         role: m.role as "user" | "assistant",
@@ -163,10 +171,16 @@ export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelP
           content: assistantText,
           timestamp: new Date(),
         };
+        const tools = turnToolsRef.current;
+        if (tools.length) {
+          setToolsByMsg((prev) => ({ ...prev, [assistantMsg.id]: tools }));
+        }
         const final = [...updated, assistantMsg];
         setMessages(final);
         if (!isError) persist(sessionId, final);
         else persist(sessionId, final);
+        turnToolsRef.current = [];
+        setTurnTools([]);
         setIsTyping(false);
         setStreamingContent("");
       };
@@ -182,9 +196,26 @@ export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelP
           (event) => {
             if (event.type === "content" && event.content) {
               setStreamingContent((prev) => prev + event.content);
+            } else if (event.type === "tool") {
+              if (event.phase === "start") {
+                const next = [
+                  ...turnToolsRef.current,
+                  { id: event.id || `${Date.now()}`, name: event.name || "tool", done: false },
+                ];
+                turnToolsRef.current = next;
+                setTurnTools(next);
+              } else if (event.phase === "result") {
+                const next = turnToolsRef.current.map((t) =>
+                  t.id === event.id
+                    ? { ...t, done: true, result: event.result, success: event.success }
+                    : t,
+                );
+                turnToolsRef.current = next;
+                setTurnTools(next);
+              }
             } else if (event.type === "done") {
               setStreamingContent((prev) => {
-                if (prev) finish(prev);
+                if (prev || turnToolsRef.current.length) finish(prev);
                 else setIsTyping(false);
                 return "";
               });
@@ -407,14 +438,21 @@ export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelP
                 <Bot size={12} />
               </div>
             )}
-            <div
-              className={`max-w-[85%] rounded-xl px-3 py-2 text-xs leading-relaxed ${
-                msg.role === "user"
-                  ? "bg-primary text-primary-foreground rounded-tr-sm"
-                  : "bg-secondary text-foreground rounded-tl-sm"
-              }`}
-            >
-              <MessageContent content={msg.content} />
+            <div className="max-w-[85%] flex flex-col gap-1.5">
+              {msg.role === "assistant" && toolsByMsg[msg.id]?.length > 0 && (
+                <ToolCards events={toolsByMsg[msg.id]} />
+              )}
+              {msg.content && (
+                <div
+                  className={`rounded-xl px-3 py-2 text-xs leading-relaxed ${
+                    msg.role === "user"
+                      ? "bg-primary text-primary-foreground rounded-tr-sm self-end"
+                      : "bg-secondary text-foreground rounded-tl-sm"
+                  }`}
+                >
+                  <MessageContent content={msg.content} />
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -424,14 +462,19 @@ export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelP
             <div className="w-6 h-6 rounded-full bg-primary/20 text-primary flex items-center justify-center flex-shrink-0">
               <Bot size={12} />
             </div>
-            <div className="bg-secondary rounded-xl rounded-tl-sm px-3 py-2.5">
-              {streamingContent ? (
-                <MessageContent content={streamingContent} />
-              ) : (
-                <div className="flex gap-1 items-center">
-                  <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:0ms]" />
-                  <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:150ms]" />
-                  <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:300ms]" />
+            <div className="max-w-[85%] flex flex-col gap-1.5">
+              {turnTools.length > 0 && <ToolCards events={turnTools} />}
+              {(streamingContent || turnTools.length === 0) && (
+                <div className="bg-secondary rounded-xl rounded-tl-sm px-3 py-2.5 w-fit">
+                  {streamingContent ? (
+                    <MessageContent content={streamingContent} />
+                  ) : (
+                    <div className="flex gap-1 items-center">
+                      <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:0ms]" />
+                      <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:150ms]" />
+                      <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce [animation-delay:300ms]" />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -501,6 +544,88 @@ export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelP
             : "Press Enter to send · Shift+Enter for new line"}
         </p>
       </div>
+    </div>
+  );
+}
+
+/** An AG-UI tool activity surfaced inline in the chat (search/read/draft/rule). */
+export interface ChatToolEvent {
+  id: string;
+  name: string;
+  done: boolean;
+  result?: string;
+  success?: boolean;
+}
+
+/** Friendly label + icon + present-tense verb for the email-assistant's tools. */
+const TOOL_META: Record<
+  string,
+  { icon: React.ElementType; label: string; running: string }
+> = {
+  search_emails: { icon: Search, label: "Searched inbox", running: "Searching inbox…" },
+  search_inbox: { icon: Search, label: "Searched inbox", running: "Searching inbox…" },
+  read_email: { icon: Mail, label: "Read email", running: "Reading email…" },
+  list_rules: { icon: ListChecks, label: "Listed rules", running: "Loading rules…" },
+  create_rule: { icon: Sparkles, label: "Created rule", running: "Creating rule…" },
+  update_rule: { icon: Sparkles, label: "Updated rule", running: "Updating rule…" },
+  update_rule_state: { icon: Sparkles, label: "Updated rule", running: "Updating rule…" },
+  learn_rule_pattern: { icon: Sparkles, label: "Taught a pattern", running: "Learning…" },
+  draft_reply: { icon: PenLine, label: "Drafted a reply", running: "Drafting a reply…" },
+  draft_email: { icon: PenLine, label: "Drafted an email", running: "Drafting…" },
+  send_email: { icon: Send, label: "Sent email", running: "Sending…" },
+  archive_emails: { icon: Archive, label: "Archived", running: "Archiving…" },
+  archive_email: { icon: Archive, label: "Archived", running: "Archiving…" },
+  label_emails: { icon: Tag, label: "Labelled", running: "Labelling…" },
+  update_assistant_settings: { icon: Settings2, label: "Updated settings", running: "Updating settings…" },
+};
+
+function toolMeta(name: string) {
+  return (
+    TOOL_META[name] ?? {
+      icon: Wrench,
+      label: name.replace(/_/g, " "),
+      running: `${name.replace(/_/g, " ")}…`,
+    }
+  );
+}
+
+/** Inline AG-UI cards showing what the assistant did this turn. */
+function ToolCards({ events }: { events: ChatToolEvent[] }) {
+  if (!events.length) return null;
+  return (
+    <div className="space-y-1.5">
+      {events.map((e) => {
+        const meta = toolMeta(e.name);
+        const Icon = e.done ? (e.success === false ? X : CheckCircle2) : meta.icon;
+        return (
+          <div
+            key={e.id}
+            className="flex items-start gap-2 rounded-lg border border-sidebar-border bg-secondary/40 px-2.5 py-1.5"
+          >
+            <span
+              className={`mt-0.5 flex-shrink-0 ${
+                e.done
+                  ? e.success === false
+                    ? "text-destructive"
+                    : "text-emerald-500"
+                  : "text-primary"
+              }`}
+            >
+              {e.done ? <Icon size={13} /> : <Loader2 size={13} className="animate-spin" />}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="text-[11px] font-medium text-foreground">
+                {e.done ? meta.label : meta.running}
+              </div>
+              {e.done && e.result && (
+                <div className="text-[10px] text-muted-foreground line-clamp-2 whitespace-pre-wrap">
+                  {e.result}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

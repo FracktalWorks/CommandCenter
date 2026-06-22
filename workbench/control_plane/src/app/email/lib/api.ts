@@ -392,9 +392,24 @@ export interface AIChatRequest {
   sessionId?: string; // stable per conversation (thread continuity)
 }
 
+/** An SSE event from the email assistant chat stream. `tool` events surface
+ *  AG-UI tool activity (searched inbox / read email / drafted reply / …). */
+export interface AIChatStreamEvent {
+  type: string; // start | content | tool | done | error
+  content?: string;
+  done?: boolean;
+  // tool events
+  phase?: "start" | "result";
+  id?: string;
+  name?: string;
+  result?: string;
+  success?: boolean;
+  error?: string;
+}
+
 export async function streamAIChat(
   request: AIChatRequest,
-  onEvent: (event: { type: string; content?: string; done?: boolean }) => void,
+  onEvent: (event: AIChatStreamEvent) => void,
   signal?: AbortSignal
 ): Promise<void> {
   const res = await fetch("/api/email/ai/chat", {

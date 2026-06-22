@@ -4084,7 +4084,7 @@ async def _learn_from_sent(account_id: str, thread_id: str, sent_text: str) -> N
 
 async def _llm_draft_reply(
     email: dict[str, str], about: str, signature: str,
-    instructions: str = "", context: str = "",
+    instructions: str = "", context: str = "", user_email: str = "",
 ) -> str:
     """Draft a reply body with the LLM, using the user's About context plus any
     extra `context` gathered from memory / specialist agents.
@@ -4395,7 +4395,7 @@ async def _orchestrate_draft(
 
     draft = await _llm_draft_reply(
         email, about, signature, instructions=instructions,
-        context="\n\n".join(context_parts),
+        context="\n\n".join(context_parts), user_email=user_email,
     )
 
     # 3) Record the interaction so future drafts have more context.

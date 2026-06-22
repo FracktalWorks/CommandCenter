@@ -383,16 +383,25 @@ export interface AIChatRequest {
   messages: { role: "user" | "assistant"; content: string }[];
   accountId?: string;
   emailContextId?: string; // currently selected email for context
+  sessionId?: string; // stable per conversation (thread continuity)
 }
 
 export async function streamAIChat(
   request: AIChatRequest,
-  onEvent: (event: { type: string; content?: string; done?: boolean }) => void
+  onEvent: (event: { type: string; content?: string; done?: boolean }) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const res = await fetch("/api/email/ai/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(request),
+    // The gateway expects snake_case keys.
+    body: JSON.stringify({
+      messages: request.messages,
+      account_id: request.accountId ?? null,
+      email_context_id: request.emailContextId ?? null,
+      session_id: request.sessionId ?? null,
+    }),
+    signal,
   });
 
   if (!res.ok) throw new Error(`AI chat failed: ${res.status}`);

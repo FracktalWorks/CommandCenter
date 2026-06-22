@@ -152,6 +152,7 @@ class AIChatRequest(BaseModel):
     messages: list[dict[str, str]]
     account_id: str | None = None
     email_context_id: str | None = None
+    session_id: str | None = None  # stable per conversation (thread continuity)
 
 class QuickActionRequest(BaseModel):
     action: str  # 'summarize' | 'find_urgent' | 'draft_reply' | 'unsubscribe'
@@ -1984,11 +1985,14 @@ async def ai_chat(
     # ── Run the agent through the orchestrator ──
     from orchestrator.executor import run_agent_stream  # noqa: PLC0415
 
+    # A stable session id keeps the agent's thread (memory) continuous across the
+    # turns of one conversation; fall back to the per-request run id.
+    thread_key = req.session_id or run_id
     agent_gen = run_agent_stream(
         "email-assistant",
         payload,
         run_id=run_id,
-        thread_id=f"email-chat:{user_id}:{run_id}",
+        thread_id=f"email-chat:{user_id}:{thread_key}",
         model=agent_model,
     )
 

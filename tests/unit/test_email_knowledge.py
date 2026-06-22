@@ -43,13 +43,16 @@ async def test_load_assistant_about_builds_tagged_blocks() -> None:
         writing_style="Short and casual.",
     )
     kb_rows = [SimpleNamespace(title="Pricing", content="Plans start at $10/mo.")]
+    lp_rows = [SimpleNamespace(pattern="Keep sign-offs to just my first name.")]
     settings_res = MagicMock()
     settings_res.fetchone.return_value = settings_row
     kb_res = MagicMock()
     kb_res.fetchall.return_value = kb_rows
+    lp_res = MagicMock()
+    lp_res.fetchall.return_value = lp_rows
 
     db = AsyncMock()
-    db.execute.side_effect = [settings_res, kb_res]
+    db.execute.side_effect = [settings_res, kb_res, lp_res]
 
     about, sig = await m._load_assistant_about(db, "acc-1")
     assert sig == "— Vijay"
@@ -57,6 +60,7 @@ async def test_load_assistant_about_builds_tagged_blocks() -> None:
     assert "<personal_instructions>" in about and "Never quote prices." in about
     assert "<writing_style>" in about and "Short and casual." in about
     assert "<knowledge_base>" in about and "## Pricing" in about
+    assert "<learned_patterns>" in about and "sign-offs" in about
 
 
 async def test_load_assistant_about_empty_when_unset() -> None:
@@ -64,8 +68,10 @@ async def test_load_assistant_about_empty_when_unset() -> None:
     settings_res.fetchone.return_value = None
     kb_res = MagicMock()
     kb_res.fetchall.return_value = []
+    lp_res = MagicMock()
+    lp_res.fetchall.return_value = []
     db = AsyncMock()
-    db.execute.side_effect = [settings_res, kb_res]
+    db.execute.side_effect = [settings_res, kb_res, lp_res]
 
     about, sig = await m._load_assistant_about(db, "acc-1")
     assert about == ""

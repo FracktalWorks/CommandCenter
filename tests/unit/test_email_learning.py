@@ -1,0 +1,66 @@
+"""Unit tests for Phase 7 — learning from the user's draft edits."""
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from gateway.routes import email as m
+
+
+def test_normalize_text_collapses_whitespace_and_case() -> None:
+    assert m._normalize_text("  Hi   THERE\n\n") == "hi there"
+
+
+async def test_learn_from_sent_stores_pattern_when_edited() -> None:
+    draft_row = SimpleNamespace(
+        draft_text="Hi,\n\nThanks for reaching out. Best regards, Vijay Varada")
+    res = MagicMock()
+    res.fetchone.return_value = draft_row
+    db = AsyncMock()
+    db.execute.return_value = res
+    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m, "_llm_distill_edit",
+                         AsyncMock(return_value="Keep sign-offs to my first name.")):
+        await m._learn_from_sent("acc-1", "t1", "Hi,\n\nThanks. Best, Vijay")
+    # delete-commit + insert-commit
+    assert db.commit.await_count == 2
+
+
+async def test_learn_skips_llm_when_unchanged() -> None:
+    draft_row = SimpleNamespace(draft_text="Hi there, thanks!")
+    res = MagicMock()
+    res.fetchone.return_value = draft_row
+    db = AsyncMock()
+    db.execute.return_value = res
+    llm = AsyncMock()
+    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m, "_llm_distill_edit", llm):
+        # Same text (modulo whitespace) → nothing to learn.
+        await m._learn_from_sent("acc-1", "t1", "Hi there,   thanks!")
+    llm.assert_not_awaited()
+
+
+async def test_learn_noop_when_no_stored_draft() -> None:
+    res = MagicMock()
+    res.fetchone.return_value = None
+    db = AsyncMock()
+    db.execute.return_value = res
+    llm = AsyncMock()
+    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m, "_llm_distill_edit", llm):
+        await m._learn_from_sent("acc-1", "t1", "anything")
+    llm.assert_not_awaited()
+
+
+async def test_store_ai_draft_upserts() -> None:
+    db = AsyncMock()
+    await m._store_ai_draft(db, "acc-1", "t1", "Draft body")
+    db.execute.assert_awaited_once()
+    db.commit.assert_awaited_once()
+
+
+async def test_store_ai_draft_skips_empty() -> None:
+    db = AsyncMock()
+    await m._store_ai_draft(db, "acc-1", "", "body")   # no thread id
+    await m._store_ai_draft(db, "acc-1", "t1", "   ")  # blank body
+    db.execute.assert_not_awaited()

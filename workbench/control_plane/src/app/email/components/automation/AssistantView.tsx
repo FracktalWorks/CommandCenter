@@ -13,11 +13,12 @@ import {
   listColdSenders, upsertColdSender, generateWritingStyle,
   listKnowledge, createKnowledge, updateKnowledge, deleteKnowledge,
   installPresetRules, reorderRules, undoExecution,
+  listLearnedPatterns, deleteLearnedPattern,
 } from "../../lib/api";
 import {
   AutomationRule, RuleAction, RuleActionType, RuleTestResult, ExecutedRule,
   AssistantSettings, RecentTestResult, EMAIL_CATEGORIES, ColdBlockerMode,
-  ColdSender, LLMConfigResponse, KnowledgeEntry,
+  ColdSender, LLMConfigResponse, KnowledgeEntry, LearnedPattern,
 } from "../../lib/types";
 
 interface AssistantViewProps {
@@ -1623,6 +1624,8 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
 
       <KnowledgeBase accountId={accountId} />
 
+      <LearnedPreferences accountId={accountId} />
+
       <ColdSendersList accountId={accountId} />
 
       <div className="bg-card border border-border rounded-xl p-4">
@@ -1818,6 +1821,70 @@ function KnowledgeBase({ accountId }: { accountId: string | null }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function LearnedPreferences({ accountId }: { accountId: string | null }) {
+  const [patterns, setPatterns] = useState<LearnedPattern[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(() => {
+    if (!accountId) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    listLearnedPatterns(accountId)
+      .then(setPatterns)
+      .catch(() => setPatterns([]))
+      .finally(() => setLoading(false));
+  }, [accountId]);
+
+  useEffect(load, [load]);
+
+  const forget = async (id: string) => {
+    setPatterns((prev) => prev.filter((p) => p.id !== id));
+    try {
+      await deleteLearnedPattern(id);
+    } catch {
+      load();
+    }
+  };
+
+  if (!accountId || loading || patterns.length === 0) return null;
+
+  return (
+    <div className="bg-card border border-border rounded-xl p-4">
+      <div className="flex items-center gap-1.5 mb-1">
+        <Sparkles size={14} className="text-primary" />
+        <h3 className="text-sm font-medium text-foreground">Learned preferences</h3>
+      </div>
+      <p className="text-[11px] text-muted-foreground mb-3">
+        Picked up from how you edit the assistant's drafts before sending. These
+        nudge future drafts — remove any you don't want.
+      </p>
+      <div className="space-y-1.5">
+        {patterns.map((p) => (
+          <div key={p.id} className="flex items-start gap-2">
+            <div className="flex-1 min-w-0 text-xs text-foreground/80">
+              {p.pattern}
+              {p.weight > 1 && (
+                <span className="ml-1 text-[10px] text-muted-foreground">
+                  ×{p.weight}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => forget(p.id)}
+              title="Forget this"
+              className="text-muted-foreground hover:text-destructive flex-shrink-0"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

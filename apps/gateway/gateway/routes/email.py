@@ -1497,6 +1497,7 @@ async def get_full_body(
 @router.post("/send")
 async def send_email(
     req: SendEmailRequest,
+    background: BackgroundTasks,
     user: UserContext = Depends(get_current_user),
 ):
     """Send a new email from a connected account."""
@@ -1553,6 +1554,21 @@ async def send_email(
         if provider.credentials_dirty():
             await _persist_rotated_creds(db, store, str(row.id), provider)
             await db.commit()
+
+        # If this was a reply, learn from how the user edited the AI's draft.
+        if req.reply_to_message_id and req.body_text:
+            try:
+                trow = (await db.execute(text(
+                    "SELECT thread_id FROM email_messages "
+                    "WHERE account_id = :aid AND provider_message_id = :pmid"
+                ), {"aid": req.account_id,
+                    "pmid": req.reply_to_message_id})).fetchone()
+                if trow and trow.thread_id:
+                    background.add_task(
+                        _learn_from_sent, req.account_id, trow.thread_id,
+                        req.body_text)
+            except Exception:  # noqa: BLE001
+                pass
 
         return {"id": msg_id, "ok": True}
     finally:
@@ -3183,6 +3199,7 @@ async def approve_execution(
         taken = await _apply_rule_actions(
             db, provider, str(row.message_id), row.provider_message_id,
             actions, email, about, signature, row.user_id,
+            account_id=str(row.account_id),
         )
         await db.execute(text(
             "UPDATE email_executed_rules SET status='APPLIED', actions_taken=:acts "
@@ -3386,7 +3403,119 @@ async def _load_assistant_about(db: Any, account_id: str) -> tuple[str, str]:
             parts.append(
                 "<knowledge_base>\n" + "\n\n".join(kb_text) + "\n</knowledge_base>"
             )
+
+    # Patterns learned from how the user edits the assistant's drafts (advisory).
+    lp_rows = (await db.execute(text(
+        """SELECT pattern FROM email_learned_patterns
+           WHERE account_id = :aid ORDER BY weight DESC, updated_at DESC LIMIT 12"""
+    ), {"aid": account_id})).fetchall()
+    if lp_rows:
+        parts.append(
+            "<learned_patterns>\n"
+            + "\n".join(f"- {r.pattern}" for r in lp_rows)
+            + "\n</learned_patterns>"
+        )
+
     return "\n\n".join(parts), signature
+
+
+def _normalize_text(s: str) -> str:
+    return " ".join((s or "").split()).lower()
+
+
+async def _store_ai_draft(
+    db: Any, account_id: str, thread_id: str, draft_text: str
+) -> None:
+    """Remember the assistant's original draft for a thread, so we can later
+    learn from how the user edits it before sending."""
+    if not account_id or not thread_id or not (draft_text or "").strip():
+        return
+    try:
+        await db.execute(text(
+            """INSERT INTO email_ai_drafts (account_id, thread_id, draft_text)
+               VALUES (:aid, :tid, :txt)
+               ON CONFLICT (account_id, thread_id) DO UPDATE SET
+                 draft_text = EXCLUDED.draft_text, created_at = now()"""
+        ), {"aid": account_id, "tid": thread_id, "txt": draft_text})
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.store_ai_draft_failed", error=str(exc)[:160])
+
+
+async def _llm_distill_edit(original: str, edited: str) -> str:
+    """One durable preference from how the user changed the draft, or '' if the
+    change is trivial / not generalizable."""
+    try:
+        import litellm as _litellm  # noqa: PLC0415
+        from litellm import acompletion  # noqa: PLC0415
+        from acb_llm.client import ensure_model_registered, _TIER_MODEL  # noqa: PLC0415
+        _litellm.drop_params = True
+        _litellm.suppress_debug_info = True
+        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
+        ensure_model_registered(model)
+        sys_prompt = (
+            "Compare the assistant's DRAFT reply with what the user actually "
+            "SENT. Identify ONE durable, generalizable preference about how this "
+            "user likes their replies written (tone, length, sign-off, phrasing, "
+            "what to include or omit). Ignore one-off factual edits specific to "
+            "this email. If there is no generalizable preference, output exactly "
+            "NONE. Otherwise output a single short instruction, e.g. 'Keep "
+            "sign-offs to just my first name.'"
+        )
+        resp = await acompletion(
+            model=model,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user",
+                       "content": f"DRAFT:\n{original[:2000]}\n\nSENT:\n{edited[:2000]}"}],
+            temperature=0, max_tokens=120,
+        )
+        out = (resp.choices[0].message.content or "").strip()
+        if not out or out.upper().startswith("NONE"):
+            return ""
+        return out[:200]
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.distill_edit_failed", error=str(exc)[:160])
+        return ""
+
+
+async def _learn_from_sent(account_id: str, thread_id: str, sent_text: str) -> None:
+    """Background: if the user edited the assistant's draft for this thread,
+    distil a learned preference and store it (best-effort)."""
+    if not thread_id or not (sent_text or "").strip():
+        return
+    db = await _get_db()
+    try:
+        row = (await db.execute(text(
+            "SELECT draft_text FROM email_ai_drafts "
+            "WHERE account_id = :aid AND thread_id = :tid"
+        ), {"aid": account_id, "tid": thread_id})).fetchone()
+        if not row:
+            return
+        original = row.draft_text or ""
+        await db.execute(text(
+            "DELETE FROM email_ai_drafts "
+            "WHERE account_id = :aid AND thread_id = :tid"
+        ), {"aid": account_id, "tid": thread_id})
+        await db.commit()
+        if not original.strip() or \
+                _normalize_text(original) == _normalize_text(sent_text):
+            return  # unchanged → nothing to learn
+        pattern = await _llm_distill_edit(original, sent_text)
+        if not pattern:
+            return
+        await db.execute(text(
+            """INSERT INTO email_learned_patterns (account_id, pattern)
+               VALUES (:aid, :p)
+               ON CONFLICT (account_id, pattern) DO UPDATE SET
+                 weight = email_learned_patterns.weight + 1, updated_at = now()"""
+        ), {"aid": account_id, "p": pattern})
+        await db.commit()
+        _log.info("email.learned_pattern", account_id=account_id,
+                  pattern=pattern[:80])
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.learn_from_sent_failed", error=str(exc)[:160])
+    finally:
+        await db.close()
 
 
 async def _llm_draft_reply(
@@ -3419,7 +3548,9 @@ async def _llm_draft_reply(
             "If the context contains <personal_instructions>, follow them. If it "
             "contains <writing_style>, match that tone, length, and phrasing. If "
             "it contains a <knowledge_base>, use it for facts and details but only "
-            "where relevant to this email."
+            "where relevant to this email. If it contains <learned_patterns>, "
+            "treat them as advisory preferences learned from the user's past "
+            "edits and apply the ones that fit."
         )
         ctx = f"User context:\n{about}\n\n" if about else ""
         if context:
@@ -3719,6 +3850,7 @@ async def _run_rules_job(
                     actions_taken = await _apply_rule_actions(
                         db, provider, str(r.id), r.provider_message_id,
                         rule["actions"], email, about, signature, account_user,
+                        account_id=account_id,
                     )
                     status = "APPLIED"
                 else:
@@ -3764,6 +3896,7 @@ async def _apply_rule_actions(
     db: Any, provider: Any, message_id: str, provider_msg_id: str,
     actions: list[dict[str, Any]], email: dict[str, str] | None = None,
     about: str = "", signature: str = "", user_email: str = "",
+    account_id: str = "",
 ) -> list[str]:
     """Apply a rule's actions. Reply/forward/draft create provider DRAFTS (never
     auto-send) so a misfiring rule can't email anyone without review."""
@@ -3808,6 +3941,10 @@ async def _apply_rule_actions(
                     reply_to_message_id=provider_msg_id,
                     thread_id=email.get("thread_id") or None,
                 )
+                # AI-written (non-template) drafts: remember for edit-learning.
+                if not tmpl and account_id:
+                    await _store_ai_draft(
+                        db, account_id, email.get("thread_id") or "", body)
             elif t == "FORWARD" and a.get("to_address"):
                 note = (a.get("content") or "").strip()
                 fwd = (
@@ -4112,6 +4249,48 @@ async def generate_writing_style(
         ), {"aid": account_id, "ws": style})
         await db.commit()
         return {"writing_style": style}
+    finally:
+        await db.close()
+
+
+@router.get("/learned-patterns")
+async def list_learned_patterns(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """Preferences the assistant has learned from the user's draft edits."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        rows = (await db.execute(text(
+            """SELECT id, pattern, weight FROM email_learned_patterns
+               WHERE account_id = :aid
+               ORDER BY weight DESC, updated_at DESC"""
+        ), {"aid": account_id})).fetchall()
+        return {"patterns": [
+            {"id": str(r.id), "pattern": r.pattern, "weight": r.weight}
+            for r in rows
+        ]}
+    finally:
+        await db.close()
+
+
+@router.delete("/learned-patterns/{pid}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_learned_pattern(
+    pid: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Forget a learned preference."""
+    db = await _get_db()
+    try:
+        res = await db.execute(text(
+            """DELETE FROM email_learned_patterns lp USING email_accounts ea
+               WHERE lp.id = :id AND lp.account_id = ea.id
+                 AND ea.user_id = :uid"""
+        ), {"id": pid, "uid": user.email or "anonymous"})
+        await db.commit()
+        if res.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Not found")
     finally:
         await db.close()
 
@@ -4675,6 +4854,10 @@ async def draft_reply_smart(
             email, about, signature, user.email or "",
             max_agents=1, agent_timeout=18.0, follow_up=req.follow_up,
         )
+
+        # Remember this draft so we can learn from the user's edits on send.
+        if not req.follow_up:
+            await _store_ai_draft(db, req.account_id, email["thread_id"], draft)
 
         created = False
         if req.create_draft:

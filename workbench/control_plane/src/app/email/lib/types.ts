@@ -251,6 +251,13 @@ export interface AssistantSettings {
   follow_up_days: number;
 }
 
+/** A preference the assistant learned from how the user edits its drafts. */
+export interface LearnedPattern {
+  id: string;
+  pattern: string;
+  weight: number;
+}
+
 /** A draft knowledge-base entry the assistant draws on when writing replies. */
 export interface KnowledgeEntry {
   id?: string;

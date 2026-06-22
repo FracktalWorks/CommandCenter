@@ -3,6 +3,7 @@ import {
   AnalyticsOverview, SenderStat, NewsletterStatus,
   AutomationRule, RuleTestResult, ExecutedRule, AssistantSettings,
   RecentTestResult, ColdSender, ReplyZeroThread, KnowledgeEntry,
+  LearnedPattern,
 } from "./types";
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
@@ -749,6 +750,19 @@ export async function updateKnowledge(
 
 export async function deleteKnowledge(id: string): Promise<void> {
   await gatewayFetch(`/email/knowledge/${id}`, { method: "DELETE" });
+}
+
+export async function listLearnedPatterns(
+  accountId: string
+): Promise<LearnedPattern[]> {
+  const res = await gatewayFetch<{ patterns: LearnedPattern[] }>(
+    `/email/learned-patterns?account_id=${encodeURIComponent(accountId)}`
+  );
+  return res.patterns ?? [];
+}
+
+export async function deleteLearnedPattern(id: string): Promise<void> {
+  await gatewayFetch(`/email/learned-patterns/${id}`, { method: "DELETE" });
 }
 
 // ── Sender categorization ───────────────────────────────────────────────────

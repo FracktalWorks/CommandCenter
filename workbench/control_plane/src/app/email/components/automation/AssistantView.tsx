@@ -230,6 +230,124 @@ const PRESET_RULES: PresetRule[] = [
   },
 ];
 
+/**
+ * Example rules the user can start from. Picking one pre-fills the manual rule
+ * editor (conditions + actions) so they can tweak and save — a hybrid of
+ * inbox-zero's "Choose from examples" with our structured editor.
+ */
+type RuleExample = {
+  name: string;
+  summary: string;
+  group: string;
+  instructions?: string;
+  from_pattern?: string;
+  subject_pattern?: string;
+  actions: RuleAction[];
+};
+
+const RULE_EXAMPLES: RuleExample[] = [
+  {
+    name: "To Reply", group: "Triage",
+    summary: "Emails that need a personal response → label + draft a reply",
+    instructions:
+      "Emails where the sender is asking me something or clearly expects a reply from me.",
+    actions: [{ type: "LABEL", label: "To Reply" }, { type: "DRAFT_EMAIL" }],
+  },
+  {
+    name: "Newsletters", group: "Triage",
+    summary: "Subscriptions & regular content → label",
+    instructions:
+      "Newsletters: regular content from publications, blogs, or services I've subscribed to.",
+    actions: [{ type: "LABEL", label: "Newsletter" }],
+  },
+  {
+    name: "Marketing", group: "Triage",
+    summary: "Promotions → label + archive",
+    instructions:
+      "Marketing: promotional emails about products, services, sales, or offers.",
+    actions: [{ type: "LABEL", label: "Marketing" }, { type: "ARCHIVE" }],
+  },
+  {
+    name: "Cold emails", group: "Triage",
+    summary: "Unsolicited pitches → label + archive",
+    instructions:
+      "Cold emails: unsolicited sales pitches and outreach from people I have no prior relationship with.",
+    actions: [{ type: "LABEL", label: "Cold Email" }, { type: "ARCHIVE" }],
+  },
+  {
+    name: "Receipts", group: "Records",
+    summary: "Purchase confirmations & invoices → label",
+    instructions:
+      "Receipts: purchase confirmations, payment receipts, transaction records or invoices.",
+    actions: [{ type: "LABEL", label: "Receipt" }],
+  },
+  {
+    name: "Forward receipts to accounting", group: "Records",
+    summary: "Receipts → label + forward to your accountant",
+    instructions: "Receipts and invoices for purchases or subscriptions.",
+    actions: [
+      { type: "LABEL", label: "Receipt" },
+      { type: "FORWARD", to_address: "accounting@example.com" },
+    ],
+  },
+  {
+    name: "Calendar", group: "Records",
+    summary: "Meeting invites & scheduling → label",
+    instructions:
+      "Any email related to scheduling, meeting invites, or calendar notifications.",
+    actions: [{ type: "LABEL", label: "Calendar" }],
+  },
+  {
+    name: "Notifications", group: "Noise",
+    summary: "Automated alerts → label + mark read",
+    instructions:
+      "Automated notifications, alerts, status updates, or system messages.",
+    actions: [{ type: "LABEL", label: "Notification" }, { type: "MARK_READ" }],
+  },
+  {
+    name: "GitHub", group: "Noise",
+    summary: "Mail from github.com → label + archive",
+    from_pattern: "github.com",
+    actions: [{ type: "LABEL", label: "GitHub" }, { type: "ARCHIVE" }],
+  },
+  {
+    name: "Recruiters", group: "Noise",
+    summary: "Recruiter outreach → label + archive",
+    instructions: "Outreach from recruiters about job opportunities.",
+    actions: [{ type: "LABEL", label: "Recruiter" }, { type: "ARCHIVE" }],
+  },
+  {
+    name: "Customer support", group: "Work",
+    summary: "Help requests → label + draft a reply",
+    instructions:
+      "A customer asking for help, reporting an issue, or requesting support.",
+    actions: [{ type: "LABEL", label: "Support" }, { type: "DRAFT_EMAIL" }],
+  },
+  {
+    name: "Investor updates", group: "Work",
+    summary: "Investor updates → label + archive",
+    instructions: "Investor updates or portfolio reports sent to me.",
+    actions: [{ type: "LABEL", label: "Investor Update" }, { type: "ARCHIVE" }],
+  },
+  {
+    name: "Spam / phishing", group: "Noise",
+    summary: "Suspected spam → move to junk",
+    instructions: "Suspected spam, phishing, or scam emails.",
+    actions: [{ type: "MARK_SPAM" }],
+  },
+];
+
+function exampleToRule(ex: RuleExample, accountId: string): AutomationRule {
+  return {
+    ...emptyRule(accountId),
+    name: ex.name,
+    instructions: ex.instructions ?? "",
+    from_pattern: ex.from_pattern ?? "",
+    subject_pattern: ex.subject_pattern ?? "",
+    actions: ex.actions,
+  };
+}
+
 export function AssistantView({ accountId }: AssistantViewProps) {
   const [tab, setTab] = useState<Tab>("rules");
   // When the user picks "See history" from a rule's ⋯ menu, jump to the History
@@ -332,6 +450,7 @@ function RulesTab({
   const [installing, setInstalling] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [showPast, setShowPast] = useState(false);
+  const [showExamples, setShowExamples] = useState(false);
   const setPendingChatPrompt = useEmailStore((s) => s.setPendingChatPrompt);
 
   const duplicate = async (rule: AutomationRule) => {
@@ -478,6 +597,12 @@ function RulesTab({
             </button>
           )}
           <button
+            onClick={() => setShowExamples(true)}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+          >
+            <Sparkles size={13} /> Examples
+          </button>
+          <button
             onClick={() => setEditing(emptyRule(accountId))}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
           >
@@ -489,6 +614,16 @@ function RulesTab({
         <ProcessPastEmailsDialog
           accountId={accountId}
           onClose={() => setShowPast(false)}
+        />
+      )}
+      {showExamples && accountId && (
+        <ExamplesDialog
+          accountId={accountId}
+          onPick={(rule) => {
+            setShowExamples(false);
+            setEditing(rule);
+          }}
+          onClose={() => setShowExamples(false)}
         />
       )}
 
@@ -1031,10 +1166,9 @@ function ProcessPastEmailsDialog({
   accountId: string;
   onClose: () => void;
 }) {
-  const [applyMode, setApplyMode] = useState(false); // false = Test, true = Apply
   const [start, setStart] = useState(isoDaysAgo(7));
   const [end, setEnd] = useState(isoDaysAgo(0));
-  const [includeRead, setIncludeRead] = useState(true);
+  const [includeRead, setIncludeRead] = useState(true); // true = all mail, false = unread only
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1044,18 +1178,20 @@ function ProcessPastEmailsDialog({
     setError(null);
     setResult(null);
     try {
+      // Processing past emails always APPLIES the matched rules (there's nothing
+      // to "test" against history) — results land in the History tab.
       const r = await processPastEmails({
         accountId,
         startDate: start || undefined,
         endDate: end || undefined,
-        isTest: !applyMode,
+        isTest: false,
         includeRead,
       });
       setResult(
         r.count === 0
           ? "No emails found in that range."
-          : `${applyMode ? "Applying rules to" : "Testing rules on"} ${r.count} ` +
-              `email${r.count === 1 ? "" : "s"} — results appear in the History tab.`,
+          : `Applying your rules to ${r.count} email${r.count === 1 ? "" : "s"} ` +
+              "— results appear in the History tab.",
       );
     } catch (e) {
       setError((e as Error).message || "Failed to start processing");
@@ -1067,27 +1203,17 @@ function ProcessPastEmailsDialog({
   return (
     <Modal
       title="Process past emails"
-      description="Run your rules over older inbox mail in a date range."
+      description="Apply your rules to older inbox mail in a date range."
       onClose={onClose}
       footer={
-        <div className="flex items-center gap-2 w-full">
-          <LabeledToggle
-            label="Test"
-            labelRight="Apply"
-            enabled={applyMode}
-            onChange={setApplyMode}
-          />
-          <button
-            onClick={run}
-            disabled={busy}
-            className={`ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white text-xs font-medium transition-colors disabled:opacity-50 ${
-              applyMode ? "bg-emerald-600 hover:bg-emerald-700" : "bg-primary hover:bg-primary/90"
-            }`}
-          >
-            {busy ? <Loader2 className="animate-spin" size={13} /> : <Play size={13} />}
-            {applyMode ? "Process & apply" : "Test on range"}
-          </button>
-        </div>
+        <button
+          onClick={run}
+          disabled={busy}
+          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="animate-spin" size={13} /> : <Play size={13} />}
+          Process emails
+        </button>
       }
     >
       <div className="flex flex-wrap gap-1.5">
@@ -1125,18 +1251,17 @@ function ProcessPastEmailsDialog({
         </Field>
       </div>
       <div className="flex items-center justify-between">
-        <div>
-          <div className="text-xs font-medium text-foreground">Include read emails</div>
-          <div className="text-[11px] text-muted-foreground">
-            Off = only process unread mail in the range.
-          </div>
-        </div>
-        <Toggle enabled={includeRead} onChange={setIncludeRead} />
+        <LabeledToggle
+          label="Unread only"
+          labelRight="All mail"
+          enabled={includeRead}
+          onChange={setIncludeRead}
+        />
       </div>
       <p className="text-[11px] text-muted-foreground">
-        {applyMode
-          ? "Apply mode runs the matched actions (labels, drafts, archive…) on every email in range."
-          : "Test mode previews which rule each email matches without changing anything."}
+        Runs the matched actions (labels, drafts, archive…) on{" "}
+        {includeRead ? "every email" : "unread mail"} in the range. Applied
+        actions show up in the History tab.
       </p>
       {result && (
         <div className="text-xs text-emerald-400 bg-emerald-500/10 rounded-md px-2.5 py-2">
@@ -1148,6 +1273,54 @@ function ProcessPastEmailsDialog({
           {error}
         </div>
       )}
+    </Modal>
+  );
+}
+
+function ExamplesDialog({
+  accountId,
+  onPick,
+  onClose,
+}: {
+  accountId: string;
+  onPick: (rule: AutomationRule) => void;
+  onClose: () => void;
+}) {
+  const groups = Array.from(new Set(RULE_EXAMPLES.map((e) => e.group)));
+  return (
+    <Modal
+      title="Choose from examples"
+      description="Pick an example to pre-fill the rule editor, then tweak and save."
+      onClose={onClose}
+      maxWidth="max-w-xl"
+    >
+      {groups.map((g) => (
+        <div key={g} className="space-y-1.5">
+          <SectionHeader>{g}</SectionHeader>
+          {RULE_EXAMPLES.filter((e) => e.group === g).map((ex) => (
+            <button
+              key={ex.name}
+              onClick={() => onPick(exampleToRule(ex, accountId))}
+              className="w-full text-left bg-card border border-border rounded-lg px-3 py-2.5 hover:border-primary/40 hover:bg-secondary/40 transition-colors"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <span className="text-sm font-medium text-foreground">{ex.name}</span>
+                <div className="flex flex-wrap gap-1 justify-end">
+                  {ex.actions.map((a, i) => (
+                    <span
+                      key={i}
+                      className={`text-[10px] px-1.5 py-0.5 rounded-md border ${actionColor(a.type)}`}
+                    >
+                      {actionText(a)}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">{ex.summary}</div>
+            </button>
+          ))}
+        </div>
+      ))}
     </Modal>
   );
 }

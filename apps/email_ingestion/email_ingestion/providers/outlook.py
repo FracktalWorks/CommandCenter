@@ -565,11 +565,44 @@ class OutlookProvider(BaseEmailProvider):
                 except Exception:
                     continue
 
+            # Seed the inbox delta token so the NEXT sync runs incrementally and
+            # can detect upstream deletions / category changes (@removed). Without
+            # this the provider stays in full-sync mode forever — purely additive,
+            # so deletions never propagate down.
+            delta_link = await self._bootstrap_inbox_delta(client)
+
             return SyncResult(
                 messages_synced=len(messages),
                 messages=messages,
-                new_history_id=None,
+                new_history_id=delta_link,
             )
+
+    async def _bootstrap_inbox_delta(
+        self, client: httpx.AsyncClient, max_pages: int = 60,
+    ) -> str | None:
+        """Walk a fresh inbox delta enumeration (id-only, so it's cheap) to the
+        final ``@odata.deltaLink``. That link captures the current inbox state;
+        storing it lets the next cycle ask Graph only for *changes* — including
+        the ``@removed`` tombstones that signal upstream deletions. Returns the
+        deltaLink, or None if it couldn't be obtained (sync stays full-mode)."""
+        try:
+            url: str | None = "/me/mailFolders/inbox/messages/delta"
+            params: dict[str, Any] | None = {"$select": "id", "$top": 200}
+            for _ in range(max_pages):
+                resp = await client.get(url, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+                delta = data.get("@odata.deltaLink")
+                if delta:
+                    return delta
+                nxt = data.get("@odata.nextLink")
+                if not nxt:
+                    return None
+                # nextLink is an absolute URL carrying its own query params.
+                url, params = nxt, None
+        except Exception:  # noqa: BLE001 — best-effort; never break the sync
+            return None
+        return None
 
     async def get_attachment(
         self, provider_message_id: str, provider_attachment_id: str

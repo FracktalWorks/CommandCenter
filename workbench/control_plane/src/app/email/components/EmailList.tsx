@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Pencil, Trash2, Archive, Flag, FolderInput,
-  Reply, ReplyAll, Forward, MailOpen, Mail, Tag, MoreHorizontal,
+  Reply, ReplyAll, Forward, MailOpen, Mail, Tag,
   Paperclip, Star, AlertTriangle, ChevronRight, Loader2, Check, CheckSquare, X,
   MessagesSquare,
 } from "lucide-react";
@@ -174,16 +174,34 @@ export function EmailList({
         </button>
 
         {TOOLBAR_PRIMARY.map(({ icon: Icon, label, key }) => (
-          <ToolbarBtn key={key} icon={Icon} label={label} onClick={() => onToolbarAction(key, selectedEmail)} />
+          <ToolbarBtn
+            key={key}
+            icon={Icon}
+            label={label}
+            onClick={(e) => {
+              // "Move" opens the context menu (which hosts the folder picker).
+              if (key === "move") {
+                if (selectedEmail) {
+                  setCtx({ x: e.clientX, y: e.clientY + 12, email: selectedEmail });
+                }
+              } else {
+                onToolbarAction(key, selectedEmail);
+              }
+            }}
+          />
         ))}
 
         <div className="flex-1" />
 
         <button
-          className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-          title="More actions"
+          onClick={() =>
+            selectedEmail && updateEmail(selectedEmail.id, { folder: "junk" })
+          }
+          disabled={!selectedEmail}
+          className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
+          title="Mark as spam"
         >
-          <MoreHorizontal size={13} />
+          <AlertTriangle size={13} />
         </button>
       </div>
 

@@ -10,10 +10,10 @@ import { Email } from "../lib/types";
 import { fullDateLabel, initials } from "../lib/utils";
 import { useEmailStore } from "../lib/emailStore";
 import {
-  getAttachmentDownloadUrl, fetchFullBody, getEmail, listThread,
+  getAttachmentDownloadUrl, fetchFullBody, getEmail, listThread, createRule,
 } from "../lib/api";
 import { MessageContent } from "./MessageContent";
-import { ConversationView } from "./ConversationView";
+import { ConversationView, DraftCard, isDraftEmail } from "./ConversationView";
 import { LabelMenu } from "./LabelMenu";
 
 interface EmailDetailProps {
@@ -47,6 +47,54 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const [loadingDetail, setLoadingDetail] = useState(false);
   // The full conversation (all messages sharing this thread_id), if any.
   const [thread, setThread] = useState<Email[] | null>(null);
+
+  // Create an archive rule for this sender, then archive the open message.
+  const blockSender = async () => {
+    if (!email) return;
+    const sender = email.from.email;
+    const accountId = email.accountId || selectedAccountId;
+    if (!sender || !accountId) return;
+    try {
+      await createRule({
+        account_id: accountId,
+        name: `Block ${sender}`.slice(0, 60),
+        instructions: "",
+        from_pattern: sender,
+        enabled: true,
+        automated: true,
+        run_on_threads: false,
+        conditional_operator: "OR",
+        category_filters: [],
+        sort_order: 0,
+        actions: [{ type: "ARCHIVE" }],
+      });
+    } catch {
+      /* best-effort — still archive below */
+    }
+    updateEmail(email.id, { folder: "archive" });
+  };
+
+  // Download the open message as a .eml file.
+  const downloadEml = () => {
+    if (!email) return;
+    const body = detail?.bodyText || email.bodyText || fullBodyText || "";
+    const eml =
+      `From: ${email.from.name} <${email.from.email}>\n` +
+      `To: ${email.to.map((t) => t.email).join(", ")}\n` +
+      `Subject: ${email.subject}\n` +
+      `Date: ${email.receivedAt}\n\n` +
+      body;
+    const url = URL.createObjectURL(
+      new Blob([eml], { type: "message/rfc822" })
+    );
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(email.subject || "email")
+      .replace(/[^a-z0-9]+/gi, "_")
+      .slice(0, 40)}.eml`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   // Fetch full content whenever the selected email changes.
   useEffect(() => {
@@ -345,7 +393,6 @@ export function EmailDetail({ email }: EmailDetailProps) {
           <Divider />
 
           <TBtn icon={Printer} label="Print" onClick={() => window.print()} />
-          <TBtn icon={ExternalLink} label="Open in new tab" onClick={() => {}} />
         </div>
 
         {/* More menu */}
@@ -364,19 +411,32 @@ export function EmailDetail({ email }: EmailDetailProps) {
               />
               <div className="absolute right-0 top-full mt-1 z-20 bg-popover border border-border rounded-lg shadow-xl py-1 w-44">
                 {[
-                  "Mark as spam",
-                  "Block sender",
-                  "Create filter",
-                  "Add to contacts",
-                  "Download email",
-                  "Report phishing",
+                  {
+                    label: "Mark as spam",
+                    run: () => updateEmail(email.id, { folder: "junk" }),
+                  },
+                  {
+                    label: "Report phishing",
+                    run: () => updateEmail(email.id, { folder: "junk" }),
+                  },
+                  {
+                    label: "Block sender",
+                    run: () => blockSender(),
+                  },
+                  {
+                    label: "Download email",
+                    run: () => downloadEml(),
+                  },
                 ].map((item) => (
                   <button
-                    key={item}
+                    key={item.label}
                     className="w-full text-left px-3 py-1.5 text-xs text-foreground/80 hover:text-foreground hover:bg-secondary transition-colors"
-                    onClick={() => setShowMoreMenu(false)}
+                    onClick={() => {
+                      item.run();
+                      setShowMoreMenu(false);
+                    }}
                   >
-                    {item}
+                    {item.label}
                   </button>
                 ))}
               </div>
@@ -428,6 +488,9 @@ export function EmailDetail({ email }: EmailDetailProps) {
         {thread && thread.length > 1 ? (
           /* Conversation view — the whole thread, stacked */
           <ConversationView messages={thread} openedId={email.id} />
+        ) : isDraftEmail(email) ? (
+          /* Standalone draft — editable composer */
+          <DraftCard draft={email} />
         ) : (
         <>
         {/* Sender info */}

@@ -629,6 +629,7 @@ export async function processPastEmails(params: {
   startDate?: string; // YYYY-MM-DD, inclusive
   endDate?: string; // YYYY-MM-DD, inclusive
   isTest: boolean;
+  includeRead?: boolean; // false = only process unread mail in the range
 }): Promise<{ scheduled: boolean; count: number; dry_run: boolean }> {
   return gatewayFetch("/email/rules/process-past", {
     method: "POST",
@@ -637,6 +638,7 @@ export async function processPastEmails(params: {
       start_date: params.startDate ?? null,
       end_date: params.endDate ?? null,
       is_test: params.isTest,
+      include_read: params.includeRead ?? true,
     }),
   });
 }

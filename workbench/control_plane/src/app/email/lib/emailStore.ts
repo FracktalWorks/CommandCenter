@@ -190,6 +190,10 @@ interface EmailState {
   updateEmail: (id: string, updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>) => Promise<void>;
   fetchLabels: (accountId?: string) => Promise<void>;
   applyLabel: (id: string, name: string, add: boolean) => Promise<void>;
+  /** Add/remove one category across many messages at once. */
+  applyLabelBulk: (ids: string[], name: string, add: boolean) => Promise<void>;
+  /** Remove ALL categories from the given messages. */
+  clearCategories: (ids: string[]) => Promise<void>;
   deleteEmail: (id: string) => Promise<void>;
   sendEmail: (params: api.SendEmailParams) => Promise<void>;
   undoSend: () => void;
@@ -421,16 +425,12 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         },
       });
     } catch {
-      // Best-effort provider paging — mark this folder exhausted so the scroll
-      // observer stops re-firing (and re-flashing), and show a friendly note
-      // instead of the raw provider request URL.
+      // Best-effort provider paging. Do NOT mark the folder exhausted on a
+      // transient failure — that would permanently disable "load older" for the
+      // session. Just stop this attempt and show a friendly, retryable note.
       set({
         backfilling: false,
-        error: "No more older messages could be loaded right now.",
-        backfillExhausted: {
-          ...get().backfillExhausted,
-          [get().selectedFolder]: true,
-        },
+        error: "Couldn't load older messages right now. Try again.",
       });
     }
   },
@@ -569,6 +569,35 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       });
     } catch (err: any) {
       set({ emails: prevEmails, error: err.message || "Failed to update label" });
+    }
+  },
+
+  applyLabelBulk: async (ids, name, add) => {
+    // Apply (or remove) one category across many messages. Sequential keeps it
+    // simple and each call is small; optimistic per-message via applyLabel.
+    for (const id of ids) {
+      await get().applyLabel(id, name, add);
+    }
+  },
+
+  clearCategories: async (ids) => {
+    for (const id of ids) {
+      const email = get().emails.find((e) => e.id === id);
+      const cats = email?.categories || [];
+      if (cats.length === 0) continue;
+      const prev = get().emails;
+      // Optimistically drop all category chips for this message.
+      set({
+        emails: prev.map((e) => (e.id === id ? { ...e, categories: [] } : e)),
+      });
+      try {
+        await api.updateEmailLabels(id, [], cats);
+      } catch (err) {
+        set({
+          emails: prev,
+          error: (err as Error)?.message || "Failed to clear categories",
+        });
+      }
     }
   },
 

@@ -2346,7 +2346,9 @@ async def list_senders(
                     "last_received": r.last_received.isoformat()
                     if r.last_received else None,
                     "unsubscribe_link": r.unsubscribe_link,
-                    "status": status_by_email.get(r.email, "APPROVED"),
+                    # "UNHANDLED" = no decision yet (inbox-zero parity); only the
+                    # three real dispositions are ever persisted.
+                    "status": status_by_email.get(r.email, "UNHANDLED"),
                     "category": category_by_email.get(r.email),
                 }
                 for r in rows
@@ -3529,6 +3531,7 @@ class RuleProcessPastRequest(BaseModel):
     start_date: str | None = None  # ISO date (YYYY-MM-DD), inclusive
     end_date: str | None = None    # ISO date (YYYY-MM-DD), inclusive
     is_test: bool = False          # True = dry-run preview; False = apply for real
+    include_read: bool = True      # False = only process unread mail in the range
     limit: int = 1000
 
 
@@ -3547,11 +3550,13 @@ async def process_past_emails(
     """
     start_dt = _parse_iso_date(req.start_date, end_of_day=False)
     end_dt = _parse_iso_date(req.end_date, end_of_day=True)
+    only_unread = not req.include_read
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         # Count what will be processed so the dialog can report it.
-        clause, params = _date_range_clause(req.account_id, start_dt, end_dt)
+        clause, params = _date_range_clause(
+            req.account_id, start_dt, end_dt, only_unread)
         n = (await db.execute(text(
             f"SELECT COUNT(*) AS c FROM email_messages em "
             f"WHERE {clause}"
@@ -3562,6 +3567,7 @@ async def process_past_emails(
     background.add_task(
         _process_past_emails_job, req.account_id, start_dt, end_dt,
         min(req.limit, 2000), not req.is_test, user.email or "anonymous",
+        only_unread,
     )
     return {"scheduled": True, "count": count, "dry_run": req.is_test}
 
@@ -3854,29 +3860,49 @@ async def _llm_draft_reply(
         _litellm.suppress_debug_info = True
         model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
         ensure_model_registered(model)
+        # A configured signature is appended after the body, so the model must not
+        # add its own closing/sign-off (mirrors inbox-zero's drafter).
+        sig_rule = (
+            "Do NOT add any closing, sign-off, name, title, or signature block — a "
+            "signature is appended automatically."
+            if (signature or "").strip()
+            else "You do not need to sign off with the user's name; a simple close "
+            "(e.g. 'Best regards,') is fine, but NEVER invent a name or leave a "
+            "placeholder."
+        )
         sys_prompt = (
             "You are an expert assistant that drafts email replies on behalf of "
-            "the user. Use the previous email and the provided context to make the "
-            "reply relevant and accurate. Rules: write ONLY the reply body (no "
-            "subject line); do not identify yourself as an AI or mention these "
-            "instructions; do not repeat the sender's content back — respond to "
-            "it; plain text only (markdown links allowed), paragraphs separated by "
-            "blank lines; be concise; match the language of the email; ground "
-            "every fact in the email or the supplied context and never invent "
-            "specifics — if something is missing, keep it open or ask for it. "
-            "If the context contains <personal_instructions>, follow them. If it "
-            "contains <writing_style>, match that tone, length, and phrasing. If "
-            "it contains a <knowledge_base>, use it for facts and details but only "
-            "where relevant to this email. If it contains <learned_patterns>, "
-            "treat them as advisory preferences learned from the user's past "
-            "edits and apply the ones that fit."
+            "the account owner, replying to the person who sent the email below. "
+            "Rules:\n"
+            "- Write ONLY the reply body. No subject line, no preamble, and NEVER "
+            "narrate what you are doing (do not write things like \"here is a "
+            "draft you can use\" or apologise).\n"
+            "- You are the account owner writing the reply; you are NOT the "
+            "sender. Address the reply to the sender — never greet or address the "
+            "account owner by name.\n"
+            "- Do not mention you are an AI or reference these instructions.\n"
+            "- Do not simply repeat the sender's content back — respond to it.\n"
+            "- Plain text only (markdown links allowed); separate paragraphs with "
+            "blank lines; match the language of the email; be concise, direct, "
+            "and friendly.\n"
+            "- Ground every fact in the email or the supplied context and never "
+            "invent specifics — if something is missing, keep it open or ask.\n"
+            "- Never use placeholders for names (e.g. [Your Name], [Name]). "
+            f"{sig_rule}\n"
+            "- If the context contains <personal_instructions>, follow them. If "
+            "it contains <writing_style>, match that tone, length, and phrasing. "
+            "If it contains a <knowledge_base>, use it for facts only where "
+            "relevant. If it contains <learned_patterns>, treat them as advisory "
+            "preferences from the user's past edits and apply the ones that fit."
         )
-        ctx = f"User context:\n{about}\n\n" if about else ""
+        owner = f"You are drafting as: {user_email}\n" if user_email else ""
+        ctx = f"{owner}User context:\n{about}\n\n" if (about or owner) else ""
         if context:
             ctx += f"Context gathered for this reply:\n{context}\n\n"
         user_prompt = (
-            f"{ctx}Draft a reply to this email.\n"
-            f"From: {email.get('from', '')}\n"
+            f"{ctx}Draft a reply to this email (it was sent TO the account owner; "
+            "write the owner's reply back to the sender).\n"
+            f"From (the sender — address your reply to them): {email.get('from', '')}\n"
             f"Subject: {email.get('subject', '')}\n"
             f"Body:\n{(email.get('body', '') or '')[:2000]}\n"
         )
@@ -3888,12 +3914,12 @@ async def _llm_draft_reply(
                       {"role": "user", "content": user_prompt}],
             temperature=0.3, max_tokens=700,
         )
-        body = (resp.choices[0].message.content or "").strip()
+        body = _clean_draft_body((resp.choices[0].message.content or "").strip())
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.llm_draft_failed", error=str(exc)[:200])
         body = "Hi,\n\nThanks for your email — I'll review this and get back to you shortly."
-    if signature:
-        body = f"{body}\n\n{signature}"
+    if (signature or "").strip() and signature.strip() not in body:
+        body = f"{body}\n\n{signature.strip()}"
     return body
 
 
@@ -3947,6 +3973,28 @@ def _strip_draft_markers(text: str) -> str:
     """Remove any standalone '---' fence lines the agent may wrap a draft in."""
     lines = [ln for ln in (text or "").splitlines() if ln.strip() != "---"]
     return "\n".join(lines).strip()
+
+
+# Lines that are just a placeholder like "[Your Name]", "[Name]", "[Your Title]"
+# — the drafter should never leave these in the body.
+_PLACEHOLDER_LINE_RE = re.compile(
+    r"^\s*[\[\(]\s*(your\s+|the\s+)?"
+    r"(name|full\s*name|first\s*name|position|title|role|company|signature|"
+    r"sender|recipient)\s*[\]\)]\s*$",
+    re.IGNORECASE,
+)
+
+
+def _clean_draft_body(body: str) -> str:
+    """Strip placeholder-only lines (e.g. "[Your Name]") from a drafted reply so
+    they never reach the user's mailbox. The configured signature is appended
+    separately by the caller."""
+    kept = [
+        ln for ln in (body or "").splitlines()
+        if not _PLACEHOLDER_LINE_RE.match(ln)
+    ]
+    # Collapse the trailing blank run left behind by a removed placeholder.
+    return "\n".join(kept).strip()
 
 
 async def _draft_via_maf_agent(
@@ -4040,12 +4088,13 @@ async def _agent_draft_reply(
     conf_note = _CONFIDENCE_INSTRUCTIONS.get(confidence or "ALL_EMAILS", "")
     if conf_note:
         instructions = (instructions + "\n" + conf_note).strip()
-    if use_agent:
-        drafted = await _draft_via_maf_agent(
-            email, about, signature, user_email, instructions=instructions,
-        )
-        if drafted:
-            return drafted
+    # NOTE: we deliberately do NOT use the conversational email-assistant MAF
+    # agent to write the draft body — it narrated its work ("I'm sorry, here's a
+    # draft you can use:"), greeted the wrong person, and left [Your Name]
+    # placeholders in the body. The focused orchestrating drafter gathers the
+    # same memory/specialist context and produces a clean reply via
+    # _llm_draft_reply. (`use_agent` is kept for call-site compatibility.)
+    _ = use_agent
     return await _orchestrate_draft(
         email, about, signature, user_email,
         max_agents=max_agents, agent_timeout=agent_timeout,
@@ -4175,6 +4224,7 @@ def _parse_iso_date(s: str | None, end_of_day: bool) -> datetime | None:
 
 def _date_range_clause(
     account_id: str, start: datetime | None, end: datetime | None,
+    only_unread: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """SQL WHERE clause (+ params) for inbox mail in a received_at date range."""
     clause = "em.account_id = :aid AND LOWER(em.folder) = 'inbox'"
@@ -4185,18 +4235,20 @@ def _date_range_clause(
     if end is not None:
         clause += " AND em.received_at <= :end"
         params["end"] = end
+    if only_unread:
+        clause += " AND em.is_read = false"
     return clause, params
 
 
 async def _process_past_emails_job(
     account_id: str, start: datetime | None, end: datetime | None,
-    limit: int, dry_run: bool, user_email: str,
+    limit: int, dry_run: bool, user_email: str, only_unread: bool = False,
 ) -> None:
     """Background worker: reprocess PAST inbox mail in a date range (inbox-zero
     'Process past emails'). Reprocesses regardless of rules_processed_at."""
     db = await _get_db()
     try:
-        clause, params = _date_range_clause(account_id, start, end)
+        clause, params = _date_range_clause(account_id, start, end, only_unread)
         params["limit"] = limit
         rows = (await db.execute(text(
             f"""SELECT em.id, em.provider_message_id, em.thread_id, em.subject,

@@ -1034,6 +1034,7 @@ function ProcessPastEmailsDialog({
   const [applyMode, setApplyMode] = useState(false); // false = Test, true = Apply
   const [start, setStart] = useState(isoDaysAgo(7));
   const [end, setEnd] = useState(isoDaysAgo(0));
+  const [includeRead, setIncludeRead] = useState(true);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1048,6 +1049,7 @@ function ProcessPastEmailsDialog({
         startDate: start || undefined,
         endDate: end || undefined,
         isTest: !applyMode,
+        includeRead,
       });
       setResult(
         r.count === 0
@@ -1121,6 +1123,15 @@ function ProcessPastEmailsDialog({
             className={INPUT_CLS}
           />
         </Field>
+      </div>
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-xs font-medium text-foreground">Include read emails</div>
+          <div className="text-[11px] text-muted-foreground">
+            Off = only process unread mail in the range.
+          </div>
+        </div>
+        <Toggle enabled={includeRead} onChange={setIncludeRead} />
       </div>
       <p className="text-[11px] text-muted-foreground">
         {applyMode

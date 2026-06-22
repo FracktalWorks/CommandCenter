@@ -148,6 +148,9 @@ export interface AnalyticsOverview {
 // ── Senders (bulk archive / unsubscribe) ────────────────────────────────────
 
 export type NewsletterStatus = "APPROVED" | "UNSUBSCRIBED" | "AUTO_ARCHIVED";
+/** Display status for a sender — adds "UNHANDLED" (no decision made yet). Only
+ *  the three NewsletterStatus values are ever persisted via upsertNewsletter. */
+export type SenderStatus = NewsletterStatus | "UNHANDLED";
 
 export interface SenderStat {
   email: string;
@@ -158,7 +161,7 @@ export interface SenderStat {
   read_rate: number;
   last_received: string | null;
   unsubscribe_link: string | null;
-  status: NewsletterStatus;
+  status: SenderStatus;
   category?: string | null;
 }
 

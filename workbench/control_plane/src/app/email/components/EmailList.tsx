@@ -4,13 +4,12 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Pencil, Trash2, Archive, Flag, FolderInput,
   Reply, ReplyAll, Forward, MailOpen, Mail, Tag,
-  Paperclip, Star, AlertTriangle, ChevronRight, Loader2, Check, CheckSquare, X,
-  MessagesSquare, RefreshCw,
+  Paperclip, Star, AlertTriangle, ChevronRight, Loader2, Check, X,
+  MessagesSquare, RefreshCw, Minus, Plus,
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { timeLabel } from "../lib/utils";
 import { useEmailStore } from "../lib/emailStore";
-import { LabelMenu } from "./LabelMenu";
 
 interface EmailListProps {
   emails: Email[];
@@ -71,6 +70,7 @@ export function EmailList({
     updateEmail, deleteEmail, folders, selectedFolder,
     selectedLabel, selectLabel,
     triggerSync, selectedAccountId, syncStatus,
+    availableLabels, applyLabel, applyLabelBulk, clearCategories,
   } = useEmailStore();
   const syncing = selectedAccountId
     ? syncStatus[selectedAccountId] === "syncing"
@@ -93,6 +93,7 @@ export function EmailList({
       return next;
     });
   const allSelected = emails.length > 0 && emails.every((e) => selected.has(e.id));
+  const someSelected = selected.size > 0 && !allSelected;
   const toggleAll = () =>
     setSelected(allSelected ? new Set() : new Set(emails.map((e) => e.id)));
   const clearSelection = () => setSelected(new Set());
@@ -152,13 +153,55 @@ export function EmailList({
   const canPageProvider = !hasMore && canBackfill && !!onBackfill;
 
   // ── Auto-load on scroll ──
-  // When the bottom sentinel scrolls into view, page the next batch: first from
-  // what's already synced (DB), then — once that's exhausted — pull older mail
-  // from the provider (backfill). Replaces the manual "Load more" buttons.
+  // The sentinel auto-pages what's already synced (DB) — fast and reliable.
+  // Pulling OLDER mail from the provider (backfill) is slower and can fail, so
+  // it's a manual button click (handleManualLoad) to avoid an auto-retry loop
+  // when a backfill yields nothing new.
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
   const handleAutoLoad = useCallback(() => {
+    if (loadingMore || backfilling) return;
+    if (hasMore) onLoadMore?.();
+  }, [loadingMore, backfilling, hasMore, onLoadMore]);
+
+  // ── Pull-to-refresh (touch/mobile) ──
+  // Pulling down at the top of the list past a threshold triggers a sync.
+  const PULL_THRESHOLD = 70;
+  const pullStartRef = useRef<number | null>(null);
+  const [pullY, setPullY] = useState(0);
+  const onPullStart = (e: React.TouchEvent) => {
+    pullStartRef.current =
+      scrollRef.current && scrollRef.current.scrollTop <= 0
+        ? e.touches[0].clientY
+        : null;
+  };
+  const onPullMove = (e: React.TouchEvent) => {
+    if (pullStartRef.current == null || syncing) return;
+    const dy = e.touches[0].clientY - pullStartRef.current;
+    // Only react to a downward pull while still at the top.
+    if (dy > 0 && (scrollRef.current?.scrollTop ?? 0) <= 0) {
+      setPullY(Math.min(dy * 0.5, 90)); // damped
+    } else {
+      setPullY(0);
+    }
+  };
+  const onPullEnd = () => {
+    if (
+      pullStartRef.current != null &&
+      pullY >= PULL_THRESHOLD &&
+      selectedAccountId &&
+      !syncing
+    ) {
+      triggerSync(selectedAccountId);
+    }
+    pullStartRef.current = null;
+    setPullY(0);
+  };
+
+  // Button click: page the DB if there's more, otherwise fetch older mail from
+  // the provider.
+  const handleManualLoad = useCallback(() => {
     if (loadingMore || backfilling) return;
     if (hasMore) onLoadMore?.();
     else if (canPageProvider) onBackfill?.();
@@ -234,13 +277,6 @@ export function EmailList({
       {/* Secondary toolbar row — becomes a bulk-action bar when rows are picked */}
       {selected.size > 0 ? (
         <div className="flex items-center gap-0.5 px-2 py-1 border-b border-border flex-shrink-0 bg-primary/10 overflow-x-auto scrollbar-hide">
-          <button
-            onClick={toggleAll}
-            title={allSelected ? "Deselect all" : "Select all"}
-            className="p-1.5 rounded text-primary hover:bg-secondary transition-colors"
-          >
-            <CheckSquare size={13} />
-          </button>
           <span className="text-[10px] font-medium text-foreground px-1">
             {selected.size} selected
           </span>
@@ -303,8 +339,44 @@ export function EmailList({
         </div>
       )}
 
+      {/* Persistent select-all header — aligned with the per-row checkboxes. */}
+      {emails.length > 0 && (
+        <div className="flex items-center border-b border-border flex-shrink-0 bg-card/60">
+          <button
+            onClick={toggleAll}
+            title={allSelected ? "Deselect all" : "Select all"}
+            className="flex items-center pl-2 pr-1 py-1.5 flex-shrink-0"
+          >
+            <CheckboxSquare checked={allSelected} indeterminate={someSelected} />
+          </button>
+          <span className="text-[10px] text-muted-foreground select-none">
+            {selected.size > 0 ? `${selected.size} selected` : "Select all"}
+          </span>
+        </div>
+      )}
+
       {/* Email rows */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-hide">
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto scrollbar-hide"
+        onTouchStart={onPullStart}
+        onTouchMove={onPullMove}
+        onTouchEnd={onPullEnd}
+        onTouchCancel={onPullEnd}
+      >
+        {/* Pull-to-refresh indicator (mobile) */}
+        {(pullY > 0 || syncing) && (
+          <div
+            className="flex items-center justify-center text-muted-foreground overflow-hidden transition-[height]"
+            style={{ height: syncing ? 36 : pullY }}
+          >
+            <RefreshCw
+              size={16}
+              className={syncing ? "animate-spin" : ""}
+              style={syncing ? undefined : { transform: `rotate(${pullY * 3}deg)` }}
+            />
+          </div>
+        )}
         {loading ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
             <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -326,25 +398,14 @@ export function EmailList({
                   isSel ? "bg-primary/5" : ""
                 }`}
               >
-                {/* Selection checkbox — shown on hover or when selected */}
+                {/* Selection checkbox — always present so it's clickable; the
+                    empty square darkens on row hover. */}
                 <button
                   onClick={() => toggleOne(email.id)}
                   title={isSel ? "Deselect" : "Select"}
-                  className={`flex items-center pl-2 pr-1 flex-shrink-0 transition-opacity ${
-                    isSel || selected.size > 0
-                      ? "opacity-100"
-                      : "opacity-0 group-hover:opacity-100"
-                  }`}
+                  className="flex items-center pl-2 pr-1 flex-shrink-0"
                 >
-                  <span
-                    className={`w-4 h-4 rounded border flex items-center justify-center ${
-                      isSel
-                        ? "bg-primary border-primary text-primary-foreground"
-                        : "border-muted-foreground/40"
-                    }`}
-                  >
-                    {isSel && <Check size={11} />}
-                  </span>
+                  <CheckboxSquare checked={isSel} hoverParent />
                 </button>
               <button
                 onClick={() => {
@@ -457,7 +518,7 @@ export function EmailList({
             {(hasMore || canPageProvider) && (
               <div ref={sentinelRef} className="p-2">
                 <button
-                  onClick={handleAutoLoad}
+                  onClick={handleManualLoad}
                   disabled={loadingMore || backfilling}
                   className="w-full flex items-center justify-center gap-1.5 py-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
                 >
@@ -483,6 +544,16 @@ export function EmailList({
         <ContextMenu
           ctx={ctx}
           folders={folders}
+          availableLabels={availableLabels}
+          appliedCategories={ctx.bulk ? new Set() : new Set(ctx.email.categories)}
+          onApplyLabel={(name, add) =>
+            ctx.bulk
+              ? applyLabelBulk([...selected], name, add)
+              : applyLabel(ctx.email.id, name, add)
+          }
+          onClearCategories={() =>
+            clearCategories(ctx.bulk ? [...selected] : [ctx.email.id])
+          }
           onClose={() => setCtx(null)}
           onReply={(k) => onToolbarAction(k, ctx.email)}
           onUpdate={(u) => updateEmail(ctx.email.id, u)}
@@ -498,6 +569,10 @@ export function EmailList({
 function ContextMenu({
   ctx,
   folders,
+  availableLabels,
+  appliedCategories,
+  onApplyLabel,
+  onClearCategories,
   onClose,
   onReply,
   onUpdate,
@@ -507,6 +582,10 @@ function ContextMenu({
 }: {
   ctx: CtxState;
   folders: { key: string; label: string }[];
+  availableLabels: string[];
+  appliedCategories: Set<string>;
+  onApplyLabel: (name: string, add: boolean) => void;
+  onClearCategories: () => void;
   onClose: () => void;
   onReply: (action: string) => void;
   onUpdate: (
@@ -519,6 +598,7 @@ function ContextMenu({
   onBulkDelete: () => void;
 }) {
   const { email, bulk, count = 1 } = ctx;
+  const hasCategories = bulk || (email.categories?.length ?? 0) > 0;
   const run = (fn: () => void) => {
     fn();
     onClose();
@@ -601,13 +681,28 @@ function ContextMenu({
           )}
         </CtxSubmenu>
 
-        {/* Label → (single-email only; per-message label toggles) */}
-        {!bulk && (
-          <CtxSubmenu icon={Tag} label="Label…" flipLeft={flipLeft} bare>
-            <div onClick={(e) => e.stopPropagation()}>
-              <LabelMenu email={email} embedded />
-            </div>
-          </CtxSubmenu>
+        {/* Categories → add (single + bulk), with checkmarks for the single case */}
+        <CtxSubmenu
+          icon={Tag}
+          label={bulk ? "Add category…" : "Categories…"}
+          flipLeft={flipLeft}
+          bare
+        >
+          <div onClick={(e) => e.stopPropagation()}>
+            <CtxLabelMenu
+              availableLabels={availableLabels}
+              applied={appliedCategories}
+              onApply={onApplyLabel}
+            />
+          </div>
+        </CtxSubmenu>
+        {/* Clear all categories on the target (single or selection) */}
+        {hasCategories && (
+          <CtxItem
+            icon={Tag}
+            label={bulk ? `Clear categories on ${count}` : "Clear categories"}
+            onClick={() => run(onClearCategories)}
+          />
         )}
 
         <CtxItem
@@ -673,6 +768,106 @@ function CtxSubmenu({
         </div>
       )}
     </div>
+  );
+}
+
+/** Category picker used in the right-click menu (single + bulk). Shows a check
+ *  for already-applied categories (single), adds on click, and supports creating
+ *  a new category. */
+function CtxLabelMenu({
+  availableLabels,
+  applied,
+  onApply,
+}: {
+  availableLabels: string[];
+  applied: Set<string>;
+  onApply: (name: string, add: boolean) => void;
+}) {
+  const [newLabel, setNewLabel] = useState("");
+  const create = () => {
+    const name = newLabel.trim();
+    if (!name) return;
+    onApply(name, true);
+    setNewLabel("");
+  };
+  return (
+    <div className="text-xs">
+      <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+        Categories
+      </div>
+      <div className="max-h-48 overflow-y-auto">
+        {availableLabels.length === 0 ? (
+          <div className="px-3 py-1.5 text-muted-foreground">No categories yet</div>
+        ) : (
+          availableLabels.map((name) => {
+            const on = applied.has(name);
+            return (
+              <button
+                key={name}
+                onClick={() => onApply(name, !on)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-foreground/80 hover:text-foreground hover:bg-secondary transition-colors"
+              >
+                <CheckboxSquare checked={on} />
+                <Tag size={10} className="flex-shrink-0" />
+                <span className="truncate">{name}</span>
+              </button>
+            );
+          })
+        )}
+      </div>
+      <div className="border-t border-border mt-1 pt-1 px-2 pb-1">
+        <div className="flex items-center gap-1">
+          <input
+            value={newLabel}
+            onChange={(e) => setNewLabel(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                create();
+              }
+            }}
+            placeholder="New category…"
+            className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none px-1 py-1"
+          />
+          <button
+            onClick={create}
+            disabled={!newLabel.trim()}
+            title="Add category"
+            className="text-primary hover:opacity-80 disabled:opacity-40"
+          >
+            <Plus size={13} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Shared checkbox square: checked (filled), indeterminate (dash), or empty.
+ *  `hoverParent` darkens the empty border when an ancestor `.group` is hovered. */
+function CheckboxSquare({
+  checked,
+  indeterminate = false,
+  hoverParent = false,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  hoverParent?: boolean;
+}) {
+  return (
+    <span
+      className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${
+        checked
+          ? "bg-primary border-primary text-primary-foreground"
+          : indeterminate
+            ? "bg-primary/30 border-primary text-primary"
+            : `border-muted-foreground/40${
+                hoverParent ? " group-hover:border-muted-foreground/80" : ""
+              }`
+      }`}
+    >
+      {checked ? <Check size={11} /> : indeterminate ? <Minus size={11} /> : null}
+    </span>
   );
 }
 

@@ -1670,11 +1670,25 @@ function FixDialog({
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // What signal(s) to learn the correction on (inbox-zero teaches by sender
+  // and/or subject keyword). Sender is on by default.
+  const [useSender, setUseSender] = useState(true);
+  const [useSubject, setUseSubject] = useState(false);
+  const [subjectKw, setSubjectKw] = useState("");
   const setPendingChatPrompt = useEmailStore((s) => s.setPendingChatPrompt);
 
   useEffect(() => {
     listRules(accountId).then(setRules).catch(() => {});
   }, [accountId]);
+
+  // Seed the subject-keyword box with the email subject the first time the
+  // user opts into subject matching, so they can trim it down to a keyword.
+  const enableSubject = () => {
+    setUseSubject((on) => {
+      if (!on && !subjectKw) setSubjectKw(email.subject || "");
+      return !on;
+    });
+  };
 
   const submit = async () => {
     if (!expected) return;
@@ -1684,6 +1698,12 @@ function FixDialog({
       onClose();
       return;
     }
+    const senderVal = useSender ? email.from : "";
+    const subjectVal = useSubject ? subjectKw.trim() : "";
+    if (!senderVal && !subjectVal) {
+      setError("Pick the sender and/or a subject keyword to learn from.");
+      return;
+    }
     // Existing rule / None → persist a learned pattern so it sticks.
     setBusy(true);
     setError(null);
@@ -1691,19 +1711,24 @@ function FixDialog({
       const matchedIds = current.ruleId ? [current.ruleId] : [];
       await submitRuleFeedback({
         accountId,
-        sender: email.from,
+        sender: senderVal,
         expected: expected === "none" ? "none" : expected.id,
         matchedRuleIds: matchedIds,
         explanation,
+        subjectKeyword: subjectVal || undefined,
       });
+      const target = [
+        senderVal && `from ${senderVal}`,
+        subjectVal && `about "${subjectVal}"`,
+      ]
+        .filter(Boolean)
+        .join(" / ");
       setDone(
         expected === "none"
-          ? `Got it — emails from ${email.from || "this sender"} won't match ${
+          ? `Got it — emails ${target} won't match ${
               current.ruleName || "that rule"
             } anymore.`
-          : `Learned — emails from ${email.from || "this sender"} will now match "${
-              expected.name
-            }".`,
+          : `Learned — emails ${target} will now match "${expected.name}".`,
       );
     } catch (e) {
       setError((e as Error).message || "Couldn't save the correction.");
@@ -1806,6 +1831,42 @@ function FixDialog({
             Selected rule:{" "}
             <span className="text-primary">{expectedLabel}</span>
           </div>
+          {expected !== "new" && (
+            <div className="rounded-lg border border-border p-2.5 space-y-2">
+              <div className="text-[11px] font-medium text-foreground">
+                Apply this to emails…
+              </div>
+              <label className="flex items-center gap-2 text-xs text-foreground cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={useSender}
+                  onChange={() => setUseSender((v) => !v)}
+                  className="accent-primary"
+                />
+                from{" "}
+                <span className="text-muted-foreground truncate">
+                  {email.from || "this sender"}
+                </span>
+              </label>
+              <label className="flex items-center gap-2 text-xs text-foreground cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={useSubject}
+                  onChange={enableSubject}
+                  className="accent-primary"
+                />
+                with subject containing…
+              </label>
+              {useSubject && (
+                <input
+                  value={subjectKw}
+                  onChange={(e) => setSubjectKw(e.target.value)}
+                  placeholder="keyword in the subject (e.g. invoice)"
+                  className={`${INPUT_CLS} ml-6 w-[calc(100%-1.5rem)]`}
+                />
+              )}
+            </div>
+          )}
           <textarea
             value={explanation}
             onChange={(e) => setExplanation(e.target.value)}
@@ -1816,7 +1877,7 @@ function FixDialog({
           <p className="text-[10px] text-muted-foreground">
             {expected === "new"
               ? "The assistant will create a rule for emails like this."
-              : "We'll remember this for emails from this sender. An explanation is optional."}
+              : "We'll remember this for matching emails. An explanation is optional."}
           </p>
           {error && (
             <div className="text-[11px] text-destructive bg-destructive/10 rounded-md px-2 py-1.5">

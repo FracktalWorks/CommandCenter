@@ -405,24 +405,33 @@ async def update_rule(
 
 
 async def learn_rule_pattern(
-    account_id: str, sender: str, rule_id: str, exclude: bool = False,
+    account_id: str, rule_id: str, sender: str = "", exclude: bool = False,
+    subject_keyword: str = "",
 ) -> str:
-    """Teach the matcher a deterministic learned pattern for a sender.
+    """Teach the matcher a deterministic learned pattern for a rule.
 
-    ``exclude=false`` → ALWAYS apply this rule to mail from ``sender``.
-    ``exclude=true``  → NEVER apply this rule to mail from ``sender``.
-    Use when the user says "emails from X should (or shouldn't) be labelled Y".
-    This persists and short-circuits future classification (no LLM needed).
+    Provide ``sender`` (an email/domain) and/or ``subject_keyword`` (a phrase
+    that appears in the subject) — at least one is required.
+    ``exclude=false`` → ALWAYS apply this rule to matching mail.
+    ``exclude=true``  → NEVER apply this rule to matching mail.
+    Use when the user says "emails from X (or about Y) should / shouldn't be
+    labelled Z". This persists and short-circuits future classification (no
+    LLM needed).
     """
     body = {
         "account_id": account_id,
         "sender": sender,
+        "subject_keyword": subject_keyword or None,
         "expected": "none" if exclude else rule_id,
         "matched_rule_ids": [rule_id] if exclude else [],
     }
     await _post("/email/rules/feedback", body)
+    signal = " / ".join(
+        s for s in [sender and f"from {sender}",
+                    subject_keyword and f'about "{subject_keyword}"'] if s
+    ) or "matching"
     verb = "no longer match" if exclude else "always match"
-    return f"Learned: emails from {sender} will {verb} that rule."
+    return f"Learned: emails {signal} will {verb} that rule."
 
 
 async def update_assistant_settings(

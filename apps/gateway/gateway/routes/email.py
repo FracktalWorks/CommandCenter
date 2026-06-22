@@ -3351,9 +3351,15 @@ async def test_rules_recent(
 async def rules_history(
     account_id: str | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
+    include_deleted: bool = Query(False),
     user: UserContext = Depends(get_current_user),
 ):
-    """Executed-rule audit log for the user's accounts."""
+    """Executed-rule audit log for the user's accounts.
+
+    By default, entries whose underlying message was deleted upstream (moved to
+    TRASH by delta reconciliation — e.g. an AI draft the user discarded) are
+    hidden, so History reflects the live mailbox. Pass ``include_deleted=true``
+    to see the full immutable log."""
     db = await _get_db()
     try:
         params: dict[str, Any] = {"uid": user.email or "anonymous", "limit": limit}
@@ -3362,6 +3368,11 @@ async def rules_history(
             scope += " AND id = :aid"
             params["aid"] = account_id
         scope += ")"
+        if not include_deleted:
+            # Keep no-match rows (message_id NULL) and rows for messages we
+            # never synced; drop only those we know were trashed/deleted.
+            scope += (" AND (em.id IS NULL OR "
+                      "lower(coalesce(em.folder, '')) NOT IN ('trash', 'deleted'))")
         rows = (await db.execute(text(
             f"""SELECT er.id, er.rule_id, er.rule_name, er.subject, er.from_address,
                        er.status, er.automated, er.actions_taken, er.reason,
@@ -3765,26 +3776,31 @@ async def run_rules_on_message(
 async def _upsert_rule_pattern(
     db: Any, account_id: str, rule_id: str, value: str, exclude: bool,
     source: str, reason: str | None, message_id: str | None, thread_id: str | None,
+    pattern_type: str = "FROM",
 ) -> None:
-    """Record a learned FROM pattern for a rule. Removes the opposite (include vs
-    exclude) for the same sender so a correction never contradicts itself."""
+    """Record a learned classification pattern (FROM sender or SUBJECT keyword)
+    for a rule. Removes the opposite (include vs exclude) for the same
+    type+value so a correction never contradicts itself."""
     if not (value or "").strip():
         return
-    # Drop the opposite disposition for this (rule, sender) first.
+    ptype = "SUBJECT" if (pattern_type or "").upper() == "SUBJECT" else "FROM"
+    # Drop the opposite disposition for this (rule, type, value) first.
     await db.execute(text(
         "DELETE FROM email_rule_patterns WHERE account_id = :aid AND rule_id = :rid "
-        "AND pattern_type = 'FROM' AND lower(value) = lower(:val) AND exclude = :opp"
-    ), {"aid": account_id, "rid": rule_id, "val": value, "opp": not exclude})
+        "AND pattern_type = :ptype AND lower(value) = lower(:val) AND exclude = :opp"
+    ), {"aid": account_id, "rid": rule_id, "ptype": ptype, "val": value,
+        "opp": not exclude})
     await db.execute(text(
         """INSERT INTO email_rule_patterns
              (account_id, rule_id, pattern_type, value, exclude, source, reason,
               message_id, thread_id)
-           VALUES (:aid, :rid, 'FROM', :val, :exc, :src, :reason, :mid, :tid)
+           VALUES (:aid, :rid, :ptype, :val, :exc, :src, :reason, :mid, :tid)
            ON CONFLICT (account_id, rule_id, pattern_type, lower(value), exclude)
            DO UPDATE SET source = EXCLUDED.source, reason = EXCLUDED.reason,
                          created_at = now()"""
-    ), {"aid": account_id, "rid": rule_id, "val": value, "exc": exclude,
-        "src": source, "reason": reason, "mid": message_id, "tid": thread_id})
+    ), {"aid": account_id, "rid": rule_id, "ptype": ptype, "val": value,
+        "exc": exclude, "src": source, "reason": reason, "mid": message_id,
+        "tid": thread_id})
 
 
 class RuleFeedbackRequest(BaseModel):
@@ -3795,6 +3811,9 @@ class RuleFeedbackRequest(BaseModel):
     explanation: str | None = None
     message_id: str | None = None
     thread_id: str | None = None
+    # Optional SUBJECT keyword to learn alongside (or instead of) the sender —
+    # inbox-zero's GroupItem supports both SENDER and SUBJECT signals.
+    subject_keyword: str | None = None
 
 
 @router.post("/rules/feedback")
@@ -3806,36 +3825,49 @@ async def rule_feedback(
     parity). "expected = rule_id" teaches the matcher to ALWAYS apply that rule
     to this sender (and to STOP applying any other rule that wrongly matched);
     "none" teaches it to stop applying the matched rules to this sender; "new"
-    is handled by creating a rule (returns created=False, action="new")."""
+    is handled by creating a rule (returns created=False, action="new").
+
+    A correction can be taught on the sender (FROM), a subject keyword
+    (SUBJECT), or both — whichever signals the request carries."""
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         sender = (req.sender or "").strip()
+        subject_kw = (req.subject_keyword or "").strip()
         reason = (req.explanation or "").strip() or "Taught via Fix"
         if req.expected == "new":
             return {"created": False, "action": "new"}
-        if not sender:
-            return {"created": False, "reason": "no sender"}
+        # Each correction teaches one or more (pattern_type, value) signals.
+        signals: list[tuple[str, str]] = []
+        if sender:
+            signals.append(("FROM", sender))
+        if subject_kw:
+            signals.append(("SUBJECT", subject_kw))
+        if not signals:
+            return {"created": False, "reason": "no sender or subject keyword"}
+
+        async def _teach(rule_id: str, exclude: bool) -> None:
+            for ptype, val in signals:
+                await _upsert_rule_pattern(
+                    db, req.account_id, rule_id, val, exclude, "FIX", reason,
+                    req.message_id, req.thread_id, pattern_type=ptype)
+
         learned: list[dict[str, Any]] = []
         if req.expected == "none":
             for rid in req.matched_rule_ids:
-                await _upsert_rule_pattern(
-                    db, req.account_id, rid, sender, True, "FIX", reason,
-                    req.message_id, req.thread_id)
+                await _teach(rid, True)
                 learned.append({"rule_id": rid, "exclude": True})
         else:  # a specific rule id should have matched
-            await _upsert_rule_pattern(
-                db, req.account_id, req.expected, sender, False, "FIX", reason,
-                req.message_id, req.thread_id)
+            await _teach(req.expected, False)
             learned.append({"rule_id": req.expected, "exclude": False})
             for rid in req.matched_rule_ids:
                 if rid and rid != req.expected:
-                    await _upsert_rule_pattern(
-                        db, req.account_id, rid, sender, True, "FIX", reason,
-                        req.message_id, req.thread_id)
+                    await _teach(rid, True)
                     learned.append({"rule_id": rid, "exclude": True})
         await db.commit()
-        return {"created": True, "learned": learned, "sender": sender}
+        return {"created": True, "learned": learned, "sender": sender,
+                "subject_keyword": subject_kw or None,
+                "signals": [t for t, _ in signals]}
     finally:
         await db.close()
 

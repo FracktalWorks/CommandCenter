@@ -632,6 +632,8 @@ export async function submitRuleFeedback(params: {
   explanation?: string;
   messageId?: string;
   threadId?: string;
+  /** Optional subject keyword to learn alongside (or instead of) the sender. */
+  subjectKeyword?: string;
 }): Promise<{ created: boolean; action?: string; learned?: unknown[]; sender?: string }> {
   return gatewayFetch("/email/rules/feedback", {
     method: "POST",
@@ -643,6 +645,7 @@ export async function submitRuleFeedback(params: {
       explanation: params.explanation ?? null,
       message_id: params.messageId ?? null,
       thread_id: params.threadId ?? null,
+      subject_keyword: params.subjectKeyword || null,
     }),
   });
 }

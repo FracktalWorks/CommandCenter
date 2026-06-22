@@ -91,10 +91,10 @@ function AgentPickerModal({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-2xl tech-glass-subtle"
+        className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-2xl tech-glass-subtle flex flex-col max-h-[85vh]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex items-center justify-between shrink-0">
           <div>
             <div className="text-base font-semibold text-foreground">New session</div>
             <div className="text-xs text-muted-foreground mt-0.5">Choose an agent to chat with</div>
@@ -107,6 +107,7 @@ function AgentPickerModal({
           </button>
         </div>
 
+        <div className="overflow-y-auto flex-1 min-h-0 -mr-2 pr-2">
         {/* Default — CommandCenter */}
         <div className="mb-2">
           <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground/70 mb-1.5">
@@ -171,7 +172,7 @@ function AgentPickerModal({
           {loading ? (
             <div className="text-xs text-muted-foreground py-2 text-center">Loading agents…</div>
           ) : (
-            <div className="flex flex-col gap-1.5 max-h-72 overflow-y-auto">
+            <div className="flex flex-col gap-1.5">
               {agents.filter(a => a.agent_runtime !== "github-copilot").map((a) => (
                 <div key={a.name}>
                   <button
@@ -200,6 +201,7 @@ function AgentPickerModal({
               ))}
             </div>
           )}
+        </div>
         </div>
       </div>
     </div>

@@ -229,9 +229,6 @@ async def delegate_to_agent(agent_name: str, message: str) -> str:
     When to delegate (examples):
     - Outbound prospecting, lead scraping, Apollo/Google Maps search → "agent-sales-assistant"
     - ClickUp task management, sprint status, workload queries → "task-manager"
-    - Billing / invoice queries → "billing"
-    - Email / WhatsApp triage → "triage"
-    - Nightly reconciliation queries → "reconciler"
 
     Do NOT delegate:
     - Broad company data questions that span multiple agents (use your own retrieval tools)

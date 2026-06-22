@@ -3581,7 +3581,7 @@ async def _llm_draft_reply(
 async def _draft_consult_plan(email: dict[str, str]) -> list[dict[str, str]]:
     """Decide which specialist agents (if any) could improve this reply.
 
-    Returns [{"agent": "sales"|"task-manager", "question": "..."}], capped at 2.
+    Returns [{"agent": "agent-sales-assistant"|"task-manager", "question": "..."}], capped at 2.
     """
     try:
         import litellm as _litellm  # noqa: PLC0415
@@ -3595,7 +3595,7 @@ async def _draft_consult_plan(email: dict[str, str]) -> list[dict[str, str]]:
             "You plan how to draft an email reply. Decide which internal specialist "
             "agents, if any, would provide context that materially improves the "
             "reply. Available agents:\n"
-            "- sales: CRM, deals, pipeline, quotes, customer/account status (Zoho).\n"
+            "- agent-sales-assistant: CRM, deals, pipeline, quotes, customer/account status (Zoho).\n"
             "- task-manager: projects, tasks, deadlines, delivery status (ClickUp).\n"
             "Only include an agent when the email clearly relates to its domain. "
             'Respond ONLY JSON: {"consult": [{"agent": "<name>", "question": '
@@ -3615,7 +3615,7 @@ async def _draft_consult_plan(email: dict[str, str]) -> list[dict[str, str]]:
         consult = data.get("consult", []) if isinstance(data, dict) else []
         out = []
         for c in consult:
-            if isinstance(c, dict) and c.get("agent") in ("sales", "task-manager") \
+            if isinstance(c, dict) and c.get("agent") in ("agent-sales-assistant", "task-manager") \
                     and c.get("question"):
                 out.append({"agent": c["agent"], "question": str(c["question"])})
         return out[:2]
@@ -3635,7 +3635,7 @@ async def _draft_via_maf_agent(
     *, instructions: str = "",
 ) -> str | None:
     """Draft by running the email-assistant MAF agent (which can hand off to
-    sales / task-manager and read memory). Returns None on any failure so the
+    agent-sales-assistant / task-manager and read memory). Returns None on any failure so the
     caller can fall back to the in-gateway orchestrator."""
     try:
         from acb_skills.memory_tools import _set_memory_user_id  # noqa: PLC0415
@@ -3646,7 +3646,7 @@ async def _draft_via_maf_agent(
         from orchestrator.executor import run_agent  # noqa: PLC0415
         task = instructions or (
             "Draft a reply to the email below. First gather context: use "
-            "remember() for the sender, and call_agent('sales' or 'task-manager') "
+            "remember() for the sender, and call_agent('agent-sales-assistant' or 'task-manager') "
             "ONLY if the email is clearly about a deal or a project."
         )
         msg = (

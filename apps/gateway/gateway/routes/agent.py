@@ -129,7 +129,12 @@ _AGENT_REGISTRY: list[dict] = [
         ),
         "tags": ["email", "gmail", "outlook", "drafting", "apps"],
         "status": "live",
-        "agent_runtime": "github-copilot",
+        # email-assistant is a MAF agent (see apps/agent-email-assistant:
+        # agents.py build_agents() + config.json "runtime": "maf"). It must NOT
+        # be labelled github-copilot — that routes it through the Copilot SDK
+        # session, which fails with a GitHub 402 quota error instead of using
+        # the BYOK LiteLLM tiers (tier-balanced → deepseek). Keep this "maf".
+        "agent_runtime": "maf",
         "local_path": "apps/agent-email-assistant",
         "integrations": [],
         "optional_integrations": [],

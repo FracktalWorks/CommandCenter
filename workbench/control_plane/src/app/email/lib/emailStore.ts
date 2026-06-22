@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { Email, EmailAccount, EmailFolder, EMAIL_CATEGORIES } from "./types";
+import { Email, EmailAccount, EmailFolder, EMAIL_CATEGORIES, RunMessageResult } from "./types";
 import * as api from "./api";
 import type { EmailFolderRaw } from "./api";
 import { QUICK_ACTIONS } from "./mockData";
@@ -161,6 +161,17 @@ interface EmailState {
   pendingChatPrompt: string | null;
   error: string | null;
 
+  // ── Assistant "Test/Apply on all" run (lifted here so it survives the
+  //    Assistant overlay/TestTab unmounting when the user navigates away) ──
+  /** Per-message rule-run results, keyed by message id. */
+  testResults: Record<string, RunMessageResult>;
+  /** Message ids with a run currently in flight (per-row spinner). */
+  testRunningIds: string[];
+  /** True while a "Test/Run on all" sweep is iterating. */
+  testBulkRunning: boolean;
+  /** The mode the active/last sweep used (false = Test/dry-run, true = Apply). */
+  testApplyMode: boolean;
+
   // Actions
   fetchAccounts: () => Promise<void>;
   fetchFolders: (accountId?: string) => Promise<void>;
@@ -184,6 +195,14 @@ interface EmailState {
   undoSend: () => void;
   /** Queue a prompt for the AI chat panel (used by the Assistant "Fix" flow). */
   setPendingChatPrompt: (prompt: string | null) => void;
+  /** Run rules on one message (Test = dry-run, Apply = execute) and store result. */
+  runTestOnMessage: (accountId: string, messageId: string, isTest: boolean) => Promise<void>;
+  /** Sweep a list of messages sequentially; keeps running across navigation. */
+  runTestOnAll: (accountId: string, messageIds: string[], isTest: boolean) => Promise<void>;
+  /** Request the in-progress sweep to stop after the current message. */
+  stopTestRun: () => void;
+  /** Clear cached per-message results (e.g. when switching Test↔Apply). */
+  clearTestResults: () => void;
   triggerSync: (accountId: string) => Promise<void>;
   deleteAccount: (id: string) => Promise<void>;
   clearError: () => void;
@@ -192,6 +211,9 @@ interface EmailState {
 let _debounceTimer: ReturnType<typeof setTimeout> | undefined;
 /** Pending "Undo send" timer — fires the real send after the undo window. */
 let _sendTimer: ReturnType<typeof setTimeout> | undefined;
+/** Cooperative stop flag for the Assistant "Test/Run on all" sweep. Kept at
+ *  module scope so it survives TestTab unmounting (run continues in the store). */
+let _stopTestRun = false;
 /** How long the user has to undo a send. */
 const UNDO_SEND_MS = 5000;
 
@@ -229,6 +251,11 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   pendingSend: null,
   pendingChatPrompt: null,
   error: null,
+
+  testResults: {},
+  testRunningIds: [],
+  testBulkRunning: false,
+  testApplyMode: false,
 
   // Actions
   fetchAccounts: async () => {
@@ -348,8 +375,10 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         emailsTotal: result.total,
         loadingMore: false,
       });
-    } catch (err: any) {
-      set({ loadingMore: false, error: err.message || "Failed to load more emails" });
+    } catch {
+      // Paging older mail is best-effort and auto-triggers on scroll, so never
+      // surface the raw provider error (it leaks the Graph/Gmail request URL).
+      set({ loadingMore: false, error: "Couldn't load more messages. Try again." });
     }
   },
 
@@ -391,10 +420,17 @@ export const useEmailStore = create<EmailState>((set, get) => ({
           [selectedFolder]: res.exhausted,
         },
       });
-    } catch (err: any) {
+    } catch {
+      // Best-effort provider paging — mark this folder exhausted so the scroll
+      // observer stops re-firing (and re-flashing), and show a friendly note
+      // instead of the raw provider request URL.
       set({
         backfilling: false,
-        error: err.message || "Failed to load older emails",
+        error: "No more older messages could be loaded right now.",
+        backfillExhausted: {
+          ...get().backfillExhausted,
+          [get().selectedFolder]: true,
+        },
       });
     }
   },
@@ -623,6 +659,39 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   setPendingChatPrompt: (prompt) => set({ pendingChatPrompt: prompt }),
+
+  runTestOnMessage: async (accountId, messageId, isTest) => {
+    if (get().testRunningIds.includes(messageId)) return;
+    set({ testRunningIds: [...get().testRunningIds, messageId] });
+    try {
+      const res = await api.runRuleOnMessage({ accountId, messageId, isTest });
+      set({ testResults: { ...get().testResults, [messageId]: res } });
+    } catch (err: any) {
+      set({ error: err?.message || "Rule run failed" });
+    } finally {
+      set({ testRunningIds: get().testRunningIds.filter((id) => id !== messageId) });
+    }
+  },
+
+  runTestOnAll: async (accountId, messageIds, isTest) => {
+    if (get().testBulkRunning) return;
+    _stopTestRun = false;
+    set({ testBulkRunning: true, testApplyMode: isTest ? get().testApplyMode : true });
+    try {
+      for (const id of messageIds) {
+        if (_stopTestRun) break;
+        await get().runTestOnMessage(accountId, id, isTest);
+      }
+    } finally {
+      set({ testBulkRunning: false });
+    }
+  },
+
+  stopTestRun: () => {
+    _stopTestRun = true;
+  },
+
+  clearTestResults: () => set({ testResults: {} }),
 
   clearError: () => set({ error: null }),
 }));

@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
-  Send, Bot, Sparkles, Plus, MessagesSquare, Trash2, X,
+  Send, Bot, Sparkles, Plus, MessagesSquare, Trash2, X, Square,
 } from "lucide-react";
 import { ChatMessage } from "../lib/types";
 import { QUICK_ACTIONS } from "../lib/mockData";
@@ -43,6 +43,8 @@ export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelP
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
+  /** Messages typed while a turn is streaming — sent in order once idle. */
+  const [queued, setQueued] = useState<string[]>([]);
   const [showSessions, setShowSessions] = useState(false);
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -248,10 +250,41 @@ export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelP
     [isTyping, sessionId, messages, selectedAccountId, selectedEmailId, persist]
   );
 
+  // Stop the in-flight turn (abort the stream), mirroring the main chat app.
+  const stop = useCallback(() => {
+    abortRef.current?.abort();
+    setIsTyping(false);
+    setStreamingContent("");
+  }, []);
+
+  // Drain the queue: when the assistant goes idle and messages are queued, send
+  // the next one automatically (same UX as the main chat's send-while-busy).
+  useEffect(() => {
+    if (!isTyping && queued.length > 0 && sessionId) {
+      const [next, ...rest] = queued;
+      setQueued(rest);
+      sendMessage(next);
+    }
+  }, [isTyping, queued, sessionId, sendMessage]);
+
+  // Send if idle, otherwise queue the message to run after the current turn.
+  const submit = useCallback(
+    (text: string) => {
+      if (!text.trim() || !sessionId) return;
+      if (isTyping) {
+        setQueued((q) => [...q, text.trim()]);
+        setInput("");
+        return;
+      }
+      sendMessage(text);
+    },
+    [isTyping, sessionId, sendMessage]
+  );
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      sendMessage(input);
+      submit(input);
     }
   };
 
@@ -439,16 +472,33 @@ export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelP
               el.style.height = Math.min(el.scrollHeight, 80) + "px";
             }}
           />
-          <button
-            onClick={() => sendMessage(input)}
-            disabled={!input.trim() || isTyping}
-            className="p-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
-          >
-            <Send size={11} />
-          </button>
+          {isTyping ? (
+            <button
+              onClick={stop}
+              title="Stop generating"
+              className="p-1.5 rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors flex-shrink-0"
+            >
+              <Square size={11} />
+            </button>
+          ) : (
+            <button
+              onClick={() => submit(input)}
+              disabled={!input.trim()}
+              className="p-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+            >
+              <Send size={11} />
+            </button>
+          )}
         </div>
+        {queued.length > 0 && (
+          <p className="text-center text-[9px] text-primary mt-1.5">
+            {queued.length} message{queued.length > 1 ? "s" : ""} queued · will send when ready
+          </p>
+        )}
         <p className="text-center text-[9px] text-muted-foreground mt-1.5">
-          Press Enter to send · Shift+Enter for new line
+          {isTyping
+            ? "Generating… press Stop to cancel · you can queue another message"
+            : "Press Enter to send · Shift+Enter for new line"}
         </p>
       </div>
     </div>

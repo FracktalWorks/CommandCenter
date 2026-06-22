@@ -961,17 +961,22 @@ async def list_enabled_models(
     }
 
 
+@router.post("/llm/enabled-models", status_code=201)
 @router.post("/llm/custom-models", status_code=201)
 async def add_custom_model(
     req: CustomModelAddRequest,
     _user: UserContext = Depends(get_current_user),
 ) -> CustomModelEntry:
-    """Add a custom model to the catalogue.
+    """Enable a model (add it to the catalogue so it appears in pickers).
+
+    Registered at both ``/llm/enabled-models`` (used by the Models settings
+    page eye-toggle) and the legacy ``/llm/custom-models`` path.
 
     The model ID must be a valid LiteLLM model string that the configured
     provider can route (e.g. ``openrouter/qwen/qwen3.8-preview``).
     No LiteLLM restart is required — the model is routed directly on the
     next request using the provider's API key already in os.environ.
+    Idempotent: re-enabling an already-enabled model returns it instead of 409.
     """
     model_id = req.id.strip()
     if not model_id:
@@ -980,9 +985,10 @@ async def add_custom_model(
         raise HTTPException(status_code=400, detail="label cannot be empty")
 
     models = _load_enabled_models()
-    # Prevent duplicates
-    if any(m["id"] == model_id for m in models):
-        raise HTTPException(status_code=409, detail=f"Model {model_id!r} already enabled")
+    # Idempotent: if already enabled, return the existing entry (no 409).
+    existing = next((m for m in models if m["id"] == model_id), None)
+    if existing is not None:
+        return EnabledModelEntry(**existing)
 
     provider = req.provider.strip() or _provider_from_model(model_id)
     # Derive clean group name from provider slug — no "Custom" prefix

@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
   Loader2, Plus, Trash2, Pencil, Play, Check, X, FlaskConical,
   History as HistoryIcon, Settings2, Settings, Sparkles, Wand2, BookOpen,
   ArrowUp, ArrowDown, Eye, MessageCircle, RefreshCcw, Square,
+  MoreVertical, Copy,
 } from "lucide-react";
 import {
-  listRules, createRule, updateRule, deleteRule, runRuleOnMessage,
+  listRules, createRule, updateRule, deleteRule,
   getRulesHistory, getAssistantSettings, saveAssistantSettings,
   listColdSenders, upsertColdSender, generateWritingStyle, listEmails,
   listKnowledge, createKnowledge, updateKnowledge, deleteKnowledge,
@@ -16,7 +17,7 @@ import {
 } from "../../lib/api";
 import {
   AutomationRule, RuleAction, RuleActionType, ExecutedRule, Email,
-  AssistantSettings, EMAIL_CATEGORIES, ColdBlockerMode, RunMessageResult,
+  AssistantSettings, EMAIL_CATEGORIES, ColdBlockerMode,
   ColdSender, LLMConfigResponse, KnowledgeEntry, LearnedPattern,
   RuleConditions, DraftConfidence, DRAFT_CONFIDENCE_OPTIONS, WEEKDAYS,
 } from "../../lib/types";
@@ -62,6 +63,32 @@ const ACTION_META: Record<RuleActionType, { label: string; description: string }
   DRAFT_EMAIL: { label: "Draft a reply", description: "Let the AI write a reply draft for your review — never auto-sent." },
   CALL_WEBHOOK: { label: "Call webhook", description: "POST the email to a URL you specify." },
 };
+
+/**
+ * Per-action badge colors (bg / text / border) so actions read at a glance in
+ * the Rules list, History popovers and Test results — mirrors inbox-zero's
+ * colored action chips. Uses Tailwind palette tints that work on light & dark.
+ */
+const ACTION_COLOR: Record<RuleActionType, string> = {
+  ARCHIVE: "bg-slate-500/10 text-slate-600 dark:text-slate-300 border-slate-500/20",
+  LABEL: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20",
+  MARK_READ: "bg-slate-500/10 text-slate-600 dark:text-slate-300 border-slate-500/20",
+  STAR: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
+  MARK_SPAM: "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20",
+  TRASH: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
+  MOVE_FOLDER: "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20",
+  REPLY: "bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20",
+  FORWARD: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20",
+  DRAFT_EMAIL: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
+  CALL_WEBHOOK: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
+};
+
+function actionColor(type: string): string {
+  return (
+    ACTION_COLOR[type as RuleActionType] ??
+    "bg-secondary text-muted-foreground border-border"
+  );
+}
 
 /** Action types that draft an email and expose to/subject/content fields. */
 const DRAFT_ACTIONS = new Set<RuleActionType>(["REPLY", "FORWARD", "DRAFT_EMAIL"]);
@@ -179,6 +206,13 @@ const PRESET_RULES: PresetRule[] = [
 
 export function AssistantView({ accountId }: AssistantViewProps) {
   const [tab, setTab] = useState<Tab>("rules");
+  // When the user picks "See history" from a rule's ⋯ menu, jump to the History
+  // tab pre-filtered to that rule.
+  const [historyRuleFilter, setHistoryRuleFilter] = useState("all");
+  const seeHistory = (ruleName: string) => {
+    setHistoryRuleFilter(ruleName);
+    setTab("history");
+  };
 
   return (
     <div className="h-full flex flex-col">
@@ -200,9 +234,11 @@ export function AssistantView({ accountId }: AssistantViewProps) {
       </div>
 
       <div className="flex-1 overflow-hidden">
-        {tab === "rules" && <RulesTab accountId={accountId} />}
+        {tab === "rules" && <RulesTab accountId={accountId} onSeeHistory={seeHistory} />}
         {tab === "test" && <TestTab accountId={accountId} />}
-        {tab === "history" && <HistoryTab accountId={accountId} />}
+        {tab === "history" && (
+          <HistoryTab accountId={accountId} initialRuleFilter={historyRuleFilter} />
+        )}
         {tab === "settings" && <SettingsTab accountId={accountId} />}
       </div>
     </div>
@@ -210,6 +246,30 @@ export function AssistantView({ accountId }: AssistantViewProps) {
 }
 
 // ── Rules tab ───────────────────────────────────────────────────────────────
+
+function RuleMenuItem({
+  icon,
+  label,
+  onClick,
+  destructive = false,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  destructive?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-secondary transition-colors ${
+        destructive ? "text-destructive" : "text-foreground"
+      }`}
+    >
+      <span className="shrink-0">{icon}</span>
+      {label}
+    </button>
+  );
+}
 
 const emptyRule = (accountId: string): AutomationRule => ({
   account_id: accountId,
@@ -226,12 +286,46 @@ const emptyRule = (accountId: string): AutomationRule => ({
   actions: [{ type: "ARCHIVE" }],
 });
 
-function RulesTab({ accountId }: { accountId: string | null }) {
+function RulesTab({
+  accountId,
+  onSeeHistory,
+}: {
+  accountId: string | null;
+  onSeeHistory?: (ruleName: string) => void;
+}) {
   const [rules, setRules] = useState<AutomationRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<AutomationRule | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const setPendingChatPrompt = useEmailStore((s) => s.setPendingChatPrompt);
+
+  const duplicate = async (rule: AutomationRule) => {
+    if (!accountId) return;
+    setMenuFor(null);
+    const { id: _id, ...rest } = rule;
+    void _id;
+    try {
+      await createRule({
+        ...rest,
+        account_id: accountId,
+        name: `${rule.name} (copy)`,
+      });
+      load();
+    } catch (e) {
+      setError((e as Error).message || "Failed to duplicate rule");
+    }
+  };
+
+  const editWithAI = (rule: AutomationRule) => {
+    setMenuFor(null);
+    setPendingChatPrompt(
+      `Help me improve my "${rule.name}" email rule. ` +
+        `Its current instructions are: "${rule.instructions || "(none)"}". ` +
+        `I want to `,
+    );
+  };
 
   const load = useCallback(() => {
     if (!accountId) {
@@ -318,18 +412,15 @@ function RulesTab({ accountId }: { accountId: string | null }) {
   if (!accountId) return <Empty>Select an account first.</Empty>;
   if (loading) return <Spinner label="Loading rules…" />;
 
-  if (editing) {
-    return (
-      <RuleEditor
-        rule={editing}
-        onSave={save}
-        onCancel={() => setEditing(null)}
-      />
-    );
-  }
-
   return (
     <div className="h-full flex flex-col relative">
+      {editing && (
+        <RuleEditor
+          rule={editing}
+          onSave={save}
+          onCancel={() => setEditing(null)}
+        />
+      )}
       <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0">
         <p className="text-xs text-muted-foreground">
           Rules run on inbox mail; the AI matches your plain-English conditions.
@@ -436,24 +527,67 @@ function RulesTab({ accountId }: { accountId: string | null }) {
                   <span
                     key={i}
                     title={actionDescription(a.type)}
-                    className="text-[10px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground"
+                    className={`text-[10px] px-1.5 py-0.5 rounded-md border ${actionColor(a.type)}`}
                   >
                     {actionText(a)}
                   </span>
                 ))}
               </div>
             </div>
-            <div className="flex items-center gap-1 flex-shrink-0">
-              <IconAction title="Edit" onClick={() => setEditing(rule)}>
-                <Pencil size={13} />
-              </IconAction>
+            <div className="relative flex items-center gap-1 flex-shrink-0">
               <IconAction
-                title="Delete"
-                onClick={() => remove(rule)}
-                className="hover:text-destructive"
+                title="More"
+                onClick={() => setMenuFor(menuFor === rule.id ? null : rule.id ?? null)}
               >
-                <Trash2 size={13} />
+                <MoreVertical size={14} />
               </IconAction>
+              {menuFor === rule.id && (
+                <>
+                  {/* Click-away backdrop */}
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setMenuFor(null)}
+                  />
+                  <div className="absolute right-0 top-7 z-50 w-44 rounded-lg border border-border bg-card shadow-lg py-1 text-xs">
+                    <RuleMenuItem
+                      icon={<Pencil size={13} />}
+                      label="Edit"
+                      onClick={() => {
+                        setMenuFor(null);
+                        setEditing(rule);
+                      }}
+                    />
+                    <RuleMenuItem
+                      icon={<Wand2 size={13} />}
+                      label="Edit with AI"
+                      onClick={() => editWithAI(rule)}
+                    />
+                    <RuleMenuItem
+                      icon={<Copy size={13} />}
+                      label="Duplicate"
+                      onClick={() => duplicate(rule)}
+                    />
+                    <RuleMenuItem
+                      icon={<HistoryIcon size={13} />}
+                      label="See history"
+                      onClick={() => {
+                        setMenuFor(null);
+                        onSeeHistory?.(rule.name);
+                      }}
+                    />
+                    <div className="my-1 h-px bg-border" />
+                    <RuleMenuItem
+                      icon={<Trash2 size={13} />}
+                      label="Delete"
+                      destructive
+                      onClick={() => {
+                        setMenuFor(null);
+                        remove(rule);
+                      }}
+                    />
+                  </div>
+                </>
+              )}
             </div>
           </div>
         ))}
@@ -526,11 +660,29 @@ function RuleEditor({
   const valid = draft.name.trim().length > 0 && draft.actions.length > 0;
 
   return (
-    <div className="h-full overflow-y-auto px-5 py-4 space-y-4">
-      <h3 className="text-sm font-semibold text-foreground">
-        {rule.id ? "Edit rule" : "New rule"}
-      </h3>
-
+    <Modal
+      title={rule.id ? "Edit rule" : "New rule"}
+      description="The AI matches your plain-English conditions; literal fields match text."
+      onClose={onCancel}
+      maxWidth="max-w-2xl"
+      footer={
+        <>
+          <button
+            onClick={() => onSave(draft)}
+            disabled={!valid}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            <Check size={13} /> Save rule
+          </button>
+          <button
+            onClick={onCancel}
+            className="px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:bg-secondary transition-colors"
+          >
+            Cancel
+          </button>
+        </>
+      }
+    >
       <Field label="Name">
         <input
           value={draft.name}
@@ -805,23 +957,7 @@ function RuleEditor({
           </span>
         </label>
       </div>
-
-      <div className="flex items-center gap-2 pt-2">
-        <button
-          onClick={() => onSave(draft)}
-          disabled={!valid}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-        >
-          <Check size={13} /> Save rule
-        </button>
-        <button
-          onClick={onCancel}
-          className="px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:bg-secondary transition-colors"
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -927,7 +1063,7 @@ function RuleResultPill({
                     <span
                       key={i}
                       title={actionDescription(a.type)}
-                      className="text-[10px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground"
+                      className={`text-[10px] px-1.5 py-0.5 rounded-md border ${actionColor(a.type)}`}
                     >
                       {actionText(a)}
                     </span>
@@ -936,7 +1072,7 @@ function RuleResultPill({
                     <span
                       key={i}
                       title={actionDescription(t)}
-                      className="text-[10px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground"
+                      className={`text-[10px] px-1.5 py-0.5 rounded-md border ${actionColor(t)}`}
                     >
                       {actionLabel(t)}
                     </span>
@@ -1154,11 +1290,17 @@ function TestTab({ accountId }: { accountId: string | null }) {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [results, setResults] = useState<Record<string, RunMessageResult>>({});
-  const [running, setRunning] = useState<Set<string>>(new Set());
-  const [bulk, setBulk] = useState(false);
   const [search, setSearch] = useState("");
-  const stopRef = useRef(false);
+
+  // Bulk Test/Run sweep state lives in the email store so it keeps running even
+  // if the user navigates away from the Assistant (TestTab unmounts).
+  const results = useEmailStore((s) => s.testResults);
+  const runningIds = useEmailStore((s) => s.testRunningIds);
+  const bulk = useEmailStore((s) => s.testBulkRunning);
+  const runTestOnMessage = useEmailStore((s) => s.runTestOnMessage);
+  const runTestOnAll = useEmailStore((s) => s.runTestOnAll);
+  const stopTestRun = useEmailStore((s) => s.stopTestRun);
+  const clearTestResults = useEmailStore((s) => s.clearTestResults);
 
   const load = useCallback(() => {
     if (!accountId) {
@@ -1178,7 +1320,7 @@ function TestTab({ accountId }: { accountId: string | null }) {
   useEffect(load, [load]);
 
   // Switching Test↔Apply invalidates prior previews (the action changes).
-  useEffect(() => setResults({}), [applyMode]);
+  useEffect(() => clearTestResults(), [applyMode, clearTestResults]);
 
   // Load the next page of older inbox mail and append it — running Test/Apply
   // "on all" then covers everything loaded, so loading further back lets the
@@ -1205,27 +1347,11 @@ function TestTab({ accountId }: { accountId: string | null }) {
   }, [accountId, page]);
 
   const runOne = useCallback(
-    async (id: string) => {
+    (id: string) => {
       if (!accountId) return;
-      setRunning((s) => new Set(s).add(id));
-      try {
-        const res = await runRuleOnMessage({
-          accountId,
-          messageId: id,
-          isTest: !applyMode,
-        });
-        setResults((r) => ({ ...r, [id]: res }));
-      } catch (e) {
-        setError((e as Error).message || "Run failed");
-      } finally {
-        setRunning((s) => {
-          const n = new Set(s);
-          n.delete(id);
-          return n;
-        });
-      }
+      runTestOnMessage(accountId, id, !applyMode);
     },
-    [accountId, applyMode],
+    [accountId, applyMode, runTestOnMessage],
   );
 
   if (!accountId) return <Empty>Select an account first.</Empty>;
@@ -1239,14 +1365,9 @@ function TestTab({ accountId }: { accountId: string | null }) {
     );
   });
 
-  const runAll = async () => {
-    setBulk(true);
-    stopRef.current = false;
-    for (const e of visible) {
-      if (stopRef.current) break;
-      await runOne(e.id);
-    }
-    setBulk(false);
+  const runAll = () => {
+    if (!accountId) return;
+    runTestOnAll(accountId, visible.map((e) => e.id), !applyMode);
   };
 
   return (
@@ -1270,18 +1391,16 @@ function TestTab({ accountId }: { accountId: string | null }) {
       <div className="flex items-center justify-between gap-2 px-4 sm:px-5 py-2 border-b border-border flex-shrink-0">
         {bulk ? (
           <button
-            onClick={() => {
-              stopRef.current = true;
-            }}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            onClick={stopTestRun}
+            className="flex items-center gap-1.5 whitespace-nowrap px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-medium hover:bg-rose-700 transition-colors"
           >
-            <Square size={12} /> Stop
+            <Square size={12} /> {applyMode ? "Stop run" : "Stop test"}
           </button>
         ) : (
           <button
             onClick={runAll}
             disabled={visible.length === 0}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+            className="flex items-center gap-1.5 whitespace-nowrap px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Play size={12} /> {applyMode ? "Run on all" : "Test all"}
           </button>
@@ -1310,7 +1429,7 @@ function TestTab({ accountId }: { accountId: string | null }) {
         ) : (
           visible.map((e) => {
             const res = results[e.id];
-            const isRunning = running.has(e.id);
+            const isRunning = runningIds.includes(e.id);
             return (
               <div
                 key={e.id}
@@ -1399,11 +1518,17 @@ function TestTab({ accountId }: { accountId: string | null }) {
 
 // ── History tab ─────────────────────────────────────────────────────────────
 
-function HistoryTab({ accountId }: { accountId: string | null }) {
+function HistoryTab({
+  accountId,
+  initialRuleFilter = "all",
+}: {
+  accountId: string | null;
+  initialRuleFilter?: string;
+}) {
   const [history, setHistory] = useState<ExecutedRule[]>([]);
   const [loading, setLoading] = useState(true);
   // "all" | "skipped" (No match) | a rule name.
-  const [ruleFilter, setRuleFilter] = useState("all");
+  const [ruleFilter, setRuleFilter] = useState(initialRuleFilter);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1583,7 +1708,16 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
     { id: string; label?: string; provider?: string }[]
   >([]);
   const [ruleNames, setRuleNames] = useState<string[]>([]);
-  const [dialog, setDialog] = useState<"followup" | "digest" | null>(null);
+  const [dialog, setDialog] = useState<
+    | "followup"
+    | "digest"
+    | "writingstyle"
+    | "personal"
+    | "signature"
+    | "knowledge"
+    | "learned"
+    | null
+  >(null);
 
   useEffect(() => {
     fetch("/api/settings/llm")
@@ -1640,7 +1774,6 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
   if (loading || !settings) return <Spinner label="Loading settings…" />;
 
   const s = settings; // narrowed
-  const patch = (p: Partial<AssistantSettings>) => setSettings({ ...s, ...p });
   const persistPatch = (p: Partial<AssistantSettings>) => persist({ ...s, ...p });
   const followUpOn = s.follow_up_awaiting_days > 0 || s.follow_up_needs_reply_days > 0;
   const digestOn = s.digest_frequency !== "OFF";
@@ -1730,65 +1863,42 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
           />
         </div>
 
-        {/* ── Your voice ── */}
+        {/* ── Your voice ── (editors live in popups to keep the tab uncluttered) */}
         <div className="space-y-2">
           <SectionHeader>Your voice</SectionHeader>
           <SettingCard
             title="Writing style"
-            description="Define your tone and style — used to draft replies in your voice."
-          >
-            <textarea
-              value={s.writing_style}
-              onChange={(e) => patch({ writing_style: e.target.value })}
-              rows={3}
-              placeholder="e.g. Concise and friendly. 2–3 short sentences. No corporate jargon. Sign off with just my first name."
-              className={`${INPUT_CLS} resize-none`}
-            />
-            <div className="mt-2">
-              <WritingStyleGenerator
-                accountId={accountId}
-                onGenerated={(ws) => patch({ writing_style: ws })}
-              />
-            </div>
-          </SettingCard>
+            description={summary(s.writing_style, "Define your tone and style — used to draft replies in your voice.")}
+            right={<EditBtn onClick={() => setDialog("writingstyle")} set={!!s.writing_style} />}
+          />
           <SettingCard
             title="Personal instructions"
-            description="Tell the AI about yourself and how you'd like it to handle your emails."
-          >
-            <textarea
-              value={s.about}
-              onChange={(e) => patch({ about: e.target.value })}
-              rows={3}
-              placeholder="e.g. I'm the founder of Acme. If I'm CC'd, it's not To Reply. Emails from jane@accounting.com aren't Notifications."
-              className={`${INPUT_CLS} resize-none`}
-            />
-            <textarea
-              value={s.personal_instructions}
-              onChange={(e) => patch({ personal_instructions: e.target.value })}
-              rows={3}
-              placeholder="Global rules the assistant always follows — e.g. Never commit to dates without checking with me. Don't discuss pricing over email."
-              className={`${INPUT_CLS} resize-none mt-2`}
-            />
-          </SettingCard>
+            description={summary(
+              [s.about, s.personal_instructions].filter(Boolean).join(" • "),
+              "Tell the AI about yourself and how you'd like it to handle your emails.",
+            )}
+            right={<EditBtn onClick={() => setDialog("personal")} set={!!(s.about || s.personal_instructions)} />}
+          />
           <SettingCard
             title="Email signature"
-            description="Set your email signature to include in drafted messages."
-          >
-            <textarea
-              value={s.signature}
-              onChange={(e) => patch({ signature: e.target.value })}
-              rows={2}
-              placeholder={"Best,\nAlex"}
-              className={`${INPUT_CLS} resize-none`}
-            />
-          </SettingCard>
+            description={summary(s.signature, "Set your email signature to include in drafted messages.")}
+            right={<EditBtn onClick={() => setDialog("signature")} set={!!s.signature} />}
+          />
         </div>
 
-        {/* ── Knowledge ── */}
+        {/* ── Knowledge ── (managed in popups) */}
         <div className="space-y-2">
           <SectionHeader>Knowledge</SectionHeader>
-          <KnowledgeBase accountId={accountId} />
-          <LearnedPreferences accountId={accountId} />
+          <SettingCard
+            title="Draft knowledge base"
+            description="Facts, snippets and boilerplate the assistant can pull into drafts."
+            right={<EditBtn onClick={() => setDialog("knowledge")} label="Manage" />}
+          />
+          <SettingCard
+            title="Learned patterns"
+            description="Preferences the assistant picked up from how you edit its drafts."
+            right={<EditBtn onClick={() => setDialog("learned")} label="Manage" />}
+          />
         </div>
 
         {/* ── Advanced ── */}
@@ -1801,6 +1911,26 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
               <Toggle
                 enabled={s.auto_run}
                 onChange={(v) => persistPatch({ auto_run: v })}
+              />
+            }
+          />
+          <SettingCard
+            title="Multi-rule execution"
+            description="Let an email match and run more than one rule. Off = only the first matching rule runs."
+            right={
+              <Toggle
+                enabled={s.multi_rule_execution}
+                onChange={(v) => persistPatch({ multi_rule_execution: v })}
+              />
+            }
+          />
+          <SettingCard
+            title="Sensitive data protection"
+            description="Skip auto-drafting replies on emails that look like they contain passwords, OTPs, or card/account numbers."
+            right={
+              <Toggle
+                enabled={s.sensitive_data_protection}
+                onChange={(v) => persistPatch({ sensitive_data_protection: v })}
               />
             }
           />
@@ -1871,16 +2001,13 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
           />
         </div>
 
-        {/* Save bar for the free-text cards */}
-        <div className="flex items-center gap-2 pb-2">
-          <button
-            onClick={() => persist(s)}
-            disabled={saving}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-          >
-            {saving ? <Loader2 className="animate-spin" size={13} /> : <Check size={13} />}
-            Save settings
-          </button>
+        {/* Each setting saves on its own (toggle / dialog) — show live status. */}
+        <div className="flex items-center gap-2 pb-2 h-5">
+          {saving && (
+            <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <Loader2 className="animate-spin" size={12} /> Saving…
+            </span>
+          )}
           {saved && <span className="text-[11px] text-emerald-400">Saved ✓</span>}
           {error && <span className="text-[11px] text-destructive">{error}</span>}
         </div>
@@ -1907,7 +2034,202 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
           onClose={() => setDialog(null)}
         />
       )}
+      {dialog === "writingstyle" && (
+        <WritingStyleDialog
+          settings={s}
+          accountId={accountId}
+          onSave={(next) => {
+            persist(next);
+            setDialog(null);
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog === "personal" && (
+        <PersonalInstructionsDialog
+          settings={s}
+          onSave={(next) => {
+            persist(next);
+            setDialog(null);
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog === "signature" && (
+        <SignatureDialog
+          settings={s}
+          onSave={(next) => {
+            persist(next);
+            setDialog(null);
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog === "knowledge" && (
+        <Modal
+          title="Draft knowledge base"
+          description="Facts and snippets the assistant can pull into drafts."
+          onClose={() => setDialog(null)}
+        >
+          <KnowledgeBase accountId={accountId} />
+        </Modal>
+      )}
+      {dialog === "learned" && (
+        <Modal
+          title="Learned patterns"
+          description="Preferences picked up from how you edit drafts before sending."
+          onClose={() => setDialog(null)}
+        >
+          <LearnedPreferences accountId={accountId} />
+        </Modal>
+      )}
     </div>
+  );
+}
+
+/** Small "Edit"/"Manage" button used by the Settings rows to open an editor popup. */
+function EditBtn({
+  onClick,
+  label,
+  set,
+}: {
+  onClick: () => void;
+  label?: string;
+  set?: boolean;
+}) {
+  return (
+    <button onClick={onClick} className={CONFIGURE_BTN}>
+      <Settings size={12} /> {label ?? (set ? "Edit" : "Set up")}
+    </button>
+  );
+}
+
+/** Trim a settings value into a one-line preview; fall back to the help text. */
+function summary(value: string | undefined | null, fallback: string): string {
+  const v = (value || "").trim().replace(/\s+/g, " ");
+  if (!v) return fallback;
+  return v.length > 90 ? v.slice(0, 90) + "…" : v;
+}
+
+function WritingStyleDialog({
+  settings,
+  accountId,
+  onSave,
+  onClose,
+}: {
+  settings: AssistantSettings;
+  accountId: string;
+  onSave: (next: AssistantSettings) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(settings);
+  return (
+    <Modal
+      title="Writing style"
+      description="Define your tone and style — used to draft replies in your voice."
+      onClose={onClose}
+      footer={
+        <button
+          onClick={() => onSave(draft)}
+          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
+        >
+          <Check size={13} /> Save
+        </button>
+      }
+    >
+      <textarea
+        value={draft.writing_style}
+        onChange={(e) => setDraft({ ...draft, writing_style: e.target.value })}
+        rows={6}
+        placeholder="e.g. Concise and friendly. 2–3 short sentences. No corporate jargon. Sign off with just my first name."
+        className={`${INPUT_CLS} resize-none`}
+      />
+      <WritingStyleGenerator
+        accountId={accountId}
+        onGenerated={(ws) => setDraft({ ...draft, writing_style: ws })}
+      />
+    </Modal>
+  );
+}
+
+function PersonalInstructionsDialog({
+  settings,
+  onSave,
+  onClose,
+}: {
+  settings: AssistantSettings;
+  onSave: (next: AssistantSettings) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(settings);
+  return (
+    <Modal
+      title="Personal instructions"
+      description="Tell the AI about yourself and how you'd like it to handle your emails."
+      onClose={onClose}
+      footer={
+        <button
+          onClick={() => onSave(draft)}
+          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
+        >
+          <Check size={13} /> Save
+        </button>
+      }
+    >
+      <Field label="About you">
+        <textarea
+          value={draft.about}
+          onChange={(e) => setDraft({ ...draft, about: e.target.value })}
+          rows={4}
+          placeholder="e.g. I'm the founder of Acme. If I'm CC'd, it's not To Reply. Emails from jane@accounting.com aren't Notifications."
+          className={`${INPUT_CLS} resize-none`}
+        />
+      </Field>
+      <Field label="Global instructions">
+        <textarea
+          value={draft.personal_instructions}
+          onChange={(e) => setDraft({ ...draft, personal_instructions: e.target.value })}
+          rows={4}
+          placeholder="Rules the assistant always follows — e.g. Never commit to dates without checking with me. Don't discuss pricing over email."
+          className={`${INPUT_CLS} resize-none`}
+        />
+      </Field>
+    </Modal>
+  );
+}
+
+function SignatureDialog({
+  settings,
+  onSave,
+  onClose,
+}: {
+  settings: AssistantSettings;
+  onSave: (next: AssistantSettings) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(settings);
+  return (
+    <Modal
+      title="Email signature"
+      description="Included at the bottom of drafted messages."
+      onClose={onClose}
+      footer={
+        <button
+          onClick={() => onSave(draft)}
+          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
+        >
+          <Check size={13} /> Save
+        </button>
+      }
+    >
+      <textarea
+        value={draft.signature}
+        onChange={(e) => setDraft({ ...draft, signature: e.target.value })}
+        rows={4}
+        placeholder={"Best,\nAlex"}
+        className={`${INPUT_CLS} resize-none`}
+      />
+    </Modal>
   );
 }
 
@@ -2318,8 +2640,8 @@ function LearnedPreferences({ accountId }: { accountId: string | null }) {
         <h3 className="text-sm font-medium text-foreground">Learned preferences</h3>
       </div>
       <p className="text-[11px] text-muted-foreground mb-3">
-        Picked up from how you edit the assistant's drafts before sending. These
-        nudge future drafts — remove any you don't want.
+        Picked up from how you edit the assistant&apos;s drafts before sending. These
+        nudge future drafts — remove any you don&apos;t want.
       </p>
       <div className="space-y-1.5">
         {patterns.map((p) => (

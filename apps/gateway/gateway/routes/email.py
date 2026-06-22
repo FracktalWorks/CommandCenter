@@ -28,6 +28,7 @@ import ipaddress
 import json
 import io
 import os
+import re
 import secrets
 import socket
 from datetime import datetime, timedelta, timezone
@@ -2793,6 +2794,34 @@ async def create_rule(
         await db.close()
 
 
+class RuleReorderRequest(BaseModel):
+    account_id: str
+    rule_ids: list[str]  # desired order; index becomes sort_order
+
+
+# NOTE: this static-path route MUST be declared before "/rules/{rule_id}" —
+# FastAPI matches routes in registration order, so if "{rule_id}" came first it
+# would capture "reorder" as a rule id and the reorder would silently no-op.
+@router.patch("/rules/reorder")
+async def reorder_rules(
+    req: RuleReorderRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Persist a new rule priority order (lower sort_order = evaluated first)."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        for i, rid in enumerate(req.rule_ids):
+            await db.execute(text(
+                "UPDATE email_rules SET sort_order = :so, updated_at = now() "
+                "WHERE id = :id AND account_id = :aid"
+            ), {"so": i, "id": rid, "aid": req.account_id})
+        await db.commit()
+        return {"reordered": len(req.rule_ids)}
+    finally:
+        await db.close()
+
+
 @router.patch("/rules/{rule_id}")
 async def update_rule(
     rule_id: str,
@@ -3273,31 +3302,6 @@ async def reject_execution(
         if res.rowcount == 0:
             raise HTTPException(status_code=404, detail="Pending execution not found")
         return {"ok": True, "status": "REJECTED"}
-    finally:
-        await db.close()
-
-
-class RuleReorderRequest(BaseModel):
-    account_id: str
-    rule_ids: list[str]  # desired order; index becomes sort_order
-
-
-@router.patch("/rules/reorder")
-async def reorder_rules(
-    req: RuleReorderRequest,
-    user: UserContext = Depends(get_current_user),
-):
-    """Persist a new rule priority order (lower sort_order = evaluated first)."""
-    db = await _get_db()
-    try:
-        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
-        for i, rid in enumerate(req.rule_ids):
-            await db.execute(text(
-                "UPDATE email_rules SET sort_order = :so, updated_at = now() "
-                "WHERE id = :id AND account_id = :aid"
-            ), {"so": i, "id": rid, "aid": req.account_id})
-        await db.commit()
-        return {"reordered": len(req.rule_ids)}
     finally:
         await db.close()
 
@@ -3987,12 +3991,22 @@ async def _run_rules_job(
         ), {"aid": account_id})).fetchone()
         account_user = owner_row.user_id if owner_row else (user_email or "")
         cold_blocker = "OFF"
+        multi_rule = False
         cb_row = (await db.execute(text(
-            "SELECT cold_email_blocker FROM email_assistant_settings "
-            "WHERE account_id = :aid"
+            "SELECT cold_email_blocker, multi_rule_execution "
+            "FROM email_assistant_settings WHERE account_id = :aid"
         ), {"aid": account_id})).fetchone()
         if cb_row and cb_row.cold_email_blocker:
             cold_blocker = cb_row.cold_email_blocker
+        if cb_row and getattr(cb_row, "multi_rule_execution", None):
+            multi_rule = bool(cb_row.multi_rule_execution)
+        # Multi-rule execution: when on, also apply any OTHER enabled rule whose
+        # STATIC conditions match (deterministic, no extra LLM call) beyond the
+        # single best match the matcher returns.
+        extra_rules = (
+            [r for r in await _load_rules(db, account_id) if r["enabled"]]
+            if multi_rule else []
+        )
 
         provider = None
         store = None
@@ -4045,6 +4059,33 @@ async def _run_rules_job(
                     "frm": frm.get("email", ""), "status": status,
                     "acts": json.dumps(actions_taken),
                     "reason": match["reason"]})
+
+                # ── Multi-rule execution: apply additional static-matching rules
+                if multi_rule and apply:
+                    for er in extra_rules:
+                        if er["id"] == rule["id"]:
+                            continue
+                        if _static_match(er, email) is not True:
+                            continue
+                        extra_taken = await _apply_rule_actions(
+                            db, provider, str(r.id), r.provider_message_id,
+                            er["actions"], email, about, signature, account_user,
+                            account_id=account_id,
+                        )
+                        await db.execute(text(
+                            """INSERT INTO email_executed_rules
+                                 (account_id, rule_id, rule_name, message_id,
+                                  provider_message_id, thread_id, subject,
+                                  from_address, status, automated, actions_taken,
+                                  reason)
+                               VALUES (:aid, :rid, :rname, :mid, :pmid, :tid,
+                                       :subj, :frm, 'APPLIED', true, :acts,
+                                       'Matched static conditions (multi-rule).')"""
+                        ), {"aid": account_id, "rid": er["id"],
+                            "rname": er["name"], "mid": str(r.id),
+                            "pmid": r.provider_message_id, "tid": r.thread_id,
+                            "subj": r.subject or "", "frm": frm.get("email", ""),
+                            "acts": json.dumps(extra_taken)})
             elif not dry_run:
                 # No rule matched — log a SKIPPED row so History shows a
                 # "No match found" entry, then let the cold-email blocker look.
@@ -4080,6 +4121,35 @@ async def _run_rules_job(
         await db.close()
 
 
+# Heuristics for the "Sensitive data protection" setting — conservative on
+# purpose (only obvious secrets) so it never silently blocks normal replies.
+_SENSITIVE_RE = re.compile(
+    r"\b("
+    r"one[\s-]?time\s*(pass(word|code)|code)|\bOTP\b|verification\s+code|"
+    r"security\s+code|2fa|two[\s-]?factor|"
+    r"password\s*[:=]|reset\s+your\s+password|"
+    r"social\s+security|ssn|sort\s+code|routing\s+number|iban|"
+    r"card\s+number|cvv|cvc|account\s+number"
+    r")\b",
+    re.IGNORECASE,
+)
+# A 13–16 digit run (optionally space/dash grouped) — looks like a card/account #.
+_LONG_NUMBER_RE = re.compile(r"(?:\d[ -]?){13,16}")
+
+
+def _email_looks_sensitive(email: dict[str, str] | None) -> bool:
+    """True if the email subject/body looks like it carries secrets (OTP,
+    password, card/account numbers). Conservative — favours false negatives."""
+    if not email:
+        return False
+    blob = f"{email.get('subject', '')}\n{email.get('body', '')}"
+    if not blob.strip():
+        return False
+    if _SENSITIVE_RE.search(blob):
+        return True
+    return bool(_LONG_NUMBER_RE.search(blob))
+
+
 async def _apply_rule_actions(
     db: Any, provider: Any, message_id: str, provider_msg_id: str,
     actions: list[dict[str, Any]], email: dict[str, str] | None = None,
@@ -4092,16 +4162,22 @@ async def _apply_rule_actions(
     done: list[str] = []
     # Draft-confidence threshold (gates AI-written REPLY/DRAFT_EMAIL drafts).
     draft_conf = "ALL_EMAILS"
+    sensitive_protection = True
     if account_id and any(
         a.get("type") in ("REPLY", "DRAFT_EMAIL") and not (a.get("content") or "").strip()
         for a in actions
     ):
         cr = (await db.execute(text(
-            "SELECT draft_confidence FROM email_assistant_settings "
-            "WHERE account_id = :aid"
+            "SELECT draft_confidence, sensitive_data_protection "
+            "FROM email_assistant_settings WHERE account_id = :aid"
         ), {"aid": account_id})).fetchone()
         if cr and cr.draft_confidence:
             draft_conf = cr.draft_confidence
+        if cr and getattr(cr, "sensitive_data_protection", None) is not None:
+            sensitive_protection = bool(cr.sensitive_data_protection)
+    # Sensitive-data protection: don't auto-draft on emails that look like they
+    # carry secrets (OTPs, passwords, card/account numbers) when the setting is on.
+    skip_ai_drafts = sensitive_protection and _email_looks_sensitive(email)
     for a in actions:
         t = a.get("type")
         try:
@@ -4127,6 +4203,12 @@ async def _apply_rule_actions(
                 await provider.set_labels(provider_msg_id, add=[a["label"]], remove=[])
             elif t in ("REPLY", "DRAFT_EMAIL"):
                 tmpl = (a.get("content") or "").strip()
+                # Sensitive-data protection: never auto-draft an AI reply on an
+                # email that looks like it carries secrets (static templates are
+                # fine — the user authored them).
+                if not tmpl and skip_ai_drafts:
+                    _log.info("email.draft_skipped_sensitive", account_id=account_id)
+                    continue
                 # Static template wins; otherwise the orchestrating drafter
                 # (memory + sales/task-manager) writes a context-aware reply.
                 body = tmpl if tmpl else await _agent_draft_reply(
@@ -4204,6 +4286,9 @@ class AssistantSettingsModel(BaseModel):
     digest_day_of_week: int = 1  # 0=Sun … 6=Sat (used when WEEKLY)
     digest_time_of_day: str = "09:00"  # HH:MM, account-local
     digest_send_to_email: bool = True
+    # inbox-zero parity (migration 30)
+    multi_rule_execution: bool = False  # allow >1 rule to run on one email
+    sensitive_data_protection: bool = True  # skip drafting on sensitive emails
 
 
 @router.get("/assistant/settings")
@@ -4221,7 +4306,8 @@ async def get_assistant_settings(
                       draft_replies, follow_up_days, draft_confidence,
                       follow_up_awaiting_days, follow_up_needs_reply_days,
                       follow_up_auto_draft, digest_categories, digest_day_of_week,
-                      digest_time_of_day, digest_send_to_email
+                      digest_time_of_day, digest_send_to_email,
+                      multi_rule_execution, sensitive_data_protection
                FROM email_assistant_settings WHERE account_id = :aid"""
         ), {"aid": account_id})).fetchone()
         awaiting = (getattr(row, "follow_up_awaiting_days", 0) if row else 0) or 0
@@ -4274,6 +4360,16 @@ async def get_assistant_settings(
                 if row and getattr(row, "digest_send_to_email", None) is not None
                 else True
             ),
+            "multi_rule_execution": (
+                bool(row.multi_rule_execution)
+                if row and getattr(row, "multi_rule_execution", None) is not None
+                else False
+            ),
+            "sensitive_data_protection": (
+                bool(row.sensitive_data_protection)
+                if row and getattr(row, "sensitive_data_protection", None) is not None
+                else True
+            ),
         }
     finally:
         await db.close()
@@ -4298,10 +4394,11 @@ async def put_assistant_settings(
                   writing_style, draft_replies, follow_up_days, draft_confidence,
                   follow_up_awaiting_days, follow_up_needs_reply_days,
                   follow_up_auto_draft, digest_categories, digest_day_of_week,
-                  digest_time_of_day, digest_send_to_email, updated_at)
+                  digest_time_of_day, digest_send_to_email,
+                  multi_rule_execution, sensitive_data_protection, updated_at)
                VALUES (:aid, :about, :sig, :auto, :cold, :model, :digest,
                        :pi, :ws, :dr, :fu, :dc, :fua, :funr, :fuad, :dcat,
-                       :ddow, :dtod, :dste, now())
+                       :ddow, :dtod, :dste, :mre, :sdp, now())
                ON CONFLICT (account_id) DO UPDATE SET
                  about = EXCLUDED.about,
                  signature = EXCLUDED.signature,
@@ -4321,6 +4418,8 @@ async def put_assistant_settings(
                  digest_day_of_week = EXCLUDED.digest_day_of_week,
                  digest_time_of_day = EXCLUDED.digest_time_of_day,
                  digest_send_to_email = EXCLUDED.digest_send_to_email,
+                 multi_rule_execution = EXCLUDED.multi_rule_execution,
+                 sensitive_data_protection = EXCLUDED.sensitive_data_protection,
                  updated_at = now()"""
         ), {"aid": req.account_id, "about": req.about, "sig": req.signature,
             "auto": req.auto_run, "cold": req.cold_email_blocker or "OFF",
@@ -4334,7 +4433,9 @@ async def put_assistant_settings(
             "dcat": list(req.digest_categories or []),
             "ddow": req.digest_day_of_week,
             "dtod": req.digest_time_of_day or "09:00",
-            "dste": req.digest_send_to_email})
+            "dste": req.digest_send_to_email,
+            "mre": req.multi_rule_execution,
+            "sdp": req.sensitive_data_protection})
         await db.commit()
         return {
             "account_id": req.account_id,
@@ -4356,6 +4457,8 @@ async def put_assistant_settings(
             "digest_day_of_week": req.digest_day_of_week,
             "digest_time_of_day": req.digest_time_of_day or "09:00",
             "digest_send_to_email": req.digest_send_to_email,
+            "multi_rule_execution": req.multi_rule_execution,
+            "sensitive_data_protection": req.sensitive_data_protection,
         }
     finally:
         await db.close()

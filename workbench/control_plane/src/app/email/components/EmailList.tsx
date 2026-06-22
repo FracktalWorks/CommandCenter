@@ -5,7 +5,7 @@ import {
   Pencil, Trash2, Archive, Flag, FolderInput,
   Reply, ReplyAll, Forward, MailOpen, Mail, Tag,
   Paperclip, Star, AlertTriangle, ChevronRight, Loader2, Check, CheckSquare, X,
-  MessagesSquare,
+  MessagesSquare, RefreshCw,
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { timeLabel } from "../lib/utils";
@@ -46,6 +46,10 @@ interface CtxState {
   x: number;
   y: number;
   email: Email;
+  /** True when opened on a multi-selection — show bulk actions instead. */
+  bulk?: boolean;
+  /** How many emails the bulk action will affect. */
+  count?: number;
 }
 
 export function EmailList({
@@ -66,7 +70,11 @@ export function EmailList({
   const {
     updateEmail, deleteEmail, folders, selectedFolder,
     selectedLabel, selectLabel,
+    triggerSync, selectedAccountId, syncStatus,
   } = useEmailStore();
+  const syncing = selectedAccountId
+    ? syncStatus[selectedAccountId] === "syncing"
+    : false;
   const [ctx, setCtx] = useState<CtxState | null>(null);
 
   // ── Bulk selection ──
@@ -105,7 +113,16 @@ export function EmailList({
     const menuH = 380;
     const x = Math.min(px, window.innerWidth - menuW);
     const y = Math.min(py, window.innerHeight - menuH);
-    setCtx({ x: Math.max(8, x), y: Math.max(8, y), email });
+    // Right-clicking a row that's part of a multi-selection acts on the whole
+    // selection (Windows/Outlook behaviour); otherwise it's a single-email menu.
+    const bulk = selected.has(email.id) && selected.size > 1;
+    setCtx({
+      x: Math.max(8, x),
+      y: Math.max(8, y),
+      email,
+      bulk,
+      count: bulk ? selected.size : 1,
+    });
   };
   const openContext = (e: React.MouseEvent, email: Email) => {
     e.preventDefault();
@@ -192,6 +209,15 @@ export function EmailList({
         ))}
 
         <div className="flex-1" />
+
+        <button
+          onClick={() => selectedAccountId && triggerSync(selectedAccountId)}
+          disabled={!selectedAccountId || syncing}
+          className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
+          title="Refresh — sync new mail, drafts & changes from the server"
+        >
+          <RefreshCw size={13} className={syncing ? "animate-spin" : ""} />
+        </button>
 
         <button
           onClick={() =>
@@ -461,6 +487,8 @@ export function EmailList({
           onReply={(k) => onToolbarAction(k, ctx.email)}
           onUpdate={(u) => updateEmail(ctx.email.id, u)}
           onDelete={() => deleteEmail(ctx.email.id)}
+          onBulkUpdate={(u) => bulkUpdate(u)}
+          onBulkDelete={bulkDelete}
         />
       )}
     </div>
@@ -474,6 +502,8 @@ function ContextMenu({
   onReply,
   onUpdate,
   onDelete,
+  onBulkUpdate,
+  onBulkDelete,
 }: {
   ctx: CtxState;
   folders: { key: string; label: string }[];
@@ -483,17 +513,25 @@ function ContextMenu({
     updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>
   ) => void;
   onDelete: () => void;
+  onBulkUpdate: (
+    updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>
+  ) => void;
+  onBulkDelete: () => void;
 }) {
-  const { email } = ctx;
-  const [moveOpen, setMoveOpen] = useState(false);
-  const [labelOpen, setLabelOpen] = useState(false);
+  const { email, bulk, count = 1 } = ctx;
   const run = (fn: () => void) => {
     fn();
     onClose();
   };
+  // Bulk actions fan out across the whole selection; single uses the one email.
+  const update = bulk ? onBulkUpdate : onUpdate;
+  const del = bulk ? onBulkDelete : onDelete;
   const moveTargets = folders.filter(
-    (f) => f.key !== "starred" && f.key !== email.folder
+    (f) => f.key !== "starred" && (bulk || f.key !== email.folder)
   );
+  // Open submenu flyouts to the LEFT when the menu sits near the right edge.
+  const flipLeft =
+    typeof window !== "undefined" && ctx.x > window.innerWidth - 460;
 
   return (
     <>
@@ -510,95 +548,125 @@ function ContextMenu({
         className="fixed z-[81] w-52 bg-popover border border-border rounded-lg shadow-xl py-1 text-xs"
         style={{ left: ctx.x, top: ctx.y }}
       >
-        <CtxItem icon={Reply} label="Reply" onClick={() => run(() => onReply("reply"))} />
-        <CtxItem icon={ReplyAll} label="Reply All" onClick={() => run(() => onReply("reply-all"))} />
-        <CtxItem icon={Forward} label="Forward" onClick={() => run(() => onReply("forward"))} />
-
-        <CtxDivider />
+        {bulk ? (
+          <div className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground border-b border-border mb-1">
+            {count} selected
+          </div>
+        ) : (
+          <>
+            <CtxItem icon={Reply} label="Reply" onClick={() => run(() => onReply("reply"))} />
+            <CtxItem icon={ReplyAll} label="Reply All" onClick={() => run(() => onReply("reply-all"))} />
+            <CtxItem icon={Forward} label="Forward" onClick={() => run(() => onReply("forward"))} />
+            <CtxDivider />
+          </>
+        )}
 
         <CtxItem
-          icon={email.isRead ? Mail : MailOpen}
-          label={email.isRead ? "Mark as unread" : "Mark as read"}
-          onClick={() => run(() => onUpdate({ isRead: !email.isRead }))}
+          icon={MailOpen}
+          label="Mark as read"
+          onClick={() => run(() => update({ isRead: true }))}
+        />
+        <CtxItem
+          icon={Mail}
+          label="Mark as unread"
+          onClick={() => run(() => update({ isRead: false }))}
         />
         <CtxItem
           icon={Flag}
-          label={email.isFlagged ? "Clear flag" : "Flag / mark important"}
-          onClick={() => run(() => onUpdate({ isFlagged: !email.isFlagged }))}
+          label={bulk ? "Flag" : email.isFlagged ? "Clear flag" : "Flag / mark important"}
+          onClick={() => run(() => update({ isFlagged: bulk ? true : !email.isFlagged }))}
         />
         <CtxItem
           icon={Star}
-          label={email.isStarred ? "Remove star" : "Add star"}
-          onClick={() => run(() => onUpdate({ isStarred: !email.isStarred }))}
+          label={bulk ? "Add star" : email.isStarred ? "Remove star" : "Add star"}
+          onClick={() => run(() => update({ isStarred: bulk ? true : !email.isStarred }))}
         />
 
         <CtxDivider />
 
-        {/* Move to → */}
-        <button
-          className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-foreground/80 hover:text-foreground hover:bg-secondary transition-colors"
-          onClick={() => setMoveOpen((v) => !v)}
-        >
-          <span className="flex items-center gap-2">
-            <FolderInput size={13} /> Move to…
-          </span>
-          <ChevronRight
-            size={12}
-            className={`transition-transform ${moveOpen ? "rotate-90" : ""}`}
-          />
-        </button>
-        {moveOpen && (
-          <div className="max-h-40 overflow-y-auto bg-secondary/40 border-y border-border">
-            {moveTargets.length === 0 ? (
-              <div className="px-3 py-1.5 text-muted-foreground">No other folders</div>
-            ) : (
-              moveTargets.map((f) => (
-                <button
-                  key={f.key}
-                  className="w-full text-left pl-8 pr-3 py-1.5 text-foreground/80 hover:text-foreground hover:bg-secondary transition-colors"
-                  onClick={() => run(() => onUpdate({ folder: f.key }))}
-                >
-                  {f.label}
-                </button>
-              ))
-            )}
-          </div>
-        )}
-        {/* Label → */}
-        <button
-          className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-foreground/80 hover:text-foreground hover:bg-secondary transition-colors"
-          onClick={() => setLabelOpen((v) => !v)}
-        >
-          <span className="flex items-center gap-2">
-            <Tag size={13} /> Label…
-          </span>
-          <ChevronRight
-            size={12}
-            className={`transition-transform ${labelOpen ? "rotate-90" : ""}`}
-          />
-        </button>
-        {labelOpen && (
-          <div onClick={(e) => e.stopPropagation()}>
-            <LabelMenu email={email} />
-          </div>
+        {/* Move to → (Windows-style flyout submenu) */}
+        <CtxSubmenu icon={FolderInput} label="Move to…" flipLeft={flipLeft}>
+          {moveTargets.length === 0 ? (
+            <div className="px-3 py-1.5 text-muted-foreground">No other folders</div>
+          ) : (
+            moveTargets.map((f) => (
+              <button
+                key={f.key}
+                className="w-full text-left px-3 py-1.5 text-foreground/80 hover:text-foreground hover:bg-secondary transition-colors"
+                onClick={() => run(() => update({ folder: f.key }))}
+              >
+                {f.label}
+              </button>
+            ))
+          )}
+        </CtxSubmenu>
+
+        {/* Label → (single-email only; per-message label toggles) */}
+        {!bulk && (
+          <CtxSubmenu icon={Tag} label="Label…" flipLeft={flipLeft}>
+            <div onClick={(e) => e.stopPropagation()}>
+              <LabelMenu email={email} />
+            </div>
+          </CtxSubmenu>
         )}
 
         <CtxItem
           icon={Archive}
           label="Archive"
-          onClick={() => run(() => onUpdate({ folder: "archive" }))}
+          onClick={() => run(() => update({ folder: "archive" }))}
         />
 
         <CtxDivider />
 
         <CtxItem
           icon={Trash2}
-          label="Delete"
+          label={bulk ? `Delete ${count}` : "Delete"}
           danger
-          onClick={() => run(onDelete)}
+          onClick={() => run(del)}
         />
       </div>
     </>
+  );
+}
+
+/** A context-menu item that reveals a flyout submenu to the side on hover. */
+function CtxSubmenu({
+  icon: Icon,
+  label,
+  flipLeft,
+  children,
+}: {
+  icon: React.ElementType;
+  label: string;
+  flipLeft?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-foreground/80 hover:text-foreground hover:bg-secondary transition-colors"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="flex items-center gap-2">
+          <Icon size={13} /> {label}
+        </span>
+        <ChevronRight size={12} className={flipLeft ? "rotate-180" : ""} />
+      </button>
+      {open && (
+        <div
+          className={`absolute top-0 ${
+            flipLeft ? "right-full mr-0.5" : "left-full ml-0.5"
+          } w-52 max-h-64 overflow-y-auto bg-popover border border-border rounded-lg shadow-xl py-1 z-[82]`}
+        >
+          {children}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -294,6 +294,10 @@ export interface AssistantSettings {
   digest_time_of_day: string;
   /** Email the digest to the account address. */
   digest_send_to_email: boolean;
+  /** Allow more than one rule to run on the same email (inbox-zero multi-rule). */
+  multi_rule_execution: boolean;
+  /** Skip auto-drafting on emails that look like they carry sensitive data. */
+  sensitive_data_protection: boolean;
 }
 
 export type DraftConfidence = "ALL_EMAILS" | "STANDARD" | "HIGH_CONFIDENCE";

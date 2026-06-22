@@ -44,7 +44,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         import sys as _sys  # noqa: PLC0415
         from pathlib import Path as _Path  # noqa: PLC0415
-        _venv = _Path(_sys.executable).resolve().parent.parent
+        # sys.prefix IS the venv root in a venv — do NOT derive it from
+        # sys.executable, whose bin/python is often a symlink to the system
+        # python (resolving it lands on /usr and misses the venv).
+        _venv = _Path(_sys.prefix)
         if (_venv / "pyvenv.cfg").is_file():
             os.environ.setdefault("VIRTUAL_ENV", str(_venv))
             _bin = str(_venv / "bin")
@@ -108,7 +111,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # them on startup so their workspace is browsable without a manual pull.
     async def _warm_clone_agents() -> None:
         try:
-            from acb_skills.loader import load_agent  # noqa: PLC0415
+            from acb_skills.loader import (  # noqa: PLC0415
+                _install_agent_deps, load_agent)
             from gateway.routes.agent import (  # noqa: PLC0415
                 _AGENT_REGISTRY, _load_dynamic_agents)
             from gateway.routes.workspace import \
@@ -134,9 +138,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 if not repo_name and not local_path:
                     continue
                 try:
-                    if _agent_workspace_dir(name) is not None:
-                        continue
+                    _ws = _agent_workspace_dir(name)
                 except Exception:  # noqa: BLE001
+                    continue
+                if _ws is not None:
+                    # Already cloned — ensure its declared deps are installed
+                    # into the shared venv (idempotent; no-op when unchanged),
+                    # so all its tools work without waiting for the next run.
+                    try:
+                        await _asyncio.to_thread(
+                            _install_agent_deps, _ws, settings
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                     continue
 
                 def _clone(n: str, r: str | None, lp: str | None) -> None:

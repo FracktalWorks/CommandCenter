@@ -968,7 +968,163 @@ def _ensure_repo(
             _install_push_guard(clone_dir)
         # After every pull/clone, auto-sync any new skill scripts into agents.py
         _sync_new_skills(clone_dir, settings)
+        # Install the repo's declared deps into the SHARED gateway venv — agents
+        # are imported in-process, so their imports must resolve in the same
+        # interpreter the gateway runs from.
+        _install_agent_deps(clone_dir, settings)
         return clone_dir
+
+
+# ---------------------------------------------------------------------------
+# Dependency installation (shared venv)
+# ---------------------------------------------------------------------------
+
+def _is_platform_dep(spec: str) -> bool:
+    """True for first-party platform packages already present in the venv.
+
+    These (``acb-*``, ``agent-framework-*``, ``copilot``) ship with the
+    CommandCenter workspace, so trying to ``pip install`` them from an agent's
+    pyproject would fail (they're not on PyPI) — skip them.
+    """
+    import re  # noqa: PLC0415
+    name = re.split(r"[<>=!~;\s\[]", spec.strip(), 1)[0].strip().lower()
+    return (
+        name.startswith("acb")
+        or name.startswith("agent-framework")
+        or name == "copilot"
+    )
+
+
+def _find_uv() -> str | None:
+    """Locate the ``uv`` binary, even when it's not on the service PATH."""
+    import shutil  # noqa: PLC0415
+    found = shutil.which("uv")
+    if found:
+        return found
+    for cand in (
+        Path.home() / ".local" / "bin" / "uv",
+        Path("/usr/local/bin/uv"),
+        Path("/root/.local/bin/uv"),
+    ):
+        try:
+            if cand.is_file():
+                return str(cand)
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+def _install_agent_deps(agent_dir: Path, settings: Any) -> None:
+    """Install an agent's (or skill's) declared dependencies into the shared
+    gateway venv.
+
+    Agents are imported into the gateway interpreter and run in-process, so any
+    third-party package an agent or its skills import must exist in the SAME
+    venv the gateway runs from.  Nothing else installs them, so we do it here
+    after every clone/pull.
+
+    Sources: ``requirements.txt`` (installed verbatim) and the
+    ``[project].dependencies`` of ``pyproject.toml`` (platform packages skipped).
+    Installed into ``sys.executable``'s environment via ``uv pip install``
+    (falling back to ``pip``).
+
+    Best-effort + idempotent: a SHA-256 of the dep sources is cached in
+    ``.git/acb-deps-hash``; an unchanged set is skipped.  A failed install logs
+    a warning and never blocks the agent run.  Runs under the caller's per-repo
+    lock, so concurrent loads can't race the installer.
+    """
+    import hashlib  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    try:
+        req = agent_dir / "requirements.txt"
+        pyproject = agent_dir / "pyproject.toml"
+        sources: list[str] = []
+        pyproject_deps: list[str] = []
+
+        if req.is_file():
+            sources.append(req.read_text(encoding="utf-8", errors="replace"))
+        if pyproject.is_file():
+            try:
+                import tomllib  # noqa: PLC0415
+                data = tomllib.loads(
+                    pyproject.read_text(encoding="utf-8", errors="replace")
+                )
+                raw = (data.get("project") or {}).get("dependencies") or []
+                pyproject_deps = [
+                    d for d in raw
+                    if isinstance(d, str) and not _is_platform_dep(d)
+                ]
+            except Exception:  # noqa: BLE001
+                pyproject_deps = []
+            sources.append("\n".join(pyproject_deps))
+
+        if not req.is_file() and not pyproject_deps:
+            return  # nothing declared to install
+
+        digest = hashlib.sha256(
+            "\x00".join(sources).encode("utf-8", "replace")
+        ).hexdigest()
+        marker = agent_dir / ".git" / "acb-deps-hash"
+        try:
+            if (
+                marker.is_file()
+                and marker.read_text(encoding="utf-8").strip() == digest
+            ):
+                return  # unchanged since the last successful install
+        except Exception:  # noqa: BLE001
+            pass
+
+        uv = _find_uv()
+        base = (
+            [uv, "pip", "install", "--python", sys.executable]
+            if uv
+            else [sys.executable, "-m", "pip", "install"]
+        )
+        cmds: list[list[str]] = []
+        if req.is_file():
+            cmds.append(base + ["-r", str(req)])
+        if pyproject_deps:
+            cmds.append(base + pyproject_deps)
+
+        ok = True
+        for cmd in cmds:
+            try:
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=600,
+                )
+                if result.returncode != 0:
+                    ok = False
+                    _log.warning(
+                        "loader.deps_install_failed",
+                        agent=agent_dir.name,
+                        tool="uv" if uv else "pip",
+                        error=(result.stderr or result.stdout or "")[-700:],
+                    )
+            except Exception as exc:  # noqa: BLE001
+                ok = False
+                _log.warning(
+                    "loader.deps_install_error",
+                    agent=agent_dir.name, error=str(exc),
+                )
+
+        if ok:
+            try:
+                marker.write_text(digest, encoding="utf-8")
+            except Exception:  # noqa: BLE001
+                pass
+            _log.info(
+                "loader.deps_installed",
+                agent=agent_dir.name,
+                requirements=req.is_file(),
+                pyproject_deps=len(pyproject_deps),
+            )
+    except Exception as exc:  # noqa: BLE001
+        _log.warning(
+            "loader.deps_install_skipped",
+            agent=agent_dir.name, error=str(exc),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1182,6 +1338,7 @@ def load_agent(
         # clean, git-tracked directory to mount.
         agent_dir = cache_root / agent_name
         _ensure_local_git_repo(source_dir, agent_dir, settings)
+        _install_agent_deps(agent_dir, settings)
 
         config_path = agent_dir / "config.json"
         config: dict[str, Any] = {}

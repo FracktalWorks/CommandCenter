@@ -1173,10 +1173,16 @@ function FixButton({
 
 // ── Test tab ────────────────────────────────────────────────────────────────
 
+/** Inbox emails fetched per "Load more" in the Test tab. */
+const TEST_PAGE_SIZE = 25;
+
 function TestTab({ accountId }: { accountId: string | null }) {
   const [applyMode, setApplyMode] = useState(false); // false = Test, true = Apply
   const [emails, setEmails] = useState<Email[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, RunMessageResult>>({});
   const [running, setRunning] = useState<Set<string>>(new Set());
@@ -1190,8 +1196,12 @@ function TestTab({ accountId }: { accountId: string | null }) {
       return;
     }
     setLoading(true);
-    listEmails({ accountId, folder: "inbox", pageSize: 25 })
-      .then((r) => setEmails(r.emails))
+    listEmails({ accountId, folder: "inbox", page: 1, pageSize: TEST_PAGE_SIZE })
+      .then((r) => {
+        setEmails(r.emails);
+        setTotal(r.total);
+        setPage(1);
+      })
       .catch((e) => setError((e as Error).message || "Failed to load emails"))
       .finally(() => setLoading(false));
   }, [accountId]);
@@ -1199,6 +1209,30 @@ function TestTab({ accountId }: { accountId: string | null }) {
 
   // Switching Test↔Apply invalidates prior previews (the action changes).
   useEffect(() => setResults({}), [applyMode]);
+
+  // Load the next page of older inbox mail and append it — running Test/Apply
+  // "on all" then covers everything loaded, so loading further back lets the
+  // rules reach deeper into inbox history (inbox-zero parity).
+  const loadMore = useCallback(async () => {
+    if (!accountId) return;
+    setLoadingMore(true);
+    try {
+      const next = page + 1;
+      const r = await listEmails({
+        accountId, folder: "inbox", page: next, pageSize: TEST_PAGE_SIZE,
+      });
+      setEmails((prev) => {
+        const seen = new Set(prev.map((e) => e.id));
+        return [...prev, ...r.emails.filter((e) => !seen.has(e.id))];
+      });
+      setTotal(r.total);
+      setPage(next);
+    } catch (e) {
+      setError((e as Error).message || "Failed to load more emails");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [accountId, page]);
 
   const runOne = useCallback(
     async (id: string) => {
@@ -1372,6 +1406,21 @@ function TestTab({ accountId }: { accountId: string | null }) {
               </div>
             );
           })
+        )}
+
+        {!loading && emails.length < total && (
+          <button
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+          >
+            {loadingMore ? (
+              <Loader2 className="animate-spin" size={13} />
+            ) : (
+              <ArrowDown size={13} />
+            )}
+            Load more ({emails.length} of {total})
+          </button>
         )}
       </div>
     </div>

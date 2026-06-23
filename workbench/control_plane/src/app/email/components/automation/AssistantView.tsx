@@ -21,7 +21,7 @@ import {
 import type { EmailArtifact } from "../../lib/api";
 import {
   AutomationRule, RuleAction, RuleActionType, RuleActionAttachment, ExecutedRule, Email,
-  AssistantSettings, EMAIL_CATEGORIES, ColdBlockerMode,
+  AssistantSettings, ColdBlockerMode,
   ColdSender, LLMConfigResponse, KnowledgeEntry, LearnedPattern,
   LearnedRulePattern,
   RuleConditions, DraftConfidence, DRAFT_CONFIDENCE_OPTIONS, WEEKDAYS,
@@ -118,7 +118,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: true,
     conditional_operator: "AND",
-    category_filters: [],
     sort_order: 0,
     actions: [{ type: "LABEL", label: "To Reply" }, { type: "DRAFT_EMAIL" }],
   },
@@ -131,7 +130,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: true,
     conditional_operator: "AND",
-    category_filters: [],
     sort_order: 1,
     actions: [{ type: "LABEL", label: "Awaiting Reply" }],
   },
@@ -144,7 +142,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: true,
     conditional_operator: "AND",
-    category_filters: [],
     sort_order: 2,
     actions: [{ type: "LABEL", label: "Actioned" }],
   },
@@ -156,7 +153,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: true,
     conditional_operator: "AND",
-    category_filters: [],
     sort_order: 1,
     actions: [{ type: "LABEL", label: "FYI" }],
   },
@@ -169,7 +165,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "AND",
-    category_filters: [],
     sort_order: 2,
     actions: [{ type: "LABEL", label: "Newsletter" }],
   },
@@ -181,7 +176,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "AND",
-    category_filters: [],
     sort_order: 3,
     actions: [{ type: "LABEL", label: "Marketing" }, { type: "ARCHIVE" }],
   },
@@ -194,7 +188,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "AND",
-    category_filters: [],
     sort_order: 4,
     actions: [{ type: "LABEL", label: "Calendar" }],
   },
@@ -207,7 +200,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "AND",
-    category_filters: [],
     sort_order: 5,
     actions: [{ type: "LABEL", label: "Receipt" }],
   },
@@ -218,7 +210,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "AND",
-    category_filters: [],
     sort_order: 6,
     actions: [{ type: "LABEL", label: "Notification" }],
   },
@@ -231,7 +222,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "AND",
-    category_filters: [],
     sort_order: 7,
     actions: [{ type: "LABEL", label: "Cold Email" }, { type: "ARCHIVE" }],
   },
@@ -319,7 +309,6 @@ const emptyRule = (accountId: string): AutomationRule => ({
   automated: true,
   run_on_threads: false,
   conditional_operator: "AND",
-  category_filters: [],
   from_pattern: "",
   subject_pattern: "",
   sort_order: 0,
@@ -944,58 +933,6 @@ function RuleEditor({
               </span>
             </label>
 
-            {/* Sender-category gate: limits which emails the rule runs on,
-                based on the SENDER's saved category — it does not set one. */}
-            <div className="pt-2 border-t border-border/60">
-              <span className="text-xs font-medium text-foreground">
-                Limit by sender category (optional)
-              </span>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                Only run this rule for senders you’ve categorized (e.g.
-                Newsletter, Marketing). This narrows which emails the rule
-                applies to — it doesn’t change a sender’s category.
-              </p>
-              <select
-                value={draft.category_filter_type ?? ""}
-                onChange={(e) =>
-                  set({
-                    category_filter_type:
-                      (e.target.value || null) as "INCLUDE" | "EXCLUDE" | null,
-                  })
-                }
-                className={`${INPUT_CLS} mt-1.5`}
-              >
-                <option value="">Any sender (no limit)</option>
-                <option value="INCLUDE">Only senders in these categories</option>
-                <option value="EXCLUDE">Except senders in these categories</option>
-              </select>
-              {draft.category_filter_type && (
-                <div className="flex flex-wrap gap-1.5 mt-2">
-                  {EMAIL_CATEGORIES.map((c) => {
-                    const on = draft.category_filters.includes(c);
-                    return (
-                      <button
-                        key={c}
-                        onClick={() =>
-                          set({
-                            category_filters: on
-                              ? draft.category_filters.filter((x) => x !== c)
-                              : [...draft.category_filters, c],
-                          })
-                        }
-                        className={`text-[10px] px-2 py-1 rounded-full border transition-colors ${
-                          on
-                            ? "bg-primary/15 text-primary border-primary/40"
-                            : "border-border text-muted-foreground hover:text-foreground"
-                        }`}
-                      >
-                        {c}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
           </div>
         )}
       </div>
@@ -1955,11 +1892,6 @@ function PrettyConditions({ c }: { c: RuleConditions }) {
   if (c.to_pattern) parts.push({ k: "To", v: c.to_pattern });
   if (c.subject_pattern) parts.push({ k: "Subject", v: c.subject_pattern });
   if (c.body_pattern) parts.push({ k: "Body", v: c.body_pattern });
-  if (c.category_filter_type && c.category_filters.length)
-    parts.push({
-      k: c.category_filter_type === "INCLUDE" ? "Category in" : "Category not in",
-      v: c.category_filters.join(", "),
-    });
   if (parts.length === 0) return null;
   const op = c.conditional_operator === "OR" ? "ANY" : "ALL";
   return (

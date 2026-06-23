@@ -340,7 +340,6 @@ async def create_rule(
         "automated": automated,
         "run_on_threads": False,
         "conditional_operator": "OR",
-        "category_filters": [],
         "sort_order": 0,
         "actions": [action],
     }

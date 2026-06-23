@@ -64,7 +64,6 @@ export function EmailDetail({ email }: EmailDetailProps) {
         automated: true,
         run_on_threads: false,
         conditional_operator: "OR",
-        category_filters: [],
         sort_order: 0,
         actions: [{ type: "ARCHIVE" }],
       });

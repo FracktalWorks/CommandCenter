@@ -245,8 +245,6 @@ export interface AutomationRule {
   to_pattern?: string | null;
   subject_pattern?: string | null;
   body_pattern?: string | null;
-  category_filter_type?: "INCLUDE" | "EXCLUDE" | null;
-  category_filters: string[];
   system_type?: string | null;
   sort_order: number;
   actions: RuleAction[];
@@ -267,8 +265,6 @@ export interface RuleConditions {
   subject_pattern: string | null;
   body_pattern: string | null;
   conditional_operator: "AND" | "OR";
-  category_filter_type: "INCLUDE" | "EXCLUDE" | null;
-  category_filters: string[];
 }
 
 export interface ExecutedRule {

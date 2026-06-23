@@ -2788,8 +2788,6 @@ class RuleModel(BaseModel):
     to_pattern: str | None = None
     subject_pattern: str | None = None
     body_pattern: str | None = None
-    category_filter_type: str | None = None
-    category_filters: list[str] = []
     system_type: str | None = None
     sort_order: int = 0
     actions: list[RuleActionModel] = []
@@ -2800,8 +2798,7 @@ async def _load_rules(db: Any, account_id: str) -> list[dict[str, Any]]:
     rule_rows = (await db.execute(text(
         """SELECT id, account_id, name, instructions, enabled, automated,
                   run_on_threads, conditional_operator, from_pattern, to_pattern,
-                  subject_pattern, body_pattern, category_filter_type,
-                  category_filters, system_type, sort_order
+                  subject_pattern, body_pattern, system_type, sort_order
            FROM email_rules WHERE account_id = :aid
            ORDER BY sort_order, created_at"""
     ), {"aid": account_id})).fetchall()
@@ -2822,8 +2819,6 @@ async def _load_rules(db: Any, account_id: str) -> list[dict[str, Any]]:
             "conditional_operator": r.conditional_operator,
             "from_pattern": r.from_pattern, "to_pattern": r.to_pattern,
             "subject_pattern": r.subject_pattern, "body_pattern": r.body_pattern,
-            "category_filter_type": r.category_filter_type,
-            "category_filters": list(r.category_filters) if r.category_filters else [],
             "system_type": r.system_type, "sort_order": r.sort_order,
             "actions": [
                 {"id": str(a.id), "type": a.type, "label": a.label,
@@ -2964,17 +2959,15 @@ async def _insert_rule(db: Any, req: RuleModel) -> str:
         """INSERT INTO email_rules
              (id, account_id, name, instructions, enabled, automated,
               run_on_threads, conditional_operator, from_pattern, to_pattern,
-              subject_pattern, body_pattern, category_filter_type,
-              category_filters, system_type, sort_order)
+              subject_pattern, body_pattern, system_type, sort_order)
            VALUES (:id, :aid, :name, :instr, :enabled, :auto, :rot, :op,
-                   :fp, :tp, :sp, :bp, :cft, :cfs, :st, :so)"""
+                   :fp, :tp, :sp, :bp, :st, :so)"""
     ), {"id": rule_id, "aid": req.account_id, "name": req.name,
         "instr": req.instructions, "enabled": req.enabled,
         "auto": req.automated, "rot": req.run_on_threads,
         "op": req.conditional_operator,
         "fp": req.from_pattern, "tp": req.to_pattern, "sp": req.subject_pattern,
-        "bp": req.body_pattern, "cft": req.category_filter_type,
-        "cfs": req.category_filters, "st": req.system_type,
+        "bp": req.body_pattern, "st": req.system_type,
         "so": req.sort_order})
     await _replace_actions(db, rule_id, req.actions)
     return rule_id
@@ -3189,8 +3182,7 @@ async def update_rule(
                  automated = :auto, run_on_threads = :rot,
                  conditional_operator = :op,
                  from_pattern = :fp, to_pattern = :tp, subject_pattern = :sp,
-                 body_pattern = :bp, category_filter_type = :cft,
-                 category_filters = :cfs,
+                 body_pattern = :bp,
                  system_type = :st, sort_order = :so, updated_at = now()
                WHERE id = :rid"""
         ), {"rid": rule_id, "name": req.name, "instr": req.instructions,
@@ -3198,7 +3190,6 @@ async def update_rule(
             "rot": req.run_on_threads,
             "op": req.conditional_operator, "fp": req.from_pattern,
             "tp": req.to_pattern, "sp": req.subject_pattern, "bp": req.body_pattern,
-            "cft": req.category_filter_type, "cfs": req.category_filters,
             "st": req.system_type, "so": req.sort_order})
         await _replace_actions(db, rule_id, req.actions)
         await db.commit()
@@ -3378,31 +3369,6 @@ def _static_match(rule: dict[str, Any], email: dict[str, str]) -> bool | None:
     return all(checks) if rule.get("conditional_operator", "AND") == "AND" else any(checks)
 
 
-def _category_ok(rule: dict[str, Any], sender_category: str) -> bool:
-    """Whether the sender's category satisfies the rule's category condition."""
-    cft = rule.get("category_filter_type")
-    cfs = rule.get("category_filters") or []
-    if not cft or not cfs:
-        return True
-    sc = sender_category or "Unknown"
-    if cft == "INCLUDE":
-        return sc in cfs
-    if cft == "EXCLUDE":
-        return sc not in cfs
-    return True
-
-
-async def _sender_category(db: Any, account_id: str, sender_email: str) -> str:
-    """Look up a sender's assigned category, defaulting to 'Unknown'."""
-    if not sender_email:
-        return "Unknown"
-    row = (await db.execute(text(
-        "SELECT category FROM email_senders "
-        "WHERE account_id = :aid AND email = LOWER(:e)"
-    ), {"aid": account_id, "e": sender_email})).fetchone()
-    return (row.category if row and row.category else "Unknown")
-
-
 async def _load_rule_patterns(
     db: Any, account_id: str,
 ) -> dict[str, dict[str, list[tuple[str, str]]]]:
@@ -3460,9 +3426,9 @@ async def _match_email_to_rule(
 ) -> dict[str, Any] | None:
     """Return the first matching rule + reason, or None.
 
-    Evaluation order per rule: category condition (if any) must pass, then static
-    patterns (local), then NL instructions (one batched LLM call). Static/category
-    first keeps it cheap & deterministic.
+    Evaluation order per rule: static patterns (local) first, then NL
+    instructions (one batched LLM call). Static-first keeps it cheap &
+    deterministic.
     """
     rules = [r for r in await _load_rules(db, account_id) if r["enabled"]]
     if not rules:
@@ -3478,20 +3444,12 @@ async def _match_email_to_rule(
         if _patterns_included_rule(rule, patterns, email):
             return {"rule": rule, "reason": "Matched a learned pattern."}
 
-    # Resolve the sender's category once, only if a rule actually filters on it.
-    sender_category = "Unknown"
-    if any(r.get("category_filter_type") and r.get("category_filters") for r in rules):
-        sender_category = await _sender_category(db, account_id, email.get("from", ""))
-
     instruction_rules: list[dict[str, Any]] = []
     for rule in rules:
         if str(rule.get("id")) in excluded:
             continue
-        if not _category_ok(rule, sender_category):
-            continue
         sm = _static_match(rule, email)
         has_instr = bool((rule.get("instructions") or "").strip())
-        has_cat = bool(rule.get("category_filter_type") and rule.get("category_filters"))
         if has_instr:
             # Static (if any) must not contradict; let the LLM decide.
             if sm is not False:
@@ -3499,12 +3457,7 @@ async def _match_email_to_rule(
             continue
         if sm is True:
             return {"rule": rule, "reason": "Matched static conditions."}
-        if sm is False:
-            continue
-        # No static patterns and no instructions: a passing category filter alone
-        # is a match.
-        if has_cat:
-            return {"rule": rule, "reason": f"Matched category: {sender_category}."}
+        # No instructions and static didn't match → this rule doesn't apply.
 
     if instruction_rules:
         pick = await _llm_pick_rule(email, instruction_rules)
@@ -3520,8 +3473,8 @@ async def _match_email_to_rules_multi(
     """Multi-rule selection (inbox-zero parity): return ALL matching rules, not
     just the best one. Each item is {"rule": ..., "reason": ...}.
 
-    Static / category matches are collected locally; the LLM is asked once for
-    EVERY instruction rule that applies (via _llm_pick_rules). De-duped by id and
+    Static matches are collected locally; the LLM is asked once for EVERY
+    instruction rule that applies (via _llm_pick_rules). De-duped by id and
     returned in rule sort order.
     """
     rules = [r for r in await _load_rules(db, account_id) if r["enabled"]]
@@ -3530,10 +3483,6 @@ async def _match_email_to_rules_multi(
 
     patterns = await _load_rule_patterns(db, account_id)
     excluded = _patterns_excluded_rules(patterns, email)
-
-    sender_category = "Unknown"
-    if any(r.get("category_filter_type") and r.get("category_filters") for r in rules):
-        sender_category = await _sender_category(db, account_id, email.get("from", ""))
 
     matches: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -3556,21 +3505,14 @@ async def _match_email_to_rules_multi(
     for rule in rules:
         if str(rule.get("id")) in excluded or str(rule.get("id")) in seen:
             continue
-        if not _category_ok(rule, sender_category):
-            continue
         sm = _static_match(rule, email)
         has_instr = bool((rule.get("instructions") or "").strip())
-        has_cat = bool(rule.get("category_filter_type") and rule.get("category_filters"))
         if has_instr:
             if sm is not False:
                 instruction_rules.append(rule)
             continue
         if sm is True:
             _add(rule, "Matched static conditions.")
-        elif sm is False:
-            continue
-        elif has_cat:
-            _add(rule, f"Matched category: {sender_category}.")
 
     if instruction_rules:
         for pick in await _llm_pick_rules(email, instruction_rules):
@@ -3713,8 +3655,7 @@ async def rules_history(
                        er.status, er.automated, er.actions_taken, er.reason,
                        er.created_at, em.snippet,
                        r.instructions, r.from_pattern, r.to_pattern,
-                       r.subject_pattern, r.body_pattern, r.conditional_operator,
-                       r.category_filter_type, r.category_filters
+                       r.subject_pattern, r.body_pattern, r.conditional_operator
                 FROM email_executed_rules er
                 LEFT JOIN email_messages em ON er.message_id = em.id
                 LEFT JOIN email_rules r ON er.rule_id = r.id
@@ -3759,8 +3700,6 @@ async def rules_history(
                      "subject_pattern": r.subject_pattern,
                      "body_pattern": r.body_pattern,
                      "conditional_operator": r.conditional_operator or "AND",
-                     "category_filter_type": r.category_filter_type,
-                     "category_filters": list(r.category_filters or []),
                  } if r.rule_id else None,
                  "rule_actions": actions_by_rule.get(
                      str(r.rule_id) if r.rule_id else "", [])}

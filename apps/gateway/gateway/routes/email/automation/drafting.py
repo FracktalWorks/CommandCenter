@@ -117,6 +117,22 @@ async def _learn_from_sent(account_id: str, thread_id: str, sent_text: str) -> N
         await db.commit()
         _log.info("email.learned_pattern", account_id=account_id,
                   pattern=pattern[:80])
+        # Also remember the preference in Mem0 (keyed by the account owner) so it
+        # surfaces during future drafting retrieval, not just the patterns table.
+        try:
+            urow = (await db.execute(text(
+                "SELECT user_id FROM email_accounts WHERE id = :aid"
+            ), {"aid": account_id})).fetchone()
+            uid = (urow.user_id if urow else None) or "default"
+            from acb_memory import add_memories_background  # noqa: PLC0415
+            await add_memories_background(
+                uid,
+                [{"role": "assistant",
+                  "content": f"Email reply preference: {pattern}"}],
+                agent_id="email",
+            )
+        except Exception:  # noqa: BLE001
+            pass
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.learn_from_sent_failed", error=str(exc)[:160])
     finally:
@@ -437,17 +453,24 @@ async def _orchestrate_draft(
         context="\n\n".join(context_parts), user_email=user_email,
     )
 
-    # 3) Record the interaction so future drafts have more context.
+    # 3) Record this exchange in Mem0 (episodic, pgvector) so future drafts to
+    # this correspondent have context. Use add_memories_background — NOT
+    # add_episode, which targets Graphiti/Neo4j (disabled → silent no-op).
     try:
-        from acb_memory import add_episode  # noqa: PLC0415
-        await add_episode(
-            name=f"email-draft:{(user_email or 'user')[:24]}",
-            content=(
-                f"Drafted a reply to {email.get('from', '')} regarding "
-                f"'{email.get('subject', '')}'."
-            ),
-            source_description="email-reply-drafter",
-            group_id=user_email or "default",
+        from acb_memory import add_memories_background  # noqa: PLC0415
+        await add_memories_background(
+            user_email or "default",
+            [
+                {"role": "user",
+                 "content": (
+                     f"Email from {email.get('from', '')} — subject "
+                     f"'{email.get('subject', '')}': "
+                     f"{(email.get('body', '') or '')[:600]}"
+                 )},
+                {"role": "assistant",
+                 "content": f"I replied: {draft[:600]}"},
+            ],
+            agent_id="email",
         )
     except Exception:  # noqa: BLE001
         pass

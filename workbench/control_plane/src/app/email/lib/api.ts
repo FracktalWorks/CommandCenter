@@ -383,6 +383,18 @@ export async function triggerSync(accountId: string): Promise<{ ok: boolean }> {
   });
 }
 
+/** Force a COMPLETE re-sync from the provider. With purge=true, deletes local
+ *  messages first (for stale/corrupt local data) before re-fetching. */
+export async function resyncAccount(
+  accountId: string,
+  purge = false,
+): Promise<{ resynced: boolean; purged: boolean; messages_synced: number | null }> {
+  return gatewayFetch(
+    `/email/accounts/${accountId}/resync?purge=${purge ? "true" : "false"}`,
+    { method: "POST" },
+  );
+}
+
 // ── AI Chat ──────────────────────────────────────────────────────────────
 
 export interface AIChatRequest {

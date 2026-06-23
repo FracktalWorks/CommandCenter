@@ -1895,6 +1895,44 @@ async def trigger_sync(
         await db.close()
 
 
+@router.post("/accounts/{account_id}/resync")
+async def resync_account(
+    account_id: str,
+    purge: bool = Query(False),
+    user: UserContext = Depends(get_current_user),
+):
+    """Force a COMPLETE re-sync from the provider (not just an incremental sync).
+
+    Resets the sync cursor and re-fetches every folder, overwriting stale local
+    fields. With ``purge=true`` it first DELETES the account's local messages
+    (cascades attachments) before re-fetching — use this when local data is
+    corrupt or badly out of sync. Returns the sync result."""
+    db = await _get_db()
+    try:
+        own = (await db.execute(text(
+            "SELECT id FROM email_accounts WHERE id = :id AND user_id = :uid"
+        ), {"id": account_id, "uid": user.email or "anonymous"})).fetchone()
+        if not own:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if purge:
+            await db.execute(text(
+                "DELETE FROM email_messages WHERE account_id = :id"
+            ), {"id": account_id})
+        # Reset the cursor so the provider does a full sweep (defensive — sync is
+        # full-sweep regardless, but this also clears any stale delta token).
+        await db.execute(text(
+            "UPDATE email_accounts SET last_history_id = NULL, updated_at = now() "
+            "WHERE id = :id"
+        ), {"id": account_id})
+        await db.commit()
+    finally:
+        await db.close()
+    # Re-fetch from the provider via the standard sync path (full sweep).
+    result = await trigger_sync(SyncRequest(account_id=account_id), user)
+    synced = result.get("messages_synced") if isinstance(result, dict) else None
+    return {"resynced": True, "purged": purge, "messages_synced": synced}
+
+
 # ── AI Chat ──────────────────────────────────────────────────────────────
 
 @router.post("/ai/chat")

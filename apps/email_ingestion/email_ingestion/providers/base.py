@@ -225,6 +225,17 @@ class BaseEmailProvider(ABC):
         """
         return None
 
+    async def create_folder(self, name: str) -> EmailFolder:
+        """Create (or reuse) a folder named ``name`` and return it normalized.
+
+        Default raises NotImplementedError so callers can log and skip on
+        providers without a folder concept.  Outlook creates a mail folder;
+        Gmail creates a label; IMAP creates a mailbox.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support creating folders"
+        )
+
     async def list_labels(self) -> list[str]:
         """User-applicable label/category *names*.
 

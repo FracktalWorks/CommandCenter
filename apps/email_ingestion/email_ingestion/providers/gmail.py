@@ -410,6 +410,18 @@ class GmailProvider(BaseEmailProvider):
             return resp.json().get("id")
         return None
 
+    async def create_folder(self, name: str) -> EmailFolder:
+        """Gmail has labels, not folders — create (or reuse) a user label."""
+        if not name or not name.strip():
+            raise ValueError("Folder/label name is required")
+        name = name.strip()
+        label_id = await self._ensure_label_id(name)
+        if not label_id:
+            raise ValueError(f"Could not create Gmail label: {name!r}")
+        return EmailFolder(
+            provider_folder_id=label_id, name=name, type="user"
+        )
+
     async def set_labels(
         self,
         provider_message_id: str,

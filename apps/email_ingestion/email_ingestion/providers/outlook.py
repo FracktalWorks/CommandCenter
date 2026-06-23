@@ -23,6 +23,27 @@ from .base import (
     canonical_folder,
 )
 
+def _skiptoken(value: str | None) -> str | None:
+    """Return a bare Graph ``$skiptoken`` value.
+
+    ``list_messages`` surfaces Graph's ``@odata.nextLink`` (a full URL) as its
+    page token, but the paging param Graph expects is the bare ``$skiptoken``
+    embedded in that URL — feeding the whole URL back as ``$skipToken`` makes
+    Graph reject the request and paging never advances.  Accepts either a full
+    nextLink URL or an already-bare token and always returns the bare token.
+    """
+    if not value:
+        return None
+    if "://" not in value:
+        return value
+    from urllib.parse import parse_qs, urlparse
+
+    qs = parse_qs(urlparse(value).query)
+    # Graph spells it ``$skiptoken`` (lowercase) on the nextLink.
+    tok = qs.get("$skiptoken") or qs.get("$skipToken")
+    return tok[0] if tok else None
+
+
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
 GRAPH_SCOPES = [
     # offline_access is REQUIRED on refresh — without it Microsoft returns a new
@@ -121,22 +142,103 @@ class OutlookProvider(BaseEmailProvider):
         except Exception:
             return False
 
-    async def list_folders(self) -> list[EmailFolder]:
-        client = await self._get_client()
-        resp = await client.get("/me/mailFolders")
-        resp.raise_for_status()
-        data = resp.json()
+    @staticmethod
+    def _folder_from_graph(folder: dict[str, Any]) -> EmailFolder:
+        return EmailFolder(
+            provider_folder_id=folder["id"],
+            name=folder["displayName"],
+            type="system" if folder.get("wellKnownName") else "user",
+            message_count=folder.get("totalItemCount", 0),
+            unread_count=folder.get("unreadItemCount", 0),
+        )
 
+    async def list_folders(self) -> list[EmailFolder]:
+        """List ALL mail folders, including user-created and nested ones.
+
+        Graph's ``/me/mailFolders`` defaults to ~10 top-level folders and omits
+        children, so we request ``$top=200``, follow ``@odata.nextLink``, and
+        descend into ``childFolders`` (one level covers inbox-zero's flat set;
+        deeper nesting is followed only when a child reports its own children).
+        """
+        client = await self._get_client()
+        select = "id,displayName,wellKnownName,totalItemCount,unreadItemCount,childFolderCount"
+
+        async def _page(url: str, params: dict[str, Any] | None) -> list[dict[str, Any]]:
+            items: list[dict[str, Any]] = []
+            # First request uses params; subsequent ones follow the absolute
+            # @odata.nextLink URL verbatim (httpx keeps the client's auth header).
+            resp = await client.get(url, params=params)
+            while True:
+                resp.raise_for_status()
+                data = resp.json()
+                items.extend(data.get("value", []))
+                next_link = data.get("@odata.nextLink")
+                if not next_link:
+                    return items
+                resp = await client.get(next_link)
+
+        async def _descend(raw: dict[str, Any]) -> list[EmailFolder]:
+            out = [self._folder_from_graph(raw)]
+            if raw.get("childFolderCount"):
+                try:
+                    children = await _page(
+                        f"/me/mailFolders/{raw['id']}/childFolders",
+                        {"$top": 200, "$select": select},
+                    )
+                    for child in children:
+                        out.extend(await _descend(child))
+                except Exception:  # noqa: BLE001
+                    pass  # a forbidden subtree shouldn't drop the parent
+            return out
+
+        top = await _page("/me/mailFolders", {"$top": 200, "$select": select})
         folders: list[EmailFolder] = []
-        for folder in data.get("value", []):
-            folders.append(EmailFolder(
-                provider_folder_id=folder["id"],
-                name=folder["displayName"],
-                type="system" if folder.get("wellKnownName") else "user",
-                message_count=folder.get("totalItemCount", 0),
-                unread_count=folder.get("unreadItemCount", 0),
-            ))
+        for raw in top:
+            folders.extend(await _descend(raw))
         return folders
+
+    async def _get_or_create_folder_id(self, name: str) -> str | None:
+        """Return the Graph id of the folder named ``name``, creating it if absent.
+
+        Dedups by ``displayName`` and tolerates the create race
+        (``ErrorFolderExists`` / HTTP 409) by re-reading — mirrors upstream
+        inbox-zero's ``getOrCreateOutlookFolderIdByName``.
+        """
+        if not name or not name.strip():
+            return None
+        name = name.strip()
+        client = await self._get_client()
+        esc = name.replace("'", "''")
+
+        async def _find() -> str | None:
+            resp = await client.get(
+                "/me/mailFolders",
+                params={"$filter": f"displayName eq '{esc}'",
+                        "$select": "id,displayName", "$top": 1},
+            )
+            resp.raise_for_status()
+            vals = resp.json().get("value", [])
+            return vals[0]["id"] if vals else None
+
+        existing = await _find()
+        if existing:
+            return existing
+        resp = await client.post("/me/mailFolders", json={"displayName": name})
+        if resp.is_success:
+            return resp.json().get("id")
+        if resp.status_code == 409 or "ErrorFolderExists" in resp.text:
+            return await _find()
+        resp.raise_for_status()
+        return None
+
+    async def create_folder(self, name: str) -> EmailFolder:
+        """Create (or reuse) a top-level mail folder; return it normalized."""
+        folder_id = await self._get_or_create_folder_id(name)
+        if not folder_id:
+            raise ValueError(f"Could not create Outlook folder: {name!r}")
+        return EmailFolder(
+            provider_folder_id=folder_id, name=name.strip(), type="user"
+        )
 
     async def list_messages(
         self,
@@ -174,7 +276,7 @@ class OutlookProvider(BaseEmailProvider):
         if query:
             params["$search"] = f'"{query}"'
         if page_token:
-            params["$skipToken"] = page_token
+            params["$skiptoken"] = _skiptoken(page_token)
 
         resp = await client.get(url, params=params)
         resp.raise_for_status()
@@ -190,7 +292,9 @@ class OutlookProvider(BaseEmailProvider):
             msg.folder = canon
             messages.append(msg)
 
-        next_token = data.get("@odata.nextLink")
+        # Surface a BARE $skiptoken (not the full nextLink URL) so it can be fed
+        # straight back into ``page_token`` above.
+        next_token = _skiptoken(data.get("@odata.nextLink"))
         return messages, next_token
 
     async def get_message(self, provider_message_id: str) -> EmailMessage:
@@ -429,7 +533,12 @@ class OutlookProvider(BaseEmailProvider):
     async def move_to_folder(
         self, provider_message_id: str, folder: str
     ) -> str | None:
+        # Well-known system folders use their Graph well-known name; any other
+        # name is treated as a user folder and created on demand (inbox-zero
+        # parity — promo/automation rules file into same-named folders).
         target = self._MOVE_TARGETS.get((folder or "").lower())
+        if not target:
+            target = await self._get_or_create_folder_id(folder)
         if not target:
             return None
         client = await self._get_client()
@@ -519,6 +628,32 @@ class OutlookProvider(BaseEmailProvider):
         )
         patch.raise_for_status()
 
+    # Initial full sweep depth per folder (≈ pages × max_results messages kept
+    # locally per folder). Deeper history is pulled lazily by the /backfill path.
+    INITIAL_SYNC_MAX_PAGES = 10
+
+    async def _sweep_folder(
+        self,
+        folder: str,
+        max_results: int,
+        canonical_override: str | None = None,
+    ) -> list[EmailMessage]:
+        """Page a single folder up to ``INITIAL_SYNC_MAX_PAGES`` and return all
+        messages, following Graph's ``@odata.nextLink`` token."""
+        out: list[EmailMessage] = []
+        token: str | None = None
+        for _ in range(self.INITIAL_SYNC_MAX_PAGES):
+            msgs, token = await self.list_messages(
+                folder=folder,
+                max_results=max_results,
+                page_token=token,
+                canonical_override=canonical_override,
+            )
+            out.extend(msgs)
+            if not token:
+                break
+        return out
+
     async def sync_messages(
         self,
         history_id: str | None = None,
@@ -578,14 +713,16 @@ class OutlookProvider(BaseEmailProvider):
             )
         else:
             # Initial sync — fetch all standard folders so messages land in the
-            # right place in the UI (not just inbox/sent).
+            # right place in the UI (not just inbox/sent).  Page each folder up to
+            # INITIAL_SYNC_MAX_PAGES so a fresh connect lands a deep window of
+            # history (≈ pages × max_results / folder), not just the newest page.
+            # Going further back stays on-demand via the /backfill endpoint.
             messages = []
             for folder_key in ("inbox", "sent", "drafts", "archive", "junk", "trash"):
                 try:
-                    folder_msgs, _ = await self.list_messages(
-                        folder=folder_key, max_results=max_results
+                    messages.extend(
+                        await self._sweep_folder(folder_key, max_results)
                     )
-                    messages.extend(folder_msgs)
                 except Exception:
                     # A missing/forbidden folder shouldn't abort the whole sync.
                     continue
@@ -604,12 +741,9 @@ class OutlookProvider(BaseEmailProvider):
                 if canon in ("inbox", "sent", "drafts", "trash", "junk", "archive"):
                     continue
                 try:
-                    folder_msgs, _ = await self.list_messages(
-                        folder=f.provider_folder_id,
-                        max_results=max_results,
-                        canonical_override=canon,
-                    )
-                    messages.extend(folder_msgs)
+                    messages.extend(await self._sweep_folder(
+                        f.provider_folder_id, max_results, canonical_override=canon
+                    ))
                 except Exception:
                     continue
 

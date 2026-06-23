@@ -25,7 +25,7 @@ async def _run_list(label):
     db = AsyncMock()
     db.execute.side_effect = fake_execute
     user = SimpleNamespace(email="u@example.com")
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)):
+    with patch.object(m.transport.messages, "_get_db", AsyncMock(return_value=db)):
         resp = await m.list_messages(
             account_id="acc-1", folder="inbox", label=label,
             query=None, thread_id=None, page=1, page_size=50, user=user,

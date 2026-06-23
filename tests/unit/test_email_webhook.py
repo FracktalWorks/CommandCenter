@@ -49,7 +49,7 @@ async def test_validation_handshake_echoes_token() -> None:
 async def test_unknown_subscription_queues_nothing() -> None:
     req = _Req(body={"value": [{"subscriptionId": "sub-x", "clientState": "cs"}]})
     bg = BackgroundTasks()
-    with patch.object(m, "_get_db", AsyncMock(return_value=_mock_db(None))):
+    with patch.object(m.transport.sync, "_get_db", AsyncMock(return_value=_mock_db(None))):
         resp = await m.microsoft_webhook(req, bg)
     assert resp.status_code == 202
     assert len(bg.tasks) == 0
@@ -61,7 +61,7 @@ async def test_known_subscription_queues_one_sync() -> None:
     ]})
     bg = BackgroundTasks()
     row = SimpleNamespace(id="acc-1", webhook_client_state="cs-match")
-    with patch.object(m, "_get_db", AsyncMock(return_value=_mock_db(row))):
+    with patch.object(m.transport.sync, "_get_db", AsyncMock(return_value=_mock_db(row))):
         resp = await m.microsoft_webhook(req, bg)
     assert resp.status_code == 202
     assert len(bg.tasks) == 1
@@ -75,7 +75,7 @@ async def test_client_state_mismatch_is_ignored() -> None:
     ]})
     bg = BackgroundTasks()
     row = SimpleNamespace(id="acc-1", webhook_client_state="cs-correct")
-    with patch.object(m, "_get_db", AsyncMock(return_value=_mock_db(row))):
+    with patch.object(m.transport.sync, "_get_db", AsyncMock(return_value=_mock_db(row))):
         resp = await m.microsoft_webhook(req, bg)
     assert resp.status_code == 202
     assert len(bg.tasks) == 0  # spoofed clientState rejected

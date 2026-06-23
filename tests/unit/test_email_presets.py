@@ -23,11 +23,11 @@ def test_preset_set_matches_inbox_zero_system_rules() -> None:
 async def test_install_presets_creates_only_missing() -> None:
     db = AsyncMock()
     user = SimpleNamespace(email="u@example.com")
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m, "_assert_account_owner", AsyncMock()), \
-            patch.object(m, "_load_rules",
+    with patch.object(m.automation.rules, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m.automation.rules, "_assert_account_owner", AsyncMock()), \
+            patch.object(m.automation.rules, "_load_rules",
                          AsyncMock(return_value=[{"name": "To Reply"}])), \
-            patch.object(m, "_replace_actions", AsyncMock()):
+            patch.object(m.automation.rules, "_replace_actions", AsyncMock()):
         res = await m.install_preset_rules(account_id="acc-1", user=user)
     assert "To Reply" not in res["installed"]   # already present → skipped
     assert "FYI" in res["installed"]
@@ -40,9 +40,9 @@ async def test_install_presets_idempotent_when_all_present() -> None:
     db = AsyncMock()
     user = SimpleNamespace(email="u@example.com")
     all_rules = [{"name": p["name"]} for p in m._PRESET_RULES]
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m, "_assert_account_owner", AsyncMock()), \
-            patch.object(m, "_load_rules", AsyncMock(return_value=all_rules)), \
-            patch.object(m, "_replace_actions", AsyncMock()):
+    with patch.object(m.automation.rules, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m.automation.rules, "_assert_account_owner", AsyncMock()), \
+            patch.object(m.automation.rules, "_load_rules", AsyncMock(return_value=all_rules)), \
+            patch.object(m.automation.rules, "_replace_actions", AsyncMock()):
         res = await m.install_preset_rules(account_id="acc-1", user=user)
     assert res["installed"] == []

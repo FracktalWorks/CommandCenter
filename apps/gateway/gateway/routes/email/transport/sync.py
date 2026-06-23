@@ -1,0 +1,511 @@
+"""Transport · sync — manual/initial sync, resync, and the Microsoft Graph
+webhook + change-subscription lifecycle."""
+
+from __future__ import annotations
+
+import json
+import os
+import secrets
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
+
+from acb_auth import UserContext, get_current_user
+from acb_common import get_settings
+from fastapi import BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
+from gateway.routes.email.core import (
+    MAX_BODY_HTML_BYTES,
+    MAX_BODY_TEXT_BYTES,
+    _get_db,
+    _instantiate_provider,
+    _log,
+    _persist_rotated_creds,
+    _truncate_body,
+    router,
+)
+from pydantic import BaseModel
+from sqlalchemy import text
+
+
+class SyncRequest(BaseModel):
+    account_id: str
+
+
+@router.post("/sync")
+async def trigger_sync(
+    req: SyncRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Trigger a manual email sync for an account.
+
+    Calls the email provider's incremental sync and persists new/updated
+    messages to the email_messages table.  Deleted messages are moved to
+    TRASH folder locally.
+    """
+    db = await _get_db()
+    try:
+        result = await db.execute(
+            text(
+                """SELECT id, provider, credentials_encrypted, last_history_id
+                   FROM email_accounts
+                   WHERE id = :id AND user_id = :user_id"""
+            ),
+            {"id": req.account_id, "user_id": user.email or "anonymous"},
+        )
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        # Update sync status to 'syncing'
+        await db.execute(
+            text(
+                """UPDATE email_accounts
+                   SET sync_status = 'syncing', updated_at = now()
+                   WHERE id = :id"""
+            ),
+            {"id": req.account_id},
+        )
+        await db.commit()
+
+        # Create sync log entry
+        sync_log_result = await db.execute(
+            text(
+                """INSERT INTO email_sync_log (account_id, started_at, status)
+                   VALUES (:id, now(), 'running')
+                   RETURNING id"""
+            ),
+            {"id": req.account_id},
+        )
+        sync_log_id = sync_log_result.fetchone().id
+        await db.commit()
+
+        # Decrypt credentials
+        from acb_llm.key_store import get_key_store
+        store = get_key_store()
+        creds = json.loads(store.decrypt(row.credentials_encrypted))
+
+        # Instantiate provider
+        if row.provider == "gmail":
+            from email_ingestion.providers.gmail import GmailProvider
+            provider = GmailProvider(creds)
+        elif row.provider == "microsoft":
+            from email_ingestion.providers.outlook import OutlookProvider
+            provider = OutlookProvider(creds)
+        elif row.provider == "imap":
+            from email_ingestion.providers.imap import IMAPProvider
+            provider = IMAPProvider(creds)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Sync not supported for provider: {row.provider}"
+            )
+
+        try:
+            if not await provider.authenticate():
+                raise HTTPException(status_code=401, detail="Auth failed")
+
+            sync_result = await provider.sync_messages(
+                history_id=row.last_history_id,
+                max_results=100,
+            )
+
+            # Persist fetched messages to email_messages
+            persisted_count = 0
+            skipped_count = 0
+            for msg in sync_result.messages:
+                if msg.subject == "[DELETED]":
+                    # Message was deleted on provider — move to TRASH locally
+                    await db.execute(
+                        text(
+                            """UPDATE email_messages
+                               SET folder = 'TRASH', updated_at = now()
+                               WHERE account_id = :account_id
+                                 AND provider_message_id = :provider_id"""
+                        ),
+                        {
+                            "account_id": req.account_id,
+                            "provider_id": msg.provider_message_id,
+                        },
+                    )
+                    persisted_count += 1
+                else:
+                    # Upsert message
+                    await db.execute(
+                        text(
+                            """INSERT INTO email_messages
+                               (id, account_id, provider_message_id, thread_id,
+                                folder, labels, categories, importance,
+                                from_address, to_addresses,
+                                cc_addresses, bcc_addresses, subject,
+                                body_text, body_html, snippet,
+                                has_attachments, is_read, is_starred, is_flagged,
+                                unsubscribe_link, received_at, synced_at)
+                               VALUES
+                               (:id, :account_id, :provider_id, :thread_id,
+                                :folder, :labels, :categories, :importance,
+                                :from_addr, :to_addrs,
+                                :cc_addrs, :bcc_addrs, :subject,
+                                :body_text, :body_html, :snippet,
+                                :has_attachments, :is_read, :is_starred, :is_flagged,
+                                :unsubscribe_link, :received_at, now())
+                               ON CONFLICT (account_id, provider_message_id)
+                               DO UPDATE SET
+                                thread_id = EXCLUDED.thread_id,
+                                folder = EXCLUDED.folder,
+                                labels = EXCLUDED.labels,
+                                categories = EXCLUDED.categories,
+                                importance = EXCLUDED.importance,
+                                from_address = EXCLUDED.from_address,
+                                to_addresses = EXCLUDED.to_addresses,
+                                cc_addresses = EXCLUDED.cc_addresses,
+                                bcc_addresses = EXCLUDED.bcc_addresses,
+                                subject = EXCLUDED.subject,
+                                body_text = EXCLUDED.body_text,
+                                body_html = EXCLUDED.body_html,
+                                snippet = EXCLUDED.snippet,
+                                has_attachments = EXCLUDED.has_attachments,
+                                is_read = EXCLUDED.is_read,
+                                is_starred = EXCLUDED.is_starred,
+                                is_flagged = EXCLUDED.is_flagged,
+                                unsubscribe_link = COALESCE(
+                                    EXCLUDED.unsubscribe_link,
+                                    email_messages.unsubscribe_link),
+                                received_at = EXCLUDED.received_at,
+                                updated_at = now()"""
+                        ),
+                        {
+                            "id": str(uuid4()),
+                            "account_id": req.account_id,
+                            "provider_id": msg.provider_message_id,
+                            "thread_id": msg.thread_id,
+                            "folder": msg.folder or "INBOX",
+                            "labels": msg.labels,
+                            "categories": getattr(msg, "categories", []) or [],
+                            "importance": getattr(msg, "importance", "normal") or "normal",
+                            "from_addr": json.dumps({
+                                "name": msg.from_address.name if msg.from_address else "",
+                                "email": msg.from_address.email if msg.from_address else "",
+                            }),
+                            "to_addrs": json.dumps([
+                                {"name": a.name, "email": a.email}
+                                for a in msg.to_addresses
+                            ]),
+                            "cc_addrs": json.dumps([
+                                {"name": a.name, "email": a.email}
+                                for a in msg.cc_addresses
+                            ]),
+                            "bcc_addrs": json.dumps([
+                                {"name": a.name, "email": a.email}
+                                for a in msg.bcc_addresses
+                            ]),
+                            "subject": msg.subject,
+                            "body_text": _truncate_body(msg.body_text, MAX_BODY_TEXT_BYTES),
+                            "body_html": _truncate_body(
+                                msg.body_html, MAX_BODY_HTML_BYTES
+                            ) if msg.body_html else None,
+                                            "snippet": msg.snippet[:200] if msg.snippet else "",
+                            "has_attachments": msg.has_attachments,
+                            "is_read": msg.is_read,
+                            "is_starred": msg.is_starred,
+                            "is_flagged": msg.is_flagged,
+                            "unsubscribe_link": getattr(
+                                msg, "unsubscribe_link", None),
+                            "body_truncated": (
+                                len(msg.body_text.encode("utf-8", errors="replace"))
+                                > MAX_BODY_TEXT_BYTES
+                                or (
+                                    bool(msg.body_html)
+                                    and len(
+                                        (msg.body_html or "").encode(
+                                            "utf-8", errors="replace"
+                                        )
+                                    )
+                                    > MAX_BODY_HTML_BYTES
+                                )
+                            ),
+                            "received_at": msg.received_at,
+                        },
+                    )
+                    persisted_count += 1
+
+                    # Persist attachment metadata
+                    for att in msg.attachments:
+                        await db.execute(
+                            text(
+                                """INSERT INTO email_attachments
+                                   (message_id, filename, mime_type, size_bytes,
+                                    provider_attachment_id)
+                                   VALUES (
+                                    (SELECT id FROM email_messages
+                                     WHERE account_id = :account_id
+                                       AND provider_message_id = :provider_id),
+                                    :filename, :mime_type, :size_bytes,
+                                    :provider_attachment_id
+                                   )
+                                   ON CONFLICT DO NOTHING"""
+                            ),
+                            {
+                                "account_id": req.account_id,
+                                "provider_id": msg.provider_message_id,
+                                "filename": att.filename,
+                                "mime_type": att.mime_type,
+                                "size_bytes": att.size_bytes,
+                                "provider_attachment_id": att.provider_attachment_id,
+                            },
+                        )
+
+            await db.commit()
+
+            # Persist refreshed OAuth tokens (access/refresh) if the provider
+            # rotated them during this sync, so the next sync doesn't reuse a
+            # stale token.
+            if provider.credentials_dirty():
+                await db.execute(
+                    text(
+                        """UPDATE email_accounts
+                           SET credentials_encrypted = :creds, updated_at = now()
+                           WHERE id = :id"""
+                    ),
+                    {
+                        "id": req.account_id,
+                        "creds": store.encrypt(
+                            json.dumps(provider.export_credentials())
+                        ),
+                    },
+                )
+
+            # Update account sync state
+            await db.execute(
+                text(
+                    """UPDATE email_accounts
+                       SET sync_status = 'idle',
+                           last_synced_at = now(),
+                           last_history_id = :history_id,
+                           sync_error = NULL,
+                           updated_at = now()
+                       WHERE id = :id"""
+                ),
+                {
+                    "id": req.account_id,
+                    "history_id": sync_result.new_history_id,
+                },
+            )
+
+            # Mark sync log as success
+            await db.execute(
+                text(
+                    """UPDATE email_sync_log
+                       SET status = 'success',
+                           completed_at = now(),
+                           messages_synced = :synced,
+                           messages_skipped = :skipped,
+                           provider_history_id = :history_id
+                       WHERE id = :log_id"""
+                ),
+                {
+                    "log_id": sync_log_id,
+                    "synced": persisted_count,
+                    "skipped": skipped_count,
+                    "history_id": sync_result.new_history_id,
+                },
+            )
+            await db.commit()
+
+            return {
+                "ok": True,
+                "messages_synced": persisted_count,
+                "messages_skipped": skipped_count,
+            }
+        except Exception as e:
+            # Update account to error state
+            await db.execute(
+                text(
+                    """UPDATE email_accounts
+                       SET sync_status = 'error',
+                           sync_error = :error,
+                           updated_at = now()
+                       WHERE id = :id"""
+                ),
+                {"id": req.account_id, "error": str(e)},
+            )
+            # Mark sync log as error
+            await db.execute(
+                text(
+                    """UPDATE email_sync_log
+                       SET status = 'error',
+                           completed_at = now(),
+                           error_message = :error
+                       WHERE id = :log_id"""
+                ),
+                {"log_id": sync_log_id, "error": str(e)},
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Sync failed: {e}"
+            )
+    finally:
+        await db.close()
+
+
+@router.post("/accounts/{account_id}/resync")
+async def resync_account(
+    account_id: str,
+    purge: bool = Query(False),
+    user: UserContext = Depends(get_current_user),
+):
+    """Force a COMPLETE re-sync from the provider (not just an incremental sync).
+
+    Resets the sync cursor and re-fetches every folder, overwriting stale local
+    fields. With ``purge=true`` it first DELETES the account's local messages
+    (cascades attachments) before re-fetching — use this when local data is
+    corrupt or badly out of sync. Returns the sync result."""
+    db = await _get_db()
+    try:
+        own = (await db.execute(text(
+            "SELECT id FROM email_accounts WHERE id = :id AND user_id = :uid"
+        ), {"id": account_id, "uid": user.email or "anonymous"})).fetchone()
+        if not own:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if purge:
+            await db.execute(text(
+                "DELETE FROM email_messages WHERE account_id = :id"
+            ), {"id": account_id})
+        # Reset the cursor so the provider does a full sweep (defensive — sync is
+        # full-sweep regardless, but this also clears any stale delta token).
+        await db.execute(text(
+            "UPDATE email_accounts SET last_history_id = NULL, updated_at = now() "
+            "WHERE id = :id"
+        ), {"id": account_id})
+        await db.commit()
+    finally:
+        await db.close()
+    # Re-fetch from the provider via the standard sync path (full sweep).
+    result = await trigger_sync(SyncRequest(account_id=account_id), user)
+    synced = result.get("messages_synced") if isinstance(result, dict) else None
+    return {"resynced": True, "purged": purge, "messages_synced": synced}
+
+
+async def _webhook_sync(account_id: str) -> None:
+    """Triggered by a Graph notification: incremental sync + auto-run rules."""
+    try:
+        from email_ingestion.scheduler import (  # noqa: PLC0415
+            _maybe_auto_run_rules,
+            _sync_account,
+        )
+        res = await _sync_account(account_id)
+        if isinstance(res, dict) and res.get("synced", 0):
+            await _maybe_auto_run_rules(account_id)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.webhook_sync_failed", account_id=account_id,
+                     error=str(exc)[:200])
+
+
+@router.api_route("/webhook/microsoft", methods=["GET", "POST"])
+async def microsoft_webhook(request: Request, background: BackgroundTasks):
+    """Public Microsoft Graph change-notification endpoint (no auth).
+
+    Handles the validation handshake (echo validationToken) and incoming
+    notifications (validate clientState → background incremental sync)."""
+    token = request.query_params.get("validationToken")
+    if token:
+        return PlainTextResponse(content=token, status_code=200)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return PlainTextResponse("", status_code=202)
+    notifications = body.get("value", []) if isinstance(body, dict) else []
+    affected: set[str] = set()
+    for n in notifications:
+        if not isinstance(n, dict):
+            continue
+        sub_id = n.get("subscriptionId")
+        client_state = n.get("clientState")
+        if not sub_id:
+            continue
+        db = await _get_db()
+        try:
+            row = (await db.execute(text(
+                "SELECT id, webhook_client_state FROM email_accounts "
+                "WHERE webhook_subscription_id = :sid"
+            ), {"sid": sub_id})).fetchone()
+        finally:
+            await db.close()
+        if not row:
+            continue
+        if row.webhook_client_state and client_state != row.webhook_client_state:
+            _log.warning("email.webhook_bad_client_state", sub=str(sub_id)[:12])
+            continue
+        affected.add(str(row.id))
+    for aid in affected:
+        background.add_task(_webhook_sync, aid)
+    return PlainTextResponse("", status_code=202)
+
+
+async def _ensure_subscription(account_id: str) -> None:
+    """Create or renew the account's Graph push subscription (Microsoft only)."""
+    public = (
+        os.environ.get("GATEWAY_PUBLIC_URL", "")
+        or getattr(get_settings(), "gateway_public_url", "")
+    ).rstrip("/")
+    if not public:
+        return
+    db = await _get_db()
+    try:
+        row = (await db.execute(text(
+            """SELECT provider, credentials_encrypted, webhook_subscription_id,
+                      webhook_client_state, webhook_expires_at
+               FROM email_accounts WHERE id = :id"""
+        ), {"id": account_id})).fetchone()
+        if not row or row.provider != "microsoft":
+            return
+        now = datetime.now(timezone.utc)
+        if (row.webhook_subscription_id and row.webhook_expires_at
+                and row.webhook_expires_at > now + timedelta(hours=12)):
+            return  # still valid, not expiring soon
+
+        from acb_llm.key_store import get_key_store  # noqa: PLC0415
+        store = get_key_store()
+        creds = json.loads(store.decrypt(row.credentials_encrypted))
+        provider = _instantiate_provider("microsoft", creds)
+        if not await provider.authenticate():
+            return
+        notify_url = f"{public}/email/webhook/microsoft"
+        client_state = row.webhook_client_state or secrets.token_urlsafe(24)
+
+        data = None
+        sub_id = row.webhook_subscription_id
+        if sub_id:
+            try:
+                data = await provider.renew_subscription(sub_id)
+            except Exception:  # noqa: BLE001
+                data = None
+        if data is None:
+            data = await provider.create_subscription(notify_url, client_state)
+            sub_id = data.get("id")
+        # Graph returns expirationDateTime as an ISO string; asyncpg needs a
+        # real datetime for the TIMESTAMPTZ column.
+        exp_raw = data.get("expirationDateTime")
+        exp_dt = None
+        if exp_raw:
+            try:
+                exp_dt = datetime.fromisoformat(
+                    str(exp_raw).replace("Z", "+00:00")
+                )
+            except Exception:  # noqa: BLE001
+                exp_dt = None
+        await _persist_rotated_creds(db, store, account_id, provider)
+        await db.execute(text(
+            """UPDATE email_accounts
+               SET webhook_subscription_id = :sid, webhook_client_state = :cs,
+                   webhook_expires_at = :exp, updated_at = now()
+               WHERE id = :id"""
+        ), {"id": account_id, "sid": sub_id, "cs": client_state, "exp": exp_dt})
+        await db.commit()
+        _log.info("email.subscription_ready", account_id=account_id,
+                  sub=str(sub_id)[:12], expires=exp_raw)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.subscription_failed", account_id=account_id,
+                     error=str(exc)[:200])
+    finally:
+        await db.close()

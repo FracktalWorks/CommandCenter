@@ -27,8 +27,8 @@ async def test_categorizes_uncategorized_senders_and_commits() -> None:
     ])
     llm = AsyncMock(return_value={"news@a.com": "Newsletter",
                                   "sales@b.com": "Marketing"})
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m, "_llm_categorize_senders", llm):
+    with patch.object(m.automation.senders, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m.automation.senders, "_llm_categorize_senders", llm):
         await m._categorize_senders_job("acc-1", 25)
     llm.assert_awaited_once()
     # 1 SELECT + 2 INSERTs.
@@ -39,8 +39,8 @@ async def test_categorizes_uncategorized_senders_and_commits() -> None:
 async def test_no_llm_cost_when_nothing_to_categorize() -> None:
     db = _mock_db([])
     llm = AsyncMock()
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m, "_llm_categorize_senders", llm):
+    with patch.object(m.automation.senders, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m.automation.senders, "_llm_categorize_senders", llm):
         await m._categorize_senders_job("acc-1", 25)
     llm.assert_not_awaited()        # no senders → no LLM call
     db.commit.assert_not_awaited()  # nothing written
@@ -52,7 +52,7 @@ async def test_failure_during_job_is_swallowed_and_cleans_up() -> None:
     # sync loop wraps this call in its own try/except.)
     db = _mock_db([SimpleNamespace(email="x@a.com", name="X", subjects=[])])
     llm = AsyncMock(side_effect=RuntimeError("llm down"))
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m, "_llm_categorize_senders", llm):
+    with patch.object(m.automation.senders, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m.automation.senders, "_llm_categorize_senders", llm):
         await m._categorize_senders_job("acc-1", 25)  # must not raise
     db.close.assert_awaited()

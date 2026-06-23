@@ -38,10 +38,10 @@ async def test_classify_threads_awaiting_for_sent_and_ai_for_inbound() -> None:
     def rec(_db, _aid, tid, status, *_a):
         recorded.append((tid, status))
 
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m, "_upsert_thread_status",
+    with patch.object(m.automation.replyzero, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m.automation.replyzero, "_upsert_thread_status",
                          AsyncMock(side_effect=rec)), \
-            patch.object(m, "_llm_needs_reply",
+            patch.object(m.automation.replyzero, "_llm_needs_reply",
                          AsyncMock(return_value={0: {"needs": True,
                                                      "reason": "asks a question"}})):
         await m._maybe_classify_threads("acc-1")
@@ -64,11 +64,11 @@ async def test_classify_threads_marks_fyi_when_no_reply_needed() -> None:
     db.execute.side_effect = [latest_res, existing_res]
     recorded: list[tuple[str, str]] = []
 
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m, "_upsert_thread_status",
+    with patch.object(m.automation.replyzero, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m.automation.replyzero, "_upsert_thread_status",
                          AsyncMock(side_effect=lambda *a: recorded.append(
                              (a[2], a[3])))), \
-            patch.object(m, "_llm_needs_reply",
+            patch.object(m.automation.replyzero, "_llm_needs_reply",
                          AsyncMock(return_value={0: {"needs": False,
                                                      "reason": "receipt"}})):
         await m._maybe_classify_threads("acc-1")
@@ -90,8 +90,8 @@ async def test_classify_skips_unchanged_threads() -> None:
     db = AsyncMock()
     db.execute.side_effect = [latest_res, existing_res]
     llm = AsyncMock()
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m, "_upsert_thread_status", AsyncMock()), \
-            patch.object(m, "_llm_needs_reply", llm):
+    with patch.object(m.automation.replyzero, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m.automation.replyzero, "_upsert_thread_status", AsyncMock()), \
+            patch.object(m.automation.replyzero, "_llm_needs_reply", llm):
         await m._maybe_classify_threads("acc-1")
     llm.assert_not_awaited()  # nothing changed → no LLM cost

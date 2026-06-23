@@ -930,8 +930,22 @@ async def _apply_rule_actions(
                 await db.execute(text("UPDATE email_messages SET is_starred=true, updated_at=now() WHERE id=:id"), {"id": message_id})
                 await provider.apply_flags(provider_msg_id, is_starred=True)
             elif t == "MOVE_FOLDER" and a.get("label"):
-                await db.execute(text("UPDATE email_messages SET folder=:f, updated_at=now() WHERE id=:id"), {"id": message_id, "f": a["label"].lower()})
-                await provider.move_to_folder(provider_msg_id, a["label"].lower())
+                # Store the canonical (lowercased) key locally, but hand the
+                # ORIGINAL-CASE name to the provider so a created folder reads
+                # "Cold Email", not "cold email".
+                from email_ingestion.providers.base import canonical_folder  # noqa: PLC0415
+                dest = a["label"].strip()
+                canon = canonical_folder(dest)
+                await db.execute(text("UPDATE email_messages SET folder=:f, updated_at=now() WHERE id=:id"), {"id": message_id, "f": canon})
+                new_pid = await provider.move_to_folder(provider_msg_id, dest)
+                if new_pid:
+                    # Outlook /move re-keys the message — keep follow-up actions valid.
+                    await db.execute(text("UPDATE email_messages SET provider_message_id=:pid WHERE id=:id"), {"id": message_id, "pid": new_pid})
+                    provider_msg_id = new_pid
+                elif canon not in ("inbox", "sent", "drafts", "trash", "junk", "archive"):
+                    # A user folder that produced no move id usually means the
+                    # provider couldn't resolve/create it — surface it.
+                    _log.info("email.move_folder_noop", account_id=account_id, folder=canon)
             elif t == "LABEL" and a.get("label"):
                 # label_ai: the label is an AI prompt ({{...}}) resolved per-email.
                 lbl = a["label"]

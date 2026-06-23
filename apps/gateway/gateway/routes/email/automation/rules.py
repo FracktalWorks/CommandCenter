@@ -122,46 +122,84 @@ async def list_rules(
         await db.close()
 
 
+# Default inbox-zero rule set. Each preset carries a provider-agnostic
+# ``category_action`` plus a Microsoft/Outlook override (``category_action_ms``),
+# mirroring upstream inbox-zero's ``categoryAction`` / ``categoryActionMicrosoft``
+# (reference/.../utils/rule/consts.ts). On Outlook, "cleanup" categories file the
+# mail into a same-named FOLDER; on Gmail they apply a LABEL. "Action" categories
+# (To Reply / Awaiting Reply / FYI / Actioned / Calendar) stay LABEL/category on
+# both so they remain in the inbox. ``extra`` holds non-categorization actions.
+#
+# category_action values: "label" | "label_archive" | "move_folder" |
+#                         "move_folder_archive"
 _PRESET_RULES: list[dict[str, Any]] = [
     {"name": "To Reply", "instructions": "Emails I need to respond to.",
-     "run_on_threads": True,
-     "actions": [{"type": "LABEL", "label": "To Reply"}, {"type": "DRAFT_EMAIL"}]},
+     "run_on_threads": True, "category_action": "label",
+     "extra": [{"type": "DRAFT_EMAIL"}]},
     {"name": "Awaiting Reply", "run_on_threads": True,
      "instructions": "Threads where I've already replied and am now waiting to "
                      "hear back from the other person.",
-     "actions": [{"type": "LABEL", "label": "Awaiting Reply"}]},
+     "category_action": "label"},
     {"name": "Actioned", "run_on_threads": True,
      "instructions": "Emails I've already handled or replied to that need no "
                      "further action from me.",
-     "actions": [{"type": "LABEL", "label": "Actioned"}]},
+     "category_action": "label"},
     {"name": "FYI", "run_on_threads": True,
      "instructions": "Important emails I should know about, but don't need to "
                      "reply to.",
-     "actions": [{"type": "LABEL", "label": "FYI"}]},
+     "category_action": "label"},
     {"name": "Newsletter",
      "instructions": "Newsletters: regular content from publications, blogs, or "
                      "services I've subscribed to.",
-     "actions": [{"type": "LABEL", "label": "Newsletter"}]},
+     "category_action": "label", "category_action_ms": "move_folder"},
     {"name": "Marketing",
      "instructions": "Marketing: promotional emails about products, services, "
                      "sales, or offers.",
-     "actions": [{"type": "LABEL", "label": "Marketing"}, {"type": "ARCHIVE"}]},
+     "category_action": "label_archive",
+     "category_action_ms": "move_folder_archive"},
     {"name": "Calendar",
      "instructions": "Calendar: any email related to scheduling, meeting "
                      "invites, or calendar notifications.",
-     "actions": [{"type": "LABEL", "label": "Calendar"}]},
+     "category_action": "label"},
     {"name": "Receipt",
      "instructions": "Receipts: purchase confirmations, payment receipts, "
                      "transaction records or invoices.",
-     "actions": [{"type": "LABEL", "label": "Receipt"}]},
+     "category_action": "label", "category_action_ms": "move_folder"},
     {"name": "Notification",
      "instructions": "Notifications: alerts, status updates, or system messages.",
-     "actions": [{"type": "LABEL", "label": "Notification"}]},
+     "category_action": "label", "category_action_ms": "move_folder"},
     {"name": "Cold Email",
      "instructions": "Cold emails: unsolicited sales pitches and outreach from "
                      "people or companies I have no prior relationship with.",
-     "actions": [{"type": "LABEL", "label": "Cold Email"}, {"type": "ARCHIVE"}]},
+     "category_action": "label_archive",
+     "category_action_ms": "move_folder_archive"},
 ]
+
+
+def _actions_for_preset(preset: dict[str, Any], provider: str) -> list[dict[str, Any]]:
+    """Resolve a preset's category_action into concrete actions for a provider.
+
+    On Outlook (``provider == "microsoft"``) the ``category_action_ms`` override
+    applies, turning cleanup categories into folder moves; otherwise the base
+    ``category_action`` (label-based) is used. ``extra`` actions are appended.
+    """
+    name = preset["name"]
+    action = preset["category_action"]
+    if provider == "microsoft" and preset.get("category_action_ms"):
+        action = preset["category_action_ms"]
+    actions: list[dict[str, Any]]
+    if action == "label":
+        actions = [{"type": "LABEL", "label": name}]
+    elif action == "label_archive":
+        actions = [{"type": "LABEL", "label": name}, {"type": "ARCHIVE"}]
+    elif action == "move_folder":
+        actions = [{"type": "MOVE_FOLDER", "label": name}]
+    elif action == "move_folder_archive":
+        actions = [{"type": "MOVE_FOLDER", "label": name}, {"type": "ARCHIVE"}]
+    else:
+        actions = [{"type": "LABEL", "label": name}]
+    actions.extend(preset.get("extra", []))
+    return actions
 
 
 @router.post("/rules/install-presets")
@@ -174,6 +212,13 @@ async def install_preset_rules(
     db = await _get_db()
     try:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
+        # The account's provider decides whether cleanup categories become
+        # folders (Outlook) or labels (Gmail) — inbox-zero parity.
+        prov_row = (await db.execute(
+            text("SELECT provider FROM email_accounts WHERE id = :id"),
+            {"id": account_id},
+        )).fetchone()
+        provider = (prov_row.provider if prov_row else "") or ""
         existing = {r["name"].lower() for r in await _load_rules(db, account_id)}
         installed: list[str] = []
         for i, p in enumerate(_PRESET_RULES):
@@ -189,7 +234,8 @@ async def install_preset_rules(
                 "instr": p["instructions"], "rot": p.get("run_on_threads", False),
                 "so": i})
             await _replace_actions(
-                db, rid, [RuleActionModel(**a) for a in p["actions"]]
+                db, rid,
+                [RuleActionModel(**a) for a in _actions_for_preset(p, provider)],
             )
             installed.append(p["name"])
         await db.commit()

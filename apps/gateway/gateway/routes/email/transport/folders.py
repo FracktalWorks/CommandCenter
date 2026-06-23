@@ -6,7 +6,14 @@ import json
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.email.core import _get_db, _log, _upsert_message, router
+from gateway.routes.email.core import (
+    _get_db,
+    _instantiate_provider,
+    _log,
+    _persist_rotated_creds,
+    _upsert_message,
+    router,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -15,6 +22,10 @@ class BackfillRequest(BaseModel):
     folder: str = "inbox"
     page_token: str | None = None
     max_pages: int = Field(default=3, ge=1, le=10)
+
+
+class CreateFolderRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
 
 
 class EmailFolderModel(BaseModel):
@@ -113,6 +124,86 @@ async def list_folders(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to list folders: {str(exc)}",
+        )
+    finally:
+        await db.close()
+
+
+@router.post(
+    "/accounts/{account_id}/folders", response_model=EmailFolderModel
+)
+async def create_folder(
+    account_id: str,
+    req: CreateFolderRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Create (or reuse) a folder/label on the connected account and persist it.
+
+    Backs the rule editor's "Create new folder" affordance.  Idempotent — the
+    provider returns the existing folder if one with the same name already
+    exists (Outlook get-or-create, Gmail label create).
+    """
+    db = await _get_db()
+    try:
+        row = (await db.execute(
+            text(
+                """SELECT provider, credentials_encrypted
+                   FROM email_accounts
+                   WHERE id = :id AND user_id = :user_id"""
+            ),
+            {"id": account_id, "user_id": user.email or "anonymous"},
+        )).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        from acb_llm.key_store import get_key_store
+        store = get_key_store()
+        creds = json.loads(store.decrypt(row.credentials_encrypted))
+        provider = _instantiate_provider(row.provider, creds)
+        if not await provider.authenticate():
+            raise HTTPException(
+                status_code=401,
+                detail="Email account authentication failed — reconnect.",
+            )
+
+        try:
+            folder = await provider.create_folder(req.name)
+        except NotImplementedError:
+            raise HTTPException(
+                status_code=400,
+                detail="This account type doesn't support creating folders.",
+            )
+
+        # Mirror into email_folders so the folder is queryable immediately.
+        await db.execute(
+            text(
+                """INSERT INTO email_folders
+                     (account_id, provider_folder_id, name, type)
+                   VALUES (:aid, :pid, :name, :type)
+                   ON CONFLICT (account_id, provider_folder_id)
+                   DO UPDATE SET name = EXCLUDED.name"""
+            ),
+            {"aid": account_id, "pid": folder.provider_folder_id,
+             "name": folder.name, "type": folder.type},
+        )
+        await _persist_rotated_creds(db, store, account_id, provider)
+        await db.commit()
+
+        return EmailFolderModel(
+            provider_folder_id=folder.provider_folder_id,
+            name=folder.name,
+            type=folder.type,
+            message_count=folder.message_count,
+            unread_count=folder.unread_count,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.error(
+            "create_folder.failed", account_id=account_id, error=str(exc)[:200]
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create folder: {str(exc)}"
         )
     finally:
         await db.close()

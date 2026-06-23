@@ -6,7 +6,7 @@ import {
   History as HistoryIcon, Settings2, Settings, Sparkles, Wand2, BookOpen,
   ArrowUp, ArrowDown, Eye, MessageCircle, RefreshCcw, Square,
   MoreVertical, MoreHorizontal, Copy, Paperclip, Upload, FolderOpen,
-  Inbox, Zap, ChevronRight, ChevronDown, Tag,
+  Inbox, Zap, ChevronRight, ChevronDown, Tag, FolderPlus,
 } from "lucide-react";
 import {
   listRules, createRule, updateRule, deleteRule,
@@ -17,6 +17,7 @@ import {
   listLearnedPatterns, deleteLearnedPattern,
   submitRuleFeedback, listRulePatterns, deleteRulePattern,
   generateRules, uploadEmailArtifacts, listEmailArtifacts,
+  createEmailFolder,
 } from "../../lib/api";
 import type { EmailArtifact } from "../../lib/api";
 import {
@@ -941,6 +942,84 @@ function RuleEditor({
 }
 
 /**
+ * MOVE_FOLDER destination picker: a combobox of the account's real folders
+ * (user folders + Archive/Junk) with an inline "Create folder" affordance when
+ * the typed name doesn't exist yet. The stored value is the folder's display
+ * name, which the backend resolves (system folders by key, user folders via
+ * get-or-create) — inbox-zero parity for filing mail into folders.
+ */
+function MoveFolderField({
+  value,
+  onChange,
+  idx,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  idx: number;
+}) {
+  const folders = useEmailStore((s) => s.folders);
+  const accountId = useEmailStore((s) => s.selectedAccountId);
+  const fetchFolders = useEmailStore((s) => s.fetchFolders);
+  const [creating, setCreating] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Folders a message can be moved into: user folders + the Archive/Junk system
+  // targets (inbox/sent/drafts/trash aren't sensible rule destinations).
+  const targets = folders.filter(
+    (f) => f.type === "user" || f.key === "archive" || f.key === "junk",
+  );
+  const typed = value.trim();
+  const exists = targets.some(
+    (t) => t.label.toLowerCase() === typed.toLowerCase(),
+  );
+  const dlId = `folder-options-${idx}`;
+
+  const handleCreate = async () => {
+    if (!accountId || !typed || creating) return;
+    setCreating(true);
+    setErr(null);
+    try {
+      const folder = await createEmailFolder(accountId, typed);
+      await fetchFolders(accountId);
+      onChange(folder.name);
+    } catch {
+      setErr("Couldn't create that folder. Try again.");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <input
+        list={dlId}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Choose or type a folder name"
+        className={INPUT_CLS}
+      />
+      <datalist id={dlId}>
+        {targets.map((f) => (
+          <option key={f.key} value={f.label} />
+        ))}
+      </datalist>
+      {typed && !exists && (
+        <button
+          type="button"
+          onClick={handleCreate}
+          disabled={creating || !accountId}
+          className="flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-md border border-dashed border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+        >
+          {creating ? <Loader2 size={12} className="animate-spin" /> : <FolderPlus size={12} />}
+          Create folder “{typed}”
+        </button>
+      )}
+      {err && <p className="text-[11px] text-destructive">{err}</p>}
+    </div>
+  );
+}
+
+/**
  * The right-hand configuration card for a single rule action — mirrors
  * inbox-zero's per-action card with a "…" overflow menu and the per-field
  * AI-vs-manual model (label combobox ↔ AI prompt; AI draft ↔ manual content
@@ -1084,11 +1163,10 @@ function ActionConfig({
       )}
 
       {action.type === "MOVE_FOLDER" && (
-        <input
+        <MoveFolderField
           value={action.label ?? ""}
-          onChange={(e) => set({ label: e.target.value })}
-          placeholder="Folder key"
-          className={INPUT_CLS}
+          onChange={(v) => set({ label: v })}
+          idx={idx}
         />
       )}
 

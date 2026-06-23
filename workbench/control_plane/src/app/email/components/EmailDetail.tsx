@@ -147,6 +147,45 @@ export function EmailDetail({ email }: EmailDetailProps) {
     };
   }, [email?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Gmail-style auto-save ──
+  // Debounce-persist the open reply/forward as a Drafts message once the user
+  // edits it. Creates the draft on the first save (threaded for reply/reply-all)
+  // and updates the same one thereafter, so closing the box never loses work.
+  // NOTE: must stay ABOVE the `if (!email) return` early-return so the hook is
+  // called on every render (moving it below crashes with a hooks-order error).
+  useEffect(() => {
+    if (!replyMode || !selectedAccountId || !email) return;
+    if (!replyDirty.current) return; // ignore the prefilled quote — wait for edits
+    const toArr = replyTo.split(",").map((s) => s.trim()).filter(Boolean);
+    if (!replyBody.trim() && toArr.length === 0) return;
+    const isForward = replyMode === "forward";
+    const subj0 = email.subject || "";
+    const subject = isForward
+      ? (subj0.startsWith("Fwd:") ? subj0 : `Fwd: ${subj0}`)
+      : (subj0.startsWith("Re:") ? subj0 : `Re: ${subj0}`);
+    const body = replyBody;
+    const handle = setTimeout(async () => {
+      try {
+        setDraftStatus("saving");
+        const saved = await saveDraft({
+          accountId: selectedAccountId,
+          draftId: draftIdRef.current ?? undefined,
+          // Reply/Reply-All thread onto the open message; Forward is standalone.
+          replyToMessageId: isForward ? undefined : email.id,
+          to: toArr,
+          subject,
+          body,
+        });
+        draftIdRef.current = saved.id;
+        setDraftStatus("saved");
+      } catch {
+        setDraftStatus("idle");
+      }
+    }, 1200);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replyBody, replyTo, replyCc, replyMode, selectedAccountId, email?.id]);
+
   // Keep state in sync when email changes
   if (email && starred !== email.isStarred) setStarred(email.isStarred);
   if (email && read !== email.isRead) setRead(email.isRead);
@@ -237,40 +276,6 @@ export function EmailDetail({ email }: EmailDetailProps) {
       : email.subject.startsWith("Re:")
         ? email.subject
         : `Re: ${email.subject}`;
-
-  // ── Gmail-style auto-save ──
-  // Debounce-persist the open reply/forward as a Drafts message once the user
-  // edits it. Creates the draft on the first save (threaded for reply/reply-all)
-  // and updates the same one thereafter, so closing the box never loses work.
-  useEffect(() => {
-    if (!replyMode || !selectedAccountId || !email) return;
-    if (!replyDirty.current) return; // ignore the prefilled quote — wait for edits
-    const toArr = replyTo.split(",").map((s) => s.trim()).filter(Boolean);
-    if (!replyBody.trim() && toArr.length === 0) return;
-    const subject = replySubject();
-    const body = replyBody;
-    const isForward = replyMode === "forward";
-    const handle = setTimeout(async () => {
-      try {
-        setDraftStatus("saving");
-        const saved = await saveDraft({
-          accountId: selectedAccountId,
-          draftId: draftIdRef.current ?? undefined,
-          // Reply/Reply-All thread onto the open message; Forward is standalone.
-          replyToMessageId: isForward ? undefined : email.id,
-          to: toArr,
-          subject,
-          body,
-        });
-        draftIdRef.current = saved.id;
-        setDraftStatus("saved");
-      } catch {
-        setDraftStatus("idle");
-      }
-    }, 1200);
-    return () => clearTimeout(handle);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [replyBody, replyTo, replyCc, replyMode, selectedAccountId, email?.id]);
 
   const resetReplySession = () => {
     draftIdRef.current = null;

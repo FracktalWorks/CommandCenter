@@ -757,7 +757,7 @@ async def _process_past_emails_job(
             )
         _past_job_finish(account_id, token=job_token)
     except Exception as e:  # noqa: BLE001 — record failure for the UI, don't crash the worker
-        _log(f"process-past job failed for {account_id}: {e}")
+        _log.warning("email.process_past_failed", account_id=account_id, error=str(e)[:200])
         _past_job_finish(account_id, token=job_token, error=str(e))
     finally:
         await db.close()

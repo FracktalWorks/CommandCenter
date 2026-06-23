@@ -327,6 +327,40 @@ async def _replace_actions(db: Any, rule_id: str, actions: list[RuleActionModel]
             ])})
 
 
+async def sync_draft_reply_action(db: Any, account_id: str, enabled: bool) -> bool:
+    """Mirror inbox-zero's ``enableDraftRepliesAction``: the "Auto draft replies"
+    toggle adds (or removes) a ``DRAFT_EMAIL`` action on the account's "To Reply"
+    rule. With the action present, To-Reply mail gets an AI draft during the
+    normal rule run (gated by ``draft_confidence``); without it, no draft —
+    exactly how inbox-zero couples auto-drafting to the To Reply system rule.
+
+    Returns True if the rule's actions changed. No-ops (returns False) when the
+    account has no "To Reply" rule, or the action is already in the desired
+    state. Caller commits.
+    """
+    rules = await _load_rules(db, account_id)
+    target = next(
+        (r for r in rules
+         if (r.get("system_type") or "").upper() == "TO_REPLY"
+         or (r.get("name") or "").strip().lower() == "to reply"),
+        None,
+    )
+    if not target:
+        return False
+    actions = target["actions"]
+    has_draft = any((a.get("type") or "").upper() == "DRAFT_EMAIL" for a in actions)
+    if enabled == has_draft:
+        return False
+    if enabled:
+        actions = [*actions, {"type": "DRAFT_EMAIL"}]
+    else:
+        actions = [a for a in actions
+                   if (a.get("type") or "").upper() != "DRAFT_EMAIL"]
+    await _replace_actions(
+        db, target["id"], [RuleActionModel(**a) for a in actions])
+    return True
+
+
 async def _insert_rule(db: Any, req: RuleModel) -> str:
     """Insert a rule + its actions; returns the new rule id. Caller commits."""
     rule_id = str(uuid4())

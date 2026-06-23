@@ -398,8 +398,12 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
 
 
 async def _maybe_auto_run_rules(account_id: str) -> None:
-    """If the account has auto-run enabled and ≥1 enabled rule, process the
-    freshly-synced inbox mail with the Assistant rules engine.
+    """Process freshly-synced inbox mail with the Assistant rules engine whenever
+    the account has ≥1 enabled rule.
+
+    inbox-zero parity: there is NO global on/off toggle — rules run automatically
+    on new mail as it arrives, and the only control is enabling/disabling an
+    individual rule (inbox-zero itself deprecated its global `automate` flag).
 
     The rules worker lives in the gateway; it's imported lazily so the email
     ingestion package keeps no static dependency on the gateway package.
@@ -408,15 +412,6 @@ async def _maybe_auto_run_rules(account_id: str) -> None:
         from gateway.routes.email import _get_db, _run_rules_job  # noqa: PLC0415
         db = await _get_db()
         try:
-            settings = (await db.execute(
-                text(
-                    "SELECT auto_run FROM email_assistant_settings "
-                    "WHERE account_id = :aid"
-                ),
-                {"aid": account_id},
-            )).fetchone()
-            if not settings or not settings.auto_run:
-                return
             has_rule = (await db.execute(
                 text(
                     "SELECT 1 FROM email_rules "

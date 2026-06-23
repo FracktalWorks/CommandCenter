@@ -77,7 +77,9 @@ class AssistantSettingsModel(BaseModel):
     account_id: str
     about: str | None = None
     signature: str | None = None
-    auto_run: bool = False
+    # inert/deprecated: rules now ALWAYS run on new mail (inbox-zero parity — the
+    # control is enabling/disabling individual rules). Kept for API/back-compat.
+    auto_run: bool = True
     cold_email_blocker: str = "OFF"  # OFF | LABEL | ARCHIVE
     agent_model: str = "tier-balanced"  # tier-fast | tier-balanced | tier-powerful
     digest_frequency: str = "OFF"  # OFF | DAILY | WEEKLY
@@ -126,7 +128,7 @@ async def get_assistant_settings(
             "account_id": account_id,
             "about": row.about if row else "",
             "signature": row.signature if row else "",
-            "auto_run": bool(row.auto_run) if row else False,
+            "auto_run": bool(row.auto_run) if row else True,
             "cold_email_blocker": (row.cold_email_blocker if row else "OFF") or "OFF",
             "agent_model": (row.agent_model if row else "tier-balanced")
             or "tier-balanced",
@@ -245,6 +247,18 @@ async def put_assistant_settings(
             "mre": req.multi_rule_execution,
             "sdp": req.sensitive_data_protection})
         await db.commit()
+        # inbox-zero parity: the "Auto draft replies" toggle adds/removes the
+        # DRAFT_EMAIL action on the "To Reply" rule (like inbox-zero's
+        # enableDraftRepliesAction), so to-reply mail is auto-drafted when on.
+        try:
+            from gateway.routes.email.automation.rules import (  # noqa: PLC0415
+                sync_draft_reply_action,
+            )
+            if await sync_draft_reply_action(db, req.account_id, req.draft_replies):
+                await db.commit()
+        except Exception as exc:  # noqa: BLE001 — settings already saved; best-effort
+            _log.warning("email.draft_replies_sync_failed",
+                         account_id=req.account_id, error=str(exc)[:200])
         return {
             "account_id": req.account_id,
             "about": req.about or "",

@@ -3245,12 +3245,11 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
           <SectionHeader>Advanced</SectionHeader>
           <SettingCard
             title="Run rules automatically on new mail"
-            description="Processes incoming inbox mail with your enabled rules as it arrives."
+            description="Your enabled rules run automatically on new mail as it arrives. To stop a rule, turn it off in the Rules tab (inbox-zero parity — there's no global switch)."
             right={
-              <Toggle
-                enabled={s.auto_run}
-                onChange={(v) => persistPatch({ auto_run: v })}
-              />
+              <span className="text-[11px] px-2 py-1 rounded-full bg-emerald-500/15 text-emerald-400 whitespace-nowrap">
+                Always on
+              </span>
             }
           />
           <SettingCard

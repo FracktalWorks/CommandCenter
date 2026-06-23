@@ -95,9 +95,14 @@ function actionColor(type: string): string {
   );
 }
 
-const INPUT_CLS =
-  "w-full bg-secondary border border-border rounded-lg px-2.5 py-2 text-xs " +
+// Base field styling WITHOUT a width — compose with `w-full` (INPUT_CLS) or a
+// fixed width (the action/condition type selects). Keeping `w-full` out of the
+// base avoids the Tailwind `w-full`+`w-40` conflict that made the selects span
+// the whole row and shove the config card into horizontal overflow.
+const INPUT_BASE =
+  "bg-secondary border border-border rounded-lg px-2.5 py-2 text-xs " +
   "text-foreground outline-none focus:border-primary transition-colors";
+const INPUT_CLS = `w-full ${INPUT_BASE}`;
 
 /**
  * Default rule set, mirroring inbox-zero's presets. Installed on demand into the
@@ -814,7 +819,7 @@ function RuleEditor({
               <select
                 value={t}
                 onChange={(e) => changeCondType(i, e.target.value as CondType)}
-                className={`${INPUT_CLS} w-28 flex-shrink-0`}
+                className={`${INPUT_BASE} w-28 flex-shrink-0`}
               >
                 {opts.map((o) => (
                   <option key={o} value={o}>
@@ -828,14 +833,14 @@ function RuleEditor({
                   onChange={(e) => setField(t, e.target.value)}
                   rows={2}
                   placeholder={meta.placeholder}
-                  className={`${INPUT_CLS} resize-none flex-1`}
+                  className={`${INPUT_CLS} resize-none flex-1 min-w-0`}
                 />
               ) : (
                 <input
                   value={value}
                   onChange={(e) => setField(t, e.target.value)}
                   placeholder={meta.placeholder}
-                  className={`${INPUT_CLS} flex-1`}
+                  className={`${INPUT_CLS} flex-1 min-w-0`}
                 />
               )}
               {shown.length > 1 && (
@@ -876,7 +881,7 @@ function RuleEditor({
                   setAction(i, { type: e.target.value as RuleActionType })
                 }
                 title={ACTION_META[a.type].description}
-                className={`${INPUT_CLS} w-40 flex-shrink-0`}
+                className={`${INPUT_BASE} w-40 flex-shrink-0`}
               >
                 {ACTION_TYPES.map((t) => (
                   <option key={t} value={t}>
@@ -939,11 +944,17 @@ function RuleEditor({
               </span>
             </label>
 
-            {/* Sender category filter */}
+            {/* Sender-category gate: limits which emails the rule runs on,
+                based on the SENDER's saved category — it does not set one. */}
             <div className="pt-2 border-t border-border/60">
               <span className="text-xs font-medium text-foreground">
-                Sender category (optional)
+                Limit by sender category (optional)
               </span>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Only run this rule for senders you’ve categorized (e.g.
+                Newsletter, Marketing). This narrows which emails the rule
+                applies to — it doesn’t change a sender’s category.
+              </p>
               <select
                 value={draft.category_filter_type ?? ""}
                 onChange={(e) =>
@@ -954,9 +965,9 @@ function RuleEditor({
                 }
                 className={`${INPUT_CLS} mt-1.5`}
               >
-                <option value="">No category filter</option>
-                <option value="INCLUDE">Only these categories</option>
-                <option value="EXCLUDE">Except these categories</option>
+                <option value="">Any sender (no limit)</option>
+                <option value="INCLUDE">Only senders in these categories</option>
+                <option value="EXCLUDE">Except senders in these categories</option>
               </select>
               {draft.category_filter_type && (
                 <div className="flex flex-wrap gap-1.5 mt-2">
@@ -1250,7 +1261,7 @@ function ActionConfig({
               })
             }
             placeholder="0"
-            className={`${INPUT_CLS} w-20`}
+            className={`${INPUT_BASE} w-20`}
           />
           <span className="text-[10px] text-muted-foreground">
             minutes (0 = immediately)

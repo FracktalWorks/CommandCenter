@@ -487,6 +487,15 @@ class OutlookProvider(BaseEmailProvider):
     ) -> SyncResult:
         client = await self._get_client()
 
+        # Delta sync is DISABLED: in production the inbox delta token returned 0
+        # changes every cycle even as new mail arrived, silently halting sync.
+        # Force the reliable multi-folder full sweep and return
+        # new_history_id=None — which also auto-clears any stuck token already
+        # persisted on the account (the scheduler writes it back), so a
+        # previously-broken account self-heals on its next cycle. Re-enable delta
+        # only behind a verified implementation.
+        history_id = None
+
         if history_id:
             # We persist Graph's @odata.deltaLink (a full URL) as history_id, but
             # the delta endpoint wants only the bare $deltatoken value — extract

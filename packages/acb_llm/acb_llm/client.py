@@ -108,30 +108,42 @@ def _init_tier_models() -> None:
         )
         return
 
-    # Merge tier_overrides.yaml on top (Settings UI changes survive deploys)
-    overrides_path = (
-        root / "infra" / "litellm" / "tier_overrides.yaml"
-    )
-    if overrides_path.exists():
-        try:
-            with overrides_path.open() as f:
-                overrides: dict[str, Any] = yaml.safe_load(f) or {}
-            if overrides and "model_list" in overrides:
-                override_map = {
-                    e["model_name"]: e
-                    for e in overrides["model_list"]
-                }
-                base_list = cfg.get("model_list", [])
-                for i, entry in enumerate(base_list):
-                    name = entry.get("model_name", "")
-                    if name in override_map:
-                        base_list[i] = override_map[name]
-                cfg["model_list"] = base_list
-        except Exception as exc:
-            _log.warning(
-                "acb_llm.tier_models_overrides_read_failed",
-                error=str(exc),
-            )
+    # Merge tier overrides on top (Settings UI changes survive deploys).
+    # Source of truth is the model_config Postgres table (key 'tier_overrides');
+    # fall back to the legacy tier_overrides.yaml file when the DB is empty or
+    # unreachable (e.g. very first boot before the gateway has seeded it).
+    overrides: dict[str, Any] = {}
+    try:
+        from acb_llm.model_config import load_blob  # noqa: PLC0415
+        blob = load_blob("tier_overrides")
+        if isinstance(blob, dict) and "model_list" in blob:
+            overrides = blob
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("acb_llm.tier_models_db_read_failed", error=str(exc))
+
+    if not overrides.get("model_list"):
+        overrides_path = root / "infra" / "litellm" / "tier_overrides.yaml"
+        if overrides_path.exists():
+            try:
+                with overrides_path.open() as f:
+                    overrides = yaml.safe_load(f) or {}
+            except Exception as exc:
+                _log.warning(
+                    "acb_llm.tier_models_overrides_read_failed",
+                    error=str(exc),
+                )
+
+    if overrides and "model_list" in overrides:
+        override_map = {
+            e["model_name"]: e
+            for e in overrides["model_list"]
+        }
+        base_list = cfg.get("model_list", [])
+        for i, entry in enumerate(base_list):
+            name = entry.get("model_name", "")
+            if name in override_map:
+                base_list[i] = override_map[name]
+        cfg["model_list"] = base_list
 
     # Extract tier model assignments
     model_list: list[dict] = cfg.get("model_list", [])

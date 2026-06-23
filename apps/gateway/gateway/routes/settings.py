@@ -23,8 +23,8 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 
 # ---------------------------------------------------------------------------
 # Locate infra/litellm/config.yaml relative to the repo root.
-# Tier overrides (changed via the Settings UI) are stored separately in
-# tier_overrides.yaml so they survive git deploys.
+# Tier overrides (changed via the Settings UI) are persisted in the
+# model_config Postgres table so they survive `git reset --hard` on deploy.
 # ---------------------------------------------------------------------------
 
 def _repo_root() -> Path:
@@ -56,49 +56,69 @@ def _tier_overrides_path() -> Path:
     return _repo_root() / "infra" / "litellm" / "tier_overrides.yaml"
 
 
-def _load_config() -> dict[str, Any]:
-    """Load base config.yaml, then merge tier overrides on top."""
-    path = _config_path()
-    with path.open() as f:
-        cfg: dict[str, Any] = yaml.safe_load(f) or {}
+def _load_tier_overrides() -> dict[str, Any]:
+    """Return tier overrides {model_list: [...]} from Postgres.
 
-    # Merge tier overrides (survives git deploys)
+    The DB (model_config table, key 'tier_overrides') is the source of truth so
+    Settings UI tier changes survive `git reset --hard` on deploy.  On the first
+    read after migration the DB is empty, so we seed it once from the legacy
+    tier_overrides.yaml file.
+    """
+    from acb_llm.model_config import load_blob, save_blob  # noqa: PLC0415
+
+    blob = load_blob("tier_overrides")
+    if isinstance(blob, dict) and "model_list" in blob:
+        return blob
+    # DB empty (or unreachable) — seed from the legacy YAML file once.
     overrides_path = _tier_overrides_path()
     if overrides_path.exists():
         try:
             with overrides_path.open() as f:
-                overrides: dict[str, Any] = yaml.safe_load(f) or {}
-            if overrides and "model_list" in overrides:
-                override_models = {
-                    e["model_name"]: e
-                    for e in overrides["model_list"]
-                }
-                base_list = cfg.get("model_list", [])
-                for i, entry in enumerate(base_list):
-                    name = entry.get("model_name", "")
-                    if name in override_models:
-                        base_list[i] = override_models[name]
-                cfg["model_list"] = base_list
+                existing = yaml.safe_load(f) or {"model_list": []}
+            if existing.get("model_list"):
+                try:
+                    save_blob("tier_overrides", existing)
+                    _log.info("settings.llm.tier_overrides_seeded_from_file")
+                except Exception:  # noqa: BLE001
+                    pass  # DB unreachable — use file contents this request
+                return existing
         except Exception:  # noqa: BLE001
             pass
+    return {"model_list": []}
+
+
+def _load_config() -> dict[str, Any]:
+    """Load base config.yaml, then merge DB tier overrides on top."""
+    path = _config_path()
+    with path.open() as f:
+        cfg: dict[str, Any] = yaml.safe_load(f) or {}
+
+    # Merge tier overrides from the DB (survives git deploys)
+    overrides = _load_tier_overrides()
+    if overrides and "model_list" in overrides:
+        override_models = {
+            e["model_name"]: e
+            for e in overrides["model_list"]
+        }
+        base_list = cfg.get("model_list", [])
+        for i, entry in enumerate(base_list):
+            name = entry.get("model_name", "")
+            if name in override_models:
+                base_list[i] = override_models[name]
+        cfg["model_list"] = base_list
 
     return cfg
 
 
 def _save_tier_override(tier_name: str, entry: dict[str, Any]) -> None:
-    """Write a single tier override to tier_overrides.yaml (not config.yaml).
+    """Persist a single tier override to Postgres (model_config table).
 
-    This file is NOT tracked by git, so Settings UI changes survive deploys.
+    Stored in the DB rather than tier_overrides.yaml so Settings UI changes
+    survive `git reset --hard` on deploy.
     """
-    overrides_path = _tier_overrides_path()
-    existing: dict[str, Any] = {"model_list": []}
-    if overrides_path.exists():
-        try:
-            with overrides_path.open() as f:
-                existing = yaml.safe_load(f) or {"model_list": []}
-        except Exception:  # noqa: BLE001
-            pass
+    from acb_llm.model_config import save_blob  # noqa: PLC0415
 
+    existing = _load_tier_overrides()
     model_list: list[dict] = existing.get("model_list", [])
     # Replace or append the tier entry
     replaced = False
@@ -111,10 +131,7 @@ def _save_tier_override(tier_name: str, entry: dict[str, Any]) -> None:
         model_list.append(entry)
 
     existing["model_list"] = model_list
-    overrides_path.parent.mkdir(parents=True, exist_ok=True)
-    with overrides_path.open("w") as f:
-        yaml.dump(existing, f, default_flow_style=False,
-                  allow_unicode=True, sort_keys=False)
+    save_blob("tier_overrides", existing)
 
 
 def _infra_dir() -> Path:
@@ -681,7 +698,8 @@ async def update_tier(
     if not updated:
         raise HTTPException(status_code=404, detail=f"Tier {req.tier_name} not found in config")
 
-    # Write to tier_overrides.yaml (NOT config.yaml) so changes survive git deploys
+    # Persist to the model_config DB table (NOT config.yaml) so the change
+    # survives `git reset --hard` on deploy.
     _save_tier_override(req.tier_name, entry)
     _log.info("settings.llm.tier_updated", tier=req.tier_name, model=req.model, actor=_user.email)
 
@@ -854,7 +872,9 @@ async def set_copilot_model(
 
 # ---------------------------------------------------------------------------
 # Enabled model catalogue — models the user has turned on via Settings → Models.
-# Stored in infra/custom_models.json (filename kept for backward compat).
+# Persisted in the model_config Postgres table (key 'enabled_models') so it
+# survives `git reset --hard` on deploy.  The legacy infra/enabled_models.json
+# (formerly custom_models.json) is read once to seed the DB, then ignored.
 # JSON structure: {"enabled": [...], "hidden": [...]}
 # Legacy keys: "custom" is treated as an alias for "enabled".
 # ---------------------------------------------------------------------------
@@ -873,38 +893,64 @@ def _enabled_models_path() -> Path:
         return Path.cwd() / "enabled_models.json"
 
 
-def _load_catalogue() -> dict[str, object]:
-    """Load model catalogue: {enabled: [...], hidden: [...]}."""
+def _normalise_catalogue(data: object) -> dict[str, object]:
+    """Coerce any stored shape into {enabled: [...], hidden: [...]}.
+
+    Supports all legacy shapes:
+      - plain list  (very old format)
+      - {"custom": [...], "hidden": [...]}  (pre-2026-06 format)
+      - {"enabled": [...], "hidden": [...]}  (current format)
+    """
+    if isinstance(data, list):
+        return {"enabled": data, "hidden": []}
+    if isinstance(data, dict):
+        enabled = data.get("enabled") or data.get("custom") or []
+        hidden = data.get("hidden", [])
+        return {
+            "enabled": enabled if isinstance(enabled, list) else [],
+            "hidden": hidden if isinstance(hidden, list) else [],
+        }
+    return {"enabled": [], "hidden": []}
+
+
+def _load_catalogue_from_file() -> dict[str, object]:
+    """Read the legacy enabled_models.json file (used only to seed the DB)."""
     import json  # noqa: PLC0415
     p = _enabled_models_path()
     if not p.exists():
         return {"enabled": [], "hidden": []}
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        # Support all legacy shapes:
-        #  - plain list  (very old format)
-        #  - {"custom": [...], "hidden": [...]}  (pre-2026-06 format)
-        #  - {"enabled": [...], "hidden": [...]}  (current format)
-        if isinstance(data, list):
-            return {"enabled": data, "hidden": []}
-        if isinstance(data, dict):
-            # Prefer "enabled"; fall back to legacy "custom" key
-            enabled = data.get("enabled") or data.get("custom") or []
-            return {
-                "enabled": enabled if isinstance(enabled, list) else [],
-                "hidden": (
-                    data.get("hidden", []) if isinstance(data, dict) else []
-                ),
-            }
-        return {"enabled": [], "hidden": []}
+        return _normalise_catalogue(json.loads(p.read_text(encoding="utf-8")))
     except Exception:  # noqa: BLE001
         return {"enabled": [], "hidden": []}
 
 
+def _load_catalogue() -> dict[str, object]:
+    """Load model catalogue {enabled: [...], hidden: [...]} from Postgres.
+
+    The DB (model_config table, key 'enabled_models') is the source of truth so
+    the config survives `git reset --hard` on deploy.  On the first read after
+    migration the DB is empty, so we seed it from the legacy JSON file once.
+    """
+    from acb_llm.model_config import load_blob, save_blob  # noqa: PLC0415
+
+    blob = load_blob("enabled_models")
+    if blob is not None:
+        return _normalise_catalogue(blob)
+    # DB empty (or unreachable) — seed from the legacy file once.
+    cat = _load_catalogue_from_file()
+    if cat.get("enabled") or cat.get("hidden"):
+        try:
+            save_blob("enabled_models", cat)
+            _log.info("settings.llm.enabled_models_seeded_from_file")
+        except Exception:  # noqa: BLE001
+            pass  # DB unreachable — fall back to file contents this request
+    return cat
+
+
 def _save_catalogue(catalogue: dict[str, object]) -> None:
-    import json  # noqa: PLC0415
-    p = _enabled_models_path()
-    p.write_text(json.dumps(catalogue, indent=2, ensure_ascii=False), encoding="utf-8")
+    from acb_llm.model_config import save_blob  # noqa: PLC0415
+    save_blob("enabled_models", catalogue)
 
 
 def _load_enabled_models() -> list[dict[str, str]]:

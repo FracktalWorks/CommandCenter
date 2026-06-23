@@ -2768,6 +2768,11 @@ class RuleActionModel(BaseModel):
     # inbox-zero parity: optional per-action delay + draft attachments.
     delay_minutes: int | None = None
     attachments: list[RuleActionAttachment] = []
+    # inbox-zero per-field AI-vs-manual model:
+    #   label_ai       — `label` is an AI prompt ({{...}}) resolved per-email.
+    #   content_manual — use the authored `content` template (else AI drafts).
+    label_ai: bool = False
+    content_manual: bool = False
 
 
 class RuleModel(BaseModel):
@@ -2804,7 +2809,8 @@ async def _load_rules(db: Any, account_id: str) -> list[dict[str, Any]]:
     for r in rule_rows:
         act_rows = (await db.execute(text(
             """SELECT id, type, label, subject, content, to_address, cc_address,
-                      bcc_address, url, delay_minutes, attachments
+                      bcc_address, url, delay_minutes, attachments,
+                      label_ai, content_manual
                FROM email_actions WHERE rule_id = :rid
                ORDER BY created_at"""
         ), {"rid": r.id})).fetchall()
@@ -2825,6 +2831,8 @@ async def _load_rules(db: Any, account_id: str) -> list[dict[str, Any]]:
                  "to_address": a.to_address, "cc_address": a.cc_address,
                  "bcc_address": a.bcc_address, "url": a.url,
                  "delay_minutes": a.delay_minutes,
+                 "label_ai": bool(a.label_ai),
+                 "content_manual": bool(a.content_manual),
                  "attachments": a.attachments if isinstance(a.attachments, list)
                  else json.loads(a.attachments or "[]")}
                 for a in act_rows
@@ -2933,13 +2941,17 @@ async def _replace_actions(db: Any, rule_id: str, actions: list[RuleActionModel]
         await db.execute(text(
             """INSERT INTO email_actions
                  (rule_id, type, label, subject, content, to_address,
-                  cc_address, bcc_address, url, delay_minutes, attachments)
+                  cc_address, bcc_address, url, delay_minutes, attachments,
+                  label_ai, content_manual)
                VALUES (:rid, :type, :label, :subject, :content, :to_addr,
-                       :cc, :bcc, :url, :delay, CAST(:attachments AS JSONB))"""
+                       :cc, :bcc, :url, :delay, CAST(:attachments AS JSONB),
+                       :label_ai, :content_manual)"""
         ), {"rid": rule_id, "type": a.type, "label": a.label, "subject": a.subject,
             "content": a.content, "to_addr": a.to_address, "cc": a.cc_address,
             "bcc": a.bcc_address, "url": a.url,
             "delay": a.delay_minutes,
+            "label_ai": bool(a.label_ai),
+            "content_manual": bool(a.content_manual),
             "attachments": json.dumps([
                 att.model_dump() for att in (a.attachments or [])
             ])})
@@ -5067,6 +5079,51 @@ def _load_action_attachments(a: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+async def _render_template(template: str, email: dict[str, str]) -> str:
+    """Fill an inbox-zero-style ``{{...}}`` template against the email context.
+
+    Placeholders describe what to generate, e.g. ``{{choose "urgent",
+    "normal"}}`` for a LABEL prompt or ``{{summarize the request}}`` in a draft.
+    Returns the input unchanged when it has no ``{{`` placeholders (the common
+    case) so static fields never incur an LLM call. Best-effort: falls back to
+    the raw template on any error."""
+    if not template or "{{" not in template:
+        return template
+    try:
+        import litellm as _litellm  # noqa: PLC0415
+        from litellm import acompletion  # noqa: PLC0415
+        from acb_llm.client import ensure_model_registered, _TIER_MODEL  # noqa: PLC0415
+        _litellm.drop_params = True
+        _litellm.suppress_debug_info = True
+        model = _TIER_MODEL.get("tier1") or _TIER_MODEL.get("tier2") or "gpt-4o-mini"
+        ensure_model_registered(model)
+        ctx = (
+            f"From: {email.get('from', '')}\n"
+            f"Subject: {email.get('subject', '')}\n\n"
+            f"{(email.get('body', '') or '')[:3000]}"
+        )
+        sys_prompt = (
+            "You fill in templates for an email automation rule. The template "
+            "contains {{...}} placeholders describing the value to generate "
+            '(e.g. {{choose "urgent","normal"}} or {{summarize the request}}). '
+            "Replace every {{...}} with an appropriate value based on the email. "
+            "Keep all text outside the braces exactly as written. Output ONLY "
+            "the filled-in result — no quotes, labels, or commentary."
+        )
+        resp = await acompletion(
+            model=model,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user",
+                       "content": f"Template:\n{template}\n\nEmail:\n{ctx}"}],
+            temperature=0, max_tokens=300,
+        )
+        out = (resp.choices[0].message.content or "").strip()
+        return out or template
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.template_render_failed", error=str(exc)[:200])
+        return template
+
+
 async def _apply_rule_actions(
     db: Any, provider: Any, message_id: str, provider_msg_id: str,
     actions: list[dict[str, Any]], email: dict[str, str] | None = None,
@@ -5117,9 +5174,18 @@ async def _apply_rule_actions(
                 await db.execute(text("UPDATE email_messages SET folder=:f, updated_at=now() WHERE id=:id"), {"id": message_id, "f": a["label"].lower()})
                 await provider.move_to_folder(provider_msg_id, a["label"].lower())
             elif t == "LABEL" and a.get("label"):
-                await provider.set_labels(provider_msg_id, add=[a["label"]], remove=[])
+                # label_ai: the label is an AI prompt ({{...}}) resolved per-email.
+                lbl = a["label"]
+                if a.get("label_ai"):
+                    lbl = (await _render_template(lbl, email)).strip()
+                if lbl:
+                    await provider.set_labels(provider_msg_id, add=[lbl], remove=[])
             elif t in ("REPLY", "DRAFT_EMAIL"):
-                tmpl = (a.get("content") or "").strip()
+                # Manual template wins; otherwise the AI drafts. A template with
+                # {{...}} placeholders is rendered against the email first.
+                raw = (a.get("content") or "").strip()
+                manual = bool(a.get("content_manual")) or bool(raw)
+                tmpl = await _render_template(raw, email) if (manual and raw) else ""
                 # Sensitive-data protection: never auto-draft an AI reply on an
                 # email that looks like it carries secrets (static templates are
                 # fine — the user authored them).
@@ -5141,7 +5207,8 @@ async def _apply_rule_actions(
                     _log.info("email.draft_skipped_low_confidence",
                               account_id=account_id, confidence=draft_conf)
                     continue
-                subj = a.get("subject") or f"Re: {email.get('subject', '')}"
+                subj = await _render_template(
+                    a.get("subject") or f"Re: {email.get('subject', '')}", email)
                 to = a.get("to_address") or email.get("from", "")
                 if not to:
                     continue
@@ -5156,7 +5223,8 @@ async def _apply_rule_actions(
                     await _store_ai_draft(
                         db, account_id, email.get("thread_id") or "", body)
             elif t == "FORWARD" and a.get("to_address"):
-                note = (a.get("content") or "").strip()
+                note = await _render_template(
+                    (a.get("content") or "").strip(), email)
                 fwd = (
                     f"{note}\n\n" if note else ""
                 ) + (

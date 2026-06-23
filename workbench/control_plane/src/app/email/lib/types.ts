@@ -225,6 +225,10 @@ export interface RuleAction {
   delay_minutes?: number | null;
   /** Draft attachments (from artifacts) for draft/reply/forward actions. */
   attachments?: RuleActionAttachment[];
+  /** LABEL: `label` is an AI prompt ({{…}}) resolved per-email, not a fixed label. */
+  label_ai?: boolean;
+  /** Draft: use the authored `content` template (false = the AI writes the body). */
+  content_manual?: boolean;
 }
 
 export interface AutomationRule {

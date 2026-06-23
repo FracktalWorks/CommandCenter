@@ -5,7 +5,8 @@ import {
   Loader2, Plus, Trash2, Pencil, Play, Check, X, FlaskConical,
   History as HistoryIcon, Settings2, Settings, Sparkles, Wand2, BookOpen,
   ArrowUp, ArrowDown, Eye, MessageCircle, RefreshCcw, Square,
-  MoreVertical, Copy, Paperclip, Upload, FolderOpen,
+  MoreVertical, MoreHorizontal, Copy, Paperclip, Upload, FolderOpen,
+  Inbox, Zap, ChevronRight, ChevronDown, Tag,
 } from "lucide-react";
 import {
   listRules, createRule, updateRule, deleteRule,
@@ -56,7 +57,7 @@ const ACTION_TYPES: RuleActionType[] = [
  */
 const ACTION_META: Record<RuleActionType, { label: string; description: string }> = {
   ARCHIVE: { label: "Archive", description: "Remove the email from the inbox." },
-  LABEL: { label: "Apply label", description: "Add a label / category to the email." },
+  LABEL: { label: "Categorize", description: "Apply a label / category to the email." },
   MARK_READ: { label: "Mark as read", description: "Mark the email as read." },
   STAR: { label: "Star", description: "Star / flag the email." },
   MARK_SPAM: { label: "Mark as spam", description: "Move the email to the spam folder." },
@@ -64,7 +65,7 @@ const ACTION_META: Record<RuleActionType, { label: string; description: string }
   MOVE_FOLDER: { label: "Move to folder", description: "Move the email to a specific folder." },
   REPLY: { label: "Reply", description: "Create a reply draft for your review — never auto-sent." },
   FORWARD: { label: "Forward", description: "Create a forward draft to someone — never auto-sent." },
-  DRAFT_EMAIL: { label: "Draft a reply", description: "Let the AI write a reply draft for your review — never auto-sent." },
+  DRAFT_EMAIL: { label: "Draft reply", description: "Let the AI write a reply draft for your review — never auto-sent." },
   CALL_WEBHOOK: { label: "Call webhook", description: "POST the email to a URL you specify." },
 };
 
@@ -93,9 +94,6 @@ function actionColor(type: string): string {
     "bg-secondary text-muted-foreground border-border"
   );
 }
-
-/** Action types that draft an email and expose to/subject/content fields. */
-const DRAFT_ACTIONS = new Set<RuleActionType>(["REPLY", "FORWARD", "DRAFT_EMAIL"]);
 
 const INPUT_CLS =
   "w-full bg-secondary border border-border rounded-lg px-2.5 py-2 text-xs " +
@@ -710,6 +708,10 @@ function RuleEditor({
       actions: d.actions.map((a, idx) => (idx === i ? { ...a, ...patch } : a)),
     }));
 
+  // Real provider labels so the "Categorize" action offers a pick-list (with
+  // free-type for new labels), mirroring inbox-zero's LabelCombobox.
+  const availableLabels = useEmailStore((s) => s.availableLabels);
+
   // Conditions visible in the builder: any pre-filled field, plus ones the user
   // explicitly adds. A new rule starts with the AI Prompt row.
   const prefilled = COND_ORDER.filter(
@@ -718,52 +720,70 @@ function RuleEditor({
   const [shown, setShown] = useState<CondType[]>(
     prefilled.length ? prefilled : ["prompt"]
   );
-  const addable = COND_ORDER.filter((t) => !shown.includes(t));
-  const removeCondition = (t: CondType) => {
-    setShown((s) => s.filter((x) => x !== t));
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  const removeCondition = (index: number) => {
+    const t = shown[index];
+    setShown((s) => s.filter((_, i) => i !== index));
     setField(t, "");
+  };
+  // Re-type a condition row: carry its value over to the new field type so the
+  // user doesn't lose what they typed when switching From → Subject etc.
+  const changeCondType = (index: number, next: CondType) => {
+    const old = shown[index];
+    if (old === next) return;
+    const val = (draft[COND_META[old].field] ?? "") as string;
+    setField(old, "");
+    setField(next, val);
+    setShown((s) => s.map((x, i) => (i === index ? next : x)));
+  };
+  const addCondition = () => {
+    const next = COND_ORDER.find((t) => !shown.includes(t));
+    if (next) setShown((s) => [...s, next]);
   };
 
   const valid = draft.name.trim().length > 0 && draft.actions.length > 0;
 
   return (
     <Modal
-      title={rule.id ? "Edit rule" : "New rule"}
-      description="The AI matches your plain-English conditions; literal fields match text."
+      title={rule.id ? "Edit Rule" : "Create Rule"}
       onClose={onCancel}
       maxWidth="max-w-2xl"
       footer={
         <>
-          <button
-            onClick={() => onSave(draft)}
-            disabled={!valid}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-          >
-            <Check size={13} /> Save rule
-          </button>
           <button
             onClick={onCancel}
             className="px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:bg-secondary transition-colors"
           >
             Cancel
           </button>
+          <button
+            onClick={() => onSave(draft)}
+            disabled={!valid}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            <Check size={13} /> {rule.id ? "Save" : "Create"}
+          </button>
         </>
       }
     >
-      <Field label="Name">
+      {/* Rule name */}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-foreground">Rule name</label>
         <input
           value={draft.name}
           onChange={(e) => set({ name: e.target.value })}
-          placeholder="e.g. Archive promotions"
+          placeholder="e.g. Label receipts"
           className={INPUT_CLS}
         />
-      </Field>
+      </div>
 
       {/* When — conditions */}
-      <div className="bg-card border border-border rounded-xl p-3 space-y-3">
+      <div className="bg-card border border-border rounded-xl p-3.5 space-y-3">
         <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-foreground">
-            When I get an email…
+          <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <Inbox size={16} className="text-blue-500" />
+            When I get an email
           </span>
           {shown.length > 1 && (
             <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -783,14 +803,25 @@ function RuleEditor({
           )}
         </div>
 
-        {shown.map((t) => {
+        <p className="text-xs text-muted-foreground">That matches:</p>
+
+        {shown.map((t, i) => {
           const meta = COND_META[t];
           const value = (draft[meta.field] ?? "") as string;
+          const opts = COND_ORDER.filter((o) => o === t || !shown.includes(o));
           return (
             <div key={t} className="flex items-start gap-2">
-              <span className="text-[10px] uppercase tracking-wide text-muted-foreground w-12 pt-2 flex-shrink-0">
-                {meta.label}
-              </span>
+              <select
+                value={t}
+                onChange={(e) => changeCondType(i, e.target.value as CondType)}
+                className={`${INPUT_CLS} w-28 flex-shrink-0`}
+              >
+                {opts.map((o) => (
+                  <option key={o} value={o}>
+                    {COND_META[o].label}
+                  </option>
+                ))}
+              </select>
               {meta.textarea ? (
                 <textarea
                   value={value}
@@ -809,7 +840,7 @@ function RuleEditor({
               )}
               {shown.length > 1 && (
                 <button
-                  onClick={() => removeCondition(t)}
+                  onClick={() => removeCondition(i)}
                   title="Remove condition"
                   className="p-1.5 text-muted-foreground hover:text-destructive flex-shrink-0 mt-0.5"
                 >
@@ -820,236 +851,494 @@ function RuleEditor({
           );
         })}
 
-        {addable.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] text-muted-foreground">Add:</span>
-            {addable.map((t) => (
-              <button
-                key={t}
-                onClick={() => setShown((s) => [...s, t])}
-                className="text-[11px] px-2 py-1 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-              >
-                <Plus size={10} className="inline -mt-0.5" /> {COND_META[t].label}
-              </button>
-            ))}
-          </div>
-        )}
-
-        <p className="text-[10px] text-muted-foreground">
-          AI Prompt is matched by the assistant; From/To/Subject/Body are literal
-          text matches.
-        </p>
-
-        {/* Category condition */}
-        <div className="pt-2 border-t border-border/60">
-          <span className="text-xs font-medium text-foreground">
-            Sender category (optional)
-          </span>
-          <select
-            value={draft.category_filter_type ?? ""}
-            onChange={(e) =>
-              set({
-                category_filter_type:
-                  (e.target.value || null) as "INCLUDE" | "EXCLUDE" | null,
-              })
-            }
-            className={`${INPUT_CLS} mt-1.5`}
+        {shown.length < COND_ORDER.length && (
+          <button
+            onClick={addCondition}
+            className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-dashed border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
           >
-            <option value="">No category filter</option>
-            <option value="INCLUDE">Only these categories</option>
-            <option value="EXCLUDE">Except these categories</option>
-          </select>
-          {draft.category_filter_type && (
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {EMAIL_CATEGORIES.map((c) => {
-                const on = draft.category_filters.includes(c);
-                return (
-                  <button
-                    key={c}
-                    onClick={() =>
-                      set({
-                        category_filters: on
-                          ? draft.category_filters.filter((x) => x !== c)
-                          : [...draft.category_filters, c],
-                      })
-                    }
-                    className={`text-[10px] px-2 py-1 rounded-full border transition-colors ${
-                      on
-                        ? "bg-primary/15 text-primary border-primary/40"
-                        : "border-border text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {c}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
+            <Plus size={13} /> Add Condition
+          </button>
+        )}
       </div>
 
       {/* Then — actions */}
-      <div className="bg-card border border-border rounded-xl p-3">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-medium text-foreground">Then…</span>
-          <button
-            onClick={() =>
-              set({ actions: [...draft.actions, { type: "ARCHIVE" }] })
-            }
-            className="flex items-center gap-1 text-xs text-primary hover:opacity-80"
-          >
-            <Plus size={12} /> Add action
-          </button>
-        </div>
-        <div className="space-y-2">
+      <div className="bg-card border border-border rounded-xl p-3.5 space-y-3">
+        <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <Zap size={16} className="text-emerald-500" />
+          Then
+        </span>
+        <div className="space-y-2.5">
           {draft.actions.map((a, i) => (
-            <div
-              key={i}
-              className="border border-border rounded-lg p-2 space-y-2 bg-secondary/30"
-            >
-              <div className="flex items-center gap-2">
-                <select
-                  value={a.type}
-                  onChange={(e) =>
-                    setAction(i, { type: e.target.value as RuleActionType })
-                  }
-                  title={ACTION_META[a.type].description}
-                  className={`${INPUT_CLS} flex-1`}
-                >
-                  {ACTION_TYPES.map((t) => (
-                    <option key={t} value={t}>
-                      {ACTION_META[t].label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() =>
-                    set({ actions: draft.actions.filter((_, idx) => idx !== i) })
-                  }
-                  className="p-1.5 text-muted-foreground hover:text-destructive flex-shrink-0"
-                >
-                  <X size={13} />
-                </button>
-              </div>
-              <p className="text-[10px] text-muted-foreground -mt-0.5">
-                {ACTION_META[a.type].description}
-              </p>
-
-              {(a.type === "LABEL" || a.type === "MOVE_FOLDER") && (
-                <input
-                  value={a.label ?? ""}
-                  onChange={(e) => setAction(i, { label: e.target.value })}
-                  placeholder={a.type === "LABEL" ? "Label name" : "Folder key"}
-                  className={INPUT_CLS}
-                />
-              )}
-              {a.type === "CALL_WEBHOOK" && (
-                <input
-                  value={a.url ?? ""}
-                  onChange={(e) => setAction(i, { url: e.target.value })}
-                  placeholder="https://…"
-                  className={INPUT_CLS}
-                />
-              )}
-              {DRAFT_ACTIONS.has(a.type) && (
-                <div className="space-y-2">
-                  <input
-                    value={a.to_address ?? ""}
-                    onChange={(e) => setAction(i, { to_address: e.target.value })}
-                    placeholder={
-                      a.type === "FORWARD"
-                        ? "Forward to (email)"
-                        : "To (defaults to the sender)"
-                    }
-                    className={INPUT_CLS}
-                  />
-                  <div className="grid grid-cols-2 gap-2">
-                    <input
-                      value={a.cc_address ?? ""}
-                      onChange={(e) => setAction(i, { cc_address: e.target.value })}
-                      placeholder="Cc (optional)"
-                      className={INPUT_CLS}
-                    />
-                    <input
-                      value={a.bcc_address ?? ""}
-                      onChange={(e) =>
-                        setAction(i, { bcc_address: e.target.value })
-                      }
-                      placeholder="Bcc (optional)"
-                      className={INPUT_CLS}
-                    />
-                  </div>
-                  <input
-                    value={a.subject ?? ""}
-                    onChange={(e) => setAction(i, { subject: e.target.value })}
-                    placeholder="Subject (optional)"
-                    className={INPUT_CLS}
-                  />
-                  <textarea
-                    value={a.content ?? ""}
-                    onChange={(e) => setAction(i, { content: e.target.value })}
-                    rows={2}
-                    placeholder={
-                      a.type === "FORWARD"
-                        ? "Note to add above the forwarded message (optional)"
-                        : "Draft text — leave blank to let the AI write the reply"
-                    }
-                    className={`${INPUT_CLS} resize-none`}
-                  />
-                  <p className="text-[10px] text-muted-foreground">
-                    Creates a draft for review — never auto-sends.
-                  </p>
-                  <ActionAttachments
-                    attachments={a.attachments ?? []}
-                    onChange={(att) => setAction(i, { attachments: att })}
-                  />
-                </div>
-              )}
-              {/* Delay — wait N minutes before running this action. */}
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] text-muted-foreground">Run after</span>
-                <input
-                  type="number"
-                  min={0}
-                  value={a.delay_minutes ?? ""}
-                  onChange={(e) =>
-                    setAction(i, {
-                      delay_minutes: e.target.value
-                        ? Math.max(0, parseInt(e.target.value, 10) || 0)
-                        : null,
+            <div key={i} className="flex items-start gap-2">
+              <select
+                value={a.type}
+                onChange={(e) =>
+                  setAction(i, { type: e.target.value as RuleActionType })
+                }
+                title={ACTION_META[a.type].description}
+                className={`${INPUT_CLS} w-40 flex-shrink-0`}
+              >
+                {ACTION_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {ACTION_META[t].label}
+                  </option>
+                ))}
+              </select>
+              <div className="flex-1 min-w-0">
+                <ActionConfig
+                  action={a}
+                  idx={i}
+                  set={(patch) => setAction(i, patch)}
+                  onRemove={() =>
+                    set({
+                      actions: draft.actions.filter((_, idx) => idx !== i),
                     })
                   }
-                  placeholder="0"
-                  className={`${INPUT_CLS} w-20`}
+                  availableLabels={availableLabels}
                 />
-                <span className="text-[10px] text-muted-foreground">
-                  minutes (0 = immediately)
-                </span>
               </div>
             </div>
           ))}
         </div>
+        <button
+          onClick={() => set({ actions: [...draft.actions, { type: "LABEL" }] })}
+          className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-dashed border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+        >
+          <Plus size={13} /> Add Action
+        </button>
       </div>
 
-      {/* Options */}
-      <div className="space-y-2">
-        <label className="flex items-start gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={draft.run_on_threads}
-            onChange={(e) => set({ run_on_threads: e.target.checked })}
-            className="accent-primary mt-0.5"
+      {/* Advanced options */}
+      <div className="border border-border rounded-xl bg-card overflow-hidden">
+        <button
+          onClick={() => setAdvancedOpen((o) => !o)}
+          className="w-full flex items-center gap-1.5 px-3.5 py-2.5 text-sm font-medium text-foreground hover:bg-secondary/40 transition-colors"
+        >
+          <ChevronRight
+            size={14}
+            className={`transition-transform ${advancedOpen ? "rotate-90" : ""}`}
           />
-          <span>
-            <span className="text-xs text-foreground">Apply to replies in a thread</span>
-            <span className="block text-[11px] text-muted-foreground">
-              Re-evaluate this rule on every new message in an ongoing
-              conversation (recommended for “To Reply” / “FYI”).
-            </span>
-          </span>
-        </label>
+          Advanced options
+        </button>
+        {advancedOpen && (
+          <div className="px-3.5 pb-3.5 pt-1 space-y-3 border-t border-border/60">
+            {/* Apply to threads */}
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={draft.run_on_threads}
+                onChange={(e) => set({ run_on_threads: e.target.checked })}
+                className="accent-primary mt-0.5"
+              />
+              <span>
+                <span className="text-xs text-foreground">Apply to threads</span>
+                <span className="block text-[11px] text-muted-foreground">
+                  Run on every reply in a conversation, not just the first
+                  message (recommended for “To Reply” / “FYI”).
+                </span>
+              </span>
+            </label>
+
+            {/* Sender category filter */}
+            <div className="pt-2 border-t border-border/60">
+              <span className="text-xs font-medium text-foreground">
+                Sender category (optional)
+              </span>
+              <select
+                value={draft.category_filter_type ?? ""}
+                onChange={(e) =>
+                  set({
+                    category_filter_type:
+                      (e.target.value || null) as "INCLUDE" | "EXCLUDE" | null,
+                  })
+                }
+                className={`${INPUT_CLS} mt-1.5`}
+              >
+                <option value="">No category filter</option>
+                <option value="INCLUDE">Only these categories</option>
+                <option value="EXCLUDE">Except these categories</option>
+              </select>
+              {draft.category_filter_type && (
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {EMAIL_CATEGORIES.map((c) => {
+                    const on = draft.category_filters.includes(c);
+                    return (
+                      <button
+                        key={c}
+                        onClick={() =>
+                          set({
+                            category_filters: on
+                              ? draft.category_filters.filter((x) => x !== c)
+                              : [...draft.category_filters, c],
+                          })
+                        }
+                        className={`text-[10px] px-2 py-1 rounded-full border transition-colors ${
+                          on
+                            ? "bg-primary/15 text-primary border-primary/40"
+                            : "border-border text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {c}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </Modal>
+  );
+}
+
+/**
+ * The right-hand configuration card for a single rule action — mirrors
+ * inbox-zero's per-action card with a "…" overflow menu and the per-field
+ * AI-vs-manual model (label combobox ↔ AI prompt; AI draft ↔ manual content
+ * with {{variables}}). Attachments + delay live behind the overflow menu.
+ */
+function ActionConfig({
+  action,
+  idx,
+  set,
+  onRemove,
+  availableLabels,
+}: {
+  action: RuleAction;
+  idx: number;
+  set: (patch: Partial<RuleAction>) => void;
+  onRemove: () => void;
+  availableLabels: string[];
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [showAttach, setShowAttach] = useState(
+    (action.attachments?.length ?? 0) > 0,
+  );
+
+  const isDraftReply = action.type === "DRAFT_EMAIL" || action.type === "REPLY";
+  const isForward = action.type === "FORWARD";
+  const draftLike = isDraftReply || isForward;
+  const delayable = action.type !== "CALL_WEBHOOK";
+  // Forward is inherently manual (a note above the forwarded body); reply/draft
+  // follow the explicit content_manual toggle (default = AI writes it).
+  const manual = isForward ? true : !!action.content_manual;
+
+  type MenuItem = { icon: React.ReactNode; label: string; onClick: () => void };
+  const menuItems: MenuItem[] = [];
+  if (action.type === "LABEL") {
+    menuItems.push(
+      action.label_ai
+        ? { icon: <Tag size={13} />, label: "Use a fixed label", onClick: () => set({ label_ai: false }) }
+        : { icon: <Sparkles size={13} />, label: "Use an AI prompt", onClick: () => set({ label_ai: true }) },
+    );
+  }
+  if (isDraftReply) {
+    menuItems.push(
+      manual
+        ? { icon: <Sparkles size={13} />, label: "Use AI draft", onClick: () => set({ content_manual: false }) }
+        : { icon: <Pencil size={13} />, label: "Set content manually", onClick: () => set({ content_manual: true }) },
+    );
+  }
+  if (draftLike) {
+    menuItems.push({
+      icon: <Paperclip size={13} />,
+      label: showAttach ? "Hide attachments" : "Configure attachments",
+      onClick: () => setShowAttach((v) => !v),
+    });
+  }
+  if (delayable) {
+    menuItems.push(
+      action.delay_minutes != null
+        ? { icon: <X size={13} />, label: "Remove delay", onClick: () => set({ delay_minutes: null }) }
+        : { icon: <ChevronDown size={13} />, label: "Add delay", onClick: () => set({ delay_minutes: 60 }) },
+    );
+  }
+
+  const dlId = `label-options-${idx}`;
+
+  return (
+    <div className="border border-border rounded-lg p-3 bg-secondary/30 space-y-3">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-[11px] text-muted-foreground">
+          {ACTION_META[action.type].description}
+        </p>
+        <div className="flex items-center gap-0.5 flex-shrink-0">
+          {menuItems.length > 0 && (
+            <div className="relative">
+              <button
+                onClick={() => setMenuOpen((o) => !o)}
+                title="More options"
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
+              >
+                <MoreHorizontal size={14} />
+              </button>
+              {menuOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+                  <div className="absolute right-0 top-7 z-20 w-52 rounded-lg border border-border bg-popover shadow-lg p-1">
+                    {menuItems.map((m, j) => (
+                      <button
+                        key={j}
+                        onClick={() => {
+                          m.onClick();
+                          setMenuOpen(false);
+                        }}
+                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-foreground hover:bg-secondary text-left"
+                      >
+                        {m.icon}
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          <button
+            onClick={onRemove}
+            title="Delete action"
+            className="p-1 rounded text-muted-foreground hover:text-destructive"
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+      </div>
+
+      {/* Categorize (LABEL): label combobox or AI prompt */}
+      {action.type === "LABEL" && (
+        action.label_ai ? (
+          <>
+            <input
+              value={action.label ?? ""}
+              onChange={(e) => set({ label: e.target.value })}
+              placeholder={'e.g. {{choose "urgent", "normal", or "low"}}'}
+              className={INPUT_CLS}
+            />
+            <VariablesHint />
+          </>
+        ) : (
+          <>
+            <input
+              list={dlId}
+              value={action.label ?? ""}
+              onChange={(e) => set({ label: e.target.value })}
+              placeholder="Select a label"
+              className={INPUT_CLS}
+            />
+            <datalist id={dlId}>
+              {availableLabels.map((l) => (
+                <option key={l} value={l} />
+              ))}
+            </datalist>
+          </>
+        )
+      )}
+
+      {action.type === "MOVE_FOLDER" && (
+        <input
+          value={action.label ?? ""}
+          onChange={(e) => set({ label: e.target.value })}
+          placeholder="Folder key"
+          className={INPUT_CLS}
+        />
+      )}
+
+      {action.type === "CALL_WEBHOOK" && (
+        <input
+          value={action.url ?? ""}
+          onChange={(e) => set({ url: e.target.value })}
+          placeholder="https://…"
+          className={INPUT_CLS}
+        />
+      )}
+
+      {/* Draft reply — AI mode (default) */}
+      {draftLike && !manual && (
+        <>
+          <p className="text-xs text-muted-foreground">
+            Our AI generates a draft reply from your email history and knowledge
+            base.
+          </p>
+          <DraftToSection />
+        </>
+      )}
+
+      {/* Draft reply / forward — manual content */}
+      {draftLike && manual && (
+        <div className="space-y-2">
+          <FieldLabel>Content</FieldLabel>
+          <textarea
+            value={action.content ?? ""}
+            onChange={(e) => set({ content: e.target.value })}
+            rows={3}
+            placeholder={
+              isForward
+                ? "Note to add above the forwarded message (optional)"
+                : "Reply text — supports {{variables}}"
+            }
+            className={`${INPUT_CLS} resize-none`}
+          />
+          <FieldLabel>Subject</FieldLabel>
+          <input
+            value={action.subject ?? ""}
+            onChange={(e) => set({ subject: e.target.value })}
+            placeholder="Subject (optional)"
+            className={INPUT_CLS}
+          />
+          <FieldLabel>To</FieldLabel>
+          <input
+            value={action.to_address ?? ""}
+            onChange={(e) => set({ to_address: e.target.value })}
+            placeholder={
+              isForward ? "Forward to (email)" : "To (defaults to the sender)"
+            }
+            className={INPUT_CLS}
+          />
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <FieldLabel>CC</FieldLabel>
+              <input
+                value={action.cc_address ?? ""}
+                onChange={(e) => set({ cc_address: e.target.value })}
+                placeholder="Cc (optional)"
+                className={`${INPUT_CLS} mt-1`}
+              />
+            </div>
+            <div>
+              <FieldLabel>BCC</FieldLabel>
+              <input
+                value={action.bcc_address ?? ""}
+                onChange={(e) => set({ bcc_address: e.target.value })}
+                placeholder="Bcc (optional)"
+                className={`${INPUT_CLS} mt-1`}
+              />
+            </div>
+          </div>
+          <VariablesHint />
+          <p className="text-[10px] text-muted-foreground">
+            Creates a draft for review — never auto-sends.
+          </p>
+          <DraftToSection />
+        </div>
+      )}
+
+      {/* Attachments (draft/reply/forward) — behind "Configure attachments" */}
+      {draftLike && showAttach && (
+        <div className="pt-2 border-t border-border/60 space-y-1.5">
+          <FieldLabel>Attachments</FieldLabel>
+          <ActionAttachments
+            attachments={action.attachments ?? []}
+            onChange={(att) => set({ attachments: att })}
+          />
+        </div>
+      )}
+
+      {/* Delay — behind "Add delay" */}
+      {delayable && action.delay_minutes != null && (
+        <div className="flex items-center gap-2 pt-1">
+          <span className="text-[10px] text-muted-foreground">Run after</span>
+          <input
+            type="number"
+            min={0}
+            value={action.delay_minutes ?? ""}
+            onChange={(e) =>
+              set({
+                delay_minutes: e.target.value
+                  ? Math.max(0, parseInt(e.target.value, 10) || 0)
+                  : 0,
+              })
+            }
+            placeholder="0"
+            className={`${INPUT_CLS} w-20`}
+          />
+          <span className="text-[10px] text-muted-foreground">
+            minutes (0 = immediately)
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Small field label used inside the action config card. */
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="text-xs font-medium text-foreground">{children}</span>
+  );
+}
+
+/**
+ * "Draft to" delivery row — Email is always on (drafts land in the inbox).
+ * Messaging-channel delivery (Slack/Telegram) is shown for parity but not yet
+ * wired, so the connect button is disabled.
+ */
+function DraftToSection() {
+  return (
+    <div className="pt-2 border-t border-border/60">
+      <span className="text-xs font-medium text-foreground">Draft to</span>
+      <label className="flex items-center gap-2 mt-1.5">
+        <input
+          type="checkbox"
+          checked
+          disabled
+          readOnly
+          className="accent-primary"
+          title="Drafts always appear in your inbox"
+        />
+        <span className="text-xs text-foreground">
+          Email{" "}
+          <span className="text-muted-foreground">
+            — Draft appears in your inbox
+          </span>
+        </span>
+      </label>
+      <button
+        type="button"
+        disabled
+        title="Coming soon"
+        className="mt-2 text-[11px] px-2.5 py-1.5 rounded-md border border-border text-muted-foreground opacity-60 cursor-not-allowed"
+      >
+        Connect Slack or Telegram
+      </button>
+    </div>
+  );
+}
+
+/** Blue {{variables}} hint banner with an inline examples disclosure. */
+function VariablesHint() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 px-2.5 py-2 text-[11px]">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-blue-600 dark:text-blue-400">
+          ✨ Use {"{{variables}}"} for personalized content
+        </span>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="px-1.5 py-0.5 rounded border border-blue-500/30 text-blue-600 dark:text-blue-400 hover:bg-blue-500/10"
+        >
+          See examples
+        </button>
+      </div>
+      {open && (
+        <ul className="mt-2 space-y-1 text-muted-foreground">
+          <li>
+            <code className="text-foreground">{"{{name}}"}</code> — the sender’s
+            name
+          </li>
+          <li>
+            <code className="text-foreground">{"{{summarize the email}}"}</code>{" "}
+            — a short summary of their message
+          </li>
+          <li>
+            <code className="text-foreground">{'{{choose "urgent", "normal"}}'}</code>{" "}
+            — let the AI pick a value
+          </li>
+        </ul>
+      )}
+    </div>
   );
 }
 

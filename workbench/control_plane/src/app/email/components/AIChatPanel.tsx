@@ -589,43 +589,95 @@ function toolMeta(name: string) {
   );
 }
 
+/** Tools whose result is content worth reading in full (email body, draft). */
+const RICH_RESULT_TOOLS = new Set([
+  "read_email", "draft_reply", "draft_email", "search_emails", "search_inbox",
+  "list_rules",
+]);
+
 /** Inline AG-UI cards showing what the assistant did this turn. */
 function ToolCards({ events }: { events: ChatToolEvent[] }) {
   if (!events.length) return null;
   return (
     <div className="space-y-1.5">
-      {events.map((e) => {
-        const meta = toolMeta(e.name);
-        const Icon = e.done ? (e.success === false ? X : CheckCircle2) : meta.icon;
-        return (
-          <div
-            key={e.id}
-            className="flex items-start gap-2 rounded-lg border border-sidebar-border bg-secondary/40 px-2.5 py-1.5"
-          >
-            <span
-              className={`mt-0.5 flex-shrink-0 ${
-                e.done
-                  ? e.success === false
-                    ? "text-destructive"
-                    : "text-emerald-500"
-                  : "text-primary"
+      {events.map((e) => (
+        <ToolCard key={e.id} event={e} />
+      ))}
+    </div>
+  );
+}
+
+function ToolCard({ event: e }: { event: ChatToolEvent }) {
+  const meta = toolMeta(e.name);
+  const Icon = e.done ? (e.success === false ? X : CheckCircle2) : meta.icon;
+  const rich = RICH_RESULT_TOOLS.has(e.name);
+  const result = (e.result || "").trim();
+  const long = result.length > 140;
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const copy = () => {
+    navigator.clipboard?.writeText(result).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  return (
+    <div className="rounded-lg border border-sidebar-border bg-secondary/40 px-2.5 py-1.5">
+      <div className="flex items-start gap-2">
+        <span
+          className={`mt-0.5 flex-shrink-0 ${
+            e.done
+              ? e.success === false
+                ? "text-destructive"
+                : "text-emerald-500"
+              : "text-primary"
+          }`}
+        >
+          {e.done ? <Icon size={13} /> : <Loader2 size={13} className="animate-spin" />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-medium text-foreground">
+              {e.done ? meta.label : meta.running}
+            </span>
+            {e.done && result && (
+              <div className="ml-auto flex items-center gap-1.5">
+                {rich && (
+                  <button
+                    onClick={copy}
+                    className="text-[9px] text-muted-foreground hover:text-foreground"
+                  >
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                )}
+                {long && (
+                  <button
+                    onClick={() => setExpanded((v) => !v)}
+                    className="text-[9px] text-primary hover:opacity-80"
+                  >
+                    {expanded ? "Less" : "More"}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+          {e.done && result && (
+            <div
+              className={`mt-0.5 text-[10px] text-muted-foreground whitespace-pre-wrap ${
+                expanded
+                  ? "max-h-64 overflow-y-auto"
+                  : rich
+                    ? "line-clamp-3"
+                    : "line-clamp-2"
               }`}
             >
-              {e.done ? <Icon size={13} /> : <Loader2 size={13} className="animate-spin" />}
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="text-[11px] font-medium text-foreground">
-                {e.done ? meta.label : meta.running}
-              </div>
-              {e.done && e.result && (
-                <div className="text-[10px] text-muted-foreground line-clamp-2 whitespace-pre-wrap">
-                  {e.result}
-                </div>
-              )}
+              {result}
             </div>
-          </div>
-        );
-      })}
+          )}
+        </div>
+      </div>
     </div>
   );
 }

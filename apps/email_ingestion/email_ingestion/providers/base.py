@@ -188,8 +188,12 @@ class BaseEmailProvider(ABC):
         ...
 
     @abstractmethod
-    async def trash_message(self, provider_message_id: str) -> None:
-        """Move message to trash."""
+    async def trash_message(self, provider_message_id: str) -> str | None:
+        """Move message to trash.
+
+        Returns the message's new provider id if the operation re-keys it
+        (e.g. Outlook /move issues a new id), otherwise ``None``.
+        """
         ...
 
     async def apply_flags(
@@ -207,12 +211,17 @@ class BaseEmailProvider(ABC):
         """
         return None
 
-    async def move_to_folder(self, provider_message_id: str, folder: str) -> None:
+    async def move_to_folder(
+        self, provider_message_id: str, folder: str
+    ) -> str | None:
         """Move a message to the given canonical folder on the provider.
 
         ``folder`` is a canonical key (inbox/archive/trash/junk/...).  Default
         implementation is a no-op; providers override with their semantics
         (Gmail = label changes, Outlook = /move, IMAP = COPY+EXPUNGE).
+
+        Returns the message's new provider id if the move re-keys it (Outlook
+        /move returns a fresh id), otherwise ``None`` (id unchanged).
         """
         return None
 

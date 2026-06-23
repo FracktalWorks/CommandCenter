@@ -47,6 +47,7 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
   const [statusTab, setStatusTab] = useState<StatusTab>("all");
   const [categorizing, setCategorizing] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [sortBy, setSortBy] = useState<"count" | "read">("count");
 
   const load = useCallback(() => {
     if (!accountId) {
@@ -76,8 +77,13 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
             !filter ||
             s.email.toLowerCase().includes(filter.toLowerCase()) ||
             s.name.toLowerCase().includes(filter.toLowerCase())
+        )
+        .sort((a, b) =>
+          // "Most emails" (volume) or "Least read" (read-rate ascending —
+          // surfaces the senders most worth unsubscribing from).
+          sortBy === "read" ? a.read_rate - b.read_rate : b.count - a.count
         ),
-    [senders, onlyNewsletters, statusTab, filter]
+    [senders, onlyNewsletters, statusTab, filter, sortBy]
   );
 
   // Status counts for the tab badges (respecting the newsletters-only toggle).
@@ -205,6 +211,24 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
           />
           Newsletters only
         </label>
+        <div className="flex items-center gap-1 bg-secondary rounded-md p-0.5">
+          {(["count", "read"] as const).map((k) => (
+            <button
+              key={k}
+              onClick={() => setSortBy(k)}
+              title={
+                k === "count" ? "Sort by volume" : "Sort by least-read first"
+              }
+              className={`px-2 py-1 rounded text-[11px] transition-colors ${
+                sortBy === k
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {k === "count" ? "Most emails" : "Least read"}
+            </button>
+          ))}
+        </div>
         <button
           onClick={runCategorize}
           disabled={categorizing}

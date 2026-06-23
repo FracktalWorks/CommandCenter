@@ -12,6 +12,7 @@ Dynamic Agent Loader entry point.
 from __future__ import annotations
 
 import os
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -445,9 +446,12 @@ async def update_assistant_settings(
     personal_instructions: str | None = None,
     writing_style: str | None = None,
     draft_replies: bool | None = None,
+    follow_up_awaiting_days: int | None = None,
+    follow_up_needs_reply_days: int | None = None,
+    follow_up_auto_draft: bool | None = None,
 ) -> str:
-    """Update assistant settings. Only the fields you pass change; the rest are
-    preserved.
+    """Update assistant settings. Only the fields you pass change; every other
+    setting is preserved.
 
     Args:
         about: free-text context about the user (used when drafting).
@@ -458,27 +462,33 @@ async def update_assistant_settings(
             (e.g. "Never commit to dates without checking with me.").
         writing_style: tone/length/style guide for drafted replies.
         draft_replies: auto-draft replies for emails that need one.
+        follow_up_awaiting_days: remind/label when THEY haven't replied after N
+            days (0 disables). Pairs with find_follow_ups.
+        follow_up_needs_reply_days: remind/label when YOU haven't replied after N
+            days (0 disables).
+        follow_up_auto_draft: when on, follow-up scans also draft a nudge.
     """
+    # Start from the current settings so a PUT preserves EVERY field this tool
+    # doesn't explicitly change (digest config, draft_confidence, follow-up
+    # windows, multi-rule, sensitive-data protection, …).
     cur = await _get("/email/assistant/settings", {"account_id": account_id})
+    body: dict[str, Any] = dict(cur)
+    body["account_id"] = account_id
 
-    def pick(val: Any, key: str, default: Any) -> Any:
-        return val if val is not None else cur.get(key, default)
+    def setif(key: str, val: Any) -> None:
+        if val is not None:
+            body[key] = val
 
-    body = {
-        "account_id": account_id,
-        "about": pick(about, "about", ""),
-        "signature": pick(signature, "signature", ""),
-        "auto_run": pick(auto_run, "auto_run", False),
-        "cold_email_blocker": pick(cold_email_blocker, "cold_email_blocker", "OFF"),
-        # Preserve fields this tool doesn't edit so a PUT doesn't reset them.
-        "agent_model": cur.get("agent_model", "tier-balanced"),
-        "digest_frequency": cur.get("digest_frequency", "OFF"),
-        "follow_up_days": cur.get("follow_up_days", 0),
-        "personal_instructions": pick(
-            personal_instructions, "personal_instructions", ""),
-        "writing_style": pick(writing_style, "writing_style", ""),
-        "draft_replies": pick(draft_replies, "draft_replies", True),
-    }
+    setif("about", about)
+    setif("signature", signature)
+    setif("auto_run", auto_run)
+    setif("cold_email_blocker", cold_email_blocker)
+    setif("personal_instructions", personal_instructions)
+    setif("writing_style", writing_style)
+    setif("draft_replies", draft_replies)
+    setif("follow_up_awaiting_days", follow_up_awaiting_days)
+    setif("follow_up_needs_reply_days", follow_up_needs_reply_days)
+    setif("follow_up_auto_draft", follow_up_auto_draft)
     await _patch_settings(body)
     return "Assistant settings updated."
 
@@ -543,6 +553,58 @@ async def _patch_settings(body: dict[str, Any]) -> Any:
         return resp.json()
 
 
+async def find_follow_ups(account_id: str) -> str:
+    """Scan NOW for threads waiting too long for a reply, label them "Follow-up",
+    and — when follow-up auto-draft is on — draft nudges. Use when the user asks
+    to "find follow-ups", "chase replies", or "draft follow-ups".
+
+    Respects the configured reminder windows; if none are set, ask the user how
+    many days to wait and set them via update_assistant_settings first."""
+    res = await _post("/email/follow-ups/scan", {"account_id": account_id})
+    if not res.get("configured"):
+        return (
+            "Follow-up reminder windows aren't set yet. Ask the user how many "
+            "days to wait before nudging (when they haven't replied, and when "
+            "you haven't), set them with update_assistant_settings "
+            "(follow_up_awaiting_days / follow_up_needs_reply_days), then scan "
+            "again."
+        )
+    scanned = res.get("scanned", 0)
+    if not scanned:
+        return "No threads are waiting past the reminder windows — all current."
+    drafted = res.get("drafted", 0)
+    note = f", drafted {drafted} nudge(s)" if drafted else ""
+    return (
+        f"Found {scanned} follow-up(s); labelled {res.get('labeled', 0)} "
+        f'"Follow-up"{note}. Drafts (if any) are in the Drafts folder for review.'
+    )
+
+
+async def process_past_emails(
+    account_id: str, days: int = 7, include_read: bool = True
+) -> str:
+    """Run the automation rules over PAST inbox mail from the last `days` days
+    (inbox-zero "Process past emails"): applies matched rules + drafts and logs
+    to History. Use when the user asks to apply rules to existing/old mail.
+
+    Args:
+        days: how far back to process (default 7).
+        include_read: false = only unread mail in the range.
+    """
+    start = (date.today() - timedelta(days=max(1, days))).isoformat()
+    res = await _post("/email/rules/process-past", {
+        "account_id": account_id, "start_date": start,
+        "is_test": False, "include_read": include_read,
+    })
+    n = res.get("count", 0)
+    if not n:
+        return "No emails found in that range to process."
+    return (
+        f"Processing {n} past email(s) from the last {days} day(s) — applied "
+        "actions stream into the History tab."
+    )
+
+
 async def suggest_unsubscribes(account_id: str | None = None) -> str:
     """Surface likely newsletters/subscriptions to consider unsubscribing from."""
     params: dict[str, Any] = {"folder": "inbox", "limit": "200"}
@@ -591,6 +653,8 @@ _TOOLS = [
     list_knowledge,
     add_knowledge,
     generate_writing_style,
+    find_follow_ups,
+    process_past_emails,
     suggest_unsubscribes,
 ]
 
@@ -603,28 +667,57 @@ def _register_agent_tools() -> dict[str, Any]:
 # ── MAF agent factory (Dynamic Agent Loader entry point) ─────────────────────
 
 def _llm_provider() -> dict[str, Any]:
-    """BYOK provider config pointing at the gateway's /v1 (litellm SDK)."""
-    base_url = os.environ.get("LITELLM_BASE_URL", "http://127.0.0.1:8080")
-    api_key = os.environ.get("LITELLM_MASTER_KEY", "sk-local")
+    """BYOK provider config pointing at the gateway's /v1 (litellm SDK).
+
+    Prefer the gateway's real key from Settings (``litellm_master_key``) over a
+    bare ``sk-local`` fallback — an unauthenticated /v1 call makes the Copilot
+    SDK drop to a NATIVE Copilot session (402). The executor also re-applies this
+    provider for Copilot-SDK agents, but keep it correct here for any path that
+    doesn't (e.g. direct quick-action tool calls)."""
+    settings = get_settings()
+    base_url = (
+        os.environ.get("LITELLM_BASE_URL", "")
+        or getattr(settings, "litellm_base_url", "")
+        or "http://127.0.0.1:8080"
+    ).rstrip("/")
+    api_key = (
+        os.environ.get("LITELLM_MASTER_KEY", "")
+        or getattr(settings, "litellm_master_key", "")
+        or "sk-local"
+    )
     return {"type": "openai", "base_url": f"{base_url}/v1", "api_key": api_key}
 
 
 def build_agents() -> list[Any]:
-    """Construct the Email Assistant MAF agent. Imported lazily so the module
-    still loads where the Copilot SDK isn't importable."""
-    from agent_framework_github_copilot import GitHubCopilotAgent  # noqa: PLC0415
-    from copilot.types import PermissionHandler  # noqa: PLC0415
+    """Construct the Email Assistant as a NATIVE MAF agent backed by the LiteLLM
+    gateway.
 
+    A pure tool+instructions assistant doesn't need the GitHub Copilot SDK's
+    shell/file/git/session machinery (that's for coding agents). So we use
+    agent_framework's native ``Agent`` with an OpenAI-compatible client pointed
+    at the gateway's ``/v1``. The gateway resolves the ``tier-balanced`` alias to
+    the configured provider model (DeepSeek), so the agent always runs on the
+    chosen LiteLLM tier — never native GitHub Copilot. Imported lazily so the
+    module still loads where the optional deps differ."""
+    from agent_framework import Agent  # noqa: PLC0415
+    from agent_framework.openai import OpenAIChatClient  # noqa: PLC0415
+
+    prov = _llm_provider()  # {type, base_url=…/v1, api_key=gateway master key}
+    client = OpenAIChatClient(
+        model=os.environ.get("EMAIL_AGENT_MODEL", "tier-balanced"),
+        api_key=prov["api_key"],
+        base_url=prov["base_url"],
+    )
     return [
-        GitHubCopilotAgent(
+        Agent(
+            client=client,
             instructions=INSTRUCTIONS,
-            tools=_TOOLS,
-            default_options={
-                "model": "tier-balanced",
-                "provider": _llm_provider(),
-                "mcp_servers": {},
-                "on_permission_request": PermissionHandler.approve_all,
-            },
+            name="email-assistant",
+            description=(
+                "Reads, triages, categorizes, automates, and drafts email; "
+                "manages rules, follow-ups, and the knowledge base."
+            ),
+            tools=list(_TOOLS),
         )
     ]
 

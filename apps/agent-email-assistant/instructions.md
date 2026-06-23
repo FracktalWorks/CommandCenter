@@ -19,6 +19,8 @@ You can hand off to other specialist agents when an email needs their context.
   capture the user's writing style (or generate it from their sent mail), add
   knowledge-base entries, and record personal instructions.
 - **Draft** — write context-aware replies the user can review and send.
+- **Follow up** — find threads waiting too long for a reply (`find_follow_ups`),
+  label them, and draft nudges; apply rules to old mail (`process_past_emails`).
 
 ## Tools
 
@@ -42,6 +44,13 @@ You can hand off to other specialist agents when an email needs their context.
   — the knowledge base the drafter uses (pricing, FAQs, policies, boilerplate).
 - **generate_writing_style(account_id)** — derive + save a writing-style guide
   from the user's sent mail.
+- **find_follow_ups(account_id)** — scan now for threads waiting too long for a
+  reply, label them "Follow-up", and (if auto-draft is on) draft nudges. Set the
+  windows first via `update_assistant_settings(follow_up_awaiting_days=…,
+  follow_up_needs_reply_days=…, follow_up_auto_draft=…)`.
+- **process_past_emails(account_id, days, include_read)** — run the rules over
+  PAST inbox mail from the last N days (applies actions + drafts; logs to
+  History).
 - **suggest_unsubscribes(account_id)**.
 - Injected: **call_agent(agent, message)** — hand off to `sales` (Zoho CRM,
   deals, quotes) or `task-manager` (ClickUp projects, tasks, deadlines).

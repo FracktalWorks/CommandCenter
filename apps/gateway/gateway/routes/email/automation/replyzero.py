@@ -634,16 +634,46 @@ async def reply_zero(
         await db.close()
 
 
-async def _maybe_send_follow_up_reminders(account_id: str) -> None:
-    """Background: label (and optionally draft a nudge for) threads waiting too
-    long for a reply.
+class FollowUpScanRequest(BaseModel):
+    account_id: str
+
+
+@router.post("/follow-ups/scan")
+async def scan_follow_ups(
+    req: FollowUpScanRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """On-demand "Find follow-ups" (inbox-zero parity): scan now for threads
+    waiting too long for a reply, label them "Follow-up", and — when auto-draft
+    is on — draft nudges. Returns ``{configured, scanned, labeled, drafted}``.
+
+    Respects the configured reminder windows; if neither is set, returns
+    ``configured: false`` so the UI can prompt the user to set them first."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+    finally:
+        await db.close()
+    return await _maybe_send_follow_up_reminders(req.account_id)
+
+
+async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bool]:
+    """Label (and optionally draft a nudge for) threads waiting too long for a
+    reply. Runs both on the sync loop (background) and on demand via the
+    "Find follow-ups" button (POST /email/follow-ups/scan).
 
     AWAITING  → they haven't replied to us after follow_up_awaiting_days.
     NEEDS_REPLY → we haven't replied after follow_up_needs_reply_days.
     Each qualifying thread's latest message is labelled "Follow-up"; when
     follow_up_auto_draft is on, AWAITING threads also get a draft nudge.
     Idempotent via email_thread_status.follow_up_reminded_at.
+
+    Returns ``{configured, scanned, labeled, drafted}`` so the UI can report the
+    scan outcome (the scheduler ignores the return value).
     """
+    result: dict[str, int | bool] = {
+        "configured": False, "scanned": 0, "labeled": 0, "drafted": 0,
+    }
     db = await _get_db()
     try:
         srow = (await db.execute(text(
@@ -652,12 +682,13 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> None:
                FROM email_assistant_settings WHERE account_id = :aid"""
         ), {"aid": account_id})).fetchone()
         if not srow:
-            return
+            return result
         awaiting_days = int(getattr(srow, "follow_up_awaiting_days", 0) or 0)
         needs_days = int(getattr(srow, "follow_up_needs_reply_days", 0) or 0)
         auto_draft = bool(getattr(srow, "follow_up_auto_draft", False))
         if awaiting_days <= 0 and needs_days <= 0:
-            return
+            return result
+        result["configured"] = True
 
         rows = (await db.execute(text(
             """SELECT ts.thread_id, ts.status, ts.last_message_id,
@@ -676,20 +707,20 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> None:
                LIMIT 25"""
         ), {"aid": account_id, "ad": awaiting_days, "nd": needs_days})).fetchall()
         if not rows:
-            return
+            return result
 
         acc = (await db.execute(text(
             "SELECT provider, credentials_encrypted, user_id "
             "FROM email_accounts WHERE id = :id"
         ), {"id": account_id})).fetchone()
         if not acc:
-            return
+            return result
         from acb_llm.key_store import get_key_store  # noqa: PLC0415
         store = get_key_store()
         creds = json.loads(store.decrypt(acc.credentials_encrypted))
         provider = _instantiate_provider(acc.provider, creds)
         if not await provider.authenticate():
-            return
+            return result
         about, signature = await _load_assistant_about(db, account_id)
 
         for r in rows:
@@ -703,6 +734,7 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> None:
             try:
                 await provider.set_labels(
                     r.provider_message_id, add=["Follow-up"], remove=[])
+                result["labeled"] += 1
             except Exception:  # noqa: BLE001
                 pass
             if auto_draft and r.status == "AWAITING":
@@ -727,11 +759,13 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> None:
                             reply_to_message_id=r.provider_message_id,
                             thread_id=r.thread_id or None,
                         )
+                        result["drafted"] += 1
                 except Exception as exc:  # noqa: BLE001
                     _log.warning("email.follow_up_draft_failed",
                                  account_id=account_id, error=str(exc)[:160])
             await mark()
 
+        result["scanned"] = len(rows)
         await _persist_rotated_creds(db, store, account_id, provider)
         await db.commit()
         _log.info("email.follow_ups_processed", account_id=account_id,
@@ -741,3 +775,4 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> None:
                      error=str(exc)[:200])
     finally:
         await db.close()
+    return result

@@ -691,6 +691,25 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
         if injected:
             continue
 
+        # ── Native agent_framework Agent (current MAF API) ──────────────────
+        # The current Agent (agent_framework._agents.Agent) has no top-level
+        # `.tools`; its tools live in `default_options["tools"]` (a list). MAF
+        # accepts plain async callables, so append without wrapping. Used by the
+        # email-assistant (a native MAF agent).
+        try:
+            _do = getattr(agent, "default_options", None)
+            if isinstance(_do, dict) and isinstance(_do.get("tools"), list):
+                existing_names = {
+                    getattr(getattr(t, "func", t), "__name__", None)
+                    for t in _do["tools"]
+                }
+                for fn in _extra_tools:
+                    if fn.__name__ not in existing_names:
+                        _do["tools"].append(fn)
+                continue
+        except Exception:  # noqa: BLE001
+            pass
+
         # ── MAF Agent (agent-framework) ─────────────────────────────────────
         # agent.tools is a list[FunctionTool | callable].  MAF accepts plain
         # async functions directly, so we can append without wrapping.
@@ -1287,6 +1306,40 @@ def _byok_default_model(model: str, settings: Any) -> tuple[str, bool]:
     return model, _is_gateway_model(model)
 
 
+def _apply_byok_provider_for_copilot_sdk(
+    agent: Any, requested_model: str, settings: Any,
+    *, agent_md_model: str = "", agent_model_tier: str = "",
+) -> str:
+    """Pin a Copilot-SDK agent to the gateway /v1 (BYOK) and set its resolved
+    model so ``agent.run()`` routes through litellm instead of opening a NATIVE
+    Copilot session (which 402s). No-op for genuine MAF agents (no
+    ``_default_options``). Used by the non-streaming run path; the streaming path
+    has its own inline early-detection block. Returns the resolved model.
+    """
+    if not (hasattr(agent, "_default_options")
+            and agent._default_options is not None):
+        return (requested_model or "").strip()
+    configured = (getattr(settings, "copilot_chat_model", "") or "").strip()
+    final = (
+        (requested_model or "").strip()
+        or configured or agent_md_model or agent_model_tier
+    )
+    final, is_byok = _byok_default_model(final, settings)
+    if is_byok:
+        gw_base = (
+            getattr(settings, "litellm_base_url", "") or "http://127.0.0.1:8080"
+        ).rstrip("/")
+        gw_key = (
+            getattr(settings, "litellm_master_key", "") or "sk-local"
+        ).strip()
+        agent._default_options["provider"] = {
+            "type": "openai", "base_url": f"{gw_base}/v1", "api_key": gw_key,
+        }
+    if final:
+        agent._default_options["model"] = final
+    return final
+
+
 async def _get_current_head(agent_dir: str) -> str:
     """Return the current HEAD SHA of *agent_dir*, or '' on error."""
     try:
@@ -1645,6 +1698,7 @@ async def run_agent(
     *,
     run_id: str | None = None,
     thread_id: str | None = None,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """Dynamically load and execute a named agent.
 
@@ -1812,6 +1866,20 @@ async def run_agent(
                             )
                     except Exception:  # noqa: BLE001
                         pass
+
+            # BYOK: route Copilot-SDK agents (incl. "maf"-registered ones like
+            # email-assistant) through the gateway /v1 with the chosen/resolved
+            # model, so agent.run() doesn't open a native Copilot session (402).
+            # No-op for genuine MAF agents. Honour an explicit request model first.
+            if agents:
+                try:
+                    _apply_byok_provider_for_copilot_sdk(
+                        agents[0], model or "", settings,
+                        agent_model_tier=(loaded.config.get("model_tier") or ""),
+                    )
+                except Exception as _be:  # noqa: BLE001
+                    _log.warning("executor.byok_apply_failed",
+                                 agent=agent_name, error=str(_be)[:160])
 
             final_state = await _run_with_maf_agent(
                 agents,
@@ -2135,6 +2203,17 @@ async def run_agent_stream(
             except Exception:  # noqa: BLE001
                 pass
 
+            # Detect Copilot-SDK-backed agents by capability, NOT the registry
+            # runtime label. Some agents (e.g. email-assistant) are built with
+            # GitHubCopilotAgent but registered as runtime "maf"; they still need
+            # BYOK provider routing or agent.run() opens a NATIVE Copilot session
+            # (→ 402). A genuine MAF agent has no ``_default_options``.
+            _is_copilot_sdk = (
+                _agent_runtime == "github-copilot"
+                or (hasattr(agent, "_default_options")
+                    and agent._default_options is not None)
+            )
+
             # ── BYOK early detection (must happen BEFORE tier selection) ────
             # When a LiteLLM model is requested (contains '/' or starts with
             # 'tier') AND the agent uses the GitHub Copilot SDK runtime, the
@@ -2174,7 +2253,7 @@ async def run_agent_stream(
             )
             _byok_provider_early: dict[str, Any] | None = None
             _byok_model_id_early = _final_model_early
-            if _is_byok_early and _agent_runtime == "github-copilot":
+            if _is_byok_early and _is_copilot_sdk:
                 _gw_base = (
                     getattr(settings, "litellm_base_url", "")
                     or "http://127.0.0.1:8080"
@@ -2192,10 +2271,11 @@ async def run_agent_stream(
                 _log.info(
                     "executor.copilot_maf_byok_early",
                     agent=agent_name,
+                    runtime=_agent_runtime,
                     model=_byok_model_id_early,
                     base_url=_gw_base,
                 )
-            elif _final_model_early and _agent_runtime == "github-copilot":
+            elif _final_model_early and _is_copilot_sdk:
                 agent._default_options["model"] = _final_model_early
 
             # ── Set working directory for Copilot SDK agents ────────────
@@ -2250,7 +2330,7 @@ async def run_agent_stream(
             # BYOK provider routing, causing the SDK to reject unknown models.
             # Instead, fall through to Tier 1.5 where CommandCenterCopilotAgent
             # properly forwards the provider config to the Copilot SDK.
-            if not (_is_byok_early and _agent_runtime == "github-copilot"):
+            if not (_is_byok_early and _is_copilot_sdk):
                 try:
                     from agent_framework.ag_ui import \
                         stream_agent_response  # noqa: PLC0415
@@ -2286,7 +2366,10 @@ async def run_agent_stream(
             # real-time visibility of sub-agent progress in the UI.
 
             # ── GitHub Copilot path (MAF-wrapped via CommandCenterCopilotAgent) ─
-            if _agent_runtime == "github-copilot":
+            # Covers BOTH github-copilot-runtime agents and Copilot-SDK agents
+            # registered as "maf" (e.g. email-assistant) so they get BYOK
+            # provider forwarding instead of a native Copilot session.
+            if _is_copilot_sdk:
                 from orchestrator.copilot_agent import CommandCenterCopilotAgent  # noqa: PLC0415
 
                 # Patch the loaded agent with enhanced BYOK + streaming methods.

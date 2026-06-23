@@ -1385,6 +1385,7 @@ async def run_agent_sync(
             req.payload,
             run_id=run_id,
             thread_id=req.thread_id,
+            model=req.model,
         )
         return AgentRunResponse(
             run_id=run_id,
@@ -1420,7 +1421,8 @@ async def run_agent_async(
 
     async def _run() -> None:
         try:
-            await run_agent(agent, req.payload, run_id=run_id, thread_id=req.thread_id)
+            await run_agent(agent, req.payload, run_id=run_id,
+                            thread_id=req.thread_id, model=req.model)
         except Exception as exc:  # noqa: BLE001
             _log.error(
                 "agent.async_run_error",

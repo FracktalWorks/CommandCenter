@@ -7,6 +7,9 @@ dependencies = [
     "acb-common",
     "acb-skills",
     "agent-framework-core>=1.8.0",
+    # Native MAF chat client → LiteLLM gateway /v1 (the agent uses agent_framework
+    # Agent + OpenAIChatClient instead of the GitHub Copilot SDK).
+    "agent-framework-openai>=1.7.0",
 ]
 
 [build-system]

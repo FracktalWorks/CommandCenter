@@ -254,6 +254,7 @@ dependencies = [
     { name = "acb-common" },
     { name = "acb-skills" },
     { name = "agent-framework-core" },
+    { name = "agent-framework-openai" },
 ]
 
 [package.metadata]
@@ -261,6 +262,7 @@ requires-dist = [
     { name = "acb-common", editable = "packages/acb_common" },
     { name = "acb-skills", editable = "packages/acb_skills" },
     { name = "agent-framework-core", specifier = ">=1.8.0" },
+    { name = "agent-framework-openai", specifier = ">=1.7.0" },
 ]
 
 [[package]]

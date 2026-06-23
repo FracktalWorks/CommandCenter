@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from apps.orchestrator.orchestrator.executor import (
+    _apply_byok_provider_for_copilot_sdk,
     _byok_default_model,
     _is_gateway_model,
 )
@@ -96,3 +97,49 @@ def test_byok_disabled_still_byok_for_tier() -> None:
     )
     assert model == "tier-balanced"
     assert is_byok is True
+
+
+class _ProviderSettings:
+    """Settings with the gateway BYOK fields the provider helper reads."""
+    copilot_byok_default = True
+    copilot_chat_model = "tier-balanced"
+    litellm_base_url = "http://gw:8080"
+    litellm_master_key = "sk-real-key"
+
+
+class _FakeCopilotAgent:
+    def __init__(self) -> None:
+        self._default_options: dict = {}
+
+
+class _FakeMafAgent:
+    """A genuine MAF agent — no _default_options."""
+
+
+def test_apply_byok_pins_provider_and_model_for_copilot_sdk() -> None:
+    ag = _FakeCopilotAgent()
+    final = _apply_byok_provider_for_copilot_sdk(
+        ag, "deepseek/deepseek-chat", _ProviderSettings())
+    assert final == "deepseek/deepseek-chat"
+    prov = ag._default_options["provider"]
+    assert prov["base_url"] == "http://gw:8080/v1"   # gateway /v1
+    assert prov["api_key"] == "sk-real-key"          # real key, not sk-local
+    assert ag._default_options["model"] == "deepseek/deepseek-chat"
+
+
+def test_apply_byok_coerces_unknown_tier_model() -> None:
+    # The email-assistant regression: an unresolvable model must not be passed
+    # raw (→ native Copilot 402); coerce to the safe default tier.
+    ag = _FakeCopilotAgent()
+    final = _apply_byok_provider_for_copilot_sdk(
+        ag, "tier1-local-qwen3", _ProviderSettings())
+    assert final == "tier-balanced"
+    assert ag._default_options["model"] == "tier-balanced"
+
+
+def test_apply_byok_noop_for_genuine_maf_agent() -> None:
+    ag = _FakeMafAgent()
+    final = _apply_byok_provider_for_copilot_sdk(
+        ag, "tier-balanced", _ProviderSettings())
+    assert final == "tier-balanced"
+    assert not hasattr(ag, "_default_options")  # untouched

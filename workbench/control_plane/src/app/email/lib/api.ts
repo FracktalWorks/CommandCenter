@@ -870,6 +870,17 @@ export async function getProcessPastStatus(
   );
 }
 
+/** On-demand "Find follow-ups" scan (inbox-zero parity): labels threads waiting
+ *  too long for a reply and (if auto-draft is on) drafts nudges. */
+export async function scanFollowUps(
+  accountId: string
+): Promise<{ configured: boolean; scanned: number; labeled: number; drafted: number }> {
+  return gatewayFetch("/email/follow-ups/scan", {
+    method: "POST",
+    body: JSON.stringify({ account_id: accountId }),
+  });
+}
+
 export async function testRules(params: {
   accountId: string;
   emailId?: string;

@@ -19,7 +19,7 @@ import {
   listLearnedPatterns, deleteLearnedPattern,
   submitRuleFeedback, listRulePatterns, deleteRulePattern,
   generateRules, uploadEmailArtifacts, listEmailArtifacts,
-  createEmailFolder, getProcessPastStatus,
+  createEmailFolder, getProcessPastStatus, scanFollowUps,
 } from "../../lib/api";
 import type { EmailArtifact, ProcessPastStatus } from "../../lib/api";
 import {
@@ -3781,19 +3781,50 @@ function FollowUpDialog({
   onClose: () => void;
 }) {
   const [draft, setDraft] = useState(settings);
+  const [scanning, setScanning] = useState(false);
+  const [scanMsg, setScanMsg] = useState<string | null>(null);
   const num = (v: string) => Math.max(0, parseInt(v || "0", 10) || 0);
+  const runScan = async () => {
+    setScanning(true);
+    setScanMsg(null);
+    try {
+      const r = await scanFollowUps(settings.account_id);
+      if (!r.configured) {
+        setScanMsg("Set a reminder window above and Save first, then scan.");
+      } else if (r.scanned === 0) {
+        setScanMsg("No threads are waiting past your reminder windows. 🎉");
+      } else {
+        const drafted = r.drafted ? `, drafted ${r.drafted} nudge${r.drafted === 1 ? "" : "s"}` : "";
+        setScanMsg(`Found ${r.scanned} — labelled ${r.labeled} "Follow-up"${drafted}.`);
+      }
+    } catch (e) {
+      setScanMsg((e as Error).message || "Scan failed.");
+    } finally {
+      setScanning(false);
+    }
+  };
   return (
     <Modal
       title="Follow-up reminders"
       description="Get reminded about conversations that need attention. Saturdays and Sundays don't count."
       onClose={onClose}
       footer={
-        <button
-          onClick={() => onSave(draft)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
-        >
-          <Check size={13} /> Save
-        </button>
+        <>
+          <button
+            onClick={runScan}
+            disabled={scanning}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+          >
+            {scanning ? <Loader2 className="animate-spin" size={13} /> : <RefreshCcw size={13} />}
+            Find follow-ups now
+          </button>
+          <button
+            onClick={() => onSave(draft)}
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
+          >
+            <Check size={13} /> Save
+          </button>
+        </>
       }
     >
       <Field label="Remind me when they haven't replied after (days)">
@@ -3836,6 +3867,15 @@ function FollowUpDialog({
           </span>
         </span>
       </label>
+      <p className="text-[11px] text-muted-foreground pt-1">
+        &ldquo;Find follow-ups now&rdquo; scans immediately and labels waiting
+        threads &mdash; they also get scanned automatically as mail syncs.
+      </p>
+      {scanMsg && (
+        <div className="text-xs text-foreground bg-secondary/40 rounded-md px-2.5 py-2">
+          {scanMsg}
+        </div>
+      )}
     </Modal>
   );
 }

@@ -27,8 +27,15 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 
+# Deep initial-sync history window (days); keep in step with the scheduler.
+INITIAL_SYNC_DAYS = 365
+
+
 class SyncRequest(BaseModel):
     account_id: str
+    # Force a deep re-sync (≈1 year, all folders) even if the initial sync
+    # already ran — e.g. a manual "resync everything" from the UI.
+    full: bool = False
 
 
 @router.post("/sync")
@@ -46,7 +53,8 @@ async def trigger_sync(
     try:
         result = await db.execute(
             text(
-                """SELECT id, provider, credentials_encrypted, last_history_id
+                """SELECT id, provider, credentials_encrypted, last_history_id,
+                          initial_sync_done
                    FROM email_accounts
                    WHERE id = :id AND user_id = :user_id"""
             ),
@@ -104,9 +112,18 @@ async def trigger_sync(
             if not await provider.authenticate():
                 raise HTTPException(status_code=401, detail="Auth failed")
 
+            # Deep 1-year backfill on first sync (or when forced via ?full);
+            # otherwise a cheap shallow/incremental sync.
+            deep = req.full or not bool(getattr(row, "initial_sync_done", False))
+            since = (
+                datetime.now(timezone.utc) - timedelta(days=INITIAL_SYNC_DAYS)
+                if deep else None
+            )
             sync_result = await provider.sync_messages(
                 history_id=row.last_history_id,
                 max_results=100,
+                deep=deep,
+                since=since,
             )
 
             # Persist fetched messages to email_messages
@@ -256,6 +273,20 @@ async def trigger_sync(
 
             await db.commit()
 
+            # Reconcile provider-side deletions on a full snapshot (Outlook).
+            try:
+                from email_ingestion.reconcile import reconcile_full_snapshot
+                removed = await reconcile_full_snapshot(
+                    db, req.account_id, sync_result
+                )
+                if removed:
+                    await db.commit()
+                    _log.info("email.sync_reconciled", account_id=req.account_id,
+                              removed=removed)
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("email.sync_reconcile_failed",
+                             account_id=req.account_id, error=str(exc)[:160])
+
             # Persist refreshed OAuth tokens (access/refresh) if the provider
             # rotated them during this sync, so the next sync doesn't reuse a
             # stale token.
@@ -274,7 +305,8 @@ async def trigger_sync(
                     },
                 )
 
-            # Update account sync state
+            # Update account sync state. Mark the one-time deep sync done so
+            # subsequent polls stay shallow.
             await db.execute(
                 text(
                     """UPDATE email_accounts
@@ -282,12 +314,14 @@ async def trigger_sync(
                            last_synced_at = now(),
                            last_history_id = :history_id,
                            sync_error = NULL,
+                           initial_sync_done = initial_sync_done OR :deep,
                            updated_at = now()
                        WHERE id = :id"""
                 ),
                 {
                     "id": req.account_id,
                     "history_id": sync_result.new_history_id,
+                    "deep": deep,
                 },
             )
 

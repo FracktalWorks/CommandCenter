@@ -447,12 +447,72 @@ class GmailProvider(BaseEmailProvider):
                 remove_labels=remove_ids or None,
             )
 
+    # Deep initial sync page ceiling per label (×500/page). The after:-query
+    # window normally exhausts well before this.
+    DEEP_SYNC_MAX_PAGES = 50
+
+    async def _sweep_label(
+        self,
+        label: str,
+        max_results: int,
+        since: datetime | None = None,
+        canonical_override: str | None = None,
+    ) -> list[EmailMessage]:
+        """Page a label to exhaustion (or the deep ceiling), optionally bounded
+        to mail received after ``since`` via Gmail's ``after:`` query."""
+        out: list[EmailMessage] = []
+        token: str | None = None
+        q = f"after:{since.strftime('%Y/%m/%d')}" if since else None
+        for _ in range(self.DEEP_SYNC_MAX_PAGES):
+            msgs, token = await self.list_messages(
+                folder=label, query=q, max_results=max_results,
+                page_token=token, canonical_override=canonical_override,
+            )
+            out.extend(msgs)
+            if not token:
+                break
+        return out
+
     async def sync_messages(
         self,
         history_id: str | None = None,
         max_results: int = 100,
+        deep: bool = False,
+        since: datetime | None = None,
     ) -> SyncResult:
         client = await self._get_client()
+
+        if deep:
+            # One-time deep backfill: page every label back to ``since`` (incl.
+            # SENT/DRAFT). User labels first so system labels win the upsert.
+            deep_messages: list[EmailMessage] = []
+            try:
+                folders = await self.list_folders()
+            except Exception:
+                folders = []
+            for f in folders:
+                if f.type != "user":
+                    continue
+                canon = canonical_folder(f.name)
+                if canon in ("inbox", "sent", "drafts", "trash", "junk", "archive"):
+                    continue
+                try:
+                    deep_messages.extend(await self._sweep_label(
+                        f.provider_folder_id, max_results, since, canon
+                    ))
+                except Exception:
+                    continue
+            for label in ("INBOX", "SENT", "DRAFT", "SPAM", "TRASH"):
+                try:
+                    deep_messages.extend(
+                        await self._sweep_label(label, max_results, since)
+                    )
+                except Exception:
+                    continue
+            return SyncResult(
+                messages_synced=len(deep_messages), messages=deep_messages,
+                new_history_id=None,
+            )
 
         if history_id:
             # Incremental sync via history.list

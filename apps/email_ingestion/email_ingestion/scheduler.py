@@ -18,12 +18,17 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
+from email_ingestion.reconcile import reconcile_full_snapshot
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+# Deep initial-sync history window (days). Older mail is pulled lazily via the
+# /backfill endpoint.
+INITIAL_SYNC_DAYS = 365
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +82,7 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
             result = await db.execute(
                 text(
                     """SELECT id, provider, credentials_encrypted, last_history_id,
-                              sync_interval_secs
+                              sync_interval_secs, initial_sync_done
                        FROM email_accounts
                        WHERE id = :id"""
                 ),
@@ -153,9 +158,18 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
                 )
                 await db.commit()
 
+            # First-ever sync for this account → deep 1-year backfill across all
+            # folders; afterwards stay shallow/incremental (cheap polls).
+            deep = not bool(getattr(row, "initial_sync_done", False))
+            since = (
+                datetime.now(timezone.utc) - timedelta(days=INITIAL_SYNC_DAYS)
+                if deep else None
+            )
             sync_result = await provider.sync_messages(
                 history_id=row.last_history_id,
                 max_results=100,
+                deep=deep,
+                since=since,
             )
 
             # Persist messages
@@ -276,6 +290,18 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
 
             await db.commit()
 
+            # Reconcile provider-side deletions on a full snapshot (Outlook):
+            # trash local messages that vanished from the mailbox entirely.
+            try:
+                removed = await reconcile_full_snapshot(db, account_id, sync_result)
+                if removed:
+                    await db.commit()
+                    logger.info("sync.reconciled_deletions account=%s removed=%d",
+                                account_id, removed)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("sync.reconcile_failed account=%s err=%s",
+                               account_id, str(exc)[:160])
+
             # Persist refreshed OAuth tokens if the provider rotated them, so the
             # next sync cycle doesn't reuse a stale (and soon-invalid) token.
             if provider.credentials_dirty():
@@ -294,16 +320,19 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
                 )
                 await db.commit()
 
-            # Update account sync state
+            # Update account sync state. Mark the one-time deep sync done so
+            # subsequent polls stay shallow.
             await db.execute(
                 text(
                     """UPDATE email_accounts
                        SET sync_status = 'idle', last_synced_at = now(),
                            last_history_id = :history_id, sync_error = NULL,
+                           initial_sync_done = initial_sync_done OR :deep,
                            updated_at = now()
                        WHERE id = :id"""
                 ),
-                {"id": account_id, "history_id": sync_result.new_history_id},
+                {"id": account_id, "history_id": sync_result.new_history_id,
+                 "deep": deep},
             )
 
             # Mark sync log success

@@ -437,6 +437,18 @@ async def generate_writing_style(
                  writing_style = EXCLUDED.writing_style, updated_at = now()"""
         ), {"aid": account_id, "ws": style})
         await db.commit()
+        # Index the derived style into Mem0 (keyed by the account owner) so the
+        # drafter's memory retrieval has substance from the user's own sent mail.
+        try:
+            from acb_memory import add_memories_background  # noqa: PLC0415
+            await add_memories_background(
+                user.email or "default",
+                [{"role": "assistant",
+                  "content": f"My email writing style: {style}"}],
+                agent_id="email",
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return {"writing_style": style}
     finally:
         await db.close()

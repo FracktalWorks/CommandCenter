@@ -247,6 +247,7 @@ class OutlookProvider(BaseEmailProvider):
         max_results: int = 50,
         page_token: str | None = None,
         canonical_override: str | None = None,
+        since: datetime | None = None,
     ) -> tuple[list[EmailMessage], str | None]:
         client = await self._get_client()
 
@@ -275,6 +276,13 @@ class OutlookProvider(BaseEmailProvider):
         }
         if query:
             params["$search"] = f'"{query}"'
+        elif since is not None:
+            # Server-side time bound for the deep initial sync. Filtering and
+            # ordering on the same property (receivedDateTime) is allowed by
+            # Graph; $search would NOT combine with $orderby, so they're
+            # mutually exclusive here (sync never passes a query).
+            iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+            params["$filter"] = f"receivedDateTime ge {iso}"
         if page_token:
             params["$skiptoken"] = _skiptoken(page_token)
 
@@ -628,26 +636,36 @@ class OutlookProvider(BaseEmailProvider):
         )
         patch.raise_for_status()
 
-    # Initial full sweep depth per folder (≈ pages × max_results messages kept
-    # locally per folder). Deeper history is pulled lazily by the /backfill path.
-    INITIAL_SYNC_MAX_PAGES = 10
+    # Recurring polls stay shallow (newest pages only) — cheap and enough to
+    # catch new mail + recent inbound changes. The one-time deep initial sync
+    # pages until the $filter(since) window is exhausted, capped for safety.
+    RECURRING_SYNC_MAX_PAGES = 2
+    DEEP_SYNC_MAX_PAGES = 200  # ~20k/folder ceiling; since-filter normally exhausts first
 
     async def _sweep_folder(
         self,
         folder: str,
         max_results: int,
         canonical_override: str | None = None,
+        *,
+        max_pages: int | None = None,
+        since: datetime | None = None,
     ) -> list[EmailMessage]:
-        """Page a single folder up to ``INITIAL_SYNC_MAX_PAGES`` and return all
-        messages, following Graph's ``@odata.nextLink`` token."""
+        """Page a single folder (newest-first), following ``@odata.nextLink``.
+
+        ``max_pages`` bounds the number of pages; ``since`` adds a server-side
+        receivedDateTime floor so the deep sweep naturally exhausts ~1 year back.
+        """
         out: list[EmailMessage] = []
         token: str | None = None
-        for _ in range(self.INITIAL_SYNC_MAX_PAGES):
+        pages = max_pages or self.RECURRING_SYNC_MAX_PAGES
+        for _ in range(pages):
             msgs, token = await self.list_messages(
                 folder=folder,
                 max_results=max_results,
                 page_token=token,
                 canonical_override=canonical_override,
+                since=since,
             )
             out.extend(msgs)
             if not token:
@@ -658,6 +676,8 @@ class OutlookProvider(BaseEmailProvider):
         self,
         history_id: str | None = None,
         max_results: int = 100,
+        deep: bool = False,
+        since: datetime | None = None,
     ) -> SyncResult:
         client = await self._get_client()
 
@@ -712,17 +732,20 @@ class OutlookProvider(BaseEmailProvider):
                 new_history_id=data.get("@odata.deltaLink"),
             )
         else:
-            # Initial sync — fetch all standard folders so messages land in the
-            # right place in the UI (not just inbox/sent).  Page each folder up to
-            # INITIAL_SYNC_MAX_PAGES so a fresh connect lands a deep window of
-            # history (≈ pages × max_results / folder), not just the newest page.
-            # Going further back stays on-demand via the /backfill endpoint.
+            # Full multi-folder sweep so messages land in the right folder in the
+            # UI (not just inbox/sent). DEEP sync (first connect / forced) pages
+            # ~1 year back per folder via the since-filter; RECURRING polls page
+            # only the newest pages (cheap). Older-than-window mail is pulled
+            # lazily by the /backfill endpoint.
+            max_pages = self.DEEP_SYNC_MAX_PAGES if deep else self.RECURRING_SYNC_MAX_PAGES
+            sweep_since = since if deep else None
             messages = []
             for folder_key in ("inbox", "sent", "drafts", "archive", "junk", "trash"):
                 try:
-                    messages.extend(
-                        await self._sweep_folder(folder_key, max_results)
-                    )
+                    messages.extend(await self._sweep_folder(
+                        folder_key, max_results,
+                        max_pages=max_pages, since=sweep_since,
+                    ))
                 except Exception:
                     # A missing/forbidden folder shouldn't abort the whole sync.
                     continue
@@ -742,7 +765,8 @@ class OutlookProvider(BaseEmailProvider):
                     continue
                 try:
                     messages.extend(await self._sweep_folder(
-                        f.provider_folder_id, max_results, canonical_override=canon
+                        f.provider_folder_id, max_results, canonical_override=canon,
+                        max_pages=max_pages, since=sweep_since,
                     ))
                 except Exception:
                     continue
@@ -760,6 +784,9 @@ class OutlookProvider(BaseEmailProvider):
                 messages_synced=len(messages),
                 messages=messages,
                 new_history_id=None,
+                # A full multi-folder snapshot → the gateway can reconcile
+                # provider-side deletions (messages gone from every folder).
+                full_snapshot=True,
             )
 
     async def get_attachment(

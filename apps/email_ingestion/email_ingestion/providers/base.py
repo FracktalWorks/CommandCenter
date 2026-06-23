@@ -110,6 +110,12 @@ class SyncResult:
     new_history_id: str | None = None
     messages: list[EmailMessage] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    # True when ``messages`` is a complete multi-folder snapshot (every folder
+    # swept), so the caller may reconcile provider-side deletions: a stored
+    # message absent from the snapshot was removed on the provider.  False for
+    # incremental syncs (Gmail history, IMAP UIDNEXT) where absence means
+    # "unchanged", not "deleted".
+    full_snapshot: bool = False
 
 
 class BaseEmailProvider(ABC):
@@ -284,10 +290,15 @@ class BaseEmailProvider(ABC):
         self,
         history_id: str | None = None,
         max_results: int = 100,
+        deep: bool = False,
+        since: datetime | None = None,
     ) -> SyncResult:
         """Incremental sync — fetch new/updated messages since history_id.
 
-        If history_id is None, performs an initial full sync.
+        If history_id is None, performs an initial full sync.  ``deep`` requests
+        the one-time deep backfill (page each folder back to ``since``); when
+        False the sync stays shallow/incremental.  ``since`` is the history floor
+        for a deep sync (providers that support a server-side date filter use it).
         """
         ...
 

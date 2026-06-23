@@ -1,0 +1,28 @@
+"""Email gateway routes (package).
+
+Split out of a single 7k-line module into an acyclic layering:
+
+    core        shared kernel: router, models, DB/provider infra, mappers
+    transport   mail sync: accounts, folders, messages, send, oauth, webhook
+    automation  inbox-zero layer: rules, drafting, categorization, reply-zero…
+    digest      inbox digest (formerly email_digest.py)
+
+The full historical import surface of ``gateway.routes.email`` is preserved:
+every top-level name from the submodules is flattened into this package
+namespace, so ``from gateway.routes.email import X`` and the scheduler/app/test
+imports keep working unchanged. Submodules are imported in dependency order so
+their routes register on the shared ``core.router``.
+"""
+from __future__ import annotations
+
+from gateway.routes.email import automation, core, digest, transport  # noqa: F401
+
+# Flatten submodule namespaces into the package so the historical public surface
+# (incl. private ``_helpers`` the scheduler/tests import by name) is preserved.
+# NOTE: reassigned module globals (e.g. core._ENGINE) live on their submodule;
+# read those via ``email.core.<name>``, not the flattened copy.
+for _mod in (core, transport, automation, digest):
+    for _k, _v in vars(_mod).items():
+        if not _k.startswith("__"):
+            globals()[_k] = _v
+del _mod, _k, _v

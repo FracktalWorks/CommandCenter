@@ -18,8 +18,8 @@ async def test_learn_from_sent_stores_pattern_when_edited() -> None:
     res.fetchone.return_value = draft_row
     db = AsyncMock()
     db.execute.return_value = res
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m, "_llm_distill_edit",
+    with patch.object(m.automation.drafting, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m.automation.drafting, "_llm_distill_edit",
                          AsyncMock(return_value="Keep sign-offs to my first name.")):
         await m._learn_from_sent("acc-1", "t1", "Hi,\n\nThanks. Best, Vijay")
     # delete-commit + insert-commit
@@ -33,8 +33,8 @@ async def test_learn_skips_llm_when_unchanged() -> None:
     db = AsyncMock()
     db.execute.return_value = res
     llm = AsyncMock()
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m, "_llm_distill_edit", llm):
+    with patch.object(m.automation.drafting, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m.automation.drafting, "_llm_distill_edit", llm):
         # Same text (modulo whitespace) → nothing to learn.
         await m._learn_from_sent("acc-1", "t1", "Hi there,   thanks!")
     llm.assert_not_awaited()
@@ -46,8 +46,8 @@ async def test_learn_noop_when_no_stored_draft() -> None:
     db = AsyncMock()
     db.execute.return_value = res
     llm = AsyncMock()
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m, "_llm_distill_edit", llm):
+    with patch.object(m.automation.drafting, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m.automation.drafting, "_llm_distill_edit", llm):
         await m._learn_from_sent("acc-1", "t1", "anything")
     llm.assert_not_awaited()
 

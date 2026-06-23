@@ -1,0 +1,484 @@
+"""Automation · assistant configuration — settings, knowledge base, writing-style
+generation, learned-pattern listing, and the shared about-context loader."""
+
+from __future__ import annotations
+
+from typing import Any
+from uuid import uuid4
+
+from acb_auth import UserContext, get_current_user
+from fastapi import Depends, HTTPException, Query, status
+from gateway.routes.email.core import _assert_account_owner, _get_db, _log, router
+from pydantic import BaseModel, Field
+from sqlalchemy import text
+
+
+async def _load_assistant_about(db: Any, account_id: str) -> tuple[str, str]:
+    """Return (enriched_about, signature) for draft context.
+
+    `enriched_about` bundles the user's About text with their personal
+    instructions, writing style, and knowledge base as tagged blocks, so the
+    single `about` string carries the full drafting context into both the LLM
+    drafter and the MAF agent. Empty string if nothing is set.
+    """
+    row = (await db.execute(text(
+        """SELECT about, signature, personal_instructions, writing_style
+           FROM email_assistant_settings WHERE account_id = :aid"""
+    ), {"aid": account_id})).fetchone()
+    about = (row.about if row else "") or ""
+    signature = (row.signature if row else "") or ""
+    personal = (getattr(row, "personal_instructions", None) or "") if row else ""
+    style = (getattr(row, "writing_style", None) or "") if row else ""
+
+    kb_rows = (await db.execute(text(
+        """SELECT title, content FROM email_knowledge
+           WHERE account_id = :aid ORDER BY updated_at DESC LIMIT 20"""
+    ), {"aid": account_id})).fetchall()
+
+    parts: list[str] = []
+    if about.strip():
+        parts.append(f"<about>\n{about.strip()}\n</about>")
+    if personal.strip():
+        parts.append(
+            "<personal_instructions>\n"
+            f"{personal.strip()}\n</personal_instructions>"
+        )
+    if style.strip():
+        parts.append(f"<writing_style>\n{style.strip()}\n</writing_style>")
+    if kb_rows:
+        kb_text, budget = [], 4000
+        for k in kb_rows:
+            chunk = f"## {k.title}\n{(k.content or '').strip()}"
+            if budget - len(chunk) < 0:
+                break
+            kb_text.append(chunk)
+            budget -= len(chunk)
+        if kb_text:
+            parts.append(
+                "<knowledge_base>\n" + "\n\n".join(kb_text) + "\n</knowledge_base>"
+            )
+
+    # Patterns learned from how the user edits the assistant's drafts (advisory).
+    lp_rows = (await db.execute(text(
+        """SELECT pattern FROM email_learned_patterns
+           WHERE account_id = :aid ORDER BY weight DESC, updated_at DESC LIMIT 12"""
+    ), {"aid": account_id})).fetchall()
+    if lp_rows:
+        parts.append(
+            "<learned_patterns>\n"
+            + "\n".join(f"- {r.pattern}" for r in lp_rows)
+            + "\n</learned_patterns>"
+        )
+
+    return "\n\n".join(parts), signature
+
+
+class AssistantSettingsModel(BaseModel):
+    account_id: str
+    about: str | None = None
+    signature: str | None = None
+    auto_run: bool = False
+    cold_email_blocker: str = "OFF"  # OFF | LABEL | ARCHIVE
+    agent_model: str = "tier-balanced"  # tier-fast | tier-balanced | tier-powerful
+    digest_frequency: str = "OFF"  # OFF | DAILY | WEEKLY
+    personal_instructions: str | None = None
+    writing_style: str | None = None
+    draft_replies: bool = True
+    follow_up_days: int = 0  # legacy alias for follow_up_awaiting_days
+    # inbox-zero parity (migration 29)
+    draft_confidence: str = "ALL_EMAILS"  # ALL_EMAILS | STANDARD | HIGH_CONFIDENCE
+    follow_up_awaiting_days: int = 0  # remind when THEY haven't replied after N days
+    follow_up_needs_reply_days: int = 0  # remind when I haven't replied after N days
+    follow_up_auto_draft: bool = True
+    digest_categories: list[str] = Field(default_factory=list)
+    digest_day_of_week: int = 1  # 0=Sun … 6=Sat (used when WEEKLY)
+    digest_time_of_day: str = "09:00"  # HH:MM, account-local
+    digest_send_to_email: bool = True
+    # inbox-zero parity (migration 30)
+    multi_rule_execution: bool = False  # allow >1 rule to run on one email
+    sensitive_data_protection: bool = True  # skip drafting on sensitive emails
+
+
+@router.get("/assistant/settings")
+async def get_assistant_settings(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """Get the assistant's About/signature/auto-run settings for an account."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        row = (await db.execute(text(
+            """SELECT about, signature, auto_run, cold_email_blocker, agent_model,
+                      digest_frequency, personal_instructions, writing_style,
+                      draft_replies, follow_up_days, draft_confidence,
+                      follow_up_awaiting_days, follow_up_needs_reply_days,
+                      follow_up_auto_draft, digest_categories, digest_day_of_week,
+                      digest_time_of_day, digest_send_to_email,
+                      multi_rule_execution, sensitive_data_protection
+               FROM email_assistant_settings WHERE account_id = :aid"""
+        ), {"aid": account_id})).fetchone()
+        awaiting = (getattr(row, "follow_up_awaiting_days", 0) if row else 0) or 0
+        # Fall back to the legacy single field if the new column is still 0.
+        if not awaiting and row:
+            awaiting = getattr(row, "follow_up_days", 0) or 0
+        return {
+            "account_id": account_id,
+            "about": row.about if row else "",
+            "signature": row.signature if row else "",
+            "auto_run": bool(row.auto_run) if row else False,
+            "cold_email_blocker": (row.cold_email_blocker if row else "OFF") or "OFF",
+            "agent_model": (row.agent_model if row else "tier-balanced")
+            or "tier-balanced",
+            "digest_frequency": (row.digest_frequency if row else "OFF") or "OFF",
+            "personal_instructions": (
+                getattr(row, "personal_instructions", None) if row else ""
+            ) or "",
+            "writing_style": (
+                getattr(row, "writing_style", None) if row else ""
+            ) or "",
+            "draft_replies": (
+                bool(row.draft_replies) if row and row.draft_replies is not None
+                else True
+            ),
+            "follow_up_days": awaiting,  # legacy alias
+            "draft_confidence": (
+                getattr(row, "draft_confidence", None) if row else None
+            ) or "ALL_EMAILS",
+            "follow_up_awaiting_days": awaiting,
+            "follow_up_needs_reply_days": (
+                getattr(row, "follow_up_needs_reply_days", 0) if row else 0
+            ) or 0,
+            "follow_up_auto_draft": (
+                bool(row.follow_up_auto_draft)
+                if row and getattr(row, "follow_up_auto_draft", None) is not None
+                else True
+            ),
+            "digest_categories": (
+                list(getattr(row, "digest_categories", None) or []) if row else []
+            ),
+            "digest_day_of_week": (
+                getattr(row, "digest_day_of_week", 1) if row else 1
+            ),
+            "digest_time_of_day": (
+                getattr(row, "digest_time_of_day", None) if row else None
+            ) or "09:00",
+            "digest_send_to_email": (
+                bool(row.digest_send_to_email)
+                if row and getattr(row, "digest_send_to_email", None) is not None
+                else True
+            ),
+            "multi_rule_execution": (
+                bool(row.multi_rule_execution)
+                if row and getattr(row, "multi_rule_execution", None) is not None
+                else False
+            ),
+            "sensitive_data_protection": (
+                bool(row.sensitive_data_protection)
+                if row and getattr(row, "sensitive_data_protection", None) is not None
+                else True
+            ),
+        }
+    finally:
+        await db.close()
+
+
+@router.put("/assistant/settings")
+async def put_assistant_settings(
+    req: AssistantSettingsModel,
+    user: UserContext = Depends(get_current_user),
+):
+    """Upsert the assistant settings for an account."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        # `follow_up_awaiting_days` is canonical; accept the legacy `follow_up_days`
+        # as a fallback so older clients keep working.
+        awaiting = req.follow_up_awaiting_days or req.follow_up_days or 0
+        await db.execute(text(
+            """INSERT INTO email_assistant_settings
+                 (account_id, about, signature, auto_run, cold_email_blocker,
+                  agent_model, digest_frequency, personal_instructions,
+                  writing_style, draft_replies, follow_up_days, draft_confidence,
+                  follow_up_awaiting_days, follow_up_needs_reply_days,
+                  follow_up_auto_draft, digest_categories, digest_day_of_week,
+                  digest_time_of_day, digest_send_to_email,
+                  multi_rule_execution, sensitive_data_protection, updated_at)
+               VALUES (:aid, :about, :sig, :auto, :cold, :model, :digest,
+                       :pi, :ws, :dr, :fu, :dc, :fua, :funr, :fuad, :dcat,
+                       :ddow, :dtod, :dste, :mre, :sdp, now())
+               ON CONFLICT (account_id) DO UPDATE SET
+                 about = EXCLUDED.about,
+                 signature = EXCLUDED.signature,
+                 auto_run = EXCLUDED.auto_run,
+                 cold_email_blocker = EXCLUDED.cold_email_blocker,
+                 agent_model = EXCLUDED.agent_model,
+                 digest_frequency = EXCLUDED.digest_frequency,
+                 personal_instructions = EXCLUDED.personal_instructions,
+                 writing_style = EXCLUDED.writing_style,
+                 draft_replies = EXCLUDED.draft_replies,
+                 follow_up_days = EXCLUDED.follow_up_days,
+                 draft_confidence = EXCLUDED.draft_confidence,
+                 follow_up_awaiting_days = EXCLUDED.follow_up_awaiting_days,
+                 follow_up_needs_reply_days = EXCLUDED.follow_up_needs_reply_days,
+                 follow_up_auto_draft = EXCLUDED.follow_up_auto_draft,
+                 digest_categories = EXCLUDED.digest_categories,
+                 digest_day_of_week = EXCLUDED.digest_day_of_week,
+                 digest_time_of_day = EXCLUDED.digest_time_of_day,
+                 digest_send_to_email = EXCLUDED.digest_send_to_email,
+                 multi_rule_execution = EXCLUDED.multi_rule_execution,
+                 sensitive_data_protection = EXCLUDED.sensitive_data_protection,
+                 updated_at = now()"""
+        ), {"aid": req.account_id, "about": req.about, "sig": req.signature,
+            "auto": req.auto_run, "cold": req.cold_email_blocker or "OFF",
+            "model": req.agent_model or "tier-balanced",
+            "digest": req.digest_frequency or "OFF",
+            "pi": req.personal_instructions, "ws": req.writing_style,
+            "dr": req.draft_replies, "fu": awaiting,
+            "dc": req.draft_confidence or "ALL_EMAILS",
+            "fua": awaiting, "funr": req.follow_up_needs_reply_days or 0,
+            "fuad": req.follow_up_auto_draft,
+            "dcat": list(req.digest_categories or []),
+            "ddow": req.digest_day_of_week,
+            "dtod": req.digest_time_of_day or "09:00",
+            "dste": req.digest_send_to_email,
+            "mre": req.multi_rule_execution,
+            "sdp": req.sensitive_data_protection})
+        await db.commit()
+        return {
+            "account_id": req.account_id,
+            "about": req.about or "",
+            "signature": req.signature or "",
+            "auto_run": req.auto_run,
+            "cold_email_blocker": req.cold_email_blocker or "OFF",
+            "agent_model": req.agent_model or "tier-balanced",
+            "digest_frequency": req.digest_frequency or "OFF",
+            "personal_instructions": req.personal_instructions or "",
+            "writing_style": req.writing_style or "",
+            "draft_replies": req.draft_replies,
+            "follow_up_days": awaiting,
+            "draft_confidence": req.draft_confidence or "ALL_EMAILS",
+            "follow_up_awaiting_days": awaiting,
+            "follow_up_needs_reply_days": req.follow_up_needs_reply_days or 0,
+            "follow_up_auto_draft": req.follow_up_auto_draft,
+            "digest_categories": list(req.digest_categories or []),
+            "digest_day_of_week": req.digest_day_of_week,
+            "digest_time_of_day": req.digest_time_of_day or "09:00",
+            "digest_send_to_email": req.digest_send_to_email,
+            "multi_rule_execution": req.multi_rule_execution,
+            "sensitive_data_protection": req.sensitive_data_protection,
+        }
+    finally:
+        await db.close()
+
+
+class KnowledgeModel(BaseModel):
+    id: str | None = None
+    account_id: str
+    title: str
+    content: str
+
+
+@router.get("/knowledge")
+async def list_knowledge(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """List the account's knowledge-base entries (used when drafting replies)."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        rows = (await db.execute(text(
+            """SELECT id, title, content, updated_at FROM email_knowledge
+               WHERE account_id = :aid ORDER BY updated_at DESC"""
+        ), {"aid": account_id})).fetchall()
+        return {"entries": [
+            {"id": str(r.id), "account_id": account_id, "title": r.title,
+             "content": r.content,
+             "updated_at": r.updated_at.isoformat() if r.updated_at else None}
+            for r in rows
+        ]}
+    finally:
+        await db.close()
+
+
+@router.post("/knowledge")
+async def create_knowledge(
+    req: KnowledgeModel,
+    user: UserContext = Depends(get_current_user),
+):
+    """Add (or overwrite by title) a knowledge-base entry."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        kid = str(uuid4())
+        await db.execute(text(
+            """INSERT INTO email_knowledge (id, account_id, title, content)
+               VALUES (:id, :aid, :title, :content)
+               ON CONFLICT (account_id, title) DO UPDATE SET
+                 content = EXCLUDED.content, updated_at = now()"""
+        ), {"id": kid, "aid": req.account_id, "title": req.title,
+            "content": req.content})
+        await db.commit()
+        return {"id": kid, "account_id": req.account_id, "title": req.title,
+                "content": req.content}
+    finally:
+        await db.close()
+
+
+@router.patch("/knowledge/{kid}")
+async def update_knowledge(
+    kid: str,
+    req: KnowledgeModel,
+    user: UserContext = Depends(get_current_user),
+):
+    """Edit a knowledge-base entry."""
+    db = await _get_db()
+    try:
+        owner = (await db.execute(text(
+            """SELECT ek.id FROM email_knowledge ek
+               JOIN email_accounts ea ON ek.account_id = ea.id
+               WHERE ek.id = :id AND ea.user_id = :uid"""
+        ), {"id": kid, "uid": user.email or "anonymous"})).fetchone()
+        if not owner:
+            raise HTTPException(status_code=404, detail="Not found")
+        await db.execute(text(
+            """UPDATE email_knowledge SET title = :title, content = :content,
+                      updated_at = now() WHERE id = :id"""
+        ), {"id": kid, "title": req.title, "content": req.content})
+        await db.commit()
+        return {"id": kid, "account_id": req.account_id, "title": req.title,
+                "content": req.content}
+    finally:
+        await db.close()
+
+
+@router.delete("/knowledge/{kid}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_knowledge(
+    kid: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Delete a knowledge-base entry."""
+    db = await _get_db()
+    try:
+        res = await db.execute(text(
+            """DELETE FROM email_knowledge ek USING email_accounts ea
+               WHERE ek.id = :id AND ek.account_id = ea.id
+                 AND ea.user_id = :uid"""
+        ), {"id": kid, "uid": user.email or "anonymous"})
+        await db.commit()
+        if res.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Not found")
+    finally:
+        await db.close()
+
+
+async def _llm_writing_style(samples: list[str]) -> str:
+    """Summarize the user's writing style from sample sent emails."""
+    try:
+        import litellm as _litellm  # noqa: PLC0415
+        from acb_llm.client import _TIER_MODEL, ensure_model_registered  # noqa: PLC0415
+        from litellm import acompletion  # noqa: PLC0415
+        _litellm.drop_params = True
+        _litellm.suppress_debug_info = True
+        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
+        ensure_model_registered(model)
+        joined = "\n\n---\n\n".join(samples)
+        sys_prompt = (
+            "Analyze the user's sent emails and describe their writing style as a "
+            "short, reusable style guide (4-6 bullet points). Cover typical "
+            "length, greeting/sign-off habits, formality, sentence style, and any "
+            "distinctive traits. Phrase each point as an instruction a writer "
+            "could follow, e.g. 'Keep replies to 2-3 short sentences.' Output ONLY "
+            "the guide."
+        )
+        resp = await acompletion(
+            model=model,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": joined[:8000]}],
+            temperature=0, max_tokens=400,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.writing_style_failed", error=str(exc)[:200])
+        return ""
+
+
+@router.post("/assistant/writing-style/generate")
+async def generate_writing_style(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """Derive a writing-style guide from the account's recent sent mail + save it."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        rows = (await db.execute(text(
+            """SELECT body_text FROM email_messages
+               WHERE account_id = :aid AND LOWER(folder) = 'sent'
+               ORDER BY received_at DESC LIMIT 25"""
+        ), {"aid": account_id})).fetchall()
+        samples = [
+            (r.body_text or "").strip()[:1200]
+            for r in rows if (r.body_text or "").strip()
+        ][:15]
+        if not samples:
+            raise HTTPException(
+                status_code=400, detail="No sent emails to analyze yet.")
+        style = await _llm_writing_style(samples)
+        if not style:
+            raise HTTPException(
+                status_code=502, detail="Could not derive a writing style.")
+        await db.execute(text(
+            """INSERT INTO email_assistant_settings
+                 (account_id, writing_style, updated_at)
+               VALUES (:aid, :ws, now())
+               ON CONFLICT (account_id) DO UPDATE SET
+                 writing_style = EXCLUDED.writing_style, updated_at = now()"""
+        ), {"aid": account_id, "ws": style})
+        await db.commit()
+        return {"writing_style": style}
+    finally:
+        await db.close()
+
+
+@router.get("/learned-patterns")
+async def list_learned_patterns(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """Preferences the assistant has learned from the user's draft edits."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        rows = (await db.execute(text(
+            """SELECT id, pattern, weight FROM email_learned_patterns
+               WHERE account_id = :aid
+               ORDER BY weight DESC, updated_at DESC"""
+        ), {"aid": account_id})).fetchall()
+        return {"patterns": [
+            {"id": str(r.id), "pattern": r.pattern, "weight": r.weight}
+            for r in rows
+        ]}
+    finally:
+        await db.close()
+
+
+@router.delete("/learned-patterns/{pid}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_learned_pattern(
+    pid: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Forget a learned preference."""
+    db = await _get_db()
+    try:
+        res = await db.execute(text(
+            """DELETE FROM email_learned_patterns lp USING email_accounts ea
+               WHERE lp.id = :id AND lp.account_id = ea.id
+                 AND ea.user_id = :uid"""
+        ), {"id": pid, "uid": user.email or "anonymous"})
+        await db.commit()
+        if res.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Not found")
+    finally:
+        await db.close()

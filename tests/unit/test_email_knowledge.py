@@ -84,8 +84,8 @@ async def test_create_knowledge_inserts_and_returns() -> None:
     db = AsyncMock()
     user = SimpleNamespace(email="u@example.com")
     req = m.KnowledgeModel(account_id="acc-1", title="FAQ", content="Answers.")
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m, "_assert_account_owner", AsyncMock()):
+    with patch.object(m.automation.assistant, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m.automation.assistant, "_assert_account_owner", AsyncMock()):
         res = await m.create_knowledge(req, user=user)
     assert res["title"] == "FAQ"
     assert res["account_id"] == "acc-1"
@@ -102,7 +102,7 @@ async def test_list_knowledge_returns_entries() -> None:
     db = AsyncMock()
     db.execute.return_value = result
     user = SimpleNamespace(email="u@example.com")
-    with patch.object(m, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m, "_assert_account_owner", AsyncMock()):
+    with patch.object(m.automation.assistant, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m.automation.assistant, "_assert_account_owner", AsyncMock()):
         res = await m.list_knowledge(account_id="acc-1", user=user)
     assert [e["title"] for e in res["entries"]] == ["Pricing", "Policy"]

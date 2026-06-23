@@ -13,10 +13,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, Query
-from pydantic import BaseModel
-from sqlalchemy import text
-
-from gateway.routes.email import (
+from gateway.routes.email.core import (
     _assert_account_owner,
     _get_db,
     _instantiate_provider,
@@ -24,6 +21,8 @@ from gateway.routes.email import (
     _persist_rotated_creds,
     router,
 )
+from pydantic import BaseModel
+from sqlalchemy import text
 
 
 async def _generate_digest(

@@ -604,7 +604,6 @@ function RulesTab({
   const [installing, setInstalling] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [showPast, setShowPast] = useState(false);
-  const [showExamples, setShowExamples] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const setPendingChatPrompt = useEmailStore((s) => s.setPendingChatPrompt);
 
@@ -752,12 +751,6 @@ function RulesTab({
             </button>
           )}
           <button
-            onClick={() => setShowExamples(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-          >
-            <Sparkles size={13} /> Examples
-          </button>
-          <button
             onClick={() => setShowAdd(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
           >
@@ -772,10 +765,6 @@ function RulesTab({
             setShowAdd(false);
             setEditing(emptyRule(accountId));
           }}
-          onBrowseExamples={() => {
-            setShowAdd(false);
-            setShowExamples(true);
-          }}
           onCreated={() => {
             setShowAdd(false);
             load();
@@ -787,16 +776,6 @@ function RulesTab({
         <ProcessPastEmailsDialog
           accountId={accountId}
           onClose={() => setShowPast(false)}
-        />
-      )}
-      {showExamples && accountId && (
-        <ExamplesDialog
-          accountId={accountId}
-          onPick={(rule) => {
-            setShowExamples(false);
-            setEditing(rule);
-          }}
-          onClose={() => setShowExamples(false)}
         />
       )}
 
@@ -1556,33 +1535,112 @@ function ActionAttachments({
   );
 }
 
+// Example rule prompts, lifted from inbox-zero (examples.ts), as full
+// natural-language sentences. Clicking one appends it to the Add-rules prompt;
+// the AI turns the text into structured rules. `@[Label]` mentions are written
+// out plainly here. Emails/links are illustrative placeholders.
+const EXAMPLE_PERSONA_KEYS = [
+  "General", "Founder", "Sales", "Recruiter", "Developer", "Support", "Investor",
+];
+
+const EXAMPLE_PROMPTS: Record<string, string[]> = {
+  General: [
+    "Label urgent emails as Urgent",
+    "Label emails from @mycompany.com addresses as Team",
+    "Forward receipts to jane@accounting.com and label them Receipt",
+    "Label newsletters as Newsletter and archive them",
+    "Label marketing and promotional emails as Marketing and archive them",
+    "Reply to cold emails telling them I'm not interested, then mark them as spam",
+    "Label high priority emails as High Priority",
+    "If someone asks to set up a call, draft a reply with my calendar link: https://cal.com/example",
+    "If a founder sends me an investor update, label it Investor Update and archive it",
+    "If someone asks for a discount, reply with the discount code INBOX20",
+    "If people ask me to speak at an event, label the email Speaker Opportunity and archive it",
+    "Label emails from customers as Customer",
+    "Label legal documents as Legal",
+    "Label Stripe emails as Stripe and archive them",
+  ],
+  Founder: [
+    "If someone asks to set up a call, draft a reply with my calendar link: https://cal.com/example",
+    "Label feedback from customers about our product as Customer Feedback",
+    "Label emails from customers who need help and support as Customer Support",
+    "Label emails from investors as Investor",
+    "Label legal documents as Legal",
+    "Label emails about travel as Travel",
+    "Label recruitment related emails as Hiring",
+  ],
+  Sales: [
+    "Label emails from prospects as Prospect",
+    "Label emails from customers as Customer",
+    "Label emails about deal negotiations as Deal Discussion",
+    "If someone asks for pricing, draft a reply with our pricing page link: https://company.com/pricing",
+    "If someone requests a demo, draft a reply with my calendar link: https://cal.com/example",
+    "Label emails containing signed contracts as Signed Contract and forward to legal@company.com",
+    "If a customer mentions churn risk, label as Churn Risk and draft an urgent note to customer success",
+    "If someone asks about enterprise pricing, draft a reply asking about their company size and requirements",
+  ],
+  Recruiter: [
+    "Label emails from candidates as Candidate",
+    "Label emails from hiring managers as Hiring Manager",
+    "If someone applies for a job, label as New Application and draft a reply acknowledging their application",
+    "Label emails containing resumes or CVs as Resume",
+    "Label emails about interview scheduling as Interview Scheduling",
+    "Label emails from job boards as Job Board and archive them",
+    "Label emails about salary negotiations as Compensation",
+    "If an internal employee refers someone, label as Employee Referral",
+  ],
+  Developer: [
+    "Label server errors, deployment failures, and other alerts as Alert and forward to oncall@company.com",
+    "Label emails from GitHub as GitHub and archive them",
+    "Label emails from Stripe as Stripe and archive them",
+    "Label emails about bug reports as Bug",
+    "If someone reports a security vulnerability, label as Security and forward to security@company.com",
+    "Label emails from recruiters as Recruiter and archive them",
+  ],
+  Support: [
+    "Label customer requests for help as Support Ticket",
+    "If someone reports a critical issue, label as Urgent Support and forward to urgent@company.com",
+    "Label bug reports as Bug and forward to engineering@company.com",
+    "Label feature requests as Feature Request and forward to product@company.com",
+    "If someone asks for a refund, draft a reply with our refund policy link: https://company.com/refund-policy",
+    "Label positive feedback as Testimonial and forward to marketing@company.com",
+  ],
+  Investor: [
+    "If a founder asks to set up a call, draft a reply with my calendar link: https://cal.com/example",
+    "If a founder sends me an investor update, label it Investor Update and archive it",
+    "Forward pitch decks to analyst@vc.com and label them Pitch Deck",
+    "Label emails from LPs as LP",
+    "Label emails containing term sheets as Term Sheet",
+    "Label due diligence related emails as Due Diligence",
+    "Label emails about portfolio company exits as Exit Opportunity",
+  ],
+};
+
 /**
  * The primary "Add rule" experience, matching inbox-zero: describe your rules in
- * plain English (one per line), with clickable example lines that append to the
- * box. "Create rules" turns the text into structured rules via the AI; "Add rule
- * manually" opens the structured editor instead.
+ * plain English (one per line). "Choose from examples" reveals a list of real
+ * example rules (lifted from inbox-zero) you click to APPEND to the box. "Create
+ * rules" turns the text into structured rules via the AI; "Add rule manually"
+ * opens the structured editor instead.
  */
 function AddRuleDialog({
   accountId,
   onManual,
-  onBrowseExamples,
   onCreated,
   onClose,
 }: {
   accountId: string;
   onManual: () => void;
-  onBrowseExamples: () => void;
   onCreated: (created: AutomationRule[]) => void;
   onClose: () => void;
 }) {
   const [text, setText] = useState("");
   const [persona, setPersona] = useState("General");
+  const [showExamples, setShowExamples] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const inPersona = RULE_EXAMPLES.filter((e) =>
-    (e.personas ?? ["General"]).includes(persona),
-  );
+  const examples = EXAMPLE_PROMPTS[persona] ?? EXAMPLE_PROMPTS.General;
 
   const append = (line: string) =>
     setText((t) => {
@@ -1611,7 +1669,7 @@ function AddRuleDialog({
   return (
     <Modal
       title="Add rules"
-      description="Describe what you want, one rule per line. The assistant turns it into rules."
+      description="Describe what you want, one rule per line — the assistant turns it into rules."
       onClose={onClose}
       maxWidth="max-w-xl"
       footer={
@@ -1640,8 +1698,8 @@ function AddRuleDialog({
         rows={6}
         autoFocus
         placeholder={
-          '* Label urgent emails from clients as "Urgent" and draft a reply\n' +
-          "* Forward receipts to accounting@example.com\n" +
+          "* Label urgent emails as Urgent\n" +
+          "* Forward receipts to jane@accounting.com and label them Receipt\n" +
           "* Archive newsletters and marketing"
         }
         className={`${INPUT_CLS} resize-y leading-relaxed`}
@@ -1653,46 +1711,46 @@ function AddRuleDialog({
       )}
 
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] font-medium text-foreground">
-            Tap an example to add it
-          </span>
-          <button
-            onClick={onBrowseExamples}
-            className="text-[11px] text-primary hover:opacity-80"
-          >
-            Browse templates →
-          </button>
-        </div>
-        {/* Persona tabs */}
-        <div className="flex flex-wrap gap-1.5">
-          {EXAMPLE_PERSONAS.map((p) => (
-            <button
-              key={p}
-              onClick={() => setPersona(p)}
-              className={`text-[11px] px-2.5 py-1 rounded-full transition-colors ${
-                persona === p
-                  ? "bg-primary/15 text-primary"
-                  : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-              }`}
-            >
-              {p}
-            </button>
-          ))}
-        </div>
-        <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
-          {inPersona.map((ex) => (
-            <button
-              key={ex.name}
-              onClick={() => append(ex.summary)}
-              title={ex.summary}
-              className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border border-border text-foreground hover:border-primary/40 hover:bg-secondary/40 transition-colors"
-            >
-              <Plus size={10} className="text-muted-foreground" />
-              {ex.name}
-            </button>
-          ))}
-        </div>
+        <button
+          onClick={() => setShowExamples((v) => !v)}
+          className="flex items-center gap-1.5 text-[11px] font-medium text-primary hover:opacity-80"
+        >
+          <Sparkles size={12} />
+          {showExamples ? "Hide examples" : "Choose from examples"}
+        </button>
+        {showExamples && (
+          <>
+            {/* Persona tabs */}
+            <div className="flex flex-wrap gap-1.5">
+              {EXAMPLE_PERSONA_KEYS.map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setPersona(p)}
+                  className={`text-[11px] px-2.5 py-1 rounded-full transition-colors ${
+                    persona === p
+                      ? "bg-primary/15 text-primary"
+                      : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+                  }`}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+            {/* Full-sentence examples — click to append to the prompt. */}
+            <div className="grid grid-cols-1 gap-1.5 max-h-64 overflow-y-auto pr-1">
+              {examples.map((ex) => (
+                <button
+                  key={ex}
+                  onClick={() => append(ex)}
+                  className="flex items-start gap-2 text-left text-[11px] px-2.5 py-2 rounded-lg border border-border text-foreground hover:border-primary/40 hover:bg-secondary/40 transition-colors"
+                >
+                  <Plus size={11} className="text-muted-foreground mt-0.5 flex-shrink-0" />
+                  <span>{ex}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </div>
     </Modal>
   );

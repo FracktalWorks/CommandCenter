@@ -710,6 +710,20 @@ export async function installPresetRules(
   );
 }
 
+/**
+ * Delete ALL of an account's rules and reinstall the default inbox-zero set
+ * fresh (provider-aware: Outlook files cleanup categories into folders, Gmail
+ * labels them). Destructive — the UI guards it behind a confirmation prompt.
+ */
+export async function resetRules(
+  accountId: string
+): Promise<{ installed: string[]; total_presets: number; reset: boolean }> {
+  return gatewayFetch(
+    `/email/rules/reset?account_id=${encodeURIComponent(accountId)}`,
+    { method: "POST" }
+  );
+}
+
 export async function reorderRules(
   accountId: string,
   ruleIds: string[]

@@ -7,13 +7,15 @@ import {
   ArrowUp, ArrowDown, Eye, MessageCircle, RefreshCcw, Square,
   MoreVertical, MoreHorizontal, Copy, Paperclip, Upload, FolderOpen,
   Inbox, Zap, ChevronRight, ChevronDown, Tag, FolderPlus,
+  Archive, MailOpen, Star, ShieldAlert, FolderInput, Reply, Forward,
+  PenLine, Webhook, RotateCcw, AlertTriangle,
 } from "lucide-react";
 import {
   listRules, createRule, updateRule, deleteRule,
   getRulesHistory, getAssistantSettings, saveAssistantSettings,
   listColdSenders, upsertColdSender, generateWritingStyle, listEmails,
   listKnowledge, createKnowledge, updateKnowledge, deleteKnowledge,
-  installPresetRules, reorderRules, processPastEmails,
+  installPresetRules, resetRules, reorderRules, processPastEmails,
   listLearnedPatterns, deleteLearnedPattern,
   submitRuleFeedback, listRulePatterns, deleteRulePattern,
   generateRules, uploadEmailArtifacts, listEmailArtifacts,
@@ -71,6 +73,46 @@ const ACTION_META: Record<RuleActionType, { label: string; description: string }
 };
 
 /**
+ * Per-action lucide icon, so each action reads at a glance wherever it appears —
+ * the action chips under a rule, the Test/History result popovers, the action
+ * editor card, and the inferred icon on each Add-rule example.
+ */
+const ACTION_ICON: Record<RuleActionType, React.ElementType> = {
+  ARCHIVE: Archive,
+  LABEL: Tag,
+  MARK_READ: MailOpen,
+  STAR: Star,
+  MARK_SPAM: ShieldAlert,
+  TRASH: Trash2,
+  MOVE_FOLDER: FolderInput,
+  REPLY: Reply,
+  FORWARD: Forward,
+  DRAFT_EMAIL: PenLine,
+  CALL_WEBHOOK: Webhook,
+};
+
+function ActionIcon({ type, size = 11 }: { type: string; size?: number }) {
+  const Icon = ACTION_ICON[type as RuleActionType] ?? Zap;
+  return <Icon size={size} className="flex-shrink-0" />;
+}
+
+/**
+ * A single colored action chip (icon + human label) shared by the Rules list and
+ * the Test/History result popovers, so actions look identical everywhere.
+ */
+function ActionChip({ action }: { action: RuleAction }) {
+  return (
+    <span
+      title={actionDescription(action.type)}
+      className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md border ${actionColor(action.type)}`}
+    >
+      <ActionIcon type={action.type} size={10} />
+      {actionText(action)}
+    </span>
+  );
+}
+
+/**
  * Per-action badge colors (bg / text / border) so actions read at a glance in
  * the Rules list, History popovers and Test results — mirrors inbox-zero's
  * colored action chips. Uses Tailwind palette tints that work on light & dark.
@@ -93,6 +135,15 @@ function actionColor(type: string): string {
   return (
     ACTION_COLOR[type as RuleActionType] ??
     "bg-secondary text-muted-foreground border-border"
+  );
+}
+
+/** Just the `text-…` portion of an action's palette, for standalone icons. */
+function actionIconColor(type: string): string {
+  return (
+    actionColor(type)
+      .split(" ")
+      .find((c) => c.startsWith("text-")) ?? "text-muted-foreground"
   );
 }
 
@@ -584,13 +635,7 @@ function RulesTab({
               )}
               <div className="flex flex-wrap items-center gap-1 mt-1.5">
                 {rule.actions.map((a, i) => (
-                  <span
-                    key={i}
-                    title={actionDescription(a.type)}
-                    className={`text-[10px] px-1.5 py-0.5 rounded-md border ${actionColor(a.type)}`}
-                  >
-                    {actionText(a)}
-                  </span>
+                  <ActionChip key={i} action={a} />
                 ))}
               </div>
             </div>
@@ -1087,7 +1132,10 @@ function ActionConfig({
   return (
     <div className="border border-border rounded-lg p-3 bg-secondary/30 space-y-3">
       <div className="flex items-start justify-between gap-2">
-        <p className="text-[11px] text-muted-foreground">
+        <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+          <span className={`mt-px ${actionIconColor(action.type)}`}>
+            <ActionIcon type={action.type} size={12} />
+          </span>
           {ACTION_META[action.type].description}
         </p>
         <div className="flex items-center gap-0.5 flex-shrink-0">
@@ -1922,18 +1970,26 @@ function AddRuleDialog({
                 </button>
               ))}
             </div>
-            {/* Full-sentence examples — click to append to the prompt. */}
+            {/* Full-sentence examples — the leading icon shows the action the
+                example performs; click to append it to the prompt. */}
             <div className="grid grid-cols-1 gap-1.5 max-h-64 overflow-y-auto pr-1">
-              {examples.map((ex) => (
-                <button
-                  key={ex}
-                  onClick={() => append(ex)}
-                  className="flex items-start gap-2 text-left text-[11px] px-2.5 py-2 rounded-lg border border-border text-foreground hover:border-primary/40 hover:bg-secondary/40 transition-colors"
-                >
-                  <Plus size={11} className="text-muted-foreground mt-0.5 flex-shrink-0" />
-                  <span>{ex}</span>
-                </button>
-              ))}
+              {examples.map((ex) => {
+                const at = exampleActionType(ex);
+                return (
+                  <button
+                    key={ex}
+                    onClick={() => append(ex)}
+                    title={`Adds an example that will ${ACTION_META[at].label.toLowerCase()} — click to append`}
+                    className="group flex items-start gap-2 text-left text-[11px] px-2.5 py-2 rounded-lg border border-border text-foreground hover:border-primary/40 hover:bg-secondary/40 transition-colors"
+                  >
+                    <span className={`mt-0.5 flex-shrink-0 ${actionIconColor(at)}`}>
+                      <ActionIcon type={at} size={12} />
+                    </span>
+                    <span className="flex-1">{ex}</span>
+                    <Plus size={11} className="text-muted-foreground/50 mt-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </button>
+                );
+              })}
             </div>
           </>
         )}
@@ -1960,6 +2016,23 @@ function actionText(a: RuleAction): string {
   if (a.type === "MOVE_FOLDER" && a.label) return `Move to "${a.label}"`;
   if (a.type === "FORWARD" && a.to_address) return `Forward to ${a.to_address}`;
   return actionLabel(a.type);
+}
+
+/**
+ * Infer the headline action an example sentence performs, so each Add-rule
+ * example can show a matching action icon. Communication/cleanup verbs win over
+ * the near-ubiquitous "label" so the icons read with variety; defaults to LABEL.
+ */
+function exampleActionType(text: string): RuleActionType {
+  const t = text.toLowerCase();
+  if (/\bforward(s|ed|ing)?\b/.test(t)) return "FORWARD";
+  if (/\b(draft|repl(y|ies)|respond)\b/.test(t)) return "DRAFT_EMAIL";
+  if (/\bspam\b/.test(t)) return "MARK_SPAM";
+  if (/\bstar(red)?\b|\bflag(ged)?\b/.test(t)) return "STAR";
+  if (/\b(trash|delete)\b/.test(t)) return "TRASH";
+  if (/\bfolder\b/.test(t)) return "MOVE_FOLDER";
+  if (/\barchive(s|d)?\b/.test(t)) return "ARCHIVE";
+  return "LABEL";
 }
 
 /** Render a rule's conditions the way inbox-zero's popover does. */
@@ -2035,21 +2108,14 @@ function RuleResultPill({
             </div>
             <div className="flex flex-wrap gap-1">
               {specs.length > 0
-                ? specs.map((a, i) => (
-                    <span
-                      key={i}
-                      title={actionDescription(a.type)}
-                      className={`text-[10px] px-1.5 py-0.5 rounded-md border ${actionColor(a.type)}`}
-                    >
-                      {actionText(a)}
-                    </span>
-                  ))
+                ? specs.map((a, i) => <ActionChip key={i} action={a} />)
                 : types.map((t, i) => (
                     <span
                       key={i}
                       title={actionDescription(t)}
-                      className={`text-[10px] px-1.5 py-0.5 rounded-md border ${actionColor(t)}`}
+                      className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md border ${actionColor(t)}`}
                     >
+                      <ActionIcon type={t} size={10} />
                       {actionLabel(t)}
                     </span>
                   ))}
@@ -2819,6 +2885,7 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
     | "knowledge"
     | "learned"
     | "patterns"
+    | "resetrules"
     | null
   >(null);
 
@@ -3109,6 +3176,33 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
           />
         </div>
 
+        {/* ── Danger zone ── */}
+        <div className="space-y-2">
+          <SectionHeader>Danger zone</SectionHeader>
+          <div className="bg-card border border-destructive/30 rounded-xl px-4 py-3">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h3 className="text-sm font-medium text-foreground">
+                  Reset rules
+                </h3>
+                <p className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">
+                  Delete all your rules and restore the default Inbox Zero set
+                  (To Reply, Newsletter, Marketing, Calendar, Receipt,
+                  Notification, Cold Email…). On Outlook the cleanup categories
+                  are both labeled and filed into folders; on Gmail they apply
+                  labels.
+                </p>
+              </div>
+              <button
+                onClick={() => setDialog("resetrules")}
+                className="flex flex-shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg border border-destructive/40 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors"
+              >
+                <RotateCcw size={13} /> Reset rules
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* Each setting saves on its own (toggle / dialog) — show live status. */}
         <div className="flex items-center gap-2 pb-2 h-5">
           {saving && (
@@ -3121,6 +3215,16 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
         </div>
       </div>
 
+      {dialog === "resetrules" && (
+        <ResetRulesDialog
+          accountId={accountId}
+          onClose={() => setDialog(null)}
+          onDone={(names) => {
+            setRuleNames(names);
+            setDialog(null);
+          }}
+        />
+      )}
       {dialog === "followup" && (
         <FollowUpDialog
           settings={s}
@@ -3351,6 +3455,85 @@ function SignatureDialog({
 }
 
 // ── Settings: Configure dialogs ──────────────────────────────────────────────
+
+/**
+ * Confirmation dialog for the destructive "Reset rules" action: deletes every
+ * rule on the account and reinstalls the default Inbox Zero set (provider-aware
+ * folder moves vs labels). Requires an explicit confirm before firing.
+ */
+function ResetRulesDialog({
+  accountId,
+  onClose,
+  onDone,
+}: {
+  accountId: string;
+  onClose: () => void;
+  onDone: (ruleNames: string[]) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const confirm = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await resetRules(accountId);
+      onDone(res.installed);
+    } catch (e) {
+      setError((e as Error).message || "Failed to reset rules.");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="Reset all rules?"
+      onClose={busy ? () => {} : onClose}
+      maxWidth="max-w-md"
+      footer={
+        <>
+          <button
+            onClick={onClose}
+            disabled={busy}
+            className="px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={confirm}
+            disabled={busy}
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-destructive text-destructive-foreground text-xs font-medium hover:bg-destructive/90 transition-colors disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="animate-spin" size={13} /> : <RotateCcw size={13} />}
+            Reset rules
+          </button>
+        </>
+      }
+    >
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 flex-shrink-0 text-destructive">
+          <AlertTriangle size={18} />
+        </span>
+        <div className="space-y-2 text-xs text-muted-foreground leading-relaxed">
+          <p>
+            Are you sure you want to reset all the rules? This{" "}
+            <span className="font-medium text-foreground">
+              permanently deletes every rule on this account
+            </span>{" "}
+            — including any you created or customized — and reinstalls the default
+            Inbox Zero set.
+          </p>
+          <p>This can’t be undone.</p>
+        </div>
+      </div>
+      {error && (
+        <div className="text-[11px] text-destructive bg-destructive/10 rounded-md px-2 py-1.5">
+          {error}
+        </div>
+      )}
+    </Modal>
+  );
+}
 
 function FollowUpDialog({
   settings,

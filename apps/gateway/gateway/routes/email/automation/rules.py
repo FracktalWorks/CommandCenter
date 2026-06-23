@@ -130,8 +130,16 @@ async def list_rules(
 # (To Reply / Awaiting Reply / FYI / Actioned / Calendar) stay LABEL/category on
 # both so they remain in the inbox. ``extra`` holds non-categorization actions.
 #
-# category_action values: "label" | "label_archive" | "move_folder" |
-#                         "move_folder_archive"
+# On Outlook a cleanup category is BOTH tagged with the category (a colored
+# Outlook category == our LABEL) AND filed into a same-named FOLDER — Outlook
+# keeps categories and folders independent, so the tag stays visible after the
+# move. We never add ARCHIVE there: the folder move already removes the mail
+# from the inbox, and a trailing archive would re-file it into Archive and undo
+# the categorization. On Gmail there are no folders, so cleanup categories just
+# LABEL (+ ARCHIVE for Marketing / Cold Email).
+#
+# category_action values: "label" | "label_archive" | "move_folder"
+# (on Outlook "move_folder" expands to LABEL + MOVE_FOLDER)
 _PRESET_RULES: list[dict[str, Any]] = [
     {"name": "To Reply", "instructions": "Emails I need to respond to.",
      "run_on_threads": True, "category_action": "label",
@@ -156,7 +164,7 @@ _PRESET_RULES: list[dict[str, Any]] = [
      "instructions": "Marketing: promotional emails about products, services, "
                      "sales, or offers.",
      "category_action": "label_archive",
-     "category_action_ms": "move_folder_archive"},
+     "category_action_ms": "move_folder"},
     {"name": "Calendar",
      "instructions": "Calendar: any email related to scheduling, meeting "
                      "invites, or calendar notifications.",
@@ -172,7 +180,7 @@ _PRESET_RULES: list[dict[str, Any]] = [
      "instructions": "Cold emails: unsolicited sales pitches and outreach from "
                      "people or companies I have no prior relationship with.",
      "category_action": "label_archive",
-     "category_action_ms": "move_folder_archive"},
+     "category_action_ms": "move_folder"},
 ]
 
 
@@ -180,26 +188,71 @@ def _actions_for_preset(preset: dict[str, Any], provider: str) -> list[dict[str,
     """Resolve a preset's category_action into concrete actions for a provider.
 
     On Outlook (``provider == "microsoft"``) the ``category_action_ms`` override
-    applies, turning cleanup categories into folder moves; otherwise the base
-    ``category_action`` (label-based) is used. ``extra`` actions are appended.
+    applies. ``move_folder`` there expands to LABEL **+** MOVE_FOLDER: Outlook
+    categories (our LABEL) and folders are independent, so we tag the category
+    AND file the mail into the same-named folder (the colored category survives
+    the move). No ARCHIVE follows — the folder move already clears the inbox, and
+    archiving would re-file the message into Archive. On Gmail (no folders) the
+    base ``category_action`` (label-based) is used. ``extra`` actions append.
     """
     name = preset["name"]
     action = preset["category_action"]
     if provider == "microsoft" and preset.get("category_action_ms"):
         action = preset["category_action_ms"]
     actions: list[dict[str, Any]]
-    if action == "label":
-        actions = [{"type": "LABEL", "label": name}]
+    if action == "move_folder":
+        # Tag the category first (categories persist across an Outlook move),
+        # then file into the folder. No archive (the move already files it).
+        actions = [{"type": "LABEL", "label": name},
+                   {"type": "MOVE_FOLDER", "label": name}]
     elif action == "label_archive":
         actions = [{"type": "LABEL", "label": name}, {"type": "ARCHIVE"}]
-    elif action == "move_folder":
-        actions = [{"type": "MOVE_FOLDER", "label": name}]
-    elif action == "move_folder_archive":
-        actions = [{"type": "MOVE_FOLDER", "label": name}, {"type": "ARCHIVE"}]
-    else:
+    else:  # "label" (and any unknown value) → categorize only.
         actions = [{"type": "LABEL", "label": name}]
     actions.extend(preset.get("extra", []))
     return actions
+
+
+async def _account_provider(db: Any, account_id: str) -> str:
+    """The account's mail provider ('gmail' | 'microsoft' | 'imap' | '')."""
+    row = (await db.execute(
+        text("SELECT provider FROM email_accounts WHERE id = :id"),
+        {"id": account_id},
+    )).fetchone()
+    return (row.provider if row else "") or ""
+
+
+async def _seed_preset_rules(
+    db: Any, account_id: str, provider: str, *, skip_existing: bool,
+) -> list[str]:
+    """Insert the default inbox-zero rule set for an account; returns the names
+    installed. With ``skip_existing`` (the additive 'Add defaults' flow) presets
+    whose name already exists are left untouched; otherwise every preset is
+    created. The ``provider`` decides whether cleanup categories become folders
+    (Outlook) or labels (Gmail). Caller commits."""
+    existing = (
+        {r["name"].lower() for r in await _load_rules(db, account_id)}
+        if skip_existing else set()
+    )
+    installed: list[str] = []
+    for i, p in enumerate(_PRESET_RULES):
+        if p["name"].lower() in existing:
+            continue
+        rid = str(uuid4())
+        await db.execute(text(
+            """INSERT INTO email_rules
+                 (id, account_id, name, instructions, run_on_threads,
+                  sort_order)
+               VALUES (:id, :aid, :name, :instr, :rot, :so)"""
+        ), {"id": rid, "aid": account_id, "name": p["name"],
+            "instr": p["instructions"], "rot": p.get("run_on_threads", False),
+            "so": i})
+        await _replace_actions(
+            db, rid,
+            [RuleActionModel(**a) for a in _actions_for_preset(p, provider)],
+        )
+        installed.append(p["name"])
+    return installed
 
 
 @router.post("/rules/install-presets")
@@ -214,33 +267,39 @@ async def install_preset_rules(
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         # The account's provider decides whether cleanup categories become
         # folders (Outlook) or labels (Gmail) — inbox-zero parity.
-        prov_row = (await db.execute(
-            text("SELECT provider FROM email_accounts WHERE id = :id"),
-            {"id": account_id},
-        )).fetchone()
-        provider = (prov_row.provider if prov_row else "") or ""
-        existing = {r["name"].lower() for r in await _load_rules(db, account_id)}
-        installed: list[str] = []
-        for i, p in enumerate(_PRESET_RULES):
-            if p["name"].lower() in existing:
-                continue
-            rid = str(uuid4())
-            await db.execute(text(
-                """INSERT INTO email_rules
-                     (id, account_id, name, instructions, run_on_threads,
-                      sort_order)
-                   VALUES (:id, :aid, :name, :instr, :rot, :so)"""
-            ), {"id": rid, "aid": account_id, "name": p["name"],
-                "instr": p["instructions"], "rot": p.get("run_on_threads", False),
-                "so": i})
-            await _replace_actions(
-                db, rid,
-                [RuleActionModel(**a) for a in _actions_for_preset(p, provider)],
-            )
-            installed.append(p["name"])
+        provider = await _account_provider(db, account_id)
+        installed = await _seed_preset_rules(
+            db, account_id, provider, skip_existing=True)
         await db.commit()
         return {"installed": installed,
                 "total_presets": len(_PRESET_RULES)}
+    finally:
+        await db.close()
+
+
+@router.post("/rules/reset")
+async def reset_rules(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """Delete ALL of an account's rules and reinstall the default inbox-zero set
+    fresh. Provider-aware: on Outlook the cleanup categories file mail into
+    folders, on Gmail they label. Backs Settings → 'Reset rules' (the UI guards
+    this destructive action behind a confirmation prompt)."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        provider = await _account_provider(db, account_id)
+        # Drop every existing rule (actions cascade) before reseeding so stale
+        # label-only rules are replaced by the current provider-aware defaults.
+        await db.execute(
+            text("DELETE FROM email_rules WHERE account_id = :aid"),
+            {"aid": account_id})
+        installed = await _seed_preset_rules(
+            db, account_id, provider, skip_existing=False)
+        await db.commit()
+        return {"installed": installed,
+                "total_presets": len(_PRESET_RULES), "reset": True}
     finally:
         await db.close()
 

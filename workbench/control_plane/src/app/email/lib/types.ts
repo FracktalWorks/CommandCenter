@@ -143,6 +143,13 @@ export interface AnalyticsOverview {
   volume: { day: string; received: number; sent: number }[];
   top_senders: { email: string; name: string; count: number; unread: number }[];
   by_folder: { folder: string; count: number }[];
+  /** Assistant automation: emails processed + by-rule breakdown (inbox-zero). */
+  rule_stats?: {
+    processed: number;
+    by_rule: { rule_name: string; count: number }[];
+  };
+  /** Breakdown of actions the assistant took (LABEL/ARCHIVE/…). */
+  action_stats?: { action: string; count: number }[];
 }
 
 // ── Senders (bulk archive / unsubscribe) ────────────────────────────────────

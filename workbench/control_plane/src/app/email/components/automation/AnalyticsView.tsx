@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   Mail, MailOpen, Send, Archive, Star, Paperclip, Loader2, BarChart3,
+  Sparkles, Zap,
 } from "lucide-react";
 import { getAnalyticsOverview } from "../../lib/api";
 import { AnalyticsOverview } from "../../lib/types";
@@ -197,6 +198,67 @@ export function AnalyticsView({ accountId }: AnalyticsViewProps) {
           </div>
         </div>
       </div>
+
+      {/* Assistant automation — emails processed + actions taken (inbox-zero) */}
+      {(data.rule_stats || data.action_stats) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="bg-card border border-border rounded-xl p-4">
+            <h3 className="text-xs font-semibold text-foreground mb-3 flex items-center gap-1.5">
+              <Sparkles size={13} className="text-primary" /> Assistant processed
+            </h3>
+            <div className="text-2xl font-semibold text-foreground tabular-nums">
+              {data.rule_stats?.processed ?? 0}
+            </div>
+            <p className="text-[11px] text-muted-foreground mb-3">
+              emails handled by your rules
+            </p>
+            <div className="space-y-1.5">
+              {(data.rule_stats?.by_rule ?? []).map((r) => (
+                <div
+                  key={r.rule_name}
+                  className="flex items-center justify-between text-xs"
+                >
+                  <span className="text-foreground truncate">{r.rule_name}</span>
+                  <span className="text-muted-foreground tabular-nums ml-2">
+                    {r.count}
+                  </span>
+                </div>
+              ))}
+              {(data.rule_stats?.by_rule ?? []).length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No rules have run yet.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-card border border-border rounded-xl p-4">
+            <h3 className="text-xs font-semibold text-foreground mb-3 flex items-center gap-1.5">
+              <Zap size={13} className="text-primary" /> Actions taken
+            </h3>
+            <div className="space-y-1.5">
+              {(data.action_stats ?? []).map((a) => (
+                <div
+                  key={a.action}
+                  className="flex items-center justify-between text-xs"
+                >
+                  <span className="text-foreground capitalize">
+                    {a.action.toLowerCase().replace(/_/g, " ")}
+                  </span>
+                  <span className="text-muted-foreground tabular-nums">
+                    {a.count}
+                  </span>
+                </div>
+              ))}
+              {(data.action_stats ?? []).length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No actions taken yet.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

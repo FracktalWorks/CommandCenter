@@ -2271,6 +2271,35 @@ async def analytics_overview(
                 GROUP BY LOWER(folder) ORDER BY count DESC"""
         ), params)).fetchall()
 
+        # Assistant automation stats (inbox-zero "Assistant processed emails" +
+        # email-actions breakdown), from the executed-rules log. Best-effort.
+        rule_scope = ("er.account_id IN (SELECT id FROM email_accounts "
+                      "WHERE user_id = :uid)")
+        if account_id:
+            rule_scope += " AND er.account_id = :aid"
+        rule_rows: list[Any] = []
+        action_rows: list[Any] = []
+        try:
+            rule_rows = (await db.execute(text(
+                f"""SELECT COALESCE(er.rule_name, '(no match)') AS rule_name,
+                           COUNT(*) AS count
+                    FROM email_executed_rules er
+                    WHERE {rule_scope} AND er.status = 'APPLIED'
+                      AND er.created_at >= now() - make_interval(days => :days)
+                    GROUP BY er.rule_name ORDER BY count DESC LIMIT 10"""
+            ), params)).fetchall()
+            action_rows = (await db.execute(text(
+                f"""SELECT act AS action, COUNT(*) AS count
+                    FROM email_executed_rules er,
+                         LATERAL jsonb_array_elements_text(er.actions_taken) AS act
+                    WHERE {rule_scope} AND er.status = 'APPLIED'
+                      AND er.created_at >= now() - make_interval(days => :days)
+                    GROUP BY act ORDER BY count DESC"""
+            ), params)).fetchall()
+        except Exception:  # noqa: BLE001 — log table optional / empty
+            rule_rows, action_rows = [], []
+        processed_total = sum(r.count for r in rule_rows)
+
         return {
             "totals": {
                 "total": total,
@@ -2292,6 +2321,16 @@ async def analytics_overview(
             ],
             "by_folder": [
                 {"folder": r.folder, "count": r.count} for r in folder_rows
+            ],
+            "rule_stats": {
+                "processed": processed_total,
+                "by_rule": [
+                    {"rule_name": r.rule_name, "count": r.count}
+                    for r in rule_rows
+                ],
+            },
+            "action_stats": [
+                {"action": r.action, "count": r.count} for r in action_rows
             ],
         }
     finally:

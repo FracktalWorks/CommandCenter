@@ -106,6 +106,11 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
   const toggleAll = () =>
     setSelected(allSelected ? new Set() : new Set(visible.map((s) => s.email)));
   const clearSelection = () => setSelected(new Set());
+  // inbox-zero's "Select suggested": senders you rarely read (<30% read rate)
+  // with enough volume to be worth unsubscribing from.
+  const suggested = visible.filter((s) => s.read_rate < 0.3 && s.count >= 3);
+  const selectSuggested = () =>
+    setSelected(new Set(suggested.map((s) => s.email)));
 
   const persist = async (s: SenderStat, status: NewsletterStatus) => {
     if (!accountId) return;
@@ -289,6 +294,15 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
           <span className="text-[10px] text-muted-foreground">
             {selectedVisible.length > 0 ? `${selectedVisible.length} selected` : "Select all"}
           </span>
+          {suggested.length > 0 && (
+            <button
+              onClick={selectSuggested}
+              className="ml-auto text-[10px] text-primary hover:opacity-80"
+              title="Select senders you rarely read (under 30% read)"
+            >
+              Select {suggested.length} suggested
+            </button>
+          )}
         </div>
       )}
 
@@ -339,11 +353,25 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
                       <div className="text-foreground font-medium">{s.count}</div>
                       <div className="text-[9px]">emails</div>
                     </div>
-                    <div className="text-center w-12">
-                      <div className="text-foreground font-medium">
-                        {Math.round(s.read_rate * 100)}%
+                    <div className="w-20">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <span
+                          className={`font-medium ${
+                            s.read_rate < 0.3 ? "text-amber-400" : "text-foreground"
+                          }`}
+                        >
+                          {Math.round(s.read_rate * 100)}%
+                        </span>
+                        <span className="text-[9px]">read</span>
                       </div>
-                      <div className="text-[9px]">read</div>
+                      <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${
+                            s.read_rate < 0.3 ? "bg-amber-400" : "bg-primary"
+                          }`}
+                          style={{ width: `${Math.round(s.read_rate * 100)}%` }}
+                        />
+                      </div>
                     </div>
                   </div>
 

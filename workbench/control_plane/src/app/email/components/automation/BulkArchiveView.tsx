@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Loader2, Archive, Search, Clock, CheckCheck } from "lucide-react";
-import { listSenders, bulkAction } from "../../lib/api";
+import {
+  Loader2, Archive, Search, Clock, CheckCheck, History,
+} from "lucide-react";
+import { listSenders, bulkAction, upsertNewsletter } from "../../lib/api";
 import { SenderStat } from "../../lib/types";
 
 interface BulkArchiveViewProps {
@@ -88,6 +90,29 @@ export function BulkArchiveView({ accountId, onArchived }: BulkArchiveViewProps)
       onArchived?.();
     } catch (e) {
       flash((e as Error).message || "Archive failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Auto-archive (inbox-zero): mark the sender AUTO_ARCHIVED — the backend
+  // archives their existing inbox mail now AND auto-archives future mail on sync.
+  const autoArchiveSender = async (s: SenderStat) => {
+    if (!accountId) return;
+    setBusy(s.email);
+    try {
+      await upsertNewsletter({
+        accountId,
+        email: s.email,
+        name: s.name,
+        status: "AUTO_ARCHIVED",
+        unsubscribeLink: s.unsubscribe_link,
+      });
+      flash(`Auto-archiving mail from ${s.name || s.email}.`);
+      setSenders((prev) => prev.filter((x) => x.email !== s.email));
+      onArchived?.();
+    } catch (e) {
+      flash((e as Error).message || "Auto-archive failed");
     } finally {
       setBusy(null);
     }
@@ -196,21 +221,37 @@ export function BulkArchiveView({ accountId, onArchived }: BulkArchiveViewProps)
                     {s.email}
                   </div>
                 </div>
+                {s.status === "AUTO_ARCHIVED" && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 flex-shrink-0">
+                    Auto-archive
+                  </span>
+                )}
                 <span className="text-[11px] text-muted-foreground tabular-nums">
                   {s.count} in inbox
                 </span>
-                <button
-                  onClick={() => archiveSender(s)}
-                  disabled={busy === s.email}
-                  className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:bg-primary/10 hover:text-primary transition-colors disabled:opacity-50"
-                >
-                  {busy === s.email ? (
-                    <Loader2 className="animate-spin" size={13} />
-                  ) : (
-                    <Archive size={13} />
-                  )}
-                  Archive all
-                </button>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button
+                    onClick={() => archiveSender(s)}
+                    disabled={busy === s.email}
+                    title="Archive all existing mail from this sender"
+                    className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:bg-primary/10 hover:text-primary transition-colors disabled:opacity-50"
+                  >
+                    {busy === s.email ? (
+                      <Loader2 className="animate-spin" size={13} />
+                    ) : (
+                      <Archive size={13} />
+                    )}
+                    Archive all
+                  </button>
+                  <button
+                    onClick={() => autoArchiveSender(s)}
+                    disabled={busy === s.email}
+                    title="Archive existing AND auto-archive future mail from this sender"
+                    className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:bg-amber-500/10 hover:text-amber-400 transition-colors disabled:opacity-50"
+                  >
+                    <History size={13} /> Auto
+                  </button>
+                </div>
               </div>
             ))}
           </div>

@@ -2572,6 +2572,41 @@ async def _bulk_reconcile_provider(
         await db.close()
 
 
+async def _maybe_auto_archive(account_id: str) -> None:
+    """Archive freshly-synced inbox mail from senders marked AUTO_ARCHIVED (the
+    bulk-archive 'Auto' action), then reconcile to the provider. This is what
+    makes auto-archive apply to FUTURE mail, not just existing. Idempotent."""
+    db = await _get_db()
+    try:
+        rows = (await db.execute(text(
+            """SELECT em.id, em.provider_message_id
+               FROM email_messages em
+               JOIN email_newsletters nl
+                 ON nl.account_id = em.account_id
+                AND LOWER(nl.email) = LOWER(em.from_address->>'email')
+               WHERE em.account_id = :aid AND nl.status = 'AUTO_ARCHIVED'
+                 AND LOWER(em.folder) = 'inbox'"""
+        ), {"aid": account_id})).fetchall()
+        if not rows:
+            return
+        ids = [str(r.id) for r in rows]
+        pmids = [r.provider_message_id for r in rows if r.provider_message_id]
+        await db.execute(text(
+            "UPDATE email_messages SET folder = 'archive', updated_at = now() "
+            "WHERE id::text = ANY(:ids)"
+        ), {"ids": ids})
+        await db.commit()
+        if pmids:
+            await _bulk_reconcile_provider(account_id, pmids, "archive")
+        _log.info("email.auto_archive_pass",
+                  account_id=account_id, archived=len(ids))
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.auto_archive_failed",
+                     account_id=account_id, error=str(exc)[:200])
+    finally:
+        await db.close()
+
+
 # ── Newsletters (bulk unsubscribe disposition) ──────────────────────────────
 
 class NewsletterUpdate(BaseModel):

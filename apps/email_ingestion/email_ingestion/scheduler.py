@@ -446,6 +446,19 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
                         "sync.classify_threads_failed account_id=%s error=%s",
                         account_id, str(exc),
                     )
+            # Auto-archive new inbox mail from senders marked AUTO_ARCHIVED
+            # (bulk-archive "Auto") so it applies to future mail, not just past.
+            if new_mail:
+                try:
+                    from gateway.routes.email import (  # noqa: PLC0415
+                        _maybe_auto_archive,
+                    )
+                    await _maybe_auto_archive(account_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "sync.auto_archive_failed account_id=%s error=%s",
+                        account_id, str(exc),
+                    )
             # Send a scheduled digest if one is due (opt-in per account).
             try:
                 from gateway.routes.email import _maybe_send_digest  # noqa: PLC0415

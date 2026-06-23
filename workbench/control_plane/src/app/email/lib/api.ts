@@ -847,6 +847,29 @@ export async function processPastEmails(params: {
   });
 }
 
+/** Live progress for the most recent "Process past emails" run on an account.
+ *  `idle` = nothing has run; `running` = job in flight; `done`/`error` = finished. */
+export type ProcessPastStatus = {
+  status: "idle" | "running" | "done" | "error";
+  total?: number;
+  processed?: number;
+  applied?: number;
+  skipped?: number;
+  dry_run?: boolean;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error?: string | null;
+};
+
+/** Poll the live progress of the background "Process past emails" job. */
+export async function getProcessPastStatus(
+  accountId: string
+): Promise<ProcessPastStatus> {
+  return gatewayFetch<ProcessPastStatus>(
+    `/email/rules/process-past/status?account_id=${encodeURIComponent(accountId)}`
+  );
+}
+
 export async function testRules(params: {
   accountId: string;
   emailId?: string;

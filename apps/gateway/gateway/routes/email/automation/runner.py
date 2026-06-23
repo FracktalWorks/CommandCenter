@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -386,6 +386,71 @@ async def run_rules(
     return {"scheduled": True, "dry_run": req.dry_run}
 
 
+# ── "Process past emails" live progress ──────────────────────────────────────
+# The process-past job runs as a fire-and-forget BackgroundTask. The frontend
+# had no way to know it was running, so the UI showed nothing after the dialog
+# closed. We track per-account progress in memory (the gateway runs a single
+# uvicorn worker, so the request handler and the background task share this dict)
+# and expose it via GET /rules/process-past/status for the UI to poll. State is
+# ephemeral by design: if the process restarts the job dies too, so losing the
+# tracker with it is correct.
+_PAST_JOBS: dict[str, dict[str, Any]] = {}
+_PAST_JOB_SEQ = 0  # monotonic token so a stale job can't clobber a newer run
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _past_job_start(account_id: str, owner: str, total: int, dry_run: bool) -> int:
+    """Seed the tracker for a new run; returns a token the background job passes
+    back so a superseded (older) run can't mutate the newer entry."""
+    global _PAST_JOB_SEQ
+    _PAST_JOB_SEQ += 1
+    token = _PAST_JOB_SEQ
+    _PAST_JOBS[account_id] = {
+        "token": token,
+        "owner": owner,
+        "status": "running" if total > 0 else "done",
+        "total": total,
+        "processed": 0,
+        "applied": 0,
+        "skipped": 0,
+        "dry_run": dry_run,
+        "started_at": _now_iso(),
+        "finished_at": None if total > 0 else _now_iso(),
+        "error": None,
+    }
+    return token
+
+
+def _past_job_tick(
+    account_id: str, *, token: int | None = None,
+    applied: int = 0, skipped: int = 0,
+) -> None:
+    job = _PAST_JOBS.get(account_id)
+    if not job or job.get("status") != "running":
+        return
+    if token is not None and job.get("token") != token:
+        return  # a newer run replaced this one — don't touch it
+    job["processed"] += 1
+    job["applied"] += applied
+    job["skipped"] += skipped
+
+
+def _past_job_finish(
+    account_id: str, *, token: int | None = None, error: str | None = None,
+) -> None:
+    job = _PAST_JOBS.get(account_id)
+    if not job:
+        return
+    if token is not None and job.get("token") != token:
+        return  # a newer run replaced this one — leave it running
+    job["status"] = "error" if error else "done"
+    job["error"] = error
+    job["finished_at"] = _now_iso()
+
+
 class RuleProcessPastRequest(BaseModel):
     account_id: str
     start_date: str | None = None  # ISO date (YYYY-MM-DD), inclusive
@@ -424,12 +489,33 @@ async def process_past_emails(
         count = int(n.c) if n else 0
     finally:
         await db.close()
-    background.add_task(
-        _process_past_emails_job, req.account_id, start_dt, end_dt,
-        min(req.limit, 2000), not req.is_test, user.email or "anonymous",
-        only_unread,
-    )
+    # Initialise the live-progress tracker BEFORE scheduling so the UI can poll
+    # immediately (a zero-count run is marked done on the spot — no job needed).
+    token = _past_job_start(
+        req.account_id, user.email or "anonymous", count, req.is_test)
+    if count > 0:
+        background.add_task(
+            _process_past_emails_job, req.account_id, start_dt, end_dt,
+            min(req.limit, 2000), not req.is_test, user.email or "anonymous",
+            only_unread, token,
+        )
     return {"scheduled": True, "count": count, "dry_run": req.is_test}
+
+
+@router.get("/rules/process-past/status")
+async def process_past_status(
+    account_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Live progress for the most recent 'Process past emails' run on this
+    account so the UI can show an ongoing indicator + auto-refresh History.
+
+    Returns {"status": "idle"} when no run has happened (or it belongs to a
+    different user)."""
+    job = _PAST_JOBS.get(account_id)
+    if not job or job.get("owner") != (user.email or "anonymous"):
+        return {"status": "idle"}
+    return {k: v for k, v in job.items() if k != "owner"}
 
 
 class RuleRunMessageRequest(BaseModel):
@@ -579,9 +665,13 @@ async def _apply_and_log_match(
 async def _process_past_emails_job(
     account_id: str, start: datetime | None, end: datetime | None,
     limit: int, dry_run: bool, user_email: str, only_unread: bool = False,
+    job_token: int | None = None,
 ) -> None:
     """Background worker: reprocess PAST inbox mail in a date range (inbox-zero
-    'Process past emails'). Reprocesses regardless of rules_processed_at."""
+    'Process past emails'). Reprocesses regardless of rules_processed_at.
+
+    Updates the in-memory progress tracker (_PAST_JOBS) per email so the UI's
+    'Processing N of M…' indicator advances live and History can auto-refresh."""
     db = await _get_db()
     try:
         clause, params = _date_range_clause(account_id, start, end, only_unread)
@@ -594,6 +684,7 @@ async def _process_past_emails_job(
                 ORDER BY em.received_at DESC LIMIT :limit"""
         ), params)).fetchall()
         if not rows:
+            _past_job_finish(account_id, token=job_token)
             return
 
         about, signature = await _load_assistant_about(db, account_id)
@@ -658,6 +749,16 @@ async def _process_past_emails_job(
                     "WHERE id = :id"
                 ), {"id": str(r.id)})
             await db.commit()
+            _past_job_tick(
+                account_id,
+                token=job_token,
+                applied=1 if matches else 0,
+                skipped=0 if matches else 1,
+            )
+        _past_job_finish(account_id, token=job_token)
+    except Exception as e:  # noqa: BLE001 — record failure for the UI, don't crash the worker
+        _log(f"process-past job failed for {account_id}: {e}")
+        _past_job_finish(account_id, token=job_token, error=str(e))
     finally:
         await db.close()
 

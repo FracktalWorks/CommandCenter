@@ -19,9 +19,9 @@ import {
   listLearnedPatterns, deleteLearnedPattern,
   submitRuleFeedback, listRulePatterns, deleteRulePattern,
   generateRules, uploadEmailArtifacts, listEmailArtifacts,
-  createEmailFolder,
+  createEmailFolder, getProcessPastStatus,
 } from "../../lib/api";
-import type { EmailArtifact } from "../../lib/api";
+import type { EmailArtifact, ProcessPastStatus } from "../../lib/api";
 import {
   AutomationRule, RuleAction, RuleActionType, RuleActionAttachment, ExecutedRule, Email,
   AssistantSettings, ColdBlockerMode,
@@ -280,6 +280,107 @@ const PRESET_RULES: PresetRule[] = [
 ];
 
 
+/**
+ * Poll the live progress of the background "Process past emails" job. Polls once
+ * on mount (catches a job already in flight if you navigate back), then every
+ * ~1.5s while a job is running, and stops on the terminal status. `ping()`
+ * restarts the loop immediately — call it right after launching a new run.
+ */
+function usePastJobStatus(accountId: string | null) {
+  const [status, setStatus] = useState<ProcessPastStatus | null>(null);
+  const [watchKey, setWatchKey] = useState(0);
+  const ping = useCallback(() => setWatchKey((k) => k + 1), []);
+
+  useEffect(() => {
+    if (!accountId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      try {
+        const s = await getProcessPastStatus(accountId);
+        if (cancelled) return;
+        setStatus(s);
+        if (s.status === "running") timer = setTimeout(tick, 1500);
+      } catch {
+        /* stop polling on error */
+      }
+    };
+    tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [accountId, watchKey]);
+
+  return { status, ping };
+}
+
+/** Slim banner above the tabs: live "Processing N of M…" while the past-emails
+ *  job runs, then a one-line outcome the user can dismiss. */
+function PastJobBanner({
+  job,
+  onViewHistory,
+  onDismiss,
+}: {
+  job: ProcessPastStatus;
+  onViewHistory: () => void;
+  onDismiss: () => void;
+}) {
+  const running = job.status === "running";
+  const total = job.total ?? 0;
+  const processed = job.processed ?? 0;
+  const matched = job.applied ?? 0;
+  const pct =
+    total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 100;
+  const verb = job.dry_run ? "would match a rule" : "matched a rule";
+
+  return (
+    <div className="border-b border-border bg-secondary/30 flex-shrink-0">
+      <div className="max-w-3xl mx-auto w-full px-3 sm:px-5 py-2">
+        <div className="flex items-center gap-2">
+          {running ? (
+            <Loader2 className="animate-spin text-primary flex-shrink-0" size={14} />
+          ) : job.status === "error" ? (
+            <AlertTriangle className="text-destructive flex-shrink-0" size={14} />
+          ) : (
+            <Check className="text-emerald-500 flex-shrink-0" size={14} />
+          )}
+          <span className="text-xs text-foreground min-w-0 truncate">
+            {running
+              ? `Processing past emails — ${processed} of ${total}…`
+              : job.status === "error"
+                ? `Processing failed: ${job.error || "unknown error"}`
+                : `Processed ${total} email${total === 1 ? "" : "s"} — ${matched} ${verb}.`}
+          </span>
+          <button
+            onClick={onViewHistory}
+            className="ml-auto text-[11px] text-primary hover:opacity-80 whitespace-nowrap"
+          >
+            View in History
+          </button>
+          {!running && (
+            <button
+              onClick={onDismiss}
+              className="text-muted-foreground hover:text-foreground flex-shrink-0"
+              title="Dismiss"
+            >
+              <X size={13} />
+            </button>
+          )}
+        </div>
+        {running && (
+          <div className="mt-1.5 h-1 w-full rounded-full bg-border overflow-hidden">
+            <div
+              className="h-full bg-primary transition-all"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function AssistantView({ accountId }: AssistantViewProps) {
   const [tab, setTab] = useState<Tab>("rules");
   // When the user picks "See history" from a rule's ⋯ menu, jump to the History
@@ -290,8 +391,34 @@ export function AssistantView({ accountId }: AssistantViewProps) {
     setTab("history");
   };
 
+  // Live progress of the "Process past emails" background job, surfaced as a
+  // banner here so it persists across tab switches and after the dialog closes.
+  const { status: pastJob, ping: pingPastJob } = usePastJobStatus(accountId);
+  const [dismissedJobAt, setDismissedJobAt] = useState<string | null>(null);
+  const pastRunning = pastJob?.status === "running";
+  // Auto-dismiss the finished summary after a few seconds (running never auto-hides).
+  useEffect(() => {
+    if (pastJob && (pastJob.status === "done" || pastJob.status === "error")) {
+      const fin = pastJob.finished_at ?? "";
+      const t = setTimeout(() => setDismissedJobAt(fin), 8000);
+      return () => clearTimeout(t);
+    }
+  }, [pastJob]);
+  const showBanner =
+    !!accountId &&
+    !!pastJob &&
+    pastJob.status !== "idle" &&
+    !(!pastRunning && dismissedJobAt === (pastJob.finished_at ?? ""));
+
   return (
     <div className="h-full flex flex-col">
+      {showBanner && pastJob && (
+        <PastJobBanner
+          job={pastJob}
+          onViewHistory={() => setTab("history")}
+          onDismiss={() => setDismissedJobAt(pastJob.finished_at ?? "")}
+        />
+      )}
       {/* Sub-tabs — centered to match the content column on wide screens. */}
       <div className="border-b border-border flex-shrink-0">
         <div className="max-w-3xl mx-auto w-full flex items-center gap-1 px-3 sm:px-5 py-2 overflow-x-auto scrollbar-hide">
@@ -315,10 +442,20 @@ export function AssistantView({ accountId }: AssistantViewProps) {
           tabs don't stretch edge-to-edge on widescreen monitors. */}
       <div className="flex-1 overflow-hidden">
         <div className="h-full max-w-3xl mx-auto w-full">
-          {tab === "rules" && <RulesTab accountId={accountId} onSeeHistory={seeHistory} />}
+          {tab === "rules" && (
+            <RulesTab
+              accountId={accountId}
+              onSeeHistory={seeHistory}
+              onPastJobStarted={pingPastJob}
+            />
+          )}
           {tab === "test" && <TestTab accountId={accountId} />}
           {tab === "history" && (
-            <HistoryTab accountId={accountId} initialRuleFilter={historyRuleFilter} />
+            <HistoryTab
+              accountId={accountId}
+              initialRuleFilter={historyRuleFilter}
+              live={pastRunning}
+            />
           )}
           {tab === "settings" && <SettingsTab accountId={accountId} />}
         </div>
@@ -370,9 +507,11 @@ const emptyRule = (accountId: string): AutomationRule => ({
 function RulesTab({
   accountId,
   onSeeHistory,
+  onPastJobStarted,
 }: {
   accountId: string | null;
   onSeeHistory?: (ruleName: string) => void;
+  onPastJobStarted?: () => void;
 }) {
   const [rules, setRules] = useState<AutomationRule[]>([]);
   const [loading, setLoading] = useState(true);
@@ -553,6 +692,7 @@ function RulesTab({
         <ProcessPastEmailsDialog
           accountId={accountId}
           onClose={() => setShowPast(false)}
+          onStarted={onPastJobStarted}
         />
       )}
 
@@ -1435,9 +1575,11 @@ function isoDaysAgo(daysAgo: number): string {
 function ProcessPastEmailsDialog({
   accountId,
   onClose,
+  onStarted,
 }: {
   accountId: string;
   onClose: () => void;
+  onStarted?: () => void;
 }) {
   const [start, setStart] = useState(isoDaysAgo(7));
   const [end, setEnd] = useState(isoDaysAgo(0));
@@ -1452,7 +1594,8 @@ function ProcessPastEmailsDialog({
     setResult(null);
     try {
       // Processing past emails always APPLIES the matched rules (there's nothing
-      // to "test" against history) — results land in the History tab.
+      // to "test" against history) — progress shows in the banner above the tabs
+      // and results stream into the History tab as they're applied.
       const r = await processPastEmails({
         accountId,
         startDate: start || undefined,
@@ -1460,12 +1603,13 @@ function ProcessPastEmailsDialog({
         isTest: false,
         includeRead,
       });
-      setResult(
-        r.count === 0
-          ? "No emails found in that range."
-          : `Applying your rules to ${r.count} email${r.count === 1 ? "" : "s"} ` +
-              "— results appear in the History tab.",
-      );
+      if (r.count === 0) {
+        setResult("No emails found in that range.");
+      } else {
+        // Hand off to the live progress banner (it polls server-side state).
+        onStarted?.();
+        onClose();
+      }
     } catch (e) {
       setError((e as Error).message || "Failed to start processing");
     } finally {
@@ -1533,8 +1677,9 @@ function ProcessPastEmailsDialog({
       </div>
       <p className="text-[11px] text-muted-foreground">
         Runs the matched actions (labels, drafts, archive…) on{" "}
-        {includeRead ? "every email" : "unread mail"} in the range. Applied
-        actions show up in the History tab.
+        {includeRead ? "every email" : "unread mail"} in the range. A progress
+        bar appears above the tabs while it runs, and applied actions stream into
+        the History tab.
       </p>
       {result && (
         <div className="text-xs text-emerald-400 bg-emerald-500/10 rounded-md px-2.5 py-2">
@@ -2689,24 +2834,38 @@ function TestTab({ accountId }: { accountId: string | null }) {
 function HistoryTab({
   accountId,
   initialRuleFilter = "all",
+  live = false,
 }: {
   accountId: string | null;
   initialRuleFilter?: string;
+  live?: boolean;
 }) {
   const [history, setHistory] = useState<ExecutedRule[]>([]);
   const [loading, setLoading] = useState(true);
   // "all" | "skipped" (No match) | a rule name.
   const [ruleFilter, setRuleFilter] = useState(initialRuleFilter);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    getRulesHistory(accountId ?? undefined, 200)
-      .then(setHistory)
-      .catch(() => setHistory([]))
-      .finally(() => setLoading(false));
-  }, [accountId]);
+  // `silent` re-loads (the live poll) keep the list mounted instead of flashing
+  // the spinner, so rows appear to stream in as the job applies them.
+  const load = useCallback(
+    (silent = false) => {
+      if (!silent) setLoading(true);
+      getRulesHistory(accountId ?? undefined, 200)
+        .then(setHistory)
+        .catch(() => setHistory([]))
+        .finally(() => setLoading(false));
+    },
+    [accountId]
+  );
 
-  useEffect(load, [load]);
+  useEffect(() => load(), [load]);
+
+  // While a "Process past emails" job runs, poll so applied actions stream in.
+  useEffect(() => {
+    if (!live) return;
+    const id = setInterval(() => load(true), 2500);
+    return () => clearInterval(id);
+  }, [live, load]);
 
   if (loading) return <Spinner label="Loading history…" />;
 
@@ -2743,8 +2902,13 @@ function HistoryTab({
             </option>
           ))}
         </select>
+        {live && (
+          <span className="flex items-center gap-1.5 text-[11px] text-primary">
+            <Loader2 className="animate-spin" size={12} /> Processing past emails…
+          </span>
+        )}
         <button
-          onClick={load}
+          onClick={() => load()}
           className="ml-auto text-xs text-primary hover:opacity-80"
         >
           Refresh

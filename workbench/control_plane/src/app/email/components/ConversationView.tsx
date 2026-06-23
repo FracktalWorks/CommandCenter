@@ -231,6 +231,8 @@ export function DraftCard({ draft, replyTo }: { draft: Email; replyTo?: Email })
         body,
       });
       await sendDraft(accountId, draft.id);
+    } catch {
+      /* send failure — the draft stays in Drafts so the user can retry */
     } finally {
       setSending(false);
     }

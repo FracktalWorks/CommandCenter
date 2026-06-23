@@ -133,6 +133,30 @@ export async function PATCH(
   }
 }
 
+export async function PUT(
+  req: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+): Promise<NextResponse> {
+  const { path } = await params;
+  const upstream = buildUpstreamUrl(path, req);
+  try {
+    const body = await req.json().catch(() => ({}));
+    const res = await fetch(upstream, {
+      method: "PUT",
+      headers: {
+        ...(await buildGatewayHeaders()),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
+    });
+    const resBody = await res.json().catch(() => ({}));
+    return NextResponse.json(resBody, { status: res.status });
+  } catch (err) {
+    return NextResponse.json({ error: String(err) }, { status: 502 });
+  }
+}
+
 export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }

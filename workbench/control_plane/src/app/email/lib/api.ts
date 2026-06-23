@@ -403,8 +403,25 @@ export interface AIChatStreamEvent {
   id?: string;
   name?: string;
   result?: string;
+  args?: Record<string, unknown> | null;
   success?: boolean;
   error?: string;
+}
+
+/** Save an explicit (user-edited) reply body to the provider Drafts folder. */
+export async function saveDraftText(
+  accountId: string,
+  messageId: string,
+  body: string,
+): Promise<{ created: boolean }> {
+  return gatewayFetch("/email/drafts/save", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: accountId,
+      message_id: messageId,
+      body,
+    }),
+  });
 }
 
 export async function streamAIChat(

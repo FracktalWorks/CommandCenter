@@ -8,7 +8,10 @@ import {
 } from "lucide-react";
 import { ChatMessage } from "../lib/types";
 import { QUICK_ACTIONS } from "../lib/mockData";
-import { streamAIChat, triggerQuickAction } from "../lib/api";
+import {
+  streamAIChat, triggerQuickAction, saveDraftText, deleteRule, listRules,
+  updateRule,
+} from "../lib/api";
 import { useEmailStore } from "../lib/emailStore";
 import {
   EmailChatSession, StoredChatMessage, getSessions, createSession,
@@ -207,7 +210,10 @@ export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelP
               } else if (event.phase === "result") {
                 const next = turnToolsRef.current.map((t) =>
                   t.id === event.id
-                    ? { ...t, done: true, result: event.result, success: event.success }
+                    ? {
+                        ...t, done: true, result: event.result,
+                        args: event.args, success: event.success,
+                      }
                     : t,
                 );
                 turnToolsRef.current = next;
@@ -440,7 +446,11 @@ export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelP
             )}
             <div className="max-w-[85%] flex flex-col gap-1.5">
               {msg.role === "assistant" && toolsByMsg[msg.id]?.length > 0 && (
-                <ToolCards events={toolsByMsg[msg.id]} />
+                <ToolCards
+                  events={toolsByMsg[msg.id]}
+                  accountId={selectedAccountId ?? null}
+                  emailId={selectedEmailId ?? null}
+                />
               )}
               {msg.content && (
                 <div
@@ -463,7 +473,13 @@ export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelP
               <Bot size={12} />
             </div>
             <div className="max-w-[85%] flex flex-col gap-1.5">
-              {turnTools.length > 0 && <ToolCards events={turnTools} />}
+              {turnTools.length > 0 && (
+                <ToolCards
+                  events={turnTools}
+                  accountId={selectedAccountId ?? null}
+                  emailId={selectedEmailId ?? null}
+                />
+              )}
               {(streamingContent || turnTools.length === 0) && (
                 <div className="bg-secondary rounded-xl rounded-tl-sm px-3 py-2.5 w-fit">
                   {streamingContent ? (
@@ -554,6 +570,7 @@ export interface ChatToolEvent {
   name: string;
   done: boolean;
   result?: string;
+  args?: Record<string, unknown> | null;
   success?: boolean;
 }
 
@@ -595,14 +612,191 @@ const RICH_RESULT_TOOLS = new Set([
   "list_rules",
 ]);
 
+const RULE_TOOLS = new Set(["create_rule", "update_rule"]);
+const DRAFT_TOOLS = new Set(["draft_reply", "draft_email"]);
+
 /** Inline AG-UI cards showing what the assistant did this turn. */
-function ToolCards({ events }: { events: ChatToolEvent[] }) {
+function ToolCards({
+  events,
+  accountId,
+  emailId,
+}: {
+  events: ChatToolEvent[];
+  accountId: string | null;
+  emailId: string | null;
+}) {
   if (!events.length) return null;
   return (
     <div className="space-y-1.5">
-      {events.map((e) => (
-        <ToolCard key={e.id} event={e} />
-      ))}
+      {events.map((e) => {
+        if (e.done && RULE_TOOLS.has(e.name) && e.success !== false) {
+          return <RuleResultCard key={e.id} event={e} />;
+        }
+        if (e.done && DRAFT_TOOLS.has(e.name) && e.success !== false) {
+          return (
+            <DraftResultCard
+              key={e.id}
+              event={e}
+              accountId={accountId}
+              emailId={emailId}
+            />
+          );
+        }
+        return <ToolCard key={e.id} event={e} />;
+      })}
+    </div>
+  );
+}
+
+const RULE_ID_RE = /id=([0-9a-fA-F-]{8,})/;
+
+/** Interactive rule card — disable or delete a rule the assistant just made. */
+function RuleResultCard({ event: e }: { event: ChatToolEvent }) {
+  const ruleId =
+    (e.args?.rule_id as string) ||
+    (e.result?.match(RULE_ID_RE)?.[1] ?? "");
+  const name =
+    (e.args?.name as string) ||
+    e.result?.match(/'([^']+)'/)?.[1] ||
+    "rule";
+  const created = e.name === "create_rule";
+  const [state, setState] = useState<"idle" | "busy" | "deleted" | "disabled">(
+    "idle",
+  );
+
+  const del = async () => {
+    if (!ruleId || !confirm(`Delete rule "${name}"?`)) return;
+    setState("busy");
+    try {
+      await deleteRule(ruleId);
+      setState("deleted");
+    } catch {
+      setState("idle");
+    }
+  };
+  const disable = async () => {
+    if (!ruleId) return;
+    setState("busy");
+    try {
+      const rules = await listRules(e.args?.account_id as string || "");
+      const r = rules.find((x) => x.id === ruleId);
+      if (r) await updateRule(ruleId, { ...r, enabled: false });
+      setState("disabled");
+    } catch {
+      setState("idle");
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-primary/40 bg-primary/5 px-2.5 py-2">
+      <div className="flex items-center gap-2">
+        <Sparkles size={13} className="text-primary flex-shrink-0" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] font-medium text-foreground">
+            {created ? "Created rule" : "Updated rule"}: {name}
+          </div>
+          {state === "deleted" && (
+            <div className="text-[10px] text-destructive">Deleted.</div>
+          )}
+          {state === "disabled" && (
+            <div className="text-[10px] text-muted-foreground">Disabled.</div>
+          )}
+        </div>
+        {state === "idle" && ruleId && (
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <button
+              onClick={disable}
+              className="text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary"
+            >
+              Disable
+            </button>
+            <button
+              onClick={del}
+              className="text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+            >
+              Delete
+            </button>
+          </div>
+        )}
+        {state === "busy" && (
+          <Loader2 size={12} className="animate-spin text-muted-foreground" />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Interactive draft card — edit the proposed reply and save it to Drafts. */
+function DraftResultCard({
+  event: e,
+  accountId,
+  emailId,
+}: {
+  event: ChatToolEvent;
+  accountId: string | null;
+  emailId: string | null;
+}) {
+  // The draft_reply tool returns "Draft[ (saved…)]:\n\n<body>".
+  const raw = e.result || "";
+  const initial = raw.includes("\n\n")
+    ? raw.slice(raw.indexOf("\n\n") + 2).trim()
+    : raw.trim();
+  const targetId = (e.args?.email_id as string) || emailId || "";
+  const [body, setBody] = useState(initial);
+  const [state, setState] = useState<"idle" | "busy" | "saved" | "error">("idle");
+
+  const save = async () => {
+    if (!accountId || !targetId || !body.trim()) return;
+    setState("busy");
+    try {
+      await saveDraftText(accountId, targetId, body);
+      setState("saved");
+    } catch {
+      setState("error");
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-primary/40 bg-primary/5 px-2.5 py-2">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <PenLine size={12} className="text-primary" />
+        <span className="text-[11px] font-medium text-foreground">Draft reply</span>
+      </div>
+      <textarea
+        value={body}
+        onChange={(ev) => setBody(ev.target.value)}
+        rows={5}
+        disabled={state === "saved"}
+        className="w-full bg-background border border-border rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none focus:border-primary resize-y leading-relaxed disabled:opacity-70"
+      />
+      <div className="flex items-center gap-2 mt-1.5">
+        {state === "saved" ? (
+          <span className="flex items-center gap-1 text-[10px] text-emerald-500">
+            <CheckCircle2 size={11} /> Saved to Drafts
+          </span>
+        ) : (
+          <button
+            onClick={save}
+            disabled={state === "busy" || !targetId || !body.trim()}
+            className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            {state === "busy" ? (
+              <Loader2 size={11} className="animate-spin" />
+            ) : (
+              <PenLine size={11} />
+            )}
+            Save to Drafts
+          </button>
+        )}
+        {state === "error" && (
+          <span className="text-[10px] text-destructive">Couldn&apos;t save.</span>
+        )}
+        {!targetId && (
+          <span className="text-[10px] text-muted-foreground">
+            Open the email to enable saving.
+          </span>
+        )}
+      </div>
     </div>
   );
 }

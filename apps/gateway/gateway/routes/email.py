@@ -2027,8 +2027,10 @@ async def ai_chat(
         yield f"data: {json.dumps({'type': 'start'})}\n\n"
 
         content_buffer: list[str] = []
-        # toolCallId → friendly tool name, so the result event can be labelled.
+        # toolCallId → friendly tool name + accumulated args JSON, so the result
+        # event can be labelled and carry the structured input (for rich cards).
         tool_names: dict[str, str] = {}
+        tool_args: dict[str, str] = {}
         try:
             async for sse_line in agent_gen:
                 if not sse_line.startswith("data: "):
@@ -2060,13 +2062,26 @@ async def ai_chat(
                                 "id": tid, "name": name}
                     yield f"data: {json.dumps(tool_evt)}\n\n"
 
+                elif evt_type == "TOOL_CALL_ARGS":
+                    tid = str(evt.get("toolCallId") or "")
+                    tool_args[tid] = tool_args.get(tid, "") + str(
+                        evt.get("delta") or evt.get("args") or "")
+
                 elif evt_type in ("TOOL_CALL_END", "TOOL_CALL_RESULT"):
                     tid = str(evt.get("toolCallId") or "")
                     result = str(evt.get("content") or evt.get("result") or "")
+                    parsed_args: Any = None
+                    raw_args = tool_args.get(tid, "")
+                    if raw_args:
+                        try:
+                            parsed_args = json.loads(raw_args)
+                        except Exception:  # noqa: BLE001
+                            parsed_args = None
                     tool_evt = {
                         "type": "tool", "phase": "result", "id": tid,
                         "name": tool_names.get(tid, "tool"),
-                        "result": result[:600],
+                        "result": result[:2000],
+                        "args": parsed_args,
                         "success": evt.get("success") is not False,
                     }
                     yield f"data: {json.dumps(tool_evt)}\n\n"
@@ -6117,6 +6132,52 @@ async def draft_reply_smart(
                 _log.warning("email.draft_reply_create_failed", error=str(exc)[:160])
 
         return {"draft": draft, "created": created}
+    finally:
+        await db.close()
+
+
+class SaveDraftRequest(BaseModel):
+    account_id: str
+    message_id: str  # the email being replied to (for thread + recipient)
+    body: str
+
+
+@router.post("/drafts/save")
+async def save_draft(
+    req: SaveDraftRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Save an explicit (possibly user-edited) reply body as a provider draft.
+
+    Powers the chat's interactive draft card: the assistant proposes a draft,
+    the user edits it inline, then saves it to their Drafts folder verbatim."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        row = (await db.execute(text(
+            "SELECT subject, thread_id, from_address FROM email_messages "
+            "WHERE id = :mid AND account_id = :aid"
+        ), {"mid": req.message_id, "aid": req.account_id})).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Message not found")
+        frm = row.from_address if isinstance(row.from_address, dict) \
+            else json.loads(row.from_address or "{}")
+        provider, pmid, account_id, store = await _provider_for_message(
+            db, req.message_id, user.email or "anonymous"
+        )
+        if not await provider.authenticate():
+            return {"created": False, "reason": "auth failed"}
+        subject = row.subject or ""
+        await provider.create_draft(
+            to=[frm.get("email", "")],
+            subject=subject if subject.lower().startswith("re:") else f"Re: {subject}",
+            body_text=req.body,
+            reply_to_message_id=pmid,
+            thread_id=row.thread_id or None,
+        )
+        await _persist_rotated_creds(db, store, account_id, provider)
+        await db.commit()
+        return {"created": True}
     finally:
         await db.close()
 

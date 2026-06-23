@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from email_ingestion.providers.outlook import OutlookProvider, _skiptoken
+from email_ingestion.providers.outlook import OutlookProvider
 
 
 def _provider() -> OutlookProvider:
@@ -25,32 +25,34 @@ def _resp(json_value: dict, *, is_success: bool = True, status: int = 200,
     return r
 
 
-# ── $skiptoken extraction (the ~100-email cap fix) ───────────────────────────
+# ── @odata.nextLink paging (the ~100-email-per-folder cap fix) ───────────────
 
-def test_skiptoken_extracts_bare_token_from_nextlink() -> None:
-    url = ("https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages"
-           "?$top=100&$skiptoken=ABC123")
-    assert _skiptoken(url) == "ABC123"
-    assert _skiptoken("ABC123") == "ABC123"   # already bare
-    assert _skiptoken(None) is None
-
-
-async def test_list_messages_returns_bare_token_and_feeds_it_back() -> None:
+async def test_list_messages_follows_nextlink_verbatim() -> None:
+    # Graph paginates message collections with $skip (a numeric offset), not
+    # $skiptoken, so the page cursor must be the full @odata.nextLink URL, fed
+    # back verbatim. Rebuilding our own query (the old behaviour) re-fetched the
+    # first page forever — capping every folder at 100.
     p = _provider()
     client = AsyncMock()
-    next_link = ("https://graph.microsoft.com/v1.0/me/mailFolders/inbox/"
-                 "messages?$skiptoken=PAGE2")
-    client.get.return_value = _resp({"value": [], "@odata.nextLink": next_link})
+    next_link = ("https://graph.microsoft.com/v1.0/me/mailFolders('inbox')/"
+                 "messages?$orderby=receivedDateTime+desc&$top=100&$skip=100")
+    page1 = _resp({"value": [{"id": "m1"}], "@odata.nextLink": next_link})
+    page2 = _resp({"value": [{"id": "m2"}]})  # no nextLink → exhausted
+    client.get.side_effect = [page1, page2]
     p._get_client = AsyncMock(return_value=client)  # type: ignore[method-assign]
 
-    # Page 1 → surfaces a BARE token, not the full nextLink URL.
-    _, token = await p.list_messages(folder="inbox", max_results=100)
-    assert token == "PAGE2"
+    # Page 1 → the cursor is the FULL nextLink URL (not a bare token).
+    msgs1, token = await p.list_messages(folder="inbox", max_results=100)
+    assert [m.provider_message_id for m in msgs1] == ["m1"]
+    assert token == next_link
 
-    # Page 2 → the bare token is sent back as $skiptoken (Graph accepts it).
-    await p.list_messages(folder="inbox", max_results=100, page_token=token)
-    params = client.get.await_args.kwargs["params"]
-    assert params["$skiptoken"] == "PAGE2"
+    # Page 2 → the URL is requested verbatim (no rebuilt params), then exhausts.
+    msgs2, token2 = await p.list_messages(
+        folder="inbox", max_results=100, page_token=token)
+    assert [m.provider_message_id for m in msgs2] == ["m2"]
+    assert token2 is None
+    assert client.get.await_args_list[1].args[0] == next_link
+    assert "params" not in client.get.await_args_list[1].kwargs
 
 
 # ── deep folder listing (all folders, incl. nested) ──────────────────────────

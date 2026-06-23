@@ -23,26 +23,6 @@ from .base import (
     canonical_folder,
 )
 
-def _skiptoken(value: str | None) -> str | None:
-    """Return a bare Graph ``$skiptoken`` value.
-
-    ``list_messages`` surfaces Graph's ``@odata.nextLink`` (a full URL) as its
-    page token, but the paging param Graph expects is the bare ``$skiptoken``
-    embedded in that URL — feeding the whole URL back as ``$skipToken`` makes
-    Graph reject the request and paging never advances.  Accepts either a full
-    nextLink URL or an already-bare token and always returns the bare token.
-    """
-    if not value:
-        return None
-    if "://" not in value:
-        return value
-    from urllib.parse import parse_qs, urlparse
-
-    qs = parse_qs(urlparse(value).query)
-    # Graph spells it ``$skiptoken`` (lowercase) on the nextLink.
-    tok = qs.get("$skiptoken") or qs.get("$skipToken")
-    return tok[0] if tok else None
-
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
 
@@ -302,42 +282,51 @@ class OutlookProvider(BaseEmailProvider):
     ) -> tuple[list[EmailMessage], str | None]:
         client = await self._get_client()
 
-        # Use well-known folder names for system folders
-        well_known: dict[str, str] = {
-            "inbox": "inbox",
-            "sent": "sentitems",
-            "sentitems": "sentitems",
-            "drafts": "drafts",
-            "trash": "deleteditems",
-            "deleteditems": "deleteditems",
-            "archive": "archive",
-            "junk": "junkemail",
-            "junkemail": "junkemail",
-        }
-        folder_path = well_known.get(folder.lower(), folder)
+        if page_token and "://" in page_token:
+            # The page cursor is Graph's @odata.nextLink — follow it VERBATIM.
+            # Message collections paginate with ``$skip`` (a numeric offset), not
+            # ``$skiptoken``, so the cursor can't be reduced to a bare token and
+            # rebuilt; re-issuing the exact URL is the only reliable way to
+            # advance. (Re-adding our own params here is what previously capped
+            # every folder at one page of 100.) httpx keeps the client's auth
+            # header for absolute URLs, and the URL already carries $orderby,
+            # $select and any $filter from the first page.
+            resp = await client.get(page_token)
+        else:
+            # First page: build the query for the requested folder.
+            well_known: dict[str, str] = {
+                "inbox": "inbox",
+                "sent": "sentitems",
+                "sentitems": "sentitems",
+                "drafts": "drafts",
+                "trash": "deleteditems",
+                "deleteditems": "deleteditems",
+                "archive": "archive",
+                "junk": "junkemail",
+                "junkemail": "junkemail",
+            }
+            folder_path = well_known.get(folder.lower(), folder)
 
-        url = f"/me/mailFolders/{folder_path}/messages"
-        params: dict[str, Any] = {
-            "$top": min(max_results, 100),
-            "$orderby": "receivedDateTime desc",
-            "$select": "id,subject,from,toRecipients,ccRecipients,"
-                       "bccRecipients,receivedDateTime,isRead,hasAttachments,"
-                       "flag,bodyPreview,categories,parentFolderId,"
-                       "conversationId,importance,internetMessageHeaders",
-        }
-        if query:
-            params["$search"] = f'"{query}"'
-        elif since is not None:
-            # Server-side time bound for the deep initial sync. Filtering and
-            # ordering on the same property (receivedDateTime) is allowed by
-            # Graph; $search would NOT combine with $orderby, so they're
-            # mutually exclusive here (sync never passes a query).
-            iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
-            params["$filter"] = f"receivedDateTime ge {iso}"
-        if page_token:
-            params["$skiptoken"] = _skiptoken(page_token)
+            url = f"/me/mailFolders/{folder_path}/messages"
+            params: dict[str, Any] = {
+                "$top": min(max_results, 100),
+                "$orderby": "receivedDateTime desc",
+                "$select": "id,subject,from,toRecipients,ccRecipients,"
+                           "bccRecipients,receivedDateTime,isRead,hasAttachments,"
+                           "flag,bodyPreview,categories,parentFolderId,"
+                           "conversationId,importance,internetMessageHeaders",
+            }
+            if query:
+                params["$search"] = f'"{query}"'
+            elif since is not None:
+                # Server-side time bound for the deep initial sync. Filtering and
+                # ordering on the same property (receivedDateTime) is allowed by
+                # Graph; $search would NOT combine with $orderby, so they're
+                # mutually exclusive here (sync never passes a query).
+                iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+                params["$filter"] = f"receivedDateTime ge {iso}"
+            resp = await client.get(url, params=params)
 
-        resp = await client.get(url, params=params)
         resp.raise_for_status()
         data = resp.json()
 
@@ -351,9 +340,9 @@ class OutlookProvider(BaseEmailProvider):
             msg.folder = canon
             messages.append(msg)
 
-        # Surface a BARE $skiptoken (not the full nextLink URL) so it can be fed
-        # straight back into ``page_token`` above.
-        next_token = _skiptoken(data.get("@odata.nextLink"))
+        # The page cursor is the full @odata.nextLink URL (None when exhausted),
+        # fed straight back into ``page_token`` to fetch the next page verbatim.
+        next_token = data.get("@odata.nextLink")
         return messages, next_token
 
     async def get_message(self, provider_message_id: str) -> EmailMessage:

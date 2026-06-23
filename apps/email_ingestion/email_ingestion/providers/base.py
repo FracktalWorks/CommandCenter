@@ -285,6 +285,33 @@ class BaseEmailProvider(ABC):
             f"{self.__class__.__name__} does not support drafts"
         )
 
+    async def update_draft(
+        self,
+        draft_id: str,
+        to: list[str] | None = None,
+        subject: str | None = None,
+        body_text: str | None = None,
+        body_html: str | None = None,
+    ) -> str:
+        """Update an existing draft in place; return the (possibly new) draft id.
+
+        Default raises NotImplementedError so callers can fall back to creating a
+        fresh draft on providers without an update primitive.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support updating drafts"
+        )
+
+    async def send_draft(self, draft_id: str) -> str | None:
+        """Send an existing draft natively (Drafts → Sent), no duplicate.
+
+        Default raises NotImplementedError so callers can fall back to sending a
+        fresh message and deleting the draft.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support sending drafts"
+        )
+
     @abstractmethod
     async def sync_messages(
         self,

@@ -436,7 +436,7 @@ export async function saveDraftText(
   accountId: string,
   messageId: string,
   body: string,
-): Promise<{ created: boolean }> {
+): Promise<{ created: boolean; id?: string }> {
   return gatewayFetch("/email/drafts/save", {
     method: "POST",
     body: JSON.stringify({
@@ -444,6 +444,48 @@ export async function saveDraftText(
       message_id: messageId,
       body,
     }),
+  });
+}
+
+export interface SaveDraftParams {
+  accountId: string;
+  /** Local id of an existing draft to UPDATE in place (omit to create a new one). */
+  draftId?: string;
+  /** Local id of the message being replied to (creates a threaded reply draft). */
+  replyToMessageId?: string;
+  to?: string[];
+  subject?: string;
+  body?: string;
+}
+
+/**
+ * Create or update a draft on the provider AND mirror it locally (the reverse-
+ * sync write path behind auto-save). Returns the persisted message so the caller
+ * can show it in Drafts / in-thread and keep editing the same draft.
+ */
+export async function saveDraft(params: SaveDraftParams): Promise<Email> {
+  const raw = await gatewayFetch<Record<string, unknown>>("/email/drafts", {
+    method: "PUT",
+    body: JSON.stringify({
+      account_id: params.accountId,
+      draft_id: params.draftId ?? null,
+      reply_to_message_id: params.replyToMessageId ?? null,
+      to: params.to ?? [],
+      subject: params.subject ?? "",
+      body: params.body ?? "",
+    }),
+  });
+  return mapEmail(raw);
+}
+
+/** Send an existing draft natively (Drafts → Sent, no duplicate). */
+export async function sendDraft(
+  accountId: string,
+  draftId: string,
+): Promise<{ sent: boolean }> {
+  return gatewayFetch("/email/drafts/send", {
+    method: "POST",
+    body: JSON.stringify({ account_id: accountId, draft_id: draftId }),
   });
 }
 

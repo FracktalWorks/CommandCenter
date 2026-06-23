@@ -438,6 +438,49 @@ class OutlookProvider(BaseEmailProvider):
         await self._attach_files(client, draft_id, attachments)
         return draft_id
 
+    async def update_draft(
+        self,
+        draft_id: str,
+        to: list[str] | None = None,
+        subject: str | None = None,
+        body_text: str | None = None,
+        body_html: str | None = None,
+    ) -> str:
+        """Update an existing Outlook draft in place (PATCH /me/messages/{id}).
+
+        Only the supplied fields are changed. Returns the (unchanged) draft id so
+        callers can keep tracking the same provider message — this is what lets
+        the editor save repeatedly without spawning duplicate drafts.
+        """
+        client = await self._get_client()
+        patch: dict[str, Any] = {}
+        if body_text is not None or body_html is not None:
+            patch["body"] = {
+                "contentType": "html" if body_html else "text",
+                "content": body_html if body_html is not None else (body_text or ""),
+            }
+        if subject is not None:
+            patch["subject"] = subject
+        if to is not None:
+            patch["toRecipients"] = [
+                {"emailAddress": {"address": addr}} for addr in to if addr
+            ]
+        if patch:
+            resp = await client.patch(f"/me/messages/{draft_id}", json=patch)
+            resp.raise_for_status()
+        return draft_id
+
+    async def send_draft(self, draft_id: str) -> str | None:
+        """Send an existing draft natively (POST /me/messages/{id}/send).
+
+        Graph moves the message Drafts → Sent itself (no leftover draft, no
+        duplicate). Returns None — Graph's send endpoint yields no message id.
+        """
+        client = await self._get_client()
+        resp = await client.post(f"/me/messages/{draft_id}/send")
+        resp.raise_for_status()
+        return None
+
     @staticmethod
     async def _attach_files(
         client: httpx.AsyncClient, draft_id: str,

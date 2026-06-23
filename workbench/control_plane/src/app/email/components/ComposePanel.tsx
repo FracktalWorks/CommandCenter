@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { X, Loader2 } from "lucide-react";
+import { useEmailStore } from "../lib/emailStore";
 
 interface ComposePanelProps {
   open: boolean;
@@ -37,6 +38,52 @@ export function ComposePanel({
   const [body, setBody] = useState(replyToBody || "");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const { saveDraft, sendDraft, deleteEmail } = useEmailStore();
+  // Gmail-style auto-save: the composed message persists as a Drafts row as you
+  // type (draftIdRef holds the local id so repeated saves update it in place).
+  const draftIdRef = useRef<string | null>(null);
+  const dirty = useRef(false);
+  const [draftStatus, setDraftStatus] = useState<"idle" | "saving" | "saved">("idle");
+
+  // A fresh compose session each time the window opens: re-sync fields from the
+  // (possibly new) props and forget any prior draft so we don't update it.
+  useEffect(() => {
+    if (!open) return;
+    setTo(defaultTo);
+    setCc("");
+    setSubject(defaultSubject);
+    setBody(replyToBody || "");
+    draftIdRef.current = null;
+    dirty.current = false;
+    setDraftStatus("idle");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // Debounced auto-save once the user edits the draft.
+  useEffect(() => {
+    if (!open || !accountId || !dirty.current) return;
+    const toArr = to.split(",").map((s) => s.trim()).filter(Boolean);
+    if (!body.trim() && toArr.length === 0 && !subject.trim()) return;
+    const handle = setTimeout(async () => {
+      try {
+        setDraftStatus("saving");
+        const saved = await saveDraft({
+          accountId,
+          draftId: draftIdRef.current ?? undefined,
+          replyToMessageId: draftIdRef.current ? undefined : (replyToMessageId || undefined),
+          to: toArr,
+          subject,
+          body,
+        });
+        draftIdRef.current = saved.id;
+        setDraftStatus("saved");
+      } catch {
+        setDraftStatus("idle");
+      }
+    }, 1200);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [to, cc, subject, body, open, accountId]);
 
   if (!open) return null;
 
@@ -44,15 +91,32 @@ export function ComposePanel({
     if (!to.trim() || sending) return;
     setSending(true);
     setSendError(null);
+    const toArr = to.split(",").map((s) => s.trim()).filter(Boolean);
+    const ccArr = cc ? cc.split(",").map((s) => s.trim()).filter(Boolean) : [];
     try {
-      await onSend({
-        to: to.split(",").map((s) => s.trim()).filter(Boolean),
-        cc: cc ? cc.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
-        subject,
-        bodyText: body,
-        replyToMessageId: replyToMessageId,
-      });
-      // onClose is called by the store after successful send
+      // Native draft-send when auto-save produced a draft and there's no Cc
+      // (the draft write-path doesn't carry Cc); otherwise send fresh.
+      if (draftIdRef.current && ccArr.length === 0) {
+        const saved = await saveDraft({
+          accountId,
+          draftId: draftIdRef.current,
+          to: toArr,
+          subject,
+          body,
+        });
+        await sendDraft(accountId, saved.id);
+        onClose();
+      } else {
+        await onSend({
+          to: toArr,
+          cc: ccArr.length ? ccArr : undefined,
+          subject,
+          bodyText: body,
+          replyToMessageId: replyToMessageId,
+        });
+        if (draftIdRef.current) void deleteEmail(draftIdRef.current);
+        // onClose is called by the store after successful send
+      }
     } catch (err: any) {
       setSendError(err.message || "Failed to send");
       setSending(false);
@@ -85,7 +149,7 @@ export function ComposePanel({
             <input
               type="text"
               value={to}
-              onChange={(e) => setTo(e.target.value)}
+              onChange={(e) => { dirty.current = true; setTo(e.target.value); }}
               placeholder="Email address..."
               className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
             />
@@ -97,7 +161,7 @@ export function ComposePanel({
             <input
               type="text"
               value={cc}
-              onChange={(e) => setCc(e.target.value)}
+              onChange={(e) => { dirty.current = true; setCc(e.target.value); }}
               placeholder="Cc..."
               className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
             />
@@ -109,7 +173,7 @@ export function ComposePanel({
             <input
               type="text"
               value={subject}
-              onChange={(e) => setSubject(e.target.value)}
+              onChange={(e) => { dirty.current = true; setSubject(e.target.value); }}
               placeholder="Subject..."
               className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
             />
@@ -119,7 +183,7 @@ export function ComposePanel({
           <div className="border-t border-border pt-3">
             <textarea
               value={body}
-              onChange={(e) => setBody(e.target.value)}
+              onChange={(e) => { dirty.current = true; setBody(e.target.value); }}
               placeholder="Write your message..."
               rows={12}
               autoFocus
@@ -131,10 +195,13 @@ export function ComposePanel({
         {/* Footer */}
         <div className="px-4 py-3 border-t border-border flex items-center justify-between">
           <div className="flex-1">
-            {sendError && (
+            {sendError ? (
               <span className="text-[10px] text-red-500">{sendError}</span>
-            )}
-            {!sendError && (
+            ) : draftStatus === "saving" ? (
+              <span className="text-[10px] text-muted-foreground">Saving draft…</span>
+            ) : draftStatus === "saved" ? (
+              <span className="text-[10px] text-muted-foreground">Draft saved to Drafts</span>
+            ) : (
               <span className="text-[10px] text-muted-foreground">
                 Sent from your connected email account
               </span>
@@ -142,7 +209,11 @@ export function ComposePanel({
           </div>
           <div className="flex gap-2">
             <button
-              onClick={onClose}
+              onClick={() => {
+                // Discard removes the auto-saved draft (closing via X keeps it).
+                if (draftIdRef.current) void deleteEmail(draftIdRef.current);
+                onClose();
+              }}
               disabled={sending}
               className="px-3 py-1.5 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
             >

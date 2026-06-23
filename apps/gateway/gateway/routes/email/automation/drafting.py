@@ -7,6 +7,7 @@ import asyncio
 import json
 import re
 from typing import Any
+from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
@@ -16,7 +17,9 @@ from gateway.routes.email.core import (
     _get_db,
     _log,
     _persist_rotated_creds,
+    _provider_for_account,
     _provider_for_message,
+    _row_to_message,
     _safe_json,
     router,
 )
@@ -530,12 +533,24 @@ async def draft_reply_smart(
                     db, req.message_id, user.email or "anonymous"
                 )
                 if await provider.authenticate():
-                    await provider.create_draft(
+                    re_subject = (
+                        email["subject"]
+                        if email["subject"].lower().startswith("re:")
+                        else f"Re: {email['subject']}"
+                    )
+                    provider_id = await provider.create_draft(
                         to=[email["from"]],
-                        subject=f"Re: {email['subject']}",
+                        subject=re_subject,
                         body_text=draft,
                         reply_to_message_id=pmid,
                         thread_id=email["thread_id"] or None,
+                    )
+                    # Mirror locally so it shows in Drafts + in-thread at once.
+                    await _upsert_local_draft(
+                        db, account_id, provider_id,
+                        thread_id=email["thread_id"] or None,
+                        owner_email=user.email or "", to_email=email["from"],
+                        subject=re_subject, body=draft,
                     )
                     await _persist_rotated_creds(db, store, account_id, provider)
                     await db.commit()
@@ -544,6 +559,215 @@ async def draft_reply_smart(
                 _log.warning("email.draft_reply_create_failed", error=str(exc)[:160])
 
         return {"draft": draft, "created": created}
+    finally:
+        await db.close()
+
+
+async def _upsert_local_draft(
+    db: Any, account_id: str, provider_message_id: str, *,
+    thread_id: str | None, owner_email: str, to_email: str,
+    subject: str, body: str,
+) -> str:
+    """Persist a just-created/updated provider draft into ``email_messages`` so it
+    shows in the Drafts folder and in-thread immediately — without waiting for the
+    next provider sweep. Keyed on ``(account_id, provider_message_id)`` so that
+    later Drafts sync updates this same row instead of duplicating it. Returns the
+    local message id."""
+    res = await db.execute(text(
+        """INSERT INTO email_messages
+             (id, account_id, provider_message_id, thread_id, folder,
+              from_address, to_addresses, subject, body_text, snippet,
+              is_read, is_starred, is_flagged, received_at, synced_at)
+           VALUES (:id, :aid, :pmid, :tid, 'drafts',
+              :from_addr, :to_addrs, :subject, :body, :snippet,
+              true, false, false, now(), now())
+           ON CONFLICT (account_id, provider_message_id) DO UPDATE SET
+             thread_id = COALESCE(EXCLUDED.thread_id, email_messages.thread_id),
+             to_addresses = EXCLUDED.to_addresses,
+             subject = EXCLUDED.subject,
+             body_text = EXCLUDED.body_text,
+             snippet = EXCLUDED.snippet,
+             folder = 'drafts',
+             updated_at = now()
+           RETURNING id"""
+    ), {
+        "id": str(uuid4()), "aid": account_id, "pmid": provider_message_id,
+        "tid": thread_id or None,
+        "from_addr": json.dumps({"name": "", "email": owner_email or ""}),
+        "to_addrs": json.dumps(
+            [{"name": "", "email": to_email}] if to_email else []),
+        "subject": subject or "", "body": body or "",
+        "snippet": (body or "")[:200],
+    })
+    rid = res.fetchone()
+    return str(rid.id) if rid else ""
+
+
+async def _fetch_message_dict(db: Any, message_id: str) -> dict[str, Any]:
+    """Return one stored message in the API (snake_case) shape, or {}."""
+    row = (await db.execute(text(
+        """SELECT em.id, em.provider_message_id, em.thread_id, em.account_id,
+                  em.folder, em.labels, em.from_address, em.to_addresses,
+                  em.cc_addresses, em.bcc_addresses, em.subject, em.body_text,
+                  em.body_html, em.snippet, em.has_attachments, em.is_read,
+                  em.is_starred, em.is_flagged, em.importance, em.categories,
+                  em.received_at, em.synced_at
+           FROM email_messages em WHERE em.id = :id"""
+    ), {"id": message_id})).fetchone()
+    return _row_to_message(row).model_dump() if row else {}
+
+
+class DraftUpsertRequest(BaseModel):
+    account_id: str
+    # Local id of an existing draft to UPDATE in place (omit to create a new one).
+    draft_id: str | None = None
+    # Local id of the message being replied to (creates a threaded reply draft).
+    reply_to_message_id: str | None = None
+    to: list[str] = []
+    subject: str = ""
+    body: str = ""
+
+
+@router.put("/drafts")
+async def upsert_draft(
+    req: DraftUpsertRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Create or update a draft on the provider AND mirror it locally.
+
+    This is the reverse-sync write path behind Gmail/Outlook-style auto-save:
+    the editor saves as you type. ``draft_id`` updates the same provider draft in
+    place (no duplicates); ``reply_to_message_id`` threads a new reply draft;
+    neither → a standalone draft. Returns the persisted message so the UI can show
+    it in the Drafts folder and in-thread at once."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        provider, store, owner_email = await _provider_for_account(
+            db, req.account_id, user.email or "anonymous"
+        )
+        if not await provider.authenticate():
+            raise HTTPException(status_code=401, detail="Email account auth failed")
+
+        to = [t for t in (req.to or []) if t]
+        subject = req.subject or ""
+        thread_id: str | None = None
+
+        if req.draft_id:
+            drow = (await db.execute(text(
+                "SELECT provider_message_id, thread_id, subject FROM email_messages"
+                " WHERE id = :id AND account_id = :aid"
+                " AND LOWER(folder) IN ('drafts', 'draft')"
+            ), {"id": req.draft_id, "aid": req.account_id})).fetchone()
+            if not drow:
+                raise HTTPException(status_code=404, detail="Draft not found")
+            thread_id = drow.thread_id
+            subject = subject or (drow.subject or "")
+            try:
+                provider_id = await provider.update_draft(
+                    drow.provider_message_id, to=to or None,
+                    subject=subject or None, body_text=req.body,
+                )
+            except NotImplementedError:
+                # No in-place update primitive → make a fresh draft, drop the old.
+                provider_id = await provider.create_draft(
+                    to=to, subject=subject, body_text=req.body,
+                    thread_id=thread_id or None,
+                )
+                try:
+                    await provider.trash_message(drow.provider_message_id)
+                except Exception:  # noqa: BLE001
+                    pass
+        elif req.reply_to_message_id:
+            # Accept either the local message id (inline reply) or the provider
+            # message id (full composer pop-out passes providerMessageId).
+            rrow = (await db.execute(text(
+                "SELECT provider_message_id, thread_id, subject, from_address"
+                " FROM email_messages WHERE account_id = :aid"
+                " AND (id = :id OR provider_message_id = :id)"
+                " LIMIT 1"
+            ), {"id": req.reply_to_message_id, "aid": req.account_id})).fetchone()
+            if not rrow:
+                raise HTTPException(status_code=404, detail="Reply target not found")
+            thread_id = rrow.thread_id
+            if not subject:
+                s0 = rrow.subject or ""
+                subject = s0 if s0.lower().startswith("re:") else f"Re: {s0}"
+            if not to:
+                frm = rrow.from_address if isinstance(rrow.from_address, dict) \
+                    else json.loads(rrow.from_address or "{}")
+                if frm.get("email"):
+                    to = [frm["email"]]
+            provider_id = await provider.create_draft(
+                to=to, subject=subject, body_text=req.body,
+                reply_to_message_id=rrow.provider_message_id,
+                thread_id=thread_id or None,
+            )
+        else:
+            provider_id = await provider.create_draft(
+                to=to, subject=subject, body_text=req.body,
+            )
+
+        local_id = await _upsert_local_draft(
+            db, req.account_id, provider_id, thread_id=thread_id,
+            owner_email=owner_email, to_email=(to[0] if to else ""),
+            subject=subject, body=req.body,
+        )
+        await _persist_rotated_creds(db, store, req.account_id, provider)
+        await db.commit()
+        return await _fetch_message_dict(db, local_id)
+    finally:
+        await db.close()
+
+
+class DraftSendRequest(BaseModel):
+    account_id: str
+    draft_id: str  # local email_messages id of the draft to send
+
+
+@router.post("/drafts/send")
+async def send_draft_endpoint(
+    req: DraftSendRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Send an existing draft natively (Drafts → Sent, no duplicate) and drop the
+    local draft row. Falls back to send-new-then-trash for providers without a
+    native send-draft primitive."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        drow = (await db.execute(text(
+            "SELECT provider_message_id, subject, to_addresses, body_text"
+            " FROM email_messages WHERE id = :id AND account_id = :aid"
+            " AND LOWER(folder) IN ('drafts', 'draft')"
+        ), {"id": req.draft_id, "aid": req.account_id})).fetchone()
+        if not drow:
+            raise HTTPException(status_code=404, detail="Draft not found")
+        provider, store, _owner = await _provider_for_account(
+            db, req.account_id, user.email or "anonymous"
+        )
+        if not await provider.authenticate():
+            raise HTTPException(status_code=401, detail="Email account auth failed")
+        try:
+            await provider.send_draft(drow.provider_message_id)
+        except NotImplementedError:
+            recips = drow.to_addresses if isinstance(drow.to_addresses, list) \
+                else json.loads(drow.to_addresses or "[]")
+            to = [a.get("email") for a in recips if a.get("email")]
+            await provider.send_message(
+                to=to, subject=drow.subject or "", body_text=drow.body_text or "")
+            try:
+                await provider.trash_message(drow.provider_message_id)
+            except Exception:  # noqa: BLE001
+                pass
+        # The draft has left the mailbox — remove the local row.
+        await db.execute(
+            text("DELETE FROM email_messages WHERE id = :id"),
+            {"id": req.draft_id},
+        )
+        await _persist_rotated_creds(db, store, req.account_id, provider)
+        await db.commit()
+        return {"sent": True}
     finally:
         await db.close()
 
@@ -562,7 +786,8 @@ async def save_draft(
     """Save an explicit (possibly user-edited) reply body as a provider draft.
 
     Powers the chat's interactive draft card: the assistant proposes a draft,
-    the user edits it inline, then saves it to their Drafts folder verbatim."""
+    the user edits it inline, then saves it to their Drafts folder verbatim. The
+    draft is mirrored locally so it shows in Drafts/in-thread immediately."""
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
@@ -580,15 +805,22 @@ async def save_draft(
         if not await provider.authenticate():
             return {"created": False, "reason": "auth failed"}
         subject = row.subject or ""
-        await provider.create_draft(
-            to=[frm.get("email", "")],
-            subject=subject if subject.lower().startswith("re:") else f"Re: {subject}",
+        re_subject = subject if subject.lower().startswith("re:") else f"Re: {subject}"
+        to_email = frm.get("email", "")
+        provider_id = await provider.create_draft(
+            to=[to_email],
+            subject=re_subject,
             body_text=req.body,
             reply_to_message_id=pmid,
             thread_id=row.thread_id or None,
         )
+        local_id = await _upsert_local_draft(
+            db, req.account_id, provider_id, thread_id=row.thread_id,
+            owner_email="", to_email=to_email,
+            subject=re_subject, body=req.body,
+        )
         await _persist_rotated_creds(db, store, account_id, provider)
         await db.commit()
-        return {"created": True}
+        return {"created": True, "id": local_id}
     finally:
         await db.close()

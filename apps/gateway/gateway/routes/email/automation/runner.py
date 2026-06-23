@@ -16,6 +16,7 @@ from gateway.routes.email.automation.drafting import (
     DRAFT_NO_DRAFT_SENTINEL,
     _agent_draft_reply,
     _store_ai_draft,
+    _upsert_local_draft,
 )
 from gateway.routes.email.automation.engine import (
     _email_payload_from_id,
@@ -985,12 +986,21 @@ async def _apply_rule_actions(
                 to = a.get("to_address") or email.get("from", "")
                 if not to:
                     continue
-                await provider.create_draft(
+                draft_pid = await provider.create_draft(
                     to=[to], subject=subj, body_text=body,
                     reply_to_message_id=provider_msg_id,
                     thread_id=email.get("thread_id") or None,
                     attachments=_load_action_attachments(a) or None,
                 )
+                # Mirror the draft locally so it shows in the Drafts folder and
+                # in-thread immediately (matches the manual draft write-path).
+                if draft_pid and account_id:
+                    await _upsert_local_draft(
+                        db, account_id, draft_pid,
+                        thread_id=email.get("thread_id") or None,
+                        owner_email=user_email, to_email=to,
+                        subject=subj, body=body,
+                    )
                 # AI-written (non-template) drafts: remember for edit-learning.
                 if not tmpl and account_id:
                     await _store_ai_draft(
@@ -1006,12 +1016,19 @@ async def _apply_rule_actions(
                     f"Subject: {email.get('subject', '')}\n\n"
                     f"{(email.get('body', '') or '')[:4000]}"
                 )
-                await provider.create_draft(
+                fwd_subject = a.get("subject") or f"Fwd: {email.get('subject', '')}"
+                fwd_pid = await provider.create_draft(
                     to=[a["to_address"]],
-                    subject=a.get("subject") or f"Fwd: {email.get('subject', '')}",
+                    subject=fwd_subject,
                     body_text=fwd,
                     attachments=_load_action_attachments(a) or None,
                 )
+                if fwd_pid and account_id:
+                    await _upsert_local_draft(
+                        db, account_id, fwd_pid, thread_id=None,
+                        owner_email=user_email, to_email=a["to_address"],
+                        subject=fwd_subject, body=fwd,
+                    )
             elif t == "CALL_WEBHOOK" and a.get("url"):
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     await client.post(a["url"], json={"message_id": message_id})

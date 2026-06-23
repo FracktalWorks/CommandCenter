@@ -147,6 +147,29 @@ async def _provider_for_message(db: Any, message_id: str, user_email: str):
     return provider, row.provider_message_id, str(row.account_id), store
 
 
+async def _provider_for_account(db: Any, account_id: str, user_email: str):
+    """Load the provider for an account (no specific message).
+
+    Returns (provider, store, owner_email) or raises 404. Used by the draft
+    write-path, which creates/updates/sends provider drafts that aren't tied to
+    a single stored message. Persisting rotated creds is the caller's job.
+    """
+    row = (await db.execute(
+        text(
+            """SELECT provider, credentials_encrypted, email_address
+               FROM email_accounts WHERE id = :id AND user_id = :uid"""
+        ),
+        {"id": account_id, "uid": user_email},
+    )).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Account not found")
+    from acb_llm.key_store import get_key_store
+    store = get_key_store()
+    creds = json.loads(store.decrypt(row.credentials_encrypted))
+    provider = _instantiate_provider(row.provider, creds)
+    return provider, store, row.email_address
+
+
 async def _persist_rotated_creds(db: Any, store: Any, account_id: str, provider) -> None:
     """Persist refreshed OAuth tokens if the provider rotated them mid-request."""
     if provider.credentials_dirty():

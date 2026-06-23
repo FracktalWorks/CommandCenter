@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Star, Reply, Forward, Trash2, Archive, MoreHorizontal,
   Paperclip, Download, ReplyAll, Flag, FolderInput,
@@ -23,7 +23,7 @@ interface EmailDetailProps {
 export function EmailDetail({ email }: EmailDetailProps) {
   const {
     updateEmail, deleteEmail, openCompose, hydrateEmail, folders,
-    accounts, selectedAccountId, sendEmail,
+    accounts, selectedAccountId, sendEmail, saveDraft, sendDraft,
   } = useEmailStore();
   const [starred, setStarred] = useState(email?.isStarred ?? false);
   const [read, setRead] = useState(email?.isRead ?? true);
@@ -38,6 +38,12 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const [replyTo, setReplyTo] = useState("");
   const [replyCc, setReplyCc] = useState("");
   const [sendErr, setSendErr] = useState<string | null>(null);
+  // ── Auto-save (Gmail-style): the reply persists as a Drafts message as you
+  //    type, so closing the composer never loses it. draftIdRef holds the local
+  //    id of the saved draft so repeated saves update it in place (no dupes). ──
+  const draftIdRef = useRef<string | null>(null);
+  const replyDirty = useRef(false);
+  const [draftStatus, setDraftStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [loadingFullBody, setLoadingFullBody] = useState(false);
   const [fullBodyText, setFullBodyText] = useState<string | null>(null);
   // Full message detail (body + attachments) fetched lazily on selection. The
@@ -107,6 +113,9 @@ export function EmailDetail({ email }: EmailDetailProps) {
     setThread(null);
     setFullBodyText(null);
     setReplyMode(null);
+    draftIdRef.current = null;
+    replyDirty.current = false;
+    setDraftStatus("idle");
     // Pull the whole conversation so we can show a Gmail-style thread view.
     if (email.threadId) {
       listThread(selectedAccountId ?? undefined, email.threadId)
@@ -182,6 +191,10 @@ export function EmailDetail({ email }: EmailDetailProps) {
   /** Open the inline composer with recipients + a quoted body prefilled. */
   const startReply = (mode: "reply" | "reply-all" | "forward") => {
     setSendErr(null);
+    // New reply session: forget any previous draft so we don't update it.
+    draftIdRef.current = null;
+    replyDirty.current = false;
+    setDraftStatus("idle");
     // HTML-only mail (e.g. Outlook) has no bodyText — fall back to the snippet.
     const quoteSrc = view.bodyText || view.snippet || "";
     if (mode === "forward") {
@@ -225,8 +238,53 @@ export function EmailDetail({ email }: EmailDetailProps) {
         ? email.subject
         : `Re: ${email.subject}`;
 
-  /** Queue the inline reply/forward (the store shows an Undo toast). */
-  const handleInlineSend = () => {
+  // ── Gmail-style auto-save ──
+  // Debounce-persist the open reply/forward as a Drafts message once the user
+  // edits it. Creates the draft on the first save (threaded for reply/reply-all)
+  // and updates the same one thereafter, so closing the box never loses work.
+  useEffect(() => {
+    if (!replyMode || !selectedAccountId || !email) return;
+    if (!replyDirty.current) return; // ignore the prefilled quote — wait for edits
+    const toArr = replyTo.split(",").map((s) => s.trim()).filter(Boolean);
+    if (!replyBody.trim() && toArr.length === 0) return;
+    const subject = replySubject();
+    const body = replyBody;
+    const isForward = replyMode === "forward";
+    const handle = setTimeout(async () => {
+      try {
+        setDraftStatus("saving");
+        const saved = await saveDraft({
+          accountId: selectedAccountId,
+          draftId: draftIdRef.current ?? undefined,
+          // Reply/Reply-All thread onto the open message; Forward is standalone.
+          replyToMessageId: isForward ? undefined : email.id,
+          to: toArr,
+          subject,
+          body,
+        });
+        draftIdRef.current = saved.id;
+        setDraftStatus("saved");
+      } catch {
+        setDraftStatus("idle");
+      }
+    }, 1200);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replyBody, replyTo, replyCc, replyMode, selectedAccountId, email?.id]);
+
+  const resetReplySession = () => {
+    draftIdRef.current = null;
+    replyDirty.current = false;
+    setDraftStatus("idle");
+    setReplyMode(null);
+    setReplyBody("");
+    setReplyTo("");
+    setReplyCc("");
+  };
+
+  /** Send the reply/forward. If it was auto-saved as a draft we send that draft
+   *  natively (Drafts → Sent, no duplicate); otherwise we send a fresh message. */
+  const handleInlineSend = async () => {
     if (!email) return;
     if (!selectedAccountId) {
       setSendErr("No account selected");
@@ -238,19 +296,40 @@ export function EmailDetail({ email }: EmailDetailProps) {
       return;
     }
     const ccArr = replyCc.split(",").map((s) => s.trim()).filter(Boolean);
-    sendEmail({
-      accountId: selectedAccountId,
-      to: toArr,
-      cc: ccArr.length ? ccArr : undefined,
-      subject: replySubject(),
-      bodyText: replyBody,
-      replyToMessageId:
-        replyMode === "forward" ? undefined : email.providerMessageId,
-    });
-    setReplyMode(null);
-    setReplyBody("");
-    setReplyTo("");
-    setReplyCc("");
+    const isForward = replyMode === "forward";
+    try {
+      // Native draft-send only when there's no Cc — the draft write-path doesn't
+      // carry Cc, so a Cc'd reply goes via the full send (and the auto-saved
+      // draft, if any, is discarded so it doesn't linger).
+      if (draftIdRef.current && ccArr.length === 0) {
+        const saved = await saveDraft({
+          accountId: selectedAccountId,
+          draftId: draftIdRef.current,
+          replyToMessageId: isForward ? undefined : email.id,
+          to: toArr,
+          subject: replySubject(),
+          body: replyBody,
+        });
+        await sendDraft(selectedAccountId, saved.id);
+      } else {
+        sendEmail({
+          accountId: selectedAccountId,
+          to: toArr,
+          cc: ccArr.length ? ccArr : undefined,
+          subject: replySubject(),
+          bodyText: replyBody,
+          replyToMessageId: isForward ? undefined : email.providerMessageId,
+        });
+        if (draftIdRef.current) {
+          // Drop the lingering auto-saved draft now the message has been sent.
+          void deleteEmail(draftIdRef.current);
+        }
+      }
+    } catch (e: any) {
+      setSendErr(e?.message || "Failed to send");
+      return;
+    }
+    resetReplySession();
   };
 
   /** Hand the current draft off to the full composer (Cc/Bcc, attachments). */
@@ -669,7 +748,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
               <input
                 type="text"
                 value={replyTo}
-                onChange={(e) => setReplyTo(e.target.value)}
+                onChange={(e) => { replyDirty.current = true; setReplyTo(e.target.value); }}
                 placeholder="Recipients (comma-separated)…"
                 className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
               />
@@ -679,14 +758,14 @@ export function EmailDetail({ email }: EmailDetailProps) {
               <input
                 type="text"
                 value={replyCc}
-                onChange={(e) => setReplyCc(e.target.value)}
+                onChange={(e) => { replyDirty.current = true; setReplyCc(e.target.value); }}
                 placeholder="Cc…"
                 className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
               />
             </div>
             <textarea
               value={replyBody}
-              onChange={(e) => setReplyBody(e.target.value)}
+              onChange={(e) => { replyDirty.current = true; setReplyBody(e.target.value); }}
               onKeyDown={(e) => {
                 if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                   e.preventDefault();
@@ -702,6 +781,10 @@ export function EmailDetail({ email }: EmailDetailProps) {
               <span className="text-[10px] truncate">
                 {sendErr ? (
                   <span className="text-red-500">{sendErr}</span>
+                ) : draftStatus === "saving" ? (
+                  <span className="text-muted-foreground">Saving draft…</span>
+                ) : draftStatus === "saved" ? (
+                  <span className="text-muted-foreground">Draft saved · Ctrl+Enter to send</span>
                 ) : (
                   <span className="text-muted-foreground">Ctrl+Enter to send</span>
                 )}
@@ -717,9 +800,12 @@ export function EmailDetail({ email }: EmailDetailProps) {
                 <button
                   className="px-3 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
                   onClick={() => {
-                    setReplyMode(null);
+                    // Discard the auto-saved draft too (the X keeps it instead).
+                    if (draftIdRef.current) void deleteEmail(draftIdRef.current);
                     setSendErr(null);
+                    resetReplySession();
                   }}
+                  title="Discard this draft"
                 >
                   Discard
                 </button>

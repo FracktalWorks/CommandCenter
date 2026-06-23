@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Paperclip, PenLine, Send, Loader2, Trash2 } from "lucide-react";
 import { Email } from "../lib/types";
 import { fullDateLabel, initials } from "../lib/utils";
@@ -148,11 +148,13 @@ export const isDraftEmail = isDraft;
 
 /** Inline editable draft: edit the body/recipients and send it into the thread. */
 export function DraftCard({ draft, replyTo }: { draft: Email; replyTo?: Email }) {
-  const { sendEmail, deleteEmail, selectedAccountId } = useEmailStore();
+  const { deleteEmail, selectedAccountId, saveDraft, sendDraft } = useEmailStore();
   const [hydratedBody, setHydratedBody] = useState<string | null>(null);
   const [body, setBody] = useState(draft.bodyText || "");
   const [to, setTo] = useState(draft.to.map((t) => t.email).filter(Boolean).join(", "));
   const [sending, setSending] = useState(false);
+  const dirty = useRef(false);
+  const [draftStatus, setDraftStatus] = useState<"idle" | "saving" | "saved">("idle");
 
   // The draft almost always arrives body-less: provider drafts (incl. the ones
   // the AI agent creates) sync header-only, so the DB copy has no body. Pull the
@@ -190,20 +192,45 @@ export function DraftCard({ draft, replyTo }: { draft: Email; replyTo?: Email })
   const recipients = () =>
     to.split(",").map((s) => s.trim()).filter(Boolean);
 
+  // Auto-save edits to the draft in place (debounced) so changes persist to the
+  // provider Drafts and survive a refresh — keyed on the draft's own id.
+  useEffect(() => {
+    const accountId = draft.accountId || selectedAccountId;
+    if (!accountId || !dirty.current) return;
+    const handle = setTimeout(async () => {
+      try {
+        setDraftStatus("saving");
+        await saveDraft({
+          accountId,
+          draftId: draft.id,
+          to: recipients(),
+          subject: draft.subject || "",
+          body,
+        });
+        setDraftStatus("saved");
+      } catch {
+        setDraftStatus("idle");
+      }
+    }, 1200);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [body, to]);
+
   const send = async () => {
     const accountId = draft.accountId || selectedAccountId;
     if (!accountId || recipients().length === 0) return;
     setSending(true);
     try {
-      await sendEmail({
+      // Persist the latest edits, then send THIS draft natively (Drafts → Sent,
+      // no duplicate). sendDraft removes it from the list.
+      await saveDraft({
         accountId,
+        draftId: draft.id,
         to: recipients(),
-        subject: draft.subject || "(no subject)",
-        bodyText: body,
-        replyToMessageId: replyTo?.providerMessageId,
+        subject: draft.subject || "",
+        body,
       });
-      // The draft has been sent — remove the lingering provider draft.
-      await deleteEmail(draft.id);
+      await sendDraft(accountId, draft.id);
     } finally {
       setSending(false);
     }
@@ -225,13 +252,13 @@ export function DraftCard({ draft, replyTo }: { draft: Email; replyTo?: Email })
       <div className="space-y-2">
         <input
           value={to}
-          onChange={(e) => setTo(e.target.value)}
+          onChange={(e) => { dirty.current = true; setTo(e.target.value); }}
           placeholder="To (comma-separated)"
           className={INPUT}
         />
         <textarea
           value={body}
-          onChange={(e) => setBody(e.target.value)}
+          onChange={(e) => { dirty.current = true; setBody(e.target.value); }}
           rows={7}
           placeholder="Write your reply…"
           className={`${INPUT} resize-y leading-relaxed`}
@@ -257,7 +284,11 @@ export function DraftCard({ draft, replyTo }: { draft: Email; replyTo?: Email })
           <Trash2 size={13} /> Discard
         </button>
         <span className="text-[10px] text-muted-foreground ml-auto">
-          Sends into this conversation · 5s undo
+          {draftStatus === "saving"
+            ? "Saving draft…"
+            : draftStatus === "saved"
+              ? "Draft saved · sends into this conversation"
+              : "Sends into this conversation"}
         </span>
       </div>
     </div>

@@ -294,6 +294,40 @@ class GmailProvider(BaseEmailProvider):
         resp.raise_for_status()
         return resp.json().get("id", "")
 
+    async def update_draft(
+        self,
+        draft_id: str,
+        to: list[str] | None = None,
+        subject: str | None = None,
+        body_text: str | None = None,
+        body_html: str | None = None,
+        thread_id: str | None = None,
+    ) -> str:
+        """Replace a Gmail draft's content in place (drafts.update). Returns the
+        (unchanged) draft id so the editor keeps tracking the same draft."""
+        msg = MIMEText(body_text or "", "plain" if not body_html else "html")
+        if to is not None:
+            msg["To"] = ", ".join(to)
+        if subject is not None:
+            msg["Subject"] = subject
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        message: dict[str, Any] = {"raw": raw}
+        if thread_id:
+            message["threadId"] = thread_id
+        client = await self._get_client()
+        resp = await client.put(
+            f"/users/me/drafts/{draft_id}", json={"message": message}
+        )
+        resp.raise_for_status()
+        return resp.json().get("id", draft_id)
+
+    async def send_draft(self, draft_id: str) -> str | None:
+        """Send an existing Gmail draft natively (drafts.send) — Drafts → Sent."""
+        client = await self._get_client()
+        resp = await client.post("/users/me/drafts/send", json={"id": draft_id})
+        resp.raise_for_status()
+        return (resp.json() or {}).get("id")
+
     async def modify_message(
         self,
         provider_message_id: str,

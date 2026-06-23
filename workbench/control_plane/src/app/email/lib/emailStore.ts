@@ -197,6 +197,10 @@ interface EmailState {
   deleteEmail: (id: string) => Promise<void>;
   sendEmail: (params: api.SendEmailParams) => Promise<void>;
   undoSend: () => void;
+  /** Create or update a draft (provider + local mirror); returns the saved draft. */
+  saveDraft: (params: api.SaveDraftParams) => Promise<Email>;
+  /** Send an existing draft natively (Drafts → Sent) and drop it from the list. */
+  sendDraft: (accountId: string, draftId: string) => Promise<void>;
   /** Queue a prompt for the AI chat panel (used by the Assistant "Fix" flow). */
   setPendingChatPrompt: (prompt: string | null) => void;
   /** Run rules on one message (Test = dry-run, Apply = execute) and store result. */
@@ -656,6 +660,45 @@ export const useEmailStore = create<EmailState>((set, get) => ({
           replyToMessageId: p.replyToMessageId,
         },
       });
+    }
+  },
+
+  saveDraft: async (params) => {
+    // Reverse-sync write: create/update the provider draft + local mirror.
+    const draft = await api.saveDraft(params);
+    set((s) => {
+      const exists = s.emails.some((e) => e.id === draft.id);
+      if (exists) {
+        // Update the row in place (editing an existing draft).
+        return {
+          emails: s.emails.map((e) => (e.id === draft.id ? { ...e, ...draft } : e)),
+        };
+      }
+      // Only surface a brand-new draft in the list when the Drafts folder is the
+      // active view — otherwise it would wrongly appear in inbox/etc. (it's still
+      // persisted, so it shows on the next Drafts open). The in-thread DraftCard
+      // is driven by the conversation refetch, not this list.
+      if (s.selectedFolder === "drafts") {
+        return { emails: [draft, ...s.emails], emailsTotal: s.emailsTotal + 1 };
+      }
+      return {};
+    });
+    return draft;
+  },
+
+  sendDraft: async (accountId, draftId) => {
+    const prev = get().emails;
+    // Optimistically remove the draft — it's leaving Drafts for Sent.
+    set({
+      emails: prev.filter((e) => e.id !== draftId),
+      emailsTotal: Math.max(0, get().emailsTotal - 1),
+    });
+    try {
+      await api.sendDraft(accountId, draftId);
+      if (get().selectedEmailId === draftId) set({ selectedEmailId: null });
+    } catch (err: any) {
+      set({ emails: prev, error: err.message || "Failed to send draft" });
+      throw err;
     }
   },
 

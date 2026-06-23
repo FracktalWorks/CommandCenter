@@ -75,6 +75,62 @@ async def test_list_folders_paginates_and_descends_children() -> None:
     assert by_name["Inbox"].type == "system"      # wellKnownName → system
     assert by_name["Newsletter"].type == "user"
     assert by_name["Sub"].type == "user"          # nested child surfaced
+    # Consumer accounts reject $select=wellKnownName (HTTP 400), so it must NOT
+    # be requested — listing has to work without it.
+    first_params = client.get.await_args_list[0].kwargs["params"]
+    assert "wellKnownName" not in first_params["$select"]
+
+
+async def test_list_folders_classifies_system_by_name_without_wellknownname() -> None:
+    # Personal/consumer (MSA) accounts never return wellKnownName — classify by
+    # display name so system folders aren't surfaced as user folders.
+    p = _provider()
+    client = AsyncMock()
+    client.get.side_effect = [_resp({"value": [
+        {"id": "1", "displayName": "Inbox", "childFolderCount": 0},
+        {"id": "2", "displayName": "Sent Items", "childFolderCount": 0},
+        {"id": "3", "displayName": "Deleted Items", "childFolderCount": 0},
+        {"id": "4", "displayName": "Conversation History", "childFolderCount": 0},
+        {"id": "5", "displayName": "Cold Email", "childFolderCount": 0},
+    ]})]
+    p._get_client = AsyncMock(return_value=client)  # type: ignore[method-assign]
+
+    by_name = {f.name: f for f in await p.list_folders()}
+    assert by_name["Inbox"].type == "system"
+    assert by_name["Sent Items"].type == "system"
+    assert by_name["Deleted Items"].type == "system"
+    assert by_name["Conversation History"].type == "system"
+    assert by_name["Cold Email"].type == "user"   # real user folder surfaced
+
+
+async def test_list_folders_retries_without_select_on_400() -> None:
+    # Defensive fallback: a 400 from a rejected $select retries with default
+    # properties instead of failing the whole listing.
+    import httpx
+
+    p = _provider()
+    client = AsyncMock()
+
+    def _raise_400() -> None:
+        raise httpx.HTTPStatusError(
+            "bad", request=MagicMock(),
+            response=MagicMock(status_code=400),
+        )
+
+    bad = _resp({}, status=400)
+    bad.raise_for_status = MagicMock(side_effect=_raise_400)
+    good = _resp({"value": [
+        {"id": "AAA", "displayName": "Inbox", "childFolderCount": 0},
+        {"id": "BBB", "displayName": "Projects", "childFolderCount": 0},
+    ]})
+    client.get.side_effect = [bad, good]
+    p._get_client = AsyncMock(return_value=client)  # type: ignore[method-assign]
+
+    by_name = {f.name: f for f in await p.list_folders()}
+    assert set(by_name) == {"Inbox", "Projects"}
+    # The retry dropped $select entirely.
+    retry_params = client.get.await_args_list[1].kwargs["params"]
+    assert "$select" not in retry_params
 
 
 # ── get-or-create move-to-folder ─────────────────────────────────────────────

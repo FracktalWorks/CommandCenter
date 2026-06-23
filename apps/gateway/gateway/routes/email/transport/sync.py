@@ -388,12 +388,17 @@ async def resync_account(
     purge: bool = Query(False),
     user: UserContext = Depends(get_current_user),
 ):
-    """Force a COMPLETE re-sync from the provider (not just an incremental sync).
+    """Force a COMPLETE, DEEP re-sync from the provider (not just an incremental
+    sync).
 
-    Resets the sync cursor and re-fetches every folder, overwriting stale local
-    fields. With ``purge=true`` it first DELETES the account's local messages
-    (cascades attachments) before re-fetching — use this when local data is
-    corrupt or badly out of sync. Returns the sync result."""
+    Resets the sync cursor and re-fetches every folder with the one-year deep
+    backfill (``full=True``), overwriting stale local fields. This is the only
+    UI path that re-runs the deep backfill on an account whose
+    ``initial_sync_done`` is already set (the recurring poll and a plain sync
+    stay shallow), so it's how an account connected before deep-sync shipped
+    pulls its full history. With ``purge=true`` it first DELETES the account's
+    local messages (cascades attachments) before re-fetching — use this when
+    local data is corrupt or badly out of sync. Returns the sync result."""
     db = await _get_db()
     try:
         own = (await db.execute(text(
@@ -414,8 +419,11 @@ async def resync_account(
         await db.commit()
     finally:
         await db.close()
-    # Re-fetch from the provider via the standard sync path (full sweep).
-    result = await trigger_sync(SyncRequest(account_id=account_id), user)
+    # Re-fetch from the provider via the standard sync path, forcing the DEEP
+    # (≈1-year, all-folder) backfill — ``full=True`` overrides the
+    # ``initial_sync_done`` gate so an already-initialised account actually pulls
+    # its older mail instead of just the newest shallow page.
+    result = await trigger_sync(SyncRequest(account_id=account_id, full=True), user)
     synced = result.get("messages_synced") if isinstance(result, dict) else None
     return {"resynced": True, "purged": purge, "messages_synced": synced}
 

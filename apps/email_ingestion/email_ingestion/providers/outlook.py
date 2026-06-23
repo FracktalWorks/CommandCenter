@@ -45,6 +45,37 @@ def _skiptoken(value: str | None) -> str | None:
 
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
+
+# Canonical keys that mean "system folder" (used to classify by display name on
+# personal/consumer accounts, which omit wellKnownName — see below).
+_CORE_CANONICAL = frozenset({"inbox", "sent", "drafts", "trash", "junk", "archive"})
+
+# Display names Graph reports for well-known/system folders. We classify against
+# these because personal (MSA/consumer) accounts reject ``$select=wellKnownName``
+# with HTTP 400, so that property is never requested/returned for them and the
+# only reliable signal left is the (English) folder name.
+_OUTLOOK_SYSTEM_FOLDER_NAMES = frozenset({
+    "inbox", "drafts", "sent items", "deleted items", "junk email",
+    "junk e-mail", "archive", "outbox", "conversation history", "clutter",
+    "notes", "rss feeds", "rss subscriptions", "sync issues",
+    "scheduled", "snoozed",
+})
+
+
+def _classify_folder_type(folder: dict[str, Any]) -> str:
+    """Return 'system' or 'user' for a Graph mailFolder.
+
+    Prefers Graph's ``wellKnownName`` (present on work/school accounts) and falls
+    back to matching the display name, since consumer accounts never return it.
+    """
+    if folder.get("wellKnownName"):
+        return "system"
+    name = (folder.get("displayName") or "").strip().lower()
+    if name in _OUTLOOK_SYSTEM_FOLDER_NAMES:
+        return "system"
+    return "system" if canonical_folder(name) in _CORE_CANONICAL else "user"
+
+
 GRAPH_SCOPES = [
     # offline_access is REQUIRED on refresh — without it Microsoft returns a new
     # access token but NOT a renewed refresh token, so the refresh chain expires
@@ -147,7 +178,7 @@ class OutlookProvider(BaseEmailProvider):
         return EmailFolder(
             provider_folder_id=folder["id"],
             name=folder["displayName"],
-            type="system" if folder.get("wellKnownName") else "user",
+            type=_classify_folder_type(folder),
             message_count=folder.get("totalItemCount", 0),
             unread_count=folder.get("unreadItemCount", 0),
         )
@@ -161,21 +192,41 @@ class OutlookProvider(BaseEmailProvider):
         deeper nesting is followed only when a child reports its own children).
         """
         client = await self._get_client()
-        select = "id,displayName,wellKnownName,totalItemCount,unreadItemCount,childFolderCount"
+        # NB: ``wellKnownName`` is intentionally NOT requested — personal/consumer
+        # (MSA) accounts reject it in ``$select`` with HTTP 400, which used to fail
+        # the whole folder listing. We classify system vs user by name instead
+        # (see ``_classify_folder_type``).
+        select = "id,displayName,totalItemCount,unreadItemCount,childFolderCount"
 
         async def _page(url: str, params: dict[str, Any] | None) -> list[dict[str, Any]]:
             items: list[dict[str, Any]] = []
             # First request uses params; subsequent ones follow the absolute
             # @odata.nextLink URL verbatim (httpx keeps the client's auth header).
-            resp = await client.get(url, params=params)
-            while True:
+            try:
+                resp = await client.get(url, params=params)
                 resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                # Defensive: if a $select field is still rejected (400) on some
+                # account type, retry once with default properties so listing
+                # degrades instead of failing outright.
+                if (
+                    params and "$select" in params
+                    and exc.response is not None
+                    and exc.response.status_code == 400
+                ):
+                    params = {k: v for k, v in params.items() if k != "$select"}
+                    resp = await client.get(url, params=params)
+                    resp.raise_for_status()
+                else:
+                    raise
+            while True:
                 data = resp.json()
                 items.extend(data.get("value", []))
                 next_link = data.get("@odata.nextLink")
                 if not next_link:
                     return items
                 resp = await client.get(next_link)
+                resp.raise_for_status()
 
         async def _descend(raw: dict[str, Any]) -> list[EmailFolder]:
             out = [self._folder_from_graph(raw)]
@@ -567,9 +618,17 @@ class OutlookProvider(BaseEmailProvider):
     # ── Labels (Outlook categories) ──────────────────────────────────────
 
     async def list_labels(self) -> list[str]:
-        """Outlook master category names."""
+        """Outlook master category names.
+
+        Personal/consumer (MSA) accounts don't expose
+        ``/me/outlook/masterCategories`` (HTTP 403), so treat that as "no master
+        categories" rather than an error — the caller degrades to the standard
+        category set and categories can still be applied per-message.
+        """
         client = await self._get_client()
         resp = await client.get("/me/outlook/masterCategories")
+        if resp.status_code in (403, 404):
+            return []
         resp.raise_for_status()
         return sorted(
             c.get("displayName")

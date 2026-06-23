@@ -20,6 +20,20 @@ def test_is_gateway_model() -> None:
     assert _is_gateway_model("copilot/gpt-4o")
     assert not _is_gateway_model("claude-sonnet-4-5")
     assert not _is_gateway_model("")
+    # Regression: a bare "tier…" name that ISN'T one of the three real aliases
+    # is NOT gateway-routable — the gateway /v1 can't resolve it and litellm
+    # would 400 "LLM Provider NOT provided". It must be treated as unknown.
+    assert not _is_gateway_model("tier1-local-qwen3")
+    assert not _is_gateway_model("tier1")
+    assert not _is_gateway_model("tiernonsense")
+
+
+def test_byok_coerces_unknown_tier_name_to_default() -> None:
+    # The bug: "tier1-local-qwen3" was passed through raw and litellm 400'd.
+    # It must be coerced to the safe, gateway-routable default tier instead.
+    model, is_byok = _byok_default_model("tier1-local-qwen3", _Settings())
+    assert model == "tier-balanced"
+    assert is_byok is True
 
 
 def test_byok_default_keeps_tier_models() -> None:

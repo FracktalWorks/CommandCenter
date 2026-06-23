@@ -1238,10 +1238,19 @@ def _apply_agent_md_overrides(
     return spec
 
 
+# The ONLY tier aliases the gateway /v1 actually resolves (see
+# v1_compat._TIER_NAME_TO_ID). A bare ``tier…`` name that is NOT one of these
+# (e.g. ``tier1-local-qwen3``) is NOT gateway-routable — litellm would 400 with
+# "LLM Provider NOT provided" — so it must be treated as unknown and coerced to
+# the safe default by _byok_default_model, not passed through.
+_GATEWAY_TIER_ALIASES = frozenset({"tier-fast", "tier-balanced", "tier-powerful"})
+
+
 def _is_gateway_model(model: str) -> bool:
-    """True when *model* is a LiteLLM-gateway id (tier-* or provider/model)."""
+    """True when *model* is a LiteLLM-gateway id: a known tier alias
+    (tier-fast/balanced/powerful) or an explicit ``provider/model``."""
     m = (model or "").strip().lower()
-    return bool(m) and ("/" in m or m.startswith("tier"))
+    return bool(m) and ("/" in m or m in _GATEWAY_TIER_ALIASES)
 
 
 def _byok_default_model(model: str, settings: Any) -> tuple[str, bool]:

@@ -374,7 +374,23 @@ async def update_message(
                         is_flagged=updates.is_flagged,
                     )
                 if updates.folder is not None:
-                    await provider.move_to_folder(provider_msg_id, updates.folder.lower())
+                    new_pid = await provider.move_to_folder(
+                        provider_msg_id, updates.folder.lower()
+                    )
+                    # Outlook /move re-keys the message — persist the new id so
+                    # later actions don't hit a stale (404) provider id, and use
+                    # it for the set_labels call below.
+                    if new_pid and new_pid != provider_msg_id:
+                        await db.execute(
+                            text(
+                                """UPDATE email_messages
+                                   SET provider_message_id = :pid, updated_at = now()
+                                   WHERE id = :id"""
+                            ),
+                            {"pid": new_pid, "id": message_id},
+                        )
+                        await db.commit()
+                        provider_msg_id = new_pid
                 if updates.add_labels or updates.remove_labels:
                     await provider.set_labels(
                         provider_msg_id,
@@ -383,9 +399,10 @@ async def update_message(
                     )
                 await _persist_rotated_creds(db, store, account_id, provider)
                 await db.commit()
-        except HTTPException:
-            raise
         except Exception as exc:  # noqa: BLE001
+            # Best-effort: the local change is already committed, so a provider
+            # failure (incl. an HTTPException from the provider lookup/write) must
+            # NOT fail the user's action — just log it.
             _log.warning(
                 "update_message.provider_sync_failed",
                 message_id=message_id, error=str(exc)[:200],
@@ -425,12 +442,23 @@ async def delete_message(
                 db, message_id, user.email or "anonymous"
             )
             if await provider.authenticate():
-                await provider.trash_message(provider_msg_id)
+                new_pid = await provider.trash_message(provider_msg_id)
+                # Outlook trash = /move to Deleted Items, which re-keys the
+                # message; persist the new id so it stays addressable.
+                if new_pid and new_pid != provider_msg_id:
+                    await db.execute(
+                        text(
+                            """UPDATE email_messages
+                               SET provider_message_id = :pid, updated_at = now()
+                               WHERE id = :id"""
+                        ),
+                        {"pid": new_pid, "id": message_id},
+                    )
                 await _persist_rotated_creds(db, store, account_id, provider)
                 await db.commit()
-        except HTTPException:
-            raise
         except Exception as exc:  # noqa: BLE001
+            # Best-effort: local trash already committed; never fail the user's
+            # action on a provider error (incl. provider-raised HTTPException).
             _log.warning(
                 "delete_message.provider_sync_failed",
                 message_id=message_id, error=str(exc)[:200],

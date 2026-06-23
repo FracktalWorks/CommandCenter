@@ -387,10 +387,11 @@ class OutlookProvider(BaseEmailProvider):
             )
             resp.raise_for_status()
 
-    async def trash_message(self, provider_message_id: str) -> None:
+    async def trash_message(self, provider_message_id: str) -> str | None:
         # Graph "delete" moves the item to Deleted Items (soft delete), which is
-        # what we want for a trash action.
-        await self.move_to_folder(provider_message_id, "trash")
+        # what we want for a trash action. /move re-keys the message, so return
+        # the new id for the caller to persist.
+        return await self.move_to_folder(provider_message_id, "trash")
 
     # Canonical folder key → Graph well-known folder name for moves.
     _MOVE_TARGETS = {
@@ -425,16 +426,26 @@ class OutlookProvider(BaseEmailProvider):
             resp = await client.patch(f"/me/messages/{provider_message_id}", json=patch)
             resp.raise_for_status()
 
-    async def move_to_folder(self, provider_message_id: str, folder: str) -> None:
+    async def move_to_folder(
+        self, provider_message_id: str, folder: str
+    ) -> str | None:
         target = self._MOVE_TARGETS.get((folder or "").lower())
         if not target:
-            return
+            return None
         client = await self._get_client()
         resp = await client.post(
             f"/me/messages/{provider_message_id}/move",
             json={"destinationId": target},
         )
         resp.raise_for_status()
+        # Graph /move creates the message in the destination folder with a NEW
+        # id; the old id is no longer valid. Return it so the caller can re-key
+        # the stored provider_message_id (otherwise follow-up actions 404 until
+        # the next full sync).
+        try:
+            return resp.json().get("id")
+        except Exception:  # noqa: BLE001
+            return None
 
     # ── Labels (Outlook categories) ──────────────────────────────────────
 
@@ -638,7 +649,6 @@ class OutlookProvider(BaseEmailProvider):
         if not received_dt:
             return None
         try:
-            from datetime import timezone
             return datetime.fromisoformat(received_dt.replace("Z", "+00:00"))
         except (ValueError, TypeError):
             return None

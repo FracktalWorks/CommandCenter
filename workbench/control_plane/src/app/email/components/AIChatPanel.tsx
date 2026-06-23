@@ -111,6 +111,7 @@ export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelP
     abortRef.current?.abort();
     setSessionId(id);
     setMessages(getMessages(id).map(toChat));
+    setToolsByMsg({}); // tools are in-memory per turn; don't leak across sessions
     setShowSessions(false);
     setIsTyping(false);
     setStreamingContent("");
@@ -122,6 +123,7 @@ export function AIChatPanel({ selectedAccountId, selectedEmailId }: AIChatPanelP
     refreshSessions();
     setSessionId(s.id);
     setMessages([]);
+    setToolsByMsg({});
     setShowSessions(false);
     setIsTyping(false);
     setStreamingContent("");
@@ -630,7 +632,7 @@ function ToolCards({
     <div className="space-y-1.5">
       {events.map((e) => {
         if (e.done && RULE_TOOLS.has(e.name) && e.success !== false) {
-          return <RuleResultCard key={e.id} event={e} />;
+          return <RuleResultCard key={e.id} event={e} accountId={accountId} />;
         }
         if (e.done && DRAFT_TOOLS.has(e.name) && e.success !== false) {
           return (
@@ -651,7 +653,13 @@ function ToolCards({
 const RULE_ID_RE = /id=([0-9a-fA-F-]{8,})/;
 
 /** Interactive rule card — disable or delete a rule the assistant just made. */
-function RuleResultCard({ event: e }: { event: ChatToolEvent }) {
+function RuleResultCard({
+  event: e,
+  accountId,
+}: {
+  event: ChatToolEvent;
+  accountId: string | null;
+}) {
   const ruleId =
     (e.args?.rule_id as string) ||
     (e.result?.match(RULE_ID_RE)?.[1] ?? "");
@@ -675,10 +683,10 @@ function RuleResultCard({ event: e }: { event: ChatToolEvent }) {
     }
   };
   const disable = async () => {
-    if (!ruleId) return;
+    if (!ruleId || !accountId) return;
     setState("busy");
     try {
-      const rules = await listRules(e.args?.account_id as string || "");
+      const rules = await listRules(accountId);
       const r = rules.find((x) => x.id === ruleId);
       if (r) await updateRule(ruleId, { ...r, enabled: false });
       setState("disabled");

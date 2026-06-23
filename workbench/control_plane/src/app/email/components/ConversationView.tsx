@@ -67,7 +67,9 @@ export function ConversationView({
       ) {
         getEmail(m.id)
           .then((full) => setHydrated((h) => ({ ...h, [m.id]: full })))
-          .catch(() => {});
+          // On failure, cache the list row so the effect doesn't retry this
+          // message forever every time `hydrated` changes for another card.
+          .catch(() => setHydrated((h) => ({ ...h, [m.id]: m })));
       }
     });
   }, [expanded, visible, hydrated]);

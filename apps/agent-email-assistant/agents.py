@@ -418,6 +418,9 @@ async def learn_rule_pattern(
     labelled Z". This persists and short-circuits future classification (no
     LLM needed).
     """
+    if not sender and not subject_keyword:
+        return ("Provide at least a sender (email/domain) or a subject_keyword "
+                "(phrase in the subject) to learn from.")
     body = {
         "account_id": account_id,
         "sender": sender,

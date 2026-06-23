@@ -3676,7 +3676,7 @@ async def rules_history(
         if rule_ids:
             act_rows = (await db.execute(text(
                 """SELECT rule_id, type, label, subject, content, to_address,
-                          cc_address, bcc_address, url
+                          cc_address, bcc_address, url, delay_minutes, attachments
                    FROM email_actions WHERE rule_id = ANY(:rids)
                    ORDER BY rule_id"""
             ), {"rids": rule_ids})).fetchall()
@@ -3685,7 +3685,9 @@ async def rules_history(
                     "type": a.type, "label": a.label, "subject": a.subject,
                     "content": a.content, "to_address": a.to_address,
                     "cc_address": a.cc_address, "bcc_address": a.bcc_address,
-                    "url": a.url,
+                    "url": a.url, "delay_minutes": a.delay_minutes,
+                    "attachments": a.attachments if isinstance(a.attachments, list)
+                    else json.loads(a.attachments or "[]"),
                 })
 
         return {
@@ -5994,15 +5996,20 @@ async def resolve_thread(
                     "lmid": lm.id if lm else None,
                     "lmat": lm.received_at if lm else None})
         else:
+            # Reopen: re-derive from the latest message's folder. Resolve the
+            # latest message directly (don't rely on last_message_id, which may
+            # be NULL) so the UPDATE always lands.
+            lm = (await db.execute(text(
+                "SELECT folder FROM email_messages "
+                "WHERE account_id = :aid AND thread_id = :tid "
+                "ORDER BY received_at DESC NULLS LAST LIMIT 1"
+            ), {"aid": req.account_id, "tid": req.thread_id})).fetchone()
+            new_status = "AWAITING" if (
+                lm and (lm.folder or "").lower() == "sent") else "NEEDS_REPLY"
             await db.execute(text(
-                """UPDATE email_thread_status ts
-                   SET status = CASE WHEN lower(em.folder) = 'sent'
-                                     THEN 'AWAITING' ELSE 'NEEDS_REPLY' END,
-                       classified_at = now()
-                   FROM email_messages em
-                   WHERE ts.account_id = :aid AND ts.thread_id = :tid
-                     AND em.id = ts.last_message_id"""
-            ), {"aid": req.account_id, "tid": req.thread_id})
+                "UPDATE email_thread_status SET status = :st, classified_at = now() "
+                "WHERE account_id = :aid AND thread_id = :tid"
+            ), {"st": new_status, "aid": req.account_id, "tid": req.thread_id})
         await db.commit()
         return {"ok": True, "thread_id": req.thread_id, "done": req.done}
     finally:

@@ -632,6 +632,66 @@ async def upload_files(
     return uploaded
 
 
+@router.post("/artifacts/upload")
+async def upload_artifact(
+    files: list[UploadFile],
+    agent: str = Query(...),
+    category: str = Query("agent-data"),  # agent-data | inputs | outputs
+    _user: UserContext = Depends(get_current_user),
+) -> list[FileEntry]:
+    """Upload file(s) directly into an AGENT's workspace folder (by agent name,
+    not chat session). Used by the email rule editor to add draft attachments —
+    files land in ``repos/{agent}/{category}/`` and can then be picked via
+    ``GET /agent/artifacts?agent=…&category=…``."""
+    cat = category if category in ("agent-data", "inputs", "outputs") else "agent-data"
+    workspace = _canonical_workspace_dir(agent)
+    upload_dir = workspace / cat
+    try:
+        upload_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Cannot create {cat} directory: {exc}",
+        ) from exc
+
+    uploaded: list[FileEntry] = []
+    for f in files:
+        safe_name = Path(f.filename or "untitled").name
+        ext = Path(safe_name).suffix.lower()
+        if ext not in _ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type: {ext}. "
+                       f"Allowed: {', '.join(sorted(_ALLOWED_EXTENSIONS))}",
+            )
+        content = await f.read()
+        if len(content) > _MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File '{safe_name}' too large "
+                       f"({len(content)} bytes). Max is {_MAX_UPLOAD_BYTES}.",
+            )
+        dest = upload_dir / safe_name
+        counter = 1
+        stem, ext2 = Path(safe_name).stem, Path(safe_name).suffix
+        while dest.exists():
+            dest = upload_dir / f"{stem} ({counter}){ext2}"
+            counter += 1
+        dest.write_bytes(content)
+        stat = dest.stat()
+        mime, _ = mimetypes.guess_type(safe_name)
+        rel_path = str(dest.relative_to(workspace)).replace("\\", "/")
+        uploaded.append(FileEntry(
+            path=rel_path, name=dest.name, size=stat.st_size,
+            modified_at=__import__("datetime").datetime.fromtimestamp(
+                stat.st_mtime, tz=__import__("datetime").timezone.utc
+            ).isoformat(),
+            mime_type=mime or "application/octet-stream", is_dir=False,
+        ))
+        _log.info("workspace.artifact_uploaded", agent=agent,
+                  path=rel_path, size=stat.st_size)
+    return uploaded
+
+
 # ---------------------------------------------------------------------------
 # DELETE /workspace/{session_id}/file  — remove a file
 # ---------------------------------------------------------------------------

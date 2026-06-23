@@ -2743,11 +2743,13 @@ async def upsert_newsletter(
 # ── Assistant: rules engine ─────────────────────────────────────────────────
 
 class RuleActionAttachment(BaseModel):
-    """A draft attachment sourced from our artifacts system (inbox-zero parity).
+    """A draft attachment sourced from the email-assistant workspace.
 
-    ``artifact_id`` references a stored artifact; ``name`` is the display name.
+    ``path`` is the workspace-relative path (e.g. ``agent-data/budget.pdf``)
+    the file was uploaded to / picked from; ``name`` is the display name.
     ``ai_selected`` marks sources the assistant may pick from at draft time
     rather than always attaching."""
+    path: str | None = None
     artifact_id: str | None = None
     name: str | None = None
     ai_selected: bool = False
@@ -5027,6 +5029,44 @@ def _email_looks_sensitive(email: dict[str, str] | None) -> bool:
     return bool(_LONG_NUMBER_RE.search(blob))
 
 
+def _load_action_attachments(a: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read the files a draft/forward action attaches (stored as
+    ``attachments: [{path, name}]`` referencing the email-assistant workspace),
+    returning ``[{filename, content, mime_type}]`` for the provider. Best-effort
+    and path-traversal-safe."""
+    atts = a.get("attachments") or []
+    if not atts:
+        return []
+    out: list[dict[str, Any]] = []
+    try:
+        import mimetypes  # noqa: PLC0415
+        from gateway.routes.workspace import (  # noqa: PLC0415
+            _agent_workspace_dir,
+        )
+        ws = _agent_workspace_dir("email-assistant")
+        if not ws:
+            return []
+        ws_root = ws.resolve()
+        for att in atts:
+            if not isinstance(att, dict):
+                continue
+            rel = (att.get("path") or "").strip()
+            if not rel:
+                continue
+            full = (ws / rel).resolve()
+            if not str(full).startswith(str(ws_root)) or not full.is_file():
+                continue
+            mime, _ = mimetypes.guess_type(full.name)
+            out.append({
+                "filename": att.get("name") or full.name,
+                "content": full.read_bytes(),
+                "mime_type": mime or "application/octet-stream",
+            })
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.attachment_load_failed", error=str(exc)[:120])
+    return out
+
+
 async def _apply_rule_actions(
     db: Any, provider: Any, message_id: str, provider_msg_id: str,
     actions: list[dict[str, Any]], email: dict[str, str] | None = None,
@@ -5109,6 +5149,7 @@ async def _apply_rule_actions(
                     to=[to], subject=subj, body_text=body,
                     reply_to_message_id=provider_msg_id,
                     thread_id=email.get("thread_id") or None,
+                    attachments=_load_action_attachments(a) or None,
                 )
                 # AI-written (non-template) drafts: remember for edit-learning.
                 if not tmpl and account_id:
@@ -5128,6 +5169,7 @@ async def _apply_rule_actions(
                     to=[a["to_address"]],
                     subject=a.get("subject") or f"Fwd: {email.get('subject', '')}",
                     body_text=fwd,
+                    attachments=_load_action_attachments(a) or None,
                 )
             elif t == "CALL_WEBHOOK" and a.get("url"):
                 async with httpx.AsyncClient(timeout=10.0) as client:

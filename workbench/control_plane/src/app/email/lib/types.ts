@@ -201,8 +201,10 @@ export type RuleActionType =
   | "DRAFT_EMAIL"
   | "CALL_WEBHOOK";
 
-/** A draft attachment sourced from our artifacts system (inbox-zero parity). */
+/** A draft attachment sourced from the email-assistant workspace. */
 export interface RuleActionAttachment {
+  /** Workspace-relative path the file lives at (e.g. agent-data/budget.pdf). */
+  path?: string | null;
   artifact_id?: string | null;
   name?: string | null;
   /** AI-selected sources the assistant may pick from, vs always-attach. */

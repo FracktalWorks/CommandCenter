@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Loader2, Plus, Trash2, Pencil, Play, Check, X, FlaskConical,
   History as HistoryIcon, Settings2, Settings, Sparkles, Wand2, BookOpen,
   ArrowUp, ArrowDown, Eye, MessageCircle, RefreshCcw, Square,
-  MoreVertical, Copy, Paperclip,
+  MoreVertical, Copy, Paperclip, Upload, FolderOpen,
 } from "lucide-react";
 import {
   listRules, createRule, updateRule, deleteRule,
@@ -15,8 +15,9 @@ import {
   installPresetRules, reorderRules, processPastEmails,
   listLearnedPatterns, deleteLearnedPattern,
   submitRuleFeedback, listRulePatterns, deleteRulePattern,
-  generateRules,
+  generateRules, uploadEmailArtifacts, listEmailArtifacts,
 } from "../../lib/api";
+import type { EmailArtifact } from "../../lib/api";
 import {
   AutomationRule, RuleAction, RuleActionType, RuleActionAttachment, ExecutedRule, Email,
   AssistantSettings, EMAIL_CATEGORIES, ColdBlockerMode,
@@ -1187,10 +1188,10 @@ function ProcessPastEmailsDialog({
 }
 
 /**
- * Attachments for a draft/reply/forward action. In CommandCenter these are
- * drawn from the artifacts the assistant produces — referenced by name here.
- * "AI-selected" sources let the assistant choose which to attach at draft time
- * (inbox-zero parity); otherwise the artifact is always attached.
+ * Attachments for a draft/reply/forward action (inbox-zero parity). Files are
+ * stored in the email-assistant workspace: drag-and-drop or click to upload from
+ * your device, or pick an existing artifact. The agent attaches them when it
+ * drafts. "AI-selected" lets the assistant choose which to attach at draft time.
  */
 function ActionAttachments({
   attachments,
@@ -1199,71 +1200,209 @@ function ActionAttachments({
   attachments: RuleActionAttachment[];
   onChange: (next: RuleActionAttachment[]) => void;
 }) {
-  const [name, setName] = useState("");
-  const add = () => {
-    const v = name.trim();
-    if (!v) return;
-    onChange([...attachments, { name: v, ai_selected: false }]);
-    setName("");
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const addFiles = async (files: File[]) => {
+    if (!files.length) return;
+    setUploading(true);
+    setErr(null);
+    try {
+      const up = await uploadEmailArtifacts(files);
+      onChange([
+        ...attachments,
+        ...up.map((u) => ({ path: u.path, name: u.name, ai_selected: false })),
+      ]);
+    } catch (e) {
+      setErr((e as Error).message || "Upload failed");
+    } finally {
+      setUploading(false);
+    }
   };
+
+  const pick = (a: EmailArtifact) => {
+    if (attachments.some((x) => x.path === a.path)) return;
+    onChange([...attachments, { path: a.path, name: a.name, ai_selected: false }]);
+  };
+
   return (
     <div className="space-y-1.5">
-      <div className="flex flex-wrap gap-1.5">
-        {attachments.map((att, i) => (
-          <span
-            key={i}
-            className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md border border-border bg-secondary/40 text-foreground"
-          >
-            <Paperclip size={9} className="text-muted-foreground" />
-            {att.name || att.artifact_id || "attachment"}
-            {att.ai_selected && (
-              <span className="text-primary" title="AI-selected source">✨</span>
-            )}
-            <button
-              onClick={() => onChange(attachments.filter((_, j) => j !== i))}
-              className="text-muted-foreground hover:text-destructive"
+      {attachments.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {attachments.map((att, i) => (
+            <span
+              key={i}
+              className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md border border-border bg-secondary/40 text-foreground"
             >
-              <X size={9} />
-            </button>
-          </span>
-        ))}
+              <Paperclip size={9} className="text-muted-foreground" />
+              {att.name || att.path || "attachment"}
+              {att.ai_selected && (
+                <span className="text-primary" title="AI-selected source">✨</span>
+              )}
+              <button
+                onClick={() => onChange(attachments.filter((_, j) => j !== i))}
+                className="text-muted-foreground hover:text-destructive"
+              >
+                <X size={9} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Drag-and-drop / click-to-upload zone */}
+      <div
+        onClick={() => fileRef.current?.click()}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          addFiles(Array.from(e.dataTransfer.files));
+        }}
+        className={`flex items-center justify-center gap-2 rounded-lg border border-dashed px-3 py-3 text-[11px] cursor-pointer transition-colors ${
+          dragOver
+            ? "border-primary bg-primary/5 text-primary"
+            : "border-border text-muted-foreground hover:border-primary/40 hover:bg-secondary/40"
+        }`}
+      >
+        {uploading ? (
+          <>
+            <Loader2 size={13} className="animate-spin" /> Uploading…
+          </>
+        ) : (
+          <>
+            <Upload size={13} /> Drag &amp; drop files, or click to upload
+          </>
+        )}
       </div>
-      <div className="flex items-center gap-1.5">
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              add();
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          addFiles(Array.from(e.target.files || []));
+          e.target.value = "";
+        }}
+      />
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => setShowPicker(true)}
+          className="flex items-center gap-1 text-[11px] text-primary hover:opacity-80"
+        >
+          <FolderOpen size={12} /> Choose from artifacts
+        </button>
+        {attachments.some((a) => !a.ai_selected) && (
+          <button
+            onClick={() =>
+              onChange(
+                attachments.map((a) => ({ ...a, ai_selected: !a.ai_selected })),
+              )
             }
-          }}
-          placeholder="Attach an artifact by name…"
-          className={`${INPUT_CLS} flex-1`}
-        />
-        <button
-          onClick={add}
-          disabled={!name.trim()}
-          className="px-2 py-1.5 rounded-lg border border-border text-[11px] text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
-        >
-          Add
-        </button>
+            className="text-[10px] text-muted-foreground hover:text-foreground"
+          >
+            {attachments.every((a) => a.ai_selected)
+              ? "Always attach these"
+              : "Let the assistant choose which to attach"}
+          </button>
+        )}
       </div>
-      {attachments.some((a) => !a.ai_selected) && (
-        <button
-          onClick={() =>
-            onChange(
-              attachments.map((a) => ({ ...a, ai_selected: !a.ai_selected })),
-            )
-          }
-          className="text-[10px] text-primary hover:opacity-80"
-        >
-          {attachments.every((a) => a.ai_selected)
-            ? "Always attach these"
-            : "Let the assistant choose which to attach"}
-        </button>
+      {err && (
+        <div className="text-[10px] text-destructive bg-destructive/10 rounded px-2 py-1">
+          {err}
+        </div>
+      )}
+
+      {showPicker && (
+        <ArtifactPickerDialog
+          selectedPaths={attachments.map((a) => a.path || "")}
+          onPick={pick}
+          onClose={() => setShowPicker(false)}
+        />
       )}
     </div>
+  );
+}
+
+/** Popup to browse + pick a file from the email-assistant workspace. */
+function ArtifactPickerDialog({
+  selectedPaths,
+  onPick,
+  onClose,
+}: {
+  selectedPaths: string[];
+  onPick: (a: EmailArtifact) => void;
+  onClose: () => void;
+}) {
+  const [artifacts, setArtifacts] = useState<EmailArtifact[] | null>(null);
+  const [filter, setFilter] = useState("");
+
+  useEffect(() => {
+    listEmailArtifacts()
+      .then(setArtifacts)
+      .catch(() => setArtifacts([]));
+  }, []);
+
+  const visible = (artifacts ?? []).filter(
+    (a) => !filter || a.name.toLowerCase().includes(filter.toLowerCase()),
+  );
+
+  return (
+    <Modal
+      title="Choose an attachment"
+      description="Pick a file from the email assistant's workspace."
+      onClose={onClose}
+      maxWidth="max-w-md"
+    >
+      <input
+        value={filter}
+        onChange={(e) => setFilter(e.target.value)}
+        placeholder="Search files…"
+        className={INPUT_CLS}
+      />
+      <div className="max-h-72 overflow-y-auto space-y-1">
+        {artifacts === null ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground py-3">
+            <Loader2 size={14} className="animate-spin" /> Loading…
+          </div>
+        ) : visible.length === 0 ? (
+          <div className="text-xs text-muted-foreground py-3">
+            No files yet. Upload one by dragging it onto the action.
+          </div>
+        ) : (
+          visible.map((a) => {
+            const picked = selectedPaths.includes(a.path);
+            return (
+              <button
+                key={a.path}
+                onClick={() => onPick(a)}
+                disabled={picked}
+                className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg border border-border text-left hover:border-primary/40 hover:bg-secondary/40 transition-colors disabled:opacity-50"
+              >
+                <Paperclip size={12} className="text-muted-foreground flex-shrink-0" />
+                <span className="flex-1 min-w-0">
+                  <span className="block text-xs text-foreground truncate">
+                    {a.name}
+                  </span>
+                  <span className="block text-[10px] text-muted-foreground truncate">
+                    {a.category} · {(a.size / 1024).toFixed(0)} KB
+                  </span>
+                </span>
+                {picked && <Check size={12} className="text-emerald-500" />}
+              </button>
+            );
+          })
+        )}
+      </div>
+    </Modal>
   );
 }
 

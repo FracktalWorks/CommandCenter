@@ -251,9 +251,11 @@ class OutlookProvider(BaseEmailProvider):
         body_html: str | None = None,
         reply_to_message_id: str | None = None,
         thread_id: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> str:
         """Create an Outlook draft. For replies, use createReply (keeps threading)
-        then set the body; otherwise create a standalone draft message."""
+        then set the body; otherwise create a standalone draft message. File
+        attachments are added to the draft via the Graph attachments endpoint."""
         client = await self._get_client()
         body_block = {
             "contentType": "html" if body_html else "text",
@@ -269,6 +271,7 @@ class OutlookProvider(BaseEmailProvider):
                 f"/me/messages/{draft_id}", json={"body": body_block}
             )
             patch.raise_for_status()
+            await self._attach_files(client, draft_id, attachments)
             return draft_id
         message: dict[str, Any] = {
             "subject": subject,
@@ -279,7 +282,32 @@ class OutlookProvider(BaseEmailProvider):
         }
         resp = await client.post("/me/messages", json=message)
         resp.raise_for_status()
-        return resp.json().get("id", "")
+        draft_id = resp.json().get("id", "")
+        await self._attach_files(client, draft_id, attachments)
+        return draft_id
+
+    @staticmethod
+    async def _attach_files(
+        client: httpx.AsyncClient, draft_id: str,
+        attachments: list[dict[str, Any]] | None,
+    ) -> None:
+        """Attach files to a Graph draft via POST /messages/{id}/attachments."""
+        import base64 as _b64  # noqa: PLC0415
+        for att in attachments or []:
+            try:
+                content = att.get("content") or b""
+                await client.post(
+                    f"/me/messages/{draft_id}/attachments",
+                    json={
+                        "@odata.type": "#microsoft.graph.fileAttachment",
+                        "name": att.get("filename", "attachment"),
+                        "contentType": att.get(
+                            "mime_type", "application/octet-stream"),
+                        "contentBytes": _b64.b64encode(content).decode(),
+                    },
+                )
+            except Exception:  # noqa: BLE001 — one bad attachment shouldn't fail the draft
+                continue
 
     # ── Change-notification subscriptions (push) ─────────────────────────────
 

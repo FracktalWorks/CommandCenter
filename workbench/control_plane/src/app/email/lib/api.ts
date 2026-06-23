@@ -639,6 +639,45 @@ export async function deleteRule(id: string): Promise<void> {
   await gatewayFetch(`/email/rules/${id}`, { method: "DELETE" });
 }
 
+// ── Draft attachments (email-assistant workspace) ───────────────────────────
+
+export interface EmailArtifact {
+  agent_name: string;
+  path: string;
+  name: string;
+  size: number;
+  mime_type: string;
+  category: string;
+  is_dir: boolean;
+}
+
+/** List files in the email-assistant workspace (the attachment picker source). */
+export async function listEmailArtifacts(): Promise<EmailArtifact[]> {
+  const res = await gatewayFetch<{ artifacts: EmailArtifact[] }>(
+    "/agent/artifacts?agent=email-assistant",
+  );
+  return (res.artifacts ?? []).filter((a) => !a.is_dir);
+}
+
+/** Upload file(s) into the email-assistant agent-data folder; returns the
+ *  stored files (path + name) to attach to a rule's draft action. */
+export async function uploadEmailArtifacts(
+  files: File[],
+): Promise<{ path: string; name: string }[]> {
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f);
+  const res = await fetch(
+    "/api/agent/artifacts/upload?agent=email-assistant&category=agent-data",
+    { method: "POST", body: fd },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || body.detail || `Upload failed ${res.status}`);
+  }
+  const data = (await res.json()) as { path: string; name: string }[];
+  return data.map((d) => ({ path: d.path, name: d.name }));
+}
+
 /** Create rule(s) from a plain-English description (inbox-zero's prompt flow).
  *  The text may describe several rules at once. */
 export async function generateRules(

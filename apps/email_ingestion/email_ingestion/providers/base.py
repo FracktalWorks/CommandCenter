@@ -244,8 +244,12 @@ class BaseEmailProvider(ABC):
         body_html: str | None = None,
         reply_to_message_id: str | None = None,
         thread_id: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> str:
         """Create a DRAFT message (not sent) on the provider; return its id.
+
+        ``attachments`` (optional): a list of ``{"filename": str, "content":
+        bytes, "mime_type": str}`` to attach to the draft.
 
         Used by Assistant reply/forward/draft rule actions. Raises
         NotImplementedError if the provider doesn't support drafts so the caller

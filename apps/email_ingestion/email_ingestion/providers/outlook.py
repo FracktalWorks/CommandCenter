@@ -565,16 +565,19 @@ class OutlookProvider(BaseEmailProvider):
                 except Exception:
                     continue
 
-            # Seed the inbox delta token so the NEXT sync runs incrementally and
-            # can detect upstream deletions / category changes (@removed). Without
-            # this the provider stays in full-sync mode forever — purely additive,
-            # so deletions never propagate down.
-            delta_link = await self._bootstrap_inbox_delta(client)
-
+            # IMPORTANT: keep the account in full-sync mode (new_history_id=None).
+            #
+            # We previously seeded an inbox delta token here (via
+            # _bootstrap_inbox_delta) to detect upstream deletions. In production
+            # that delta token returned 0 changes every cycle even when new mail
+            # had arrived — i.e. it SILENTLY STOPPED syncing new email. The
+            # multi-folder full sweep above is the reliable path (it reliably
+            # picks up new mail), so we stay on it. Deletion-detection needs a
+            # different, verified approach before delta is re-enabled.
             return SyncResult(
                 messages_synced=len(messages),
                 messages=messages,
-                new_history_id=delta_link,
+                new_history_id=None,
             )
 
     async def _bootstrap_inbox_delta(

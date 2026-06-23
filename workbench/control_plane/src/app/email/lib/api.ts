@@ -190,6 +190,17 @@ export async function listEmailFolders(
   );
 }
 
+/** Create (or reuse) a folder/label on the account; returns the folder. */
+export async function createEmailFolder(
+  accountId: string,
+  name: string
+): Promise<EmailFolderRaw> {
+  return gatewayFetch<EmailFolderRaw>(
+    `/email/accounts/${accountId}/folders`,
+    { method: "POST", body: JSON.stringify({ name }) }
+  );
+}
+
 // ── Emails ───────────────────────────────────────────────────────────────
 
 export interface ListEmailsParams {

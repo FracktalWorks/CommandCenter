@@ -212,7 +212,8 @@ async def _match_email_to_rule(
         if str(rule.get("id")) in excluded:
             continue
         if _patterns_included_rule(rule, patterns, email):
-            return {"rule": rule, "reason": "Matched a learned pattern."}
+            return {"rule": rule, "reason": "Matched a learned pattern.",
+                    "source": "pattern"}
 
     instruction_rules: list[dict[str, Any]] = []
     for rule in rules:
@@ -226,14 +227,15 @@ async def _match_email_to_rule(
                 instruction_rules.append(rule)
             continue
         if sm is True:
-            return {"rule": rule, "reason": "Matched static conditions."}
+            return {"rule": rule, "reason": "Matched static conditions.",
+                    "source": "static"}
         # No instructions and static didn't match → this rule doesn't apply.
 
     if instruction_rules:
         pick = await _llm_pick_rule(email, instruction_rules)
         if pick:
             return {"rule": instruction_rules[pick["index"]],
-                    "reason": pick["reason"] or "Matched by AI."}
+                    "reason": pick["reason"] or "Matched by AI.", "source": "ai"}
     return None
 
 
@@ -257,19 +259,19 @@ async def _match_email_to_rules_multi(
     matches: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    def _add(rule: dict[str, Any], reason: str) -> None:
+    def _add(rule: dict[str, Any], reason: str, source: str) -> None:
         rid = str(rule.get("id"))
         if rid in seen:
             return
         seen.add(rid)
-        matches.append({"rule": rule, "reason": reason})
+        matches.append({"rule": rule, "reason": reason, "source": source})
 
     # Learned INCLUDE patterns match immediately (and skip the LLM for that rule).
     for rule in rules:
         if str(rule.get("id")) in excluded:
             continue
         if _patterns_included_rule(rule, patterns, email):
-            _add(rule, "Matched a learned pattern.")
+            _add(rule, "Matched a learned pattern.", "pattern")
 
     instruction_rules: list[dict[str, Any]] = []
     for rule in rules:
@@ -282,11 +284,12 @@ async def _match_email_to_rules_multi(
                 instruction_rules.append(rule)
             continue
         if sm is True:
-            _add(rule, "Matched static conditions.")
+            _add(rule, "Matched static conditions.", "static")
 
     if instruction_rules:
         for pick in await _llm_pick_rules(email, instruction_rules):
-            _add(instruction_rules[pick["index"]], pick["reason"] or "Matched by AI.")
+            _add(instruction_rules[pick["index"]],
+                 pick["reason"] or "Matched by AI.", "ai")
 
     # Preserve rule sort order (rules already arrive ordered by sort_order).
     order = {str(r.get("id")): i for i, r in enumerate(rules)}

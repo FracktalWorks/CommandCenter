@@ -23,6 +23,7 @@ from gateway.routes.email.automation.engine import (
     _match_email_to_rule,
     _match_email_to_rules_multi,
 )
+from gateway.routes.email.automation.rules import _upsert_rule_pattern
 from gateway.routes.email.automation.senders import _maybe_block_cold
 from gateway.routes.email.core import (
     _assert_account_owner,
@@ -150,13 +151,14 @@ async def rules_history(
         rows = (await db.execute(text(
             f"""SELECT er.id, er.rule_id, er.rule_name, er.subject, er.from_address,
                        er.status, er.automated, er.actions_taken, er.reason,
-                       er.created_at, em.snippet,
+                       er.created_at, em.snippet, em.received_at,
                        r.instructions, r.from_pattern, r.to_pattern,
                        r.subject_pattern, r.body_pattern, r.conditional_operator
                 FROM email_executed_rules er
                 LEFT JOIN email_messages em ON er.message_id = em.id
                 LEFT JOIN email_rules r ON er.rule_id = r.id
-                WHERE {scope} ORDER BY er.created_at DESC LIMIT :limit"""
+                WHERE {scope}
+                ORDER BY COALESCE(em.received_at, er.created_at) DESC LIMIT :limit"""
         ), params)).fetchall()
 
         # Fetch each matched rule's action specs once so the hover popover can
@@ -190,6 +192,8 @@ async def rules_history(
                  else json.loads(r.actions_taken or "[]"),
                  "reason": r.reason, "snippet": r.snippet or "",
                  "created_at": r.created_at.isoformat() if r.created_at else None,
+                 "received_at": r.received_at.isoformat()
+                 if getattr(r, "received_at", None) else None,
                  "conditions": {
                      "instructions": r.instructions,
                      "from_pattern": r.from_pattern,
@@ -646,6 +650,20 @@ async def _apply_and_log_match(
             account_id=account_id,
         )
         status = "APPLIED"
+        # inbox-zero parity: when the AI (not a static/learned-pattern rule)
+        # picks a rule, cache the sender→rule as a learned FROM pattern so future
+        # mail from that sender short-circuits the LLM. Auto-populates Learned
+        # Patterns without the user having to Fix anything. Best-effort.
+        sender = (frm.get("email") or "").strip()
+        if match.get("source") == "ai" and sender and rule.get("id"):
+            try:
+                await _upsert_rule_pattern(
+                    db, account_id, str(rule["id"]), sender, False, "AI",
+                    "Auto-learned from an AI match", str(r.id),
+                    getattr(r, "thread_id", None), pattern_type="FROM")
+            except Exception as e:  # noqa: BLE001 — never fail a rule run on this
+                _log.warning("email.auto_learn_pattern_failed",
+                             account_id=account_id, error=str(e)[:160])
     else:
         actions_taken = [a["type"] for a in rule["actions"]]
         status = "PENDING"  # dry-run preview only
@@ -668,7 +686,8 @@ async def _process_past_emails_job(
     job_token: int | None = None,
 ) -> None:
     """Background worker: reprocess PAST inbox mail in a date range (inbox-zero
-    'Process past emails'). Reprocesses regardless of rules_processed_at.
+    'Process past emails'). Reprocesses regardless of rules_processed_at, oldest
+    email first so rules/learning build up chronologically.
 
     Updates the in-memory progress tracker (_PAST_JOBS) per email so the UI's
     'Processing N of M…' indicator advances live and History can auto-refresh."""
@@ -681,7 +700,7 @@ async def _process_past_emails_job(
                        em.body_text, em.snippet, em.from_address
                 FROM email_messages em
                 WHERE {clause}
-                ORDER BY em.received_at DESC LIMIT :limit"""
+                ORDER BY em.received_at ASC LIMIT :limit"""
         ), params)).fetchall()
         if not rows:
             _past_job_finish(account_id, token=job_token)

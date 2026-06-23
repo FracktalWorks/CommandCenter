@@ -10,8 +10,8 @@ from gateway.routes.email import AssistantSettingsModel
 
 def test_settings_defaults_match_litellm_balanced_tier() -> None:
     s = AssistantSettingsModel(account_id="acc-1")
-    # auto_run is inert/deprecated: rules always run on new mail (inbox-zero
-    # parity), so the field defaults on and is kept only for API back-compat.
+    # auto_run is the global "run rules automatically" switch; defaults ON so a
+    # fresh account auto-runs once it has rules (an explicit OFF stops it).
     assert s.auto_run is True
     assert s.cold_email_blocker == "OFF"
     # Default agent must be the LiteLLM balanced tier (→ DeepSeek), not Copilot.

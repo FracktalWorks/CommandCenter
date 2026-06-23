@@ -77,8 +77,9 @@ class AssistantSettingsModel(BaseModel):
     account_id: str
     about: str | None = None
     signature: str | None = None
-    # inert/deprecated: rules now ALWAYS run on new mail (inbox-zero parity — the
-    # control is enabling/disabling individual rules). Kept for API/back-compat.
+    # Global "Run rules automatically on new mail" switch (inbox-zero style).
+    # Defaults ON; the scheduler treats a missing settings row as ON, so a fresh
+    # account auto-runs once it has rules. An explicit OFF stops auto-run.
     auto_run: bool = True
     cold_email_blocker: str = "OFF"  # OFF | LABEL | ARCHIVE
     agent_model: str = "tier-balanced"  # tier-fast | tier-balanced | tier-powerful

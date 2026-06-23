@@ -2155,12 +2155,50 @@ function actionDescription(type: string): string {
   return ACTION_META[type as RuleActionType]?.description ?? "";
 }
 
-/** Human label for an action spec (e.g. `Label as "Receipt"`). */
+/** Human label for an action spec (e.g. `Label as "Receipt"`), with the action's
+ *  args inline — mirrors inbox-zero's per-action detail in the history popover. */
 function actionText(a: RuleAction): string {
   if (a.type === "LABEL" && a.label) return `Label as "${a.label}"`;
   if (a.type === "MOVE_FOLDER" && a.label) return `Move to "${a.label}"`;
   if (a.type === "FORWARD" && a.to_address) return `Forward to ${a.to_address}`;
+  if (a.type === "REPLY" && a.to_address) return `Reply to ${a.to_address}`;
+  if (a.type === "CALL_WEBHOOK" && a.url) return "Call webhook";
+  if ((a.type === "DRAFT_EMAIL" || a.type === "REPLY") && a.content) {
+    const snip = a.content.replace(/\s+/g, " ").trim().slice(0, 40);
+    return `${actionLabel(a.type)}: "${snip}${a.content.length > 40 ? "…" : ""}"`;
+  }
   return actionLabel(a.type);
+}
+
+/** "From + AI" style summary of which condition types a rule uses (inbox-zero
+ *  shows this as a badge on the matched rule in the history popover). */
+function conditionTypeSummary(c?: RuleConditions | null): string {
+  if (!c) return "";
+  const t: string[] = [];
+  if (c.instructions) t.push("AI");
+  if (c.from_pattern) t.push("From");
+  if (c.to_pattern) t.push("To");
+  if (c.subject_pattern) t.push("Subject");
+  if (c.body_pattern) t.push("Body");
+  return t.join(" + ");
+}
+
+/** Friendly label + tint for an executed-rule status (History popover). */
+function statusMeta(status?: string): { label: string; cls: string } | null {
+  switch ((status || "").toUpperCase()) {
+    case "APPLIED":
+      return { label: "Applied", cls: "bg-emerald-500/15 text-emerald-400" };
+    case "SKIPPED":
+      return { label: "No match", cls: "bg-red-500/15 text-red-400" };
+    case "PENDING":
+      return { label: "Preview", cls: "bg-amber-500/15 text-amber-400" };
+    case "UNDONE":
+      return { label: "Undone", cls: "bg-slate-500/15 text-slate-400" };
+    case "ERROR":
+      return { label: "Error", cls: "bg-rose-500/15 text-rose-400" };
+    default:
+      return null;
+  }
 }
 
 /**
@@ -2217,6 +2255,7 @@ function RuleResultPill({
   conditions,
   actionSpecs,
   takenTypes,
+  status,
 }: {
   matched: boolean;
   ruleName: string | null;
@@ -2224,6 +2263,7 @@ function RuleResultPill({
   conditions?: RuleConditions | null;
   actionSpecs?: RuleAction[];
   takenTypes?: string[];
+  status?: string;
 }) {
   const pill = (
     <span
@@ -2239,11 +2279,25 @@ function RuleResultPill({
   );
   const specs = actionSpecs ?? [];
   const types = takenTypes ?? [];
+  const typeSummary = conditionTypeSummary(conditions);
+  const sm = statusMeta(status);
   return (
     <HoverPopover trigger={pill}>
       <div className="space-y-2">
-        <div className="text-xs font-medium text-foreground">
-          {matched ? ruleName || "Matched rule" : "No rule matched"}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-xs font-medium text-foreground">
+            {matched ? ruleName || "Matched rule" : "No rule matched"}
+          </span>
+          {typeSummary && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground border border-border">
+              {typeSummary}
+            </span>
+          )}
+          {sm && (
+            <span className={`text-[9px] px-1.5 py-0.5 rounded-md ${sm.cls}`}>
+              {sm.label}
+            </span>
+          )}
         </div>
         {conditions && <PrettyConditions c={conditions} />}
         {(specs.length > 0 || types.length > 0) && (
@@ -2320,9 +2374,10 @@ function FixDialog({
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // What signal(s) to learn the correction on (inbox-zero teaches by sender
-  // and/or subject keyword). Sender is on by default.
-  const [useSender, setUseSender] = useState(true);
+  // Optional signal(s) to PIN the correction on so it's learned instantly (a
+  // sender and/or subject keyword). Off by default — like inbox-zero, the
+  // primary path is a free-text explanation handed to the assistant.
+  const [useSender, setUseSender] = useState(false);
   const [useSubject, setUseSubject] = useState(false);
   const [subjectKw, setSubjectKw] = useState("");
   const setPendingChatPrompt = useEmailStore((s) => s.setPendingChatPrompt);
@@ -2340,21 +2395,21 @@ function FixDialog({
     });
   };
 
+  const senderVal = expected && expected !== "new" && useSender ? email.from : "";
+  const subjectVal =
+    expected && expected !== "new" && useSubject ? subjectKw.trim() : "";
+  // No pinned signal (or a brand-new rule) → hand the free-text explanation to
+  // the assistant, which adjusts the rules for you (inbox-zero parity).
+  const willChat = expected === "new" || (!senderVal && !subjectVal);
+
   const submit = async () => {
     if (!expected) return;
-    // "New rule" still routes through the assistant chat (it has to be created).
-    if (expected === "new") {
+    if (willChat) {
       setPendingChatPrompt(buildFixPrompt(expected, explanation, email));
       onClose();
       return;
     }
-    const senderVal = useSender ? email.from : "";
-    const subjectVal = useSubject ? subjectKw.trim() : "";
-    if (!senderVal && !subjectVal) {
-      setError("Pick the sender and/or a subject keyword to learn from.");
-      return;
-    }
-    // Existing rule / None → persist a learned pattern so it sticks.
+    // A sender/subject was pinned → persist a learned pattern so it sticks.
     setBusy(true);
     setError(null);
     try {
@@ -2424,12 +2479,12 @@ function FixDialog({
             >
               {busy ? (
                 <Loader2 className="animate-spin" size={13} />
-              ) : expected === "new" ? (
+              ) : willChat ? (
                 <MessageCircle size={13} />
               ) : (
                 <Check size={13} />
               )}
-              {expected === "new" ? "Send to assistant" : "Apply correction"}
+              {willChat ? "Send to assistant" : "Apply correction"}
             </button>
           </>
         ) : undefined
@@ -2481,53 +2536,63 @@ function FixDialog({
             Selected rule:{" "}
             <span className="text-primary">{expectedLabel}</span>
           </div>
-          {expected !== "new" && (
-            <div className="rounded-lg border border-border p-2.5 space-y-2">
-              <div className="text-[11px] font-medium text-foreground">
-                Apply this to emails…
-              </div>
-              <label className="flex items-center gap-2 text-xs text-foreground cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={useSender}
-                  onChange={() => setUseSender((v) => !v)}
-                  className="accent-primary"
-                />
-                from{" "}
-                <span className="text-muted-foreground truncate">
-                  {email.from || "this sender"}
-                </span>
-              </label>
-              <label className="flex items-center gap-2 text-xs text-foreground cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={useSubject}
-                  onChange={enableSubject}
-                  className="accent-primary"
-                />
-                with subject containing…
-              </label>
-              {useSubject && (
-                <input
-                  value={subjectKw}
-                  onChange={(e) => setSubjectKw(e.target.value)}
-                  placeholder="keyword in the subject (e.g. invoice)"
-                  className={`${INPUT_CLS} ml-6 w-[calc(100%-1.5rem)]`}
-                />
-              )}
-            </div>
-          )}
+          {/* Free-text explanation is the primary input (inbox-zero style): just
+              describe the fix and the assistant adjusts your rules. */}
           <textarea
             value={explanation}
             onChange={(e) => setExplanation(e.target.value)}
             rows={3}
-            placeholder="Why should this rule have been applied? (optional)"
+            placeholder={
+              expected === "new"
+                ? "Describe the rule you want for emails like this…"
+                : expected === "none"
+                  ? "Explain why this email shouldn't have matched…"
+                  : `Explain why this should match "${expectedLabel}"…`
+            }
             className={`${INPUT_CLS} resize-none`}
           />
+          {expected !== "new" && (
+            <details className="rounded-lg border border-border p-2.5">
+              <summary className="text-[11px] font-medium text-foreground cursor-pointer select-none">
+                Pin it so it&apos;s learned instantly (optional)
+              </summary>
+              <div className="space-y-2 mt-2">
+                <label className="flex items-center gap-2 text-xs text-foreground cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={useSender}
+                    onChange={() => setUseSender((v) => !v)}
+                    className="accent-primary"
+                  />
+                  from{" "}
+                  <span className="text-muted-foreground truncate">
+                    {email.from || "this sender"}
+                  </span>
+                </label>
+                <label className="flex items-center gap-2 text-xs text-foreground cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={useSubject}
+                    onChange={enableSubject}
+                    className="accent-primary"
+                  />
+                  with subject containing…
+                </label>
+                {useSubject && (
+                  <input
+                    value={subjectKw}
+                    onChange={(e) => setSubjectKw(e.target.value)}
+                    placeholder="keyword in the subject (e.g. invoice)"
+                    className={`${INPUT_CLS} ml-6 w-[calc(100%-1.5rem)]`}
+                  />
+                )}
+              </div>
+            </details>
+          )}
           <p className="text-[10px] text-muted-foreground">
-            {expected === "new"
-              ? "The assistant will create a rule for emails like this."
-              : "We'll remember this for matching emails. An explanation is optional."}
+            {willChat
+              ? "The assistant will refine your rules from your explanation."
+              : "We'll remember this instantly for matching emails."}
           </p>
           {error && (
             <div className="text-[11px] text-destructive bg-destructive/10 rounded-md px-2 py-1.5">
@@ -2884,7 +2949,12 @@ function HistoryTab({
         ? h.status === "SKIPPED"
         : h.rule_name === ruleFilter
   );
-  const groups = groupHistoryByDate(filtered);
+  // Newest mail first (by the email's received date, falling back to when the
+  // rule ran). The backend orders this way too; sorting here keeps it robust.
+  const ts = (h: ExecutedRule) =>
+    new Date(h.received_at ?? h.created_at ?? 0).getTime();
+  const sorted = [...filtered].sort((a, b) => ts(b) - ts(a));
+  const groups = groupHistoryByDate(sorted);
 
   return (
     <div className="h-full overflow-y-auto px-3 sm:px-5 py-3">
@@ -2949,7 +3019,8 @@ function groupHistoryByDate(items: ExecutedRule[]) {
   const groups: { key: string; label: string; items: ExecutedRule[] }[] = [];
   const byKey: Record<string, (typeof groups)[number]> = {};
   for (const h of items) {
-    const d = h.created_at ? new Date(h.created_at) : null;
+    const stamp = h.received_at ?? h.created_at;
+    const d = stamp ? new Date(stamp) : null;
     let key = "unknown";
     let label = "Earlier";
     if (d && !isNaN(d.getTime())) {
@@ -3008,6 +3079,7 @@ function HistoryRow({
           conditions={h.conditions ?? undefined}
           actionSpecs={h.rule_actions}
           takenTypes={h.actions}
+          status={h.status}
         />
         {accountId && (
           <FixButton
@@ -3245,11 +3317,12 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
           <SectionHeader>Advanced</SectionHeader>
           <SettingCard
             title="Run rules automatically on new mail"
-            description="Your enabled rules run automatically on new mail as it arrives. To stop a rule, turn it off in the Rules tab (inbox-zero parity — there's no global switch)."
+            description="Processes incoming inbox mail with your enabled rules as it arrives. Turn it off to stop auto-running (rules still apply when you run them manually or process past emails)."
             right={
-              <span className="text-[11px] px-2 py-1 rounded-full bg-emerald-500/15 text-emerald-400 whitespace-nowrap">
-                Always on
-              </span>
+              <Toggle
+                enabled={s.auto_run}
+                onChange={(v) => persistPatch({ auto_run: v })}
+              />
             }
           />
           <SettingCard

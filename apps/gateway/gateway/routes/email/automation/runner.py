@@ -15,6 +15,7 @@ from gateway.routes.email.automation.assistant import _load_assistant_about
 from gateway.routes.email.automation.drafting import (
     DRAFT_NO_DRAFT_SENTINEL,
     _agent_draft_reply,
+    _fetch_thread_context,
     _store_ai_draft,
     _upsert_local_draft,
 )
@@ -1132,11 +1133,20 @@ async def _apply_rule_actions(
                     _log.info("email.draft_skipped_sensitive", account_id=account_id)
                     continue
                 # Static template wins; otherwise the orchestrating drafter
-                # (memory + sales/task-manager) writes a context-aware reply.
-                body = tmpl if tmpl else await _agent_draft_reply(
-                    email, about, signature, user_email, use_agent=True,
-                    confidence=draft_conf,
-                )
+                # (memory + sales/task-manager + thread history) writes a
+                # context-aware reply. Only the AI path needs the thread.
+                if tmpl:
+                    body = tmpl
+                else:
+                    draft_email = email
+                    if email.get("thread_id"):
+                        draft_email = {**email, "thread": await _fetch_thread_context(
+                            db, account_id, email.get("thread_id", ""),
+                            provider_msg_id)}
+                    body = await _agent_draft_reply(
+                        draft_email, about, signature, user_email, use_agent=True,
+                        confidence=draft_conf,
+                    )
                 # Draft-confidence gate: the drafter returns the NO_DRAFT
                 # sentinel (or empty) when it isn't confident enough — skip.
                 if not tmpl and (

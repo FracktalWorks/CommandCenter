@@ -31,6 +31,47 @@ def _normalize_text(s: str) -> str:
     return " ".join((s or "").split()).lower()
 
 
+async def _fetch_thread_context(
+    db: Any, account_id: str, thread_id: str,
+    exclude_provider_msg_id: str = "", *, limit: int = 12,
+) -> str:
+    """Earlier messages in the conversation (oldest → newest), formatted for the
+    drafter so it can reply with full thread context — inbox-zero passes the
+    whole thread to its reply AI; without this we'd only see the latest message.
+
+    Excludes drafts and the message currently being replied to. Returns '' when
+    there's no prior context (e.g. a brand-new single-message thread)."""
+    if not thread_id:
+        return ""
+    try:
+        rows = (await db.execute(text(
+            """SELECT from_address, body_text, snippet, received_at,
+                      provider_message_id, folder
+               FROM email_messages
+               WHERE account_id = :aid AND thread_id = :tid
+                 AND LOWER(COALESCE(folder, '')) NOT IN ('drafts', 'draft')
+               ORDER BY received_at ASC NULLS FIRST
+               LIMIT :lim"""
+        ), {"aid": account_id, "tid": thread_id, "lim": limit})).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.thread_context_failed", error=str(exc)[:160])
+        return ""
+    parts: list[str] = []
+    for r in rows:
+        if exclude_provider_msg_id and r.provider_message_id == exclude_provider_msg_id:
+            continue
+        body = (r.body_text or r.snippet or "").strip()
+        if not body:
+            continue
+        frm = r.from_address if isinstance(r.from_address, dict) \
+            else json.loads(r.from_address or "{}")
+        sender = frm.get("name") or frm.get("email") or "?"
+        when = r.received_at.isoformat() if hasattr(r.received_at, "isoformat") else ""
+        header = f"From: {sender}" + (f" · {when}" if when else "")
+        parts.append(f"{header}\n{body[:1500]}")
+    return "\n\n---\n\n".join(parts)
+
+
 async def _store_ai_draft(
     db: Any, account_id: str, thread_id: str, draft_text: str
 ) -> None:
@@ -198,12 +239,19 @@ async def _llm_draft_reply(
         ctx = f"{owner}User context:\n{about}\n\n" if (about or owner) else ""
         if context:
             ctx += f"Context gathered for this reply:\n{context}\n\n"
+        thread = (email.get("thread") or "").strip()
+        thread_block = (
+            "Earlier in this thread (oldest to newest) — read it for full "
+            f"context before replying:\n{thread[:5000]}\n\n" if thread else ""
+        )
         user_prompt = (
             f"{ctx}Draft a reply to this email (it was sent TO the account owner; "
             "write the owner's reply back to the sender).\n"
             f"From (the sender — address your reply to them): {email.get('from', '')}\n"
-            f"Subject: {email.get('subject', '')}\n"
-            f"Body:\n{(email.get('body', '') or '')[:2000]}\n"
+            f"Subject: {email.get('subject', '')}\n\n"
+            f"{thread_block}"
+            "Latest message — reply to THIS, taking the thread above into "
+            f"account:\n{(email.get('body', '') or '')[:2000]}\n"
         )
         if instructions:
             user_prompt += f"\nExtra instructions: {instructions}\n"
@@ -313,11 +361,17 @@ async def _draft_via_maf_agent(
             "remember() for the sender, and call_agent('agent-sales-assistant' or 'task-manager') "
             "ONLY if the email is clearly about a deal or a project."
         )
+        thread = (email.get("thread") or "").strip()
+        thread_block = (
+            f"\nEarlier in this thread (oldest to newest):\n{thread[:5000]}\n"
+            if thread else ""
+        )
         msg = (
             f"{task} Then write ONLY the message body — no subject line, no "
             "preamble, no '---' fences, no confidence line.\n\n"
             f"From: {email.get('from', '')}\nSubject: {email.get('subject', '')}\n"
-            f"Body:\n{(email.get('body', '') or '')[:3000]}"
+            f"{thread_block}"
+            f"Latest message (reply to this):\n{(email.get('body', '') or '')[:3000]}"
         )
         res = await asyncio.wait_for(
             run_agent(
@@ -513,6 +567,9 @@ async def draft_reply_smart(
             "subject": row.subject or "", "from": frm.get("email", ""),
             "body": row.body_text or row.snippet or "",
             "thread_id": row.thread_id or "",
+            "thread": await _fetch_thread_context(
+                db, req.account_id, row.thread_id or "",
+                row.provider_message_id or ""),
         }
         about, signature = await _load_assistant_about(db, req.account_id)
         # Synchronous request → keep the orchestration budget under the proxy

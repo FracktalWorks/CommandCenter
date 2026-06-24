@@ -1,4 +1,4 @@
-"""Unit tests for rule reordering and history undo (Chunk D)."""
+"""Unit tests for canonical rule ordering and history undo."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -10,16 +10,27 @@ from fastapi import HTTPException
 from gateway.routes import email as m
 
 
-async def test_reorder_rules_writes_sort_order_per_rule() -> None:
-    db = AsyncMock()
-    user = SimpleNamespace(email="u@example.com")
-    req = m.RuleReorderRequest(account_id="acc-1", rule_ids=["r1", "r2", "r3"])
-    with patch.object(m.automation.rules, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m.automation.rules, "_assert_account_owner", AsyncMock()):
-        res = await m.reorder_rules(req, user=user)
-    assert res["reordered"] == 3
-    assert db.execute.await_count == 3   # one UPDATE per rule
-    db.commit.assert_awaited()
+def test_rules_sort_canonically_not_by_user_order() -> None:
+    """Rules sort in the fixed inbox-zero system order (no user 'priority'):
+    enabled first, then system-type order, then name. system_type may be absent
+    on seeded presets, so the rule name is used as a fallback rank."""
+    rules = [
+        {"name": "Cold Email", "enabled": True, "system_type": "COLD_EMAIL"},
+        {"name": "To Reply", "enabled": True, "system_type": "TO_REPLY"},
+        {"name": "FYI", "enabled": True, "system_type": "FYI"},
+        # system_type missing → ranked by name ("Newsletter" → NEWSLETTER).
+        {"name": "Newsletter", "enabled": True, "system_type": None},
+        {"name": "Zeta custom", "enabled": True, "system_type": None},
+        {"name": "Alpha custom", "enabled": True, "system_type": None},
+        # disabled rules sort last regardless of system order.
+        {"name": "Awaiting Reply", "enabled": False, "system_type": "AWAITING_REPLY"},
+    ]
+    out = [r["name"] for r in m.automation.rules._sort_rules_canonical(rules)]
+    assert out == [
+        "To Reply", "FYI", "Newsletter", "Cold Email",
+        "Alpha custom", "Zeta custom",
+        "Awaiting Reply",
+    ]
 
 
 async def test_undo_not_found_raises_404() -> None:

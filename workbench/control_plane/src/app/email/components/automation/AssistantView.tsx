@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Loader2, Plus, Trash2, Pencil, Play, Check, X, FlaskConical,
   History as HistoryIcon, Settings2, Settings, Sparkles, Wand2, BookOpen,
-  ArrowUp, ArrowDown, Eye, MessageCircle, RefreshCcw, Square,
+  ArrowDown, Eye, MessageCircle, RefreshCcw, Square,
   MoreVertical, MoreHorizontal, Copy, Paperclip, Upload, FolderOpen,
   Inbox, Zap, ChevronRight, ChevronDown, Tag, FolderPlus,
   Archive, MailOpen, Star, ShieldAlert, FolderInput, Reply, Forward,
@@ -15,7 +15,7 @@ import {
   getRulesHistory, getAssistantSettings, saveAssistantSettings,
   listColdSenders, upsertColdSender, generateWritingStyle, listEmails,
   listKnowledge, createKnowledge, updateKnowledge, deleteKnowledge,
-  installPresetRules, resetRules, reorderRules, processPastEmails,
+  installPresetRules, resetRules, processPastEmails,
   listLearnedPatterns, deleteLearnedPattern,
   submitRuleFeedback, listRulePatterns, deleteRulePattern,
   generateRules, uploadEmailArtifacts, listEmailArtifacts,
@@ -696,23 +696,6 @@ function RulesTab({
     }
   };
 
-  const move = async (index: number, dir: -1 | 1) => {
-    if (!accountId) return;
-    const j = index + dir;
-    if (j < 0 || j >= rules.length) return;
-    const next = [...rules];
-    [next[index], next[j]] = [next[j], next[index]];
-    setRules(next);
-    try {
-      await reorderRules(
-        accountId,
-        next.map((r) => r.id).filter((id): id is string => !!id)
-      );
-    } catch {
-      load();
-    }
-  };
-
   if (!accountId) return <Empty>Select an account first.</Empty>;
   if (loading) return <Spinner label="Loading rules…" />;
 
@@ -807,29 +790,11 @@ function RulesTab({
             </button>
           </div>
         )}
-        {rules.map((rule, idx) => (
+        {rules.map((rule) => (
           <div
             key={rule.id}
             className="flex items-start gap-3 bg-card border border-border rounded-xl px-4 py-3"
           >
-            <div className="flex flex-col -my-0.5">
-              <button
-                onClick={() => move(idx, -1)}
-                disabled={idx === 0}
-                title="Move up (higher priority)"
-                className="text-muted-foreground hover:text-foreground disabled:opacity-30"
-              >
-                <ArrowUp size={12} />
-              </button>
-              <button
-                onClick={() => move(idx, 1)}
-                disabled={idx === rules.length - 1}
-                title="Move down (lower priority)"
-                className="text-muted-foreground hover:text-foreground disabled:opacity-30"
-              >
-                <ArrowDown size={12} />
-              </button>
-            </div>
             <button
               onClick={() => toggle(rule)}
               title={rule.enabled ? "Disable" : "Enable"}

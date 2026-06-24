@@ -65,8 +65,42 @@ class RuleModel(BaseModel):
     actions: list[RuleActionModel] = []
 
 
+# Canonical system-rule order (inbox-zero parity — see SYSTEM_RULE_ORDER). Rules
+# are presented to the classifier and applied (multi-rule) in this fixed order,
+# NOT a user-defined "priority". Matching is AI-first: the most specific rule
+# wins regardless of position; order is only a deterministic, stable arrangement.
+_SYSTEM_RULE_ORDER = [
+    "TO_REPLY", "AWAITING_REPLY", "FYI", "ACTIONED", "NEWSLETTER",
+    "MARKETING", "CALENDAR", "RECEIPT", "NOTIFICATION", "COLD_EMAIL",
+]
+
+
+def _canonical_rank(rule: dict[str, Any]) -> int:
+    """Index of a rule in the fixed system order. Falls back to the rule name
+    (so seeded presets without an explicit system_type still sort correctly);
+    custom rules sort after all system rules."""
+    key = (rule.get("system_type") or "").upper().strip()
+    if not key:
+        key = (rule.get("name") or "").upper().strip().replace(" ", "_")
+    try:
+        return _SYSTEM_RULE_ORDER.index(key)
+    except ValueError:
+        return len(_SYSTEM_RULE_ORDER)
+
+
+def _sort_rules_canonical(rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Order rules exactly like inbox-zero's sortRulesForAutomation: enabled
+    first, then the fixed system-rule order, then alphabetically by name."""
+    return sorted(rules, key=lambda r: (
+        0 if r.get("enabled") else 1,
+        _canonical_rank(r),
+        (r.get("name") or "").lower(),
+        (r.get("instructions") or "").lower(),
+    ))
+
+
 async def _load_rules(db: Any, account_id: str) -> list[dict[str, Any]]:
-    """Load rules + their actions for an account, ordered by sort_order."""
+    """Load rules + their actions for an account, in canonical system order."""
     rule_rows = (await db.execute(text(
         """SELECT id, account_id, name, instructions, enabled, automated,
                   run_on_threads, conditional_operator, from_pattern, to_pattern,
@@ -105,7 +139,7 @@ async def _load_rules(db: Any, account_id: str) -> list[dict[str, Any]]:
                 for a in act_rows
             ],
         })
-    return rules
+    return _sort_rules_canonical(rules)
 
 
 @router.get("/rules")
@@ -536,31 +570,6 @@ async def generate_rules(
         rules = await _load_rules(db, req.account_id)
         created = [r for r in rules if r["id"] in set(created_ids)]
         return {"created": created}
-    finally:
-        await db.close()
-
-
-class RuleReorderRequest(BaseModel):
-    account_id: str
-    rule_ids: list[str]  # desired order; index becomes sort_order
-
-
-@router.patch("/rules/reorder")
-async def reorder_rules(
-    req: RuleReorderRequest,
-    user: UserContext = Depends(get_current_user),
-):
-    """Persist a new rule priority order (lower sort_order = evaluated first)."""
-    db = await _get_db()
-    try:
-        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
-        for i, rid in enumerate(req.rule_ids):
-            await db.execute(text(
-                "UPDATE email_rules SET sort_order = :so, updated_at = now() "
-                "WHERE id = :id AND account_id = :aid"
-            ), {"so": i, "id": rid, "aid": req.account_id})
-        await db.commit()
-        return {"reordered": len(req.rule_ids)}
     finally:
         await db.close()
 

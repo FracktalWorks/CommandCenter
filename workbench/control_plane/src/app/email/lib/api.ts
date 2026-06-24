@@ -799,16 +799,6 @@ export async function resetRules(
   );
 }
 
-export async function reorderRules(
-  accountId: string,
-  ruleIds: string[]
-): Promise<void> {
-  await gatewayFetch("/email/rules/reorder", {
-    method: "PATCH",
-    body: JSON.stringify({ account_id: accountId, rule_ids: ruleIds }),
-  });
-}
-
 export async function undoExecution(
   execId: string
 ): Promise<{ status: string; reversed: string[] }> {

@@ -278,11 +278,24 @@ deeper learning/retrieval systems. Audit done 2026-06-24 against
   User vs rule changes separate automatically: rule-applied labels are written to
   local categories synchronously, so they don't show as a sync delta. Mirrors
   inbox-zero `process-label-added-event` / `record-label-removal-learning`.
-- ⚠️ Design nuance: our auto-learn fires on every AI match (eager); inbox-zero
-  gates on a *consistent* multi-email sender history + AI verification
-  (`analyze-sender-pattern`). Ours is cruder but simpler.
+- ✅ Auto-learn is now **consistency-gated** (inbox-zero `analyze-sender-pattern`
+  parity): `_sender_consistent_for_rule` requires ≥3 matches to the same rule
+  with no conflicting rule before committing a pattern.
+
+**Follow-up reminders — parity audit 2026-06-24:**
+- ✅ Two windows (awaiting + needs-reply), auto-draft nudge, "Follow-up" label,
+  Reply Zero Awaiting tab + badge, on-demand scan + scheduled run, idempotent.
+  Now elapse in **business days** (`_business_days_cutoff`), fractional days, scan
+  limit 50 — full behavioural parity with `processAccountFollowUps`.
+- ⏳ **Deferred — chat-tool follow-up notifications.** inbox-zero also pushes the
+  nudge to **Slack / Microsoft Teams / Telegram** (connected `MessagingChannel`
+  routed for FOLLOW_UPS) as an interactive card (Open / Mark-done buttons) —
+  `send-follow-up-notification.ts`. We surface follow-ups in-app only. Needs a
+  full messaging-channel integration (OAuth + routing + outbound card + a webhook
+  for the Mark-done callback). To build later, alongside the MCP integrations.
 
 **Deferred (bigger / dependency-gated):**
+- **Chat-tool follow-up notifications** (Slack / Teams / Telegram) — see above.
 - **Calendar / scheduling context** in drafts (booking link + availability) —
   needs a calendar integration first.
 - **PDF attachment context** — extract attached-PDF text into the draft context.

@@ -7,6 +7,7 @@ import json
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
@@ -29,6 +30,75 @@ from sqlalchemy import text
 
 # Deep initial-sync history window (days); keep in step with the scheduler.
 INITIAL_SYNC_DAYS = 365
+
+
+async def _build_label_rule_map(db: Any, account_id: str) -> dict[str, str]:
+    """category-name (lower) → rule_id, from each enabled rule's name and its
+    LABEL action labels — so a manually-applied category can be traced to a rule."""
+    try:
+        from gateway.routes.email.automation.rules import (  # noqa: PLC0415
+            _load_rules,
+        )
+        rules = await _load_rules(db, account_id)
+    except Exception:  # noqa: BLE001
+        return {}
+    out: dict[str, str] = {}
+    for r in rules:
+        if not r.get("enabled"):
+            continue
+        rid = str(r.get("id"))
+        nm = (r.get("name") or "").strip().lower()
+        if nm:
+            out.setdefault(nm, rid)
+        for a in r.get("actions", []) or []:
+            label = (a.get("label") or "").strip()
+            if a.get("type") == "LABEL" and label:
+                out.setdefault(label.lower(), rid)
+    return out
+
+
+async def _learn_from_label_changes(
+    db: Any, account_id: str, msg: Any,
+    old_categories: list, new_categories: list, label_rule_map: dict[str, str],
+) -> None:
+    """When the user adds/removes a label (category) in their email client, learn
+    a FROM include/exclude classification pattern for the matching rule —
+    inbox-zero's LABEL_ADDED / LABEL_REMOVED learning. Best-effort.
+
+    Our own rule-applied labels are written to local categories synchronously, so
+    a sync delta here reflects only changes the *user* made in their client."""
+    sender = ""
+    if getattr(msg, "from_address", None):
+        sender = (msg.from_address.email or "").strip()
+    if not sender or not label_rule_map:
+        return
+    old_s = {str(c).strip().lower() for c in (old_categories or [])}
+    new_s = {str(c).strip().lower() for c in (new_categories or [])}
+    added, removed = new_s - old_s, old_s - new_s
+    if not added and not removed:
+        return
+    try:
+        from gateway.routes.email.automation.rules import (  # noqa: PLC0415
+            _upsert_rule_pattern,
+        )
+    except Exception:  # noqa: BLE001
+        return
+    tid = getattr(msg, "thread_id", None)
+    for cat, exclude, src, why in (
+        *[(c, False, "LABEL_ADDED", "Label added in the mail client")
+          for c in added],
+        *[(c, True, "LABEL_REMOVED", "Label removed in the mail client")
+          for c in removed],
+    ):
+        rid = label_rule_map.get(cat)
+        if not rid:
+            continue
+        try:
+            await _upsert_rule_pattern(
+                db, account_id, rid, sender, exclude, src, why, None, tid,
+                pattern_type="FROM")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 class SyncRequest(BaseModel):
@@ -126,7 +196,14 @@ async def trigger_sync(
                 since=since,
             )
 
-            # Persist fetched messages to email_messages
+            # Persist fetched messages to email_messages.
+            # Learn classification patterns from manual label changes — only on
+            # incremental syncs (a deep/full sync replays history and would
+            # mislearn). Empty map (no rules) disables the per-message diff.
+            label_rule_map = (
+                await _build_label_rule_map(db, req.account_id)
+                if not deep else {}
+            )
             persisted_count = 0
             skipped_count = 0
             for msg in sync_result.messages:
@@ -146,6 +223,17 @@ async def trigger_sync(
                     )
                     persisted_count += 1
                 else:
+                    # Capture categories before the upsert so we can learn from
+                    # manual label changes made in the user's email client.
+                    old_categories = None
+                    if label_rule_map:
+                        ocr = (await db.execute(text(
+                            "SELECT categories FROM email_messages WHERE "
+                            "account_id = :aid AND provider_message_id = :pid"
+                        ), {"aid": req.account_id,
+                            "pid": msg.provider_message_id})).fetchone()
+                        old_categories = (
+                            list(ocr.categories or []) if ocr else None)
                     # Upsert message
                     await db.execute(
                         text(
@@ -244,6 +332,13 @@ async def trigger_sync(
                         },
                     )
                     persisted_count += 1
+
+                    # Learn from manual label add/remove (existing rows only —
+                    # a new message has no prior categories to diff against).
+                    if old_categories is not None:
+                        await _learn_from_label_changes(
+                            db, req.account_id, msg, old_categories,
+                            getattr(msg, "categories", []) or [], label_rule_map)
 
                     # Persist attachment metadata
                     for att in msg.attachments:

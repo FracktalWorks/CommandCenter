@@ -269,14 +269,15 @@ deeper learning/retrieval systems. Audit done 2026-06-24 against
 - ✅ Matching parity (shipped): FROM is now *bidirectional* substring and SUBJECT
   matches with numbers/IDs/parens generalised away (`_generalize_subject`) —
   mirrors inbox-zero `find-matching-group.ts` + `generalizeSubject`.
-- ❌ **REMAINING GAP — learn from manual labels in the email client.** inbox-zero
-  learns a pattern when the user adds/removes a label directly in Gmail/Outlook
-  (webhook → `process-label-added-event` / `record-label-removal-learning` →
-  saveLearnedPattern include/exclude). We only learn from AI matches + the in-app
-  Fix dialog. To close: in the sync/delta upsert, diff old-vs-new `categories`,
-  map a user-added/removed category to the rule whose label matches, and call
-  `_upsert_rule_pattern` (FROM include on add, exclude on remove). Needs care to
-  distinguish user changes from our own rule-applied category writes.
+- ✅ **Learn from manual labels in the email client (shipped 2026-06-24).** The
+  incremental sync now diffs old-vs-new `categories` per message; a user-added
+  category that maps to a rule (by rule name or its LABEL action) teaches a FROM
+  **include** pattern (`source=LABEL_ADDED`), a removed one teaches **exclude**
+  (`source=LABEL_REMOVED`) — via `_build_label_rule_map` + `_learn_from_label_changes`
+  in `transport/sync.py`. Gated to incremental syncs (deep/full replay history).
+  User vs rule changes separate automatically: rule-applied labels are written to
+  local categories synchronously, so they don't show as a sync delta. Mirrors
+  inbox-zero `process-label-added-event` / `record-label-removal-learning`.
 - ⚠️ Design nuance: our auto-learn fires on every AI match (eager); inbox-zero
   gates on a *consistent* multi-email sender history + AI verification
   (`analyze-sender-pattern`). Ours is cruder but simpler.

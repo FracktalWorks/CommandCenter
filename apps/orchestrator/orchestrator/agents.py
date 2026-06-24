@@ -244,9 +244,12 @@ async def delegate_to_agent(agent_name: str, message: str) -> str:
     import uuid as _uuid  # noqa: PLC0415
 
     from orchestrator.executor import AgentRunError  # noqa: PLC0415
-    from orchestrator.executor import _active_run_queue
+    from orchestrator.executor import _active_run_queue, _active_run_model
 
     run_id = str(_uuid.uuid4())
+    # Inherit the orchestrator's resolved tier so the specialist runs on the
+    # same model the user chose, not its own config default.
+    _parent_model = _active_run_model.get(None)
 
     # Use streaming path if a parent SSE queue is active (gives live UI progress).
     event_queue = _active_run_queue.get(None)
@@ -254,7 +257,9 @@ async def delegate_to_agent(agent_name: str, message: str) -> str:
         try:
             from orchestrator.executor import \
                 _run_sub_agent_streaming  # noqa: PLC0415
-            return await _run_sub_agent_streaming(agent_name, message, run_id, event_queue)
+            return await _run_sub_agent_streaming(
+                agent_name, message, run_id, event_queue, model=_parent_model,
+            )
         except Exception as exc:  # noqa: BLE001
             return f"Agent {agent_name!r} failed: {exc}"
 
@@ -264,6 +269,7 @@ async def delegate_to_agent(agent_name: str, message: str) -> str:
             agent_name,
             {"message": message, "mode": "chat"},
             run_id=run_id,
+            model=_parent_model,
         )
         text = result.get("result") or result.get("answer") or ""
         if isinstance(text, dict):
@@ -333,14 +339,19 @@ def _load_specialist_agents_as_tools() -> list[Any]:
             async def _specialist_fn(task: str, _n: str = _agent_name) -> str:
                 import uuid as _uuid  # noqa: PLC0415
                 run_id = str(_uuid.uuid4())
-                from orchestrator.executor import \
-                    _active_run_queue  # noqa: PLC0415
+                from orchestrator.executor import (  # noqa: PLC0415
+                    _active_run_queue, _active_run_model,
+                )
                 eq = _active_run_queue.get(None)
+                # Inherit the orchestrator's resolved tier for the specialist.
+                _pm = _active_run_model.get(None)
                 if eq is not None:
                     try:
                         from orchestrator.executor import \
                             _run_sub_agent_streaming  # noqa: PLC0415
-                        return await _run_sub_agent_streaming(_n, task, run_id, eq)
+                        return await _run_sub_agent_streaming(
+                            _n, task, run_id, eq, model=_pm,
+                        )
                     except Exception as exc:  # noqa: BLE001
                         return f"Agent {_n!r} failed: {exc}"
                 return await delegate_to_agent(_n, task)

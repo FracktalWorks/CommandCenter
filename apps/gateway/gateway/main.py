@@ -275,9 +275,16 @@ if _HAS_MAF:
         async def copilot_chat(
             request_body: _AGUIRequest,
             background_tasks: BackgroundTasks,
+            model: str | None = None,
             user: UserContext = Depends(get_current_user),
         ) -> StreamingResponse:
-            """MAF orchestrator: per-request agent with Mem0+Graphiti memory injection."""
+            """MAF orchestrator: per-request agent with Mem0+Graphiti memory injection.
+
+            *model* (query param) is the LiteLLM tier the chat UI selected. The
+            orchestrator is a native MAF agent, so it reads its model from
+            ``default_options["model"]``; we set the resolved tier there and also
+            expose it via ``_active_run_model`` so delegated specialists inherit it.
+            """
             from orchestrator.agents import (build_orchestrator_agent,
                                              enrich_instructions_with_memory)
 
@@ -316,10 +323,34 @@ if _HAS_MAF:
                 if isinstance(opts, dict):
                     _apply_thinking_mode(opts, think_mode)
 
+            # ── Resolve the selected LiteLLM tier and pin it on the agent ──
+            # Native MAF agents read their model from default_options["model"]; if
+            # unset they keep the build-time client default (tier-balanced) and the
+            # chat UI's tier picker has no effect. Resolve via the BYOK-default
+            # policy (empty/bare → tier-balanced or copilot_chat_model).
+            _resolved_model = ""
+            try:
+                from orchestrator.executor import (  # noqa: PLC0415
+                    _apply_model_for_maf_agent)
+                _resolved_model = _apply_model_for_maf_agent(
+                    agent, (model or "").strip(), get_settings())
+            except Exception:  # noqa: BLE001
+                pass
+
             protocol_runner = _AgentFrameworkAgent(agent=agent)
 
             async def event_generator():
                 encoder = _EventEncoder()
+                # Expose the run's tier so delegated specialists inherit it. Set
+                # HERE (inside the streaming generator) so the tools' ContextVar
+                # lookup sees it — the handler body runs in a different context.
+                try:
+                    from orchestrator.executor import (  # noqa: PLC0415
+                        _active_run_model)
+                    if _resolved_model:
+                        _active_run_model.set(_resolved_model)
+                except Exception:  # noqa: BLE001
+                    pass
                 try:
                     async for event in protocol_runner.run(input_data):
                         yield encoder.encode(event)

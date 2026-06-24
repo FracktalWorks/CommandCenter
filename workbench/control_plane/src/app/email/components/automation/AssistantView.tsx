@@ -3564,7 +3564,7 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
           <ColdSendersList accountId={accountId} />
           <SettingCard
             title="Assistant model"
-            description="The model tier the assistant agent and chat use."
+            description="The model the assistant uses for automation — rules, drafted replies, and follow-ups."
             right={
               <select
                 value={s.agent_model}
@@ -3653,6 +3653,44 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
                     {s.fallback_model || "tier-powerful"} (default)
                   </option>
                 )}
+              </select>
+            }
+          />
+          <SettingCard
+            title="Chat model"
+            description="The model the assistant chat uses inside the email app. Defaults to the Assistant model."
+            right={
+              <select
+                value={s.chat_model || ""}
+                onChange={(e) => persistPatch({ chat_model: e.target.value })}
+                className={`${INPUT_CLS} w-56 py-1`}
+              >
+                <option value="">Same as assistant model</option>
+                {llm && (
+                  <optgroup label="Tiers (auto-routing)">
+                    {llm.tiers.map((t) => (
+                      <option key={t.tier_name} value={t.tier_name}>
+                        {t.tier_name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {enabledModels.length > 0 && (
+                  <optgroup label="Your enabled models">
+                    {enabledModels.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label || m.id}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {/* Keep a previously-saved value selectable even if it's no
+                    longer a tier or an enabled model. */}
+                {s.chat_model &&
+                  !llm?.tiers.some((t) => t.tier_name === s.chat_model) &&
+                  !enabledModels.some((m) => m.id === s.chat_model) && (
+                    <option value={s.chat_model}>{s.chat_model}</option>
+                  )}
               </select>
             }
           />

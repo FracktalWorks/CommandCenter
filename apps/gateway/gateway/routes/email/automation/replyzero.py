@@ -124,21 +124,29 @@ async def ai_chat(
         except Exception:  # noqa: BLE001
             pass
 
-    # ── Resolve which LiteLLM tier the agent should use (per-account) ──
-    # The interactive chat runs on the configured assistant model only — no
-    # automatic fallback escalation (that's reserved for the unattended
-    # automation paths: rule classification + draft generation).
+    # ── Resolve which LiteLLM tier the email CHAT should use (per-account) ──
+    # The chat panel has its own model (chat_model). When unset it inherits the
+    # background assistant agent's model (agent_model); both default to
+    # tier-balanced. This keeps interactive chat and automation independently
+    # tunable while preserving existing behaviour for accounts that set neither.
+    # The interactive chat runs on this single model only — no automatic
+    # fallback escalation (that's reserved for the unattended automation paths:
+    # rule classification + draft generation).
     agent_model = "tier-balanced"
     if req.account_id:
         try:
             _mdb = await _get_db()
             try:
                 _mrow = (await _mdb.execute(text(
-                    "SELECT agent_model FROM email_assistant_settings "
+                    "SELECT chat_model, agent_model FROM email_assistant_settings "
                     "WHERE account_id = :aid"
                 ), {"aid": req.account_id})).fetchone()
-                if _mrow and _mrow.agent_model:
-                    agent_model = _mrow.agent_model
+                if _mrow:
+                    agent_model = (
+                        (getattr(_mrow, "chat_model", "") or "").strip()
+                        or (_mrow.agent_model or "").strip()
+                        or "tier-balanced"
+                    )
             finally:
                 await _mdb.close()
         except Exception:  # noqa: BLE001

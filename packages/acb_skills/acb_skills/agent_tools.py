@@ -31,6 +31,21 @@ import json as _json
 import uuid as _uuid
 
 
+def _parent_run_model() -> str | None:
+    """The resolved model/tier of the current (parent) agent run, if any.
+
+    Set by the executor's ``run_agent_stream`` (and the orchestrator chat path)
+    via the ``_active_run_model`` ContextVar.  Sub-agents read it so a delegated
+    task inherits the tier the user chose for the parent instead of silently
+    falling back to its own config default.  Returns ``None`` outside a run.
+    """
+    try:
+        from orchestrator.executor import _active_run_model  # noqa: PLC0415
+        return _active_run_model.get(None)
+    except (ImportError, Exception):  # noqa: BLE001
+        return None
+
+
 async def call_agent(agent_name: str, message: str) -> str:
     """Delegate a sub-task to another CommandCenter agent and return its response.
 
@@ -70,6 +85,10 @@ async def call_agent(agent_name: str, message: str) -> str:
     """
     run_id = str(_uuid.uuid4())
 
+    # Inherit the parent run's resolved tier so the sub-agent runs on the same
+    # model the user chose for the parent, not its own config default.
+    _parent_model = _parent_run_model()
+
     # If there is an active parent SSE queue (set by run_agent_stream via ContextVar),
     # stream sub-agent events through it so the UI shows progress in real time.
     event_queue = None
@@ -82,7 +101,9 @@ async def call_agent(agent_name: str, message: str) -> str:
     if event_queue is not None:
         try:
             from orchestrator.executor import _run_sub_agent_streaming  # noqa: PLC0415
-            return await _run_sub_agent_streaming(agent_name, message, run_id, event_queue)
+            return await _run_sub_agent_streaming(
+                agent_name, message, run_id, event_queue, model=_parent_model,
+            )
         except Exception as exc:  # noqa: BLE001
             return f"Sub-task to {agent_name!r} failed: {exc}"
 
@@ -96,7 +117,9 @@ async def call_agent(agent_name: str, message: str) -> str:
         )
         _relay_tid = _stream_relay_thread_id.get(None)
         if _relay_tid:
-            return await _run_sub_agent_streaming(agent_name, message, run_id, None)
+            return await _run_sub_agent_streaming(
+                agent_name, message, run_id, None, model=_parent_model,
+            )
     except (ImportError, Exception):  # noqa: BLE001
         pass
 
@@ -107,6 +130,7 @@ async def call_agent(agent_name: str, message: str) -> str:
             agent_name,
             {"message": message, "mode": "sub_task"},
             run_id=run_id,
+            model=_parent_model,
         )
         text = result.get("result") or result.get("answer") or ""
         if isinstance(text, dict):
@@ -182,6 +206,9 @@ async def call_agents_parallel(tasks: str) -> str:
         except (ImportError, Exception):  # noqa: BLE001
             pass
 
+    # Inherit the parent run's resolved tier for every fanned-out sub-agent.
+    _parent_model = _parent_run_model()
+
     async def _run_one(agent_name: str, message: str) -> tuple[str, str]:
         run_id = str(_uuid.uuid4())
         # Use streaming path if we have either a queue (Tier 2) or
@@ -192,7 +219,7 @@ async def call_agents_parallel(tasks: str) -> str:
             try:
                 _q = event_queue if event_queue is not None else None
                 result = await _run_sub_agent_streaming(
-                    agent_name, message, run_id, _q)
+                    agent_name, message, run_id, _q, model=_parent_model)
                 return agent_name, result
             except Exception as exc:  # noqa: BLE001
                 return agent_name, f"Sub-task failed: {exc}"
@@ -203,6 +230,7 @@ async def call_agents_parallel(tasks: str) -> str:
                 agent_name,
                 {"message": message, "mode": "sub_task"},
                 run_id=run_id,
+                model=_parent_model,
             )
             text = result.get("result") or result.get("answer") or ""
             if isinstance(text, dict):
@@ -250,6 +278,8 @@ async def call_agent_background(agent_name: str, message: str) -> str:
         )
     """
     run_id = str(_uuid.uuid4())
+    # Capture the parent tier now (the detached task runs after we return).
+    _parent_model = _parent_run_model()
     try:
         from orchestrator.executor import run_agent  # noqa: PLC0415
         asyncio.create_task(
@@ -257,6 +287,7 @@ async def call_agent_background(agent_name: str, message: str) -> str:
                 agent_name,
                 {"message": message, "mode": "background_sub_task"},
                 run_id=run_id,
+                model=_parent_model,
             )
         )
         return (

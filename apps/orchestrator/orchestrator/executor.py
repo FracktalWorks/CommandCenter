@@ -91,6 +91,14 @@ _stream_relay_thread_id: contextvars.ContextVar[str | None] = (
     contextvars.ContextVar("_stream_relay_thread_id", default=None)
 )
 
+# ContextVar that holds the resolved model/tier of the CURRENT agent run, so
+# sub-agents spawned via call_agent / call_agents_parallel / delegate_to_agent
+# inherit the parent's tier instead of silently falling back to their own
+# config default. Set inside run_agent_stream once the model is resolved.
+_active_run_model: contextvars.ContextVar[str | None] = (
+    contextvars.ContextVar("_active_run_model", default=None)
+)
+
 
 async def _push_sse_to_stream(thread_id: str, sse_line: str) -> None:
     """Push an SSE line to the Redis stream for reconnection support.
@@ -852,11 +860,16 @@ async def _run_sub_agent_streaming(
     message_str: str,
     run_id: str,
     event_queue: "asyncio.Queue[dict[str, Any] | None] | None" = None,
+    model: str | None = None,
 ) -> str:
     """Run a sub-agent and forward its streaming events to *event_queue*.
 
     Called by ``call_agent`` when there is an active parent SSE queue so that
     the sub-agent's progress is visible in the UI in real time.
+
+    *model* is the parent run's resolved tier; when set it takes priority over
+    the sub-agent's own config default so a delegated task inherits the tier the
+    user chose for the parent (both Copilot SDK and native MAF sub-agents).
 
     Supports GitHub Copilot SDK agents (native stream) and MAF agents (batch
     run with a single result delta at the end).
@@ -988,10 +1001,11 @@ async def _run_sub_agent_streaming(
 
             if _runtime == "github-copilot" and hasattr(agent, "run"):
                 # Resolve model with priority:
-                #   1. copilot_chat_model (global setting)
-                #   2. .github/agents/<name>.agent.md model (authored choice)
-                #   3. Agent's model_tier from config.json
-                _model = (
+                #   1. parent run's resolved tier (model arg) — tier inheritance
+                #   2. copilot_chat_model (global setting)
+                #   3. .github/agents/<name>.agent.md model (authored choice)
+                #   4. Agent's model_tier from config.json
+                _model = (model or "").strip() or (
                     getattr(settings, "copilot_chat_model", "") or ""
                 ).strip() or (
                     (_agent_md_spec.model or "").strip()
@@ -1088,10 +1102,13 @@ async def _run_sub_agent_streaming(
                                 })
             else:
                 # MAF or unknown runtime: batch run, emit one result delta.
+                # Forward the parent's resolved tier so native MAF sub-agents
+                # inherit it (run_agent applies it via default_options["model"]).
                 result = await run_agent(
                     agent_name,
                     {"message": message_str, "mode": "sub_task"},
                     run_id=run_id,
+                    model=model,
                 )
                 text = result.get("result") or result.get("answer") or ""
                 if isinstance(text, dict):
@@ -1337,6 +1354,32 @@ def _apply_byok_provider_for_copilot_sdk(
         }
     if final:
         agent._default_options["model"] = final
+    return final
+
+
+def _apply_model_for_maf_agent(
+    agent: Any, requested_model: str, settings: Any,
+    *, agent_model_tier: str = "",
+) -> str:
+    """Pin the resolved LiteLLM tier on a NATIVE MAF agent's default_options.
+
+    Native MAF agents read their model from ``default_options["model"]`` (merged
+    over the build-time client model at run time). Without setting it the agent
+    SILENTLY IGNORES the requested/inherited tier and keeps the build-time
+    default (tier-balanced) — so the per-account model and the chat-app tier
+    picker have no effect. This is the MAF counterpart of
+    ``_apply_byok_provider_for_copilot_sdk``: a no-op for Copilot-SDK agents
+    (they own ``_default_options`` and are handled there). Returns the resolved
+    model (also used to seed the sub-agent model ContextVar).
+    """
+    final = (requested_model or "").strip() or (agent_model_tier or "").strip()
+    final, _ = _byok_default_model(final, settings)
+    # Skip Copilot-SDK agents — the BYOK provider helper owns those.
+    if hasattr(agent, "_default_options") and agent._default_options is not None:
+        return final
+    opts = getattr(agent, "default_options", None)
+    if final and isinstance(opts, dict):
+        opts["model"] = final
     return final
 
 
@@ -1867,15 +1910,26 @@ async def run_agent(
                     except Exception:  # noqa: BLE001
                         pass
 
-            # BYOK: route Copilot-SDK agents (incl. "maf"-registered ones like
-            # email-assistant) through the gateway /v1 with the chosen/resolved
-            # model, so agent.run() doesn't open a native Copilot session (402).
-            # No-op for genuine MAF agents. Honour an explicit request model first.
+            # Resolve + apply the run model to the agent (batch path).
+            #  - Copilot-SDK agents: pin to gateway /v1 (BYOK) + set model so
+            #    agent.run() routes through litellm (no native Copilot 402).
+            #  - Native MAF agents: _apply_byok_… is a no-op, so set
+            #    default_options["model"] here — the MAF client otherwise keeps
+            #    its build-time model and ignores the requested/inherited tier.
             if agents:
+                _agent0 = agents[0]
+                _cfg_tier = (loaded.config.get("model_tier") or "")
                 try:
+                    # Copilot-SDK agents: pin gateway /v1 (BYOK) + model.
                     _apply_byok_provider_for_copilot_sdk(
-                        agents[0], model or "", settings,
-                        agent_model_tier=(loaded.config.get("model_tier") or ""),
+                        _agent0, model or "", settings,
+                        agent_model_tier=_cfg_tier,
+                    )
+                    # Native MAF agents: set default_options["model"] so the
+                    # requested/inherited tier is honoured (no-op for Copilot SDK).
+                    _apply_model_for_maf_agent(
+                        _agent0, model or "", settings,
+                        agent_model_tier=_cfg_tier,
                     )
                 except Exception as _be:  # noqa: BLE001
                     _log.warning("executor.byok_apply_failed",
@@ -2093,6 +2147,9 @@ async def run_agent_stream(
 
     # ── Stream relay: tee all SSE events to Redis for reconnection support ─
     _relay_token = _stream_relay_thread_id.set(thread_id)
+    # Expose the run's model so sub-agents inherit the parent tier. Seed with the
+    # raw requested model now; refined to the fully-resolved tier once known.
+    _model_token = _active_run_model.set((model or "").strip() or None)
     _relay_mark_inactive = None  # type: ignore[assignment]
     try:
         from orchestrator.stream_relay import (  # noqa: PLC0415
@@ -2251,6 +2308,10 @@ async def run_agent_stream(
             _final_model_early, _is_byok_early = _byok_default_model(
                 _final_model_early, settings,
             )
+            # Refine the run's model ContextVar to the fully-resolved tier so
+            # sub-agents spawned during this run inherit it (call_agent etc.).
+            if _final_model_early:
+                _active_run_model.set(_final_model_early)
             _byok_provider_early: dict[str, Any] | None = None
             _byok_model_id_early = _final_model_early
             if _is_byok_early and _is_copilot_sdk:
@@ -2277,6 +2338,23 @@ async def run_agent_stream(
                 )
             elif _final_model_early and _is_copilot_sdk:
                 agent._default_options["model"] = _final_model_early
+            elif _final_model_early and not _is_copilot_sdk:
+                # Native MAF agent (e.g. email-assistant, orchestrator): make it
+                # honour the resolved tier via default_options["model"] — the
+                # Tier-1 stream_agent_response path otherwise keeps the build-time
+                # client model and silently ignores the requested tier.
+                try:
+                    _apply_model_for_maf_agent(
+                        agent, _final_model_early, settings,
+                    )
+                    _log.info(
+                        "executor.maf_model_override",
+                        agent=agent_name,
+                        runtime=_agent_runtime,
+                        model=_final_model_early,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
 
             # ── Set working directory for Copilot SDK agents ────────────
             # The Copilot SDK CLI defaults to the gateway CWD unless
@@ -3317,6 +3395,7 @@ async def run_agent_stream(
             except Exception:  # noqa: BLE001
                 pass
         _stream_relay_thread_id.reset(_relay_token)
+        _active_run_model.reset(_model_token)
         if _relay_mark_inactive is not None:
             try:
                 await _relay_mark_inactive(thread_id)

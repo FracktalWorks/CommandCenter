@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from apps.orchestrator.orchestrator.executor import (
     _apply_byok_provider_for_copilot_sdk,
+    _apply_model_for_maf_agent,
     _byok_default_model,
     _is_gateway_model,
 )
@@ -143,3 +144,51 @@ def test_apply_byok_noop_for_genuine_maf_agent() -> None:
         ag, "tier-balanced", _ProviderSettings())
     assert final == "tier-balanced"
     assert not hasattr(ag, "_default_options")  # untouched
+
+
+class _FakeMafAgentWithOpts:
+    """A native MAF agent: a public default_options dict, no _default_options."""
+
+    def __init__(self) -> None:
+        self.default_options: dict = {}
+
+
+def test_apply_model_for_maf_agent_sets_requested_tier() -> None:
+    # The core fix: a native MAF agent must honour the requested tier via
+    # default_options["model"] (the Tier-1 path otherwise ignores it).
+    ag = _FakeMafAgentWithOpts()
+    final = _apply_model_for_maf_agent(ag, "tier-fast", _ProviderSettings())
+    assert final == "tier-fast"
+    assert ag.default_options["model"] == "tier-fast"
+
+
+def test_apply_model_for_maf_agent_empty_falls_back_to_config_tier() -> None:
+    ag = _FakeMafAgentWithOpts()
+    final = _apply_model_for_maf_agent(
+        ag, "", _ProviderSettings(), agent_model_tier="tier-powerful")
+    assert final == "tier-powerful"
+    assert ag.default_options["model"] == "tier-powerful"
+
+
+def test_apply_model_for_maf_agent_empty_defaults_to_tier_balanced() -> None:
+    ag = _FakeMafAgentWithOpts()
+    final = _apply_model_for_maf_agent(ag, "", _ProviderSettings())
+    assert final == "tier-balanced"
+    assert ag.default_options["model"] == "tier-balanced"
+
+
+def test_apply_model_for_maf_agent_coerces_unknown_tier() -> None:
+    ag = _FakeMafAgentWithOpts()
+    final = _apply_model_for_maf_agent(
+        ag, "tier1-local-qwen3", _ProviderSettings())
+    assert final == "tier-balanced"
+    assert ag.default_options["model"] == "tier-balanced"
+
+
+def test_apply_model_for_maf_agent_noop_for_copilot_sdk() -> None:
+    # Copilot-SDK agents own _default_options and are handled by the BYOK
+    # provider helper — the MAF helper must not touch their model.
+    ag = _FakeCopilotAgent()
+    final = _apply_model_for_maf_agent(ag, "tier-fast", _ProviderSettings())
+    assert final == "tier-fast"
+    assert "model" not in ag._default_options  # untouched by the MAF helper

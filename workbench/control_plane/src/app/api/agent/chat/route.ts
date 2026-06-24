@@ -600,7 +600,13 @@ export async function POST(req: NextRequest): Promise<Response> {
         ...(messages ?? []).map((m) => ({ role: m.role, content: m.content })),
         { role: "user" as const, content: message },
       ];
-      gatewayRes = await fetch(`${GATEWAY_URL}/copilot/chat`, {
+      // The orchestrator is a native MAF agent; forward the selected LiteLLM
+      // tier as a query param so it (and any specialist it delegates to) runs on
+      // the chosen model instead of the build-time tier-balanced default.
+      const copilotUrl = model
+        ? `${GATEWAY_URL}/copilot/chat?model=${encodeURIComponent(model)}`
+        : `${GATEWAY_URL}/copilot/chat`;
+      gatewayRes = await fetch(copilotUrl, {
         method: "POST",
         headers: await buildGatewayHeaders(),
         body: JSON.stringify({

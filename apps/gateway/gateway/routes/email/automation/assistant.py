@@ -126,6 +126,8 @@ class AssistantSettingsModel(BaseModel):
     # fails to execute the rules, or isn't confident enough to draft a reply.
     # Defaults to the powerful tier.
     fallback_model: str = "tier-powerful"
+    # Model the interactive email chat panel uses. Empty = inherit agent_model.
+    chat_model: str = ""
     digest_frequency: str = "OFF"  # OFF | DAILY | WEEKLY
     personal_instructions: str | None = None
     writing_style: str | None = None
@@ -156,7 +158,7 @@ async def get_assistant_settings(
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         row = (await db.execute(text(
             """SELECT about, signature, auto_run, cold_email_blocker, agent_model,
-                      fallback_model,
+                      fallback_model, chat_model,
                       digest_frequency, personal_instructions, writing_style,
                       draft_replies, follow_up_days, draft_confidence,
                       follow_up_awaiting_days, follow_up_needs_reply_days,
@@ -180,6 +182,7 @@ async def get_assistant_settings(
             "fallback_model": (
                 getattr(row, "fallback_model", None) if row else "tier-powerful"
             ) or "tier-powerful",
+            "chat_model": (getattr(row, "chat_model", "") if row else "") or "",
             "digest_frequency": (row.digest_frequency if row else "OFF") or "OFF",
             "personal_instructions": (
                 getattr(row, "personal_instructions", None) if row else ""
@@ -248,7 +251,7 @@ async def put_assistant_settings(
         await db.execute(text(
             """INSERT INTO email_assistant_settings
                  (account_id, about, signature, auto_run, cold_email_blocker,
-                  agent_model, fallback_model, digest_frequency,
+                  agent_model, fallback_model, chat_model, digest_frequency,
                   personal_instructions,
                   writing_style, draft_replies, follow_up_days, draft_confidence,
                   follow_up_awaiting_days, follow_up_needs_reply_days,
@@ -256,6 +259,7 @@ async def put_assistant_settings(
                   digest_time_of_day, digest_send_to_email,
                   multi_rule_execution, sensitive_data_protection, updated_at)
                VALUES (:aid, :about, :sig, :auto, :cold, :model, :fbmodel,
+                       :chat_model,
                        :digest,
                        :pi, :ws, :dr, :fu, :dc, :fua, :funr, :fuad, :dcat,
                        :ddow, :dtod, :dste, :mre, :sdp, now())
@@ -266,6 +270,7 @@ async def put_assistant_settings(
                  cold_email_blocker = EXCLUDED.cold_email_blocker,
                  agent_model = EXCLUDED.agent_model,
                  fallback_model = EXCLUDED.fallback_model,
+                 chat_model = EXCLUDED.chat_model,
                  digest_frequency = EXCLUDED.digest_frequency,
                  personal_instructions = EXCLUDED.personal_instructions,
                  writing_style = EXCLUDED.writing_style,
@@ -286,6 +291,7 @@ async def put_assistant_settings(
             "auto": req.auto_run, "cold": req.cold_email_blocker or "OFF",
             "model": req.agent_model or "tier-balanced",
             "fbmodel": req.fallback_model or "tier-powerful",
+            "chat_model": req.chat_model or "",
             "digest": req.digest_frequency or "OFF",
             "pi": req.personal_instructions, "ws": req.writing_style,
             "dr": req.draft_replies, "fu": awaiting,
@@ -319,6 +325,7 @@ async def put_assistant_settings(
             "cold_email_blocker": req.cold_email_blocker or "OFF",
             "agent_model": req.agent_model or "tier-balanced",
             "fallback_model": req.fallback_model or "tier-powerful",
+            "chat_model": req.chat_model or "",
             "digest_frequency": req.digest_frequency or "OFF",
             "personal_instructions": req.personal_instructions or "",
             "writing_style": req.writing_style or "",

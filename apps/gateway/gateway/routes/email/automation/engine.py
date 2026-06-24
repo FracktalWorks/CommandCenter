@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 from fastapi import HTTPException
+from gateway.routes.email.automation.assistant import _account_models
 from gateway.routes.email.automation.rules import _load_rules
 from gateway.routes.email.core import _log, _safe_json
 from sqlalchemy import text
@@ -148,8 +149,14 @@ def _hint_block(hints: str) -> str:
 
 async def _llm_pick_rule(
     email: dict[str, str], rules: list[dict[str, Any]], hints: str = "",
+    *, model: str = "tier-balanced", fallback_model: str = "tier-powerful",
 ) -> dict[str, Any] | None:
     """Ask the LLM which instruction-based rule matches the email.
+
+    Runs on the account's ``model`` (cheap tier) with the prompt fitted to its
+    context window; on overflow or failure it escalates once to
+    ``fallback_model`` (the more-powerful tier) with the prompt re-fit — so a
+    long thread + many rules can't silently break classification.
 
     Returns {"index": int, "reason": str} (index into `rules`) or None.
     Fails closed (returns None) when the LLM is unavailable.
@@ -157,13 +164,7 @@ async def _llm_pick_rule(
     if not rules:
         return None
     try:
-        import litellm as _litellm  # noqa: PLC0415
-        from acb_llm.client import _TIER_MODEL, ensure_model_registered  # noqa: PLC0415
-        from litellm import acompletion  # noqa: PLC0415
-        _litellm.drop_params = True
-        _litellm.suppress_debug_info = True
-        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
-        ensure_model_registered(model)
+        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
 
         rule_lines = "\n".join(
             f"{i}. {r['name']}: {r.get('instructions') or '(no description)'}"
@@ -179,8 +180,8 @@ async def _llm_pick_rule(
         user_prompt = (
             f"{_email_block(email)}\n\nRULES\n{rule_lines}{_hint_block(hints)}"
         )
-        resp = await acompletion(
-            model=model,
+        resp, _used = await acompletion_with_fallback(
+            model=model, fallback_model=fallback_model,
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": user_prompt}],
             temperature=0, max_tokens=300,
@@ -199,9 +200,14 @@ async def _llm_pick_rule(
 
 async def _llm_pick_rules(
     email: dict[str, str], rules: list[dict[str, Any]], hints: str = "",
+    *, model: str = "tier-balanced", fallback_model: str = "tier-powerful",
 ) -> list[dict[str, Any]]:
     """Multi-rule selection (inbox-zero parity): ask the LLM for ALL instruction
     rules that apply to the email, not just the single best.
+
+    Like :func:`_llm_pick_rule`, runs on the account's ``model`` with the prompt
+    fitted to its context window and escalates once to ``fallback_model`` on
+    overflow or failure.
 
     Returns a list of {"index": int, "reason": str} (indexes into `rules`).
     Fails closed (returns []) when the LLM is unavailable.
@@ -209,13 +215,7 @@ async def _llm_pick_rules(
     if not rules:
         return []
     try:
-        import litellm as _litellm  # noqa: PLC0415
-        from acb_llm.client import _TIER_MODEL, ensure_model_registered  # noqa: PLC0415
-        from litellm import acompletion  # noqa: PLC0415
-        _litellm.drop_params = True
-        _litellm.suppress_debug_info = True
-        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
-        ensure_model_registered(model)
+        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
 
         rule_lines = "\n".join(
             f"{i}. {r['name']}: {r.get('instructions') or '(no description)'}"
@@ -235,8 +235,8 @@ async def _llm_pick_rules(
         user_prompt = (
             f"{_email_block(email)}\n\nRULES\n{rule_lines}{_hint_block(hints)}"
         )
-        resp = await acompletion(
-            model=model,
+        resp, _used = await acompletion_with_fallback(
+            model=model, fallback_model=fallback_model,
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": user_prompt}],
             temperature=0, max_tokens=500,
@@ -389,7 +389,10 @@ async def _match_email_to_rule(
 
     if instruction_rules:
         hints = await _fetch_classification_hints(db, account_id, email.get("from", ""))
-        pick = await _llm_pick_rule(email, instruction_rules, hints=hints)
+        model, fallback_model = await _account_models(db, account_id)
+        pick = await _llm_pick_rule(
+            email, instruction_rules, hints=hints,
+            model=model, fallback_model=fallback_model)
         if pick:
             return {"rule": instruction_rules[pick["index"]],
                     "reason": pick["reason"] or "Matched by AI.", "source": "ai"}
@@ -447,7 +450,11 @@ async def _match_email_to_rules_multi(
 
     if instruction_rules:
         hints = await _fetch_classification_hints(db, account_id, email.get("from", ""))
-        for pick in await _llm_pick_rules(email, instruction_rules, hints=hints):
+        model, fallback_model = await _account_models(db, account_id)
+        for pick in await _llm_pick_rules(
+            email, instruction_rules, hints=hints,
+            model=model, fallback_model=fallback_model,
+        ):
             _add(instruction_rules[pick["index"]],
                  pick["reason"] or "Matched by AI.", "ai",
                  is_primary=bool(pick.get("primary")))

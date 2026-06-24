@@ -3607,6 +3607,55 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
               </select>
             }
           />
+          <SettingCard
+            title="Fallback model"
+            description="Set this to a model MORE powerful than the assistant model. The assistant escalates to it when the assistant model overflows its context window, can't execute the rules, or isn't confident enough to draft a reply."
+            right={
+              <select
+                value={s.fallback_model || "tier-powerful"}
+                onChange={(e) =>
+                  persistPatch({ fallback_model: e.target.value })
+                }
+                className={`${INPUT_CLS} w-56 py-1`}
+              >
+                {llm || enabledModels.length > 0 ? (
+                  <>
+                    {llm && (
+                      <optgroup label="Tiers (auto-routing)">
+                        {llm.tiers.map((t) => (
+                          <option key={t.tier_name} value={t.tier_name}>
+                            {t.tier_name}
+                            {t.tier_name === "tier-powerful" ? " (default)" : ""}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {enabledModels.length > 0 && (
+                      <optgroup label="Your enabled models">
+                        {enabledModels.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.label || m.id}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {/* Keep a previously-saved value selectable even if it's no
+                        longer a tier or an enabled model. */}
+                    {!llm?.tiers.some((t) => t.tier_name === s.fallback_model) &&
+                      !enabledModels.some((m) => m.id === s.fallback_model) && (
+                        <option value={s.fallback_model}>
+                          {s.fallback_model}
+                        </option>
+                      )}
+                  </>
+                ) : (
+                  <option value={s.fallback_model || "tier-powerful"}>
+                    {s.fallback_model || "tier-powerful"} (default)
+                  </option>
+                )}
+              </select>
+            }
+          />
         </div>
 
         {/* ── Danger zone ── */}

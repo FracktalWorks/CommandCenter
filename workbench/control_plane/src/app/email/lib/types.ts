@@ -317,6 +317,11 @@ export interface AssistantSettings {
   /** Which LiteLLM tier or model id the assistant agent/chat uses
    *  (e.g. "tier-balanced" or "deepseek/deepseek-chat"). */
   agent_model: string;
+  /** A model MORE powerful than `agent_model` that the assistant escalates to
+   *  when the primary overflows its context window (even after compression),
+   *  fails to execute the rules, or isn't confident enough to draft a reply
+   *  (e.g. "tier-powerful"). */
+  fallback_model: string;
   /** Scheduled inbox-digest cadence. */
   digest_frequency: DigestFrequency;
   /** Global "always do this" guidance for the assistant. */

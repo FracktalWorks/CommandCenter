@@ -125,6 +125,9 @@ async def ai_chat(
             pass
 
     # ── Resolve which LiteLLM tier the agent should use (per-account) ──
+    # The interactive chat runs on the configured assistant model only — no
+    # automatic fallback escalation (that's reserved for the unattended
+    # automation paths: rule classification + draft generation).
     agent_model = "tier-balanced"
     if req.account_id:
         try:
@@ -922,6 +925,10 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bo
         if not await provider.authenticate():
             return result
         about, signature = await _load_assistant_about(db, account_id)
+        from gateway.routes.email.automation.assistant import (  # noqa: PLC0415
+            _account_models,
+        )
+        fu_model, fu_fallback = await _account_models(db, account_id)
 
         for r in rows:
             mark = lambda: db.execute(text(  # noqa: E731
@@ -951,6 +958,7 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bo
                         }
                         body = await _agent_draft_reply(
                             email, about, signature, acc.user_id, use_agent=True,
+                            model=fu_model, fallback_model=fu_fallback,
                         )
                         await provider.create_draft(
                             to=[to],

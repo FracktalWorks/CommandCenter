@@ -86,6 +86,31 @@ async def _load_assistant_about(db: Any, account_id: str) -> tuple[str, str]:
     return "\n\n".join(parts), signature
 
 
+async def _account_models(db: Any, account_id: str) -> tuple[str, str]:
+    """The ``(assistant_model, fallback_model)`` an account's automation should
+    use: the primary (cheap) tier/model that handles most mail, and the
+    more-powerful model the assistant escalates to when the primary overflows
+    its context window, errors out, or isn't confident enough to draft.
+
+    Defaults to ``tier-balanced`` / ``tier-powerful`` — the same defaults the
+    settings row carries — so automation still works before the user has saved
+    any preference (or if the lookup fails)."""
+    model, fallback = "tier-balanced", "tier-powerful"
+    if not account_id:
+        return model, fallback
+    try:
+        row = (await db.execute(text(
+            "SELECT agent_model, fallback_model FROM email_assistant_settings "
+            "WHERE account_id = :aid"
+        ), {"aid": account_id})).fetchone()
+        if row:
+            model = (getattr(row, "agent_model", None) or model)
+            fallback = (getattr(row, "fallback_model", None) or fallback)
+    except Exception as exc:  # noqa: BLE001 — fall back to the tier defaults
+        _log.warning("email.account_models_failed", error=str(exc)[:160])
+    return model, fallback
+
+
 class AssistantSettingsModel(BaseModel):
     account_id: str
     about: str | None = None
@@ -96,6 +121,11 @@ class AssistantSettingsModel(BaseModel):
     auto_run: bool = True
     cold_email_blocker: str = "OFF"  # OFF | LABEL | ARCHIVE
     agent_model: str = "tier-balanced"  # tier-fast | tier-balanced | tier-powerful
+    # A model MORE powerful than `agent_model` that the assistant escalates to
+    # when the primary overflows its context window (even after compression),
+    # fails to execute the rules, or isn't confident enough to draft a reply.
+    # Defaults to the powerful tier.
+    fallback_model: str = "tier-powerful"
     digest_frequency: str = "OFF"  # OFF | DAILY | WEEKLY
     personal_instructions: str | None = None
     writing_style: str | None = None
@@ -126,6 +156,7 @@ async def get_assistant_settings(
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         row = (await db.execute(text(
             """SELECT about, signature, auto_run, cold_email_blocker, agent_model,
+                      fallback_model,
                       digest_frequency, personal_instructions, writing_style,
                       draft_replies, follow_up_days, draft_confidence,
                       follow_up_awaiting_days, follow_up_needs_reply_days,
@@ -146,6 +177,9 @@ async def get_assistant_settings(
             "cold_email_blocker": (row.cold_email_blocker if row else "OFF") or "OFF",
             "agent_model": (row.agent_model if row else "tier-balanced")
             or "tier-balanced",
+            "fallback_model": (
+                getattr(row, "fallback_model", None) if row else "tier-powerful"
+            ) or "tier-powerful",
             "digest_frequency": (row.digest_frequency if row else "OFF") or "OFF",
             "personal_instructions": (
                 getattr(row, "personal_instructions", None) if row else ""
@@ -214,13 +248,15 @@ async def put_assistant_settings(
         await db.execute(text(
             """INSERT INTO email_assistant_settings
                  (account_id, about, signature, auto_run, cold_email_blocker,
-                  agent_model, digest_frequency, personal_instructions,
+                  agent_model, fallback_model, digest_frequency,
+                  personal_instructions,
                   writing_style, draft_replies, follow_up_days, draft_confidence,
                   follow_up_awaiting_days, follow_up_needs_reply_days,
                   follow_up_auto_draft, digest_categories, digest_day_of_week,
                   digest_time_of_day, digest_send_to_email,
                   multi_rule_execution, sensitive_data_protection, updated_at)
-               VALUES (:aid, :about, :sig, :auto, :cold, :model, :digest,
+               VALUES (:aid, :about, :sig, :auto, :cold, :model, :fbmodel,
+                       :digest,
                        :pi, :ws, :dr, :fu, :dc, :fua, :funr, :fuad, :dcat,
                        :ddow, :dtod, :dste, :mre, :sdp, now())
                ON CONFLICT (account_id) DO UPDATE SET
@@ -229,6 +265,7 @@ async def put_assistant_settings(
                  auto_run = EXCLUDED.auto_run,
                  cold_email_blocker = EXCLUDED.cold_email_blocker,
                  agent_model = EXCLUDED.agent_model,
+                 fallback_model = EXCLUDED.fallback_model,
                  digest_frequency = EXCLUDED.digest_frequency,
                  personal_instructions = EXCLUDED.personal_instructions,
                  writing_style = EXCLUDED.writing_style,
@@ -248,6 +285,7 @@ async def put_assistant_settings(
         ), {"aid": req.account_id, "about": req.about, "sig": req.signature,
             "auto": req.auto_run, "cold": req.cold_email_blocker or "OFF",
             "model": req.agent_model or "tier-balanced",
+            "fbmodel": req.fallback_model or "tier-powerful",
             "digest": req.digest_frequency or "OFF",
             "pi": req.personal_instructions, "ws": req.writing_style,
             "dr": req.draft_replies, "fu": awaiting,
@@ -280,6 +318,7 @@ async def put_assistant_settings(
             "auto_run": req.auto_run,
             "cold_email_blocker": req.cold_email_blocker or "OFF",
             "agent_model": req.agent_model or "tier-balanced",
+            "fallback_model": req.fallback_model or "tier-powerful",
             "digest_frequency": req.digest_frequency or "OFF",
             "personal_instructions": req.personal_instructions or "",
             "writing_style": req.writing_style or "",

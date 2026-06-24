@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from acb_auth import UserContext, get_current_user
@@ -836,6 +836,23 @@ async def scan_follow_ups(
     return await _maybe_send_follow_up_reminders(req.account_id)
 
 
+def _business_days_cutoff(days: float) -> datetime:
+    """UTC timestamp ``days`` business days before now (weekends skipped) — the
+    follow-up window inbox-zero uses so a Friday email isn't chased on Sunday.
+    The whole-day part steps over Mon–Fri; any fraction is applied as hours."""
+    d = datetime.now(timezone.utc)
+    whole = int(days)
+    stepped = 0
+    while stepped < whole:
+        d -= timedelta(days=1)
+        if d.weekday() < 5:  # Mon–Fri
+            stepped += 1
+    frac = days - whole
+    if frac > 0:
+        d -= timedelta(hours=frac * 24)
+    return d
+
+
 async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bool]:
     """Label (and optionally draft a nudge for) threads waiting too long for a
     reply. Runs both on the sync loop (background) and on demand via the
@@ -862,12 +879,16 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bo
         ), {"aid": account_id})).fetchone()
         if not srow:
             return result
-        awaiting_days = int(getattr(srow, "follow_up_awaiting_days", 0) or 0)
-        needs_days = int(getattr(srow, "follow_up_needs_reply_days", 0) or 0)
+        awaiting_days = float(getattr(srow, "follow_up_awaiting_days", 0) or 0)
+        needs_days = float(getattr(srow, "follow_up_needs_reply_days", 0) or 0)
         auto_draft = bool(getattr(srow, "follow_up_auto_draft", False))
         if awaiting_days <= 0 and needs_days <= 0:
             return result
         result["configured"] = True
+
+        # Business-day windows (inbox-zero parity) — don't chase over the weekend.
+        cutoff_aw = _business_days_cutoff(awaiting_days) if awaiting_days > 0 else None
+        cutoff_nd = _business_days_cutoff(needs_days) if needs_days > 0 else None
 
         rows = (await db.execute(text(
             """SELECT ts.thread_id, ts.status, ts.last_message_id,
@@ -878,13 +899,13 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bo
                WHERE ts.account_id = :aid
                  AND ts.follow_up_reminded_at IS NULL
                  AND (
-                   (ts.status = 'AWAITING' AND :ad > 0
-                    AND ts.last_message_at < now() - make_interval(days => :ad))
-                   OR (ts.status = 'NEEDS_REPLY' AND :nd > 0
-                    AND ts.last_message_at < now() - make_interval(days => :nd))
+                   (ts.status = 'AWAITING' AND :caw IS NOT NULL
+                    AND ts.last_message_at < :caw)
+                   OR (ts.status = 'NEEDS_REPLY' AND :cnd IS NOT NULL
+                    AND ts.last_message_at < :cnd)
                  )
-               LIMIT 25"""
-        ), {"aid": account_id, "ad": awaiting_days, "nd": needs_days})).fetchall()
+               LIMIT 50"""
+        ), {"aid": account_id, "caw": cutoff_aw, "cnd": cutoff_nd})).fetchall()
         if not rows:
             return result
 

@@ -152,7 +152,7 @@ async def rules_history(
             f"""SELECT er.id, er.rule_id, er.rule_name, er.subject, er.from_address,
                        er.status, er.automated, er.actions_taken, er.reason,
                        er.created_at, er.match_source, er.action_errors,
-                       em.snippet, em.received_at, em.categories,
+                       er.message_id, em.snippet, em.received_at, em.categories,
                        r.instructions, r.from_pattern, r.to_pattern,
                        r.subject_pattern, r.body_pattern, r.conditional_operator
                 FROM email_executed_rules er
@@ -192,6 +192,8 @@ async def rules_history(
                  "actions": r.actions_taken if isinstance(r.actions_taken, list)
                  else json.loads(r.actions_taken or "[]"),
                  "reason": r.reason, "snippet": r.snippet or "",
+                 "message_id": str(r.message_id)
+                 if getattr(r, "message_id", None) else None,
                  "match_source": getattr(r, "match_source", None),
                  "action_errors": (
                      r.action_errors if isinstance(r.action_errors, list)

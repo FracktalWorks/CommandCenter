@@ -283,6 +283,8 @@ export interface ExecutedRule {
   created_at: string | null;
   /** The email's received date — History is ordered/grouped by this (mail date). */
   received_at?: string | null;
+  /** The underlying email's id — for opening a preview / re-running rules on it. */
+  message_id?: string | null;
   /** Labels/categories currently on the email (inbox-zero shows these per row). */
   labels?: string[] | null;
   /** Which condition type fired: "pattern" | "static" | "ai" (matched via …). */

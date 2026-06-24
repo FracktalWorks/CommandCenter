@@ -34,9 +34,14 @@ export function ConversationView({
   messages: Email[];
   openedId: string;
 }) {
+  // Locally-discarded drafts hide instantly (the provider delete is async).
+  const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
   // Hide messages deleted upstream (trash) so the conversation reflects the
-  // live mailbox — except the one the user explicitly opened.
-  const visible = messages.filter((m) => !isTrashed(m) || m.id === openedId);
+  // live mailbox — except the one the user explicitly opened — and any draft the
+  // user just discarded.
+  const visible = messages.filter(
+    (m) => (!isTrashed(m) || m.id === openedId) && !dismissed.has(m.id)
+  );
   const lastId = visible[visible.length - 1]?.id;
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set([openedId, lastId].filter(Boolean) as string[])
@@ -79,7 +84,16 @@ export function ConversationView({
     <div className="flex flex-col gap-2">
       {visible.map((m) => {
         if (isDraft(m)) {
-          return <DraftCard key={m.id} draft={m} replyTo={replyTarget} />;
+          return (
+            <DraftCard
+              key={m.id}
+              draft={m}
+              replyTo={replyTarget}
+              onDismiss={() =>
+                setDismissed((s) => new Set(s).add(m.id))
+              }
+            />
+          );
         }
         const isOpen = expanded.has(m.id);
         const view = hydrated[m.id] ?? m;
@@ -147,14 +161,50 @@ export function ConversationView({
 export const isDraftEmail = isDraft;
 
 /** Inline editable draft: edit the body/recipients and send it into the thread. */
-export function DraftCard({ draft, replyTo }: { draft: Email; replyTo?: Email }) {
-  const { deleteEmail, selectedAccountId, saveDraft, sendDraft } = useEmailStore();
+export function DraftCard({
+  draft,
+  replyTo,
+  onDismiss,
+}: {
+  draft: Email;
+  replyTo?: Email;
+  onDismiss?: () => void;
+}) {
+  const {
+    deleteEmail, selectedAccountId, saveDraft, sendDraft, sendEmail, accounts,
+  } = useEmailStore();
+  const ownEmail = accounts
+    .find((a) => a.id === (draft.accountId || selectedAccountId))
+    ?.emailAddress?.toLowerCase();
+  // Default to REPLY-ALL: the original sender + everyone on To, minus yourself;
+  // original Cc carried over. Falls back to whatever the draft already has.
+  const replyAllTo = (() => {
+    if (!replyTo) return draft.to.map((t) => t.email).filter(Boolean);
+    const all = [
+      replyTo.from?.email,
+      ...(replyTo.to || []).map((t) => t.email),
+    ];
+    const deduped = all.filter(
+      (e, i) => e && all.indexOf(e) === i && e.toLowerCase() !== ownEmail
+    );
+    return deduped.length ? deduped : draft.to.map((t) => t.email).filter(Boolean);
+  })();
+  const replyAllCc = (replyTo?.cc || [])
+    .map((c) => c.email)
+    .filter((e) => e && e.toLowerCase() !== ownEmail);
+
   const [hydratedBody, setHydratedBody] = useState<string | null>(null);
   const [body, setBody] = useState(draft.bodyText || "");
-  const [to, setTo] = useState(draft.to.map((t) => t.email).filter(Boolean).join(", "));
+  const [to, setTo] = useState(replyAllTo.join(", "));
+  const [cc, setCc] = useState(replyAllCc.join(", "));
+  const [bcc, setBcc] = useState("");
+  const [showCc, setShowCc] = useState(replyAllCc.length > 0);
   const [sending, setSending] = useState(false);
   const dirty = useRef(false);
   const [draftStatus, setDraftStatus] = useState<"idle" | "saving" | "saved">("idle");
+
+  const ccList = () => cc.split(",").map((s) => s.trim()).filter(Boolean);
+  const bccList = () => bcc.split(",").map((s) => s.trim()).filter(Boolean);
 
   // The draft almost always arrives body-less: provider drafts (incl. the ones
   // the AI agent creates) sync header-only, so the DB copy has no body. Pull the
@@ -221,16 +271,36 @@ export function DraftCard({ draft, replyTo }: { draft: Email; replyTo?: Email })
     if (!accountId || recipients().length === 0) return;
     setSending(true);
     try {
-      // Persist the latest edits, then send THIS draft natively (Drafts → Sent,
-      // no duplicate). sendDraft removes it from the list.
-      await saveDraft({
-        accountId,
-        draftId: draft.id,
-        to: recipients(),
-        subject: draft.subject || "",
-        body,
-      });
-      await sendDraft(accountId, draft.id);
+      if (ccList().length || bccList().length) {
+        // Cc/Bcc aren't carried by the draft write-path, so send via the full
+        // path (threaded) and remove the saved draft so it doesn't linger.
+        await sendEmail({
+          accountId,
+          to: recipients(),
+          cc: ccList(),
+          bcc: bccList(),
+          subject: draft.subject || "",
+          bodyText: body,
+          replyToMessageId: replyTo?.providerMessageId,
+        });
+        onDismiss?.();
+        try {
+          await deleteEmail(draft.id);
+        } catch {
+          /* the message was sent; the leftover draft cleanup is best-effort */
+        }
+      } else {
+        // Persist the latest edits, then send THIS draft natively (Drafts →
+        // Sent, no duplicate). sendDraft removes it from the list.
+        await saveDraft({
+          accountId,
+          draftId: draft.id,
+          to: recipients(),
+          subject: draft.subject || "",
+          body,
+        });
+        await sendDraft(accountId, draft.id);
+      }
     } catch {
       /* send failure — the draft stays in Drafts so the user can retry */
     } finally {
@@ -239,7 +309,13 @@ export function DraftCard({ draft, replyTo }: { draft: Email; replyTo?: Email })
   };
 
   const discard = async () => {
-    if (confirm("Discard this draft?")) await deleteEmail(draft.id);
+    if (!confirm("Discard this draft?")) return;
+    onDismiss?.(); // hide instantly; the provider delete is async
+    try {
+      await deleteEmail(draft.id);
+    } catch {
+      /* already hidden locally; the sweep will reconcile */
+    }
   };
 
   return (
@@ -252,12 +328,39 @@ export function DraftCard({ draft, replyTo }: { draft: Email; replyTo?: Email })
         </span>
       </div>
       <div className="space-y-2">
-        <input
-          value={to}
-          onChange={(e) => { dirty.current = true; setTo(e.target.value); }}
-          placeholder="To (comma-separated)"
-          className={INPUT}
-        />
+        <div className="flex items-center gap-2">
+          <input
+            value={to}
+            onChange={(e) => { dirty.current = true; setTo(e.target.value); }}
+            placeholder="To (comma-separated)"
+            className={`${INPUT} flex-1`}
+          />
+          {!showCc && (
+            <button
+              type="button"
+              onClick={() => setShowCc(true)}
+              className="text-[10px] text-muted-foreground hover:text-foreground whitespace-nowrap px-1"
+            >
+              Cc/Bcc
+            </button>
+          )}
+        </div>
+        {showCc && (
+          <>
+            <input
+              value={cc}
+              onChange={(e) => setCc(e.target.value)}
+              placeholder="Cc (comma-separated)"
+              className={INPUT}
+            />
+            <input
+              value={bcc}
+              onChange={(e) => setBcc(e.target.value)}
+              placeholder="Bcc (comma-separated)"
+              className={INPUT}
+            />
+          </>
+        )}
         <textarea
           value={body}
           onChange={(e) => { dirty.current = true; setBody(e.target.value); }}

@@ -41,6 +41,13 @@ _OUTLOOK_SYSTEM_FOLDER_NAMES = frozenset({
     "scheduled", "snoozed",
 })
 
+# Diagnostic folders Outlook desktop clients auto-create to log synchronization
+# problems (the "Sync Issues" tree). They aren't real mailboxes — hide them and
+# their whole subtree from the folder list so they don't clutter the sidebar.
+_OUTLOOK_HIDDEN_FOLDER_NAMES = frozenset({
+    "sync issues", "conflicts", "local failures", "server failures",
+})
+
 
 def _classify_folder_type(folder: dict[str, Any]) -> str:
     """Return 'system' or 'user' for a Graph mailFolder.
@@ -209,6 +216,11 @@ class OutlookProvider(BaseEmailProvider):
                 resp.raise_for_status()
 
         async def _descend(raw: dict[str, Any]) -> list[EmailFolder]:
+            # Skip the Outlook "Sync Issues" diagnostic tree entirely (the folder
+            # and its Conflicts / Local Failures / Server Failures children).
+            if (raw.get("displayName") or "").strip().lower() in \
+                    _OUTLOOK_HIDDEN_FOLDER_NAMES:
+                return []
             out = [self._folder_from_graph(raw)]
             if raw.get("childFolderCount"):
                 try:

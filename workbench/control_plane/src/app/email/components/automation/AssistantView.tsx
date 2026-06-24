@@ -19,7 +19,7 @@ import {
   listLearnedPatterns, deleteLearnedPattern,
   submitRuleFeedback, listRulePatterns, deleteRulePattern,
   generateRules, uploadEmailArtifacts, listEmailArtifacts,
-  createEmailFolder, getProcessPastStatus, scanFollowUps,
+  createEmailFolder, getProcessPastStatus, scanFollowUps, runRuleOnMessage,
 } from "../../lib/api";
 import type { EmailArtifact, ProcessPastStatus } from "../../lib/api";
 import {
@@ -28,8 +28,10 @@ import {
   ColdSender, LLMConfigResponse, KnowledgeEntry, LearnedPattern,
   LearnedRulePattern,
   RuleConditions, DraftConfidence, DRAFT_CONFIDENCE_OPTIONS, WEEKDAYS,
+  RunMessageResult,
 } from "../../lib/types";
 import { useEmailStore } from "../../lib/emailStore";
+import { EmailPreviewModal } from "../EmailPreviewModal";
 import {
   Modal, Toggle, LabeledToggle, HoverPopover, SettingCard, SectionHeader,
 } from "./ui";
@@ -390,12 +392,12 @@ export function AssistantView({ accountId }: AssistantViewProps) {
     setHistoryRuleFilter(ruleName);
     setTab("history");
   };
-  // "View rule" from a History popover jumps to the Rules tab and opens that
-  // rule's editor (inbox-zero's "View matching rule").
+  // "View matching rule" from a History popover opens that rule's editor as a
+  // modal OVER the current tab (RuleEditor is itself a Modal) — the user stays
+  // on the History tab (inbox-zero's "View matching rule").
   const [openRuleId, setOpenRuleId] = useState<string | null>(null);
   const viewRule = (ruleId: string) => {
     setOpenRuleId(ruleId);
-    setTab("rules");
   };
 
   // Live progress of the "Process past emails" background job, surfaced as a
@@ -454,8 +456,6 @@ export function AssistantView({ accountId }: AssistantViewProps) {
               accountId={accountId}
               onSeeHistory={seeHistory}
               onPastJobStarted={pingPastJob}
-              openRuleId={openRuleId}
-              onRuleOpened={() => setOpenRuleId(null)}
             />
           )}
           {tab === "test" && <TestTab accountId={accountId} />}
@@ -470,8 +470,66 @@ export function AssistantView({ accountId }: AssistantViewProps) {
           {tab === "settings" && <SettingsTab accountId={accountId} />}
         </div>
       </div>
+      {/* "View matching rule" opens the rule's editor as a modal over any tab. */}
+      {openRuleId && accountId && (
+        <RuleEditorModalLoader
+          accountId={accountId}
+          ruleId={openRuleId}
+          onClose={() => setOpenRuleId(null)}
+        />
+      )}
     </div>
   );
+}
+
+/** Loads a rule by id and shows its editor (a Modal) — used by History's
+ *  "View matching rule" so the editor opens over the current tab. */
+function RuleEditorModalLoader({
+  accountId,
+  ruleId,
+  onClose,
+}: {
+  accountId: string;
+  ruleId: string;
+  onClose: () => void;
+}) {
+  const [rule, setRule] = useState<AutomationRule | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    listRules(accountId)
+      .then((rs) => {
+        if (!cancelled) {
+          const found = rs.find((r) => r.id === ruleId) ?? null;
+          setRule(found);
+          if (!found) setErr("That rule no longer exists.");
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setErr((e as Error).message || "Couldn't load the rule.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId, ruleId]);
+
+  const save = async (r: AutomationRule) => {
+    try {
+      if (r.id) await updateRule(r.id, r);
+    } finally {
+      onClose();
+    }
+  };
+
+  if (err) {
+    return (
+      <Modal title="Rule" onClose={onClose}>
+        <div className="text-xs text-destructive">{err}</div>
+      </Modal>
+    );
+  }
+  if (!rule) return null; // brief load; the editor Modal appears once resolved
+  return <RuleEditor rule={rule} onSave={save} onCancel={onClose} />;
 }
 
 // ── Rules tab ───────────────────────────────────────────────────────────────
@@ -2438,11 +2496,15 @@ function FixDialog({
   accountId,
   email,
   current,
+  messageId,
+  onReran,
   onClose,
 }: {
   accountId: string;
   email: { subject: string; from: string };
   current: { matched: boolean; ruleName: string | null; ruleId?: string | null };
+  messageId?: string | null;
+  onReran?: () => void;
   onClose: () => void;
 }) {
   const [rules, setRules] = useState<AutomationRule[]>([]);
@@ -2499,19 +2561,42 @@ function FixDialog({
         explanation,
         subjectKeyword: subjectVal || undefined,
       });
+      // Re-run the rules on THIS email now that the correction is learned, so the
+      // reclassification takes effect immediately (apply the new label/action).
+      let reran: RunMessageResult | null = null;
+      if (messageId) {
+        try {
+          reran = await runRuleOnMessage({
+            accountId,
+            messageId,
+            isTest: false,
+          });
+        } catch {
+          /* the learning is saved; a re-run failure shouldn't block the fix */
+        }
+      }
       const target = [
         senderVal && `from ${senderVal}`,
         subjectVal && `about "${subjectVal}"`,
       ]
         .filter(Boolean)
         .join(" / ");
+      const rerunNote = !reran
+        ? ""
+        : reran.applied && reran.rule
+          ? ` Re-ran on this email → applied "${reran.rule.name}".`
+          : reran.matched
+            ? " Re-ran on this email."
+            : " Re-ran on this email → no rule matched now.";
       setDone(
-        expected === "none"
+        (expected === "none"
           ? `Got it — emails ${target} won't match ${
               current.ruleName || "that rule"
             } anymore.`
-          : `Learned — emails ${target} will now match "${expected.name}".`,
+          : `Learned — emails ${target} will now match "${expected.name}".`) +
+          rerunNote,
       );
+      onReran?.();
     } catch (e) {
       setError((e as Error).message || "Couldn't save the correction.");
     } finally {
@@ -2704,10 +2789,14 @@ function FixButton({
   accountId,
   email,
   current,
+  messageId,
+  onReran,
 }: {
   accountId: string;
   email: { subject: string; from: string };
   current: { matched: boolean; ruleName: string | null; ruleId?: string | null };
+  messageId?: string | null;
+  onReran?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -2724,6 +2813,8 @@ function FixButton({
           accountId={accountId}
           email={email}
           current={current}
+          messageId={messageId}
+          onReran={onReran}
           onClose={() => setOpen(false)}
         />
       )}
@@ -2745,6 +2836,7 @@ function TestTab({ accountId }: { accountId: string | null }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [preview, setPreview] = useState<Email | null>(null);
 
   // Bulk Test/Run sweep state lives in the email store so it keeps running even
   // if the user navigates away from the Assistant (TestTab unmounts).
@@ -2891,7 +2983,12 @@ function TestTab({ accountId }: { accountId: string | null }) {
                   isRunning ? "animate-pulse" : ""
                 }`}
               >
-                <div className="flex-1 min-w-0">
+                <button
+                  type="button"
+                  onClick={() => setPreview(e)}
+                  title="Preview email"
+                  className="flex-1 min-w-0 text-left cursor-pointer hover:opacity-80 transition-opacity"
+                >
                   <div className="text-xs text-foreground truncate">
                     {e.subject || "(no subject)"}
                   </div>
@@ -2903,7 +3000,7 @@ function TestTab({ accountId }: { accountId: string | null }) {
                       {e.snippet}
                     </div>
                   )}
-                </div>
+                </button>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
                   {res ? (
                     <>
@@ -2967,6 +3064,13 @@ function TestTab({ accountId }: { accountId: string | null }) {
           </button>
         )}
       </div>
+      {preview && (
+        <EmailPreviewModal
+          messageId={preview.id}
+          seed={preview}
+          onClose={() => setPreview(null)}
+        />
+      )}
     </div>
   );
 }
@@ -2988,6 +3092,7 @@ function HistoryTab({
   const [loading, setLoading] = useState(true);
   // "all" | "skipped" (No match) | a rule name.
   const [ruleFilter, setRuleFilter] = useState(initialRuleFilter);
+  const [previewId, setPreviewId] = useState<string | null>(null);
 
   // `silent` re-loads (the live poll) keep the list mounted instead of flashing
   // the spinner, so rows appear to stream in as the job applies them.
@@ -3084,12 +3189,20 @@ function HistoryTab({
                     h={h}
                     accountId={accountId}
                     onViewRule={onViewRule}
+                    onPreview={(id) => setPreviewId(id)}
+                    onReran={() => load(true)}
                   />
                 ))}
               </div>
             </div>
           ))}
         </div>
+      )}
+      {previewId && (
+        <EmailPreviewModal
+          messageId={previewId}
+          onClose={() => setPreviewId(null)}
+        />
       )}
     </div>
   );
@@ -3133,15 +3246,32 @@ function HistoryRow({
   h,
   accountId,
   onViewRule,
+  onPreview,
+  onReran,
 }: {
   h: ExecutedRule;
   accountId: string | null;
   onViewRule?: (ruleId: string) => void;
+  onPreview?: (messageId: string) => void;
+  onReran?: () => void;
 }) {
   const matched = h.status !== "SKIPPED";
+  // Show ALL actions the rule applied (label, move to folder, draft, …), not
+  // just the label — prefer the matched rule's specs (with args), fall back to
+  // the action types actually taken.
+  const actionChips: RuleAction[] =
+    (h.rule_actions && h.rule_actions.length > 0
+      ? h.rule_actions
+      : (h.actions || []).map((t) => ({ type: t } as RuleAction)));
   return (
     <div className="flex items-start gap-3 bg-card border border-border rounded-lg px-3 py-2">
-      <div className="flex-1 min-w-0">
+      <button
+        type="button"
+        onClick={() => h.message_id && onPreview?.(h.message_id)}
+        disabled={!h.message_id}
+        title={h.message_id ? "Preview email" : undefined}
+        className="flex-1 min-w-0 text-left cursor-pointer hover:opacity-80 transition-opacity disabled:cursor-default disabled:hover:opacity-100"
+      >
         <div className="text-xs text-foreground truncate">
           {h.subject || "(no subject)"}
         </div>
@@ -3149,6 +3279,13 @@ function HistoryRow({
         {h.snippet && (
           <div className="text-[10px] text-muted-foreground/70 line-clamp-1 mt-0.5">
             {h.snippet}
+          </div>
+        )}
+        {actionChips.length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-1">
+            {actionChips.map((a, i) => (
+              <ActionChip key={i} action={a} />
+            ))}
           </div>
         )}
         {(h.labels?.length ?? 0) > 0 && (
@@ -3173,7 +3310,7 @@ function HistoryRow({
             Applied manually
           </span>
         )}
-      </div>
+      </button>
       <div className="flex items-center gap-1.5 flex-shrink-0">
         <RuleResultPill
           matched={matched}
@@ -3193,6 +3330,8 @@ function HistoryRow({
             accountId={accountId}
             email={{ subject: h.subject || "", from: h.from || "" }}
             current={{ matched, ruleName: h.rule_name, ruleId: h.rule_id ?? null }}
+            messageId={h.message_id ?? null}
+            onReran={onReran}
           />
         )}
       </div>

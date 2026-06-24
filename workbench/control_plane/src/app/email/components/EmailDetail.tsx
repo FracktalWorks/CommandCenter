@@ -37,6 +37,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const [replyBody, setReplyBody] = useState("");
   const [replyTo, setReplyTo] = useState("");
   const [replyCc, setReplyCc] = useState("");
+  const [replyBcc, setReplyBcc] = useState("");
   const [sendErr, setSendErr] = useState<string | null>(null);
   // ── Auto-save (Gmail-style): the reply persists as a Drafts message as you
   //    type, so closing the composer never loses it. draftIdRef holds the local
@@ -251,6 +252,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
     draftIdRef.current = null;
     replyDirty.current = false;
     setDraftStatus("idle");
+    setReplyBcc("");
     // HTML-only mail (e.g. Outlook) has no bodyText — fall back to the snippet.
     const quoteSrc = view.bodyText || view.snippet || "";
     if (mode === "forward") {
@@ -302,6 +304,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
     setReplyBody("");
     setReplyTo("");
     setReplyCc("");
+    setReplyBcc("");
   };
 
   /** Send the reply/forward. If it was auto-saved as a draft we send that draft
@@ -318,12 +321,13 @@ export function EmailDetail({ email }: EmailDetailProps) {
       return;
     }
     const ccArr = replyCc.split(",").map((s) => s.trim()).filter(Boolean);
+    const bccArr = replyBcc.split(",").map((s) => s.trim()).filter(Boolean);
     const isForward = replyMode === "forward";
     try {
-      // Native draft-send only when there's no Cc — the draft write-path doesn't
-      // carry Cc, so a Cc'd reply goes via the full send (and the auto-saved
-      // draft, if any, is discarded so it doesn't linger).
-      if (draftIdRef.current && ccArr.length === 0) {
+      // Native draft-send only when there's no Cc/Bcc — the draft write-path
+      // doesn't carry them, so a Cc'd/Bcc'd reply goes via the full send (and the
+      // auto-saved draft, if any, is discarded so it doesn't linger).
+      if (draftIdRef.current && ccArr.length === 0 && bccArr.length === 0) {
         const saved = await saveDraft({
           accountId: selectedAccountId,
           draftId: draftIdRef.current,
@@ -338,6 +342,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
           accountId: selectedAccountId,
           to: toArr,
           cc: ccArr.length ? ccArr : undefined,
+          bcc: bccArr.length ? bccArr : undefined,
           subject: replySubject(),
           bodyText: replyBody,
           replyToMessageId: isForward ? undefined : email.providerMessageId,
@@ -782,6 +787,16 @@ export function EmailDetail({ email }: EmailDetailProps) {
                 value={replyCc}
                 onChange={(e) => { replyDirty.current = true; setReplyCc(e.target.value); }}
                 placeholder="Cc…"
+                className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
+              />
+            </div>
+            <div className="px-4 py-1.5 border-b border-border flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground w-7 flex-shrink-0">Bcc</span>
+              <input
+                type="text"
+                value={replyBcc}
+                onChange={(e) => { replyDirty.current = true; setReplyBcc(e.target.value); }}
+                placeholder="Bcc…"
                 className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
               />
             </div>

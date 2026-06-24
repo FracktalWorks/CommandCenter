@@ -356,6 +356,13 @@ export function getAttachmentDownloadUrl(attachmentId: string): string {
 
 // ── Send ─────────────────────────────────────────────────────────────────
 
+export interface SendAttachment {
+  filename: string;
+  mimeType: string;
+  /** base64-encoded file content (no data: prefix). */
+  contentB64: string;
+}
+
 export interface SendEmailParams {
   accountId: string;
   to: string[];
@@ -365,6 +372,7 @@ export interface SendEmailParams {
   bodyText: string;
   bodyHtml?: string;
   replyToMessageId?: string;
+  attachments?: SendAttachment[];
 }
 
 export async function sendEmail(params: SendEmailParams): Promise<{ id: string }> {
@@ -379,9 +387,34 @@ export async function sendEmail(params: SendEmailParams): Promise<{ id: string }
   if (params.bcc) body.bcc = params.bcc;
   if (params.bodyHtml) body.body_html = params.bodyHtml;
   if (params.replyToMessageId) body.reply_to_message_id = params.replyToMessageId;
+  if (params.attachments?.length) {
+    body.attachments = params.attachments.map((a) => ({
+      filename: a.filename,
+      mime_type: a.mimeType,
+      content_b64: a.contentB64,
+    }));
+  }
   return gatewayFetch<{ id: string }>("/email/send", {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+/** Read a File into a base64 string (no data: prefix) for sendEmail attachments. */
+export function fileToSendAttachment(file: File): Promise<SendAttachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      const comma = result.indexOf(",");
+      resolve({
+        filename: file.name,
+        mimeType: file.type || "application/octet-stream",
+        contentB64: comma >= 0 ? result.slice(comma + 1) : result,
+      });
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
   });
 }
 

@@ -12,6 +12,12 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 
+class SendAttachment(BaseModel):
+    filename: str
+    mime_type: str = "application/octet-stream"
+    content_b64: str  # base64-encoded file content
+
+
 class SendEmailRequest(BaseModel):
     account_id: str
     to: list[str]
@@ -21,6 +27,7 @@ class SendEmailRequest(BaseModel):
     cc: list[str] | None = None
     bcc: list[str] | None = None
     reply_to_message_id: str | None = None
+    attachments: list[SendAttachment] | None = None
 
 
 @router.post("/send")
@@ -69,6 +76,24 @@ async def send_email(
         if not await provider.authenticate():
             raise HTTPException(status_code=401, detail="Email account auth failed")
 
+        attachments = None
+        if req.attachments:
+            import base64 as _b64
+            try:
+                attachments = [
+                    {
+                        "filename": a.filename,
+                        "mime_type": a.mime_type,
+                        "content": _b64.b64decode(a.content_b64),
+                    }
+                    for a in req.attachments
+                ]
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid attachment encoding: {exc}",
+                ) from exc
+
         msg_id = await provider.send_message(
             to=req.to,
             subject=req.subject,
@@ -77,6 +102,7 @@ async def send_email(
             cc=req.cc,
             bcc=req.bcc,
             reply_to_message_id=req.reply_to_message_id,
+            attachments=attachments,
         )
 
         # Persist any refreshed/rotated OAuth token from authenticate().

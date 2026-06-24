@@ -247,6 +247,7 @@ class IMAPProvider(BaseEmailProvider):
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
         reply_to_message_id: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> str:
         smtp_host = self.credentials.get("smtp_host", "")
         smtp_port = int(self.credentials.get("smtp_port", 587))
@@ -261,7 +262,24 @@ class IMAPProvider(BaseEmailProvider):
         if not smtp_host:
             raise ValueError("Missing SMTP configuration: smtp_host")
 
-        msg = MIMEText(body_text, "plain" if not body_html else "html")
+        msg: Any
+        if attachments:
+            from email import encoders  # noqa: PLC0415
+            from email.mime.base import MIMEBase  # noqa: PLC0415
+            from email.mime.multipart import MIMEMultipart  # noqa: PLC0415
+            msg = MIMEMultipart()
+            msg.attach(MIMEText(body_text, "plain" if not body_html else "html"))
+            for att in attachments:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(att.get("content") or b"")
+                encoders.encode_base64(part)
+                part.add_header(
+                    "Content-Disposition",
+                    f'attachment; filename="{att.get("filename", "attachment")}"',
+                )
+                msg.attach(part)
+        else:
+            msg = MIMEText(body_text, "plain" if not body_html else "html")
         msg["From"] = smtp_username
         msg["To"] = ", ".join(to)
         msg["Subject"] = subject

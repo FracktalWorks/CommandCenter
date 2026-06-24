@@ -231,9 +231,27 @@ class GmailProvider(BaseEmailProvider):
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
         reply_to_message_id: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> str:
-        # Build RFC 2822 message
-        msg = MIMEText(body_text, "plain" if not body_html else "html")
+        # Build RFC 2822 message — multipart when file attachments are present.
+        msg: Any
+        if attachments:
+            from email import encoders  # noqa: PLC0415
+            from email.mime.base import MIMEBase  # noqa: PLC0415
+            from email.mime.multipart import MIMEMultipart  # noqa: PLC0415
+            msg = MIMEMultipart()
+            msg.attach(MIMEText(body_text, "plain" if not body_html else "html"))
+            for att in attachments:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(att.get("content") or b"")
+                encoders.encode_base64(part)
+                part.add_header(
+                    "Content-Disposition",
+                    f'attachment; filename="{att.get("filename", "attachment")}"',
+                )
+                msg.attach(part)
+        else:
+            msg = MIMEText(body_text, "plain" if not body_html else "html")
         msg["To"] = ", ".join(to)
         msg["Subject"] = subject
         if cc:

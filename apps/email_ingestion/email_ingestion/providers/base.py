@@ -179,8 +179,12 @@ class BaseEmailProvider(ABC):
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
         reply_to_message_id: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> str:
-        """Send an email. Returns the provider message ID of the sent message."""
+        """Send an email. Returns the provider message ID of the sent message.
+
+        ``attachments`` is a list of ``{"filename", "content" (bytes),
+        "mime_type"}`` dicts to attach to the outgoing message."""
         ...
 
     @abstractmethod

@@ -379,6 +379,7 @@ class OutlookProvider(BaseEmailProvider):
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
         reply_to_message_id: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> str:
         client = await self._get_client()
 
@@ -397,6 +398,20 @@ class OutlookProvider(BaseEmailProvider):
         if bcc:
             message["bccRecipients"] = [
                 {"emailAddress": {"address": addr}} for addr in bcc
+            ]
+        if attachments:
+            import base64 as _b64  # noqa: PLC0415
+            # Inline file attachments (base64). Graph accepts these for small
+            # files; very large files would need an upload session.
+            message["attachments"] = [
+                {
+                    "@odata.type": "#microsoft.graph.fileAttachment",
+                    "name": att.get("filename", "attachment"),
+                    "contentType": att.get(
+                        "mime_type", "application/octet-stream"),
+                    "contentBytes": _b64.b64encode(att.get("content") or b"").decode(),
+                }
+                for att in attachments
             ]
 
         if reply_to_message_id:

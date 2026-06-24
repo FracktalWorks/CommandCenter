@@ -11,6 +11,7 @@ import { fullDateLabel, initials } from "../lib/utils";
 import { useEmailStore } from "../lib/emailStore";
 import {
   getAttachmentDownloadUrl, fetchFullBody, getEmail, listThread, createRule,
+  fileToSendAttachment, type SendAttachment,
 } from "../lib/api";
 import { MessageContent } from "./MessageContent";
 import { ConversationView, DraftCard, isDraftEmail } from "./ConversationView";
@@ -38,6 +39,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const [replyTo, setReplyTo] = useState("");
   const [replyCc, setReplyCc] = useState("");
   const [replyBcc, setReplyBcc] = useState("");
+  const [replyAttachments, setReplyAttachments] = useState<SendAttachment[]>([]);
   const [sendErr, setSendErr] = useState<string | null>(null);
   // ── Auto-save (Gmail-style): the reply persists as a Drafts message as you
   //    type, so closing the composer never loses it. draftIdRef holds the local
@@ -253,6 +255,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
     replyDirty.current = false;
     setDraftStatus("idle");
     setReplyBcc("");
+    setReplyAttachments([]);
     // HTML-only mail (e.g. Outlook) has no bodyText — fall back to the snippet.
     const quoteSrc = view.bodyText || view.snippet || "";
     if (mode === "forward") {
@@ -305,6 +308,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
     setReplyTo("");
     setReplyCc("");
     setReplyBcc("");
+    setReplyAttachments([]);
   };
 
   /** Send the reply/forward. If it was auto-saved as a draft we send that draft
@@ -324,10 +328,13 @@ export function EmailDetail({ email }: EmailDetailProps) {
     const bccArr = replyBcc.split(",").map((s) => s.trim()).filter(Boolean);
     const isForward = replyMode === "forward";
     try {
-      // Native draft-send only when there's no Cc/Bcc — the draft write-path
-      // doesn't carry them, so a Cc'd/Bcc'd reply goes via the full send (and the
-      // auto-saved draft, if any, is discarded so it doesn't linger).
-      if (draftIdRef.current && ccArr.length === 0 && bccArr.length === 0) {
+      // Native draft-send only when there's no Cc/Bcc and no attachments — the
+      // draft write-path doesn't carry them, so those go via the full send (and
+      // the auto-saved draft, if any, is discarded so it doesn't linger).
+      if (
+        draftIdRef.current && ccArr.length === 0 && bccArr.length === 0 &&
+        replyAttachments.length === 0
+      ) {
         const saved = await saveDraft({
           accountId: selectedAccountId,
           draftId: draftIdRef.current,
@@ -346,6 +353,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
           subject: replySubject(),
           bodyText: replyBody,
           replyToMessageId: isForward ? undefined : email.providerMessageId,
+          attachments: replyAttachments.length ? replyAttachments : undefined,
         });
         if (draftIdRef.current) {
           // Drop the lingering auto-saved draft now the message has been sent.
@@ -357,6 +365,18 @@ export function EmailDetail({ email }: EmailDetailProps) {
       return;
     }
     resetReplySession();
+  };
+
+  /** Read picked files into base64 and append them to the reply's attachments. */
+  const addReplyFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    replyDirty.current = true;
+    try {
+      const added = await Promise.all(Array.from(files).map(fileToSendAttachment));
+      setReplyAttachments((prev) => [...prev, ...added]);
+    } catch {
+      setSendErr("Couldn't read one of the attachments");
+    }
   };
 
   /** Hand the current draft off to the full composer (Cc/Bcc, attachments). */
@@ -814,6 +834,30 @@ export function EmailDetail({ email }: EmailDetailProps) {
               autoFocus
               className="w-full bg-transparent px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground outline-none resize-none"
             />
+            {replyAttachments.length > 0 && (
+              <div className="px-4 pb-2 flex flex-wrap gap-1.5">
+                {replyAttachments.map((a, i) => (
+                  <span
+                    key={i}
+                    className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border border-border bg-secondary text-muted-foreground"
+                  >
+                    <Paperclip size={10} />
+                    <span className="truncate max-w-[140px]" title={a.filename}>
+                      {a.filename}
+                    </span>
+                    <button
+                      onClick={() =>
+                        setReplyAttachments((prev) => prev.filter((_, j) => j !== i))
+                      }
+                      className="hover:text-foreground"
+                      title="Remove attachment"
+                    >
+                      <X size={10} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="px-4 py-2 bg-secondary/50 border-t border-border flex items-center justify-between gap-2">
               <span className="text-[10px] truncate">
                 {sendErr ? (
@@ -826,7 +870,22 @@ export function EmailDetail({ email }: EmailDetailProps) {
                   <span className="text-muted-foreground">Ctrl+Enter to send</span>
                 )}
               </span>
-              <div className="flex gap-2 flex-shrink-0">
+              <div className="flex gap-2 flex-shrink-0 items-center">
+                <label
+                  className="px-2 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors cursor-pointer flex items-center"
+                  title="Attach files"
+                >
+                  <Paperclip size={13} />
+                  <input
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      void addReplyFiles(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
                 <button
                   className="px-3 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
                   onClick={popOutToComposer}

@@ -71,6 +71,10 @@ GRAPH_SCOPES = [
     "https://graph.microsoft.com/Mail.ReadWrite",
     "https://graph.microsoft.com/Mail.Send",
     "https://graph.microsoft.com/User.Read",
+    # Lets us create Outlook master categories (coloured labels) via
+    # /me/outlook/masterCategories — without it that endpoint 403s and a rule's
+    # new label is only tagged on the message, never created as a real category.
+    "https://graph.microsoft.com/MailboxSettings.ReadWrite",
 ]
 
 

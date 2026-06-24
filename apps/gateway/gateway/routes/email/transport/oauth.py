@@ -100,6 +100,11 @@ async def oauth_authorize(
             "&scope=offline_access+https://graph.microsoft.com/Mail.ReadWrite"
             "+https://graph.microsoft.com/Mail.Send"
             "+https://graph.microsoft.com/User.Read"
+            # Required to create/manage Outlook master categories (coloured
+            # labels). Without it /me/outlook/masterCategories 403s and a rule's
+            # new label is only tagged on the message, never created as a real
+            # category. (inbox-zero requests the same scope.)
+            "+https://graph.microsoft.com/MailboxSettings.ReadWrite"
             f"&redirect_uri={redirect_uri}"
             f"&state={state}"
         )

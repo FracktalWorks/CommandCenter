@@ -225,6 +225,51 @@ into the drafter and viewable/removable in Assistant → Settings.
   stored as patterns.
 - Tests: style summarizer over a fixture corpus; pattern capture on edit.
 
+### Phase 8 — Reply intelligence & advanced drafting/classification context
+The drafter and classifier now match inbox-zero's *inputs*; this phase brings the
+deeper learning/retrieval systems. Audit done 2026-06-24 against
+`reference/inbox-zero/apps/web/utils/ai/{reply,choose-rule}`.
+
+**✅ Shipped (2026-06-24):**
+- Full **thread context** to the drafter (oldest→newest), at both the rule
+  `DRAFT_EMAIL` action and the manual draft endpoint (`_fetch_thread_context`).
+- **Similar-thread precedent** — a topic-focused Mem0 retrieval surfaces
+  semantically similar past emails (inbox-zero `<email_history>`).
+- **Past replies to this sender** — `_fetch_sender_reply_examples` mines Sent
+  mail for tone/brevity mirroring (inbox-zero `<sender_reply_examples>`).
+- **Today's date** passed to the drafter.
+- (Already had: writing style, knowledge base, personal instructions, learned
+  patterns — all injected via the enriched `about`.)
+- **Classifier inputs parity** — To/Cc + owner address + about + date + the
+  inbox-zero classification guidelines (Phase 4-adjacent, shipped 2026-06-24).
+
+**Backlog (prioritized):**
+- **P1 · Classification feedback as soft hints** *(straightforward)* — pass the
+  classifier an advisory summary of how mail from this sender was classified
+  before (from `email_executed_rules`), distinct from our hard learned patterns.
+  inbox-zero's `classificationFeedback`. Reduces repeat misclassification (e.g.
+  the CC→FYI case) without a rigid rule. **← implementing now.**
+- **P1 · Scoped reply-memory system** *(involved)* — replace the single global
+  `email_learned_patterns` with sender/domain/topic/global-scoped memories of
+  kind FACT/PROCEDURE/PREFERENCE, extracted from the draft→sent diff and
+  retrieved by scope priority. Mirrors `reply-memory.ts`. New table + extraction
+  + retrieval; the single biggest drafting-quality lever.
+- **P2 · Auto-refreshing learned writing style** — accumulate preference
+  evidence and periodically regenerate `writing_style` from it (today it's
+  generate-on-demand only). Mirrors `maybeRefreshLearnedWritingStyle`.
+- **P2 · Granular draft-confidence rubric** — expand our binary NO_DRAFT gate to
+  LOW/MEDIUM/HIGH with inbox-zero's detailed criteria.
+- **P3 · `isPrimary` in multi-rule** — mark the single most-specific matched rule
+  as primary (today we apply all matches in canonical order, no primary).
+
+**Deferred (bigger / dependency-gated):**
+- **Calendar / scheduling context** in drafts (booking link + availability) —
+  needs a calendar integration first.
+- **PDF attachment context** — extract attached-PDF text into the draft context.
+- **External MCP / CRM tools context** — inbox-zero pulls CRM/task-manager data;
+  we approximate with the sales/task-manager specialist agents today and will
+  wire real MCP tools in as Command Center's MCP integrations land.
+
 ### Cross-cutting
 - Gmail Pub/Sub push parity (Outlook Graph push already shipped).
 - Mirror BYOK block into non-streaming `run_agent`.

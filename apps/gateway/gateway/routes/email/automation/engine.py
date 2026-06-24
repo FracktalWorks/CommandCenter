@@ -108,8 +108,44 @@ _CLASSIFIER_GUIDELINES = (
 )
 
 
+async def _fetch_classification_hints(
+    db: Any, account_id: str, sender_email: str, *, limit: int = 5,
+) -> str:
+    """How mail from this sender has been classified before — an ADVISORY hint
+    for the classifier (inbox-zero's classificationFeedback), NOT a hard rule.
+    Returns e.g. "Newsletter (x4), FYI (x1)" or "" when there's no history."""
+    sender = (sender_email or "").strip().lower()
+    if not sender:
+        return ""
+    try:
+        rows = (await db.execute(text(
+            """SELECT rule_name, COUNT(*) AS n
+               FROM email_executed_rules
+               WHERE account_id = :aid
+                 AND rule_name IS NOT NULL
+                 AND status NOT IN ('SKIPPED', 'REJECTED')
+                 AND LOWER(COALESCE(from_address, '')) LIKE :pat
+               GROUP BY rule_name ORDER BY n DESC LIMIT :lim"""
+        ), {"aid": account_id, "pat": f"%{sender}%", "lim": limit})).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.classification_hints_failed", error=str(exc)[:160])
+        return ""
+    return ", ".join(f"{r.rule_name} (x{r.n})" for r in rows if r.rule_name)
+
+
+def _hint_block(hints: str) -> str:
+    """Render the advisory classification-history hint for the prompt."""
+    if not hints:
+        return ""
+    return (
+        "\n\nCLASSIFICATION HISTORY (advisory only — still judge THIS email on "
+        f"its own merits): mail from this sender was previously filed under: "
+        f"{hints}."
+    )
+
+
 async def _llm_pick_rule(
-    email: dict[str, str], rules: list[dict[str, Any]]
+    email: dict[str, str], rules: list[dict[str, Any]], hints: str = "",
 ) -> dict[str, Any] | None:
     """Ask the LLM which instruction-based rule matches the email.
 
@@ -138,7 +174,9 @@ async def _llm_pick_rule(
             + ' Respond with ONLY a JSON object: {"index": <number or -1 if none '
             'match>, "reason": "<short why>"}.'
         )
-        user_prompt = f"{_email_block(email)}\n\nRULES\n{rule_lines}"
+        user_prompt = (
+            f"{_email_block(email)}\n\nRULES\n{rule_lines}{_hint_block(hints)}"
+        )
         resp = await acompletion(
             model=model,
             messages=[{"role": "system", "content": sys_prompt},
@@ -158,7 +196,7 @@ async def _llm_pick_rule(
 
 
 async def _llm_pick_rules(
-    email: dict[str, str], rules: list[dict[str, Any]]
+    email: dict[str, str], rules: list[dict[str, Any]], hints: str = "",
 ) -> list[dict[str, Any]]:
     """Multi-rule selection (inbox-zero parity): ask the LLM for ALL instruction
     rules that apply to the email, not just the single best.
@@ -189,7 +227,9 @@ async def _llm_pick_rules(
             + ' Respond with ONLY a JSON object: {"matches": [{"index": <number>, '
             '"reason": "<short why>"}]} — an empty list if none apply.'
         )
-        user_prompt = f"{_email_block(email)}\n\nRULES\n{rule_lines}"
+        user_prompt = (
+            f"{_email_block(email)}\n\nRULES\n{rule_lines}{_hint_block(hints)}"
+        )
         resp = await acompletion(
             model=model,
             messages=[{"role": "system", "content": sys_prompt},
@@ -325,7 +365,8 @@ async def _match_email_to_rule(
         # No instructions and static didn't match → this rule doesn't apply.
 
     if instruction_rules:
-        pick = await _llm_pick_rule(email, instruction_rules)
+        hints = await _fetch_classification_hints(db, account_id, email.get("from", ""))
+        pick = await _llm_pick_rule(email, instruction_rules, hints=hints)
         if pick:
             return {"rule": instruction_rules[pick["index"]],
                     "reason": pick["reason"] or "Matched by AI.", "source": "ai"}
@@ -380,7 +421,8 @@ async def _match_email_to_rules_multi(
             _add(rule, "Matched static conditions.", "static")
 
     if instruction_rules:
-        for pick in await _llm_pick_rules(email, instruction_rules):
+        hints = await _fetch_classification_hints(db, account_id, email.get("from", ""))
+        for pick in await _llm_pick_rules(email, instruction_rules, hints=hints):
             _add(instruction_rules[pick["index"]],
                  pick["reason"] or "Matched by AI.", "ai")
 

@@ -11,7 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
-from fastapi import Depends, HTTPException
+from fastapi import BackgroundTasks, Depends, HTTPException
 from gateway.routes.email.automation.assistant import _load_assistant_about
 from gateway.routes.email.core import (
     _assert_account_owner,
@@ -1056,6 +1056,7 @@ class DraftSendRequest(BaseModel):
 @router.post("/drafts/send")
 async def send_draft_endpoint(
     req: DraftSendRequest,
+    background: BackgroundTasks,
     user: UserContext = Depends(get_current_user),
 ):
     """Send an existing draft natively (Drafts → Sent, no duplicate) and drop the
@@ -1065,7 +1066,8 @@ async def send_draft_endpoint(
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         drow = (await db.execute(text(
-            "SELECT provider_message_id, subject, to_addresses, body_text"
+            "SELECT provider_message_id, subject, to_addresses, body_text,"
+            " thread_id"
             " FROM email_messages WHERE id = :id AND account_id = :aid"
             " AND LOWER(folder) IN ('drafts', 'draft')"
         ), {"id": req.draft_id, "aid": req.account_id})).fetchone()
@@ -1095,6 +1097,17 @@ async def send_draft_endpoint(
         )
         await _persist_rotated_creds(db, store, req.account_id, provider)
         await db.commit()
+        # Reply complete: learn from the sent body and move the thread out of
+        # "To Reply" → Awaiting Reply (same hooks as the full /send path).
+        if drow.thread_id:
+            from gateway.routes.email.automation.replyzero import (  # noqa: PLC0415
+                _mark_thread_replied,
+            )
+            background.add_task(
+                _learn_from_sent, req.account_id, drow.thread_id,
+                drow.body_text or "")
+            background.add_task(
+                _mark_thread_replied, req.account_id, drow.thread_id)
         return {"sent": True}
     finally:
         await db.close()

@@ -669,6 +669,38 @@ async def run_rules_on_message(
         await db.close()
 
 
+_AUTO_LEARN_MIN_CONSISTENT = 3
+
+
+async def _sender_consistent_for_rule(
+    db: Any, account_id: str, sender: str, rule_id: str,
+) -> bool:
+    """Whether to auto-learn a sender→rule classification pattern yet.
+
+    inbox-zero's analyze-sender-pattern only commits a learned pattern once a
+    sender's mail has CONSISTENTLY matched one rule. We mirror that: require at
+    least ``_AUTO_LEARN_MIN_CONSISTENT`` matches (counting the current one) and
+    no *other* rule ever matched this sender — so a single early misclassification
+    can't entrench itself. The current match isn't logged yet, hence the +1."""
+    sender = (sender or "").strip().lower()
+    if not sender:
+        return False
+    try:
+        rows = (await db.execute(text(
+            """SELECT rule_id, COUNT(*) AS n FROM email_executed_rules
+               WHERE account_id = :aid AND rule_id IS NOT NULL
+                 AND status NOT IN ('SKIPPED', 'REJECTED')
+                 AND LOWER(COALESCE(from_address, '')) LIKE :pat
+               GROUP BY rule_id"""
+        ), {"aid": account_id, "pat": f"%{sender}%"})).fetchall()
+    except Exception:  # noqa: BLE001
+        return False
+    by_rule = {str(row.rule_id): int(row.n) for row in rows}
+    if any(rid != str(rule_id) and n > 0 for rid, n in by_rule.items()):
+        return False  # a different rule has matched this sender → not consistent
+    return by_rule.get(str(rule_id), 0) + 1 >= _AUTO_LEARN_MIN_CONSISTENT
+
+
 async def _apply_and_log_match(
     db: Any, provider: Any, r: Any, frm: dict[str, Any], email: dict[str, str],
     match: dict[str, Any], apply: bool, about: str, signature: str,
@@ -688,14 +720,18 @@ async def _apply_and_log_match(
         status = "APPLIED"
         # inbox-zero parity: when the AI (not a static/learned-pattern rule)
         # picks a rule, cache the sender→rule as a learned FROM pattern so future
-        # mail from that sender short-circuits the LLM. Auto-populates Learned
-        # Patterns without the user having to Fix anything. Best-effort.
+        # mail from that sender short-circuits the LLM. Consistency-gated like
+        # inbox-zero's analyze-sender-pattern: only learn once the sender has
+        # CONSISTENTLY matched this one rule (≥3 incl. now), so a single early
+        # misclassification can't entrench itself. Best-effort.
         sender = (frm.get("email") or "").strip()
-        if match.get("source") == "ai" and sender and rule.get("id"):
+        if (match.get("source") == "ai" and sender and rule.get("id")
+                and await _sender_consistent_for_rule(
+                    db, account_id, sender, str(rule["id"]))):
             try:
                 await _upsert_rule_pattern(
                     db, account_id, str(rule["id"]), sender, False, "AI",
-                    "Auto-learned from an AI match", str(r.id),
+                    "Auto-learned from a consistent AI match history", str(r.id),
                     getattr(r, "thread_id", None), pattern_type="FROM")
             except Exception as e:  # noqa: BLE001 — never fail a rule run on this
                 _log.warning("email.auto_learn_pattern_failed",

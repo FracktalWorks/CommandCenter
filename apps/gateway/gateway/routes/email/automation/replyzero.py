@@ -416,6 +416,80 @@ async def _upsert_thread_status(
         "mat": msg_at, "reason": reason})
 
 
+async def _mark_thread_replied(account_id: str, thread_id: str) -> None:
+    """After the user sends a reply, move the thread out of "To Reply": set its
+    Reply Zero status to AWAITING (replied → now waiting on the other person) and
+    swap the "To Reply" category for "Awaiting Reply" on the inbound messages.
+
+    Mirrors inbox-zero relabelling the thread on an outbound reply. (inbox-zero
+    AI-determines AWAITING_REPLY vs ACTIONED; we default to AWAITING — replying
+    means you're waiting on them. "Actioned" stays the explicit done state.)
+    Runs as a background task; best-effort."""
+    if not thread_id:
+        return
+    db = await _get_db()
+    try:
+        rows = (await db.execute(text(
+            """SELECT id, provider_message_id, categories, folder, received_at
+               FROM email_messages
+               WHERE account_id = :aid AND thread_id = :tid
+               ORDER BY received_at ASC NULLS FIRST"""
+        ), {"aid": account_id, "tid": thread_id})).fetchall()
+        if not rows:
+            return
+        latest = rows[-1]
+        await _upsert_thread_status(
+            db, account_id, thread_id, "AWAITING", latest.id,
+            latest.received_at, "Replied — awaiting their response")
+        await db.commit()
+
+        # Swap the "To Reply" category → "Awaiting Reply" on the inbound messages
+        # that carry it, upstream + locally (best-effort; needs the provider).
+        targets = [
+            r for r in rows
+            if (r.folder or "").lower() != "sent"
+            and "To Reply" in list(r.categories or [])
+        ]
+        if not targets:
+            return
+        acc = (await db.execute(text(
+            "SELECT provider, credentials_encrypted FROM email_accounts "
+            "WHERE id = :id"
+        ), {"id": account_id})).fetchone()
+        if not acc:
+            return
+        from acb_llm.key_store import get_key_store  # noqa: PLC0415
+        store = get_key_store()
+        creds = json.loads(store.decrypt(acc.credentials_encrypted))
+        provider = _instantiate_provider(acc.provider, creds)
+        if not await provider.authenticate():
+            return
+        for r in targets:
+            try:
+                await provider.set_labels(
+                    r.provider_message_id, add=["Awaiting Reply"],
+                    remove=["To Reply"])
+                await db.execute(text(
+                    """UPDATE email_messages SET categories = CASE
+                         WHEN 'Awaiting Reply' = ANY(
+                                array_remove(categories, 'To Reply'))
+                           THEN array_remove(categories, 'To Reply')
+                         ELSE array_append(
+                                array_remove(categories, 'To Reply'),
+                                'Awaiting Reply')
+                       END, updated_at = now() WHERE id = :id"""
+                ), {"id": r.id})
+            except Exception:  # noqa: BLE001 — one bad message shouldn't abort
+                continue
+        if provider.credentials_dirty():
+            await _persist_rotated_creds(db, store, account_id, provider)
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.mark_thread_replied_failed", error=str(exc)[:160])
+    finally:
+        await db.close()
+
+
 async def _maybe_classify_threads(account_id: str) -> None:
     """Reply Zero: store a per-thread status (NEEDS_REPLY / FYI / AWAITING).
 

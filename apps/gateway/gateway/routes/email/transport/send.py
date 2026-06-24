@@ -119,10 +119,16 @@ async def send_email(
                 ), {"aid": req.account_id,
                     "pmid": req.reply_to_message_id})).fetchone()
                 if trow and trow.thread_id:
-                    from gateway.routes.email.automation import _learn_from_sent  # noqa: PLC0415
+                    from gateway.routes.email.automation import (  # noqa: PLC0415
+                        _learn_from_sent,
+                        _mark_thread_replied,
+                    )
                     background.add_task(
                         _learn_from_sent, req.account_id, trow.thread_id,
                         req.body_text)
+                    # Move the thread out of "To Reply" → Awaiting Reply.
+                    background.add_task(
+                        _mark_thread_replied, req.account_id, trow.thread_id)
             except Exception:  # noqa: BLE001
                 pass
 

@@ -101,6 +101,23 @@ export function EmailDetail({ email }: EmailDetailProps) {
     URL.revokeObjectURL(url);
   };
 
+  // Background refresh of the OPEN conversation (~20s) so an assistant-created
+  // draft, or a reply that just synced from upstream, appears without reopening
+  // the thread. Re-fetching keeps existing cards (keyed by message id — incl. a
+  // draft you're editing) and only adds new ones. Pauses when the tab is hidden.
+  useEffect(() => {
+    if (!email?.threadId) return;
+    const threadId = email.threadId;
+    const tick = () => {
+      if (document.visibilityState !== "visible") return;
+      listThread(selectedAccountId ?? undefined, threadId)
+        .then(setThread)
+        .catch(() => {});
+    };
+    const id = setInterval(tick, 20000);
+    return () => clearInterval(id);
+  }, [email?.threadId, selectedAccountId]);
+
   // Fetch full content whenever the selected email changes.
   useEffect(() => {
     if (!email) {

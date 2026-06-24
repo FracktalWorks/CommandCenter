@@ -1078,6 +1078,16 @@ async def _apply_rule_actions(
                     lbl = (await _render_template(lbl, email)).strip()
                 if lbl:
                     await provider.set_labels(provider_msg_id, add=[lbl], remove=[])
+                    # Mirror the label into the local row NOW so the viewer shows
+                    # it immediately, instead of waiting for the next upstream sync
+                    # to re-fetch categories. Atomic append-if-absent on the
+                    # TEXT[] (race-free, no read-modify-write).
+                    await db.execute(text(
+                        "UPDATE email_messages SET categories = "
+                        "CASE WHEN :lbl = ANY(categories) THEN categories "
+                        "ELSE array_append(categories, :lbl) END, "
+                        "updated_at = now() WHERE id = :id"
+                    ), {"id": message_id, "lbl": lbl})
             elif t in ("REPLY", "DRAFT_EMAIL"):
                 # Manual template wins; otherwise the AI drafts. A template with
                 # {{...}} placeholders is rendered against the email first.

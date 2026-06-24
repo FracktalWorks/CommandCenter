@@ -92,6 +92,7 @@ export default function EmailPage() {
     deleteEmail,
     triggerSync,
     sendEmail,
+    softRefresh,
   } = useEmailStore();
 
   // Fetch on mount
@@ -105,6 +106,23 @@ export default function EmailPage() {
       fetchEmails();
     }
   }, [selectedAccountId, selectedFolder, fetchEmails]);
+
+  // Background auto-refresh: silently re-pull the current folder so changes the
+  // assistant or upstream make (labels, drafts, new mail, archives) show up
+  // without a manual reload. Pauses while the tab is hidden; refreshes the
+  // moment the user returns to the tab. softRefresh no-ops past page 1.
+  useEffect(() => {
+    if (!selectedAccountId) return;
+    const tick = () => {
+      if (document.visibilityState === "visible") softRefresh();
+    };
+    const id = setInterval(tick, 20000);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, [selectedAccountId, softRefresh]);
 
   // Derived data
   const selectedAccount = accounts.find((a) => a.id === selectedAccountId) ?? null;

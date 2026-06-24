@@ -176,6 +176,10 @@ interface EmailState {
   fetchAccounts: () => Promise<void>;
   fetchFolders: (accountId?: string) => Promise<void>;
   fetchEmails: () => Promise<void>;
+  /** Silent background refresh of the current folder's first page (no spinner),
+   *  so assistant/upstream changes (labels, drafts, new mail, archives) appear
+   *  without a manual reload. No-op while loading or paginated past page 1. */
+  softRefresh: () => Promise<void>;
   loadMoreEmails: () => Promise<void>;
   backfillOlder: () => Promise<void>;
   selectAccount: (id: string) => void;
@@ -354,6 +358,46 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       });
     } catch (err: any) {
       set({ emailsLoading: false, error: err.message || "Failed to load emails" });
+    }
+  },
+
+  softRefresh: async () => {
+    const {
+      selectedAccountId, selectedFolder, selectedLabel, searchQuery,
+      emailsLoading, emailsPage,
+    } = get();
+    // Don't disrupt an in-flight load or a user who has paginated/scrolled
+    // deeper than the first page — they can pull-to-refresh manually.
+    if (!selectedAccountId || emailsLoading || emailsPage > 1) return;
+    try {
+      const result = await api.listEmails({
+        accountId: selectedAccountId,
+        folder: selectedFolder,
+        label: selectedLabel || undefined,
+        query: searchQuery || undefined,
+        page: 1,
+        pageSize: PAGE_SIZE,
+      });
+      // Bail if the user navigated away mid-fetch (avoid clobbering the new view).
+      const now = get();
+      if (
+        now.selectedAccountId !== selectedAccountId ||
+        now.selectedFolder !== selectedFolder ||
+        now.selectedLabel !== selectedLabel ||
+        now.searchQuery !== searchQuery ||
+        now.emailsPage > 1
+      ) {
+        return;
+      }
+      const labelSet = new Set(now.availableLabels);
+      for (const e of result.emails) for (const c of e.categories || []) labelSet.add(c);
+      set({
+        emails: result.emails,
+        emailsTotal: result.total,
+        availableLabels: [...labelSet].sort(),
+      });
+    } catch {
+      /* silent — a failed background refresh shouldn't surface an error */
     }
   },
 

@@ -242,7 +242,13 @@ async def _assert_account_owner(db: Any, account_id: str, user_email: str) -> No
 
 
 def _safe_json(content: str) -> Any | None:
-    """Extract a JSON object/array from an LLM response (tolerates ``` fences)."""
+    """Extract a JSON object/array from an LLM response.
+
+    Tolerates ``` fences, leading prose, and trailing commentary. First tries a
+    naive first-open→last-close slice; if that doesn't parse (e.g. prose contains
+    a stray brace, or there's text after the JSON), falls back to a string-aware
+    balanced-bracket scan that returns the first complete {...}/[...] span. Still
+    returns None for genuinely truncated JSON (no matching close)."""
     if not content:
         return None
     s = content.strip()
@@ -254,13 +260,25 @@ def _safe_json(content: str) -> Any | None:
     if start < 0:
         return None
     s = s[start:]
+    # Fast path: trim to the last closing bracket and parse.
     end = max(s.rfind("}"), s.rfind("]"))
     if end >= 0:
-        s = s[:end + 1]
-    try:
-        return json.loads(s)
-    except Exception:
-        return None
+        try:
+            return json.loads(s[:end + 1])
+        except Exception:  # noqa: BLE001 — fall through to the tolerant scan
+            pass
+    # Backstop: decode the first valid JSON value starting at any '{'/'[',
+    # ignoring trailing text and stray braces in surrounding prose. Truncated
+    # JSON (no matching close) still fails, returning None.
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(s):
+        if ch in "{[":
+            try:
+                obj, _ = decoder.raw_decode(s, i)
+                return obj
+            except Exception:  # noqa: BLE001 — try the next opening bracket
+                continue
+    return None
 
 
 def _parse_iso_date(s: str | None, end_of_day: bool) -> datetime | None:

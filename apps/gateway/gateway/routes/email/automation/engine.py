@@ -184,7 +184,11 @@ async def _llm_pick_rule(
             model=model, fallback_model=fallback_model,
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": user_prompt}],
-            temperature=0, max_tokens=300,
+            temperature=0, max_tokens=700,
+            # Force structured output so the reply is parseable JSON, not prose
+            # we have to scrape (the #1 cause of silent "no match"). Dropped
+            # automatically for models that don't support it (drop_params=True).
+            response_format={"type": "json_object"},
         )
         content = resp.choices[0].message.content or ""
         data = _safe_json(content)
@@ -192,6 +196,12 @@ async def _llm_pick_rule(
             idx = data["index"]
             if 0 <= idx < len(rules):
                 return {"index": idx, "reason": str(data.get("reason", ""))[:300]}
+        # Distinguish an unparseable/empty reply (a real failure) from a genuine
+        # "no rule fits" (-1) — otherwise a high parse-failure rate looks
+        # identical to "nothing matched" and stays invisible.
+        if data is None and content.strip():
+            _log.warning("email.llm_pick_rule_unparseable",
+                         model=_used, sample=content[:200])
         return None
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.llm_pick_rule_failed", error=str(exc)[:200])
@@ -239,7 +249,10 @@ async def _llm_pick_rules(
             model=model, fallback_model=fallback_model,
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": user_prompt}],
-            temperature=0, max_tokens=500,
+            temperature=0, max_tokens=1000,
+            # Force structured output (see _llm_pick_rule); a higher budget so a
+            # multi-rule object with several reasons isn't truncated mid-JSON.
+            response_format={"type": "json_object"},
         )
         content = resp.choices[0].message.content or ""
         data = _safe_json(content)
@@ -255,6 +268,11 @@ async def _llm_pick_rules(
                     out.append({"index": idx,
                                 "reason": str(m.get("reason", ""))[:300],
                                 "primary": bool(m.get("primary"))})
+        elif data is None and content.strip():
+            # Unparseable reply (truncation/prose) — log so it's not silently
+            # read as "no rules apply" (see _llm_pick_rule).
+            _log.warning("email.llm_pick_rules_unparseable",
+                         model=_used, sample=content[:200])
         return out
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.llm_pick_rules_failed", error=str(exc)[:200])

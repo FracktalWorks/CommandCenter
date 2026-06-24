@@ -263,6 +263,24 @@ deeper learning/retrieval systems. Audit done 2026-06-24 against
 - ✅ **P3 · `isPrimary` in multi-rule** — `_llm_pick_rules` marks one match
   primary (most specific); it's ordered first, then canonical order.
 
+**Classification learned-patterns (email_rule_patterns) — parity audit 2026-06-24:**
+- ✅ Storage (FROM/SUBJECT, include/exclude, per-rule), create-on-AI-match, Fix-flow
+  teaching (FROM+SUBJECT), short-circuit use before the LLM.
+- ✅ Matching parity (shipped): FROM is now *bidirectional* substring and SUBJECT
+  matches with numbers/IDs/parens generalised away (`_generalize_subject`) —
+  mirrors inbox-zero `find-matching-group.ts` + `generalizeSubject`.
+- ❌ **REMAINING GAP — learn from manual labels in the email client.** inbox-zero
+  learns a pattern when the user adds/removes a label directly in Gmail/Outlook
+  (webhook → `process-label-added-event` / `record-label-removal-learning` →
+  saveLearnedPattern include/exclude). We only learn from AI matches + the in-app
+  Fix dialog. To close: in the sync/delta upsert, diff old-vs-new `categories`,
+  map a user-added/removed category to the rule whose label matches, and call
+  `_upsert_rule_pattern` (FROM include on add, exclude on remove). Needs care to
+  distinguish user changes from our own rule-applied category writes.
+- ⚠️ Design nuance: our auto-learn fires on every AI match (eager); inbox-zero
+  gates on a *consistent* multi-email sender history + AI verification
+  (`analyze-sender-pattern`). Ours is cruder but simpler.
+
 **Deferred (bigger / dependency-gated):**
 - **Calendar / scheduling context** in drafts (booking link + availability) —
   needs a calendar integration first.

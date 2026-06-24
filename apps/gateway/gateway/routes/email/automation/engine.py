@@ -4,6 +4,7 @@ that decides which rule(s) an email triggers (read-only; no side effects)."""
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from fastapi import HTTPException
@@ -298,15 +299,31 @@ async def _load_rule_patterns(
     return out
 
 
+def _generalize_subject(s: str) -> str:
+    """Strip parenthesised content, numbers and IDs (inbox-zero's
+    generalizeSubject) so a learned subject pattern matches across varying
+    invoice / order / ticket numbers."""
+    s = re.sub(r"\([^)]*\)", "", s or "")
+    s = re.sub(r"(?:#\d+|\b\d+\b)", "", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def _pattern_hit(pat: tuple[str, str], email: dict[str, str]) -> bool:
-    """True if a learned pattern (type, value) matches the email (substring, ci)."""
+    """True if a learned pattern (type, value) matches the email — inbox-zero
+    parity: FROM is a *bidirectional* case-insensitive substring; SUBJECT matches
+    on raw substring OR with numbers/IDs generalised away."""
     ptype, value = pat
     v = (value or "").strip().lower()
     if not v:
         return False
     if ptype == "SUBJECT":
-        return v in (email.get("subject", "") or "").lower()
-    return v in (email.get("from", "") or "").lower()  # FROM
+        subj = (email.get("subject", "") or "").lower()
+        if v in subj:
+            return True
+        gv = _generalize_subject(v)
+        return bool(gv) and gv in _generalize_subject(subj)
+    frm = (email.get("from", "") or "").lower()  # FROM (bidirectional)
+    return bool(frm) and (v in frm or frm in v)
 
 
 def _patterns_excluded_rules(

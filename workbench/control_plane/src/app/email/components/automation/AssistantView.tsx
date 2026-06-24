@@ -2207,6 +2207,20 @@ function conditionTypeSummary(c?: RuleConditions | null): string {
   return t.join(" + ");
 }
 
+/** Which condition type fired (inbox-zero's "matched via" / matchMetadata). */
+function matchSourceLabel(src?: string | null): string | null {
+  switch ((src || "").toLowerCase()) {
+    case "ai":
+      return "AI instructions";
+    case "pattern":
+      return "a learned pattern";
+    case "static":
+      return "static conditions (from/subject/…)";
+    default:
+      return null;
+  }
+}
+
 /** Friendly label + tint for an executed-rule status (History popover). */
 function statusMeta(status?: string): { label: string; cls: string } | null {
   switch ((status || "").toUpperCase()) {
@@ -2282,6 +2296,8 @@ function RuleResultPill({
   status,
   ruleId,
   onViewRule,
+  matchSource,
+  actionErrors,
 }: {
   matched: boolean;
   ruleName: string | null;
@@ -2292,6 +2308,8 @@ function RuleResultPill({
   status?: string;
   ruleId?: string;
   onViewRule?: (ruleId: string) => void;
+  matchSource?: string | null;
+  actionErrors?: { type: string; error: string }[] | null;
 }) {
   const pill = (
     <span
@@ -2309,6 +2327,8 @@ function RuleResultPill({
   const types = takenTypes ?? [];
   const typeSummary = conditionTypeSummary(conditions);
   const sm = statusMeta(status);
+  const srcLabel = matchSourceLabel(matchSource);
+  const errs = actionErrors ?? [];
   return (
     <HoverPopover trigger={pill}>
       <div className="space-y-2">
@@ -2327,6 +2347,12 @@ function RuleResultPill({
             </span>
           )}
         </div>
+        {srcLabel && (
+          <div className="text-[10px] text-muted-foreground">
+            <span className="text-muted-foreground/60">Matched via: </span>
+            {srcLabel}
+          </div>
+        )}
         {conditions && <PrettyConditions c={conditions} />}
         {(specs.length > 0 || types.length > 0) && (
           <div>
@@ -2355,6 +2381,18 @@ function RuleResultPill({
               Reason for choosing this rule:{" "}
             </span>
             {reason}
+          </div>
+        )}
+        {errs.length > 0 && (
+          <div className="text-[10px] text-destructive bg-destructive/10 rounded-md px-2 py-1.5">
+            <div className="font-medium mb-0.5 flex items-center gap-1">
+              <AlertTriangle size={10} /> Action issues
+            </div>
+            {errs.map((e, i) => (
+              <div key={i} className="text-destructive/90">
+                {actionLabel(e.type)}: {e.error}
+              </div>
+            ))}
           </div>
         )}
         {ruleId && onViewRule && (
@@ -3147,6 +3185,8 @@ function HistoryRow({
           status={h.status}
           ruleId={h.rule_id ?? undefined}
           onViewRule={onViewRule}
+          matchSource={h.match_source}
+          actionErrors={h.action_errors}
         />
         {accountId && (
           <FixButton

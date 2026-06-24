@@ -285,6 +285,10 @@ export interface ExecutedRule {
   received_at?: string | null;
   /** Labels/categories currently on the email (inbox-zero shows these per row). */
   labels?: string[] | null;
+  /** Which condition type fired: "pattern" | "static" | "ai" (matched via …). */
+  match_source?: string | null;
+  /** Actions that failed during the run ({type, error}) — "Action issues". */
+  action_errors?: { type: string; error: string }[] | null;
   /** Matched rule's conditions, for the hover popover (null when no match). */
   conditions?: RuleConditions | null;
   /** Matched rule's full action specs (label/to/subject…), for the popover. */

@@ -151,7 +151,8 @@ async def rules_history(
         rows = (await db.execute(text(
             f"""SELECT er.id, er.rule_id, er.rule_name, er.subject, er.from_address,
                        er.status, er.automated, er.actions_taken, er.reason,
-                       er.created_at, em.snippet, em.received_at, em.categories,
+                       er.created_at, er.match_source, er.action_errors,
+                       em.snippet, em.received_at, em.categories,
                        r.instructions, r.from_pattern, r.to_pattern,
                        r.subject_pattern, r.body_pattern, r.conditional_operator
                 FROM email_executed_rules er
@@ -191,6 +192,11 @@ async def rules_history(
                  "actions": r.actions_taken if isinstance(r.actions_taken, list)
                  else json.loads(r.actions_taken or "[]"),
                  "reason": r.reason, "snippet": r.snippet or "",
+                 "match_source": getattr(r, "match_source", None),
+                 "action_errors": (
+                     r.action_errors if isinstance(r.action_errors, list)
+                     else json.loads(r.action_errors or "[]")
+                 ) if getattr(r, "action_errors", None) is not None else [],
                  "created_at": r.created_at.isoformat() if r.created_at else None,
                  "received_at": r.received_at.isoformat()
                  if getattr(r, "received_at", None) else None,
@@ -647,11 +653,12 @@ async def _apply_and_log_match(
     email_executed_rules row. Shared by the auto-run and process-past jobs so
     multi-rule execution behaves identically in both."""
     rule = match["rule"]
+    action_errors: list[dict[str, str]] = []
     if apply:
         actions_taken = await _apply_rule_actions(
             db, provider, str(r.id), r.provider_message_id,
             rule["actions"], email, about, signature, account_user,
-            account_id=account_id,
+            account_id=account_id, errors_out=action_errors,
         )
         status = "APPLIED"
         # inbox-zero parity: when the AI (not a static/learned-pattern rule)
@@ -675,13 +682,15 @@ async def _apply_and_log_match(
         """INSERT INTO email_executed_rules
              (account_id, rule_id, rule_name, message_id, provider_message_id,
               thread_id, subject, from_address, status, automated, actions_taken,
-              reason)
+              reason, match_source, action_errors)
            VALUES (:aid, :rid, :rname, :mid, :pmid, :tid, :subj, :frm,
-                   :status, true, :acts, :reason)"""
+                   :status, true, :acts, :reason, :msrc,
+                   CAST(:aerr AS JSONB))"""
     ), {"aid": account_id, "rid": rule["id"], "rname": rule["name"],
         "mid": str(r.id), "pmid": r.provider_message_id, "tid": r.thread_id,
         "subj": r.subject or "", "frm": frm.get("email", ""), "status": status,
-        "acts": json.dumps(actions_taken), "reason": match["reason"]})
+        "acts": json.dumps(actions_taken), "reason": match["reason"],
+        "msrc": match.get("source"), "aerr": json.dumps(action_errors)})
 
 
 async def _process_past_emails_job(
@@ -1012,10 +1021,14 @@ async def _apply_rule_actions(
     db: Any, provider: Any, message_id: str, provider_msg_id: str,
     actions: list[dict[str, Any]], email: dict[str, str] | None = None,
     about: str = "", signature: str = "", user_email: str = "",
-    account_id: str = "",
+    account_id: str = "", errors_out: list[dict[str, str]] | None = None,
 ) -> list[str]:
     """Apply a rule's actions. Reply/forward/draft create provider DRAFTS (never
-    auto-send) so a misfiring rule can't email anyone without review."""
+    auto-send) so a misfiring rule can't email anyone without review.
+
+    If ``errors_out`` is provided, each action that raises is appended as
+    ``{"type", "error"}`` so the History view can show inbox-zero-style
+    "Action issues" (the action is still dropped from the returned list)."""
     email = email or {}
     done: list[str] = []
     # Draft-confidence threshold (gates AI-written REPLY/DRAFT_EMAIL drafts).
@@ -1171,4 +1184,6 @@ async def _apply_rule_actions(
             done.append(t)
         except Exception as exc:  # noqa: BLE001
             _log.warning("email.rule_action_failed", action=t, error=str(exc)[:120])
+            if errors_out is not None:
+                errors_out.append({"type": t or "?", "error": str(exc)[:160]})
     return done

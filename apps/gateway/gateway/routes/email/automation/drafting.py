@@ -321,10 +321,89 @@ async def _learn_from_sent(account_id: str, thread_id: str, sent_text: str) -> N
             )
         except Exception:  # noqa: BLE001
             pass
+        # Regenerate the learned writing style once enough new evidence accrued.
+        await _maybe_refresh_learned_style(db, account_id)
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.learn_from_sent_failed", error=str(exc)[:160])
     finally:
         await db.close()
+
+
+_MIN_STYLE_EVIDENCE = 5
+_STYLE_REFRESH_EVERY = 5
+
+
+async def _llm_summarize_writing_style(prefs: list[str]) -> str:
+    """Distil accumulated reply preferences into a concise writing-style guide
+    (inbox-zero's aiSummarizeLearnedWritingStyle)."""
+    if not prefs:
+        return ""
+    try:
+        import litellm as _litellm  # noqa: PLC0415
+        from acb_llm.client import _TIER_MODEL, ensure_model_registered  # noqa: PLC0415
+        from litellm import acompletion  # noqa: PLC0415
+        _litellm.drop_params = True
+        _litellm.suppress_debug_info = True
+        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
+        ensure_model_registered(model)
+        sys_prompt = (
+            "You distil a user's email writing style from preferences observed in "
+            "how they edit the assistant's drafts. Output 3-6 short, concrete "
+            "bullet guidelines (tone, length, greeting/sign-off, formatting, what "
+            "to include or omit). No preamble — just the bullet lines."
+        )
+        resp = await acompletion(
+            model=model,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": "Preferences:\n"
+                       + "\n".join(f"- {p}" for p in prefs[:25])}],
+            temperature=0.2, max_tokens=300,
+        )
+        return (resp.choices[0].message.content or "").strip()[:1500]
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.summarize_style_failed", error=str(exc)[:160])
+        return ""
+
+
+async def _maybe_refresh_learned_style(db: Any, account_id: str) -> None:
+    """Regenerate the learned writing style once enough new PREFERENCE evidence
+    has accumulated since the last refresh (inbox-zero parity)."""
+    try:
+        cnt = (await db.execute(text(
+            "SELECT COUNT(*) AS n FROM email_learned_patterns "
+            "WHERE account_id = :aid AND is_style_evidence = true"
+        ), {"aid": account_id})).fetchone()
+        cur = int(cnt.n) if cnt else 0
+        if cur == 0:
+            return
+        srow = (await db.execute(text(
+            "SELECT learned_writing_style, learned_style_evidence_count "
+            "FROM email_assistant_settings WHERE account_id = :aid"
+        ), {"aid": account_id})).fetchone()
+        have_style = bool(srow and (srow.learned_writing_style or "").strip())
+        last = int(getattr(srow, "learned_style_evidence_count", 0) or 0) if srow else 0
+        need = ((not have_style and cur >= _MIN_STYLE_EVIDENCE)
+                or (cur - last >= _STYLE_REFRESH_EVERY))
+        if not need:
+            return
+        prefs = [r.pattern for r in (await db.execute(text(
+            "SELECT pattern FROM email_learned_patterns "
+            "WHERE account_id = :aid AND is_style_evidence = true "
+            "ORDER BY weight DESC, updated_at DESC LIMIT 25"
+        ), {"aid": account_id})).fetchall() if r.pattern]
+        style = await _llm_summarize_writing_style(prefs)
+        if not style:
+            return
+        await db.execute(text(
+            "UPDATE email_assistant_settings SET learned_writing_style = :s, "
+            "learned_style_evidence_count = :c, updated_at = now() "
+            "WHERE account_id = :aid"
+        ), {"s": style, "c": cur, "aid": account_id})
+        await db.commit()
+        _log.info("email.learned_style_refreshed",
+                  account_id=account_id, evidence=cur)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.refresh_style_failed", error=str(exc)[:160])
 
 
 async def _llm_draft_reply(
@@ -374,10 +453,13 @@ async def _llm_draft_reply(
             "- Never use placeholders for names (e.g. [Your Name], [Name]). "
             f"{sig_rule}\n"
             "- If the context contains <personal_instructions>, follow them. If "
-            "it contains <writing_style>, match that tone, length, and phrasing. "
-            "If it contains a <knowledge_base>, use it for facts only where "
-            "relevant. If it contains <learned_patterns>, treat them as advisory "
-            "preferences from the user's past edits and apply the ones that fit."
+            "it contains <writing_style>, match that tone, length, and phrasing "
+            "(an explicit <writing_style> outranks <learned_writing_style>, which "
+            "is auto-derived and advisory). If it contains a <knowledge_base>, "
+            "use it for facts only where relevant. If it contains "
+            "<learned_patterns> or <reply_memories>, treat them as advisory "
+            "preferences/facts from the user's past edits and apply the ones that "
+            "fit."
         )
         owner = f"You are drafting as: {user_email}\n" if user_email else ""
         ctx = f"{owner}User context:\n{about}\n\n" if (about or owner) else ""
@@ -568,16 +650,29 @@ _FOLLOW_UP_INSTRUCTION = (
 DRAFT_NO_DRAFT_SENTINEL = "NO_DRAFT"
 
 
+# Granular confidence rubric ported from inbox-zero's drafter, so the NO_DRAFT
+# gate reasons about *why* a draft is/ isn't trustworthy, not just "unsure".
+_CONFIDENCE_RUBRIC = (
+    "Judge your confidence in the draft: HIGH = complete and fully grounded — "
+    "every fact comes from the email/thread/context, with no reliance on missing "
+    "facts, assumptions, unavailable business or calendar state, or details only "
+    "the user can fill in. MEDIUM = a useful reply that leans on reasonable "
+    "assumptions or a few user-fillable details. LOW = highly uncertain, needs "
+    "broader context, or would mostly just ask/check/follow up."
+)
+
 _CONFIDENCE_INSTRUCTIONS = {
     "STANDARD": (
-        "Only draft a reply if you clearly understand the email and a reply is "
-        "appropriate. If you are unsure how to respond, output exactly "
+        _CONFIDENCE_RUBRIC + " Draft only when your confidence is MEDIUM or "
+        "higher. If it would be LOW (you don't clearly understand the email, or a "
+        "reply isn't appropriate), output exactly "
         f"{DRAFT_NO_DRAFT_SENTINEL} and nothing else."
     ),
     "HIGH_CONFIDENCE": (
-        "Only draft a reply if you are highly confident a reply is needed and you "
-        "can write an accurate, complete response from the context given. If there "
-        f"is any doubt, output exactly {DRAFT_NO_DRAFT_SENTINEL} and nothing else."
+        _CONFIDENCE_RUBRIC + " Draft ONLY when your confidence is HIGH — a "
+        "complete, accurate, fully-grounded reply. At MEDIUM or LOW (any doubt, "
+        "missing facts, or assumptions), output exactly "
+        f"{DRAFT_NO_DRAFT_SENTINEL} and nothing else."
     ),
 }
 

@@ -22,13 +22,16 @@ async def _load_assistant_about(db: Any, account_id: str) -> tuple[str, str]:
     drafter and the MAF agent. Empty string if nothing is set.
     """
     row = (await db.execute(text(
-        """SELECT about, signature, personal_instructions, writing_style
+        """SELECT about, signature, personal_instructions, writing_style,
+                  learned_writing_style
            FROM email_assistant_settings WHERE account_id = :aid"""
     ), {"aid": account_id})).fetchone()
     about = (row.about if row else "") or ""
     signature = (row.signature if row else "") or ""
     personal = (getattr(row, "personal_instructions", None) or "") if row else ""
     style = (getattr(row, "writing_style", None) or "") if row else ""
+    learned_style = (
+        getattr(row, "learned_writing_style", None) or "") if row else ""
 
     kb_rows = (await db.execute(text(
         """SELECT title, content FROM email_knowledge
@@ -45,6 +48,13 @@ async def _load_assistant_about(db: Any, account_id: str) -> tuple[str, str]:
         )
     if style.strip():
         parts.append(f"<writing_style>\n{style.strip()}\n</writing_style>")
+    # Auto-derived from the user's draft edits — advisory, lower priority than an
+    # explicit writing_style.
+    if learned_style.strip():
+        parts.append(
+            "<learned_writing_style>\n"
+            f"{learned_style.strip()}\n</learned_writing_style>"
+        )
     if kb_rows:
         kb_text, budget = [], 4000
         for k in kb_rows:

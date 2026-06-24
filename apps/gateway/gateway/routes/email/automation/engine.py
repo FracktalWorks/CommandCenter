@@ -223,9 +223,12 @@ async def _llm_pick_rules(
             "You are an email classifier helping the user manage their inbox. "
             "Given an email and a numbered list of rules, choose EVERY rule that "
             "genuinely applies to the email (there may be more than one, or none). "
-            "Do not force a match. " + _CLASSIFIER_GUIDELINES
+            "Do not force a match. Mark exactly ONE match as the primary (the "
+            "single most specific rule that best fits the email) with "
+            '"primary": true. ' + _CLASSIFIER_GUIDELINES
             + ' Respond with ONLY a JSON object: {"matches": [{"index": <number>, '
-            '"reason": "<short why>"}]} — an empty list if none apply.'
+            '"reason": "<short why>", "primary": <true|false>}]} — an empty list '
+            "if none apply."
         )
         user_prompt = (
             f"{_email_block(email)}\n\nRULES\n{rule_lines}{_hint_block(hints)}"
@@ -247,7 +250,9 @@ async def _llm_pick_rules(
                 idx = m.get("index")
                 if isinstance(idx, int) and 0 <= idx < len(rules) and idx not in seen:
                     seen.add(idx)
-                    out.append({"index": idx, "reason": str(m.get("reason", ""))[:300]})
+                    out.append({"index": idx,
+                                "reason": str(m.get("reason", ""))[:300],
+                                "primary": bool(m.get("primary"))})
         return out
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.llm_pick_rules_failed", error=str(exc)[:200])
@@ -393,12 +398,14 @@ async def _match_email_to_rules_multi(
     matches: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    def _add(rule: dict[str, Any], reason: str, source: str) -> None:
+    def _add(rule: dict[str, Any], reason: str, source: str,
+             is_primary: bool = False) -> None:
         rid = str(rule.get("id"))
         if rid in seen:
             return
         seen.add(rid)
-        matches.append({"rule": rule, "reason": reason, "source": source})
+        matches.append({"rule": rule, "reason": reason, "source": source,
+                        "is_primary": is_primary})
 
     # Learned INCLUDE patterns match immediately (and skip the LLM for that rule).
     for rule in rules:
@@ -424,12 +431,15 @@ async def _match_email_to_rules_multi(
         hints = await _fetch_classification_hints(db, account_id, email.get("from", ""))
         for pick in await _llm_pick_rules(email, instruction_rules, hints=hints):
             _add(instruction_rules[pick["index"]],
-                 pick["reason"] or "Matched by AI.", "ai")
+                 pick["reason"] or "Matched by AI.", "ai",
+                 is_primary=bool(pick.get("primary")))
 
-    # Apply matched rules in canonical system order (rules already arrive from
-    # _load_rules sorted that way — inbox-zero parity, not a user priority).
+    # The LLM-chosen primary (most specific) leads; the rest follow in canonical
+    # system order (rules arrive from _load_rules sorted that way — inbox-zero
+    # parity, not a user priority).
     order = {str(r.get("id")): i for i, r in enumerate(rules)}
-    matches.sort(key=lambda m: order.get(str(m["rule"].get("id")), 1_000))
+    matches.sort(key=lambda m: (0 if m.get("is_primary") else 1,
+                                order.get(str(m["rule"].get("id")), 1_000)))
     return matches
 
 

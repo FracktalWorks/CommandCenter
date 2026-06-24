@@ -2356,6 +2356,7 @@ function RuleResultPill({
   onViewRule,
   matchSource,
   actionErrors,
+  draftPreview,
 }: {
   matched: boolean;
   ruleName: string | null;
@@ -2368,6 +2369,7 @@ function RuleResultPill({
   onViewRule?: (ruleId: string) => void;
   matchSource?: string | null;
   actionErrors?: { type: string; error: string }[] | null;
+  draftPreview?: string | null;
 }) {
   const pill = (
     <span
@@ -2387,6 +2389,7 @@ function RuleResultPill({
   const sm = statusMeta(status);
   const srcLabel = matchSourceLabel(matchSource);
   const errs = actionErrors ?? [];
+  const draft = (draftPreview || "").trim();
   return (
     <HoverPopover trigger={pill}>
       <div className="space-y-2">
@@ -2430,6 +2433,16 @@ function RuleResultPill({
                       {actionLabel(t)}
                     </span>
                   ))}
+            </div>
+          </div>
+        )}
+        {draft && (
+          <div>
+            <div className="text-[9px] uppercase tracking-wide text-muted-foreground/70 mb-1 flex items-center gap-1">
+              <PenLine size={10} /> Drafted reply
+            </div>
+            <div className="text-[10px] text-foreground/90 bg-secondary/40 rounded-md px-2 py-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap break-words">
+              {draft}
             </div>
           </div>
         )}
@@ -3307,6 +3320,7 @@ function HistoryRow({
           onViewRule={onViewRule}
           matchSource={h.match_source}
           actionErrors={h.action_errors}
+          draftPreview={h.draft_preview}
         />
         {accountId && (
           <FixButton

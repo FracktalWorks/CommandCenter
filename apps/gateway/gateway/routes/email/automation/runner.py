@@ -22,6 +22,7 @@ from gateway.routes.email.automation.engine import (
     _email_payload_from_id,
     _match_email_to_rule,
     _match_email_to_rules_multi,
+    email_dict_from_row,
 )
 from gateway.routes.email.automation.rules import _upsert_rule_pattern
 from gateway.routes.email.automation.senders import _maybe_block_cold
@@ -37,6 +38,18 @@ from gateway.routes.email.core import (
 )
 from pydantic import BaseModel
 from sqlalchemy import text
+
+
+async def _account_self_email(db: Any, account_id: str) -> str:
+    """The connected account's own address — passed to the classifier so it can
+    tell whether the mailbox owner is a direct recipient (To) or only CC'd."""
+    try:
+        row = (await db.execute(text(
+            "SELECT email_address FROM email_accounts WHERE id = :id"
+        ), {"id": account_id})).fetchone()
+        return (row.email_address or "") if row else ""
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 class RuleTestRequest(BaseModel):
@@ -93,8 +106,11 @@ async def test_rules_recent(
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        self_email = await _account_self_email(db, req.account_id)
+        about, _ = await _load_assistant_about(db, req.account_id)
         rows = (await db.execute(text(
-            """SELECT id, subject, body_text, snippet, from_address
+            """SELECT id, subject, body_text, snippet, from_address,
+                      to_addresses, cc_addresses, thread_id, received_at
                FROM email_messages
                WHERE account_id = :aid AND LOWER(folder) = 'inbox'
                ORDER BY received_at DESC LIMIT :limit"""
@@ -103,8 +119,7 @@ async def test_rules_recent(
         for r in rows:
             frm = r.from_address if isinstance(r.from_address, dict) \
                 else json.loads(r.from_address or "{}")
-            email = {"subject": r.subject or "", "from": frm.get("email", ""),
-                     "body": r.body_text or r.snippet or "", "to": ""}
+            email = email_dict_from_row(r, self_email, about)
             match = await _match_email_to_rule(db, req.account_id, email)
             results.append({
                 "email_id": str(r.id),
@@ -154,10 +169,13 @@ async def rules_history(
                        er.created_at, er.match_source, er.action_errors,
                        er.message_id, em.snippet, em.received_at, em.categories,
                        r.instructions, r.from_pattern, r.to_pattern,
-                       r.subject_pattern, r.body_pattern, r.conditional_operator
+                       r.subject_pattern, r.body_pattern, r.conditional_operator,
+                       d.draft_text
                 FROM email_executed_rules er
                 LEFT JOIN email_messages em ON er.message_id = em.id
                 LEFT JOIN email_rules r ON er.rule_id = r.id
+                LEFT JOIN email_ai_drafts d
+                  ON d.account_id = er.account_id AND d.thread_id = em.thread_id
                 WHERE {scope}
                 ORDER BY COALESCE(em.received_at, er.created_at) DESC LIMIT :limit"""
         ), params)).fetchall()
@@ -202,6 +220,9 @@ async def rules_history(
                  "created_at": r.created_at.isoformat() if r.created_at else None,
                  "received_at": r.received_at.isoformat()
                  if getattr(r, "received_at", None) else None,
+                 # The AI draft generated for this thread (DRAFT_EMAIL action),
+                 # so the hover pill can preview it. Cleared once the user sends.
+                 "draft_preview": (getattr(r, "draft_text", None) or None),
                  "labels": (
                      r.categories if isinstance(r.categories, list)
                      else json.loads(r.categories or "[]")
@@ -556,7 +577,8 @@ async def run_rules_on_message(
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         row = (await db.execute(text(
             """SELECT id, provider_message_id, thread_id, subject, body_text,
-                      snippet, from_address
+                      snippet, from_address, to_addresses, cc_addresses,
+                      received_at
                FROM email_messages
                WHERE id = :mid AND account_id = :aid"""
         ), {"mid": req.message_id, "aid": req.account_id})).fetchone()
@@ -565,11 +587,9 @@ async def run_rules_on_message(
 
         frm = row.from_address if isinstance(row.from_address, dict) \
             else json.loads(row.from_address or "{}")
-        email = {
-            "subject": row.subject or "", "from": frm.get("email", ""),
-            "body": row.body_text or row.snippet or "", "to": "",
-            "thread_id": row.thread_id or "",
-        }
+        about, _ = await _load_assistant_about(db, req.account_id)
+        email = email_dict_from_row(
+            row, await _account_self_email(db, req.account_id), about)
         match = await _match_email_to_rule(db, req.account_id, email)
 
         if req.is_test:
@@ -712,7 +732,8 @@ async def _process_past_emails_job(
         params["limit"] = limit
         rows = (await db.execute(text(
             f"""SELECT em.id, em.provider_message_id, em.thread_id, em.subject,
-                       em.body_text, em.snippet, em.from_address
+                       em.body_text, em.snippet, em.from_address,
+                       em.to_addresses, em.cc_addresses, em.received_at
                 FROM email_messages em
                 WHERE {clause}
                 ORDER BY em.received_at ASC LIMIT :limit"""
@@ -723,9 +744,10 @@ async def _process_past_emails_job(
 
         about, signature = await _load_assistant_about(db, account_id)
         owner_row = (await db.execute(text(
-            "SELECT user_id FROM email_accounts WHERE id = :aid"
+            "SELECT user_id, email_address FROM email_accounts WHERE id = :aid"
         ), {"aid": account_id})).fetchone()
         account_user = owner_row.user_id if owner_row else (user_email or "")
+        self_email = (owner_row.email_address or "") if owner_row else ""
         mr_row = (await db.execute(text(
             "SELECT multi_rule_execution FROM email_assistant_settings "
             "WHERE account_id = :aid"
@@ -749,11 +771,7 @@ async def _process_past_emails_job(
         for r in rows:
             frm = r.from_address if isinstance(r.from_address, dict) \
                 else json.loads(r.from_address or "{}")
-            email = {
-                "subject": r.subject or "", "from": frm.get("email", ""),
-                "body": r.body_text or r.snippet or "", "to": "",
-                "thread_id": r.thread_id or "",
-            }
+            email = email_dict_from_row(r, self_email, about)
             if multi_rule:
                 matches = await _match_email_to_rules_multi(db, account_id, email)
             else:
@@ -811,7 +829,8 @@ async def _run_rules_job(
     try:
         rows = (await db.execute(text(
             """SELECT em.id, em.provider_message_id, em.thread_id, em.subject,
-                      em.body_text, em.snippet, em.from_address
+                      em.body_text, em.snippet, em.from_address,
+                      em.to_addresses, em.cc_addresses, em.received_at
                FROM email_messages em
                WHERE em.account_id = :aid AND LOWER(em.folder) = 'inbox'
                  AND em.rules_processed_at IS NULL
@@ -822,9 +841,10 @@ async def _run_rules_job(
 
         about, signature = await _load_assistant_about(db, account_id)
         owner_row = (await db.execute(text(
-            "SELECT user_id FROM email_accounts WHERE id = :aid"
+            "SELECT user_id, email_address FROM email_accounts WHERE id = :aid"
         ), {"aid": account_id})).fetchone()
         account_user = owner_row.user_id if owner_row else (user_email or "")
+        self_email = (owner_row.email_address or "") if owner_row else ""
         cold_blocker = "OFF"
         multi_rule = False
         cb_row = (await db.execute(text(
@@ -853,11 +873,7 @@ async def _run_rules_job(
         for r in rows:
             frm = r.from_address if isinstance(r.from_address, dict) \
                 else json.loads(r.from_address or "{}")
-            email = {
-                "subject": r.subject or "", "from": frm.get("email", ""),
-                "body": r.body_text or r.snippet or "", "to": "",
-                "thread_id": r.thread_id or "",
-            }
+            email = email_dict_from_row(r, self_email, about)
             # Multi-rule execution (inbox-zero parity): when on, every matching
             # rule applies; otherwise just the single best match.
             if multi_rule:

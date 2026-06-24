@@ -12,6 +12,102 @@ from gateway.routes.email.core import _log, _safe_json
 from sqlalchemy import text
 
 
+def _fmt_recipients(field: Any) -> str:
+    """A JSONB ``[{name, email}]`` recipient list → ``"Name <email>, …"`` for the
+    classifier prompt. Empty string when there are none."""
+    try:
+        items = field if isinstance(field, list) else json.loads(field or "[]")
+    except Exception:  # noqa: BLE001
+        return ""
+    out: list[str] = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        em, nm = (it.get("email") or "").strip(), (it.get("name") or "").strip()
+        if em and nm:
+            out.append(f"{nm} <{em}>")
+        elif em or nm:
+            out.append(em or nm)
+    return ", ".join(out)
+
+
+def email_dict_from_row(
+    row: Any, self_email: str = "", about: str = "", self_name: str = "",
+) -> dict[str, str]:
+    """Build the classifier's email dict from an ``email_messages`` row.
+
+    Mirrors the inputs inbox-zero feeds its rule AI: the recipient envelope
+    (``to`` / ``cc``) + the account's own address/name (``self`` / ``self_name``)
+    so it can tell direct-recipient from CC'd, the email ``date``, and the user's
+    free-text ``about`` context (role / preferences) for relevance judgement."""
+    raw_from = getattr(row, "from_address", None)
+    frm = raw_from if isinstance(raw_from, dict) else json.loads(raw_from or "{}")
+    received = getattr(row, "received_at", None)
+    return {
+        "subject": getattr(row, "subject", "") or "",
+        "from": frm.get("email", ""),
+        "body": getattr(row, "body_text", None) or getattr(row, "snippet", None) or "",
+        "to": _fmt_recipients(getattr(row, "to_addresses", None)),
+        "cc": _fmt_recipients(getattr(row, "cc_addresses", None)),
+        "self": self_email or "",
+        "self_name": self_name or "",
+        "about": about or "",
+        "date": received.isoformat() if hasattr(received, "isoformat") else "",
+        "thread_id": getattr(row, "thread_id", "") or "",
+    }
+
+
+def _user_info_block(email: dict[str, str]) -> str:
+    """Who the AI is acting for (inbox-zero's ``getUserInfoPrompt`` parity):
+    the owner's email, name and free-text "about" context."""
+    parts = []
+    if email.get("self"):
+        parts.append(f"  email: {email['self']}")
+    if email.get("self_name"):
+        parts.append(f"  name: {email['self_name']}")
+    if (email.get("about") or "").strip():
+        parts.append(f"  about: {email['about'].strip()[:1200]}")
+    if not parts:
+        return ""
+    body = "\n".join(parts)
+    return f"USER (you are acting on behalf of this person):\n{body}\n\n"
+
+
+def _email_block(email: dict[str, str]) -> str:
+    """Render the email envelope for the classifier prompt — including To/Cc, the
+    date, and who "You" are, so recipient role (direct vs CC'd) is visible."""
+    date_line = f"Date: {email['date']}\n" if email.get("date") else ""
+    return (
+        _user_info_block(email)
+        + f"EMAIL\nFrom: {email.get('from', '')}\n"
+        f"To: {email.get('to', '') or '(unknown)'}\n"
+        f"Cc: {email.get('cc', '') or '(none)'}\n"
+        + date_line
+        + f"Subject: {email.get('subject', '')}\n"
+        f"Body: {(email.get('body', '') or '')[:1500]}"
+    )
+
+
+_RECIPIENT_GUIDELINE = (
+    "Consider whether the mailbox owner is a direct recipient (in To) or only "
+    "CC'd: an email where they are merely CC'd is usually informational and does "
+    "not require a reply from them."
+)
+
+# Classification guidance ported from inbox-zero's choose-rule system prompt, so
+# our rule AI reasons the same way (specific over catch-all, honour excludes,
+# more-specific wins, reply rules only when a response is genuinely needed).
+_CLASSIFIER_GUIDELINES = (
+    "Follow these guidelines: (1) Match the email to the most SPECIFIC rule that "
+    "fits its content and purpose; when several could apply, prefer the more "
+    "specific one. (2) If a rule says to exclude certain emails, do NOT pick it "
+    "for those. (3) Prioritise reply-related rules only when the email clearly "
+    "needs a response from the mailbox owner. " + _RECIPIENT_GUIDELINE + " "
+    "(4) Use the USER context (their role and what they care about) to judge "
+    "relevance, and only fall back to a catch-all rule when no specific rule fits."
+)
+
+
 async def _llm_pick_rule(
     email: dict[str, str], rules: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
@@ -36,14 +132,13 @@ async def _llm_pick_rule(
             for i, r in enumerate(rules)
         )
         sys_prompt = (
-            "You are an email classifier. Given an email and a numbered list of "
-            "rules, choose the single best-matching rule. Respond with ONLY a JSON "
-            'object: {"index": <number or -1 if none match>, "reason": "<short why>"}.'
+            "You are an email classifier helping the user manage their inbox. "
+            "Given an email and a numbered list of rules, choose the single "
+            "best-matching rule. " + _CLASSIFIER_GUIDELINES
+            + ' Respond with ONLY a JSON object: {"index": <number or -1 if none '
+            'match>, "reason": "<short why>"}.'
         )
-        user_prompt = (
-            f"EMAIL\nFrom: {email.get('from','')}\nSubject: {email.get('subject','')}\n"
-            f"Body: {(email.get('body','') or '')[:1500]}\n\nRULES\n{rule_lines}"
-        )
+        user_prompt = f"{_email_block(email)}\n\nRULES\n{rule_lines}"
         resp = await acompletion(
             model=model,
             messages=[{"role": "system", "content": sys_prompt},
@@ -87,16 +182,14 @@ async def _llm_pick_rules(
             for i, r in enumerate(rules)
         )
         sys_prompt = (
-            "You are an email classifier. Given an email and a numbered list of "
-            "rules, choose EVERY rule that genuinely applies to the email (there "
-            "may be more than one, or none). Do not force a match. Respond with "
-            'ONLY a JSON object: {"matches": [{"index": <number>, "reason": '
-            '"<short why>"}]} — an empty list if none apply.'
+            "You are an email classifier helping the user manage their inbox. "
+            "Given an email and a numbered list of rules, choose EVERY rule that "
+            "genuinely applies to the email (there may be more than one, or none). "
+            "Do not force a match. " + _CLASSIFIER_GUIDELINES
+            + ' Respond with ONLY a JSON object: {"matches": [{"index": <number>, '
+            '"reason": "<short why>"}]} — an empty list if none apply.'
         )
-        user_prompt = (
-            f"EMAIL\nFrom: {email.get('from','')}\nSubject: {email.get('subject','')}\n"
-            f"Body: {(email.get('body','') or '')[:1500]}\n\nRULES\n{rule_lines}"
-        )
+        user_prompt = f"{_email_block(email)}\n\nRULES\n{rule_lines}"
         resp = await acompletion(
             model=model,
             messages=[{"role": "system", "content": sys_prompt},
@@ -299,16 +392,12 @@ async def _match_email_to_rules_multi(
 
 async def _email_payload_from_id(db: Any, message_id: str, user_email: str) -> dict[str, str]:
     row = (await db.execute(text(
-        """SELECT em.subject, em.body_text, em.snippet, em.from_address, em.to_addresses
+        """SELECT em.subject, em.body_text, em.snippet, em.from_address,
+                  em.to_addresses, em.cc_addresses, em.thread_id, em.received_at,
+                  ea.email_address
            FROM email_messages em JOIN email_accounts ea ON em.account_id = ea.id
            WHERE em.id = :mid AND ea.user_id = :uid"""
     ), {"mid": message_id, "uid": user_email})).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Message not found")
-    frm = row.from_address if isinstance(row.from_address, dict) else json.loads(row.from_address or "{}")
-    return {
-        "subject": row.subject or "",
-        "body": row.body_text or row.snippet or "",
-        "from": frm.get("email", ""),
-        "to": "",
-    }
+    return email_dict_from_row(row, getattr(row, "email_address", "") or "")

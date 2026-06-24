@@ -11,6 +11,7 @@ from fastapi import Depends, HTTPException, Query, status
 from gateway.routes.email.core import (
     MAX_BODY_HTML_BYTES,
     MAX_BODY_TEXT_BYTES,
+    AttachmentModel,
     EmailMessageModel,
     _fetch_attachments,
     _get_db,
@@ -175,6 +176,54 @@ async def list_messages(
         await db.close()
 
 
+async def _hydrate_attachments(
+    db: Any, message_id: str, user_email: str
+) -> list[AttachmentModel]:
+    """Fetch a message from its provider and persist its attachment metadata,
+    then return it.
+
+    Attachment rows are only ever created on demand. The body-hydration path
+    below stores them too, but it runs only when the body is missing — so a
+    message whose body arrived via sync (or was hydrated before attachment
+    support shipped) would never get its attachments stored. This closes that
+    gap: when a message advertises attachments but none are stored, fetch and
+    store them regardless of the body state."""
+    try:
+        provider, provider_msg_id, account_id, store = await _provider_for_message(
+            db, message_id, user_email
+        )
+        if not await provider.authenticate():
+            return []
+        full = await provider.get_message(provider_msg_id)
+        for att in full.attachments:
+            await db.execute(
+                text(
+                    """INSERT INTO email_attachments
+                       (message_id, filename, mime_type, size_bytes,
+                        provider_attachment_id)
+                       VALUES (:mid, :filename, :mime_type, :size_bytes,
+                               :provider_attachment_id)
+                       ON CONFLICT DO NOTHING"""
+                ),
+                {
+                    "mid": message_id,
+                    "filename": att.filename,
+                    "mime_type": att.mime_type,
+                    "size_bytes": att.size_bytes,
+                    "provider_attachment_id": att.provider_attachment_id,
+                },
+            )
+        await _persist_rotated_creds(db, store, account_id, provider)
+        await db.commit()
+        return await _fetch_attachments(db, message_id)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning(
+            "get_message.attach_hydrate_failed",
+            message_id=message_id, error=str(exc)[:200],
+        )
+        return []
+
+
 @router.get("/messages/{message_id}", response_model=EmailMessageModel)
 async def get_message(
     message_id: str,
@@ -278,6 +327,12 @@ async def get_message(
 
         if msg.has_attachments:
             msg.attachments = await _fetch_attachments(db, message_id)
+            # Body came from sync (so the hydration block above didn't run) but
+            # the attachments were never stored — fetch + store them now.
+            if not msg.attachments:
+                msg.attachments = await _hydrate_attachments(
+                    db, message_id, user.email or "anonymous"
+                )
         return msg
     finally:
         await db.close()

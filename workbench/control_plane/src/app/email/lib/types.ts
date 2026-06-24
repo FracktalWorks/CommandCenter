@@ -291,6 +291,8 @@ export interface ExecutedRule {
   match_source?: string | null;
   /** Actions that failed during the run ({type, error}) — "Action issues". */
   action_errors?: { type: string; error: string }[] | null;
+  /** The AI draft generated for this thread (DRAFT_EMAIL), to preview in the pill. */
+  draft_preview?: string | null;
   /** Matched rule's conditions, for the hover popover (null when no match). */
   conditions?: RuleConditions | null;
   /** Matched rule's full action specs (label/to/subject…), for the popover. */

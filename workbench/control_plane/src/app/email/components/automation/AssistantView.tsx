@@ -3288,23 +3288,6 @@ function HistoryRow({
             ))}
           </div>
         )}
-        {(h.labels?.length ?? 0) > 0 && (
-          <div className="flex flex-wrap gap-1 mt-1">
-            {h.labels!.slice(0, 3).map((l) => (
-              <span
-                key={l}
-                className="inline-flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20"
-              >
-                <Tag size={8} /> {l}
-              </span>
-            ))}
-            {h.labels!.length > 3 && (
-              <span className="text-[9px] text-muted-foreground self-center">
-                +{h.labels!.length - 3}
-              </span>
-            )}
-          </div>
-        )}
         {!h.automated && (
           <span className="inline-block mt-1 text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400">
             Applied manually

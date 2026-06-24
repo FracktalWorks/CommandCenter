@@ -11,17 +11,26 @@ def test_normalize_text_collapses_whitespace_and_case() -> None:
     assert m._normalize_text("  Hi   THERE\n\n") == "hi there"
 
 
-async def test_learn_from_sent_stores_pattern_when_edited() -> None:
-    draft_row = SimpleNamespace(
-        draft_text="Hi,\n\nThanks for reaching out. Best regards, Vijay Varada")
+async def test_learn_from_sent_stores_memories_when_edited() -> None:
+    # One row satisfies every query the function makes (draft, inbound, user).
+    row = SimpleNamespace(
+        draft_text="Hi,\n\nThanks for reaching out. Best regards, Vijay Varada",
+        from_address={"email": "alice@acme.com"},
+        body_text="Original incoming message", snippet="",
+        user_id="u@example.com")
     res = MagicMock()
-    res.fetchone.return_value = draft_row
+    res.fetchone.return_value = row
     db = AsyncMock()
     db.execute.return_value = res
+    memories = AsyncMock(return_value=[
+        {"content": "Keep sign-offs to my first name.", "kind": "PREFERENCE",
+         "scope": "GLOBAL", "topic": ""},
+    ])
     with patch.object(m.automation.drafting, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m.automation.drafting, "_llm_distill_edit",
-                         AsyncMock(return_value="Keep sign-offs to my first name.")):
+            patch.object(m.automation.drafting, "_llm_extract_reply_memories",
+                         memories):
         await m._learn_from_sent("acc-1", "t1", "Hi,\n\nThanks. Best, Vijay")
+    memories.assert_awaited()
     # delete-commit + insert-commit
     assert db.commit.await_count == 2
 
@@ -34,7 +43,7 @@ async def test_learn_skips_llm_when_unchanged() -> None:
     db.execute.return_value = res
     llm = AsyncMock()
     with patch.object(m.automation.drafting, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m.automation.drafting, "_llm_distill_edit", llm):
+            patch.object(m.automation.drafting, "_llm_extract_reply_memories", llm):
         # Same text (modulo whitespace) → nothing to learn.
         await m._learn_from_sent("acc-1", "t1", "Hi there,   thanks!")
     llm.assert_not_awaited()
@@ -47,7 +56,7 @@ async def test_learn_noop_when_no_stored_draft() -> None:
     db.execute.return_value = res
     llm = AsyncMock()
     with patch.object(m.automation.drafting, "_get_db", AsyncMock(return_value=db)), \
-            patch.object(m.automation.drafting, "_llm_distill_edit", llm):
+            patch.object(m.automation.drafting, "_llm_extract_reply_memories", llm):
         await m._learn_from_sent("acc-1", "t1", "anything")
     llm.assert_not_awaited()
 

@@ -383,6 +383,12 @@ export interface LearnedPattern {
   id: string;
   pattern: string;
   weight: number;
+  /** FACT | PROCEDURE | PREFERENCE */
+  kind?: string | null;
+  /** SENDER | DOMAIN | TOPIC | GLOBAL */
+  scope_type?: string | null;
+  /** The sender email / domain / topic keyword for non-global scopes. */
+  scope_value?: string | null;
 }
 
 /** A draft knowledge-base entry the assistant draws on when writing replies. */

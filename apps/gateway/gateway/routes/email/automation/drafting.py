@@ -102,6 +102,38 @@ async def _fetch_sender_reply_examples(
     return "\n\n---\n\n".join(parts)
 
 
+async def _fetch_reply_memories(
+    db: Any, account_id: str, email: dict[str, str], *, limit: int = 6,
+) -> str:
+    """Scope-matched reply memories (SENDER/DOMAIN/TOPIC) for the email being
+    drafted — inbox-zero's <reply_memories>, prioritised SENDER > DOMAIN > TOPIC.
+    GLOBAL memories are injected separately via the enriched `about`."""
+    sender = (email.get("from") or "").strip().lower()
+    domain = sender.split("@")[-1] if "@" in sender else ""
+    content = f"{email.get('subject', '')} {email.get('body', '')}".lower()[:2000]
+    try:
+        rows = (await db.execute(text(
+            """SELECT pattern, kind, scope_type,
+                      CASE scope_type WHEN 'SENDER' THEN 3 WHEN 'DOMAIN' THEN 2
+                                      WHEN 'TOPIC' THEN 1 ELSE 0 END AS prio
+               FROM email_learned_patterns
+               WHERE account_id = :aid AND (
+                     (scope_type = 'SENDER' AND scope_value = :sender)
+                  OR (scope_type = 'DOMAIN' AND scope_value = :domain
+                      AND :domain <> '')
+                  OR (scope_type = 'TOPIC' AND scope_value <> ''
+                      AND :content LIKE '%' || scope_value || '%')
+               )
+               ORDER BY prio DESC, weight DESC, updated_at DESC
+               LIMIT :lim"""
+        ), {"aid": account_id, "sender": sender, "domain": domain,
+            "content": content, "lim": limit})).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.reply_memories_failed", error=str(exc)[:160])
+        return ""
+    return "\n".join(f"- [{r.kind}/{r.scope_type}] {r.pattern}" for r in rows)
+
+
 async def _store_ai_draft(
     db: Any, account_id: str, thread_id: str, draft_text: str
 ) -> None:
@@ -121,9 +153,22 @@ async def _store_ai_draft(
         _log.warning("email.store_ai_draft_failed", error=str(exc)[:160])
 
 
-async def _llm_distill_edit(original: str, edited: str) -> str:
-    """One durable preference from how the user changed the draft, or '' if the
-    change is trivial / not generalizable."""
+_PUBLIC_EMAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com",
+    "yahoo.com", "icloud.com", "me.com", "aol.com", "proton.me",
+    "protonmail.com", "gmx.com", "mail.com", "msn.com",
+})
+
+
+async def _llm_extract_reply_memories(
+    incoming: str, draft: str, sent: str,
+) -> list[dict[str, str]]:
+    """Extract 0-3 durable, reusable reply memories from how the user changed the
+    assistant's draft, each tagged with a KIND (FACT/PROCEDURE/PREFERENCE) and a
+    SCOPE (SENDER/DOMAIN/TOPIC/GLOBAL) — inbox-zero's scoped reply memories.
+
+    Returns [{content, kind, scope, topic}]; empty when nothing generalizable.
+    """
     try:
         import litellm as _litellm  # noqa: PLC0415
         from acb_llm.client import _TIER_MODEL, ensure_model_registered  # noqa: PLC0415
@@ -133,33 +178,76 @@ async def _llm_distill_edit(original: str, edited: str) -> str:
         model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
         ensure_model_registered(model)
         sys_prompt = (
-            "Compare the assistant's DRAFT reply with what the user actually "
-            "SENT. Identify ONE durable, generalizable preference about how this "
-            "user likes their replies written (tone, length, sign-off, phrasing, "
-            "what to include or omit). Ignore one-off factual edits specific to "
-            "this email. If there is no generalizable preference, output exactly "
-            "NONE. Otherwise output a single short instruction, e.g. 'Keep "
-            "sign-offs to just my first name.'"
+            "You learn how a user likes their email replies written by comparing "
+            "the assistant's DRAFT with what the user actually SENT (the INCOMING "
+            "email is given for context). Extract 0-3 DURABLE, REUSABLE memories; "
+            "ignore one-off facts specific to THIS email. For each, give:\n"
+            "- content: a short instruction or fact (e.g. 'Keep sign-offs to my "
+            "first name', 'I am the CTO', 'Attach the pricing PDF for demos').\n"
+            "- kind: FACT (a stable fact about the user/their work), PROCEDURE "
+            "(a how-to/step they follow), or PREFERENCE (tone/length/style).\n"
+            "- scope: SENDER (specific to this correspondent), DOMAIN (their "
+            "company), TOPIC (a recurring subject), or GLOBAL (all replies).\n"
+            "- topic: a 1-3 word keyword, ONLY when scope is TOPIC.\n"
+            'Respond with ONLY JSON: {"memories": [{"content","kind","scope",'
+            '"topic"}]} — an empty list if nothing is generalizable.'
+        )
+        user = (
+            f"INCOMING:\n{incoming[:1500]}\n\nDRAFT:\n{draft[:2000]}\n\n"
+            f"SENT:\n{sent[:2000]}"
         )
         resp = await acompletion(
             model=model,
             messages=[{"role": "system", "content": sys_prompt},
-                      {"role": "user",
-                       "content": f"DRAFT:\n{original[:2000]}\n\nSENT:\n{edited[:2000]}"}],
-            temperature=0, max_tokens=120,
+                      {"role": "user", "content": user}],
+            temperature=0, max_tokens=400,
         )
-        out = (resp.choices[0].message.content or "").strip()
-        if not out or out.upper().startswith("NONE"):
-            return ""
-        return out[:200]
+        data = _safe_json(resp.choices[0].message.content or "")
+        items = data.get("memories") if isinstance(data, dict) else None
+        out: list[dict[str, str]] = []
+        for m in (items or [])[:3]:
+            if not isinstance(m, dict):
+                continue
+            content = (m.get("content") or "").strip()
+            if not content:
+                continue
+            kind = (m.get("kind") or "PREFERENCE").upper()
+            if kind not in ("FACT", "PROCEDURE", "PREFERENCE"):
+                kind = "PREFERENCE"
+            scope = (m.get("scope") or "GLOBAL").upper()
+            if scope not in ("SENDER", "DOMAIN", "TOPIC", "GLOBAL"):
+                scope = "GLOBAL"
+            out.append({
+                "content": content[:240], "kind": kind, "scope": scope,
+                "topic": (m.get("topic") or "").strip().lower()[:60],
+            })
+        return out
     except Exception as exc:  # noqa: BLE001
-        _log.warning("email.distill_edit_failed", error=str(exc)[:160])
-        return ""
+        _log.warning("email.extract_memories_failed", error=str(exc)[:160])
+        return []
+
+
+def _resolve_memory_scope(
+    scope: str, topic: str, sender_email: str, domain: str,
+) -> tuple[str, str]:
+    """Map an extracted scope to a concrete (scope_type, scope_value), demoting
+    scopes that have no usable target (e.g. a public mailbox domain) to SENDER or
+    GLOBAL so the memory stays retrievable."""
+    if scope == "SENDER":
+        return ("SENDER", sender_email) if sender_email else ("GLOBAL", "")
+    if scope == "DOMAIN":
+        if domain and domain not in _PUBLIC_EMAIL_DOMAINS:
+            return ("DOMAIN", domain)
+        return ("SENDER", sender_email) if sender_email else ("GLOBAL", "")
+    if scope == "TOPIC":
+        return ("TOPIC", topic) if topic else ("GLOBAL", "")
+    return ("GLOBAL", "")
 
 
 async def _learn_from_sent(account_id: str, thread_id: str, sent_text: str) -> None:
     """Background: if the user edited the assistant's draft for this thread,
-    distil a learned preference and store it (best-effort)."""
+    extract scoped reply memories (sender/domain/topic/global) and store them
+    (best-effort)."""
     if not thread_id or not (sent_text or "").strip():
         return
     db = await _get_db()
@@ -179,20 +267,46 @@ async def _learn_from_sent(account_id: str, thread_id: str, sent_text: str) -> N
         if not original.strip() or \
                 _normalize_text(original) == _normalize_text(sent_text):
             return  # unchanged → nothing to learn
-        pattern = await _llm_distill_edit(original, sent_text)
-        if not pattern:
+
+        # Sender + incoming content, to scope the extracted memories.
+        inb = (await db.execute(text(
+            """SELECT from_address, body_text, snippet FROM email_messages
+               WHERE account_id = :aid AND thread_id = :tid
+                 AND LOWER(COALESCE(folder, '')) <> 'sent'
+               ORDER BY received_at DESC NULLS LAST LIMIT 1"""
+        ), {"aid": account_id, "tid": thread_id})).fetchone()
+        sender_email, incoming = "", ""
+        if inb:
+            frm = inb.from_address if isinstance(inb.from_address, dict) \
+                else json.loads(inb.from_address or "{}")
+            sender_email = (frm.get("email") or "").strip().lower()
+            incoming = inb.body_text or inb.snippet or ""
+        domain = sender_email.split("@")[-1] if "@" in sender_email else ""
+
+        memories = await _llm_extract_reply_memories(incoming, original, sent_text)
+        if not memories:
             return
-        await db.execute(text(
-            """INSERT INTO email_learned_patterns (account_id, pattern)
-               VALUES (:aid, :p)
-               ON CONFLICT (account_id, pattern) DO UPDATE SET
-                 weight = email_learned_patterns.weight + 1, updated_at = now()"""
-        ), {"aid": account_id, "p": pattern})
+        stored: list[str] = []
+        for m in memories:
+            scope_type, scope_value = _resolve_memory_scope(
+                m["scope"], m["topic"], sender_email, domain)
+            await db.execute(text(
+                """INSERT INTO email_learned_patterns
+                     (account_id, pattern, kind, scope_type, scope_value,
+                      is_style_evidence)
+                   VALUES (:aid, :p, :k, :st, :sv, :ev)
+                   ON CONFLICT (account_id, kind, scope_type, scope_value, pattern)
+                   DO UPDATE SET weight = email_learned_patterns.weight + 1,
+                                 updated_at = now()"""
+            ), {"aid": account_id, "p": m["content"], "k": m["kind"],
+                "st": scope_type, "sv": scope_value,
+                "ev": m["kind"] == "PREFERENCE"})
+            stored.append(m["content"])
         await db.commit()
-        _log.info("email.learned_pattern", account_id=account_id,
-                  pattern=pattern[:80])
-        # Also remember the preference in Mem0 (keyed by the account owner) so it
-        # surfaces during future drafting retrieval, not just the patterns table.
+        _log.info("email.learned_memories", account_id=account_id,
+                  count=len(stored))
+        # Also remember the strongest memory in Mem0 (keyed by the account owner)
+        # so it surfaces during future drafting retrieval, not just this table.
         try:
             urow = (await db.execute(text(
                 "SELECT user_id FROM email_accounts WHERE id = :aid"
@@ -202,7 +316,7 @@ async def _learn_from_sent(account_id: str, thread_id: str, sent_text: str) -> N
             await add_memories_background(
                 uid,
                 [{"role": "assistant",
-                  "content": f"Email reply preference: {pattern}"}],
+                  "content": f"Email reply preference: {stored[0]}"}],
                 agent_id="email",
             )
         except Exception:  # noqa: BLE001
@@ -280,6 +394,12 @@ async def _llm_draft_reply(
             "tone, brevity and directness; do NOT reuse their specific facts:\n"
             f"{examples[:2500]}\n\n" if examples else ""
         )
+        memories = (email.get("reply_memories") or "").strip()
+        memories_block = (
+            "Learned reply memories relevant to this sender/topic (advisory — "
+            "apply the ones that fit; explicit instructions still win):\n"
+            f"{memories[:2000]}\n\n" if memories else ""
+        )
         today = datetime.now(timezone.utc).strftime("%A, %d %B %Y")
         user_prompt = (
             f"{ctx}Today is {today}.\n"
@@ -287,6 +407,7 @@ async def _llm_draft_reply(
             "write the owner's reply back to the sender).\n"
             f"From (the sender — address your reply to them): {email.get('from', '')}\n"
             f"Subject: {email.get('subject', '')}\n\n"
+            f"{memories_block}"
             f"{examples_block}"
             f"{thread_block}"
             "Latest message — reply to THIS, taking the thread above into "
@@ -624,6 +745,8 @@ async def draft_reply_smart(
             "sender_examples": await _fetch_sender_reply_examples(
                 db, req.account_id, frm.get("email", "")),
         }
+        email["reply_memories"] = await _fetch_reply_memories(
+            db, req.account_id, email)
         about, signature = await _load_assistant_about(db, req.account_id)
         # Synchronous request → keep the orchestration budget under the proxy
         # timeout (one specialist agent, short timeout).

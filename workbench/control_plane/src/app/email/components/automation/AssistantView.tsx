@@ -4414,13 +4414,26 @@ function LearnedPreferences({ accountId }: { accountId: string | null }) {
       </div>
       <p className="text-[11px] text-muted-foreground mb-3">
         Picked up from how you edit the assistant&apos;s drafts before sending. These
-        nudge future drafts — remove any you don&apos;t want.
+        nudge future drafts — global ones always apply; scoped ones only for that
+        sender, company, or topic. Remove any you don&apos;t want.
       </p>
       <div className="space-y-1.5">
-        {patterns.map((p) => (
+        {patterns.map((p) => {
+          const scope =
+            !p.scope_type || p.scope_type === "GLOBAL"
+              ? null
+              : p.scope_type === "TOPIC"
+                ? `topic: ${p.scope_value}`
+                : p.scope_value || p.scope_type.toLowerCase();
+          return (
           <div key={p.id} className="flex items-start gap-2">
             <div className="flex-1 min-w-0 text-xs text-foreground/80">
               {p.pattern}
+              {scope && (
+                <span className="ml-1.5 inline-flex items-center text-[9px] px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground border border-border align-middle">
+                  {scope}
+                </span>
+              )}
               {p.weight > 1 && (
                 <span className="ml-1 text-[10px] text-muted-foreground">
                   ×{p.weight}
@@ -4435,7 +4448,8 @@ function LearnedPreferences({ accountId }: { accountId: string | null }) {
               <X size={13} />
             </button>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

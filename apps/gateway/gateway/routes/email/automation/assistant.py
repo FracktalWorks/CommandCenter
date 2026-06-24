@@ -58,10 +58,13 @@ async def _load_assistant_about(db: Any, account_id: str) -> tuple[str, str]:
                 "<knowledge_base>\n" + "\n\n".join(kb_text) + "\n</knowledge_base>"
             )
 
-    # Patterns learned from how the user edits the assistant's drafts (advisory).
+    # GLOBAL patterns learned from how the user edits drafts (advisory, always
+    # applicable). Scope-specific memories (sender/domain/topic) are injected
+    # per-email via `_fetch_reply_memories` as <reply_memories> instead.
     lp_rows = (await db.execute(text(
         """SELECT pattern FROM email_learned_patterns
-           WHERE account_id = :aid ORDER BY weight DESC, updated_at DESC LIMIT 12"""
+           WHERE account_id = :aid AND scope_type = 'GLOBAL'
+           ORDER BY weight DESC, updated_at DESC LIMIT 12"""
     ), {"aid": account_id})).fetchall()
     if lp_rows:
         parts.append(
@@ -479,12 +482,16 @@ async def list_learned_patterns(
     try:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         rows = (await db.execute(text(
-            """SELECT id, pattern, weight FROM email_learned_patterns
+            """SELECT id, pattern, weight, kind, scope_type, scope_value
+               FROM email_learned_patterns
                WHERE account_id = :aid
                ORDER BY weight DESC, updated_at DESC"""
         ), {"aid": account_id})).fetchall()
         return {"patterns": [
-            {"id": str(r.id), "pattern": r.pattern, "weight": r.weight}
+            {"id": str(r.id), "pattern": r.pattern, "weight": r.weight,
+             "kind": getattr(r, "kind", None),
+             "scope_type": getattr(r, "scope_type", None),
+             "scope_value": getattr(r, "scope_value", None)}
             for r in rows
         ]}
     finally:

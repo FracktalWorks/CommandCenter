@@ -220,13 +220,7 @@ async def _llm_extract_reply_memories(
     Returns [{content, kind, scope, topic}]; empty when nothing generalizable.
     """
     try:
-        import litellm as _litellm  # noqa: PLC0415
-        from acb_llm.client import _TIER_MODEL, ensure_model_registered  # noqa: PLC0415
-        from litellm import acompletion  # noqa: PLC0415
-        _litellm.drop_params = True
-        _litellm.suppress_debug_info = True
-        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
-        ensure_model_registered(model)
+        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
         sys_prompt = (
             "You learn how a user likes their email replies written by comparing "
             "the assistant's DRAFT with what the user actually SENT (the INCOMING "
@@ -246,11 +240,12 @@ async def _llm_extract_reply_memories(
             f"INCOMING:\n{incoming[:1500]}\n\nDRAFT:\n{draft[:2000]}\n\n"
             f"SENT:\n{sent[:2000]}"
         )
-        resp = await acompletion(
-            model=model,
+        resp, _ = await acompletion_with_fallback(
+            model="tier-powerful",
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": user}],
-            temperature=0, max_tokens=400,
+            temperature=0, max_tokens=1000,
+            response_format={"type": "json_object"},
         )
         data = _safe_json(resp.choices[0].message.content or "")
         items = data.get("memories") if isinstance(data, dict) else None
@@ -389,25 +384,19 @@ async def _llm_summarize_writing_style(prefs: list[str]) -> str:
     if not prefs:
         return ""
     try:
-        import litellm as _litellm  # noqa: PLC0415
-        from acb_llm.client import _TIER_MODEL, ensure_model_registered  # noqa: PLC0415
-        from litellm import acompletion  # noqa: PLC0415
-        _litellm.drop_params = True
-        _litellm.suppress_debug_info = True
-        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
-        ensure_model_registered(model)
+        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
         sys_prompt = (
             "You distil a user's email writing style from preferences observed in "
             "how they edit the assistant's drafts. Output 3-6 short, concrete "
             "bullet guidelines (tone, length, greeting/sign-off, formatting, what "
             "to include or omit). No preamble — just the bullet lines."
         )
-        resp = await acompletion(
-            model=model,
+        resp, _ = await acompletion_with_fallback(
+            model="tier-powerful",
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": "Preferences:\n"
                        + "\n".join(f"- {p}" for p in prefs[:25])}],
-            temperature=0.2, max_tokens=300,
+            temperature=0.2, max_tokens=1000,
         )
         return (resp.choices[0].message.content or "").strip()[:1500]
     except Exception as exc:  # noqa: BLE001
@@ -459,24 +448,19 @@ async def _maybe_refresh_learned_style(db: Any, account_id: str) -> None:
 async def _llm_draft_reply(
     email: dict[str, str], about: str, signature: str,
     instructions: str = "", context: str = "", user_email: str = "",
-    *, model: str = "tier-balanced", fallback_model: str = "tier-powerful",
+    *, model: str = "tier-powerful",
 ) -> str:
     """Draft a reply body with the LLM, using the user's About context plus any
     extra `context` gathered from memory / specialist agents.
 
-    Runs on the account's primary ``model`` with the prompt fitted to its
-    context window. Escalates once to the more-powerful ``fallback_model`` when
-    the primary overflows / errors, OR when a confidence gate is active and the
-    primary isn't confident (returns the NO_DRAFT sentinel) — so a hard email
-    gets the stronger model rather than silently producing no draft.
+    Runs on the account's draft-writing ``model`` (default the powerful tier)
+    with the prompt fitted to its context window. A confidence gate may make the
+    model return the NO_DRAFT sentinel, which is propagated to the caller.
 
     Falls back to a neutral template if the LLM is unavailable.
     """
     try:
-        from acb_llm.context import (  # noqa: PLC0415
-            acompletion_with_fallback,
-            resolve_underlying_model,
-        )
+        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
         # A configured signature is appended after the body, so the model must not
         # add its own closing/sign-off (mirrors inbox-zero's drafter).
         sig_rule = (
@@ -559,33 +543,13 @@ async def _llm_draft_reply(
             user_prompt += f"\nExtra instructions: {instructions}\n"
         _messages = [{"role": "system", "content": sys_prompt},
                      {"role": "user", "content": user_prompt}]
-        resp, used = await acompletion_with_fallback(
-            model=model, fallback_model=fallback_model,
-            messages=_messages, temperature=0.3, max_tokens=700,
+        # Generous output budget — a full reply body (greeting + paragraphs +
+        # context) must never be truncated mid-sentence.
+        resp, _used = await acompletion_with_fallback(
+            model=model,
+            messages=_messages, temperature=0.3, max_tokens=3000,
         )
         body = _clean_draft_body((resp.choices[0].message.content or "").strip())
-        # Confidence handoff: when a confidence gate is active and the primary
-        # (cheap) model isn't sure — it returns the NO_DRAFT sentinel or nothing
-        # — hand the SAME prompt to the more-powerful fallback model, which may
-        # manage a confident draft. Skipped when the fallback is the same
-        # underlying model, or was already used by the overflow/error path above.
-        _fb = (fallback_model or "").strip()
-        _low_conf = (not body) or body.strip().upper() == DRAFT_NO_DRAFT_SENTINEL
-        if (_low_conf and _fb
-                and resolve_underlying_model(_fb) != used
-                and resolve_underlying_model(_fb) != resolve_underlying_model(model)):
-            resp2, _used2 = await acompletion_with_fallback(
-                model=_fb, fallback_model="",
-                messages=_messages, temperature=0.3, max_tokens=700,
-            )
-            body2 = _clean_draft_body(
-                (resp2.choices[0].message.content or "").strip())
-            if body2 and body2.strip().upper() != DRAFT_NO_DRAFT_SENTINEL:
-                _log.info("email.draft_escalated_low_confidence",
-                          fallback=resolve_underlying_model(_fb))
-                body = body2
-            elif body2:
-                body = body2  # fallback also declined → propagate NO_DRAFT
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.llm_draft_failed", error=str(exc)[:200])
         body = "Hi,\n\nThanks for your email — I'll review this and get back to you shortly."
@@ -604,13 +568,7 @@ async def _draft_consult_plan(email: dict[str, str]) -> list[dict[str, str]]:
     Returns [{"agent": "agent-sales-assistant"|"task-manager", "question": "..."}], capped at 2.
     """
     try:
-        import litellm as _litellm  # noqa: PLC0415
-        from acb_llm.client import _TIER_MODEL, ensure_model_registered  # noqa: PLC0415
-        from litellm import acompletion  # noqa: PLC0415
-        _litellm.drop_params = True
-        _litellm.suppress_debug_info = True
-        model = _TIER_MODEL.get("tier1") or _TIER_MODEL.get("tier2") or "gpt-4o-mini"
-        ensure_model_registered(model)
+        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
         sys_prompt = (
             "You plan how to draft an email reply. Decide which internal specialist "
             "agents, if any, would provide context that materially improves the "
@@ -625,11 +583,13 @@ async def _draft_consult_plan(email: dict[str, str]) -> list[dict[str, str]]:
             f"From: {email.get('from', '')}\nSubject: {email.get('subject', '')}\n"
             f"Body:\n{(email.get('body', '') or '')[:1500]}"
         )
-        resp = await acompletion(
-            model=model,
+        # A fast routing decision; JSON-forced so the plan is always parseable.
+        resp, _ = await acompletion_with_fallback(
+            model="tier-fast",
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": user_prompt}],
-            temperature=0, max_tokens=300,
+            temperature=0, max_tokens=500,
+            response_format={"type": "json_object"},
         )
         data = _safe_json(resp.choices[0].message.content or "")
         consult = data.get("consult", []) if isinstance(data, dict) else []
@@ -767,7 +727,7 @@ async def _agent_draft_reply(
     email: dict[str, str], about: str, signature: str, user_email: str,
     *, use_agent: bool = False, max_agents: int = 2, agent_timeout: float = 90.0,
     follow_up: bool = False, confidence: str = "ALL_EMAILS",
-    model: str = "tier-balanced", fallback_model: str = "tier-powerful",
+    model: str = "tier-powerful",
 ) -> str:
     """Draft a reply (or a follow-up nudge). When ``use_agent`` is set (background
     rule actions), run the email-assistant MAF agent first; otherwise — and on any
@@ -777,9 +737,7 @@ async def _agent_draft_reply(
     higher tiers instruct the drafter to return the NO_DRAFT sentinel when it
     isn't confident, which the caller treats as "skip this draft".
 
-    ``model`` / ``fallback_model`` are the account's primary and escalation
-    models: the draft runs on the primary and hands off to the more-powerful
-    fallback on context overflow, error, or low confidence."""
+    ``model`` is the account's draft-writing model (default the powerful tier)."""
     instructions = _FOLLOW_UP_INSTRUCTION if follow_up else ""
     conf_note = _CONFIDENCE_INSTRUCTIONS.get(confidence or "ALL_EMAILS", "")
     if conf_note:
@@ -794,14 +752,14 @@ async def _agent_draft_reply(
     return await _orchestrate_draft(
         email, about, signature, user_email,
         max_agents=max_agents, agent_timeout=agent_timeout,
-        instructions=instructions, model=model, fallback_model=fallback_model,
+        instructions=instructions, model=model,
     )
 
 
 async def _orchestrate_draft(
     email: dict[str, str], about: str, signature: str, user_email: str,
     *, max_agents: int = 2, agent_timeout: float = 90.0, instructions: str = "",
-    model: str = "tier-balanced", fallback_model: str = "tier-powerful",
+    model: str = "tier-powerful",
 ) -> str:
     """In-gateway orchestrating drafter: gather context from memory + specialist
     agents (sales / task-manager), then draft. Best-effort; degrades to an
@@ -867,7 +825,7 @@ async def _orchestrate_draft(
     draft = await _llm_draft_reply(
         email, about, signature, instructions=instructions,
         context="\n\n".join(context_parts), user_email=user_email,
-        model=model, fallback_model=fallback_model,
+        model=model,
     )
 
     # 3) Record this exchange in Mem0 (episodic, pgvector) so future drafts to
@@ -937,13 +895,13 @@ async def draft_reply_smart(
         email["reply_memories"] = await _fetch_reply_memories(
             db, req.account_id, email)
         about, signature = await _load_assistant_about(db, req.account_id)
-        model, fallback_model = await _account_models(db, req.account_id)
+        models = await _account_models(db, req.account_id)
         # Synchronous request → keep the orchestration budget under the proxy
         # timeout (one specialist agent, short timeout).
         draft = await _agent_draft_reply(
             email, about, signature, user.email or "",
             max_agents=1, agent_timeout=18.0, follow_up=req.follow_up,
-            model=model, fallback_model=fallback_model,
+            model=models["draft"],
         )
 
         # Remember this draft so we can learn from the user's edits on send.

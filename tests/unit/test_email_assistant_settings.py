@@ -14,8 +14,10 @@ def test_settings_defaults_match_litellm_balanced_tier() -> None:
     # fresh account auto-runs once it has rules (an explicit OFF stops it).
     assert s.auto_run is True
     assert s.cold_email_blocker == "OFF"
-    # Default agent must be the LiteLLM balanced tier (→ DeepSeek), not Copilot.
-    assert s.agent_model == "tier-balanced"
+    # Three task-specific models, each defaulting to its recommended tier.
+    assert s.rule_model == "tier-fast"
+    assert s.draft_model == "tier-powerful"
+    assert s.chat_model == "tier-balanced"
     assert s.digest_frequency == "OFF"
     assert s.about is None
     assert s.signature is None
@@ -28,7 +30,9 @@ def test_settings_roundtrip_preserves_overrides() -> None:
         signature="— Vijay",
         auto_run=True,
         cold_email_blocker="ARCHIVE",
-        agent_model="tier-powerful",
+        rule_model="tier-balanced",
+        draft_model="tier-fast",
+        chat_model="tier-powerful",
         digest_frequency="DAILY",
     )
     d = s.model_dump()
@@ -36,7 +40,9 @@ def test_settings_roundtrip_preserves_overrides() -> None:
     assert d["signature"] == "— Vijay"
     assert d["auto_run"] is True
     assert d["cold_email_blocker"] == "ARCHIVE"
-    assert d["agent_model"] == "tier-powerful"
+    assert d["rule_model"] == "tier-balanced"
+    assert d["draft_model"] == "tier-fast"
+    assert d["chat_model"] == "tier-powerful"
     assert d["digest_frequency"] == "DAILY"
 
 

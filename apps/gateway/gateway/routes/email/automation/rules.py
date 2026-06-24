@@ -442,17 +442,12 @@ async def _llm_generate_rules(prompt: str) -> list[dict[str, Any]]:
     Returns a list of dicts shaped like RuleModel (minus account_id). Best
     effort: returns [] if the LLM is unavailable or nothing parses."""
     try:
-        import litellm as _litellm  # noqa: PLC0415
-        from acb_llm.client import _TIER_MODEL, ensure_model_registered  # noqa: PLC0415
-        from litellm import acompletion  # noqa: PLC0415
-        _litellm.drop_params = True
-        _litellm.suppress_debug_info = True
-        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
-        ensure_model_registered(model)
+        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
         sys_prompt = (
             "You convert a user's plain-English description of email rules into "
             "structured automation rules. The user may describe several rules "
-            "(often one per line/bullet). Output ONLY a JSON array; each element:\n"
+            "(often one per line/bullet). Output ONLY a JSON object "
+            '{"rules": [ ... ]} where each element is:\n'
             '{"name": "<short name>", "instructions": "<the AI-matched condition '
             'in plain English, or empty if purely static>", "from_pattern": '
             '"<sender substring/email, or empty>", "subject_pattern": "<subject '
@@ -468,16 +463,20 @@ async def _llm_generate_rules(prompt: str) -> list[dict[str, Any]]:
             "reply' → DRAFT_EMAIL; 'reply with …' → REPLY content. Prefer an AI "
             "`instructions` condition for fuzzy intent; use from_pattern/"
             "subject_pattern only for literal sender/subject text. Keep names "
-            "short. Omit empty fields. Output [] if nothing is parseable."
+            'short. Omit empty fields. Output {"rules": []} if nothing parses.'
         )
-        resp = await acompletion(
-            model=model,
+        # Rule authoring is quality-sensitive generation → powerful tier; JSON
+        # forced; generous budget so several rules aren't truncated.
+        resp, _ = await acompletion_with_fallback(
+            model="tier-powerful",
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": prompt[:4000]}],
-            temperature=0, max_tokens=1200,
+            temperature=0, max_tokens=2500,
+            response_format={"type": "json_object"},
         )
         data = _safe_json(resp.choices[0].message.content or "")
-        return _normalize_generated_rules(data)
+        rules = data.get("rules") if isinstance(data, dict) else data
+        return _normalize_generated_rules(rules)
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.generate_rules_failed", error=str(exc)[:200])
         return []

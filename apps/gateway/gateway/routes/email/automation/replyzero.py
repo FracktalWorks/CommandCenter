@@ -125,28 +125,16 @@ async def ai_chat(
             pass
 
     # ── Resolve which LiteLLM tier the email CHAT should use (per-account) ──
-    # The chat panel has its own model (chat_model). When unset it inherits the
-    # background assistant agent's model (agent_model); both default to
-    # tier-balanced. This keeps interactive chat and automation independently
-    # tunable while preserving existing behaviour for accounts that set neither.
-    # The interactive chat runs on this single model only — no automatic
-    # fallback escalation (that's reserved for the unattended automation paths:
-    # rule classification + draft generation).
-    agent_model = "tier-balanced"
+    # The chat panel uses its own chat_model setting (default tier-balanced),
+    # independent of rule evaluation and draft writing.
+    chat_model = "tier-balanced"
     if req.account_id:
         try:
+            from gateway.routes.email.automation.assistant import (  # noqa: PLC0415
+                _account_models)
             _mdb = await _get_db()
             try:
-                _mrow = (await _mdb.execute(text(
-                    "SELECT chat_model, agent_model FROM email_assistant_settings "
-                    "WHERE account_id = :aid"
-                ), {"aid": req.account_id})).fetchone()
-                if _mrow:
-                    agent_model = (
-                        (getattr(_mrow, "chat_model", "") or "").strip()
-                        or (_mrow.agent_model or "").strip()
-                        or "tier-balanced"
-                    )
+                chat_model = (await _account_models(_mdb, req.account_id))["chat"]
             finally:
                 await _mdb.close()
         except Exception:  # noqa: BLE001
@@ -163,7 +151,7 @@ async def ai_chat(
         payload,
         run_id=run_id,
         thread_id=f"email-chat:{user_id}:{thread_key}",
-        model=agent_model,
+        model=chat_model,
     )
 
     async def event_stream():
@@ -362,13 +350,7 @@ async def _llm_needs_reply(items: list[dict[str, str]]) -> dict[int, dict[str, A
     if not items:
         return {}
     try:
-        import litellm as _litellm  # noqa: PLC0415
-        from acb_llm.client import _TIER_MODEL, ensure_model_registered  # noqa: PLC0415
-        from litellm import acompletion  # noqa: PLC0415
-        _litellm.drop_params = True
-        _litellm.suppress_debug_info = True
-        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
-        ensure_model_registered(model)
+        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
         listing = "\n\n".join(
             f"{i}. From: {it['from']}\nSubject: {it['subject']}\n"
             f"Body: {(it['body'] or '')[:800]}"
@@ -379,19 +361,25 @@ async def _llm_needs_reply(items: list[dict[str, str]]) -> dict[int, dict[str, A
             "recipient — a real person asking a question, making a request, or "
             "expecting a response — versus FYI / automated / no-action mail "
             "(newsletters, notifications, receipts, marketing, confirmations, "
-            "calendar invites). Respond ONLY with a JSON array of "
-            '{"index": <n>, "needs_reply": <bool>, "reason": "<short why>"}.'
+            "calendar invites). Respond ONLY with a JSON object "
+            '{"results": [{"index": <n>, "needs_reply": <bool>, '
+            '"reason": "<short why>"}]}.'
         )
-        resp = await acompletion(
-            model=model,
+        # Classification → fast tier. JSON-forced (object wrapper required by
+        # json_object mode); generous budget so a batch isn't truncated.
+        resp, _ = await acompletion_with_fallback(
+            model="tier-fast",
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": listing}],
-            temperature=0, max_tokens=700,
+            temperature=0, max_tokens=2000,
+            response_format={"type": "json_object"},
         )
         data = _safe_json(resp.choices[0].message.content or "")
+        rows = data.get("results") if isinstance(data, dict) else (
+            data if isinstance(data, list) else None)
         out: dict[int, dict[str, Any]] = {}
-        if isinstance(data, list):
-            for d in data:
+        if isinstance(rows, list):
+            for d in rows:
                 if not isinstance(d, dict):
                     continue
                 idx = d.get("index")
@@ -445,13 +433,7 @@ async def _llm_determine_thread_status(
     Defaults to AWAITING_REPLY (the user just replied) on any failure."""
     fallback = "AWAITING_REPLY" if user_sent_last else "FYI"
     try:
-        import litellm as _litellm  # noqa: PLC0415
-        from acb_llm.client import _TIER_MODEL, ensure_model_registered  # noqa: PLC0415
-        from litellm import acompletion  # noqa: PLC0415
-        _litellm.drop_params = True
-        _litellm.suppress_debug_info = True
-        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
-        ensure_model_registered(model)
+        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
         fyi_state = "" if user_sent_last else "\n* FYI - No reply needed"
         fyi_opt = "" if user_sent_last else "FYI, "
         fyi_rules = "" if user_sent_last else (
@@ -499,11 +481,12 @@ async def _llm_determine_thread_status(
             f"{ctx}\nEmail thread (oldest to newest):\n{thread_text[:6000]}\n\n"
             "Determine the current status of this thread."
         )
-        resp = await acompletion(
-            model=model,
+        resp, _ = await acompletion_with_fallback(
+            model="tier-fast",
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": user_prompt}],
-            temperature=0, max_tokens=200,
+            temperature=0, max_tokens=500,
+            response_format={"type": "json_object"},
         )
         data = _safe_json(resp.choices[0].message.content or "")
         st = ((data.get("status") if isinstance(data, dict) else "") or "")
@@ -936,7 +919,7 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bo
         from gateway.routes.email.automation.assistant import (  # noqa: PLC0415
             _account_models,
         )
-        fu_model, fu_fallback = await _account_models(db, account_id)
+        fu_model = (await _account_models(db, account_id))["draft"]
 
         for r in rows:
             mark = lambda: db.execute(text(  # noqa: E731
@@ -966,7 +949,7 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bo
                         }
                         body = await _agent_draft_reply(
                             email, about, signature, acc.user_id, use_agent=True,
-                            model=fu_model, fallback_model=fu_fallback,
+                            model=fu_model,
                         )
                         await provider.create_draft(
                             to=[to],

@@ -86,29 +86,37 @@ async def _load_assistant_about(db: Any, account_id: str) -> tuple[str, str]:
     return "\n\n".join(parts), signature
 
 
-async def _account_models(db: Any, account_id: str) -> tuple[str, str]:
-    """The ``(assistant_model, fallback_model)`` an account's automation should
-    use: the primary (cheap) tier/model that handles most mail, and the
-    more-powerful model the assistant escalates to when the primary overflows
-    its context window, errors out, or isn't confident enough to draft.
+# Per-task default tiers when no account preference is saved (or lookup fails).
+_DEFAULT_TASK_MODELS = {
+    "rule": "tier-fast",       # rule evaluation / classification / labeling
+    "draft": "tier-powerful",  # draft writing
+    "chat": "tier-balanced",   # email chat panel
+}
 
-    Defaults to ``tier-balanced`` / ``tier-powerful`` — the same defaults the
-    settings row carries — so automation still works before the user has saved
-    any preference (or if the lookup fails)."""
-    model, fallback = "tier-balanced", "tier-powerful"
+
+async def _account_models(db: Any, account_id: str) -> dict[str, str]:
+    """The three task-specific models an account uses, as a dict with keys
+    ``rule`` (rule evaluation/classification), ``draft`` (draft writing), and
+    ``chat`` (the email chat panel).
+
+    Each falls back to its per-task default (rule→tier-fast, draft→tier-powerful,
+    chat→tier-balanced) so automation works before the user saves a preference
+    or if the lookup fails."""
+    out = dict(_DEFAULT_TASK_MODELS)
     if not account_id:
-        return model, fallback
+        return out
     try:
         row = (await db.execute(text(
-            "SELECT agent_model, fallback_model FROM email_assistant_settings "
-            "WHERE account_id = :aid"
+            "SELECT rule_model, draft_model, chat_model "
+            "FROM email_assistant_settings WHERE account_id = :aid"
         ), {"aid": account_id})).fetchone()
         if row:
-            model = (getattr(row, "agent_model", None) or model)
-            fallback = (getattr(row, "fallback_model", None) or fallback)
-    except Exception as exc:  # noqa: BLE001 — fall back to the tier defaults
+            out["rule"] = (getattr(row, "rule_model", None) or out["rule"])
+            out["draft"] = (getattr(row, "draft_model", None) or out["draft"])
+            out["chat"] = (getattr(row, "chat_model", None) or out["chat"])
+    except Exception as exc:  # noqa: BLE001 — fall back to the per-task defaults
         _log.warning("email.account_models_failed", error=str(exc)[:160])
-    return model, fallback
+    return out
 
 
 class AssistantSettingsModel(BaseModel):
@@ -120,14 +128,13 @@ class AssistantSettingsModel(BaseModel):
     # account auto-runs once it has rules. An explicit OFF stops auto-run.
     auto_run: bool = True
     cold_email_blocker: str = "OFF"  # OFF | LABEL | ARCHIVE
-    agent_model: str = "tier-balanced"  # tier-fast | tier-balanced | tier-powerful
-    # A model MORE powerful than `agent_model` that the assistant escalates to
-    # when the primary overflows its context window (even after compression),
-    # fails to execute the rules, or isn't confident enough to draft a reply.
-    # Defaults to the powerful tier.
-    fallback_model: str = "tier-powerful"
-    # Model the interactive email chat panel uses. Empty = inherit agent_model.
-    chat_model: str = ""
+    # Three task-specific models (tier-fast | tier-balanced | tier-powerful, or
+    # any enabled model id). Rule evaluation / classification / labeling:
+    rule_model: str = "tier-fast"
+    # Draft writing (replies, follow-ups, rule DRAFT_EMAIL actions):
+    draft_model: str = "tier-powerful"
+    # The interactive email chat panel:
+    chat_model: str = "tier-balanced"
     digest_frequency: str = "OFF"  # OFF | DAILY | WEEKLY
     personal_instructions: str | None = None
     writing_style: str | None = None
@@ -157,8 +164,8 @@ async def get_assistant_settings(
     try:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         row = (await db.execute(text(
-            """SELECT about, signature, auto_run, cold_email_blocker, agent_model,
-                      fallback_model, chat_model,
+            """SELECT about, signature, auto_run, cold_email_blocker,
+                      rule_model, draft_model, chat_model,
                       digest_frequency, personal_instructions, writing_style,
                       draft_replies, follow_up_days, draft_confidence,
                       follow_up_awaiting_days, follow_up_needs_reply_days,
@@ -177,12 +184,12 @@ async def get_assistant_settings(
             "signature": row.signature if row else "",
             "auto_run": bool(row.auto_run) if row else True,
             "cold_email_blocker": (row.cold_email_blocker if row else "OFF") or "OFF",
-            "agent_model": (row.agent_model if row else "tier-balanced")
+            "rule_model": (getattr(row, "rule_model", None) if row else None)
+            or "tier-fast",
+            "draft_model": (getattr(row, "draft_model", None) if row else None)
+            or "tier-powerful",
+            "chat_model": (getattr(row, "chat_model", None) if row else None)
             or "tier-balanced",
-            "fallback_model": (
-                getattr(row, "fallback_model", None) if row else "tier-powerful"
-            ) or "tier-powerful",
-            "chat_model": (getattr(row, "chat_model", "") if row else "") or "",
             "digest_frequency": (row.digest_frequency if row else "OFF") or "OFF",
             "personal_instructions": (
                 getattr(row, "personal_instructions", None) if row else ""
@@ -251,15 +258,15 @@ async def put_assistant_settings(
         await db.execute(text(
             """INSERT INTO email_assistant_settings
                  (account_id, about, signature, auto_run, cold_email_blocker,
-                  agent_model, fallback_model, chat_model, digest_frequency,
+                  rule_model, draft_model, chat_model, digest_frequency,
                   personal_instructions,
                   writing_style, draft_replies, follow_up_days, draft_confidence,
                   follow_up_awaiting_days, follow_up_needs_reply_days,
                   follow_up_auto_draft, digest_categories, digest_day_of_week,
                   digest_time_of_day, digest_send_to_email,
                   multi_rule_execution, sensitive_data_protection, updated_at)
-               VALUES (:aid, :about, :sig, :auto, :cold, :model, :fbmodel,
-                       :chat_model,
+               VALUES (:aid, :about, :sig, :auto, :cold, :rule_model,
+                       :draft_model, :chat_model,
                        :digest,
                        :pi, :ws, :dr, :fu, :dc, :fua, :funr, :fuad, :dcat,
                        :ddow, :dtod, :dste, :mre, :sdp, now())
@@ -268,8 +275,8 @@ async def put_assistant_settings(
                  signature = EXCLUDED.signature,
                  auto_run = EXCLUDED.auto_run,
                  cold_email_blocker = EXCLUDED.cold_email_blocker,
-                 agent_model = EXCLUDED.agent_model,
-                 fallback_model = EXCLUDED.fallback_model,
+                 rule_model = EXCLUDED.rule_model,
+                 draft_model = EXCLUDED.draft_model,
                  chat_model = EXCLUDED.chat_model,
                  digest_frequency = EXCLUDED.digest_frequency,
                  personal_instructions = EXCLUDED.personal_instructions,
@@ -289,9 +296,9 @@ async def put_assistant_settings(
                  updated_at = now()"""
         ), {"aid": req.account_id, "about": req.about, "sig": req.signature,
             "auto": req.auto_run, "cold": req.cold_email_blocker or "OFF",
-            "model": req.agent_model or "tier-balanced",
-            "fbmodel": req.fallback_model or "tier-powerful",
-            "chat_model": req.chat_model or "",
+            "rule_model": req.rule_model or "tier-fast",
+            "draft_model": req.draft_model or "tier-powerful",
+            "chat_model": req.chat_model or "tier-balanced",
             "digest": req.digest_frequency or "OFF",
             "pi": req.personal_instructions, "ws": req.writing_style,
             "dr": req.draft_replies, "fu": awaiting,
@@ -323,9 +330,9 @@ async def put_assistant_settings(
             "signature": req.signature or "",
             "auto_run": req.auto_run,
             "cold_email_blocker": req.cold_email_blocker or "OFF",
-            "agent_model": req.agent_model or "tier-balanced",
-            "fallback_model": req.fallback_model or "tier-powerful",
-            "chat_model": req.chat_model or "",
+            "rule_model": req.rule_model or "tier-fast",
+            "draft_model": req.draft_model or "tier-powerful",
+            "chat_model": req.chat_model or "tier-balanced",
             "digest_frequency": req.digest_frequency or "OFF",
             "personal_instructions": req.personal_instructions or "",
             "writing_style": req.writing_style or "",
@@ -448,15 +455,12 @@ async def delete_knowledge(
 
 
 async def _llm_writing_style(samples: list[str]) -> str:
-    """Summarize the user's writing style from sample sent emails."""
+    """Summarize the user's writing style from sample sent emails.
+
+    A generation task → runs on the powerful tier with the input fitted to the
+    model's context window (acompletion_with_fallback handles keys + fitting)."""
     try:
-        import litellm as _litellm  # noqa: PLC0415
-        from acb_llm.client import _TIER_MODEL, ensure_model_registered  # noqa: PLC0415
-        from litellm import acompletion  # noqa: PLC0415
-        _litellm.drop_params = True
-        _litellm.suppress_debug_info = True
-        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
-        ensure_model_registered(model)
+        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
         joined = "\n\n---\n\n".join(samples)
         sys_prompt = (
             "Analyze the user's sent emails and describe their writing style as a "
@@ -466,11 +470,11 @@ async def _llm_writing_style(samples: list[str]) -> str:
             "could follow, e.g. 'Keep replies to 2-3 short sentences.' Output ONLY "
             "the guide."
         )
-        resp = await acompletion(
-            model=model,
+        resp, _ = await acompletion_with_fallback(
+            model="tier-powerful",
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": joined[:8000]}],
-            temperature=0, max_tokens=400,
+            temperature=0, max_tokens=1000,
         )
         return (resp.choices[0].message.content or "").strip()
     except Exception as exc:  # noqa: BLE001

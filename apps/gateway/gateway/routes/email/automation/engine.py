@@ -149,14 +149,13 @@ def _hint_block(hints: str) -> str:
 
 async def _llm_pick_rule(
     email: dict[str, str], rules: list[dict[str, Any]], hints: str = "",
-    *, model: str = "tier-balanced", fallback_model: str = "tier-powerful",
+    *, model: str = "tier-fast",
 ) -> dict[str, Any] | None:
     """Ask the LLM which instruction-based rule matches the email.
 
-    Runs on the account's ``model`` (cheap tier) with the prompt fitted to its
-    context window; on overflow or failure it escalates once to
-    ``fallback_model`` (the more-powerful tier) with the prompt re-fit — so a
-    long thread + many rules can't silently break classification.
+    Runs on the account's rule-evaluation ``model`` with the prompt fitted to its
+    context window (acompletion_with_fallback handles keys + fitting) and forces
+    JSON output so the reply is always parseable.
 
     Returns {"index": int, "reason": str} (index into `rules`) or None.
     Fails closed (returns None) when the LLM is unavailable.
@@ -181,10 +180,10 @@ async def _llm_pick_rule(
             f"{_email_block(email)}\n\nRULES\n{rule_lines}{_hint_block(hints)}"
         )
         resp, _used = await acompletion_with_fallback(
-            model=model, fallback_model=fallback_model,
+            model=model,
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": user_prompt}],
-            temperature=0, max_tokens=700,
+            temperature=0, max_tokens=800,
             # Force structured output so the reply is parseable JSON, not prose
             # we have to scrape (the #1 cause of silent "no match"). Dropped
             # automatically for models that don't support it (drop_params=True).
@@ -210,14 +209,13 @@ async def _llm_pick_rule(
 
 async def _llm_pick_rules(
     email: dict[str, str], rules: list[dict[str, Any]], hints: str = "",
-    *, model: str = "tier-balanced", fallback_model: str = "tier-powerful",
+    *, model: str = "tier-fast",
 ) -> list[dict[str, Any]]:
     """Multi-rule selection (inbox-zero parity): ask the LLM for ALL instruction
     rules that apply to the email, not just the single best.
 
-    Like :func:`_llm_pick_rule`, runs on the account's ``model`` with the prompt
-    fitted to its context window and escalates once to ``fallback_model`` on
-    overflow or failure.
+    Like :func:`_llm_pick_rule`, runs on the account's rule-evaluation ``model``
+    with the prompt fitted to its context window and JSON output forced.
 
     Returns a list of {"index": int, "reason": str} (indexes into `rules`).
     Fails closed (returns []) when the LLM is unavailable.
@@ -246,11 +244,11 @@ async def _llm_pick_rules(
             f"{_email_block(email)}\n\nRULES\n{rule_lines}{_hint_block(hints)}"
         )
         resp, _used = await acompletion_with_fallback(
-            model=model, fallback_model=fallback_model,
+            model=model,
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": user_prompt}],
-            temperature=0, max_tokens=1000,
-            # Force structured output (see _llm_pick_rule); a higher budget so a
+            temperature=0, max_tokens=1500,
+            # Force structured output (see _llm_pick_rule); a generous budget so a
             # multi-rule object with several reasons isn't truncated mid-JSON.
             response_format={"type": "json_object"},
         )
@@ -407,10 +405,9 @@ async def _match_email_to_rule(
 
     if instruction_rules:
         hints = await _fetch_classification_hints(db, account_id, email.get("from", ""))
-        model, fallback_model = await _account_models(db, account_id)
+        models = await _account_models(db, account_id)
         pick = await _llm_pick_rule(
-            email, instruction_rules, hints=hints,
-            model=model, fallback_model=fallback_model)
+            email, instruction_rules, hints=hints, model=models["rule"])
         if pick:
             return {"rule": instruction_rules[pick["index"]],
                     "reason": pick["reason"] or "Matched by AI.", "source": "ai"}
@@ -468,10 +465,9 @@ async def _match_email_to_rules_multi(
 
     if instruction_rules:
         hints = await _fetch_classification_hints(db, account_id, email.get("from", ""))
-        model, fallback_model = await _account_models(db, account_id)
+        models = await _account_models(db, account_id)
         for pick in await _llm_pick_rules(
-            email, instruction_rules, hints=hints,
-            model=model, fallback_model=fallback_model,
+            email, instruction_rules, hints=hints, model=models["rule"],
         ):
             _add(instruction_rules[pick["index"]],
                  pick["reason"] or "Matched by AI.", "ai",

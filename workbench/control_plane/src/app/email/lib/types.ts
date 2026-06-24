@@ -314,16 +314,12 @@ export interface AssistantSettings {
   signature: string;
   auto_run: boolean;
   cold_email_blocker: ColdBlockerMode;
-  /** Which LiteLLM tier or model id the assistant agent uses for automation
-   *  (rules, drafts, follow-ups, digests). e.g. "tier-balanced". */
-  agent_model: string;
-  /** A model MORE powerful than `agent_model` that the assistant escalates to
-   *  when the primary overflows its context window (even after compression),
-   *  fails to execute the rules, or isn't confident enough to draft a reply
-   *  (e.g. "tier-powerful"). */
-  fallback_model: string;
-  /** Which LiteLLM tier or model the interactive email chat panel uses.
-   *  Empty string = inherit agent_model. */
+  /** Model for rule evaluation / classification / labeling (default tier-fast). */
+  rule_model: string;
+  /** Model for draft writing — replies, follow-ups, DRAFT_EMAIL rule actions
+   *  (default tier-powerful). */
+  draft_model: string;
+  /** Model the interactive email chat panel uses (default tier-balanced). */
   chat_model: string;
   /** Scheduled inbox-digest cadence. */
   digest_frequency: DigestFrequency;

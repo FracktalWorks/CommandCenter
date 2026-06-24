@@ -3562,138 +3562,82 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
             }
           />
           <ColdSendersList accountId={accountId} />
-          <SettingCard
-            title="Assistant model"
-            description="The model the assistant uses for automation — rules, drafted replies, and follow-ups."
-            right={
-              <select
-                value={s.agent_model}
-                onChange={(e) => persistPatch({ agent_model: e.target.value })}
-                className={`${INPUT_CLS} w-56 py-1`}
-              >
-                {llm || enabledModels.length > 0 ? (
-                  <>
-                    {llm && (
-                      <optgroup label="Tiers (auto-routing)">
-                        {llm.tiers.map((t) => (
-                          <option key={t.tier_name} value={t.tier_name}>
-                            {t.tier_name}
-                            {t.tier_name === "tier-balanced" ? " (default)" : ""}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {enabledModels.length > 0 && (
-                      <optgroup label="Your enabled models">
-                        {enabledModels.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.label || m.id}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {/* Keep a previously-saved value selectable even if it's no
-                        longer a tier or an enabled model. */}
-                    {!llm?.tiers.some((t) => t.tier_name === s.agent_model) &&
-                      !enabledModels.some((m) => m.id === s.agent_model) && (
-                        <option value={s.agent_model}>{s.agent_model}</option>
+          {([
+            {
+              key: "rule_model" as const,
+              title: "Rule evaluation model",
+              description:
+                "Classifies and labels each incoming email against your rules. A fast tier is recommended for this high-volume task.",
+              value: s.rule_model,
+              def: "tier-fast",
+            },
+            {
+              key: "draft_model" as const,
+              title: "Draft writing model",
+              description:
+                "Writes reply drafts, follow-ups, and rule draft actions. A powerful tier is recommended for reply quality.",
+              value: s.draft_model,
+              def: "tier-powerful",
+            },
+            {
+              key: "chat_model" as const,
+              title: "Email chat model",
+              description:
+                "The model the assistant chat panel uses inside the email app.",
+              value: s.chat_model,
+              def: "tier-balanced",
+            },
+          ]).map((cfg) => (
+            <SettingCard
+              key={cfg.key}
+              title={cfg.title}
+              description={cfg.description}
+              right={
+                <select
+                  value={cfg.value || cfg.def}
+                  onChange={(e) =>
+                    persistPatch({ [cfg.key]: e.target.value })
+                  }
+                  className={`${INPUT_CLS} w-56 py-1`}
+                >
+                  {llm || enabledModels.length > 0 ? (
+                    <>
+                      {llm && (
+                        <optgroup label="Tiers (auto-routing)">
+                          {llm.tiers.map((t) => (
+                            <option key={t.tier_name} value={t.tier_name}>
+                              {t.tier_name}
+                              {t.tier_name === cfg.def ? " (default)" : ""}
+                            </option>
+                          ))}
+                        </optgroup>
                       )}
-                  </>
-                ) : (
-                  <option value={s.agent_model || "tier-balanced"}>
-                    {s.agent_model || "tier-balanced"} (default)
-                  </option>
-                )}
-              </select>
-            }
-          />
-          <SettingCard
-            title="Fallback model"
-            description="Set this to a model MORE powerful than the assistant model. The assistant escalates to it when the assistant model overflows its context window, can't execute the rules, or isn't confident enough to draft a reply."
-            right={
-              <select
-                value={s.fallback_model || "tier-powerful"}
-                onChange={(e) =>
-                  persistPatch({ fallback_model: e.target.value })
-                }
-                className={`${INPUT_CLS} w-56 py-1`}
-              >
-                {llm || enabledModels.length > 0 ? (
-                  <>
-                    {llm && (
-                      <optgroup label="Tiers (auto-routing)">
-                        {llm.tiers.map((t) => (
-                          <option key={t.tier_name} value={t.tier_name}>
-                            {t.tier_name}
-                            {t.tier_name === "tier-powerful" ? " (default)" : ""}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {enabledModels.length > 0 && (
-                      <optgroup label="Your enabled models">
-                        {enabledModels.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.label || m.id}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {/* Keep a previously-saved value selectable even if it's no
-                        longer a tier or an enabled model. */}
-                    {!llm?.tiers.some((t) => t.tier_name === s.fallback_model) &&
-                      !enabledModels.some((m) => m.id === s.fallback_model) && (
-                        <option value={s.fallback_model}>
-                          {s.fallback_model}
-                        </option>
+                      {enabledModels.length > 0 && (
+                        <optgroup label="Your enabled models">
+                          {enabledModels.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.label || m.id}
+                            </option>
+                          ))}
+                        </optgroup>
                       )}
-                  </>
-                ) : (
-                  <option value={s.fallback_model || "tier-powerful"}>
-                    {s.fallback_model || "tier-powerful"} (default)
-                  </option>
-                )}
-              </select>
-            }
-          />
-          <SettingCard
-            title="Chat model"
-            description="The model the assistant chat uses inside the email app. Defaults to the Assistant model."
-            right={
-              <select
-                value={s.chat_model || ""}
-                onChange={(e) => persistPatch({ chat_model: e.target.value })}
-                className={`${INPUT_CLS} w-56 py-1`}
-              >
-                <option value="">Same as assistant model</option>
-                {llm && (
-                  <optgroup label="Tiers (auto-routing)">
-                    {llm.tiers.map((t) => (
-                      <option key={t.tier_name} value={t.tier_name}>
-                        {t.tier_name}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {enabledModels.length > 0 && (
-                  <optgroup label="Your enabled models">
-                    {enabledModels.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label || m.id}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {/* Keep a previously-saved value selectable even if it's no
-                    longer a tier or an enabled model. */}
-                {s.chat_model &&
-                  !llm?.tiers.some((t) => t.tier_name === s.chat_model) &&
-                  !enabledModels.some((m) => m.id === s.chat_model) && (
-                    <option value={s.chat_model}>{s.chat_model}</option>
+                      {/* Keep a previously-saved value selectable even if it's
+                          no longer a tier or an enabled model. */}
+                      {cfg.value &&
+                        !llm?.tiers.some((t) => t.tier_name === cfg.value) &&
+                        !enabledModels.some((m) => m.id === cfg.value) && (
+                          <option value={cfg.value}>{cfg.value}</option>
+                        )}
+                    </>
+                  ) : (
+                    <option value={cfg.value || cfg.def}>
+                      {cfg.value || cfg.def} (default)
+                    </option>
                   )}
-              </select>
-            }
-          />
+                </select>
+              }
+            />
+          ))}
         </div>
 
         {/* ── Danger zone ── */}

@@ -492,23 +492,18 @@ EMAIL_CATEGORIES = [
 
 
 async def _llm_categorize_senders(
-    items: list[dict[str, Any]]
+    items: list[dict[str, Any]], *, model: str = "tier-fast",
 ) -> dict[str, str]:
     """Categorize a batch of senders. items: [{email, name, subjects}].
 
-    Returns {email: category}; empty dict on LLM failure (callers default to
-    'Unknown').
+    Runs on the account's rule-evaluation ``model`` (labeling is part of rule
+    evaluation). Returns {email: category}; empty dict on LLM failure (callers
+    default to 'Unknown').
     """
     if not items:
         return {}
     try:
-        import litellm as _litellm  # noqa: PLC0415
-        from acb_llm.client import _TIER_MODEL, ensure_model_registered  # noqa: PLC0415
-        from litellm import acompletion  # noqa: PLC0415
-        _litellm.drop_params = True
-        _litellm.suppress_debug_info = True
-        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
-        ensure_model_registered(model)
+        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
         listing = "\n".join(
             f"{i}. {it.get('name') or ''} <{it['email']}> — subjects: "
             f"{'; '.join((it.get('subjects') or [])[:3])}"
@@ -517,19 +512,24 @@ async def _llm_categorize_senders(
         sys_prompt = (
             "Classify each email sender into exactly one category from: "
             f"{', '.join(EMAIL_CATEGORIES)}. Use the sender address and recent "
-            "subjects. Respond with ONLY a JSON array of "
-            '{"index": <n>, "category": "<one category>"}.'
+            "subjects. Respond with ONLY a JSON object "
+            '{"results": [{"index": <n>, "category": "<one category>"}]}.'
         )
-        resp = await acompletion(
+        # JSON-forced (object wrapper required by json_object mode); a generous
+        # budget so a large sender batch isn't truncated mid-array.
+        resp, _ = await acompletion_with_fallback(
             model=model,
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": listing}],
-            temperature=0, max_tokens=800,
+            temperature=0, max_tokens=2000,
+            response_format={"type": "json_object"},
         )
         data = _safe_json(resp.choices[0].message.content or "")
+        rows = data.get("results") if isinstance(data, dict) else (
+            data if isinstance(data, list) else None)
         out: dict[str, str] = {}
-        if isinstance(data, list):
-            for d in data:
+        if isinstance(rows, list):
+            for d in rows:
                 idx = d.get("index") if isinstance(d, dict) else None
                 cat = d.get("category") if isinstance(d, dict) else None
                 if isinstance(idx, int) and 0 <= idx < len(items) \
@@ -563,9 +563,12 @@ async def _categorize_senders_job(account_id: str, limit: int) -> None:
              "subjects": [s for s in (r.subjects or []) if s]}
             for r in rows
         ]
+        from gateway.routes.email.automation.assistant import (  # noqa: PLC0415
+            _account_models)
+        rule_model = (await _account_models(db, account_id))["rule"]
         for i in range(0, len(items), 10):
             batch = items[i:i + 10]
-            cats = await _llm_categorize_senders(batch)
+            cats = await _llm_categorize_senders(batch, model=rule_model)
             for it in batch:
                 await db.execute(text(
                     """INSERT INTO email_senders
@@ -631,13 +634,7 @@ async def sender_categories(
 async def _llm_is_cold(email: dict[str, str]) -> tuple[bool, str]:
     """Classify whether an email is cold outreach. (is_cold, reason)."""
     try:
-        import litellm as _litellm  # noqa: PLC0415
-        from acb_llm.client import _TIER_MODEL, ensure_model_registered  # noqa: PLC0415
-        from litellm import acompletion  # noqa: PLC0415
-        _litellm.drop_params = True
-        _litellm.suppress_debug_info = True
-        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
-        ensure_model_registered(model)
+        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
         sys_prompt = (
             "Decide if this is a COLD email: unsolicited sales, marketing, or "
             "recruiting outreach from someone with no prior relationship to the "
@@ -647,11 +644,12 @@ async def _llm_is_cold(email: dict[str, str]) -> tuple[bool, str]:
             f"From: {email.get('from', '')}\nSubject: {email.get('subject', '')}\n"
             f"Body:\n{(email.get('body', '') or '')[:1500]}"
         )
-        resp = await acompletion(
-            model=model,
+        resp, _ = await acompletion_with_fallback(
+            model="tier-fast",
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user", "content": user_prompt}],
-            temperature=0, max_tokens=200,
+            temperature=0, max_tokens=500,
+            response_format={"type": "json_object"},
         )
         data = _safe_json(resp.choices[0].message.content or "")
         if isinstance(data, dict):

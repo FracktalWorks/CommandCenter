@@ -1040,13 +1040,7 @@ async def _render_template(template: str, email: dict[str, str]) -> str:
     if not template or "{{" not in template:
         return template
     try:
-        import litellm as _litellm  # noqa: PLC0415
-        from acb_llm.client import _TIER_MODEL, ensure_model_registered  # noqa: PLC0415
-        from litellm import acompletion  # noqa: PLC0415
-        _litellm.drop_params = True
-        _litellm.suppress_debug_info = True
-        model = _TIER_MODEL.get("tier1") or _TIER_MODEL.get("tier2") or "gpt-4o-mini"
-        ensure_model_registered(model)
+        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
         ctx = (
             f"From: {email.get('from', '')}\n"
             f"Subject: {email.get('subject', '')}\n\n"
@@ -1060,12 +1054,14 @@ async def _render_template(template: str, email: dict[str, str]) -> str:
             "Keep all text outside the braces exactly as written. Output ONLY "
             "the filled-in result — no quotes, labels, or commentary."
         )
-        resp = await acompletion(
-            model=model,
+        # Field-fill is part of rule evaluation → fast tier. Prose output (a
+        # filled template), so no JSON mode.
+        resp, _ = await acompletion_with_fallback(
+            model="tier-fast",
             messages=[{"role": "system", "content": sys_prompt},
                       {"role": "user",
                        "content": f"Template:\n{template}\n\nEmail:\n{ctx}"}],
-            temperature=0, max_tokens=300,
+            temperature=0, max_tokens=1000,
         )
         out = (resp.choices[0].message.content or "").strip()
         return out or template
@@ -1091,26 +1087,23 @@ async def _apply_rule_actions(
     # Draft-confidence threshold (gates AI-written REPLY/DRAFT_EMAIL drafts).
     draft_conf = "ALL_EMAILS"
     sensitive_protection = True
-    # Primary + fallback models for AI drafting (overflow / error / low-confidence
-    # handoff). Defaults to the tier defaults; overridden from settings below.
-    draft_model, draft_fallback = "tier-balanced", "tier-powerful"
+    # The draft-writing model for AI rule actions (REPLY / DRAFT_EMAIL).
+    # Defaults to the powerful tier; overridden from settings below.
+    draft_model = "tier-powerful"
     if account_id and any(
         a.get("type") in ("REPLY", "DRAFT_EMAIL") and not (a.get("content") or "").strip()
         for a in actions
     ):
         cr = (await db.execute(text(
-            "SELECT draft_confidence, sensitive_data_protection, "
-            "agent_model, fallback_model "
+            "SELECT draft_confidence, sensitive_data_protection, draft_model "
             "FROM email_assistant_settings WHERE account_id = :aid"
         ), {"aid": account_id})).fetchone()
         if cr and cr.draft_confidence:
             draft_conf = cr.draft_confidence
         if cr and getattr(cr, "sensitive_data_protection", None) is not None:
             sensitive_protection = bool(cr.sensitive_data_protection)
-        if cr and getattr(cr, "agent_model", None):
-            draft_model = cr.agent_model
-        if cr and getattr(cr, "fallback_model", None):
-            draft_fallback = cr.fallback_model
+        if cr and getattr(cr, "draft_model", None):
+            draft_model = cr.draft_model
     # Sensitive-data protection: don't auto-draft on emails that look like they
     # carry secrets (OTPs, passwords, card/account numbers) when the setting is on.
     skip_ai_drafts = sensitive_protection and _email_looks_sensitive(email)
@@ -1197,7 +1190,7 @@ async def _apply_rule_actions(
                     body = await _agent_draft_reply(
                         draft_email, about, signature, user_email, use_agent=True,
                         confidence=draft_conf,
-                        model=draft_model, fallback_model=draft_fallback,
+                        model=draft_model,
                     )
                 # Draft-confidence gate: the drafter returns the NO_DRAFT
                 # sentinel (or empty) when it isn't confident enough — skip.

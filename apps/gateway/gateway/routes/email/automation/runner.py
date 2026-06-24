@@ -151,7 +151,7 @@ async def rules_history(
         rows = (await db.execute(text(
             f"""SELECT er.id, er.rule_id, er.rule_name, er.subject, er.from_address,
                        er.status, er.automated, er.actions_taken, er.reason,
-                       er.created_at, em.snippet, em.received_at,
+                       er.created_at, em.snippet, em.received_at, em.categories,
                        r.instructions, r.from_pattern, r.to_pattern,
                        r.subject_pattern, r.body_pattern, r.conditional_operator
                 FROM email_executed_rules er
@@ -194,6 +194,10 @@ async def rules_history(
                  "created_at": r.created_at.isoformat() if r.created_at else None,
                  "received_at": r.received_at.isoformat()
                  if getattr(r, "received_at", None) else None,
+                 "labels": (
+                     r.categories if isinstance(r.categories, list)
+                     else json.loads(r.categories or "[]")
+                 ) if getattr(r, "categories", None) is not None else [],
                  "conditions": {
                      "instructions": r.instructions,
                      "from_pattern": r.from_pattern,

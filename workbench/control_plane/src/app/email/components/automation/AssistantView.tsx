@@ -390,6 +390,13 @@ export function AssistantView({ accountId }: AssistantViewProps) {
     setHistoryRuleFilter(ruleName);
     setTab("history");
   };
+  // "View rule" from a History popover jumps to the Rules tab and opens that
+  // rule's editor (inbox-zero's "View matching rule").
+  const [openRuleId, setOpenRuleId] = useState<string | null>(null);
+  const viewRule = (ruleId: string) => {
+    setOpenRuleId(ruleId);
+    setTab("rules");
+  };
 
   // Live progress of the "Process past emails" background job, surfaced as a
   // banner here so it persists across tab switches and after the dialog closes.
@@ -447,6 +454,8 @@ export function AssistantView({ accountId }: AssistantViewProps) {
               accountId={accountId}
               onSeeHistory={seeHistory}
               onPastJobStarted={pingPastJob}
+              openRuleId={openRuleId}
+              onRuleOpened={() => setOpenRuleId(null)}
             />
           )}
           {tab === "test" && <TestTab accountId={accountId} />}
@@ -455,6 +464,7 @@ export function AssistantView({ accountId }: AssistantViewProps) {
               accountId={accountId}
               initialRuleFilter={historyRuleFilter}
               live={pastRunning}
+              onViewRule={viewRule}
             />
           )}
           {tab === "settings" && <SettingsTab accountId={accountId} />}
@@ -508,10 +518,14 @@ function RulesTab({
   accountId,
   onSeeHistory,
   onPastJobStarted,
+  openRuleId,
+  onRuleOpened,
 }: {
   accountId: string | null;
   onSeeHistory?: (ruleName: string) => void;
   onPastJobStarted?: () => void;
+  openRuleId?: string | null;
+  onRuleOpened?: () => void;
 }) {
   const [rules, setRules] = useState<AutomationRule[]>([]);
   const [loading, setLoading] = useState(true);
@@ -581,6 +595,16 @@ function RulesTab({
   };
 
   useEffect(load, [load]);
+
+  // Opened from History "View rule": when rules are loaded, open that rule's
+  // editor and clear the request so it doesn't re-open on the next render.
+  useEffect(() => {
+    if (!openRuleId || rules.length === 0) return;
+    const r = rules.find((x) => x.id === openRuleId);
+    if (r) setEditing(r);
+    onRuleOpened?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openRuleId, rules]);
 
   const save = async (rule: AutomationRule) => {
     try {
@@ -2256,6 +2280,8 @@ function RuleResultPill({
   actionSpecs,
   takenTypes,
   status,
+  ruleId,
+  onViewRule,
 }: {
   matched: boolean;
   ruleName: string | null;
@@ -2264,6 +2290,8 @@ function RuleResultPill({
   actionSpecs?: RuleAction[];
   takenTypes?: string[];
   status?: string;
+  ruleId?: string;
+  onViewRule?: (ruleId: string) => void;
 }) {
   const pill = (
     <span
@@ -2328,6 +2356,17 @@ function RuleResultPill({
             </span>
             {reason}
           </div>
+        )}
+        {ruleId && onViewRule && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onViewRule(ruleId);
+            }}
+            className="flex items-center gap-1 text-[11px] text-primary hover:opacity-80 pt-0.5"
+          >
+            <Pencil size={11} /> View matching rule
+          </button>
         )}
       </div>
     </HoverPopover>
@@ -2900,10 +2939,12 @@ function HistoryTab({
   accountId,
   initialRuleFilter = "all",
   live = false,
+  onViewRule,
 }: {
   accountId: string | null;
   initialRuleFilter?: string;
   live?: boolean;
+  onViewRule?: (ruleId: string) => void;
 }) {
   const [history, setHistory] = useState<ExecutedRule[]>([]);
   const [loading, setLoading] = useState(true);
@@ -3000,7 +3041,12 @@ function HistoryTab({
               </div>
               <div className="space-y-1.5">
                 {g.items.map((h) => (
-                  <HistoryRow key={h.id} h={h} accountId={accountId} />
+                  <HistoryRow
+                    key={h.id}
+                    h={h}
+                    accountId={accountId}
+                    onViewRule={onViewRule}
+                  />
                 ))}
               </div>
             </div>
@@ -3048,9 +3094,11 @@ function groupHistoryByDate(items: ExecutedRule[]) {
 function HistoryRow({
   h,
   accountId,
+  onViewRule,
 }: {
   h: ExecutedRule;
   accountId: string | null;
+  onViewRule?: (ruleId: string) => void;
 }) {
   const matched = h.status !== "SKIPPED";
   return (
@@ -3063,6 +3111,23 @@ function HistoryRow({
         {h.snippet && (
           <div className="text-[10px] text-muted-foreground/70 line-clamp-1 mt-0.5">
             {h.snippet}
+          </div>
+        )}
+        {(h.labels?.length ?? 0) > 0 && (
+          <div className="flex flex-wrap gap-1 mt-1">
+            {h.labels!.slice(0, 3).map((l) => (
+              <span
+                key={l}
+                className="inline-flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20"
+              >
+                <Tag size={8} /> {l}
+              </span>
+            ))}
+            {h.labels!.length > 3 && (
+              <span className="text-[9px] text-muted-foreground self-center">
+                +{h.labels!.length - 3}
+              </span>
+            )}
           </div>
         )}
         {!h.automated && (
@@ -3080,6 +3145,8 @@ function HistoryRow({
           actionSpecs={h.rule_actions}
           takenTypes={h.actions}
           status={h.status}
+          ruleId={h.rule_id ?? undefined}
+          onViewRule={onViewRule}
         />
         {accountId && (
           <FixButton

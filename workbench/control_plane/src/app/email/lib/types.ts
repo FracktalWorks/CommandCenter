@@ -283,6 +283,8 @@ export interface ExecutedRule {
   created_at: string | null;
   /** The email's received date — History is ordered/grouped by this (mail date). */
   received_at?: string | null;
+  /** Labels/categories currently on the email (inbox-zero shows these per row). */
+  labels?: string[] | null;
   /** Matched rule's conditions, for the hover popover (null when no match). */
   conditions?: RuleConditions | null;
   /** Matched rule's full action specs (label/to/subject…), for the popover. */

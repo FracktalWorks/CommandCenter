@@ -416,21 +416,118 @@ async def _upsert_thread_status(
         "mat": msg_at, "reason": reason})
 
 
-async def _mark_thread_replied(account_id: str, thread_id: str) -> None:
-    """After the user sends a reply, move the thread out of "To Reply": set its
-    Reply Zero status to AWAITING (replied → now waiting on the other person) and
-    swap the "To Reply" category for "Awaiting Reply" on the inbound messages.
+# Reply Zero status → (our thread status, the category label) mapping.
+_THREAD_STATUS_MAP = {
+    "TO_REPLY": ("NEEDS_REPLY", "To Reply"),
+    "AWAITING_REPLY": ("AWAITING", "Awaiting Reply"),
+    "ACTIONED": ("DONE", "Actioned"),
+    "FYI": ("FYI", "FYI"),
+}
 
-    Mirrors inbox-zero relabelling the thread on an outbound reply. (inbox-zero
-    AI-determines AWAITING_REPLY vs ACTIONED; we default to AWAITING — replying
-    means you're waiting on them. "Actioned" stays the explicit done state.)
-    Runs as a background task; best-effort."""
+
+async def _llm_determine_thread_status(
+    thread_text: str, user_email: str, about: str, *, user_sent_last: bool = True,
+) -> str:
+    """Determine an email thread's status from the user's perspective — a faithful
+    port of inbox-zero's aiDetermineThreadStatus. Returns TO_REPLY /
+    AWAITING_REPLY / ACTIONED (and FYI only when the user did NOT send last).
+    Defaults to AWAITING_REPLY (the user just replied) on any failure."""
+    fallback = "AWAITING_REPLY" if user_sent_last else "FYI"
+    try:
+        import litellm as _litellm  # noqa: PLC0415
+        from acb_llm.client import _TIER_MODEL, ensure_model_registered  # noqa: PLC0415
+        from litellm import acompletion  # noqa: PLC0415
+        _litellm.drop_params = True
+        _litellm.suppress_debug_info = True
+        model = _TIER_MODEL.get("tier2") or _TIER_MODEL.get("tier1") or "gpt-4o-mini"
+        ensure_model_registered(model)
+        fyi_state = "" if user_sent_last else "\n* FYI - No reply needed"
+        fyi_opt = "" if user_sent_last else "FYI, "
+        fyi_rules = "" if user_sent_last else (
+            "\n- FYI: ONLY when there are absolutely no questions, requests, or "
+            "pending actions anywhere in the thread, and the user RECEIVED the "
+            "last message.")
+        last_rule = (
+            "\n- Because the user sent the last email, FYI is NOT an option: "
+            "choose AWAITING_REPLY if waiting on a response, or ACTIONED if the "
+            "thread is complete." if user_sent_last else "")
+        sys_prompt = (
+            "You analyze an email thread and determine its current status from "
+            "the user's perspective. It is in ONE of these mutually exclusive "
+            "states:\n"
+            "* TO_REPLY - the user needs to reply\n"
+            "* AWAITING_REPLY - waiting for the other person to respond/act"
+            f"{fyi_state}\n* ACTIONED - the thread is complete\n\n"
+            "CRITERIA:\n"
+            "- TO_REPLY: someone asked the user a direct question or requested "
+            "info/action and the user hasn't addressed it; OR the user promised "
+            "a follow-up/deliverable and hasn't sent it. A clarifying question "
+            "that got answered while a commitment is still pending is still "
+            "TO_REPLY.\n"
+            "- AWAITING_REPLY: the ball is in the OTHER person's court — the user "
+            "asked/requested and is still waiting, or someone else owes an "
+            "action. If the user's request was already fulfilled, they are NO "
+            "longer awaiting.\n"
+            "- ACTIONED: all questions answered and requests fulfilled, the "
+            "conversation concluded, or the user sent info/recommendations and "
+            "isn't waiting for anything. Taking ownership ('I'll handle it') "
+            "fulfils a request unless it promises a later deliverable."
+            f"{fyi_rules}\n\n"
+            "RULES: scan the ENTIRE thread, not just the latest message; an "
+            "earlier unanswered question/request still governs. If SOMEONE ELSE "
+            "promised something → AWAITING_REPLY; if the USER promised a future "
+            "reply/deliverable → TO_REPLY."
+            f"{last_rule}\n\n"
+            'Respond with ONLY a JSON object: {"status": "<one of TO_REPLY, '
+            f'AWAITING_REPLY, {fyi_opt}ACTIONED>", "rationale": "<one line>"}}.'
+        )
+        ctx = f"You are acting on behalf of: {user_email}\n"
+        if (about or "").strip():
+            ctx += f"{about.strip()[:1200]}\n"
+        user_prompt = (
+            f"{ctx}\nEmail thread (oldest to newest):\n{thread_text[:6000]}\n\n"
+            "Determine the current status of this thread."
+        )
+        resp = await acompletion(
+            model=model,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": user_prompt}],
+            temperature=0, max_tokens=200,
+        )
+        data = _safe_json(resp.choices[0].message.content or "")
+        st = ((data.get("status") if isinstance(data, dict) else "") or "")
+        st = st.strip().upper()
+        allowed = {"TO_REPLY", "AWAITING_REPLY", "ACTIONED"}
+        if not user_sent_last:
+            allowed.add("FYI")
+        return st if st in allowed else fallback
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.determine_status_failed", error=str(exc)[:160])
+        return fallback
+
+
+def _fmt_thread_msg(r: Any) -> str:
+    frm = r.from_address if isinstance(r.from_address, dict) \
+        else json.loads(r.from_address or "{}")
+    sender = frm.get("name") or frm.get("email") or "?"
+    direction = "(you sent)" if (r.folder or "").lower() == "sent" else ""
+    body = (r.body_text or r.snippet or "").strip()
+    return f"From: {sender} {direction}\nSubject: {r.subject or ''}\n{body[:1500]}"
+
+
+async def _mark_thread_replied(account_id: str, thread_id: str) -> None:
+    """After the user sends a reply, re-determine the thread's status with the
+    AI (exact inbox-zero aiDetermineThreadStatus parity) and relabel: set the
+    Reply Zero status and swap the old status category for the new one on the
+    inbound messages. Since the user just sent, FYI is excluded — the AI picks
+    AWAITING_REPLY (waiting on them) or ACTIONED (done). Best-effort."""
     if not thread_id:
         return
     db = await _get_db()
     try:
         rows = (await db.execute(text(
-            """SELECT id, provider_message_id, categories, folder, received_at
+            """SELECT id, provider_message_id, from_address, subject, body_text,
+                      snippet, categories, folder, received_at
                FROM email_messages
                WHERE account_id = :aid AND thread_id = :tid
                ORDER BY received_at ASC NULLS FIRST"""
@@ -438,25 +535,36 @@ async def _mark_thread_replied(account_id: str, thread_id: str) -> None:
         if not rows:
             return
         latest = rows[-1]
+        about, _sig = await _load_assistant_about(db, account_id)
+        acc = (await db.execute(text(
+            "SELECT email_address, provider, credentials_encrypted "
+            "FROM email_accounts WHERE id = :id"
+        ), {"id": account_id})).fetchone()
+        acc_email = (acc.email_address if acc else "") or ""
+
+        thread_text = "\n\n---\n\n".join(_fmt_thread_msg(r) for r in rows)
+        status = await _llm_determine_thread_status(
+            thread_text, acc_email, about, user_sent_last=True)
+        rz_status, new_cat = _THREAD_STATUS_MAP.get(
+            status, ("AWAITING", "Awaiting Reply"))
+
         await _upsert_thread_status(
-            db, account_id, thread_id, "AWAITING", latest.id,
-            latest.received_at, "Replied — awaiting their response")
+            db, account_id, thread_id, rz_status, latest.id,
+            latest.received_at, f"Replied — {status}")
         await db.commit()
 
-        # Swap the "To Reply" category → "Awaiting Reply" on the inbound messages
-        # that carry it, upstream + locally (best-effort; needs the provider).
+        # Still needs the user's reply (a pending commitment) → leave labels.
+        if status == "TO_REPLY":
+            return
+
+        # Swap the "To Reply" category → the new status category on inbound
+        # messages that carry it, upstream + locally (best-effort).
         targets = [
             r for r in rows
             if (r.folder or "").lower() != "sent"
             and "To Reply" in list(r.categories or [])
         ]
-        if not targets:
-            return
-        acc = (await db.execute(text(
-            "SELECT provider, credentials_encrypted FROM email_accounts "
-            "WHERE id = :id"
-        ), {"id": account_id})).fetchone()
-        if not acc:
+        if not targets or not acc:
             return
         from acb_llm.key_store import get_key_store  # noqa: PLC0415
         store = get_key_store()
@@ -467,18 +575,15 @@ async def _mark_thread_replied(account_id: str, thread_id: str) -> None:
         for r in targets:
             try:
                 await provider.set_labels(
-                    r.provider_message_id, add=["Awaiting Reply"],
-                    remove=["To Reply"])
+                    r.provider_message_id, add=[new_cat], remove=["To Reply"])
                 await db.execute(text(
                     """UPDATE email_messages SET categories = CASE
-                         WHEN 'Awaiting Reply' = ANY(
-                                array_remove(categories, 'To Reply'))
+                         WHEN :newcat = ANY(array_remove(categories, 'To Reply'))
                            THEN array_remove(categories, 'To Reply')
                          ELSE array_append(
-                                array_remove(categories, 'To Reply'),
-                                'Awaiting Reply')
+                                array_remove(categories, 'To Reply'), :newcat)
                        END, updated_at = now() WHERE id = :id"""
-                ), {"id": r.id})
+                ), {"id": r.id, "newcat": new_cat})
             except Exception:  # noqa: BLE001 — one bad message shouldn't abort
                 continue
         if provider.credentials_dirty():

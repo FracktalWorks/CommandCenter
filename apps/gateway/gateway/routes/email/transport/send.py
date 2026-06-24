@@ -120,6 +120,7 @@ async def send_email(
                     "pmid": req.reply_to_message_id})).fetchone()
                 if trow and trow.thread_id:
                     from gateway.routes.email.automation import (  # noqa: PLC0415
+                        _cleanup_thread_drafts,
                         _learn_from_sent,
                         _mark_thread_replied,
                     )
@@ -129,6 +130,9 @@ async def send_email(
                     # Move the thread out of "To Reply" → Awaiting Reply.
                     background.add_task(
                         _mark_thread_replied, req.account_id, trow.thread_id)
+                    # Trash leftover drafts in the thread (AI draft / auto-save).
+                    background.add_task(
+                        _cleanup_thread_drafts, req.account_id, trow.thread_id)
             except Exception:  # noqa: BLE001
                 pass
 

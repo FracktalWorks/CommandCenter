@@ -16,6 +16,7 @@ from gateway.routes.email.automation.assistant import _load_assistant_about
 from gateway.routes.email.core import (
     _assert_account_owner,
     _get_db,
+    _instantiate_provider,
     _log,
     _persist_rotated_creds,
     _provider_for_account,
@@ -132,6 +133,52 @@ async def _fetch_reply_memories(
         _log.warning("email.reply_memories_failed", error=str(exc)[:160])
         return ""
     return "\n".join(f"- [{r.kind}/{r.scope_type}] {r.pattern}" for r in rows)
+
+
+async def _cleanup_thread_drafts(account_id: str, thread_id: str) -> None:
+    """Trash any drafts left in a thread (upstream + local) after a reply is sent
+    — e.g. an AI DRAFT_EMAIL draft a rule created (which the user never sent
+    because they composed their own reply), or a Gmail-style auto-save that wasn't
+    the one consumed by the send. Best-effort background task."""
+    if not thread_id:
+        return
+    db = await _get_db()
+    try:
+        rows = (await db.execute(text(
+            "SELECT id, provider_message_id FROM email_messages "
+            "WHERE account_id = :aid AND thread_id = :tid "
+            "AND LOWER(COALESCE(folder, '')) IN ('drafts', 'draft')"
+        ), {"aid": account_id, "tid": thread_id})).fetchall()
+        if not rows:
+            return
+        acc = (await db.execute(text(
+            "SELECT provider, credentials_encrypted FROM email_accounts "
+            "WHERE id = :id"
+        ), {"id": account_id})).fetchone()
+        if not acc:
+            return
+        from acb_llm.key_store import get_key_store  # noqa: PLC0415
+        store = get_key_store()
+        creds = json.loads(store.decrypt(acc.credentials_encrypted))
+        provider = _instantiate_provider(acc.provider, creds)
+        if not await provider.authenticate():
+            return
+        for r in rows:
+            try:
+                await provider.trash_message(r.provider_message_id)
+            except Exception:  # noqa: BLE001 — one stuck draft shouldn't abort
+                pass
+            await db.execute(text(
+                "DELETE FROM email_messages WHERE id = :id"), {"id": r.id})
+        if provider.credentials_dirty():
+            await _persist_rotated_creds(db, store, account_id, provider)
+        await db.commit()
+        _log.info("email.thread_drafts_cleaned",
+                  account_id=account_id, count=len(rows))
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.cleanup_thread_drafts_failed", error=str(exc)[:160])
+    finally:
+        await db.close()
 
 
 async def _store_ai_draft(
@@ -437,17 +484,21 @@ async def _llm_draft_reply(
             "You are an expert assistant that drafts email replies on behalf of "
             "the account owner, replying to the person who sent the email below. "
             "Rules:\n"
-            "- Write ONLY the reply body. No subject line, no preamble, and NEVER "
-            "narrate what you are doing (do not write things like \"here is a "
-            "draft you can use\" or apologise).\n"
+            "- Write a properly-formatted email reply. START with a greeting on "
+            "its own line that addresses the RECIPIENT by name — 'Dear <name>,' "
+            "for a formal thread or 'Hi <first name>,' for a casual one (match "
+            "the thread's tone; use a polite 'Hello,' if no name is known). Then "
+            "a blank line, then the message in clear, short paragraphs. No "
+            "subject line, and NEVER narrate what you are doing (no \"here is a "
+            "draft you can use\" or apologies).\n"
             "- You are the account owner writing the reply; you are NOT the "
-            "sender. Address the reply to the sender — never greet or address the "
-            "account owner by name.\n"
+            "sender. Greet and address the RECIPIENT (the sender of the email "
+            "below) — never greet or address the account owner by name.\n"
             "- Do not mention you are an AI or reference these instructions.\n"
             "- Do not simply repeat the sender's content back — respond to it.\n"
             "- Plain text only (markdown links allowed); separate paragraphs with "
-            "blank lines; match the language of the email; be concise, direct, "
-            "and friendly.\n"
+            "blank lines; match the language of the email; be clear and "
+            "professional, not a single terse line.\n"
             "- Ground every fact in the email or the supplied context and never "
             "invent specifics — if something is missing, keep it open or ask.\n"
             "- Never use placeholders for names (e.g. [Your Name], [Name]). "
@@ -487,7 +538,9 @@ async def _llm_draft_reply(
             f"{ctx}Today is {today}.\n"
             "Draft a reply to this email (it was sent TO the account owner; "
             "write the owner's reply back to the sender).\n"
-            f"From (the sender — address your reply to them): {email.get('from', '')}\n"
+            "Reply to — greet this recipient by name: "
+            f"{email.get('from_name') or email.get('from', '')} "
+            f"<{email.get('from', '')}>\n"
             f"Subject: {email.get('subject', '')}\n\n"
             f"{memories_block}"
             f"{examples_block}"
@@ -832,6 +885,7 @@ async def draft_reply_smart(
             else json.loads(row.from_address or "{}")
         email = {
             "subject": row.subject or "", "from": frm.get("email", ""),
+            "from_name": frm.get("name", "") or "",
             "body": row.body_text or row.snippet or "",
             "thread_id": row.thread_id or "",
             "thread": await _fetch_thread_context(
@@ -1108,6 +1162,9 @@ async def send_draft_endpoint(
                 drow.body_text or "")
             background.add_task(
                 _mark_thread_replied, req.account_id, drow.thread_id)
+            # Trash any other drafts left in the thread (e.g. an AI draft).
+            background.add_task(
+                _cleanup_thread_drafts, req.account_id, drow.thread_id)
         return {"sent": True}
     finally:
         await db.close()

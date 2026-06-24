@@ -47,6 +47,7 @@ def email_dict_from_row(
     return {
         "subject": getattr(row, "subject", "") or "",
         "from": frm.get("email", ""),
+        "from_name": frm.get("name", "") or "",
         "body": getattr(row, "body_text", None) or getattr(row, "snippet", None) or "",
         "to": _fmt_recipients(getattr(row, "to_addresses", None)),
         "cc": _fmt_recipients(getattr(row, "cc_addresses", None)),

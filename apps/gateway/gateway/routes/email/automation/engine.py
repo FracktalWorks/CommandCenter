@@ -384,7 +384,8 @@ async def _match_email_to_rules_multi(
             _add(instruction_rules[pick["index"]],
                  pick["reason"] or "Matched by AI.", "ai")
 
-    # Preserve rule sort order (rules already arrive ordered by sort_order).
+    # Apply matched rules in canonical system order (rules already arrive from
+    # _load_rules sorted that way — inbox-zero parity, not a user priority).
     order = {str(r.get("id")): i for i, r in enumerate(rules)}
     matches.sort(key=lambda m: order.get(str(m["rule"].get("id")), 1_000))
     return matches

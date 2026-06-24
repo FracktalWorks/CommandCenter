@@ -37,14 +37,13 @@ CREATE TABLE IF NOT EXISTS email_rules (
     body_pattern TEXT,
     category_filter_type TEXT,               -- 'INCLUDE' | 'EXCLUDE' | NULL
     system_type TEXT,                        -- 'COLD_EMAIL' | 'REPLY_ZERO' | NULL
-    sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now(),
     UNIQUE(account_id, name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_email_rules_account
-    ON email_rules(account_id, enabled, sort_order);
+    ON email_rules(account_id, enabled);
 
 -- ── Assistant: actions ──────────────────────────────────────────────────────
 -- One or more actions executed when a rule matches.

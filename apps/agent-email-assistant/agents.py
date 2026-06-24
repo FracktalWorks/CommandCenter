@@ -341,7 +341,6 @@ async def create_rule(
         "automated": automated,
         "run_on_threads": False,
         "conditional_operator": "OR",
-        "sort_order": 0,
         "actions": [action],
     }
     res = await _post("/email/rules", rule)

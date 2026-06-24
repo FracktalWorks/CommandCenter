@@ -61,7 +61,6 @@ class RuleModel(BaseModel):
     subject_pattern: str | None = None
     body_pattern: str | None = None
     system_type: str | None = None
-    sort_order: int = 0
     actions: list[RuleActionModel] = []
 
 
@@ -104,9 +103,9 @@ async def _load_rules(db: Any, account_id: str) -> list[dict[str, Any]]:
     rule_rows = (await db.execute(text(
         """SELECT id, account_id, name, instructions, enabled, automated,
                   run_on_threads, conditional_operator, from_pattern, to_pattern,
-                  subject_pattern, body_pattern, system_type, sort_order
+                  subject_pattern, body_pattern, system_type
            FROM email_rules WHERE account_id = :aid
-           ORDER BY sort_order, created_at"""
+           ORDER BY created_at"""
     ), {"aid": account_id})).fetchall()
     rules: list[dict[str, Any]] = []
     for r in rule_rows:
@@ -125,7 +124,7 @@ async def _load_rules(db: Any, account_id: str) -> list[dict[str, Any]]:
             "conditional_operator": r.conditional_operator,
             "from_pattern": r.from_pattern, "to_pattern": r.to_pattern,
             "subject_pattern": r.subject_pattern, "body_pattern": r.body_pattern,
-            "system_type": r.system_type, "sort_order": r.sort_order,
+            "system_type": r.system_type,
             "actions": [
                 {"id": str(a.id), "type": a.type, "label": a.label,
                  "subject": a.subject, "content": a.content,
@@ -269,18 +268,16 @@ async def _seed_preset_rules(
         if skip_existing else set()
     )
     installed: list[str] = []
-    for i, p in enumerate(_PRESET_RULES):
+    for p in _PRESET_RULES:
         if p["name"].lower() in existing:
             continue
         rid = str(uuid4())
         await db.execute(text(
             """INSERT INTO email_rules
-                 (id, account_id, name, instructions, run_on_threads,
-                  sort_order)
-               VALUES (:id, :aid, :name, :instr, :rot, :so)"""
+                 (id, account_id, name, instructions, run_on_threads)
+               VALUES (:id, :aid, :name, :instr, :rot)"""
         ), {"id": rid, "aid": account_id, "name": p["name"],
-            "instr": p["instructions"], "rot": p.get("run_on_threads", False),
-            "so": i})
+            "instr": p["instructions"], "rot": p.get("run_on_threads", False)})
         await _replace_actions(
             db, rid,
             [RuleActionModel(**a) for a in _actions_for_preset(p, provider)],
@@ -402,16 +399,15 @@ async def _insert_rule(db: Any, req: RuleModel) -> str:
         """INSERT INTO email_rules
              (id, account_id, name, instructions, enabled, automated,
               run_on_threads, conditional_operator, from_pattern, to_pattern,
-              subject_pattern, body_pattern, system_type, sort_order)
+              subject_pattern, body_pattern, system_type)
            VALUES (:id, :aid, :name, :instr, :enabled, :auto, :rot, :op,
-                   :fp, :tp, :sp, :bp, :st, :so)"""
+                   :fp, :tp, :sp, :bp, :st)"""
     ), {"id": rule_id, "aid": req.account_id, "name": req.name,
         "instr": req.instructions, "enabled": req.enabled,
         "auto": req.automated, "rot": req.run_on_threads,
         "op": req.conditional_operator,
         "fp": req.from_pattern, "tp": req.to_pattern, "sp": req.subject_pattern,
-        "bp": req.body_pattern, "st": req.system_type,
-        "so": req.sort_order})
+        "bp": req.body_pattern, "st": req.system_type})
     await _replace_actions(db, rule_id, req.actions)
     return rule_id
 
@@ -552,9 +548,8 @@ async def generate_rules(
         if not specs:
             return {"created": [],
                     "error": "Couldn't turn that into a rule — try rephrasing."}
-        base = len(await _load_rules(db, req.account_id))
         created_ids: list[str] = []
-        for i, spec in enumerate(specs):
+        for spec in specs:
             model = RuleModel(
                 account_id=req.account_id,
                 name=spec["name"],
@@ -562,7 +557,6 @@ async def generate_rules(
                 from_pattern=spec.get("from_pattern"),
                 subject_pattern=spec.get("subject_pattern"),
                 conditional_operator=spec.get("conditional_operator", "AND"),
-                sort_order=base + i,
                 actions=[RuleActionModel(**a) for a in spec["actions"]],
             )
             created_ids.append(await _insert_rule(db, model))
@@ -597,14 +591,14 @@ async def update_rule(
                  conditional_operator = :op,
                  from_pattern = :fp, to_pattern = :tp, subject_pattern = :sp,
                  body_pattern = :bp,
-                 system_type = :st, sort_order = :so, updated_at = now()
+                 system_type = :st, updated_at = now()
                WHERE id = :rid"""
         ), {"rid": rule_id, "name": req.name, "instr": req.instructions,
             "enabled": req.enabled, "auto": req.automated,
             "rot": req.run_on_threads,
             "op": req.conditional_operator, "fp": req.from_pattern,
             "tp": req.to_pattern, "sp": req.subject_pattern, "bp": req.body_pattern,
-            "st": req.system_type, "so": req.sort_order})
+            "st": req.system_type})
         await _replace_actions(db, rule_id, req.actions)
         await db.commit()
         rules = await _load_rules(db, str(owner.account_id))

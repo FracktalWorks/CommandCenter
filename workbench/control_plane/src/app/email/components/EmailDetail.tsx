@@ -73,7 +73,6 @@ export function EmailDetail({ email }: EmailDetailProps) {
         automated: true,
         run_on_threads: false,
         conditional_operator: "OR",
-        sort_order: 0,
         actions: [{ type: "ARCHIVE" }],
       });
     } catch {

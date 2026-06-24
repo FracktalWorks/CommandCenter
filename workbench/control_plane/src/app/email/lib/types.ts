@@ -246,7 +246,6 @@ export interface AutomationRule {
   subject_pattern?: string | null;
   body_pattern?: string | null;
   system_type?: string | null;
-  sort_order: number;
   actions: RuleAction[];
 }
 

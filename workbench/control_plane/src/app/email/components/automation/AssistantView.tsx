@@ -172,7 +172,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: true,
     conditional_operator: "AND",
-    sort_order: 0,
     actions: [{ type: "LABEL", label: "To Reply" }, { type: "DRAFT_EMAIL" }],
   },
   {
@@ -184,7 +183,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: true,
     conditional_operator: "AND",
-    sort_order: 1,
     actions: [{ type: "LABEL", label: "Awaiting Reply" }],
   },
   {
@@ -196,7 +194,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: true,
     conditional_operator: "AND",
-    sort_order: 2,
     actions: [{ type: "LABEL", label: "Actioned" }],
   },
   {
@@ -207,7 +204,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: true,
     conditional_operator: "AND",
-    sort_order: 1,
     actions: [{ type: "LABEL", label: "FYI" }],
   },
   {
@@ -219,7 +215,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "AND",
-    sort_order: 2,
     actions: [{ type: "LABEL", label: "Newsletter" }],
   },
   {
@@ -230,7 +225,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "AND",
-    sort_order: 3,
     actions: [{ type: "LABEL", label: "Marketing" }, { type: "ARCHIVE" }],
   },
   {
@@ -242,7 +236,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "AND",
-    sort_order: 4,
     actions: [{ type: "LABEL", label: "Calendar" }],
   },
   {
@@ -254,7 +247,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "AND",
-    sort_order: 5,
     actions: [{ type: "LABEL", label: "Receipt" }],
   },
   {
@@ -264,7 +256,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "AND",
-    sort_order: 6,
     actions: [{ type: "LABEL", label: "Notification" }],
   },
   {
@@ -276,7 +267,6 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: false,
     conditional_operator: "AND",
-    sort_order: 7,
     actions: [{ type: "LABEL", label: "Cold Email" }, { type: "ARCHIVE" }],
   },
 ];
@@ -568,7 +558,6 @@ const emptyRule = (accountId: string): AutomationRule => ({
   conditional_operator: "AND",
   from_pattern: "",
   subject_pattern: "",
-  sort_order: 0,
   actions: [{ type: "ARCHIVE" }],
 });
 

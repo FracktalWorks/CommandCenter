@@ -243,24 +243,25 @@ deeper learning/retrieval systems. Audit done 2026-06-24 against
 - **Classifier inputs parity** — To/Cc + owner address + about + date + the
   inbox-zero classification guidelines (Phase 4-adjacent, shipped 2026-06-24).
 
-**Backlog (prioritized):**
-- **P1 · Classification feedback as soft hints** *(straightforward)* — pass the
-  classifier an advisory summary of how mail from this sender was classified
-  before (from `email_executed_rules`), distinct from our hard learned patterns.
-  inbox-zero's `classificationFeedback`. Reduces repeat misclassification (e.g.
-  the CC→FYI case) without a rigid rule. **← implementing now.**
-- **P1 · Scoped reply-memory system** *(involved)* — replace the single global
-  `email_learned_patterns` with sender/domain/topic/global-scoped memories of
-  kind FACT/PROCEDURE/PREFERENCE, extracted from the draft→sent diff and
-  retrieved by scope priority. Mirrors `reply-memory.ts`. New table + extraction
-  + retrieval; the single biggest drafting-quality lever.
-- **P2 · Auto-refreshing learned writing style** — accumulate preference
-  evidence and periodically regenerate `writing_style` from it (today it's
-  generate-on-demand only). Mirrors `maybeRefreshLearnedWritingStyle`.
-- **P2 · Granular draft-confidence rubric** — expand our binary NO_DRAFT gate to
-  LOW/MEDIUM/HIGH with inbox-zero's detailed criteria.
-- **P3 · `isPrimary` in multi-rule** — mark the single most-specific matched rule
-  as primary (today we apply all matches in canonical order, no primary).
+**Backlog — ALL SHIPPED 2026-06-24:**
+- ✅ **Classification feedback as soft hints** — the classifier gets an advisory
+  summary of how mail from this sender was classified before (from
+  `email_executed_rules`, `_fetch_classification_hints`), distinct from the hard
+  learned patterns. inbox-zero's `classificationFeedback`.
+- ✅ **P1 · Scoped reply-memory system** — `email_learned_patterns` upgraded
+  (migration 38) with kind (FACT/PROCEDURE/PREFERENCE) + scope
+  (SENDER/DOMAIN/TOPIC/GLOBAL). `_llm_extract_reply_memories` extracts scoped
+  memories from the draft→sent diff; GLOBAL inject via `about`
+  (<learned_patterns>), SENDER/DOMAIN/TOPIC via `_fetch_reply_memories`
+  (<reply_memories>, prioritised SENDER>DOMAIN>TOPIC). Mirrors `reply-memory.ts`.
+- ✅ **P2 · Auto-refreshing learned writing style** — PREFERENCE memories accrue
+  as style evidence; `_maybe_refresh_learned_style` regenerates
+  `learned_writing_style` (migration 39) once enough new evidence lands, injected
+  as advisory <learned_writing_style> (explicit writing_style outranks it).
+- ✅ **P2 · Granular draft-confidence rubric** — the NO_DRAFT gate reasons with
+  inbox-zero's HIGH/MEDIUM/LOW grounded-vs-assumption criteria.
+- ✅ **P3 · `isPrimary` in multi-rule** — `_llm_pick_rules` marks one match
+  primary (most specific); it's ordered first, then canonical order.
 
 **Deferred (bigger / dependency-gated):**
 - **Calendar / scheduling context** in drafts (booking link + availability) —

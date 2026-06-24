@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -69,6 +70,35 @@ async def _fetch_thread_context(
         when = r.received_at.isoformat() if hasattr(r.received_at, "isoformat") else ""
         header = f"From: {sender}" + (f" · {when}" if when else "")
         parts.append(f"{header}\n{body[:1500]}")
+    return "\n\n---\n\n".join(parts)
+
+
+async def _fetch_sender_reply_examples(
+    db: Any, account_id: str, sender_email: str, *, limit: int = 3,
+) -> str:
+    """The owner's recent replies SENT to this sender — past examples the drafter
+    can mirror for tone, brevity and relationship (inbox-zero's
+    <sender_reply_examples>). Empty when there's no sent history to them."""
+    sender_email = (sender_email or "").strip().lower()
+    if not sender_email:
+        return ""
+    try:
+        rows = (await db.execute(text(
+            """SELECT body_text, snippet
+               FROM email_messages
+               WHERE account_id = :aid AND LOWER(COALESCE(folder, '')) = 'sent'
+                 AND LOWER(to_addresses::text) LIKE :pat
+               ORDER BY received_at DESC NULLS LAST
+               LIMIT :lim"""
+        ), {"aid": account_id, "pat": f"%{sender_email}%", "lim": limit})).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.sender_examples_failed", error=str(exc)[:160])
+        return ""
+    parts: list[str] = []
+    for r in rows:
+        body = (r.body_text or r.snippet or "").strip()
+        if body:
+            parts.append(body[:800])
     return "\n\n---\n\n".join(parts)
 
 
@@ -244,11 +274,20 @@ async def _llm_draft_reply(
             "Earlier in this thread (oldest to newest) — read it for full "
             f"context before replying:\n{thread[:5000]}\n\n" if thread else ""
         )
+        examples = (email.get("sender_examples") or "").strip()
+        examples_block = (
+            "Past replies you (the owner) have sent to this sender — mirror their "
+            "tone, brevity and directness; do NOT reuse their specific facts:\n"
+            f"{examples[:2500]}\n\n" if examples else ""
+        )
+        today = datetime.now(timezone.utc).strftime("%A, %d %B %Y")
         user_prompt = (
-            f"{ctx}Draft a reply to this email (it was sent TO the account owner; "
+            f"{ctx}Today is {today}.\n"
+            "Draft a reply to this email (it was sent TO the account owner; "
             "write the owner's reply back to the sender).\n"
             f"From (the sender — address your reply to them): {email.get('from', '')}\n"
             f"Subject: {email.get('subject', '')}\n\n"
+            f"{examples_block}"
             f"{thread_block}"
             "Latest message — reply to THIS, taking the thread above into "
             f"account:\n{(email.get('body', '') or '')[:2000]}\n"
@@ -474,6 +513,18 @@ async def _orchestrate_draft(
         )
         if mem and "no relevant" not in mem.lower():
             context_parts.append(f"From memory:\n{mem[:1500]}")
+        # Precedent: semantically similar past emails (any sender) and how the
+        # account handled them — inbox-zero's <email_history> advisory context.
+        precedent = await remember(
+            f"similar past emails about '{email.get('subject', '')}' and how "
+            f"they were handled or replied to: "
+            f"{(email.get('body', '') or '')[:200]}"
+        )
+        if (precedent and "no relevant" not in precedent.lower()
+                and precedent.strip() != (mem or "").strip()):
+            context_parts.append(
+                "Similar past emails (precedent — advisory, the current thread "
+                f"still wins):\n{precedent[:1200]}")
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.draft_memory_failed", error=str(exc)[:160])
 
@@ -570,6 +621,8 @@ async def draft_reply_smart(
             "thread": await _fetch_thread_context(
                 db, req.account_id, row.thread_id or "",
                 row.provider_message_id or ""),
+            "sender_examples": await _fetch_sender_reply_examples(
+                db, req.account_id, frm.get("email", "")),
         }
         about, signature = await _load_assistant_about(db, req.account_id)
         # Synchronous request → keep the orchestration budget under the proxy

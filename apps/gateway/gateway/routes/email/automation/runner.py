@@ -15,6 +15,7 @@ from gateway.routes.email.automation.assistant import _load_assistant_about
 from gateway.routes.email.automation.drafting import (
     DRAFT_NO_DRAFT_SENTINEL,
     _agent_draft_reply,
+    _fetch_sender_reply_examples,
     _fetch_thread_context,
     _store_ai_draft,
     _upsert_local_draft,
@@ -1138,11 +1139,14 @@ async def _apply_rule_actions(
                 if tmpl:
                     body = tmpl
                 else:
-                    draft_email = email
-                    if email.get("thread_id"):
-                        draft_email = {**email, "thread": await _fetch_thread_context(
+                    draft_email = {
+                        **email,
+                        "thread": await _fetch_thread_context(
                             db, account_id, email.get("thread_id", ""),
-                            provider_msg_id)}
+                            provider_msg_id) if email.get("thread_id") else "",
+                        "sender_examples": await _fetch_sender_reply_examples(
+                            db, account_id, email.get("from", "")),
+                    }
                     body = await _agent_draft_reply(
                         draft_email, about, signature, user_email, use_agent=True,
                         confidence=draft_conf,

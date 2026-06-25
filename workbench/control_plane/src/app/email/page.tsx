@@ -8,7 +8,7 @@ import {
   PanelRight,
   Columns2,
   ArrowLeft,
-  Pencil,
+  RefreshCw,
   X,
   Mail,
   ExternalLink,
@@ -23,6 +23,7 @@ import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
 import { AccountSidebar } from "./components/AccountSidebar";
 import { EmailList } from "./components/EmailList";
+import { EmailToolbar } from "./components/EmailToolbar";
 import { MailboxActions } from "./components/MailboxActions";
 import { EmailDetail } from "./components/EmailDetail";
 import { AIChatPanel } from "./components/AIChatPanel";
@@ -92,6 +93,7 @@ export default function EmailPage() {
     updateEmail,
     deleteEmail,
     triggerSync,
+    syncStatus,
     sendEmail,
     softRefresh,
   } = useEmailStore();
@@ -131,6 +133,9 @@ export default function EmailPage() {
   const unreadCount = emails.filter(
     (e) => e.folder === selectedFolder && !e.isRead
   ).length;
+  const syncing = selectedAccountId
+    ? syncStatus[selectedAccountId] === "syncing"
+    : false;
 
   // Reset mobile view when folder/account changes
   useEffect(() => {
@@ -709,15 +714,17 @@ export default function EmailPage() {
             <div className="flex items-center gap-1">
               {unreadCount > 0 && (
                 <span className="text-[10px] px-1.5 py-0.5 bg-primary/15 text-primary rounded-full">
-                  {unreadCount}
+                  {unreadCount} unread
                 </span>
               )}
               <button
-                onClick={() => openCompose()}
-                className="p-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-                aria-label="Compose"
+                onClick={() => selectedAccountId && triggerSync(selectedAccountId)}
+                disabled={!selectedAccountId || syncing}
+                className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
+                aria-label="Refresh"
+                title="Refresh"
               >
-                <Pencil size={14} />
+                <RefreshCw size={16} className={syncing ? "animate-spin" : ""} />
               </button>
             </div>
           </div>
@@ -754,6 +761,10 @@ export default function EmailPage() {
             )}
           </div>
         )}
+
+        {/* ── Unified action toolbar — spans the list + viewer columns, just
+            below the top bar (desktop only; mobile keeps per-view toolbars). ── */}
+        {!isMobile && <EmailToolbar />}
 
         {/* ── Content: email list + detail ── */}
         <div className="flex-1 flex min-w-0 overflow-hidden">

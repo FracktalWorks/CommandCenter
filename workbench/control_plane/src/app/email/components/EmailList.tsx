@@ -10,6 +10,7 @@ import {
 import { Email } from "../lib/types";
 import { timeLabel } from "../lib/utils";
 import { useEmailStore } from "../lib/emailStore";
+import { useViewMode } from "@/components/ViewModeProvider";
 
 interface EmailListProps {
   emails: Email[];
@@ -71,42 +72,27 @@ export function EmailList({
     selectedLabel, selectLabel,
     triggerSync, selectedAccountId, syncStatus,
     availableLabels, applyLabel, applyLabelBulk, clearCategories,
+    selectedIds, toggleEmailSelected, setSelectedEmails, clearEmailSelection,
+    bulkUpdateSelected, bulkDeleteSelected,
   } = useEmailStore();
+  const { isMobile } = useViewMode();
   const syncing = selectedAccountId
     ? syncStatus[selectedAccountId] === "syncing"
     : false;
   const [ctx, setCtx] = useState<CtxState | null>(null);
 
   // ── Bulk selection ──
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  // Clear the selection when the folder changes (render-time reset, not effect).
-  const [prevFolder, setPrevFolder] = useState(selectedFolder);
-  if (selectedFolder !== prevFolder) {
-    setPrevFolder(selectedFolder);
-    setSelected(new Set());
-  }
-  const toggleOne = (id: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  // Held in the store so the desktop unified toolbar shares it; aliased to the
+  // local names the rows / select-all / context-menu code below already use.
+  const selected = selectedIds;
+  const toggleOne = toggleEmailSelected;
   const allSelected = emails.length > 0 && emails.every((e) => selected.has(e.id));
   const someSelected = selected.size > 0 && !allSelected;
   const toggleAll = () =>
-    setSelected(allSelected ? new Set() : new Set(emails.map((e) => e.id)));
-  const clearSelection = () => setSelected(new Set());
-  const bulkUpdate = (
-    updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>
-  ) => {
-    selected.forEach((id) => updateEmail(id, updates));
-    clearSelection();
-  };
-  const bulkDelete = () => {
-    selected.forEach((id) => deleteEmail(id));
-    clearSelection();
-  };
+    allSelected ? clearEmailSelection() : setSelectedEmails(emails.map((e) => e.id));
+  const clearSelection = clearEmailSelection;
+  const bulkUpdate = bulkUpdateSelected;
+  const bulkDelete = bulkDeleteSelected;
 
   const openContextAt = (px: number, py: number, email: Email) => {
     // Clamp so the menu stays on-screen.
@@ -222,11 +208,13 @@ export function EmailList({
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Unified toolbar row — contextual:
+      {/* Contextual toolbar row — MOBILE ONLY. On desktop the single
+          EmailToolbar below the page top bar (spanning both columns) provides
+          these actions instead.
           • multi-select   → bulk-action bar
           • one email open → New + per-message actions
           • nothing open   → New + message count */}
-      {selected.size > 0 ? (
+      {isMobile && (selected.size > 0 ? (
         <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-border flex-shrink-0 bg-primary/10 overflow-x-auto scrollbar-hide">
           <span className="text-[10px] font-medium text-foreground px-1">
             {selected.size} selected
@@ -290,7 +278,7 @@ export function EmailList({
             </>
           )}
         </div>
-      )}
+      ))}
 
       {/* Active label filter */}
       {selectedLabel && (

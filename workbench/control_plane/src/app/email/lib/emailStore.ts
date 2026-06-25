@@ -150,6 +150,12 @@ interface EmailState {
   selectedLabel: string | null;
   selectedEmailId: string | null;
   searchQuery: string;
+  /** Checkbox multi-selection in the list, shared with the unified toolbar so
+   *  bulk actions can live in the page-level bar instead of inside EmailList. */
+  selectedIds: Set<string>;
+  /** Transient command from the unified toolbar to the open email viewer
+   *  (reply/forward/block/download), consumed and cleared by EmailDetail. */
+  viewerCommand: "reply" | "reply-all" | "forward" | "block" | "download" | null;
 
   // UI
   composeOpen: boolean;
@@ -187,6 +193,18 @@ interface EmailState {
   /** Filter the list by a label/category (null clears the filter). */
   selectLabel: (label: string | null) => void;
   selectEmail: (id: string | null) => void;
+  /** Toggle one message in the checkbox multi-selection. */
+  toggleEmailSelected: (id: string) => void;
+  /** Replace the checkbox multi-selection (used by "select all"). */
+  setSelectedEmails: (ids: string[]) => void;
+  /** Clear the checkbox multi-selection. */
+  clearEmailSelection: () => void;
+  /** Apply an update to every checkbox-selected message, then clear. */
+  bulkUpdateSelected: (updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>) => void;
+  /** Delete every checkbox-selected message, then clear. */
+  bulkDeleteSelected: () => void;
+  /** Send a transient command to the open email viewer (reply/forward/etc.). */
+  setViewerCommand: (cmd: EmailState["viewerCommand"]) => void;
   setSearchQuery: (q: string) => void;
   openCompose: (defaults?: { to: string; subject: string; replyToBody?: string; replyToMessageId?: string }) => void;
   closeCompose: () => void;
@@ -256,6 +274,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   selectedLabel: null,
   selectedEmailId: null,
   searchQuery: "",
+  selectedIds: new Set<string>(),
+  viewerCommand: null,
 
   // UI
   composeOpen: false,
@@ -484,7 +504,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   selectAccount: (id: string) => {
-    set({ selectedAccountId: id, selectedEmailId: null });
+    set({ selectedAccountId: id, selectedEmailId: null, selectedIds: new Set() });
     // Fetch folders, labels and emails for the newly selected account
     get().fetchFolders(id);
     get().fetchLabels(id);
@@ -492,8 +512,13 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   selectFolder: (folder: string) => {
-    // Switching folders clears any active label filter.
-    set({ selectedFolder: folder, selectedLabel: null, selectedEmailId: null });
+    // Switching folders clears any active label filter + checkbox selection.
+    set({
+      selectedFolder: folder,
+      selectedLabel: null,
+      selectedEmailId: null,
+      selectedIds: new Set(),
+    });
     get().fetchEmails();
   },
 
@@ -503,7 +528,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   selectEmail: (id: string | null) => {
-    set({ selectedEmailId: id });
+    // Opening a different message cancels any pending viewer command.
+    set({ selectedEmailId: id, viewerCommand: null });
     // Mark as read if unread
     if (id) {
       const email = get().emails.find((e) => e.id === id);
@@ -512,6 +538,32 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       }
     }
   },
+
+  toggleEmailSelected: (id: string) =>
+    set((s) => {
+      const next = new Set(s.selectedIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return { selectedIds: next };
+    }),
+
+  setSelectedEmails: (ids: string[]) => set({ selectedIds: new Set(ids) }),
+
+  clearEmailSelection: () => set({ selectedIds: new Set() }),
+
+  bulkUpdateSelected: (updates) => {
+    const ids = [...get().selectedIds];
+    ids.forEach((id) => get().updateEmail(id, updates));
+    set({ selectedIds: new Set() });
+  },
+
+  bulkDeleteSelected: () => {
+    const ids = [...get().selectedIds];
+    ids.forEach((id) => get().deleteEmail(id));
+    set({ selectedIds: new Set() });
+  },
+
+  setViewerCommand: (cmd) => set({ viewerCommand: cmd }),
 
   setSearchQuery: (q: string) => {
     set({ searchQuery: q });

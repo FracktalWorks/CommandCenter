@@ -16,6 +16,7 @@ import {
 import { MessageContent } from "./MessageContent";
 import { ConversationView, DraftCard, isDraftEmail } from "./ConversationView";
 import { LabelMenu } from "./LabelMenu";
+import { useViewMode } from "@/components/ViewModeProvider";
 
 interface EmailDetailProps {
   email: Email | null;
@@ -25,7 +26,9 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const {
     updateEmail, deleteEmail, openCompose, hydrateEmail, folders,
     accounts, selectedAccountId, sendEmail, saveDraft, sendDraft,
+    viewerCommand, setViewerCommand,
   } = useEmailStore();
+  const { isMobile } = useViewMode();
   const [starred, setStarred] = useState(email?.isStarred ?? false);
   const [read, setRead] = useState(email?.isRead ?? true);
   const [flagged, setFlagged] = useState(email?.isFlagged ?? false);
@@ -204,6 +207,25 @@ export function EmailDetail({ email }: EmailDetailProps) {
     return () => clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replyBody, replyTo, replyCc, replyMode, selectedAccountId, email?.id]);
+
+  // Bridge for the desktop unified toolbar: it issues a transient store command
+  // (reply/forward/block/download) that this viewer executes via the live
+  // handlers captured in the ref below (kept in a ref so this effect — which
+  // must sit above the early return — needn't reference them before they exist).
+  const cmdRef = useRef<{
+    reply: (m: "reply" | "reply-all" | "forward") => void;
+    block: () => void;
+    download: () => void;
+  }>({ reply: () => {}, block: () => {}, download: () => {} });
+  useEffect(() => {
+    if (!viewerCommand) return;
+    const h = cmdRef.current;
+    if (viewerCommand === "block") h.block();
+    else if (viewerCommand === "download") h.download();
+    else h.reply(viewerCommand);
+    setViewerCommand(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewerCommand]);
 
   // Keep state in sync when email changes
   if (email && starred !== email.isStarred) setStarred(email.isStarred);
@@ -390,9 +412,14 @@ export function EmailDetail({ email }: EmailDetailProps) {
     setReplyMode(null);
   };
 
+  // Keep the command bridge pointed at the live handlers (runs each render).
+  cmdRef.current = { reply: startReply, block: blockSender, download: downloadEml };
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* ── Main toolbar ── */}
+      {/* ── Main toolbar (MOBILE ONLY — on desktop the unified EmailToolbar
+          below the page top bar provides these actions) ── */}
+      {isMobile && (
       <div className="flex items-center justify-between px-3 py-2 border-b border-border flex-shrink-0 bg-card">
         {/* Left group */}
         <div className="flex items-center gap-0.5 flex-wrap">
@@ -568,6 +595,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
           )}
         </div>
       </div>
+      )}
 
       {/* ── Email content ── */}
       <div className="flex-1 overflow-y-auto scrollbar-hide px-6 py-5">

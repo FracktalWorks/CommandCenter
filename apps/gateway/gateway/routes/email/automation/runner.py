@@ -13,11 +13,11 @@ from acb_auth import UserContext, get_current_user
 from fastapi import BackgroundTasks, Depends, HTTPException, Query
 from gateway.routes.email.automation.assistant import _load_assistant_about
 from gateway.routes.email.automation.drafting import (
-    DRAFT_NO_DRAFT_SENTINEL,
     _agent_draft_reply,
     _fetch_reply_memories,
     _fetch_sender_reply_examples,
     _fetch_thread_context,
+    _is_no_draft,
     _store_ai_draft,
     _upsert_local_draft,
 )
@@ -1194,10 +1194,7 @@ async def _apply_rule_actions(
                     )
                 # Draft-confidence gate: the drafter returns the NO_DRAFT
                 # sentinel (or empty) when it isn't confident enough — skip.
-                if not tmpl and (
-                    not body.strip()
-                    or body.strip().upper() == DRAFT_NO_DRAFT_SENTINEL
-                ):
+                if not tmpl and _is_no_draft(body):
                     _log.info("email.draft_skipped_low_confidence",
                               account_id=account_id, confidence=draft_conf)
                     continue

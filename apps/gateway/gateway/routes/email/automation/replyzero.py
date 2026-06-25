@@ -12,7 +12,7 @@ from acb_auth import UserContext, get_current_user
 from fastapi import BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from gateway.routes.email.automation.assistant import _load_assistant_about
-from gateway.routes.email.automation.drafting import _agent_draft_reply
+from gateway.routes.email.automation.drafting import _agent_draft_reply, _is_no_draft
 from gateway.routes.email.core import (
     _assert_account_owner,
     _get_db,
@@ -951,14 +951,17 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bo
                             email, about, signature, acc.user_id, use_agent=True,
                             model=fu_model,
                         )
-                        await provider.create_draft(
-                            to=[to],
-                            subject=f"Re: {r.subject or ''}",
-                            body_text=body,
-                            reply_to_message_id=r.provider_message_id,
-                            thread_id=r.thread_id or None,
-                        )
-                        result["drafted"] += 1
+                        # Confidence gate (defense-in-depth): don't persist a
+                        # declined / empty draft as a real provider draft.
+                        if not _is_no_draft(body):
+                            await provider.create_draft(
+                                to=[to],
+                                subject=f"Re: {r.subject or ''}",
+                                body_text=body,
+                                reply_to_message_id=r.provider_message_id,
+                                thread_id=r.thread_id or None,
+                            )
+                            result["drafted"] += 1
                 except Exception as exc:  # noqa: BLE001
                     _log.warning("email.follow_up_draft_failed",
                                  account_id=account_id, error=str(exc)[:160])

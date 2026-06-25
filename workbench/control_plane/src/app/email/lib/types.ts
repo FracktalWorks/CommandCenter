@@ -126,6 +126,11 @@ export interface ReplyZeroThread {
   awaiting_days?: number | null;
   /** True when an awaiting thread is older than the follow-up window. */
   needs_follow_up?: boolean;
+  /** Local id of an existing draft in this thread (auto-drafted or saved), if
+   *  any — the UI offers "View draft" instead of drafting a second reply. */
+  draft_id?: string | null;
+  /** The existing draft's body text, for inline preview. */
+  draft_preview?: string | null;
 }
 
 // ── Analytics ──────────────────────────────────────────────────────────────

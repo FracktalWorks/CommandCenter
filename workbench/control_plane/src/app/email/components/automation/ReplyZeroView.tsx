@@ -3,8 +3,11 @@
 import { useEffect, useState, useCallback } from "react";
 import {
   Loader2, Reply, Clock, PenLine, Mail, Check, CheckCircle2, RotateCcw,
+  RefreshCw,
 } from "lucide-react";
-import { getReplyZero, draftReplySmart, resolveThread } from "../../lib/api";
+import {
+  getReplyZero, draftReplySmart, resolveThread, reclassifyReplyZero,
+} from "../../lib/api";
 import { ReplyZeroThread } from "../../lib/types";
 import { timeLabel } from "../../lib/utils";
 
@@ -29,6 +32,7 @@ export function ReplyZeroView({ accountId }: ReplyZeroViewProps) {
   const [saving, setSaving] = useState<string | null>(null);
   const [savedTo, setSavedTo] = useState<Record<string, boolean>>({});
   const [resolving, setResolving] = useState<string | null>(null);
+  const [reclassifying, setReclassifying] = useState(false);
 
   const load = useCallback(() => {
     if (!accountId) {
@@ -37,7 +41,21 @@ export function ReplyZeroView({ accountId }: ReplyZeroViewProps) {
     }
     setLoading(true);
     getReplyZero(accountId, mode, 100)
-      .then(setThreads)
+      .then((ts) => {
+        setThreads(ts);
+        // Pre-seed any existing thread draft (auto-drafted by the rule or saved
+        // earlier) so it shows inline and we never draft a second reply.
+        const seedDrafts: Record<string, string> = {};
+        const seedSaved: Record<string, boolean> = {};
+        for (const t of ts) {
+          if (t.draft_id && t.draft_preview) {
+            seedDrafts[t.message_id] = t.draft_preview;
+            seedSaved[t.message_id] = true; // already in the Drafts folder
+          }
+        }
+        setDrafts(seedDrafts);
+        setSavedTo(seedSaved);
+      })
       .catch(() => setThreads([]))
       .finally(() => setLoading(false));
   }, [accountId, mode]);
@@ -85,6 +103,24 @@ export function ReplyZeroView({ accountId }: ReplyZeroViewProps) {
     }
   };
 
+  // Rebuild every bucket from scratch with the rules engine (keeps Done). The
+  // job runs in the background, so we re-poll a few times as it fills in.
+  const reclassify = async () => {
+    if (!accountId || reclassifying) return;
+    setReclassifying(true);
+    try {
+      await reclassifyReplyZero(accountId);
+      for (const delay of [3000, 6000, 12000]) {
+        await new Promise((r) => setTimeout(r, delay));
+        load();
+      }
+    } catch {
+      // ignore — the user can retry
+    } finally {
+      setReclassifying(false);
+    }
+  };
+
   if (!accountId) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
@@ -109,7 +145,19 @@ export function ReplyZeroView({ accountId }: ReplyZeroViewProps) {
             <Icon size={13} /> {label}
           </button>
         ))}
-        <span className="text-[11px] text-muted-foreground ml-auto">
+        <button
+          onClick={reclassify}
+          disabled={reclassifying}
+          title="Reclassify — rebuild every bucket from your rules (keeps Done)"
+          className="ml-auto flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+        >
+          <RefreshCw
+            size={12}
+            className={reclassifying ? "animate-spin" : undefined}
+          />
+          {reclassifying ? "Reclassifying…" : "Reclassify"}
+        </button>
+        <span className="text-[11px] text-muted-foreground">
           {threads.length}
         </span>
       </div>
@@ -157,7 +205,17 @@ export function ReplyZeroView({ accountId }: ReplyZeroViewProps) {
                     )}
                   </div>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
-                    {mode !== "done" && (
+                    {/* A draft already exists for this thread (auto-drafted by
+                        the rule or saved earlier) → surface it, don't re-draft. */}
+                    {mode !== "done" && t.draft_id && (
+                      <span
+                        title="A draft is already saved for this thread"
+                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-emerald-400 border border-emerald-500/30 bg-emerald-500/10"
+                      >
+                        <Check size={12} /> Draft ready
+                      </span>
+                    )}
+                    {mode !== "done" && !t.draft_id && (
                       <button
                         onClick={() => draft(t, mode === "awaiting")}
                         disabled={drafting === t.message_id}

@@ -1136,6 +1136,20 @@ export async function getReplyZero(
   return res.threads ?? [];
 }
 
+/**
+ * Rebuild Reply Zero from scratch with the current rules-based logic. Clears the
+ * derived statuses (To Reply / Awaiting / FYI) but keeps threads marked Done,
+ * then reclassifies in the background. Poll getReplyZero afterwards.
+ */
+export async function reclassifyReplyZero(
+  accountId: string
+): Promise<{ scheduled: boolean }> {
+  return gatewayFetch("/email/reply-zero/reclassify", {
+    method: "POST",
+    body: JSON.stringify({ account_id: accountId }),
+  });
+}
+
 /** Mark a thread done (inbox-zero "Mark Done") or reopen it. */
 export async function resolveThread(
   accountId: string,

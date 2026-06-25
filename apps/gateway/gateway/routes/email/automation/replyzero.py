@@ -341,57 +341,6 @@ def _addr_dict(raw: Any) -> dict:
     return raw if isinstance(raw, dict) else json.loads(raw or "{}")
 
 
-async def _llm_needs_reply(items: list[dict[str, str]]) -> dict[int, dict[str, Any]]:
-    """Classify which inbound emails actually need a personal reply.
-
-    items: [{subject, from, body}]. Returns {index: {"needs": bool,
-    "reason": str}}; empty on LLM failure (callers default to needs=True).
-    """
-    if not items:
-        return {}
-    try:
-        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
-        listing = "\n\n".join(
-            f"{i}. From: {it['from']}\nSubject: {it['subject']}\n"
-            f"Body: {(it['body'] or '')[:800]}"
-            for i, it in enumerate(items)
-        )
-        sys_prompt = (
-            "For each email decide if it NEEDS a personal reply from the "
-            "recipient — a real person asking a question, making a request, or "
-            "expecting a response — versus FYI / automated / no-action mail "
-            "(newsletters, notifications, receipts, marketing, confirmations, "
-            "calendar invites). Respond ONLY with a JSON object "
-            '{"results": [{"index": <n>, "needs_reply": <bool>, '
-            '"reason": "<short why>"}]}.'
-        )
-        # Classification → fast tier. JSON-forced (object wrapper required by
-        # json_object mode); generous budget so a batch isn't truncated.
-        resp, _ = await acompletion_with_fallback(
-            model="tier-fast",
-            messages=[{"role": "system", "content": sys_prompt},
-                      {"role": "user", "content": listing}],
-            temperature=0, max_tokens=2000,
-            response_format={"type": "json_object"},
-        )
-        data = _safe_json(resp.choices[0].message.content or "")
-        rows = data.get("results") if isinstance(data, dict) else (
-            data if isinstance(data, list) else None)
-        out: dict[int, dict[str, Any]] = {}
-        if isinstance(rows, list):
-            for d in rows:
-                if not isinstance(d, dict):
-                    continue
-                idx = d.get("index")
-                if isinstance(idx, int) and 0 <= idx < len(items):
-                    out[idx] = {"needs": bool(d.get("needs_reply")),
-                                "reason": str(d.get("reason", ""))[:200]}
-        return out
-    except Exception as exc:  # noqa: BLE001
-        _log.warning("email.needs_reply_failed", error=str(exc)[:200])
-        return {}
-
-
 async def _upsert_thread_status(
     db: Any, account_id: str, thread_id: str, status: str,
     msg_id: Any, msg_at: Any, reason: str,
@@ -422,6 +371,60 @@ _THREAD_STATUS_MAP = {
     "ACTIONED": ("DONE", "Actioned"),
     "FYI": ("FYI", "FYI"),
 }
+
+# Conversation-status rule key → stored Reply Zero status. The rules pipeline is
+# the single source of truth: when the engine matches one of these rules for an
+# inbound message, the runner projects the corresponding status here (Reply Zero
+# is a projection of the rules, not a parallel classifier).
+_CONVERSATION_RULE_STATUS = {
+    "TO_REPLY": "NEEDS_REPLY",
+    "AWAITING_REPLY": "AWAITING",
+    "FYI": "FYI",
+    "ACTIONED": "DONE",
+}
+# Priority when several conversation rules match the same email (most actionable
+# first) — TO_REPLY must win over AWAITING/FYI/ACTIONED.
+_CONVERSATION_PRIORITY = ("TO_REPLY", "AWAITING_REPLY", "FYI", "ACTIONED")
+
+
+def _match_conversation_key(match: dict[str, Any] | None) -> str:
+    """The conversation-status key (TO_REPLY/…) of a matched rule, or ""."""
+    if not match:
+        return ""
+    rule = match.get("rule") or {}
+    key = (rule.get("system_type") or "").upper().strip()
+    if not key:
+        key = (rule.get("name") or "").upper().strip().replace(" ", "_")
+    return key if key in _CONVERSATION_RULE_STATUS else ""
+
+
+async def project_reply_status_from_matches(
+    db: Any, account_id: str, message_row: Any,
+    matches: list[dict[str, Any]] | None,
+) -> None:
+    """Store an inbound message's Reply Zero status from the conversation-status
+    rule the engine matched — the unified path that makes Reply Zero a projection
+    of the rules (no parallel classifier). Called by the rule runner on live runs.
+
+    Picks the highest-priority conversation rule among ``matches``; when none
+    matched, stores FYI so the thread stays out of the To Reply view and isn't
+    re-evaluated by the backfill. Best-effort; caller commits. Only call for
+    inbound mail (sent/replies are handled by ``_mark_thread_replied``)."""
+    thread_id = getattr(message_row, "thread_id", None)
+    if not thread_id:
+        return
+    chosen, reason = "", ""
+    for m in matches or []:
+        key = _match_conversation_key(m)
+        if not key:
+            continue
+        if not chosen or (_CONVERSATION_PRIORITY.index(key)
+                          < _CONVERSATION_PRIORITY.index(chosen)):
+            chosen, reason = key, (m.get("reason") or "")
+    status = _CONVERSATION_RULE_STATUS.get(chosen, "FYI")
+    await _upsert_thread_status(
+        db, account_id, thread_id, status, message_row.id,
+        getattr(message_row, "received_at", None), reason)
 
 
 async def _llm_determine_thread_status(
@@ -590,17 +593,29 @@ async def _mark_thread_replied(account_id: str, thread_id: str) -> None:
 
 
 async def _maybe_classify_threads(account_id: str) -> None:
-    """Reply Zero: store a per-thread status (NEEDS_REPLY / FYI / AWAITING).
+    """Reply Zero BACKFILL: fill in per-thread status for threads the live rules
+    pipeline hasn't classified yet — historical mail, accounts with auto-apply
+    off, or anything the runner missed.
 
-    Sent-last threads are AWAITING; inbound-last threads are AI-classified into
-    NEEDS_REPLY vs FYI. Only re-classifies a thread when its latest message
-    changed; caps the LLM work per cycle. Best-effort (never raises to caller)."""
+    Reuses the SAME rule engine as live classification, so Reply Zero stays a
+    projection of the rules and never a parallel classifier. Sent-last threads →
+    AWAITING (deterministic). Inbound-last gap threads are matched by the engine
+    (which applies the Reply Zero pre-filter that keeps newsletters/broadcasts out
+    of "To Reply") and projected via the matched conversation-status rule (FYI
+    when none matches). Only touches threads whose latest message changed and caps
+    engine work per cycle. The match is READ-ONLY — it never mutates the mailbox,
+    so it is safe even when auto-apply is off. Best-effort (never raises)."""
     db = await _get_db()
     try:
+        from gateway.routes.email.automation.engine import (  # noqa: PLC0415
+            _match_email_to_rule,
+            email_dict_from_row,
+        )
         rows = (await db.execute(text(
             """WITH latest AS (
                  SELECT DISTINCT ON (thread_id) thread_id, id, subject,
-                        from_address, body_text, snippet, folder, received_at
+                        from_address, to_addresses, cc_addresses, body_text,
+                        snippet, folder, received_at
                  FROM email_messages
                  WHERE account_id = :aid AND thread_id IS NOT NULL
                    AND received_at > now() - interval '30 days'
@@ -617,7 +632,13 @@ async def _maybe_classify_threads(account_id: str) -> None:
                 "WHERE account_id = :aid"
             ), {"aid": account_id})).fetchall()
         }
-        to_classify = []
+        about, _sig = await _load_assistant_about(db, account_id)
+        acc = (await db.execute(text(
+            "SELECT email_address FROM email_accounts WHERE id = :id"
+        ), {"id": account_id})).fetchone()
+        self_email = (acc.email_address if acc else "") or ""
+
+        gap_inbound = []
         for r in rows:
             if existing.get(r.thread_id) == str(r.id):
                 continue  # latest message unchanged → status still valid
@@ -627,31 +648,49 @@ async def _maybe_classify_threads(account_id: str) -> None:
                     db, account_id, r.thread_id, "AWAITING", r.id,
                     r.received_at, "")
             elif folder == "inbox":
-                to_classify.append(r)
+                gap_inbound.append(r)
         await db.commit()
 
-        to_classify = to_classify[:25]  # cap LLM work per cycle
-        for i in range(0, len(to_classify), 10):
-            batch = to_classify[i:i + 10]
-            items = [
-                {"subject": r.subject or "",
-                 "from": _addr_dict(r.from_address).get("email", ""),
-                 "body": r.body_text or r.snippet or ""}
-                for r in batch
-            ]
-            verdicts = await _llm_needs_reply(items)
-            for j, r in enumerate(batch):
-                v = verdicts.get(j, {"needs": True, "reason": ""})
-                status = "NEEDS_REPLY" if v["needs"] else "FYI"
-                await _upsert_thread_status(
-                    db, account_id, r.thread_id, status, r.id,
-                    r.received_at, v.get("reason", ""))
+        for r in gap_inbound[:25]:  # cap engine work per cycle
+            email = email_dict_from_row(r, self_email, about)
+            match = await _match_email_to_rule(db, account_id, email)
+            await project_reply_status_from_matches(
+                db, account_id, r, [match] if match else [])
             await db.commit()
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.classify_threads_failed",
                      account_id=account_id, error=str(exc)[:200])
     finally:
         await db.close()
+
+
+async def _reclassify_reply_zero_job(account_id: str) -> None:
+    """Rebuild an account's Reply Zero statuses from scratch with the current
+    rules-based logic — used when the classifier changed (e.g. to clear threads
+    that the old parallel classifier stale-labelled as needs-reply).
+
+    Drops the DERIVED statuses (NEEDS_REPLY / AWAITING / FYI) but PRESERVES DONE,
+    so a user's "Mark done" decisions survive a reclassify. Then runs the engine
+    backfill a bounded number of times (each pass scans ≤200 threads and
+    classifies ≤25 inbound, so this covers the whole recent window without
+    unbounded LLM cost). Best-effort."""
+    db = await _get_db()
+    try:
+        await db.execute(text(
+            "DELETE FROM email_thread_status "
+            "WHERE account_id = :aid AND status <> 'DONE'"
+        ), {"aid": account_id})
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.reclassify_reset_failed",
+                     account_id=account_id, error=str(exc)[:160])
+        await db.close()
+        return
+    else:
+        await db.close()
+    # Each pass classifies the next batch of now-statusless threads.
+    for _ in range(8):
+        await _maybe_classify_threads(account_id)
 
 
 class ThreadResolveRequest(BaseModel):
@@ -715,92 +754,108 @@ async def resolve_thread(
         await db.close()
 
 
+class ReplyZeroReclassifyRequest(BaseModel):
+    account_id: str
+
+
+@router.post("/reply-zero/reclassify")
+async def reclassify_reply_zero(
+    req: ReplyZeroReclassifyRequest,
+    background: BackgroundTasks,
+    user: UserContext = Depends(get_current_user),
+):
+    """Rebuild Reply Zero from scratch with the current rules-based logic.
+
+    Clears the derived statuses (To Reply / Awaiting / FYI) — preserving threads
+    you've marked Done — then re-runs classification through the rules engine.
+    Useful after the classifier changed. Runs in the background; poll
+    GET /email/reply-zero to see the rebuilt buckets."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+    finally:
+        await db.close()
+    background.add_task(_reclassify_reply_zero_job, req.account_id)
+    return {"scheduled": True}
+
+
 @router.get("/reply-zero")
 async def reply_zero(
+    background: BackgroundTasks,
     account_id: str = Query(...),
-    type: str = Query("needs_reply"),  # needs_reply | awaiting
+    type: str = Query("needs_reply"),  # needs_reply | awaiting | done
     limit: int = Query(50, ge=1, le=200),
     user: UserContext = Depends(get_current_user),
 ):
-    """Threads that need a reply or are awaiting one. Prefers the stored,
-    AI-classified status (Reply Zero); falls back to the folder heuristic until
-    the first classification pass has run."""
+    """Threads in a Reply Zero bucket, read straight from the stored,
+    rules-derived status (``email_thread_status``).
+
+    Reply Zero is a PROJECTION of the rules pipeline — a thread shows up only once
+    a rule has classified it. There is deliberately NO inbox fallback (the old
+    "show every inbox thread until the first pass runs" behaviour is what made
+    every email appear under "To Reply"). On a cold account with nothing
+    classified yet we kick off a one-off background backfill so the next poll is
+    populated; an existing draft for the thread is surfaced (``draft_id``) so the
+    UI offers "View draft" instead of drafting a second reply."""
     db = await _get_db()
     try:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
-        has_status = (await db.execute(text(
-            "SELECT 1 FROM email_thread_status WHERE account_id = :aid LIMIT 1"
-        ), {"aid": account_id})).fetchone() is not None
-
-        if has_status:
-            want = {"awaiting": "AWAITING", "done": "DONE"}.get(
-                type, "NEEDS_REPLY")
-            rows = (await db.execute(text(
-                """SELECT ts.thread_id, ts.reason, ts.last_message_at,
-                          em.id, em.subject, em.from_address, em.is_read
-                   FROM email_thread_status ts
-                   JOIN email_messages em ON em.id = ts.last_message_id
-                   WHERE ts.account_id = :aid AND ts.status = :st
-                   ORDER BY ts.last_message_at DESC NULLS LAST LIMIT :limit"""
-            ), {"aid": account_id, "st": want, "limit": limit})).fetchall()
-            fu_days = 0
-            if type == "awaiting":
-                fu_row = (await db.execute(text(
-                    "SELECT follow_up_days FROM email_assistant_settings "
-                    "WHERE account_id = :aid"
-                ), {"aid": account_id})).fetchone()
-                fu_days = (fu_row.follow_up_days if fu_row else 0) or 0
-            now = datetime.now(timezone.utc)
-            out = []
-            for r in rows:
-                frm = _addr_dict(r.from_address)
-                days = (now - r.last_message_at).days if r.last_message_at else None
-                out.append({
-                    "thread_id": r.thread_id, "message_id": str(r.id),
-                    "subject": r.subject or "(no subject)",
-                    "from": frm.get("name") or frm.get("email", ""),
-                    "from_email": frm.get("email", ""),
-                    "received_at": (
-                        r.last_message_at.isoformat() if r.last_message_at else None
-                    ),
-                    "is_read": r.is_read, "reason": r.reason or "",
-                    "awaiting_days": days,
-                    "needs_follow_up": bool(
-                        fu_days and days is not None and days >= fu_days),
-                })
-            return {"threads": out, "type": type}
-
-        # No folder heuristic for "done" — it only exists once a thread has been
-        # explicitly resolved (a stored status).
-        if type == "done":
-            return {"threads": [], "type": type}
-
-        # Fallback: folder heuristic (before the first classification pass).
-        folder = "sent" if type == "awaiting" else "inbox"
+        want = {"awaiting": "AWAITING", "done": "DONE"}.get(type, "NEEDS_REPLY")
         rows = (await db.execute(text(
-            """WITH latest AS (
-                 SELECT DISTINCT ON (thread_id)
-                        thread_id, id, subject, from_address, folder,
-                        received_at, is_read
-                 FROM email_messages
-                 WHERE account_id = :aid AND thread_id IS NOT NULL
-                 ORDER BY thread_id, received_at DESC
-               )
-               SELECT thread_id, id, subject, from_address, received_at, is_read
-               FROM latest WHERE LOWER(folder) = :folder
-               ORDER BY received_at DESC LIMIT :limit"""
-        ), {"aid": account_id, "folder": folder, "limit": limit})).fetchall()
+            """SELECT ts.thread_id, ts.reason, ts.last_message_at,
+                      em.id, em.subject, em.from_address, em.is_read,
+                      d.id AS draft_id, d.body_text AS draft_text
+               FROM email_thread_status ts
+               JOIN email_messages em ON em.id = ts.last_message_id
+               LEFT JOIN LATERAL (
+                 SELECT id, body_text FROM email_messages dm
+                 WHERE dm.account_id = ts.account_id
+                   AND dm.thread_id = ts.thread_id
+                   AND LOWER(COALESCE(dm.folder, '')) IN ('drafts', 'draft')
+                 ORDER BY dm.updated_at DESC NULLS LAST, dm.received_at DESC
+                 LIMIT 1
+               ) d ON true
+               WHERE ts.account_id = :aid AND ts.status = :st
+               ORDER BY ts.last_message_at DESC NULLS LAST LIMIT :limit"""
+        ), {"aid": account_id, "st": want, "limit": limit})).fetchall()
+
+        # Cold start: nothing classified yet → schedule a one-off backfill so the
+        # next poll fills in, instead of the old whole-inbox fallback.
+        if not rows:
+            has_any = (await db.execute(text(
+                "SELECT 1 FROM email_thread_status WHERE account_id = :aid LIMIT 1"
+            ), {"aid": account_id})).fetchone()
+            if has_any is None:
+                background.add_task(_maybe_classify_threads, account_id)
+
+        fu_days = 0
+        if type == "awaiting":
+            fu_row = (await db.execute(text(
+                "SELECT follow_up_days FROM email_assistant_settings "
+                "WHERE account_id = :aid"
+            ), {"aid": account_id})).fetchone()
+            fu_days = (fu_row.follow_up_days if fu_row else 0) or 0
+        now = datetime.now(timezone.utc)
         out = []
         for r in rows:
             frm = _addr_dict(r.from_address)
+            days = (now - r.last_message_at).days if r.last_message_at else None
             out.append({
                 "thread_id": r.thread_id, "message_id": str(r.id),
                 "subject": r.subject or "(no subject)",
                 "from": frm.get("name") or frm.get("email", ""),
                 "from_email": frm.get("email", ""),
-                "received_at": r.received_at.isoformat() if r.received_at else None,
-                "is_read": r.is_read, "reason": "",
-                "awaiting_days": None, "needs_follow_up": False,
+                "received_at": (
+                    r.last_message_at.isoformat() if r.last_message_at else None
+                ),
+                "is_read": r.is_read, "reason": r.reason or "",
+                "awaiting_days": days,
+                "needs_follow_up": bool(
+                    fu_days and days is not None and days >= fu_days),
+                # An existing draft in the thread (auto-drafted or saved) so the
+                # UI shows "View draft" rather than drafting another reply.
+                "draft_id": str(r.draft_id) if r.draft_id else None,
+                "draft_preview": (r.draft_text or "") if r.draft_id else None,
             })
         return {"threads": out, "type": type}
     finally:

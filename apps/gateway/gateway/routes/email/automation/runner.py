@@ -909,6 +909,12 @@ async def _run_rules_job(
                 if not await provider.authenticate():
                     provider = None
 
+        # Reply Zero (unified): project each thread's reply status from the rule
+        # the engine matched. Rows are newest-first, so the first message seen per
+        # thread is the latest — project only that one (older ones must not clobber
+        # a newer status).
+        projected_threads: set[str] = set()
+
         for r in rows:
             frm = r.from_address if isinstance(r.from_address, dict) \
                 else json.loads(r.from_address or "{}")
@@ -945,6 +951,20 @@ async def _run_rules_job(
                         db, provider, account_id, str(r.id),
                         r.provider_message_id, email, cold_blocker,
                     )
+            # Reply Zero: project this thread's status from the matched rule
+            # (latest message per thread only). Read-only of the mailbox — runs
+            # even when the provider failed to authenticate.
+            if not dry_run and r.thread_id and r.thread_id not in projected_threads:
+                projected_threads.add(r.thread_id)
+                try:
+                    from gateway.routes.email.automation.replyzero import (  # noqa: PLC0415
+                        project_reply_status_from_matches,
+                    )
+                    await project_reply_status_from_matches(
+                        db, account_id, r, matches)
+                except Exception as exc:  # noqa: BLE001
+                    _log.warning("email.project_reply_status_failed",
+                                 account_id=account_id, error=str(exc)[:160])
             if not dry_run:
                 await db.execute(text(
                     "UPDATE email_messages SET rules_processed_at = now() "

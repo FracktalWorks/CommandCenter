@@ -277,6 +277,99 @@ async def _llm_pick_rules(
         return []
 
 
+# ── Conversation-status (Reply Zero) pre-filter ───────────────────────────────
+# A faithful port of inbox-zero's filterConversationStatusRulesWithMetadata
+# (utils/reply-tracker/match-rules.ts). Before the AI is even asked, we decide
+# whether the conversation-status rules (To Reply / Awaiting Reply / FYI /
+# Actioned) are eligible at all. Without this gate every newsletter, notification
+# and one-way broadcast that the classifier mis-reads becomes "To Reply" — the
+# root cause of "everything shows up in the To Reply tab".
+
+# System rules that track a thread's reply status (Reply Zero). Identified by
+# system_type, falling back to the name (seeded presets store system_type NULL).
+_CONVERSATION_SYSTEM_KEYS = {"TO_REPLY", "AWAITING_REPLY", "FYI", "ACTIONED"}
+
+# Senders that never expect a reply (inbox-zero's NO_REPLY_PREFIXES + a few
+# obvious extras). Matched as a case-insensitive prefix of the full address.
+_NO_REPLY_PREFIXES = (
+    "noreply@", "no-reply@", "no_reply@", "donotreply@", "do-not-reply@",
+    "notifications@", "notification@", "notify@", "notif@", "info@",
+    "newsletter@", "news@", "updates@", "update@", "account@", "accounts@",
+    "mailer@", "mailer-daemon@", "bounce@", "bounces@",
+)
+
+# Never replied to a sender but received at least this many from them → it's a
+# one-way broadcast, not a conversation (inbox-zero TO_REPLY_RECEIVED_THRESHOLD).
+_TO_REPLY_RECEIVED_THRESHOLD = 10
+
+
+def _conversation_rule_key(rule: dict[str, Any]) -> str:
+    """The canonical conversation-status key for a rule (system_type, falling
+    back to its UPPER_SNAKE name), or "" when it isn't a conversation rule."""
+    key = (rule.get("system_type") or "").upper().strip()
+    if not key:
+        key = (rule.get("name") or "").upper().strip().replace(" ", "_")
+    return key if key in _CONVERSATION_SYSTEM_KEYS else ""
+
+
+def _is_conversation_status_rule(rule: dict[str, Any]) -> bool:
+    return bool(_conversation_rule_key(rule))
+
+
+async def _is_reply_candidate(
+    db: Any, account_id: str, email: dict[str, str],
+) -> tuple[bool, str]:
+    """Whether an email may match the conversation-status rules at all.
+
+    Returns ``(allowed, reason_when_blocked)``. Deterministic — no LLM. Blocks
+    no-reply senders, mass mail carrying a List-Unsubscribe link, and one-way
+    broadcast senders the user has never replied to (inbox-zero parity). Fails
+    OPEN (allowed) on any error so a transient DB issue can't hide real mail."""
+    sender = (email.get("from") or "").strip().lower()
+    if not sender or "@" not in sender:
+        return True, ""
+    if any(sender.startswith(p) for p in _NO_REPLY_PREFIXES):
+        return False, "no_reply_sender"
+    try:
+        # Mass/automated mail: a List-Unsubscribe link was parsed for this sender.
+        unsub = (await db.execute(text(
+            "SELECT 1 FROM email_messages WHERE account_id = :aid "
+            "AND LOWER(from_address->>'email') = :s "
+            "AND unsubscribe_link IS NOT NULL LIMIT 1"
+        ), {"aid": account_id, "s": sender})).fetchone()
+        if unsub:
+            return False, "list_unsubscribe"
+        # Reply-history threshold: never replied + many received → broadcast.
+        recv = (await db.execute(text(
+            "SELECT COUNT(*) AS c FROM (SELECT 1 FROM email_messages "
+            "WHERE account_id = :aid AND LOWER(from_address->>'email') = :s "
+            "AND LOWER(COALESCE(folder, '')) = 'inbox' LIMIT :thr) t"
+        ), {"aid": account_id, "s": sender,
+            "thr": _TO_REPLY_RECEIVED_THRESHOLD})).fetchone()
+        if recv and int(recv.c) >= _TO_REPLY_RECEIVED_THRESHOLD:
+            replied = (await db.execute(text(
+                "SELECT 1 FROM email_messages WHERE account_id = :aid "
+                "AND LOWER(COALESCE(folder, '')) = 'sent' "
+                "AND CAST(to_addresses AS TEXT) ILIKE :pat LIMIT 1"
+            ), {"aid": account_id, "pat": f"%{sender}%"})).fetchone()
+            if not replied:
+                return False, "reply_history_threshold"
+    except Exception as exc:  # noqa: BLE001 — never hide mail on a gate error
+        _log.warning("email.reply_candidate_gate_failed", error=str(exc)[:160])
+        return True, ""
+    return True, ""
+
+
+def _gate_conversation_rules(
+    rules: list[dict[str, Any]], allowed: bool,
+) -> list[dict[str, Any]]:
+    """Drop the conversation-status rules from the candidate set when the email
+    isn't a reply candidate, so it falls through to Newsletter/Marketing/etc."""
+    if allowed:
+        return rules
+    return [r for r in rules if not _is_conversation_status_rule(r)]
+
+
 def _static_match(rule: dict[str, Any], email: dict[str, str]) -> bool | None:
     """Evaluate a rule's static patterns. Returns None if the rule has none."""
     checks: list[bool] = []
@@ -376,6 +469,14 @@ async def _match_email_to_rule(
     if not rules:
         return None
 
+    # Reply Zero gate (inbox-zero parity): drop the conversation-status rules
+    # (To Reply / Awaiting / FYI / Actioned) for no-reply, mass and broadcast
+    # mail so they can never match "To Reply".
+    allowed, _why = await _is_reply_candidate(db, account_id, email)
+    rules = _gate_conversation_rules(rules, allowed)
+    if not rules:
+        return None
+
     # Learned patterns (inbox-zero parity): an EXCLUDE pattern skips a rule
     # entirely; an INCLUDE pattern short-circuits to an immediate match (no LLM).
     patterns = await _load_rule_patterns(db, account_id)
@@ -425,6 +526,12 @@ async def _match_email_to_rules_multi(
     returned in rule sort order.
     """
     rules = [r for r in await _load_rules(db, account_id) if r["enabled"]]
+    if not rules:
+        return []
+
+    # Reply Zero gate (inbox-zero parity) — see _match_email_to_rule.
+    allowed, _why = await _is_reply_candidate(db, account_id, email)
+    rules = _gate_conversation_rules(rules, allowed)
     if not rules:
         return []
 

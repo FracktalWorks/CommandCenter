@@ -5,12 +5,11 @@ import {
   Pencil, Trash2, Archive, Flag, FolderInput,
   Reply, ReplyAll, Forward, MailOpen, Mail, Tag,
   Paperclip, Star, AlertTriangle, ChevronRight, Loader2, Check, X,
-  MessagesSquare, RefreshCw, Minus, Plus, Settings2, RotateCw, Eraser,
+  MessagesSquare, RefreshCw, Minus, Plus,
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { timeLabel } from "../lib/utils";
 import { useEmailStore } from "../lib/emailStore";
-import { resyncAccount } from "../lib/api";
 
 interface EmailListProps {
   emails: Email[];
@@ -27,18 +26,18 @@ interface EmailListProps {
   canBackfill?: boolean;
 }
 
-const TOOLBAR_PRIMARY = [
-  { icon: Trash2, label: "Delete", key: "delete" },
-  { icon: Archive, label: "Archive", key: "archive" },
-  { icon: Flag, label: "Flag", key: "flag" },
-  { icon: FolderInput, label: "Move", key: "move" },
-];
-
-const TOOLBAR_SECONDARY = [
+// Per-message actions, shown only when a single email is open. Ordered
+// respond → dispose → organize. "move"/"label" open the context menu (folder &
+// label pickers); everything else routes through onToolbarAction.
+const TOOLBAR_ACTIONS = [
   { icon: Reply, label: "Reply", key: "reply" },
   { icon: ReplyAll, label: "Reply All", key: "reply-all" },
   { icon: Forward, label: "Forward", key: "forward" },
+  { icon: Archive, label: "Archive", key: "archive" },
+  { icon: Trash2, label: "Delete", key: "delete" },
+  { icon: FolderInput, label: "Move", key: "move" },
   { icon: MailOpen, label: "Mark as Read", key: "mark-read" },
+  { icon: Flag, label: "Flag", key: "flag" },
   { icon: Tag, label: "Label", key: "label" },
 ];
 
@@ -77,30 +76,6 @@ export function EmailList({
     ? syncStatus[selectedAccountId] === "syncing"
     : false;
   const [ctx, setCtx] = useState<CtxState | null>(null);
-
-  // ── Mailbox settings menu (gear) ──
-  const [showSettings, setShowSettings] = useState(false);
-  const [resyncing, setResyncing] = useState<"full" | "purge" | null>(null);
-  const [resyncMsg, setResyncMsg] = useState<string | null>(null);
-  const doResync = async (purge: boolean) => {
-    if (!selectedAccountId || resyncing) return;
-    if (purge && !confirm(
-      "Hard resync deletes this mailbox's locally-stored emails, then re-fetches " +
-      "them fresh from the server. Use this only if local data looks wrong. Continue?"
-    )) return;
-    setResyncing(purge ? "purge" : "full");
-    setResyncMsg(null);
-    try {
-      const r = await resyncAccount(selectedAccountId, purge);
-      setResyncMsg(
-        `Resynced — ${r.messages_synced ?? 0} message(s) re-fetched.`
-      );
-    } catch (e) {
-      setResyncMsg((e as Error).message || "Resync failed.");
-    } finally {
-      setResyncing(null);
-    }
-  };
 
   // ── Bulk selection ──
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -247,139 +222,12 @@ export function EmailList({
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Primary toolbar row */}
-      <div className="flex items-center gap-0.5 px-2 pt-2 pb-1 border-b border-border flex-shrink-0">
-        <button
-          title="New Email"
-          onClick={onCompose}
-          className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors mr-1"
-        >
-          <Pencil size={12} />
-          <span className="text-[10px] font-medium">New</span>
-        </button>
-
-        {TOOLBAR_PRIMARY.map(({ icon: Icon, label, key }) => (
-          <ToolbarBtn
-            key={key}
-            icon={Icon}
-            label={label}
-            onClick={(e) => {
-              // "Move" opens the context menu (which hosts the folder picker).
-              if (key === "move") {
-                if (selectedEmail) {
-                  setCtx({ x: e.clientX, y: e.clientY + 12, email: selectedEmail });
-                }
-              } else {
-                onToolbarAction(key, selectedEmail);
-              }
-            }}
-          />
-        ))}
-
-        <div className="flex-1" />
-
-        <button
-          onClick={() => selectedAccountId && triggerSync(selectedAccountId)}
-          disabled={!selectedAccountId || syncing}
-          className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
-          title="Refresh — sync new mail, drafts & changes from the server"
-        >
-          <RefreshCw size={13} className={syncing ? "animate-spin" : ""} />
-        </button>
-
-        <button
-          onClick={() =>
-            selectedEmail && updateEmail(selectedEmail.id, { folder: "junk" })
-          }
-          disabled={!selectedEmail}
-          className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
-          title="Mark as spam"
-        >
-          <AlertTriangle size={13} />
-        </button>
-
-        {/* Mailbox settings (gear) */}
-        <div className="relative">
-          <button
-            onClick={() => setShowSettings((v) => !v)}
-            className={`p-1.5 rounded transition-colors ${
-              showSettings
-                ? "text-primary bg-primary/10"
-                : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-            }`}
-            title="Mailbox settings"
-          >
-            <Settings2 size={13} />
-          </button>
-          {showSettings && (
-            <>
-              <div
-                className="fixed inset-0 z-10"
-                onClick={() => setShowSettings(false)}
-              />
-              <div className="absolute right-0 top-full mt-1 z-20 w-64 bg-popover border border-border rounded-lg shadow-xl py-1">
-                <div className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                  Mailbox
-                </div>
-                <button
-                  onClick={() => doResync(false)}
-                  disabled={!selectedAccountId || !!resyncing}
-                  className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-secondary transition-colors disabled:opacity-50"
-                >
-                  {resyncing === "full" ? (
-                    <Loader2 size={13} className="animate-spin mt-0.5 flex-shrink-0" />
-                  ) : (
-                    <RotateCw size={13} className="mt-0.5 flex-shrink-0 text-muted-foreground" />
-                  )}
-                  <span>
-                    <span className="block text-xs text-foreground">Resync mailbox</span>
-                    <span className="block text-[10px] text-muted-foreground">
-                      Re-fetch everything from the server (fixes stale data)
-                    </span>
-                  </span>
-                </button>
-                <button
-                  onClick={() => doResync(true)}
-                  disabled={!selectedAccountId || !!resyncing}
-                  className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-secondary transition-colors disabled:opacity-50"
-                >
-                  {resyncing === "purge" ? (
-                    <Loader2 size={13} className="animate-spin mt-0.5 flex-shrink-0" />
-                  ) : (
-                    <Eraser size={13} className="mt-0.5 flex-shrink-0 text-muted-foreground" />
-                  )}
-                  <span>
-                    <span className="block text-xs text-foreground">Hard resync</span>
-                    <span className="block text-[10px] text-muted-foreground">
-                      Clear local copy & re-fetch (for corrupt data)
-                    </span>
-                  </span>
-                </button>
-                <button
-                  onClick={() => {
-                    if (selectedAccountId) triggerSync(selectedAccountId);
-                    setShowSettings(false);
-                  }}
-                  disabled={!selectedAccountId || syncing}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-secondary transition-colors disabled:opacity-50"
-                >
-                  <RefreshCw size={13} className={`flex-shrink-0 text-muted-foreground ${syncing ? "animate-spin" : ""}`} />
-                  <span className="text-xs text-foreground">Sync new mail now</span>
-                </button>
-                {resyncMsg && (
-                  <div className="px-3 py-1.5 text-[10px] text-muted-foreground border-t border-border">
-                    {resyncMsg}
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Secondary toolbar row — becomes a bulk-action bar when rows are picked */}
+      {/* Unified toolbar row — contextual:
+          • multi-select   → bulk-action bar
+          • one email open → New + per-message actions
+          • nothing open   → New + message count */}
       {selected.size > 0 ? (
-        <div className="flex items-center gap-0.5 px-2 py-1 border-b border-border flex-shrink-0 bg-primary/10 overflow-x-auto scrollbar-hide">
+        <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-border flex-shrink-0 bg-primary/10 overflow-x-auto scrollbar-hide">
           <span className="text-[10px] font-medium text-foreground px-1">
             {selected.size} selected
           </span>
@@ -398,30 +246,49 @@ export function EmailList({
           </button>
         </div>
       ) : (
-        <div className="flex items-center gap-0.5 px-2 py-1 border-b border-border flex-shrink-0 bg-secondary/30 overflow-x-auto scrollbar-hide">
-          {TOOLBAR_SECONDARY.map(({ icon: Icon, label, key }) => (
-            <ToolbarBtn
-              key={key}
-              icon={Icon}
-              label={label}
-              onClick={(e) => {
-                // "Label" opens the label picker (the context menu, which hosts
-                // LabelMenu) anchored at the button for the selected message.
-                if (key === "label") {
-                  if (selectedEmail) {
-                    setCtx({ x: e.clientX, y: e.clientY + 12, email: selectedEmail });
-                  }
-                } else {
-                  onToolbarAction(key, selectedEmail);
-                }
-              }}
-            />
-          ))}
-          <div className="flex-1" />
-          <span className="text-[10px] text-muted-foreground pr-1">
-            {emails.length}
-            {total !== undefined && total > emails.length ? ` of ${total}` : ""} msgs
-          </span>
+        <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-border flex-shrink-0 overflow-x-auto scrollbar-hide">
+          {/* Compose — always available, even with nothing selected */}
+          <button
+            title="New Email"
+            onClick={onCompose}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex-shrink-0"
+          >
+            <Pencil size={12} />
+            <span className="text-[10px] font-medium">New</span>
+          </button>
+
+          {selectedEmail ? (
+            <>
+              {/* Per-message actions — only when an email is open. */}
+              <div className="w-px h-4 bg-border mx-1 flex-shrink-0" />
+              {TOOLBAR_ACTIONS.map(({ icon: Icon, label, key }) => (
+                <ToolbarBtn
+                  key={key}
+                  icon={Icon}
+                  label={label}
+                  onClick={(e) => {
+                    // "Move"/"Label" open the context menu (folder & label
+                    // pickers) anchored at the click; the rest route through
+                    // onToolbarAction.
+                    if (key === "move" || key === "label") {
+                      setCtx({ x: e.clientX, y: e.clientY + 12, email: selectedEmail });
+                    } else {
+                      onToolbarAction(key, selectedEmail);
+                    }
+                  }}
+                />
+              ))}
+              <div className="flex-1" />
+            </>
+          ) : (
+            <>
+              <div className="flex-1" />
+              <span className="text-[10px] text-muted-foreground pr-1 whitespace-nowrap flex-shrink-0">
+                {emails.length}
+                {total !== undefined && total > emails.length ? ` of ${total}` : ""} msgs
+              </span>
+            </>
+          )}
         </div>
       )}
 

@@ -23,6 +23,7 @@ import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
 import { AccountSidebar } from "./components/AccountSidebar";
 import { EmailList } from "./components/EmailList";
+import { MailboxActions } from "./components/MailboxActions";
 import { EmailDetail } from "./components/EmailDetail";
 import { AIChatPanel } from "./components/AIChatPanel";
 import { ComposePanel } from "./components/ComposePanel";
@@ -636,6 +637,8 @@ export default function EmailPage() {
               </div>
             </div>
             <div className="flex items-center gap-1">
+              <MailboxActions selectedEmail={selectedEmail} />
+              <div className="w-px h-4 bg-border" />
               <button
                 onClick={() => setPaletteOpen(true)}
                 title="Command palette (Ctrl/Cmd+K)"
@@ -758,7 +761,7 @@ export default function EmailPage() {
           {!isMobile && (
             <div
               className={`flex-shrink-0 border-r border-border transition-all duration-200 overflow-hidden ${
-                listOpen ? "w-72" : "w-0"
+                listOpen ? "w-96" : "w-0"
               }`}
             >
               {listOpen && (

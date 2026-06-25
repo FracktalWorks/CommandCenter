@@ -36,9 +36,25 @@ def _normalize_text(s: str) -> str:
     return " ".join((s or "").split()).lower()
 
 
+# ── Drafting context budgets ─────────────────────────────────────────────────
+# Generous UPPER BOUNDS only. The LLM layer (acompletion_with_fallback →
+# fit_messages_to_context) already trims the prompt to the model's real context
+# window (the draft model defaults to tier-powerful ≈ 200k input tokens), keeping
+# a head + tail around a marker. So we pass the FULL incoming email + thread and
+# let that layer fit — instead of pre-truncating here. The old tight caps (the
+# message being replied to was cut to [:2000] chars) made a long email reach the
+# model as just its opening lines, so drafts read "only the introductory lines
+# came through" / "the communication appears to be truncated". These bounds are a
+# safety net against pathological multi-MB bodies, not the normal limiter.
+_DRAFT_BODY_MAX_CHARS = 100_000     # the message being replied to (~25k tokens)
+_DRAFT_THREAD_MAX_CHARS = 60_000    # the whole prior thread, joined (~15k tokens)
+_THREAD_MSG_MAX_CHARS = 12_000      # per earlier message in the thread
+_THREAD_MSG_LIMIT = 20              # how many earlier messages to include
+
+
 async def _fetch_thread_context(
     db: Any, account_id: str, thread_id: str,
-    exclude_provider_msg_id: str = "", *, limit: int = 12,
+    exclude_provider_msg_id: str = "", *, limit: int = _THREAD_MSG_LIMIT,
 ) -> str:
     """Earlier messages in the conversation (oldest → newest), formatted for the
     drafter so it can reply with full thread context — inbox-zero passes the
@@ -73,7 +89,7 @@ async def _fetch_thread_context(
         sender = frm.get("name") or frm.get("email") or "?"
         when = r.received_at.isoformat() if hasattr(r.received_at, "isoformat") else ""
         header = f"From: {sender}" + (f" · {when}" if when else "")
-        parts.append(f"{header}\n{body[:1500]}")
+        parts.append(f"{header}\n{body[:_THREAD_MSG_MAX_CHARS]}")
     return "\n\n---\n\n".join(parts)
 
 
@@ -510,7 +526,8 @@ async def _llm_draft_reply(
         thread = (email.get("thread") or "").strip()
         thread_block = (
             "Earlier in this thread (oldest to newest) — read it for full "
-            f"context before replying:\n{thread[:5000]}\n\n" if thread else ""
+            f"context before replying:\n{thread[:_DRAFT_THREAD_MAX_CHARS]}\n\n"
+            if thread else ""
         )
         examples = (email.get("sender_examples") or "").strip()
         examples_block = (
@@ -537,7 +554,7 @@ async def _llm_draft_reply(
             f"{examples_block}"
             f"{thread_block}"
             "Latest message — reply to THIS, taking the thread above into "
-            f"account:\n{(email.get('body', '') or '')[:2000]}\n"
+            f"account:\n{(email.get('body', '') or '')[:_DRAFT_BODY_MAX_CHARS]}\n"
         )
         if instructions:
             user_prompt += f"\nExtra instructions: {instructions}\n"
@@ -653,7 +670,8 @@ async def _draft_via_maf_agent(
         )
         thread = (email.get("thread") or "").strip()
         thread_block = (
-            f"\nEarlier in this thread (oldest to newest):\n{thread[:5000]}\n"
+            "\nEarlier in this thread (oldest to newest):\n"
+            f"{thread[:_DRAFT_THREAD_MAX_CHARS]}\n"
             if thread else ""
         )
         msg = (
@@ -661,7 +679,8 @@ async def _draft_via_maf_agent(
             "preamble, no '---' fences, no confidence line.\n\n"
             f"From: {email.get('from', '')}\nSubject: {email.get('subject', '')}\n"
             f"{thread_block}"
-            f"Latest message (reply to this):\n{(email.get('body', '') or '')[:3000]}"
+            "Latest message (reply to this):\n"
+            f"{(email.get('body', '') or '')[:_DRAFT_BODY_MAX_CHARS]}"
         )
         res = await asyncio.wait_for(
             run_agent(

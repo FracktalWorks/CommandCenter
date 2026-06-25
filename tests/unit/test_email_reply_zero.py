@@ -154,7 +154,7 @@ def _row(thread_id, mid, frm, folder, body=""):
         body_text=body, snippet="", folder=folder, received_at=None)
 
 
-async def test_backfill_awaiting_for_sent_and_engine_for_inbound() -> None:
+async def test_backfill_handles_outbound_reply_and_engine_for_inbound() -> None:
     latest = [
         _row("t1", "m1", "me@x.com", "sent"),
         _row("t2", "m2", "a@b.com", "inbox", body="Can you help?"),
@@ -167,18 +167,45 @@ async def test_backfill_awaiting_for_sent_and_engine_for_inbound() -> None:
 
     to_reply_match = {"rule": {"name": "To Reply", "system_type": None},
                       "reason": "asks a question", "source": "ai"}
+    mark = AsyncMock()
     with patch.object(_rz, "_get_db", AsyncMock(return_value=db)), \
             patch.object(_rz, "_load_assistant_about",
                          AsyncMock(return_value=("", ""))), \
+            patch.object(_rz, "_mark_thread_replied", mark), \
             patch.object(_rz, "_upsert_thread_status",
                          AsyncMock(side_effect=rec)), \
             patch.object(_eng, "_match_email_to_rule",
                          AsyncMock(return_value=to_reply_match)):
         await m._maybe_classify_threads("acc-1")
 
-    statuses = dict(recorded)
-    assert statuses["t1"] == "AWAITING"      # sent-last → awaiting (no LLM)
-    assert statuses["t2"] == "NEEDS_REPLY"   # inbound matched the To Reply rule
+    # Sent-last thread → outbound-reply handling (AI status + label swap), the
+    # SAME path as a CC reply — this is what gives native-client replies parity.
+    mark.assert_awaited_once_with("acc-1", "t1")
+    # Inbound thread → engine match → NEEDS_REPLY.
+    assert dict(recorded)["t2"] == "NEEDS_REPLY"
+
+
+async def test_backfill_caps_outbound_reply_determination() -> None:
+    n = _rz._REPLY_DETERMINE_CAP + 2
+    latest = [_row(f"t{i}", f"m{i}", "me@x.com", "sent") for i in range(n)]
+    db = _backfill_db(latest, [])
+    overflow: list[tuple[str, str]] = []
+    mark = AsyncMock()
+    with patch.object(_rz, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(_rz, "_load_assistant_about",
+                         AsyncMock(return_value=("", ""))), \
+            patch.object(_rz, "_mark_thread_replied", mark), \
+            patch.object(_rz, "_upsert_thread_status",
+                         AsyncMock(side_effect=lambda _d, _a, tid, st, *x:
+                                   overflow.append((tid, st)))), \
+            patch.object(_eng, "_match_email_to_rule", AsyncMock(return_value=None)):
+        await m._maybe_classify_threads("acc-1")
+
+    # Newest _REPLY_DETERMINE_CAP sent threads get full AI handling; the rest
+    # fall back to a cheap AWAITING so they're still classified.
+    assert mark.await_count == _rz._REPLY_DETERMINE_CAP
+    assert len(overflow) == 2
+    assert all(st == "AWAITING" for _tid, st in overflow)
 
 
 async def test_backfill_marks_fyi_when_no_conversation_rule_matches() -> None:

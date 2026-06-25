@@ -592,19 +592,34 @@ async def _mark_thread_replied(account_id: str, thread_id: str) -> None:
         await db.close()
 
 
+# How many newly-detected outbound replies (sent threads) get the full AI status
+# determination + label swap per backfill cycle. Bounds AI/provider cost; older
+# sent threads beyond the cap fall back to a cheap AWAITING. New replies are
+# processed newest-first, so genuine just-sent replies always get full handling.
+_REPLY_DETERMINE_CAP = 15
+# How many inbound gap threads get an engine match (classification) per cycle.
+_BACKFILL_INBOUND_CAP = 25
+
+
 async def _maybe_classify_threads(account_id: str) -> None:
     """Reply Zero BACKFILL: fill in per-thread status for threads the live rules
     pipeline hasn't classified yet — historical mail, accounts with auto-apply
     off, or anything the runner missed.
 
     Reuses the SAME rule engine as live classification, so Reply Zero stays a
-    projection of the rules and never a parallel classifier. Sent-last threads →
-    AWAITING (deterministic). Inbound-last gap threads are matched by the engine
-    (which applies the Reply Zero pre-filter that keeps newsletters/broadcasts out
-    of "To Reply") and projected via the matched conversation-status rule (FYI
-    when none matches). Only touches threads whose latest message changed and caps
-    engine work per cycle. The match is READ-ONLY — it never mutates the mailbox,
-    so it is safe even when auto-apply is off. Best-effort (never raises)."""
+    projection of the rules and never a parallel classifier.
+
+    Sent-last GAP threads mean a NEW outbound message arrived — whether sent via
+    Command Center OR the user's native email client. They get the SAME AI status
+    determination + label swap as a CC-initiated reply (``_mark_thread_replied``),
+    so a reply sent from Gmail/Outlook directly still reaches Awaiting/Actioned and
+    loses its "To Reply" label — inbox-zero handleOutboundMessage parity. This is
+    capped per cycle; older sent threads beyond the cap fall back to a cheap
+    AWAITING. Inbound-last gap threads are matched by the engine (which applies the
+    Reply Zero pre-filter that keeps newsletters/broadcasts out of "To Reply") and
+    projected via the matched conversation-status rule (FYI when none matches).
+    Only touches threads whose latest message changed and caps work per cycle.
+    Best-effort (never raises)."""
     db = await _get_db()
     try:
         from gateway.routes.email.automation.engine import (  # noqa: PLC0415
@@ -639,19 +654,27 @@ async def _maybe_classify_threads(account_id: str) -> None:
         self_email = (acc.email_address if acc else "") or ""
 
         gap_inbound = []
+        sent_handled = 0
         for r in rows:
             if existing.get(r.thread_id) == str(r.id):
                 continue  # latest message unchanged → status still valid
             folder = (r.folder or "").lower()
             if folder == "sent":
-                await _upsert_thread_status(
-                    db, account_id, r.thread_id, "AWAITING", r.id,
-                    r.received_at, "")
+                # New outbound message (CC reply OR native-client reply) →
+                # re-determine status with the AI and swap labels, exactly like a
+                # CC send. Capped; overflow falls back to a cheap AWAITING.
+                if sent_handled < _REPLY_DETERMINE_CAP:
+                    await _mark_thread_replied(account_id, r.thread_id)
+                    sent_handled += 1
+                else:
+                    await _upsert_thread_status(
+                        db, account_id, r.thread_id, "AWAITING", r.id,
+                        r.received_at, "")
             elif folder == "inbox":
                 gap_inbound.append(r)
         await db.commit()
 
-        for r in gap_inbound[:25]:  # cap engine work per cycle
+        for r in gap_inbound[:_BACKFILL_INBOUND_CAP]:  # cap engine work per cycle
             email = email_dict_from_row(r, self_email, about)
             match = await _match_email_to_rule(db, account_id, email)
             await project_reply_status_from_matches(

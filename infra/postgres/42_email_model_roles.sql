@@ -18,13 +18,23 @@
 -- Depends on 20/23 (agent_model) + 40 (fallback_model) + 41 (chat_model).
 -- ============================================================================
 
--- 1) Rename agent_model -> rule_model (guarded so re-runs are no-ops).
+-- 1) Rename agent_model -> rule_model. Must stay idempotent across re-runs:
+--    apply_migrations re-runs ALL migrations every deploy, and migration 23
+--    (ADD COLUMN IF NOT EXISTS agent_model) RE-CREATES agent_model on each run.
+--    So after the first rename, a later run sees BOTH agent_model (re-added by 23,
+--    junk default data) AND rule_model (the real, migrated column). In that case
+--    drop the redundant re-created agent_model instead of renaming (which would
+--    collide with the existing rule_model).
 DO $$
+DECLARE
+  has_agent  bool := EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='email_assistant_settings' AND column_name='agent_model');
+  has_rule   bool := EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='email_assistant_settings' AND column_name='rule_model');
 BEGIN
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'email_assistant_settings' AND column_name = 'agent_model'
-  ) THEN
+  IF has_agent AND has_rule THEN
+    ALTER TABLE email_assistant_settings DROP COLUMN agent_model;
+  ELSIF has_agent THEN
     ALTER TABLE email_assistant_settings RENAME COLUMN agent_model TO rule_model;
   END IF;
 END $$;

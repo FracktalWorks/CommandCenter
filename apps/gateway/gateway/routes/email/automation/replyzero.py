@@ -372,6 +372,14 @@ _THREAD_STATUS_MAP = {
     "FYI": ("FYI", "FYI"),
 }
 
+# The four conversation-status category labels are MUTUALLY EXCLUSIVE per thread
+# (inbox-zero's removeConflictingThreadStatusLabels): when a thread's status
+# changes, the other three must be cleared so an old label never lingers on the
+# previous emails. "Follow-up" is a separate reminder label, cleared whenever the
+# thread is no longer awaiting the other person.
+_CONVERSATION_LABELS = ("To Reply", "Awaiting Reply", "Actioned", "FYI")
+_FOLLOW_UP_LABEL = "Follow-up"
+
 # Conversation-status rule key → stored Reply Zero status. The rules pipeline is
 # the single source of truth: when the engine matches one of these rules for an
 # inbound message, the runner projects the corresponding status here (Reply Zero
@@ -401,18 +409,20 @@ def _match_conversation_key(match: dict[str, Any] | None) -> str:
 async def project_reply_status_from_matches(
     db: Any, account_id: str, message_row: Any,
     matches: list[dict[str, Any]] | None,
-) -> None:
+) -> str | None:
     """Store an inbound message's Reply Zero status from the conversation-status
     rule the engine matched — the unified path that makes Reply Zero a projection
     of the rules (no parallel classifier). Called by the rule runner on live runs.
 
     Picks the highest-priority conversation rule among ``matches``; when none
     matched, stores FYI so the thread stays out of the To Reply view and isn't
-    re-evaluated by the backfill. Best-effort; caller commits. Only call for
-    inbound mail (sent/replies are handled by ``_mark_thread_replied``)."""
+    re-evaluated by the backfill. Returns the conversation-status LABEL applied
+    (e.g. "To Reply") when a conversation rule matched — so the caller can
+    reconcile the mutually-exclusive thread labels — else None. Best-effort;
+    caller commits. Only call for inbound mail (sends → ``_mark_thread_replied``)."""
     thread_id = getattr(message_row, "thread_id", None)
     if not thread_id:
-        return
+        return None
     chosen, reason = "", ""
     for m in matches or []:
         key = _match_conversation_key(m)
@@ -425,6 +435,7 @@ async def project_reply_status_from_matches(
     await _upsert_thread_status(
         db, account_id, thread_id, status, message_row.id,
         getattr(message_row, "received_at", None), reason)
+    return _THREAD_STATUS_MAP[chosen][1] if chosen else None
 
 
 async def _llm_determine_thread_status(
@@ -512,12 +523,72 @@ def _fmt_thread_msg(r: Any) -> str:
     return f"From: {sender} {direction}\nSubject: {r.subject or ''}\n{body[:1500]}"
 
 
+async def _reconcile_thread_labels(
+    db: Any, provider: Any, account_id: str, thread_id: str,
+    keep_label: str | None,
+) -> None:
+    """Enforce inbox-zero's mutually-exclusive conversation labels on a thread.
+
+    Across EVERY message in the thread, remove the conversation-status labels
+    other than ``keep_label`` (To Reply / Awaiting Reply / Actioned / FYI) — plus
+    the "Follow-up" reminder unless the thread is still awaiting — so an old label
+    never lingers on the previous emails after the thread changes hands. Then
+    ensure ``keep_label`` is present on the latest inbound message. Mirrors the
+    change locally (email_messages.categories) and upstream (provider). Best-effort
+    per message; caller commits."""
+    rows = (await db.execute(text(
+        """SELECT id, provider_message_id, categories, folder
+           FROM email_messages
+           WHERE account_id = :aid AND thread_id = :tid
+           ORDER BY received_at ASC NULLS FIRST"""
+    ), {"aid": account_id, "tid": thread_id})).fetchall()
+    if not rows:
+        return
+    stale = {lab for lab in _CONVERSATION_LABELS if lab != keep_label}
+    if keep_label != "Awaiting Reply":  # follow-up only applies while awaiting
+        stale.add(_FOLLOW_UP_LABEL)
+    for r in rows:
+        to_remove = [c for c in list(r.categories or []) if c in stale]
+        if not to_remove:
+            continue
+        try:
+            await provider.set_labels(
+                r.provider_message_id, add=[], remove=to_remove)
+            await db.execute(text(
+                "UPDATE email_messages SET categories = ARRAY("
+                "  SELECT c FROM unnest(categories) AS c WHERE NOT (c = ANY(:rm))"
+                "), updated_at = now() WHERE id = :id"
+            ), {"id": r.id, "rm": to_remove})
+        except Exception:  # noqa: BLE001 — one bad message shouldn't abort
+            continue
+    if not keep_label:
+        return
+    # Ensure the new status label is on the latest INBOUND message (the one a
+    # reader looks at); fall back to the latest message if all are outbound.
+    inbound = [r for r in rows if (r.folder or "").lower() != "sent"]
+    target = inbound[-1] if inbound else rows[-1]
+    if keep_label in list(target.categories or []):
+        return
+    try:
+        await provider.set_labels(
+            target.provider_message_id, add=[keep_label], remove=[])
+        await db.execute(text(
+            "UPDATE email_messages SET categories = CASE "
+            "WHEN :lbl = ANY(categories) THEN categories "
+            "ELSE array_append(categories, :lbl) END, "
+            "updated_at = now() WHERE id = :id"
+        ), {"id": target.id, "lbl": keep_label})
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _mark_thread_replied(account_id: str, thread_id: str) -> None:
     """After the user sends a reply, re-determine the thread's status with the
-    AI (exact inbox-zero aiDetermineThreadStatus parity) and relabel: set the
-    Reply Zero status and swap the old status category for the new one on the
-    inbound messages. Since the user just sent, FYI is excluded — the AI picks
-    AWAITING_REPLY (waiting on them) or ACTIONED (done). Best-effort."""
+    AI (exact inbox-zero aiDetermineThreadStatus parity) and reconcile labels:
+    set the Reply Zero status and collapse the thread to a SINGLE conversation
+    label (removing any stale To Reply / Awaiting / FYI / Follow-up). Since the
+    user just sent, FYI is excluded — the AI picks AWAITING_REPLY (waiting on
+    them) or ACTIONED (done). Best-effort."""
     if not thread_id:
         return
     db = await _get_db()
@@ -550,18 +621,10 @@ async def _mark_thread_replied(account_id: str, thread_id: str) -> None:
             latest.received_at, f"Replied — {status}")
         await db.commit()
 
-        # Still needs the user's reply (a pending commitment) → leave labels.
-        if status == "TO_REPLY":
-            return
-
-        # Swap the "To Reply" category → the new status category on inbound
-        # messages that carry it, upstream + locally (best-effort).
-        targets = [
-            r for r in rows
-            if (r.folder or "").lower() != "sent"
-            and "To Reply" in list(r.categories or [])
-        ]
-        if not targets or not acc:
+        # Reconcile the thread to a SINGLE conversation label (mutually exclusive,
+        # inbox-zero parity): clear any stale To Reply / Awaiting / FYI / Follow-up
+        # across the thread and apply the new status label. Needs the provider.
+        if not acc:
             return
         from acb_llm.key_store import get_key_store  # noqa: PLC0415
         store = get_key_store()
@@ -569,20 +632,8 @@ async def _mark_thread_replied(account_id: str, thread_id: str) -> None:
         provider = _instantiate_provider(acc.provider, creds)
         if not await provider.authenticate():
             return
-        for r in targets:
-            try:
-                await provider.set_labels(
-                    r.provider_message_id, add=[new_cat], remove=["To Reply"])
-                await db.execute(text(
-                    """UPDATE email_messages SET categories = CASE
-                         WHEN :newcat = ANY(array_remove(categories, 'To Reply'))
-                           THEN array_remove(categories, 'To Reply')
-                         ELSE array_append(
-                                array_remove(categories, 'To Reply'), :newcat)
-                       END, updated_at = now() WHERE id = :id"""
-                ), {"id": r.id, "newcat": new_cat})
-            except Exception:  # noqa: BLE001 — one bad message shouldn't abort
-                continue
+        await _reconcile_thread_labels(
+            db, provider, account_id, thread_id, new_cat)
         if provider.credentials_dirty():
             await _persist_rotated_creds(db, store, account_id, provider)
         await db.commit()

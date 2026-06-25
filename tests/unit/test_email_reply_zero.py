@@ -120,6 +120,62 @@ async def test_project_status_maps_rule_to_status_with_priority() -> None:
         ("t1", "NEEDS_REPLY"), ("t1", "FYI"), ("t1", "FYI"), ("t1", "NEEDS_REPLY")]
 
 
+async def test_reconcile_thread_labels_enforces_single_status() -> None:
+    rows = [
+        SimpleNamespace(id="m1", provider_message_id="p1", folder="inbox",
+                        categories=["To Reply", "Follow-up"]),
+        SimpleNamespace(id="m2", provider_message_id="p2", folder="inbox",
+                        categories=["Awaiting Reply"]),
+        SimpleNamespace(id="m3", provider_message_id="p3", folder="sent",
+                        categories=[]),
+    ]
+    db = AsyncMock()
+    db.execute.return_value = _result(fetchall=rows)
+    calls: list[tuple[str, tuple, tuple]] = []
+
+    async def set_labels(pmid, add=None, remove=None):
+        calls.append((pmid, tuple(add or []), tuple(remove or [])))
+
+    provider = AsyncMock()
+    provider.set_labels.side_effect = set_labels
+
+    await _rz._reconcile_thread_labels(db, provider, "acc", "t1", "Actioned")
+
+    removed = {pmid: rem for pmid, _add, rem in calls if rem}
+    added = {pmid: add for pmid, add, _rem in calls if add}
+    # Every OTHER conversation label + Follow-up cleared (keep != Awaiting Reply).
+    assert "To Reply" in removed["p1"] and "Follow-up" in removed["p1"]
+    assert "Awaiting Reply" in removed["p2"]
+    # The new status label lands on the latest inbound message (m2).
+    assert added["p2"] == ("Actioned",)
+    # Sent message untouched.
+    assert "p3" not in removed and "p3" not in added
+
+
+async def test_reconcile_thread_labels_keeps_follow_up_while_awaiting() -> None:
+    rows = [
+        SimpleNamespace(id="m1", provider_message_id="p1", folder="inbox",
+                        categories=["To Reply", "Follow-up"]),
+    ]
+    db = AsyncMock()
+    db.execute.return_value = _result(fetchall=rows)
+    calls: list[tuple[str, tuple, tuple]] = []
+
+    async def set_labels(pmid, add=None, remove=None):
+        calls.append((pmid, tuple(add or []), tuple(remove or [])))
+
+    provider = AsyncMock()
+    provider.set_labels.side_effect = set_labels
+
+    await _rz._reconcile_thread_labels(
+        db, provider, "acc", "t1", "Awaiting Reply")
+
+    removed = {pmid: rem for pmid, _add, rem in calls if rem}
+    # "To Reply" cleared, but "Follow-up" KEPT because the thread is awaiting.
+    assert "To Reply" in removed["p1"]
+    assert "Follow-up" not in removed.get("p1", ())
+
+
 async def test_project_status_respects_system_type_over_name() -> None:
     recorded: list[tuple[str, str]] = []
     db = AsyncMock()

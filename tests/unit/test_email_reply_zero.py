@@ -191,6 +191,64 @@ async def test_project_status_respects_system_type_over_name() -> None:
     assert recorded == [("t9", "AWAITING")]
 
 
+# ── Full-thread conversation-status determination (inbox-zero parity) ────────
+
+async def test_resolve_passthrough_for_non_conversation() -> None:
+    db = AsyncMock()
+    row = SimpleNamespace(thread_id="t1")
+    matches = [{"rule": {"name": "Newsletter"}, "reason": "x"}]
+    out = await _rz.resolve_conversation_status_matches(db, "acc", row, matches)
+    assert out == matches
+    db.execute.assert_not_called()  # no thread fetch / LLM for non-conversation
+
+
+async def test_resolve_uses_full_thread_status_over_per_message_pick() -> None:
+    db = AsyncMock()
+    db.execute.side_effect = [
+        _result(fetchall=[SimpleNamespace(
+            from_address={"email": "a@b.com"}, subject="s", body_text="thanks",
+            snippet="", folder="inbox")]),                 # thread messages
+        _result(fetchone=SimpleNamespace(email_address="me@x.com")),  # acc email
+    ]
+    row = SimpleNamespace(thread_id="t1")
+    actioned = {"id": "r1", "name": "Actioned", "system_type": None,
+                "enabled": True}
+    # Per-message pick said To Reply; full-thread says the thread is concluded.
+    matches = [{"rule": {"name": "To Reply"}, "reason": "picked"}]
+    with patch.object(_rz, "_load_assistant_about",
+                      AsyncMock(return_value=("", ""))), \
+            patch.object(_rz, "_llm_determine_thread_status",
+                         AsyncMock(return_value="ACTIONED")), \
+            patch.object(_rz, "_conversation_rule_for_status",
+                         AsyncMock(return_value=actioned)):
+        out = await _rz.resolve_conversation_status_matches(
+            db, "acc", row, matches)
+    assert len(out) == 1
+    assert out[0]["rule"]["name"] == "Actioned"
+    assert out[0]["source"] == "thread_status"
+
+
+async def test_resolve_keeps_original_when_no_rule_for_status() -> None:
+    db = AsyncMock()
+    db.execute.side_effect = [
+        _result(fetchall=[SimpleNamespace(
+            from_address={"email": "a@b.com"}, subject="s", body_text="b",
+            snippet="", folder="inbox")]),
+        _result(fetchone=SimpleNamespace(email_address="me@x.com")),
+    ]
+    row = SimpleNamespace(thread_id="t1")
+    matches = [{"rule": {"name": "To Reply"}, "reason": "picked"}]
+    with patch.object(_rz, "_load_assistant_about",
+                      AsyncMock(return_value=("", ""))), \
+            patch.object(_rz, "_llm_determine_thread_status",
+                         AsyncMock(return_value="ACTIONED")), \
+            patch.object(_rz, "_conversation_rule_for_status",
+                         AsyncMock(return_value=None)):  # no enabled Actioned rule
+        out = await _rz.resolve_conversation_status_matches(
+            db, "acc", row, matches)
+    assert out == matches  # degrade to the per-message pick
+
+
 # ── Backfill (reuses the engine, no parallel classifier) ─────────────────────
 
 def _backfill_db(latest, existing):
@@ -228,6 +286,8 @@ async def test_backfill_handles_outbound_reply_and_engine_for_inbound() -> None:
             patch.object(_rz, "_load_assistant_about",
                          AsyncMock(return_value=("", ""))), \
             patch.object(_rz, "_mark_thread_replied", mark), \
+            patch.object(_rz, "resolve_conversation_status_matches",
+                         AsyncMock(side_effect=lambda _d, _a, _r, ms: ms)), \
             patch.object(_rz, "_upsert_thread_status",
                          AsyncMock(side_effect=rec)), \
             patch.object(_eng, "_match_email_to_rule",

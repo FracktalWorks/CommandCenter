@@ -926,6 +926,16 @@ async def _run_rules_job(
             else:
                 m = await _match_email_to_rule(db, account_id, email)
                 matches = [m] if m else []
+            # Reply Zero (inbox-zero determineConversationStatus parity): when the
+            # match is a conversation, re-determine the status from the FULL thread
+            # and apply the determined status rule's actions (so an Actioned thread
+            # doesn't auto-draft). Live runs only — skip the dry-run preview.
+            if matches and not dry_run:
+                from gateway.routes.email.automation.replyzero import (  # noqa: PLC0415
+                    resolve_conversation_status_matches,
+                )
+                matches = await resolve_conversation_status_matches(
+                    db, account_id, r, matches)
             if matches:
                 apply = (not dry_run) and provider is not None
                 for match in matches:

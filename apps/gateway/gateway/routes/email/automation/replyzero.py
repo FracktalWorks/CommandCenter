@@ -523,6 +523,69 @@ def _fmt_thread_msg(r: Any) -> str:
     return f"From: {sender} {direction}\nSubject: {r.subject or ''}\n{body[:1500]}"
 
 
+async def _conversation_rule_for_status(
+    db: Any, account_id: str, status: str,
+) -> dict[str, Any] | None:
+    """The account's enabled conversation rule for a determined status
+    (TO_REPLY / AWAITING_REPLY / FYI / ACTIONED), matched by system_type or name.
+    None when no such rule is enabled."""
+    from gateway.routes.email.automation.rules import _load_rules  # noqa: PLC0415
+    for r in await _load_rules(db, account_id):
+        if r.get("enabled") and _match_conversation_key({"rule": r}) == status:
+            return r
+    return None
+
+
+async def resolve_conversation_status_matches(
+    db: Any, account_id: str, message_row: Any,
+    matches: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """inbox-zero ``determineConversationStatus`` parity for INBOUND mail.
+
+    The per-message engine match decides only whether the email is a conversation
+    (it picked one of the conversation-status rules). When it did, re-determine the
+    status from the FULL thread with ``aiDetermineThreadStatus``
+    (``_llm_determine_thread_status``, user_sent_last=False) and replace the
+    conversation match with the rule for the determined status — so the RIGHT
+    rule's actions run (e.g. an Actioned thread doesn't auto-draft a reply) and the
+    right label is applied. Non-conversation matches pass through unchanged. On any
+    failure (or no enabled rule for the determined status) returns the input
+    unchanged, so classification degrades to the per-message pick."""
+    if not matches or not any(_match_conversation_key(m) for m in matches):
+        return matches
+    thread_id = getattr(message_row, "thread_id", None)
+    if not thread_id:
+        return matches
+    try:
+        rows = (await db.execute(text(
+            """SELECT from_address, subject, body_text, snippet, folder
+               FROM email_messages
+               WHERE account_id = :aid AND thread_id = :tid
+               ORDER BY received_at ASC NULLS FIRST"""
+        ), {"aid": account_id, "tid": thread_id})).fetchall()
+        if not rows:
+            return matches
+        about, _sig = await _load_assistant_about(db, account_id)
+        acc = (await db.execute(text(
+            "SELECT email_address FROM email_accounts WHERE id = :id"
+        ), {"id": account_id})).fetchone()
+        acc_email = (acc.email_address if acc else "") or ""
+        thread_text = "\n\n---\n\n".join(_fmt_thread_msg(r) for r in rows)
+        status = await _llm_determine_thread_status(
+            thread_text, acc_email, about, user_sent_last=False)
+        target = await _conversation_rule_for_status(db, account_id, status)
+        if not target:
+            return matches
+        non_conv = [m for m in matches if not _match_conversation_key(m)]
+        determined = {"rule": target, "reason": f"Thread status: {status}",
+                      "source": "thread_status", "is_primary": True}
+        return [determined, *non_conv]
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.resolve_conversation_status_failed",
+                     account_id=account_id, error=str(exc)[:160])
+        return matches
+
+
 async def _reconcile_thread_labels(
     db: Any, provider: Any, account_id: str, thread_id: str,
     keep_label: str | None,
@@ -728,8 +791,11 @@ async def _maybe_classify_threads(account_id: str) -> None:
         for r in gap_inbound[:_BACKFILL_INBOUND_CAP]:  # cap engine work per cycle
             email = email_dict_from_row(r, self_email, about)
             match = await _match_email_to_rule(db, account_id, email)
-            await project_reply_status_from_matches(
+            # Full-thread status determination (same parity as the live runner)
+            # when the match is a conversation.
+            matches = await resolve_conversation_status_matches(
                 db, account_id, r, [match] if match else [])
+            await project_reply_status_from_matches(db, account_id, r, matches)
             await db.commit()
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.classify_threads_failed",

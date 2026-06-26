@@ -101,6 +101,38 @@ function foldForToolStart(
   return { blocks: [...folded, ""], cutoff: folded.length };
 }
 
+/**
+ * Un-fold the trailing narration block back into the visible answer.
+ *
+ * `foldForToolStart` moves answer text into the thinking timeline at every
+ * tool_start, on the assumption that only text emitted AFTER the last tool call
+ * is the real answer.  That assumption breaks when a turn ENDS on a tool call
+ * (save_memory, manage_todo_list, write_artifact, a trailing verification
+ * command, …): the genuine answer was the last folded block and `content` ends
+ * up empty — the answer "disappears" into the consciousness stream.
+ *
+ * This restores it: promote reasoningBlocks[foldedAnswerIdx] back to `content`
+ * and blank that block (kept as an empty sentinel so each tool's
+ * reasoningCutoff index stays aligned — empty blocks are skipped at render).
+ * No-op when answer text already followed the last tool call (content non-empty)
+ * or nothing was folded (foldedAnswerIdx < 0).  Keep in sync with the inline
+ * mirror in app/api/agent/chat/route.ts (translateAndPersistStream).
+ */
+function unfoldTrailingAnswer(
+  content: string,
+  reasoningBlocks: string[] | undefined,
+  foldedAnswerIdx: number,
+): { content: string; reasoningBlocks: string[] | undefined } {
+  if (content.trim() || foldedAnswerIdx < 0) return { content, reasoningBlocks };
+  const blocks = reasoningBlocks ?? [];
+  const candidate = blocks[foldedAnswerIdx];
+  if (!candidate || !candidate.trim()) return { content, reasoningBlocks };
+  return {
+    content: candidate,
+    reasoningBlocks: blocks.map((b, i) => (i === foldedAnswerIdx ? "" : b)),
+  };
+}
+
 export function useAgentChat({
   agentName,
   threadId,
@@ -228,6 +260,11 @@ export function useAgentChat({
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        // Index of the most recently folded answer block (text that streamed as
+        // the visible answer but was moved into the timeline at a tool_start).
+        // Restored as `content` at run end if no further answer text followed
+        // the last tool call.  -1 = nothing to un-fold.  See unfoldTrailingAnswer.
+        let foldedAnswerIdx = -1;
 
         // Helper: update just the assistant message
         const upd = (fn: (m: ChatMessage) => ChatMessage) =>
@@ -262,6 +299,9 @@ export function useAgentChat({
             switch (evt.type) {
               case "delta": {
                 const deltaText = String(evt.content ?? "");
+                // New visible answer text → any earlier narration fold was
+                // genuine narration, not the answer.  Drop the un-fold candidate.
+                foldedAnswerIdx = -1;
                 upd((m) => ({
                   ...m,
                   content: m.content + deltaText,
@@ -320,6 +360,10 @@ export function useAgentChat({
                   // the visible answer.
                   const narration = m.content.trim();
                   const { blocks, cutoff } = foldForToolStart(m.reasoningBlocks, narration);
+                  // The just-folded answer text sits at cutoff-1 (foldForToolStart
+                  // appends narration then an empty sentinel).  Remember it so the
+                  // run-end handler can restore it if no further answer follows.
+                  if (narration) foldedAnswerIdx = cutoff - 1;
                   const newEvent: ToolEvent = {
                     id: toolId, name: String(evt.name ?? "tool"),
                     args: (evt.args as Record<string, unknown>) ?? {}, status: "running",
@@ -443,7 +487,10 @@ export function useAgentChat({
                 break;
               }
               case "done":
-                upd((m) => ({ ...m, streaming: false, isThinkingActive: false }));
+                upd((m) => {
+                  const u = unfoldTrailingAnswer(m.content, m.reasoningBlocks, foldedAnswerIdx);
+                  return { ...m, content: u.content, reasoningBlocks: u.reasoningBlocks, streaming: false, isThinkingActive: false };
+                });
                 emitAgentEvent("onRunFinalized", { runId: String(evt.run_id ?? ""), threadId });
                 break;
               case "state":
@@ -714,6 +761,8 @@ export function useAgentChat({
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        // Un-fold candidate for the replayed stream (mirror of the live loop).
+        let foldedAnswerIdx = -1;
 
         // Update helper: applies changes ONLY to the specific message we're
         // replaying into (matched by lastId).  Previous messages — even those
@@ -751,6 +800,7 @@ export function useAgentChat({
 
             switch (evt.type) {
               case "delta":
+                foldedAnswerIdx = -1;
                 updLast((m) => ({
                   ...m,
                   content: m.content + String(evt.content ?? ""),
@@ -789,6 +839,7 @@ export function useAgentChat({
                 updLast((m) => {
                   const narration = m.content.trim();
                   const { blocks, cutoff } = foldForToolStart(m.reasoningBlocks, narration);
+                  if (narration) foldedAnswerIdx = cutoff - 1;
                   return {
                     ...m,
                     content: narration ? "" : m.content,
@@ -850,6 +901,12 @@ export function useAgentChat({
               }
               case "done": {
                 reconnected = true;
+                // Restore a trailing answer folded into the timeline (turn ended
+                // on a tool call) before measuring recovered content below.
+                updLast((m) => {
+                  const u = unfoldTrailingAnswer(m.content, m.reasoningBlocks, foldedAnswerIdx);
+                  return { ...m, content: u.content, reasoningBlocks: u.reasoningBlocks };
+                });
                 // Check if we actually recovered content.  When the Redis
                 // stream has expired, the reconnect endpoint returns only a
                 // synthetic RUN_FINISHED with no prior delta/tool events —

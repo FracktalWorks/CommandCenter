@@ -171,6 +171,12 @@ async function translateAndPersistStream(
   let latestTodos: Array<{ id: string; title: string; status: string }> = [];
   let buf = "";
   let assistantContent = "";
+  /** Index in reasoningBlocks of the most recently folded answer (visible text
+   *  moved into the timeline at a tool_start).  Un-folded back into
+   *  assistantContent at RUN_FINISHED when no answer text followed the last tool
+   *  call.  -1 = nothing to un-fold.  Mirror of unfoldTrailingAnswer() in
+   *  hooks/useAgentChat.ts. */
+  let foldedAnswerIdx = -1;
   let lastPersistTime = Date.now();
   let clientConnected = true;
 
@@ -205,6 +211,8 @@ async function translateAndPersistStream(
         if (t === "TEXT_MESSAGE_CONTENT") {
           const delta = String(ev.delta ?? "");
           assistantContent += delta;
+          // New visible answer text → any earlier fold was genuine narration.
+          foldedAnswerIdx = -1;
           out = { type: "delta", content: delta };
         } else if (t === "REASONING_MESSAGE_CONTENT" || t === "THINKING_TEXT_MESSAGE_CONTENT") {
           const chunk = String(ev.delta ?? "");
@@ -243,6 +251,9 @@ async function translateAndPersistStream(
           // answer — persist it as a reasoning block instead.
           if (assistantContent.trim()) {
             reasoningBlocks.push(assistantContent.trim());
+            // Remember where the folded answer landed so RUN_FINISHED can
+            // restore it if the turn ends on a tool call (no answer follows).
+            foldedAnswerIdx = reasoningBlocks.length - 1;
             assistantContent = "";
           }
           // Record where this tool sits in the reasoning timeline, then seal
@@ -311,6 +322,17 @@ async function translateAndPersistStream(
           // RUN_FINISHED: standard AG-UI event from the agent executor.
           // "done": synthetic event from the reconnect endpoint when the
           // agent has already finished (Redis stream expired or empty).
+          // Un-fold a trailing answer: when the turn ended on a tool call
+          // (save_memory, manage_todo_list, write_artifact, …) the genuine
+          // answer was folded into the timeline and assistantContent is empty.
+          // Restore it so the persisted message (refresh recovery + memory
+          // extraction) carries the answer instead of an empty bubble.  Keep in
+          // sync with unfoldTrailingAnswer() in hooks/useAgentChat.ts.
+          const foldedAnswer = foldedAnswerIdx >= 0 ? reasoningBlocks[foldedAnswerIdx] : undefined;
+          if (!assistantContent.trim() && foldedAnswer?.trim()) {
+            assistantContent = foldedAnswer;
+            reasoningBlocks[foldedAnswerIdx] = "";
+          }
           out = { type: "done", run_id: ev.runId || ev.run_id };
         } else if (t === "RUN_ERROR") {
           out = { type: "error", content: String(ev.message ?? "Agent run error") };

@@ -2567,6 +2567,13 @@ async def run_agent_stream(
                             "executor.native_maf_stream_error",
                             agent=agent_name,
                         )
+                        # Close any open text message first so the UI bubble
+                        # doesn't hang in "streaming" before the error lands.
+                        if _n_text_started and _n_msg_id:
+                            yield _sse({
+                                "type": "TEXT_MESSAGE_END",
+                                "messageId": _n_msg_id,
+                            })
                         yield _sse({
                             "type": "RUN_ERROR", "runId": run_id,
                             "message": str(_nexc),

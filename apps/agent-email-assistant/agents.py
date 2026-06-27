@@ -11,6 +11,7 @@ Dynamic Agent Loader entry point.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -76,12 +77,35 @@ def _headers() -> dict[str, str]:
     return headers
 
 
+def _raise_if_error(resp: httpx.Response, method: str, path: str) -> None:
+    """Surface gateway errors as a concise, user-facing message.
+
+    The agent relays a tool's raised exception to the user, so a raw
+    ``httpx.HTTPStatusError`` (status line + URL + a help link) reads badly.
+    Turn 4xx/5xx into a short ``RuntimeError`` with the gateway's own
+    ``detail``/``error`` message instead.
+    """
+    if resp.status_code < 400:
+        return
+    detail = ""
+    try:
+        body = resp.json()
+        if isinstance(body, dict):
+            detail = str(body.get("detail") or body.get("error") or "")
+    except Exception:  # non-JSON body
+        detail = (resp.text or "")[:200]
+    raise RuntimeError(
+        f"Email {method} {path} failed ({resp.status_code})"
+        + (f": {detail}" if detail else "")
+    )
+
+
 async def _get(path: str, params: dict[str, Any] | None = None) -> Any:
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(
             f"{_gateway_url()}{path}", params=params or {}, headers=_headers()
         )
-        resp.raise_for_status()
+        _raise_if_error(resp, "GET", path)
         return resp.json()
 
 
@@ -90,7 +114,7 @@ async def _post(path: str, body: dict[str, Any]) -> Any:
         resp = await client.post(
             f"{_gateway_url()}{path}", json=body, headers=_headers()
         )
-        resp.raise_for_status()
+        _raise_if_error(resp, "POST", path)
         return resp.json()
 
 
@@ -99,14 +123,14 @@ async def _patch(path: str, body: dict[str, Any]) -> Any:
         resp = await client.patch(
             f"{_gateway_url()}{path}", json=body, headers=_headers()
         )
-        resp.raise_for_status()
+        _raise_if_error(resp, "PATCH", path)
         return resp.json()
 
 
 async def _delete(path: str) -> Any:
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.delete(f"{_gateway_url()}{path}", headers=_headers())
-        resp.raise_for_status()
+        _raise_if_error(resp, "DELETE", path)
         # DELETEs commonly return 204 with no body.
         if resp.status_code == 204 or not resp.content:
             return {}
@@ -797,7 +821,7 @@ async def _patch_settings(body: dict[str, Any]) -> Any:
             f"{_gateway_url()}/email/assistant/settings",
             json=body, headers=_headers(),
         )
-        resp.raise_for_status()
+        _raise_if_error(resp, "PUT", "/email/assistant/settings")
         return resp.json()
 
 
@@ -886,21 +910,25 @@ async def apply_labels(
     provider). Pass label NAMES in ``add`` / ``remove``."""
     if not add and not remove:
         return "Provide at least one label to add or remove."
-    n = 0
-    for mid in message_ids:
-        body: dict[str, Any] = {}
-        if add:
-            body["add_labels"] = add
-        if remove:
-            body["remove_labels"] = remove
-        await _patch(f"/email/messages/{mid}", body)
-        n += 1
+    body: dict[str, Any] = {}
+    if add:
+        body["add_labels"] = add
+    if remove:
+        body["remove_labels"] = remove
+    # Patch all messages concurrently instead of one serial round-trip each.
+    results = await asyncio.gather(
+        *(_patch(f"/email/messages/{mid}", dict(body)) for mid in message_ids),
+        return_exceptions=True,
+    )
+    n = sum(1 for r in results if not isinstance(r, BaseException))
     bits = []
     if add:
         bits.append(f"+{', '.join(add)}")
     if remove:
         bits.append(f"-{', '.join(remove)}")
-    return f"Updated labels on {n} message(s): {' '.join(bits)}."
+    failed = len(message_ids) - n
+    note = f" ({failed} failed)" if failed else ""
+    return f"Updated labels on {n} message(s){note}: {' '.join(bits)}."
 
 
 async def move_to_folder(
@@ -908,11 +936,15 @@ async def move_to_folder(
 ) -> str:
     """Move one or more messages to a folder/mailbox (e.g. 'Archive', a custom
     folder). Creates nothing — the folder must exist (see create_label)."""
-    n = 0
-    for mid in message_ids:
-        await _patch(f"/email/messages/{mid}", {"folder": folder})
-        n += 1
-    return f"Moved {n} message(s) to '{folder}'."
+    # Move all messages concurrently instead of one serial round-trip each.
+    results = await asyncio.gather(
+        *(_patch(f"/email/messages/{mid}", {"folder": folder}) for mid in message_ids),
+        return_exceptions=True,
+    )
+    n = sum(1 for r in results if not isinstance(r, BaseException))
+    failed = len(message_ids) - n
+    note = f" ({failed} failed)" if failed else ""
+    return f"Moved {n} message(s) to '{folder}'{note}."
 
 
 async def list_labels(account_id: str) -> str:

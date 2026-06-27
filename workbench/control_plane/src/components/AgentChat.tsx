@@ -1062,15 +1062,21 @@ export default function AgentChat({
       .catch(() => {});
   }, [externalAgents]);
 
-  // Refresh statuses when a new assistant message arrives (in case credentials were just saved)
+  // Refresh statuses once a NEW assistant message has SETTLED (credentials may
+  // have just been saved).  Gate on the message id + agent so we DON'T refetch
+  // on every streaming delta — `messages` changes on every token, and the old
+  // unguarded version fired this request dozens of times per response.
+  const lastStatusKeyRef = useRef<string>("");
   useEffect(() => {
     const last = messages[messages.length - 1];
-    if (last?.role === "assistant") {
-      fetch(`/api/integrations/status?agent=${encodeURIComponent(currentAgentName)}`)
-        .then((r) => r.json())
-        .then((data: unknown) => { if (Array.isArray(data)) setStatuses(data as IntegrationStatus[]); })
-        .catch(() => {});
-    }
+    if (last?.role !== "assistant" || last.streaming) return;
+    const key = `${last.id}:${currentAgentName}`;
+    if (lastStatusKeyRef.current === key) return;
+    lastStatusKeyRef.current = key;
+    fetch(`/api/integrations/status?agent=${encodeURIComponent(currentAgentName)}`)
+      .then((r) => r.json())
+      .then((data: unknown) => { if (Array.isArray(data)) setStatuses(data as IntegrationStatus[]); })
+      .catch(() => {});
   }, [messages, currentAgentName]);
 
   const missingMandatory = statuses.filter((s) => s.mandatory && !s.configured);

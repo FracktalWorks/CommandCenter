@@ -1917,6 +1917,20 @@ function MessageBubble({
     }
   }, [editing]);
 
+  // Dedup tool events by id before rendering.  A streamed tool call can arrive
+  // more than once (MAF surfaces a function_call across several updates as its
+  // args fill in), and React throws (#185 / duplicate-key) when sibling
+  // elements share a key.  Both the thinking timeline AND the email cards key
+  // by tool id, so dedup once here and feed both the same clean list.
+  const dedupedToolEvents = useMemo(() => {
+    const seen = new Set<string>();
+    return (message.toolEvents ?? []).filter((t) => {
+      if (seen.has(t.id)) return false;
+      seen.add(t.id);
+      return true;
+    });
+  }, [message.toolEvents]);
+
   // ── Extract artifact events from custom events ──────────────────────────
   const artifactEvents: ArtifactMeta[] = (message.customEvents ?? [])
     .filter(
@@ -2091,7 +2105,7 @@ function MessageBubble({
       <MarkdownMessage
         content={message.content}
         streaming={message.streaming}
-        toolEvents={message.toolEvents}
+        toolEvents={dedupedToolEvents}
         progressLines={message.progressLines}
         isThinkingActive={message.isThinkingActive}
         reasoningBlocks={message.reasoningBlocks}
@@ -2115,7 +2129,7 @@ function MessageBubble({
           Inert unless the message contains email-assistant tool calls, so this
           renders in both the chat app and the email app. */}
       <EmailToolCards
-        toolEvents={message.toolEvents}
+        toolEvents={dedupedToolEvents}
         accountId={emailContext?.accountId}
         emailId={emailContext?.emailId}
       />

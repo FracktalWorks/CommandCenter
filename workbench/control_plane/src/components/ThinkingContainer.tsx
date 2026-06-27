@@ -318,7 +318,13 @@ export default function ThinkingContainer({
       return formatToolName(toolEvents[toolEvents.length - 1].name);
     }
     if (progressLines.length > 0) {
-      return formatToolName(progressLines[progressLines.length - 1]);
+      const last = progressLines[progressLines.length - 1];
+      // Live answer/progress snippets are marked with a leading "↳" so the
+      // delta loop can replace them — but that marker reads like an "enter"
+      // symbol in the minimized header.  Strip it and show the raw process
+      // text as-is (no tool-name title-casing for prose snippets).
+      if (last.startsWith("↳ ")) return last.slice(2).trim();
+      return formatToolName(last);
     }
     return null;
   }, [toolEvents, progressLines]);

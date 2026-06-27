@@ -353,6 +353,11 @@ export function useAgentChat({
                 const toolId = String(evt.id ?? nanoid());
                 const isDelegate = String(evt.name ?? "").toLowerCase().includes("call_agent");
                 upd((m) => {
+                  // Dedup: a tool call's TOOL_CALL_START can arrive more than once
+                  // (e.g. MAF streams a function_call across several updates as its
+                  // args fill in).  Never add a second row for an id we already
+                  // have — keeps the consciousness timeline from duplicating.
+                  if ((m.toolEvents ?? []).some((t) => t.id === toolId)) return m;
                   // VS Code-style narration fold: text emitted BEFORE a tool
                   // call is the model narrating its plan ("Let me check…"),
                   // not the final answer.  Move it into the thinking
@@ -837,6 +842,9 @@ export function useAgentChat({
               case "tool_start": {
                 const toolId = String(evt.id ?? nanoid());
                 updLast((m) => {
+                  // Dedup duplicate TOOL_CALL_START for the same id (mirror of the
+                  // live loop) so a replayed stream doesn't double-add tool rows.
+                  if ((m.toolEvents ?? []).some((t) => t.id === toolId)) return m;
                   const narration = m.content.trim();
                   const { blocks, cutoff } = foldForToolStart(m.reasoningBlocks, narration);
                   if (narration) foldedAnswerIdx = cutoff - 1;

@@ -1381,12 +1381,19 @@ def build_agents() -> list[Any]:
     at the gateway's ``/v1``. The gateway resolves the ``tier-balanced`` alias to
     the configured provider model (DeepSeek), so the agent always runs on the
     chosen LiteLLM tier — never native GitHub Copilot. Imported lazily so the
-    module still loads where the optional deps differ."""
+    module still loads where the optional deps differ.
+
+    Use ``OpenAIChatCompletionClient`` (the Chat Completions client), NOT
+    ``OpenAIChatClient`` — the latter targets OpenAI's *Responses* API
+    (``client.responses.create`` → ``POST /v1/responses``), which the gateway's
+    ``v1_compat`` shim does not implement, so it 404s with
+    ``{'detail': 'Not Found'}``. The gateway only serves ``/v1/chat/completions``
+    (same client the orchestrator MAF agent uses)."""
     from agent_framework import Agent  # noqa: PLC0415
-    from agent_framework.openai import OpenAIChatClient  # noqa: PLC0415
+    from agent_framework.openai import OpenAIChatCompletionClient  # noqa: PLC0415
 
     prov = _llm_provider()  # {type, base_url=…/v1, api_key=gateway master key}
-    client = OpenAIChatClient(
+    client = OpenAIChatCompletionClient(
         model=os.environ.get("EMAIL_AGENT_MODEL", "tier-balanced"),
         api_key=prov["api_key"],
         base_url=prov["base_url"],

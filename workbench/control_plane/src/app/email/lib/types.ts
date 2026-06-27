@@ -450,3 +450,10 @@ export interface EmailFolder {
   /** Unread count from the provider, when available. */
   unread?: number;
 }
+
+/** A user-applicable label/category with its assigned colour. */
+export interface LabelInfo {
+  name: string;
+  /** Canonical preset token ('preset0'..'preset24'), or null when unset. */
+  color: string | null;
+}

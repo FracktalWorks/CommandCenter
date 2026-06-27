@@ -100,6 +100,9 @@ class EmailFolder:
     type: str  # 'system' | 'user'
     message_count: int = 0
     unread_count: int = 0
+    # Canonical colour token ('preset0'..'preset24') for user labels, or None
+    # when uncoloured. See providers/label_colors.py.
+    color: str | None = None
 
 
 @dataclass
@@ -246,9 +249,10 @@ class BaseEmailProvider(ABC):
             f"{self.__class__.__name__} does not support creating folders"
         )
 
-    async def list_labels(self) -> list[str]:
-        """User-applicable label/category *names*.
+    async def list_labels(self) -> list[dict[str, str | None]]:
+        """User-applicable labels/categories as ``{name, color}`` dicts.
 
+        ``color`` is a canonical preset token ('preset0'..'preset24') or None.
         Gmail = user labels, Outlook = master categories.  Default (e.g. generic
         IMAP, which has no label concept) returns nothing.
         """
@@ -263,6 +267,14 @@ class BaseEmailProvider(ABC):
         """Apply/remove labels (by name) on a message; creating labels if needed.
 
         Default is a no-op so providers without labels degrade gracefully.
+        """
+        return None
+
+    async def set_label_color(self, name: str, color: str) -> None:
+        """Set a label/category's colour (canonical 'presetN' token).
+
+        Creates the label/category if it doesn't exist yet so the colour
+        sticks.  Default is a no-op for providers without label colours.
         """
         return None
 

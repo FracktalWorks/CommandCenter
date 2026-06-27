@@ -10,6 +10,8 @@ import {
 import { Email } from "../lib/types";
 import { timeLabel } from "../lib/utils";
 import { useEmailStore } from "../lib/emailStore";
+import { LabelChip, ColorSwatch, LabelColorGrid } from "./LabelChip";
+import { presetForLabel } from "../lib/labelColors";
 import { useViewMode } from "@/components/ViewModeProvider";
 
 interface EmailListProps {
@@ -445,24 +447,17 @@ export function EmailList({
                 {email.categories.length > 0 && (
                   <div className="flex flex-wrap gap-1 mt-0.5">
                     {email.categories.slice(0, 3).map((label) => (
-                      <span
+                      <LabelChip
                         key={label}
-                        role="button"
-                        tabIndex={0}
+                        name={label}
+                        active={selectedLabel === label}
                         title={`Filter by “${label}”`}
                         onClick={(e) => {
                           e.stopPropagation();
                           e.preventDefault();
                           selectLabel(label);
                         }}
-                        className={`text-[9px] px-1.5 py-0.5 rounded-full cursor-pointer transition-colors ${
-                          selectedLabel === label
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-primary/15 text-primary hover:bg-primary/30"
-                        }`}
-                      >
-                        {label}
-                      </span>
+                      />
                     ))}
                   </div>
                 )}
@@ -741,7 +736,9 @@ function CtxLabelMenu({
   applied: Set<string>;
   onApply: (name: string, add: boolean) => void;
 }) {
+  const { labelColors, setLabelColor } = useEmailStore();
   const [newLabel, setNewLabel] = useState("");
+  const [openColorFor, setOpenColorFor] = useState<string | null>(null);
   const create = () => {
     const name = newLabel.trim();
     if (!name) return;
@@ -759,16 +756,35 @@ function CtxLabelMenu({
         ) : (
           availableLabels.map((name) => {
             const on = applied.has(name);
+            const open = openColorFor === name;
             return (
-              <button
-                key={name}
-                onClick={() => onApply(name, !on)}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-foreground/80 hover:text-foreground hover:bg-secondary transition-colors"
-              >
-                <CheckboxSquare checked={on} />
-                <Tag size={10} className="flex-shrink-0" />
-                <span className="truncate">{name}</span>
-              </button>
+              <div key={name}>
+                <div className="w-full flex items-center gap-2 px-3 py-1.5 text-foreground/80 hover:bg-secondary transition-colors">
+                  <button
+                    onClick={() => onApply(name, !on)}
+                    className="flex items-center gap-2 flex-1 min-w-0 text-left hover:text-foreground"
+                  >
+                    <CheckboxSquare checked={on} />
+                    <span className="truncate">{name}</span>
+                  </button>
+                  <ColorSwatch
+                    name={name}
+                    title={open ? "Close colours" : "Set colour"}
+                    onClick={() => setOpenColorFor(open ? null : name)}
+                  />
+                </div>
+                {open && (
+                  <div className="px-3 pb-1.5">
+                    <LabelColorGrid
+                      value={presetForLabel(name, labelColors)}
+                      onPick={(c) => {
+                        setLabelColor(name, c);
+                        setOpenColorFor(null);
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
             );
           })
         )}

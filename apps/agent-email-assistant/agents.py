@@ -952,7 +952,11 @@ async def list_labels(account_id: str) -> str:
     labels = await _get(f"/email/accounts/{account_id}/labels")
     if not labels:
         return "No user labels on this account yet."
-    return "Labels: " + ", ".join(labels)
+    # Labels are {name, color} dicts; surface just the names.
+    names = [
+        (lbl.get("name") if isinstance(lbl, dict) else lbl) for lbl in labels
+    ]
+    return "Labels: " + ", ".join(n for n in names if n)
 
 
 async def create_label(account_id: str, name: str) -> str:

@@ -149,6 +149,9 @@ interface EmailState {
   folders: EmailFolder[];
   /** User-applicable label/category names for the selected account. */
   availableLabels: string[];
+  /** Label/category name → assigned colour (preset token), for the selected
+   *  account. Names absent here fall back to a deterministic colour. */
+  labelColors: Record<string, string | null>;
   quickActions: typeof QUICK_ACTIONS;
 
   // Loading states
@@ -235,6 +238,8 @@ interface EmailState {
   hydrateEmail: (email: Email) => void;
   updateEmail: (id: string, updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>) => Promise<void>;
   fetchLabels: (accountId?: string) => Promise<void>;
+  /** Set a label/category's colour (preset token); syncs to the provider. */
+  setLabelColor: (name: string, color: string) => Promise<void>;
   applyLabel: (id: string, name: string, add: boolean) => Promise<void>;
   /** Add/remove one category across many messages at once. */
   applyLabelBulk: (ids: string[], name: string, add: boolean) => Promise<void>;
@@ -279,6 +284,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   emailsPage: 1,
   folders: [],
   availableLabels: [],
+  labelColors: {},
   quickActions: QUICK_ACTIONS,
 
   // Loading states
@@ -693,14 +699,36 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       const labels = await api.listLabels(aid);
       // Always offer the standard categories too, so they're available to apply
       // (applying creates the real Gmail label / Outlook category upstream).
-      const merged = Array.from(
-        new Set([...labels, ...EMAIL_CATEGORIES])
+      const names = Array.from(
+        new Set([...labels.map((l) => l.name), ...EMAIL_CATEGORIES])
       ).sort();
-      set({ availableLabels: merged });
+      // Name → colour map from the provider; uncoloured labels are simply
+      // absent (the renderer falls back to a deterministic colour).
+      const colors: Record<string, string | null> = {};
+      for (const l of labels) if (l.color) colors[l.name] = l.color;
+      set({ availableLabels: names, labelColors: colors });
     } catch {
       // Even if the provider list fails, offer the standard categories.
       set({
         availableLabels: Array.from(new Set([...EMAIL_CATEGORIES])).sort(),
+        labelColors: {},
+      });
+    }
+  },
+
+  setLabelColor: async (name, color) => {
+    const aid = get().selectedAccountId;
+    if (!aid) return;
+    const prev = get().labelColors;
+    // Optimistically recolour everywhere chips read from labelColors.
+    set({ labelColors: { ...prev, [name]: color } });
+    if (DEMO) return;
+    try {
+      await api.setLabelColor(aid, name, color);
+    } catch (err) {
+      set({
+        labelColors: prev,
+        error: (err as Error)?.message || "Failed to set colour",
       });
     }
   },

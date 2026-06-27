@@ -28,6 +28,18 @@ class CreateFolderRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
 
 
+class LabelInfo(BaseModel):
+    """A user-applicable label/category with its canonical colour token."""
+    name: str
+    # 'preset0'..'preset24' (see providers/label_colors.py) or null if unset.
+    color: str | None = None
+
+
+class SetLabelColorRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    color: str = Field(pattern=r"^preset(2[0-4]|1[0-9]|[0-9])$")
+
+
 class EmailFolderModel(BaseModel):
     provider_folder_id: str
     name: str
@@ -209,14 +221,16 @@ async def create_folder(
         await db.close()
 
 
-@router.get("/accounts/{account_id}/labels", response_model=list[str])
+@router.get("/accounts/{account_id}/labels", response_model=list[LabelInfo])
 async def list_labels(
     account_id: str,
     user: UserContext = Depends(get_current_user),
 ):
-    """List user-applicable label/category names for an account.
+    """List user-applicable labels/categories (with colours) for an account.
 
-    Gmail = user labels, Outlook = master categories, IMAP = none.
+    Each entry is ``{name, color}`` where ``color`` is a canonical preset token
+    ('preset0'..'preset24') or null. Gmail = user labels, Outlook = master
+    categories, IMAP = none.
     """
     db = await _get_db()
     try:
@@ -276,6 +290,56 @@ async def list_labels(
     except Exception as exc:
         _log.error("list_labels.failed", account_id=account_id, error=str(exc)[:200])
         raise HTTPException(status_code=500, detail=f"Failed to list labels: {exc}")
+    finally:
+        await db.close()
+
+
+@router.patch("/accounts/{account_id}/labels", response_model=LabelInfo)
+async def set_label_color(
+    account_id: str,
+    req: SetLabelColorRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Set a label/category's colour on the provider (Gmail label / Outlook
+    master category). The colour is a canonical preset token; it round-trips to
+    the real mailbox. No-op for providers without label colours (IMAP)."""
+    db = await _get_db()
+    try:
+        result = await db.execute(
+            text(
+                """SELECT provider, credentials_encrypted
+                   FROM email_accounts
+                   WHERE id = :id AND user_id = :user_id"""
+            ),
+            {"id": account_id, "user_id": user.email or "anonymous"},
+        )
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        from acb_llm.key_store import get_key_store
+        store = get_key_store()
+        creds = json.loads(store.decrypt(row.credentials_encrypted))
+        provider = _instantiate_provider(row.provider, creds)
+
+        if not await provider.authenticate():
+            raise HTTPException(
+                status_code=401,
+                detail="Email account authentication failed — reconnect.",
+            )
+        await provider.set_label_color(req.name, req.color)
+        await _persist_rotated_creds(db, store, account_id, provider)
+        await db.commit()
+        return LabelInfo(name=req.name, color=req.color)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.error(
+            "set_label_color.failed", account_id=account_id, error=str(exc)[:200]
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Failed to set label colour: {exc}"
+        )
     finally:
         await db.close()
 

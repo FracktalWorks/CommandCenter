@@ -3,7 +3,7 @@ import {
   AnalyticsOverview, SenderStat, NewsletterStatus,
   AutomationRule, RuleTestResult, ExecutedRule, AssistantSettings,
   RecentTestResult, ColdSender, ReplyZeroThread, KnowledgeEntry,
-  LearnedPattern, RunMessageResult, LearnedRulePattern,
+  LearnedPattern, RunMessageResult, LearnedRulePattern, LabelInfo,
 } from "./types";
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
@@ -323,9 +323,25 @@ export async function updateEmail(
   return mapEmail(raw);
 }
 
-/** User-applicable label/category names for an account. */
-export async function listLabels(accountId: string): Promise<string[]> {
-  return gatewayFetch<string[]>(`/email/accounts/${accountId}/labels`);
+/** User-applicable labels/categories (name + colour) for an account. */
+export async function listLabels(accountId: string): Promise<LabelInfo[]> {
+  const raw = await gatewayFetch<{ name: string; color: string | null }[]>(
+    `/email/accounts/${accountId}/labels`
+  );
+  return raw.map((l) => ({ name: l.name, color: l.color ?? null }));
+}
+
+/** Set a label/category's colour on the provider (syncs to the real mailbox).
+ *  `color` is a canonical preset token ('preset0'..'preset24'). */
+export async function setLabelColor(
+  accountId: string,
+  name: string,
+  color: string
+): Promise<LabelInfo> {
+  return gatewayFetch<LabelInfo>(`/email/accounts/${accountId}/labels`, {
+    method: "PATCH",
+    body: JSON.stringify({ name, color }),
+  });
 }
 
 /** Add/remove labels (by name) on a message; syncs to the provider. */

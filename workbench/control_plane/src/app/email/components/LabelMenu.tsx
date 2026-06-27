@@ -1,14 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Plus, Tag } from "lucide-react";
+import { Check, Plus } from "lucide-react";
 import { Email } from "../lib/types";
 import { useEmailStore } from "../lib/emailStore";
+import { presetForLabel, presetHex, deterministicPreset } from "../lib/labelColors";
+import { ColorSwatch, LabelColorGrid } from "./LabelChip";
 
 /**
  * Label picker — toggle the account's labels on a message (multi-select, stays
- * open) and create new ones. Applied labels show a check. Writes sync to the
- * provider (Gmail labels / Outlook categories) via the store.
+ * open) and create new ones. Applied labels show a check. Each label has a
+ * colour swatch that opens a palette; the choice syncs to the provider (Gmail
+ * label / Outlook category colour). Writes sync via the store.
  */
 export function LabelMenu({
   email,
@@ -20,23 +23,37 @@ export function LabelMenu({
    *  box-in-a-box with a nested scrollbar. */
   embedded?: boolean;
 }) {
-  const { availableLabels, applyLabel } = useEmailStore();
+  const { availableLabels, labelColors, applyLabel, setLabelColor } =
+    useEmailStore();
   const [newLabel, setNewLabel] = useState("");
+  const [newColor, setNewColor] = useState<string | null>(null);
+  const [pickNew, setPickNew] = useState(false);
+  // Which label's colour palette is currently expanded (null = none).
+  const [openColorFor, setOpenColorFor] = useState<string | null>(null);
   const applied = new Set(email.categories || []);
 
   const create = () => {
     const name = newLabel.trim();
     if (!name) return;
     applyLabel(email.id, name, true);
+    if (newColor) setLabelColor(name, newColor);
     setNewLabel("");
+    setNewColor(null);
+    setPickNew(false);
   };
+
+  // Preview colour for the create-row swatch: the explicit pick, else a
+  // deterministic preview of the typed name (so it's never an empty swatch).
+  const newPreviewHex = presetHex(
+    newColor || deterministicPreset(newLabel.trim() || "label")
+  );
 
   return (
     <div
       className={
         embedded
           ? "text-xs"
-          : "w-52 bg-popover border border-border rounded-lg shadow-xl py-1 text-xs"
+          : "w-60 bg-popover border border-border rounded-lg shadow-xl py-1 text-xs"
       }
     >
       <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -44,36 +61,62 @@ export function LabelMenu({
       </div>
       {/* Only the label list scrolls (and only when it overflows) — the create
           row below stays pinned. */}
-      <div className="max-h-48 overflow-y-auto">
+      <div className="max-h-56 overflow-y-auto">
         {availableLabels.length === 0 ? (
           <div className="px-3 py-1.5 text-muted-foreground">No labels yet</div>
         ) : (
           availableLabels.map((name) => {
             const on = applied.has(name);
+            const open = openColorFor === name;
             return (
-              <button
-                key={name}
-                onClick={() => applyLabel(email.id, name, !on)}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-foreground/80 hover:text-foreground hover:bg-secondary transition-colors"
-              >
-                <span
-                  className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
-                    on
-                      ? "bg-primary border-primary text-primary-foreground"
-                      : "border-muted-foreground/40"
-                  }`}
-                >
-                  {on && <Check size={11} />}
-                </span>
-                <Tag size={10} className="flex-shrink-0" />
-                <span className="truncate">{name}</span>
-              </button>
+              <div key={name}>
+                <div className="w-full flex items-center gap-2 px-3 py-1.5 text-foreground/80 hover:bg-secondary transition-colors">
+                  <button
+                    onClick={() => applyLabel(email.id, name, !on)}
+                    className="flex items-center gap-2 flex-1 min-w-0 text-left hover:text-foreground"
+                  >
+                    <span
+                      className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                        on
+                          ? "bg-primary border-primary text-primary-foreground"
+                          : "border-muted-foreground/40"
+                      }`}
+                    >
+                      {on && <Check size={11} />}
+                    </span>
+                    <span className="truncate">{name}</span>
+                  </button>
+                  <ColorSwatch
+                    name={name}
+                    title={open ? "Close colours" : "Set colour"}
+                    onClick={() => setOpenColorFor(open ? null : name)}
+                  />
+                </div>
+                {open && (
+                  <div className="px-3 pb-1.5">
+                    <LabelColorGrid
+                      value={presetForLabel(name, labelColors)}
+                      onPick={(c) => {
+                        setLabelColor(name, c);
+                        setOpenColorFor(null);
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
             );
           })
         )}
       </div>
       <div className="border-t border-border mt-1 pt-1 px-2 pb-1">
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            title="Pick a colour for the new label"
+            onClick={() => setPickNew((v) => !v)}
+            style={{ backgroundColor: newPreviewHex }}
+            className="w-3.5 h-3.5 rounded-full border border-black/20 ring-1 ring-inset ring-white/20 flex-shrink-0 hover:scale-110 transition-transform"
+          />
           <input
             value={newLabel}
             onChange={(e) => setNewLabel(e.target.value)}
@@ -95,6 +138,17 @@ export function LabelMenu({
             <Plus size={13} />
           </button>
         </div>
+        {pickNew && (
+          <div className="pt-1">
+            <LabelColorGrid
+              value={newColor}
+              onPick={(c) => {
+                setNewColor(c);
+                setPickNew(false);
+              }}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

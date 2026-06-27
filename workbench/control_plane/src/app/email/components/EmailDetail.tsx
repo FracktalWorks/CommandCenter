@@ -17,6 +17,7 @@ import { ArtifactAttachPicker } from "./ArtifactAttachPicker";
 import { MessageContent } from "./MessageContent";
 import { ConversationView, DraftCard, isDraftEmail } from "./ConversationView";
 import { LabelMenu } from "./LabelMenu";
+import { LabelChip } from "./LabelChip";
 import { useViewMode } from "@/components/ViewModeProvider";
 
 interface EmailDetailProps {
@@ -628,16 +629,16 @@ export function EmailDetail({ email }: EmailDetailProps) {
           </div>
         </div>
 
-        {/* Categories / labels */}
+        {/* Categories / labels — rendered in their assigned colours */}
         {view.categories && view.categories.length > 0 && (
           <div className="flex flex-wrap gap-1 mb-4">
             {view.categories.map((cat) => (
-              <span
+              <LabelChip
                 key={cat}
-                className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-secondary text-foreground/80 border border-border"
-              >
-                <Tag size={9} /> {cat}
-              </span>
+                name={cat}
+                icon
+                className="text-[10px] px-2 py-0.5"
+              />
             ))}
           </div>
         )}

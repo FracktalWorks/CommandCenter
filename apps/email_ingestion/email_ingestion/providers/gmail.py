@@ -420,18 +420,25 @@ class GmailProvider(BaseEmailProvider):
         "IMPORTANT", "CHAT",
     }
 
-    async def list_labels(self) -> list[str]:
-        """User label names (excludes Gmail system labels and categories)."""
+    async def list_labels(self) -> list[dict[str, str | None]]:
+        """User labels as ``{name, color}`` (excludes system labels/categories).
+
+        ``color`` is a canonical preset token mapped from the label's Gmail
+        ``backgroundColor`` (None when the label has no colour set)."""
+        from .label_colors import preset_from_gmail_bg
         client = await self._get_client()
         resp = await client.get("/users/me/labels")
         resp.raise_for_status()
-        names: list[str] = []
+        out: list[dict[str, str | None]] = []
         for lbl in resp.json().get("labels", []):
             if lbl.get("type") == "user" and not lbl.get("name", "").startswith(
                 "CATEGORY_"
             ):
-                names.append(lbl["name"])
-        return sorted(names)
+                bg = (lbl.get("color") or {}).get("backgroundColor")
+                out.append(
+                    {"name": lbl["name"], "color": preset_from_gmail_bg(bg)}
+                )
+        return sorted(out, key=lambda x: (x["name"] or "").lower())
 
     async def _label_name_id_map(self) -> dict[str, str]:
         """Lower-cased label name → id for the account's labels."""
@@ -444,23 +451,52 @@ class GmailProvider(BaseEmailProvider):
             if lbl.get("name")
         }
 
-    async def _ensure_label_id(self, name: str) -> str | None:
-        """Resolve a label name to its id, creating the label if it's new."""
+    async def _ensure_label_id(
+        self, name: str, color: str | None = None
+    ) -> str | None:
+        """Resolve a label name to its id, creating the label if it's new.
+
+        ``color`` is a canonical preset token applied to a freshly-created
+        label (ignored if the label already exists — use ``set_label_color``)."""
         existing = await self._label_name_id_map()
         if name.lower() in existing:
             return existing[name.lower()]
+        from .label_colors import gmail_color
         client = await self._get_client()
-        resp = await client.post(
-            "/users/me/labels",
-            json={
-                "name": name,
-                "labelListVisibility": "labelShow",
-                "messageListVisibility": "show",
-            },
-        )
+        body: dict[str, object] = {
+            "name": name,
+            "labelListVisibility": "labelShow",
+            "messageListVisibility": "show",
+        }
+        gc = gmail_color(color) if color else None
+        if gc:
+            body["color"] = gc
+        resp = await client.post("/users/me/labels", json=body)
+        # A bad colour is the only likely rejection here — retry without it so
+        # label creation never fails on colour alone.
+        if not resp.is_success and gc:
+            body.pop("color", None)
+            resp = await client.post("/users/me/labels", json=body)
         if resp.is_success:
             return resp.json().get("id")
         return None
+
+    async def set_label_color(self, name: str, color: str) -> None:
+        """Set a Gmail user label's colour (creating the label if needed)."""
+        from .label_colors import gmail_color, is_preset
+        if not is_preset(color):
+            return
+        # Ensure the label exists; if brand-new, the colour is set on create.
+        existing = await self._label_name_id_map()
+        label_id = existing.get(name.lower())
+        if not label_id:
+            await self._ensure_label_id(name, color=color)
+            return
+        gc = gmail_color(color)
+        if not gc:
+            return
+        client = await self._get_client()
+        await client.patch(f"/users/me/labels/{label_id}", json={"color": gc})
 
     async def create_folder(self, name: str) -> EmailFolder:
         """Gmail has labels, not folders — create (or reuse) a user label."""

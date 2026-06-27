@@ -680,24 +680,29 @@ class OutlookProvider(BaseEmailProvider):
 
     # ── Labels (Outlook categories) ──────────────────────────────────────
 
-    async def list_labels(self) -> list[str]:
-        """Outlook master category names.
+    async def list_labels(self) -> list[dict[str, str | None]]:
+        """Outlook master categories as ``{name, color}`` dicts.
 
-        Personal/consumer (MSA) accounts don't expose
-        ``/me/outlook/masterCategories`` (HTTP 403), so treat that as "no master
-        categories" rather than an error — the caller degrades to the standard
-        category set and categories can still be applied per-message.
+        ``color`` is the category's preset token ('preset0'..'preset24'), which
+        is already our canonical colour id.  Personal/consumer (MSA) accounts
+        don't expose ``/me/outlook/masterCategories`` (HTTP 403), so treat that
+        as "no master categories" rather than an error — the caller degrades to
+        the standard category set and categories can still be applied.
         """
+        from .label_colors import is_preset
         client = await self._get_client()
         resp = await client.get("/me/outlook/masterCategories")
         if resp.status_code in (403, 404):
             return []
         resp.raise_for_status()
-        return sorted(
-            c.get("displayName")
-            for c in resp.json().get("value", [])
-            if c.get("displayName")
-        )
+        out: list[dict[str, str | None]] = []
+        for c in resp.json().get("value", []):
+            name = c.get("displayName")
+            if not name:
+                continue
+            color = c.get("color")
+            out.append({"name": name, "color": color if is_preset(color) else None})
+        return sorted(out, key=lambda x: (x["name"] or "").lower())
 
     async def _ensure_categories(self, names: list[str]) -> None:
         """Create any missing Outlook master categories so an applied category is
@@ -714,11 +719,12 @@ class OutlookProvider(BaseEmailProvider):
             }
         except Exception:  # noqa: BLE001
             existing = set()
+        from .label_colors import preset_for_name
         for name in names:
             if not name or name.lower() in existing:
                 continue
             # Stable colour from the name so the same category is consistent.
-            color = f"preset{sum(ord(ch) for ch in name) % 25}"
+            color = preset_for_name(name)
             try:
                 await client.post(
                     "/me/outlook/masterCategories",
@@ -727,6 +733,41 @@ class OutlookProvider(BaseEmailProvider):
                 existing.add(name.lower())
             except Exception:  # noqa: BLE001
                 pass  # best-effort — applying the category still works
+
+    async def set_label_color(self, name: str, color: str) -> None:
+        """Set an Outlook master category's colour (creating it if needed).
+
+        Categories are identified by id; we look up the id by displayName, then
+        PATCH the colour (or POST a new category when it doesn't exist yet)."""
+        from .label_colors import is_preset
+        if not name or not is_preset(color):
+            return
+        client = await self._get_client()
+        try:
+            resp = await client.get("/me/outlook/masterCategories")
+            if resp.status_code in (403, 404):
+                return  # MSA / missing scope — categories aren't manageable
+            resp.raise_for_status()
+            cat_id = next(
+                (
+                    c.get("id")
+                    for c in resp.json().get("value", [])
+                    if (c.get("displayName") or "").lower() == name.lower()
+                ),
+                None,
+            )
+        except Exception:  # noqa: BLE001
+            cat_id = None
+        if cat_id:
+            await client.patch(
+                f"/me/outlook/masterCategories/{cat_id}",
+                json={"color": color},
+            )
+        else:
+            await client.post(
+                "/me/outlook/masterCategories",
+                json={"displayName": name, "color": color},
+            )
 
     async def set_labels(
         self,

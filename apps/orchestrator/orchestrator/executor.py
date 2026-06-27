@@ -2452,11 +2452,35 @@ async def run_agent_stream(
                 _n_emitted = False
                 _n_fc_ctr = [0]
                 _n_seen_fc: set[str] = set()
+                # Idle watchdog: if the native stream yields no update for this
+                # many seconds, treat the agent as stalled and error out rather
+                # than hold the SSE open until the HTTP-level abort (~5 min).
+                _native_idle = False
+                _idle_to = float(
+                    os.environ.get("NATIVE_STREAM_IDLE_TIMEOUT_SECONDS", "120")
+                )
                 try:
                     async with contextlib.AsyncExitStack() as _nstack:
                         if hasattr(type(agent), "__aenter__"):
                             await _nstack.enter_async_context(agent)
-                        async for _u in agent.run(_native_input, stream=True):
+                        _agen = agent.run(
+                            _native_input, stream=True,
+                        ).__aiter__()
+                        while True:
+                            try:
+                                _u = await asyncio.wait_for(
+                                    _agen.__anext__(), timeout=_idle_to,
+                                )
+                            except StopAsyncIteration:
+                                break
+                            except TimeoutError:
+                                # No update for _idle_to seconds → the agent is
+                                # wedged.  Stop and let the post-loop emit a
+                                # RUN_ERROR instead of hanging the stream.
+                                _native_idle = True
+                                with contextlib.suppress(Exception):
+                                    await _agen.aclose()
+                                break
                             for _c in (getattr(_u, "contents", None) or []):
                                 _ct = getattr(_c, "type", None)
                                 if _ct == "text":
@@ -2553,10 +2577,23 @@ async def run_agent_stream(
                         yield _sse({
                             "type": "TEXT_MESSAGE_END", "messageId": _n_msg_id,
                         })
-                    yield _sse({
-                        "type": "RUN_FINISHED", "runId": run_id,
-                        "threadId": thread_id,
-                    })
+                    if _native_idle:
+                        _log.warning(
+                            "executor.native_maf_stream_idle_timeout",
+                            agent=agent_name, idle_seconds=_idle_to,
+                        )
+                        yield _sse({
+                            "type": "RUN_ERROR", "runId": run_id,
+                            "message": (
+                                f"Agent produced no output for {int(_idle_to)}s "
+                                "and was stopped (possible stall)."
+                            ),
+                        })
+                    else:
+                        yield _sse({
+                            "type": "RUN_FINISHED", "runId": run_id,
+                            "threadId": thread_id,
+                        })
                     _active_run_queue.reset(_nq_token)
                     return
                 except Exception as _nexc:

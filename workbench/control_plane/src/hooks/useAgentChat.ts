@@ -24,6 +24,7 @@ import { parseAgentError } from "@/lib/parseAgentError";
 import { activeContextSlice, isCompactionCheckpoint } from "@/lib/tokenCount";
 import { emitAgentEvent } from "@/lib/agentEvents";
 import { applyStateSnapshot, applyStateDelta } from "@/hooks/useAgentState";
+import { applyStreamEvent, nanoid, type StreamFold } from "@/lib/chatStream";
 
 // Re-export types for backward compatibility with AgentChat.tsx imports.
 export type { ChatMessage, ToolEvent };
@@ -73,65 +74,9 @@ interface UseAgentChatReturn {
   runStatus: "idle" | "running" | "recovering" | "unknown";
 }
 
-function nanoid(): string {
-  return Math.random().toString(36).slice(2, 11);
-}
-
-/**
- * Fold pre-tool narration into the reasoning blocks and compute the timeline
- * cutoff for a starting tool (VS Code-style interleaved thinking).
- *
- * Blocks with index < cutoff render BEFORE the tool in the timeline;
- * reasoning that streams in afterwards lands at index >= cutoff and renders
- * AFTER it.  An empty sentinel block is appended when needed so later
- * reasoning never merges into a pre-tool block.
- */
-function foldForToolStart(
-  blocks: string[] | undefined,
-  narration: string,
-): { blocks: string[]; cutoff: number } {
-  const folded = narration ? [...(blocks ?? []), narration] : [...(blocks ?? [])];
-  if (folded.length === 0) return { blocks: folded, cutoff: 0 };
-  if (!folded[folded.length - 1].trim()) {
-    // Trailing empty sentinel from a previous tool — future reasoning merges
-    // into it, so it must sit after this tool too.
-    return { blocks: folded, cutoff: folded.length - 1 };
-  }
-  // Seal the current block so later reasoning starts a NEW block after the tool.
-  return { blocks: [...folded, ""], cutoff: folded.length };
-}
-
-/**
- * Un-fold the trailing narration block back into the visible answer.
- *
- * `foldForToolStart` moves answer text into the thinking timeline at every
- * tool_start, on the assumption that only text emitted AFTER the last tool call
- * is the real answer.  That assumption breaks when a turn ENDS on a tool call
- * (save_memory, manage_todo_list, write_artifact, a trailing verification
- * command, …): the genuine answer was the last folded block and `content` ends
- * up empty — the answer "disappears" into the consciousness stream.
- *
- * This restores it: promote reasoningBlocks[foldedAnswerIdx] back to `content`
- * and blank that block (kept as an empty sentinel so each tool's
- * reasoningCutoff index stays aligned — empty blocks are skipped at render).
- * No-op when answer text already followed the last tool call (content non-empty)
- * or nothing was folded (foldedAnswerIdx < 0).  Keep in sync with the inline
- * mirror in app/api/agent/chat/route.ts (translateAndPersistStream).
- */
-function unfoldTrailingAnswer(
-  content: string,
-  reasoningBlocks: string[] | undefined,
-  foldedAnswerIdx: number,
-): { content: string; reasoningBlocks: string[] | undefined } {
-  if (content.trim() || foldedAnswerIdx < 0) return { content, reasoningBlocks };
-  const blocks = reasoningBlocks ?? [];
-  const candidate = blocks[foldedAnswerIdx];
-  if (!candidate || !candidate.trim()) return { content, reasoningBlocks };
-  return {
-    content: candidate,
-    reasoningBlocks: blocks.map((b, i) => (i === foldedAnswerIdx ? "" : b)),
-  };
-}
+// nanoid, foldForToolStart, unfoldTrailingAnswer and the per-event message
+// reducer now live in @/lib/chatStream (shared by the live loop, the reconnect
+// loop, and — for the fold helpers — the server persistence translator).
 
 export function useAgentChat({
   agentName,
@@ -260,11 +205,9 @@ export function useAgentChat({
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        // Index of the most recently folded answer block (text that streamed as
-        // the visible answer but was moved into the timeline at a tool_start).
-        // Restored as `content` at run end if no further answer text followed
-        // the last tool call.  -1 = nothing to un-fold.  See unfoldTrailingAnswer.
-        let foldedAnswerIdx = -1;
+        // Per-stream fold cursor — mutated by applyStreamEvent at tool_start /
+        // delta and read at run end by unfoldTrailingAnswer.
+        const fold: StreamFold = { foldedAnswerIdx: -1 };
 
         // Helper: update just the assistant message
         const upd = (fn: (m: ChatMessage) => ChatMessage) =>
@@ -297,121 +240,17 @@ export function useAgentChat({
 
 
             switch (evt.type) {
-              case "delta": {
-                const deltaText = String(evt.content ?? "");
-                // New visible answer text → any earlier narration fold was
-                // genuine narration, not the answer.  Drop the un-fold candidate.
-                foldedAnswerIdx = -1;
-                upd((m) => ({
-                  ...m,
-                  content: m.content + deltaText,
-                  // Show brief live snippet in the ThinkingContainer header
-                  // so the user sees activity, but do NOT dump into reasoning.
-                  // Reasoning is reserved for actual model chain-of-thought
-                  // tokens (THINKING_TEXT_MESSAGE_CONTENT / ASSISTANT_REASONING_DELTA).
-                  progressLines: [
-                    ...(m.progressLines ?? []).filter((l) => !l.startsWith("↳ ")),
-                    `↳ ${deltaText.slice(0, 80)}`,
-                  ].slice(-3),
-                }));
-                break;
-              }
+              // Common message-state events (delta, reasoning, tool_start,
+              // tool_end, tool_partial, progress, todos) — handled identically
+              // here and in the reconnect loop, so the logic lives in one place.
+              case "delta":
               case "progress":
-                upd((m) => ({ ...m, progressLines: [...(m.progressLines ?? []), String(evt.name ?? "Working")] }));
-                break;
               case "todos":
-                upd((m) => ({
-                  ...m,
-                  todos: Array.isArray(evt.todos)
-                    ? (evt.todos as { id: string; title: string; status: string }[])
-                    : m.todos,
-                }));
-                break;
               case "reasoning":
-                upd((m) => {
-                  const chunk = String(evt.content ?? "");
-                  if (!chunk) return m;
-                  const blocks = m.reasoningBlocks ?? [];
-                  // Verbose token streams: append to the current block and
-                  // only start a new one at paragraph breaks (\n\n) — the
-                  // same grouping VS Code Copilot uses for thinking text.
-                  if (blocks.length === 0) {
-                    return { ...m, reasoningBlocks: [chunk] };
-                  }
-                  const last = blocks[blocks.length - 1] + chunk;
-                  const parts = last.split(/\n{2,}/);
-                  return {
-                    ...m,
-                    reasoningBlocks: [
-                      ...blocks.slice(0, -1),
-                      ...parts.filter((p, i) => p.trim() || i === parts.length - 1),
-                    ],
-                  };
-                });
-                break;
-              case "tool_start": {
-                const toolId = String(evt.id ?? nanoid());
-                const isDelegate = String(evt.name ?? "").toLowerCase().includes("call_agent");
-                upd((m) => {
-                  // Dedup: a tool call's TOOL_CALL_START can arrive more than once
-                  // (e.g. MAF streams a function_call across several updates as its
-                  // args fill in).  Never add a second row for an id we already
-                  // have — keeps the consciousness timeline from duplicating.
-                  if ((m.toolEvents ?? []).some((t) => t.id === toolId)) return m;
-                  // VS Code-style narration fold: text emitted BEFORE a tool
-                  // call is the model narrating its plan ("Let me check…"),
-                  // not the final answer.  Move it into the thinking
-                  // timeline; only text after the LAST tool call remains as
-                  // the visible answer.
-                  const narration = m.content.trim();
-                  const { blocks, cutoff } = foldForToolStart(m.reasoningBlocks, narration);
-                  // The just-folded answer text sits at cutoff-1 (foldForToolStart
-                  // appends narration then an empty sentinel).  Remember it so the
-                  // run-end handler can restore it if no further answer follows.
-                  if (narration) foldedAnswerIdx = cutoff - 1;
-                  const newEvent: ToolEvent = {
-                    id: toolId, name: String(evt.name ?? "tool"),
-                    args: (evt.args as Record<string, unknown>) ?? {}, status: "running",
-                    startedAt: Date.now(), reasoningCutoff: cutoff,
-                    ...(isDelegate ? { subAgentActive: true } : {}),
-                  };
-                  return {
-                    ...m,
-                    content: narration ? "" : m.content,
-                    reasoningBlocks: blocks,
-                    toolEvents: [...(m.toolEvents ?? []), newEvent],
-                  };
-                });
-                break;
-              }
+              case "tool_start":
               case "tool_end":
-                upd((m) => ({
-                  ...m,
-                  toolEvents: (m.toolEvents ?? []).map((t) =>
-                    t.id === String(evt.id)
-                      ? {
-                          ...t,
-                          args: evt.args && Object.keys(evt.args as object).length > 0
-                            ? (evt.args as Record<string, unknown>) : t.args,
-                          result: String(evt.result ?? ""),
-                          status: evt.success ? "done" : "error",
-                          endedAt: Date.now(), subAgentActive: false,
-                        }
-                      : t
-                  ),
-                }));
-                break;
               case "tool_partial":
-                // Streaming partial output (terminal stdout, tool progress).
-                // Accumulate without marking the tool as complete.
-                upd((m) => ({
-                  ...m,
-                  toolEvents: (m.toolEvents ?? []).map((t) =>
-                    t.id === String(evt.id)
-                      ? { ...t, result: (t.result ?? "") + String(evt.result ?? "") }
-                      : t
-                  ),
-                }));
+                upd((m) => applyStreamEvent(m, evt, fold));
                 break;
               case "sub_agent_delta": {
                 const tgtAgent = String(evt.agentName ?? "");
@@ -492,10 +331,7 @@ export function useAgentChat({
                 break;
               }
               case "done":
-                upd((m) => {
-                  const u = unfoldTrailingAnswer(m.content, m.reasoningBlocks, foldedAnswerIdx);
-                  return { ...m, content: u.content, reasoningBlocks: u.reasoningBlocks, streaming: false, isThinkingActive: false };
-                });
+                upd((m) => applyStreamEvent(m, evt, fold));
                 emitAgentEvent("onRunFinalized", { runId: String(evt.run_id ?? ""), threadId });
                 break;
               case "state":
@@ -766,8 +602,8 @@ export function useAgentChat({
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        // Un-fold candidate for the replayed stream (mirror of the live loop).
-        let foldedAnswerIdx = -1;
+        // Per-stream fold cursor (mirror of the live loop).
+        const fold: StreamFold = { foldedAnswerIdx: -1 };
 
         // Update helper: applies changes ONLY to the specific message we're
         // replaying into (matched by lastId).  Previous messages — even those
@@ -804,87 +640,16 @@ export function useAgentChat({
             }
 
             switch (evt.type) {
+              // Common message-state events — same handling as the live loop
+              // (see applyStreamEvent).  A replayed stream never carries todos,
+              // but routing it through the shared reducer is harmless.
               case "delta":
-                foldedAnswerIdx = -1;
-                updLast((m) => ({
-                  ...m,
-                  content: m.content + String(evt.content ?? ""),
-                  streaming: true,
-                }));
-                break;
               case "reasoning":
-                updLast((m) => {
-                  const chunk = String(evt.content ?? "");
-                  if (!chunk) return m;
-                  const blocks = m.reasoningBlocks ?? [];
-                  // Paragraph-break grouping (\n\n) — keep in sync with the
-                  // live loop and route.ts translator.
-                  if (blocks.length === 0) {
-                    return { ...m, reasoningBlocks: [chunk] };
-                  }
-                  const merged = blocks[blocks.length - 1] + chunk;
-                  const parts = merged.split(/\n{2,}/);
-                  return {
-                    ...m,
-                    reasoningBlocks: [
-                      ...blocks.slice(0, -1),
-                      ...parts.filter((p, i) => p.trim() || i === parts.length - 1),
-                    ],
-                  };
-                });
-                break;
               case "progress":
-                updLast((m) => ({
-                  ...m,
-                  progressLines: [...(m.progressLines ?? []), String(evt.name ?? "Working")],
-                }));
-                break;
-              case "tool_start": {
-                const toolId = String(evt.id ?? nanoid());
-                updLast((m) => {
-                  // Dedup duplicate TOOL_CALL_START for the same id (mirror of the
-                  // live loop) so a replayed stream doesn't double-add tool rows.
-                  if ((m.toolEvents ?? []).some((t) => t.id === toolId)) return m;
-                  const narration = m.content.trim();
-                  const { blocks, cutoff } = foldForToolStart(m.reasoningBlocks, narration);
-                  if (narration) foldedAnswerIdx = cutoff - 1;
-                  return {
-                    ...m,
-                    content: narration ? "" : m.content,
-                    reasoningBlocks: blocks,
-                    toolEvents: [...(m.toolEvents ?? []), {
-                      id: toolId, name: String(evt.name ?? "tool"),
-                      args: (evt.args as Record<string, unknown>) ?? {},
-                      status: "running" as const, startedAt: Date.now(),
-                      reasoningCutoff: cutoff,
-                    }],
-                  };
-                });
-                break;
-              }
+              case "tool_start":
               case "tool_end":
-                updLast((m) => {
-                  const newStatus: ToolEvent["status"] = evt.success ? "done" : "error";
-                  return {
-                    ...m,
-                    toolEvents: (m.toolEvents ?? []).map((t) =>
-                      t.id === String(evt.id)
-                        ? { ...t, result: String(evt.result ?? ""), status: newStatus, endedAt: Date.now() }
-                        : t
-                    ),
-                  };
-                });
-                break;
               case "tool_partial":
-                // Live terminal/tool output streaming into the running tool row.
-                updLast((m) => ({
-                  ...m,
-                  toolEvents: (m.toolEvents ?? []).map((t) =>
-                    t.id === String(evt.id)
-                      ? { ...t, result: (t.result ?? "") + String(evt.result ?? "") }
-                      : t
-                  ),
-                }));
+                updLast((m) => applyStreamEvent(m, evt, fold));
                 break;
               case "custom": {
                 // Mirror the live loop so a HITL question pending when the page
@@ -910,11 +675,9 @@ export function useAgentChat({
               case "done": {
                 reconnected = true;
                 // Restore a trailing answer folded into the timeline (turn ended
-                // on a tool call) before measuring recovered content below.
-                updLast((m) => {
-                  const u = unfoldTrailingAnswer(m.content, m.reasoningBlocks, foldedAnswerIdx);
-                  return { ...m, content: u.content, reasoningBlocks: u.reasoningBlocks };
-                });
+                // on a tool call) and mark the message settled — the shared
+                // reducer does the un-fold + streaming:false in one update.
+                updLast((m) => applyStreamEvent(m, evt, fold));
                 // Check if we actually recovered content.  When the Redis
                 // stream has expired, the reconnect endpoint returns only a
                 // synthetic RUN_FINISHED with no prior delta/tool events —
@@ -927,7 +690,6 @@ export function useAgentChat({
                   (recoveredMsg?.content?.trim() ?? "") ||
                   (recoveredMsg?.toolEvents?.length ?? 0) > 0 ||
                   (recoveredMsg?.reasoningBlocks?.length ?? 0) > 0;
-                updLast((m) => ({ ...m, streaming: false, isThinkingActive: false }));
                 setSessionState(threadId, (prev) => ({
                   ...prev,
                   recovering: hasRecoveredContent ? false : prev.recovering,

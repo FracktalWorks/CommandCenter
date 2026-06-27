@@ -37,6 +37,11 @@
 
 import { NextRequest } from "next/server";
 import { auth, isAuthEnabled } from "@/auth";
+import {
+  foldForToolStart,
+  unfoldTrailingAnswer,
+  groupReasoningBlocks,
+} from "@/lib/chatStream";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -217,15 +222,13 @@ async function translateAndPersistStream(
         } else if (t === "REASONING_MESSAGE_CONTENT" || t === "THINKING_TEXT_MESSAGE_CONTENT") {
           const chunk = String(ev.delta ?? "");
           if (chunk) {
-            // Group verbose reasoning into paragraph blocks (split on \n\n),
-            // mirroring the frontend cascade logic.
-            if (reasoningBlocks.length === 0) {
-              reasoningBlocks.push(chunk);
-            } else {
-              const merged = reasoningBlocks[reasoningBlocks.length - 1] + chunk;
-              const parts = merged.split(/\n{2,}/).filter((p, i, a) => p.trim() || i === a.length - 1);
-              reasoningBlocks.splice(reasoningBlocks.length - 1, 1, ...parts);
-            }
+            // Paragraph-grouped reasoning blocks (shared with the frontend
+            // cascade via groupReasoningBlocks).
+            reasoningBlocks.splice(
+              0,
+              reasoningBlocks.length,
+              ...groupReasoningBlocks(reasoningBlocks, chunk),
+            );
           }
           out = { type: "reasoning", content: ev.delta ?? "" };
         } else if (t === "PROGRESS_UPDATE") {
@@ -246,26 +249,19 @@ async function translateAndPersistStream(
           const name = String(ev.toolCallName ?? ev.tool_call_name ?? "tool");
           toolNames[String(ev.toolCallId ?? "")] = name;
           toolArgs[String(ev.toolCallId ?? "")] = "";
-          // VS Code-style narration fold (mirror of the frontend): text
-          // accumulated before a tool call is plan narration, not the
-          // answer — persist it as a reasoning block instead.
-          if (assistantContent.trim()) {
-            reasoningBlocks.push(assistantContent.trim());
+          // VS Code-style narration fold (shared with the frontend via
+          // foldForToolStart): text accumulated before a tool call is plan
+          // narration, not the answer — fold it into the reasoning timeline and
+          // record where this tool sits so reasoning interleaves chronologically.
+          const narration = assistantContent.trim();
+          const folded = foldForToolStart(reasoningBlocks, narration);
+          reasoningBlocks.splice(0, reasoningBlocks.length, ...folded.blocks);
+          toolCutoffs[String(ev.toolCallId ?? "")] = folded.cutoff;
+          if (narration) {
             // Remember where the folded answer landed so RUN_FINISHED can
             // restore it if the turn ends on a tool call (no answer follows).
-            foldedAnswerIdx = reasoningBlocks.length - 1;
+            foldedAnswerIdx = folded.cutoff - 1;
             assistantContent = "";
-          }
-          // Record where this tool sits in the reasoning timeline, then seal
-          // the current block so later reasoning starts AFTER the tool.
-          // (Keep in sync with foldForToolStart in useAgentChat.ts.)
-          if (reasoningBlocks.length === 0) {
-            toolCutoffs[String(ev.toolCallId ?? "")] = 0;
-          } else if (!reasoningBlocks[reasoningBlocks.length - 1].trim()) {
-            toolCutoffs[String(ev.toolCallId ?? "")] = reasoningBlocks.length - 1;
-          } else {
-            toolCutoffs[String(ev.toolCallId ?? "")] = reasoningBlocks.length;
-            reasoningBlocks.push("");
           }
           toolStarts[String(ev.toolCallId ?? "")] = Date.now();
           // Capture progress so the polling recovery path can show tool activity.
@@ -326,12 +322,12 @@ async function translateAndPersistStream(
           // (save_memory, manage_todo_list, write_artifact, …) the genuine
           // answer was folded into the timeline and assistantContent is empty.
           // Restore it so the persisted message (refresh recovery + memory
-          // extraction) carries the answer instead of an empty bubble.  Keep in
-          // sync with unfoldTrailingAnswer() in hooks/useAgentChat.ts.
-          const foldedAnswer = foldedAnswerIdx >= 0 ? reasoningBlocks[foldedAnswerIdx] : undefined;
-          if (!assistantContent.trim() && foldedAnswer?.trim()) {
-            assistantContent = foldedAnswer;
-            reasoningBlocks[foldedAnswerIdx] = "";
+          // extraction) carries the answer instead of an empty bubble.  Shared
+          // with the frontend via unfoldTrailingAnswer.
+          const unfolded = unfoldTrailingAnswer(assistantContent, reasoningBlocks, foldedAnswerIdx);
+          assistantContent = unfolded.content;
+          if (unfolded.reasoningBlocks && unfolded.reasoningBlocks !== reasoningBlocks) {
+            reasoningBlocks.splice(0, reasoningBlocks.length, ...unfolded.reasoningBlocks);
           }
           out = { type: "done", run_id: ev.runId || ev.run_id };
         } else if (t === "RUN_ERROR") {

@@ -75,6 +75,7 @@ export interface QuickAction {
 
 /** The Email Automation features surfaced in the sidebar. */
 export type AutomationFeature =
+  | "chat"
   | "assistant"
   | "reply-zero"
   | "digest"

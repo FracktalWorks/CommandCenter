@@ -4,8 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   PanelLeftClose,
   PanelLeftOpen,
-  PanelRightClose,
-  PanelRight,
+  MessageSquare,
   Columns2,
   ArrowLeft,
   RefreshCw,
@@ -40,7 +39,6 @@ export default function EmailPage() {
   // Desktop UI state
   const [leftOpen, setLeftOpen] = useState(true);
   const [listOpen, setListOpen] = useState(true);
-  const [rightOpen, setRightOpen] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -249,17 +247,18 @@ export default function EmailPage() {
     return () => window.removeEventListener("cc-mobile-nav", handler);
   }, [openDrawer, closeDrawer]);
 
-  // When the Assistant "Fix" flow queues a chat prompt, leave the automation
-  // overlay and surface the AI chat so the prompt lands in its input.
+  // When the Assistant "Fix" flow queues a chat prompt, surface the AI chat so
+  // the prompt lands in its input. Desktop: open the full-scene chat; mobile:
+  // open the chat drawer.
   useEffect(() => {
     if (!pendingChatPrompt) return;
-    setAutomationFeature(null);
     if (isMobile) {
+      setAutomationFeature(null);
       window.dispatchEvent(
         new CustomEvent("cc-mobile-nav", { detail: "email-ai" })
       );
     } else {
-      setRightOpen(true);
+      setAutomationFeature("chat");
     }
   }, [pendingChatPrompt, isMobile]);
 
@@ -599,7 +598,16 @@ export default function EmailPage() {
       )}
 
       {/* ═══ Email Automation overlay (replaces panes, keeps left sidebar) ═══ */}
-      {automationFeature ? (
+      {automationFeature === "chat" ? (
+        // Chat is a full scene (like Assistant / Reply Zero), not a side rail.
+        <div className="flex-1 min-w-0 overflow-hidden">
+          <EmailAssistantChat
+            selectedAccountId={selectedAccountId}
+            selectedEmailId={selectedEmailId}
+            onClose={() => setAutomationFeature(null)}
+          />
+        </div>
+      ) : automationFeature ? (
         <div className="flex-1 min-w-0 overflow-hidden">
           <AutomationView
             feature={automationFeature}
@@ -654,9 +662,9 @@ export default function EmailPage() {
                 </span>
               </button>
               <IconBtn
-                icon={rightOpen ? PanelRightClose : PanelRight}
-                label={rightOpen ? "Hide AI assistant" : "Show AI assistant"}
-                onClick={() => setRightOpen((v) => !v)}
+                icon={MessageSquare}
+                label="Open AI chat"
+                onClick={() => setAutomationFeature("chat")}
               />
             </div>
           </div>
@@ -830,16 +838,6 @@ export default function EmailPage() {
         </div>
       </div>
 
-      {/* ═══ DESKTOP: Right sidebar — AI chat ═══ */}
-      {!isMobile && (
-        <div
-          className={`flex-shrink-0 border-l border-border transition-all duration-200 overflow-hidden ${
-            rightOpen ? "w-72" : "w-0"
-          }`}
-        >
-          {rightOpen && <EmailAssistantChat selectedAccountId={selectedAccountId} selectedEmailId={selectedEmailId} />}
-        </div>
-      )}
       </>
       )}
 

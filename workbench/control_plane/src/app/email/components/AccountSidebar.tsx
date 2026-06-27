@@ -5,7 +5,7 @@ import {
   Inbox, Send, FileText, Trash2, Star, Archive, Tag,
   Search, Plus, ChevronDown, ChevronRight, Check,
   ShieldAlert, Folder, Sparkles, MailMinus, Archive as ArchiveIcon,
-  BarChart3, Zap, Reply, Newspaper,
+  BarChart3, Zap, Reply, Newspaper, MessageSquare,
 } from "lucide-react";
 import { EmailAccount, EmailFolder, AutomationFeature } from "../lib/types";
 
@@ -29,6 +29,7 @@ const AUTOMATION_ITEMS: {
   label: string;
   icon: React.ElementType;
 }[] = [
+  { key: "chat", label: "Chat", icon: MessageSquare },
   { key: "assistant", label: "Assistant", icon: Sparkles },
   { key: "reply-zero", label: "Reply Zero", icon: Reply },
   { key: "digest", label: "Digest", icon: Newspaper },

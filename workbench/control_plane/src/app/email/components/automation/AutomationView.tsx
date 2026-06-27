@@ -2,6 +2,7 @@
 
 import {
   ArrowLeft, Sparkles, MailMinus, Archive, BarChart3, Reply, Newspaper,
+  MessageSquare,
 } from "lucide-react";
 import { AutomationFeature } from "../../lib/types";
 import { AssistantView } from "./AssistantView";
@@ -23,6 +24,13 @@ const META: Record<
   AutomationFeature,
   { title: string; subtitle: string; icon: React.ElementType }
 > = {
+  // 'chat' renders as its own full scene (EmailAssistantChat) in the page, not
+  // via this host — this entry just keeps the META map exhaustive.
+  chat: {
+    title: "Chat",
+    subtitle: "Conversational AI assistant",
+    icon: MessageSquare,
+  },
   assistant: {
     title: "Assistant",
     subtitle: "Rules, testing & history",

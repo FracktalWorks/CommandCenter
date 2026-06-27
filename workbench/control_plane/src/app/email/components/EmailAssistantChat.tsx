@@ -20,7 +20,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
-import { Sparkles, Plus, MessagesSquare, Trash2, X } from "lucide-react";
+import { Sparkles, Plus, MessagesSquare, Trash2, X, ArrowLeft } from "lucide-react";
 import AgentChat from "@/components/AgentChat";
 import {
   getSessions, createSession, upsertSession, deleteSession,
@@ -37,11 +37,15 @@ const AGENT = "email-assistant";
 interface EmailAssistantChatProps {
   selectedAccountId?: string | null;
   selectedEmailId?: string | null;
+  /** When set, renders a back button in the header — used when the chat is a
+   *  full scene (like Assistant / Reply Zero) rather than a sidebar rail. */
+  onClose?: () => void;
 }
 
 export function EmailAssistantChat({
   selectedAccountId,
   selectedEmailId,
+  onClose,
 }: EmailAssistantChatProps) {
   const { data: nextAuthSession } = useSession();
   const userId: string = nextAuthSession?.user?.email ?? "dev@fracktal.in";
@@ -191,6 +195,16 @@ export function EmailAssistantChat({
       {/* Header */}
       <div className="flex items-center justify-between px-4 h-9 border-b border-sidebar-border flex-shrink-0">
         <div className="flex items-center gap-2">
+          {onClose && (
+            <button
+              onClick={onClose}
+              title="Back to inbox"
+              aria-label="Back to inbox"
+              className="p-1 -ml-1 rounded text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+            >
+              <ArrowLeft size={14} />
+            </button>
+          )}
           <div className="w-5 h-5 rounded-full bg-primary/20 text-primary flex items-center justify-center">
             <Sparkles size={11} />
           </div>

@@ -100,41 +100,47 @@ def _raise_if_error(resp: httpx.Response, method: str, path: str) -> None:
     )
 
 
-async def _get(path: str, params: dict[str, Any] | None = None) -> Any:
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.get(
-            f"{_gateway_url()}{path}", params=params or {}, headers=_headers()
+async def _request(
+    method: str,
+    path: str,
+    *,
+    timeout: float = 30.0,
+    **kwargs: Any,
+) -> httpx.Response:
+    """Single gateway round-trip: build the URL + auth headers, fire the
+    request, and turn any 4xx/5xx into a concise user-facing error.
+
+    All the verb helpers below delegate here so the client config, headers, and
+    error handling live in exactly one place.  (Still one client per call — a
+    shared pooled client is a possible perf follow-up, pending confirmation that
+    the agent always runs on a single long-lived event loop.)
+    """
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.request(
+            method, f"{_gateway_url()}{path}", headers=_headers(), **kwargs
         )
-        _raise_if_error(resp, "GET", path)
-        return resp.json()
+        _raise_if_error(resp, method, path)
+        return resp
+
+
+async def _get(path: str, params: dict[str, Any] | None = None) -> Any:
+    return (await _request("GET", path, params=params or {})).json()
 
 
 async def _post(path: str, body: dict[str, Any]) -> Any:
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(
-            f"{_gateway_url()}{path}", json=body, headers=_headers()
-        )
-        _raise_if_error(resp, "POST", path)
-        return resp.json()
+    return (await _request("POST", path, timeout=60.0, json=body)).json()
 
 
 async def _patch(path: str, body: dict[str, Any]) -> Any:
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.patch(
-            f"{_gateway_url()}{path}", json=body, headers=_headers()
-        )
-        _raise_if_error(resp, "PATCH", path)
-        return resp.json()
+    return (await _request("PATCH", path, json=body)).json()
 
 
 async def _delete(path: str) -> Any:
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.delete(f"{_gateway_url()}{path}", headers=_headers())
-        _raise_if_error(resp, "DELETE", path)
-        # DELETEs commonly return 204 with no body.
-        if resp.status_code == 204 or not resp.content:
-            return {}
-        return resp.json()
+    resp = await _request("DELETE", path)
+    # DELETEs commonly return 204 with no body.
+    if resp.status_code == 204 or not resp.content:
+        return {}
+    return resp.json()
 
 
 # ── Read / triage tools ──────────────────────────────────────────────────────
@@ -816,13 +822,7 @@ async def install_default_rules(account_id: str) -> str:
 
 
 async def _patch_settings(body: dict[str, Any]) -> Any:
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.put(
-            f"{_gateway_url()}/email/assistant/settings",
-            json=body, headers=_headers(),
-        )
-        _raise_if_error(resp, "PUT", "/email/assistant/settings")
-        return resp.json()
+    return (await _request("PUT", "/email/assistant/settings", json=body)).json()
 
 
 async def find_follow_ups(account_id: str) -> str:

@@ -14,6 +14,7 @@ import {
   type ChatSession,
 } from "@/lib/sessions";
 import type { Mem0Memory } from "@/lib/memory";
+import { buildEmailAssistantPersona } from "@/app/email/lib/emailAssistantPersona";
 import AgentChat from "@/components/AgentChat";
 import type { ArtifactEntry } from "@/hooks/useAgentChat";
 import ArtifactSidebar, { type FileEntry } from "@/components/ArtifactSidebar";
@@ -500,6 +501,32 @@ function ChatPageInner() {
   const [activeSessionId, setActiveSessionId] = useState<string>("");
   const [memories, setMemories] = useState<Mem0Memory[]>([]);
   const [memoriesLoaded, setMemoriesLoaded] = useState(false);
+
+  // ── Email-assistant parity ────────────────────────────────────────────────
+  // Give the email-assistant the SAME account-aware context in the chat app
+  // that the email app provides (the open-email context is inherently
+  // email-app-only).  Fetch the user's accounts when the active session is the
+  // email-assistant and build the SHARED persona the email app also uses.
+  const [emailAccounts, setEmailAccounts] = useState<
+    Array<{ id: string; label?: string | null; email_address?: string | null }>
+  >([]);
+  const activeAgentName = sessions.find((s) => s.id === activeSessionId)?.agentName;
+  useEffect(() => {
+    if (activeAgentName !== "email-assistant") return;
+    let cancelled = false;
+    fetch("/api/email/accounts")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => { if (!cancelled && Array.isArray(d)) setEmailAccounts(d); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeAgentName]);
+  const emailAssistantPersona = useMemo(
+    () =>
+      activeAgentName === "email-assistant"
+        ? buildEmailAssistantPersona({ accounts: emailAccounts })
+        : undefined,
+    [activeAgentName, emailAccounts],
+  );
   const [showPicker, setShowPicker] = useState(false);
   // Desktop: collapsible side panel.  Mobile: drawer-based (never a sidebar).
   const [sessionPanelOpen, setSessionPanelOpen] = useState(true);
@@ -854,6 +881,16 @@ function ChatPageInner() {
                 persona={
                   PERSONA_AGENTS.has(activeSession.agentName)
                     ? COMMANDCENTER_PERSONA
+                    : activeSession.agentName === "email-assistant"
+                      ? emailAssistantPersona
+                      : undefined
+                }
+                emailContext={
+                  activeSession.agentName === "email-assistant"
+                    ? {
+                        accountId:
+                          emailAccounts.length === 1 ? emailAccounts[0].id : null,
+                      }
                     : undefined
                 }
                 memories={memories.map((m) => m.memory)}

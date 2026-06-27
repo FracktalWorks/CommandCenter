@@ -28,6 +28,7 @@ import {
 } from "@/lib/sessions";
 import { useActiveSessions } from "@/hooks/useActiveSessions";
 import { useEmailStore } from "../lib/emailStore";
+import { buildEmailAssistantPersona } from "../lib/emailAssistantPersona";
 
 const AGENT = "email-assistant";
 
@@ -54,6 +55,34 @@ export function EmailAssistantChat({
   const [activeId, setActiveId] = useState<string>("");
   const [showSessions, setShowSessions] = useState(false);
   const [pendingInput, setPendingInput] = useState<string | undefined>();
+  const [memories, setMemories] = useState<string[]>([]);
+
+  // Inject Mem0 memories so the assistant has the SAME cross-conversation
+  // continuity here as in the chat app (parity).  Polls every 30s like the chat
+  // app so newly-extracted memories appear without a manual refresh.
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    const load = () =>
+      fetch(`/api/memory/${encodeURIComponent(userId)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (cancelled || !data) return;
+          const list = Array.isArray(data) ? data : (data.results ?? []);
+          setMemories(
+            (list as Array<{ memory?: string } | string>)
+              .map((m) => (typeof m === "string" ? m : m.memory ?? ""))
+              .filter(Boolean),
+          );
+        })
+        .catch(() => {});
+    load();
+    const t = setInterval(load, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [userId]);
 
   const emailSessions = useMemo(
     () => sessions.filter((s) => s.agentName === AGENT),
@@ -135,51 +164,19 @@ export function EmailAssistantChat({
     [activeId],
   );
 
-  // Compose the email context the agent operates with — the selected account
-  // and the currently-open email, so "this email" / "reply" resolve correctly.
-  const emailContextStr = useMemo(() => {
-    const parts: string[] = [
-      "You are the email assistant, embedded inside the user's email client UI.",
-    ];
-    const account = accounts.find((a) => a.id === selectedAccountId);
-    if (account) {
-      parts.push(
-        `Active account: "${account.label || account.emailAddress}" ` +
-        `(email_address: ${account.emailAddress}, account_id: ${account.id}). ` +
-        "Use this account_id for tools unless the user names a different account.",
-      );
-    } else if (selectedAccountId) {
-      parts.push(
-        `Active account_id: ${selectedAccountId}. Use it for account-scoped tools ` +
-        "unless the user names a different account.",
-      );
-    } else {
-      parts.push(
-        "No account is selected yet — call list_accounts and pick one before any " +
-        "account-scoped action.",
-      );
-    }
-    const email = emails.find((e) => e.id === selectedEmailId);
-    if (email) {
-      const from = email.from.name
-        ? `${email.from.name} <${email.from.email}>`
-        : email.from.email;
-      parts.push(
-        'The user currently has this email open. When they say "this email", ' +
-        '"this thread", "reply", or "summarize this", they mean it:\n' +
-        `  • email_id: ${email.id}\n` +
-        `  • subject: ${email.subject || "(no subject)"}\n` +
-        `  • from: ${from}\n` +
-        `Call read_email(email_id="${email.id}") to read its full body before acting.`,
-      );
-    } else if (selectedEmailId) {
-      parts.push(
-        `The user has email_id ${selectedEmailId} open; call read_email to read ` +
-        "it when relevant.",
-      );
-    }
-    return parts.join("\n\n");
-  }, [accounts, emails, selectedAccountId, selectedEmailId]);
+  // Compose the email context the agent operates with — the connected accounts,
+  // the selected account, and the currently-open email — via the SHARED builder
+  // the chat app also uses, so running the assistant here vs in the chat app is
+  // the same experience (the open email is the only email-app-specific extra).
+  const emailContextStr = useMemo(
+    () =>
+      buildEmailAssistantPersona({
+        accounts,
+        selectedAccountId,
+        openEmail: emails.find((e) => e.id === selectedEmailId) ?? null,
+      }),
+    [accounts, emails, selectedAccountId, selectedEmailId],
+  );
 
   const activeSession = emailSessions.find((s) => s.id === activeId);
 
@@ -288,6 +285,7 @@ export function EmailAssistantChat({
             compact
             persona={emailContextStr}
             emailContext={{ accountId: selectedAccountId, emailId: selectedEmailId }}
+            memories={memories}
             memoryUserId={userId}
             expectedMessageCount={activeSession.messageCount}
             onActivity={handleActivity}

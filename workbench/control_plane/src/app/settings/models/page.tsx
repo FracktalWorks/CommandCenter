@@ -237,8 +237,12 @@ export default function ModelsPage() {
     return result;
   }, [providerModels]);
 
-  // All enabled models (unfiltered) — used by Tiers tab
-  const allEnabledModels = useMemo(() => allProviderModels.filter((m) => enabledIds.has(m.id)), [allProviderModels, enabledIds]);
+  // All enabled models (unfiltered) — used by the Tiers tab for assignment.
+  // Excludes GitHub Copilot models: they run via the Copilot SDK, not LiteLLM
+  // tier routing, so a bare Copilot id (e.g. "claude-sonnet-4.5") isn't a
+  // routable tier model.  They remain enable-able in the Models tab for the
+  // chat picker.
+  const allEnabledModels = useMemo(() => allProviderModels.filter((m) => enabledIds.has(m.id) && m.provider !== "github"), [allProviderModels, enabledIds]);
   // Enabled models filtered for the Models tab display
   const enabledModels = allProviderModels.filter((m) => enabledIds.has(m.id) && (modelProvFilter === "all" || m.provider === modelProvFilter) && (!mq || m.label.toLowerCase().includes(mq) || m.id.toLowerCase().includes(mq)));
   const disabledModels = allProviderModels.filter((m) => !enabledIds.has(m.id) && (modelProvFilter === "all" || m.provider === modelProvFilter) && (!mq || m.label.toLowerCase().includes(mq) || m.id.toLowerCase().includes(mq)));

@@ -251,6 +251,12 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
   // Tier routing aliases — always present regardless of what's enabled.
   const tierModels = LITELLM_MODELS.filter((m) => m.provider === null);
 
+  // The Models-page allow-list: every model id the user explicitly enabled
+  // (LiteLLM + GitHub Copilot).  Used to gate the Copilot SDK group so the
+  // picker shows only what the user turned on (strict allow-list), instead of
+  // the full live Copilot catalogue.
+  const enabledIdSet = new Set(enabledModels.map((m) => m.id));
+
   // Resolve label/group for an enabled model: prefer the built-in LITELLM_MODELS
   // entry for accurate labels, fall back to what's stored in enabled_models.json.
   const resolveModel = (em: { id: string; label: string; provider: string }) => {
@@ -269,10 +275,15 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
       id: m.id, label: m.label, runtime: "litellm" as ModelRuntime, group: m.group,
     })),
 
-    // ② GitHub Copilot SDK group — separate execution path, shown when token is set
+    // ② GitHub Copilot SDK group — separate execution path, shown when token is set.
+    //    Strict allow-list: only "auto" (the safe default picker) plus Copilot
+    //    models the user enabled on the Models page.  IDs match because
+    //    /llm/provider-models?provider=github now serves the same live Copilot
+    //    list this dropdown reads from.
     ...(configured.has("github")
       ? copilotModels
-          .filter((m) => !hiddenSet.has(m.id))
+          .filter((m) => !hiddenSet.has(m.id)
+            && (m.id === "auto" || enabledIdSet.has(m.id)))
           .map((m) => ({
             id: m.id,
             label: m.label,
@@ -290,8 +301,13 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
     // ③ User-enabled models — the only source for LiteLLM models.
     //    If the user hasn't enabled anything yet, nothing extra appears here
     //    (the tier aliases above are always sufficient to start chatting).
+    //    GitHub-provider models are Copilot-runtime and already surface in the
+    //    Copilot group above (different execution path), so exclude them here to
+    //    avoid litellm-runtime duplicates pointing at the wrong endpoint.
     ...enabledModels
-      .filter((m) => !hiddenSet.has(m.id) && !tierModels.some((t) => t.id === m.id))
+      .filter((m) => !hiddenSet.has(m.id)
+        && !tierModels.some((t) => t.id === m.id)
+        && m.provider !== "github")
       .map(resolveModel),
   ];
 

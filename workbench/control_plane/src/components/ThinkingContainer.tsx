@@ -425,7 +425,12 @@ export default function ThinkingContainer({
         <div
           ref={bodyRef}
           className={`border-t border-border/40 chat-fade-in overflow-y-auto ${
-            isActive ? "max-h-72" : "max-h-[32rem]"
+            // While streaming, use a FIXED-height window (not max-height) so the
+            // live "consciousness" stream scrolls INTERNALLY (auto-followed to the
+            // newest line) instead of growing and pushing the whole chat down.
+            // When the user manually expands a finished turn to review, allow it
+            // to grow up to a larger cap.
+            isActive ? "h-56" : "max-h-[32rem]"
           }`}
         >
           {/* Container with NO left padding — all items position relative to this.

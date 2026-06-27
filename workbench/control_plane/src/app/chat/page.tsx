@@ -23,6 +23,7 @@ import FileUploadButton from "@/components/FileUploadButton";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
 import { useActiveSessions } from "@/hooks/useActiveSessions";
+import { useChatMemories } from "@/hooks/useChatMemories";
 import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 
@@ -499,8 +500,14 @@ function ChatPageInner() {
 
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>("");
-  const [memories, setMemories] = useState<Mem0Memory[]>([]);
-  const [memoriesLoaded, setMemoriesLoaded] = useState(false);
+  // Cross-conversation memory (load + 30s poll + delete) — shared with the
+  // email-assistant rail via useChatMemories.
+  const {
+    memories,
+    loaded: memoriesLoaded,
+    refresh: loadMemories,
+    remove: handleDeleteMemory,
+  } = useChatMemories(userId);
 
   // ── Email-assistant parity ────────────────────────────────────────────────
   // Give the email-assistant the SAME account-aware context in the chat app
@@ -610,26 +617,6 @@ function ChatPageInner() {
     return () => { cancelled = true; clearTimeout(timer); };
   }, []);
 
-  // Fetch memories from Mem0 (or return [] gracefully).
-  // Polls every 30s so newly extracted memories appear without refresh.
-  const loadMemories = useCallback(() => {
-    fetch(`/api/memory/${encodeURIComponent(userId)}`)
-      .then((r) => r.json())
-      .then((data: Mem0Memory[] | { results?: Mem0Memory[] }) => {
-        const list = Array.isArray(data) ? data : (data.results ?? []);
-        setMemories(list);
-        setMemoriesLoaded(true);
-      })
-      .catch(() => setMemoriesLoaded(true));
-  }, [userId]);
-
-  useEffect(() => {
-    loadMemories();
-    // Auto-refresh memories every 30s
-    const interval = setInterval(loadMemories, 30000);
-    return () => clearInterval(interval);
-  }, [loadMemories]);
-
   const handleNewSession = useCallback(() => {
     setShowPicker(true);
   }, []);
@@ -667,14 +654,6 @@ function ChatPageInner() {
     },
     [activeSessionId]
   );
-
-  const handleDeleteMemory = useCallback(async (memoryId: string) => {
-    await fetch(
-      `/api/memory/${encodeURIComponent(userId)}/${encodeURIComponent(memoryId)}`,
-      { method: "DELETE" }
-    );
-    setMemories((prev) => prev.filter((m) => m.id !== memoryId));
-  }, [userId]);
 
   // Enrich the active session (auto-title + last-turn preview) as the chat runs.
   const handleActivity = useCallback(

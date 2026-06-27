@@ -27,6 +27,7 @@ import {
   enrichSession, fetchAndMergeSessionsFromDb, type ChatSession,
 } from "@/lib/sessions";
 import { useActiveSessions } from "@/hooks/useActiveSessions";
+import { useChatMemories } from "@/hooks/useChatMemories";
 import { useEmailStore } from "../lib/emailStore";
 import { buildEmailAssistantPersona } from "../lib/emailAssistantPersona";
 
@@ -55,34 +56,15 @@ export function EmailAssistantChat({
   const [activeId, setActiveId] = useState<string>("");
   const [showSessions, setShowSessions] = useState(false);
   const [pendingInput, setPendingInput] = useState<string | undefined>();
-  const [memories, setMemories] = useState<string[]>([]);
 
   // Inject Mem0 memories so the assistant has the SAME cross-conversation
-  // continuity here as in the chat app (parity).  Polls every 30s like the chat
-  // app so newly-extracted memories appear without a manual refresh.
-  useEffect(() => {
-    if (!userId) return;
-    let cancelled = false;
-    const load = () =>
-      fetch(`/api/memory/${encodeURIComponent(userId)}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => {
-          if (cancelled || !data) return;
-          const list = Array.isArray(data) ? data : (data.results ?? []);
-          setMemories(
-            (list as Array<{ memory?: string } | string>)
-              .map((m) => (typeof m === "string" ? m : m.memory ?? ""))
-              .filter(Boolean),
-          );
-        })
-        .catch(() => {});
-    load();
-    const t = setInterval(load, 30000);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, [userId]);
+  // continuity here as in the chat app (parity) — shared fetch + 30s poll via
+  // useChatMemories; the agent persona only needs the memory text.
+  const { memories: memoryObjs } = useChatMemories(userId);
+  const memories = useMemo(
+    () => memoryObjs.map((m) => m.memory).filter(Boolean),
+    [memoryObjs],
+  );
 
   const emailSessions = useMemo(
     () => sessions.filter((s) => s.agentName === AGENT),

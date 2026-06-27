@@ -10,11 +10,18 @@ capture the assembled prompt.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from gateway.routes import email as m
 
 _drafting = m.automation.drafting
+
+
+def _one(obj):
+    res = MagicMock()
+    res.fetchone.return_value = obj
+    return res
 
 
 def _fake_completion(captured: dict):
@@ -66,3 +73,58 @@ async def test_drafter_includes_full_thread_context() -> None:
 
     user_msg = captured["messages"][1]["content"]
     assert "THREAD_TAIL_MARKER" in user_msg
+
+
+# ── Auto-draft dedup (inbox-zero handlePreviousDraftDeletion parity) ──────────
+
+async def test_resolve_draft_none_when_no_existing() -> None:
+    db = AsyncMock()
+    db.execute.side_effect = [_one(None)]
+    provider = AsyncMock()
+    out = await _drafting._resolve_existing_thread_draft(
+        db, provider, "acc", "t1")
+    assert out == "none"
+    provider.trash_message.assert_not_called()
+
+
+async def test_resolve_draft_replace_when_unmodified() -> None:
+    db = AsyncMock()
+    db.execute.side_effect = [
+        _one(SimpleNamespace(id="d1", provider_message_id="pd1",
+                             body_text="Hi there,\n\nThanks!\n\nBest")),
+        _one(SimpleNamespace(draft_text="Hi there,\n\nThanks!\n\nBest")),
+        MagicMock(),  # DELETE
+    ]
+    provider = AsyncMock()
+    out = await _drafting._resolve_existing_thread_draft(
+        db, provider, "acc", "t1")
+    assert out == "replace"  # unmodified AI draft → trashed, fresh one created
+    provider.trash_message.assert_awaited_once_with("pd1")
+
+
+async def test_resolve_draft_keep_when_user_modified() -> None:
+    db = AsyncMock()
+    db.execute.side_effect = [
+        _one(SimpleNamespace(id="d1", provider_message_id="pd1",
+                             body_text="My own hand-written reply")),
+        _one(SimpleNamespace(draft_text="Hi there,\n\nThanks!\n\nBest")),
+    ]
+    provider = AsyncMock()
+    out = await _drafting._resolve_existing_thread_draft(
+        db, provider, "acc", "t1")
+    assert out == "keep"  # user edited → preserve, never duplicate
+    provider.trash_message.assert_not_called()
+
+
+async def test_resolve_draft_keep_when_no_original_to_compare() -> None:
+    db = AsyncMock()
+    db.execute.side_effect = [
+        _one(SimpleNamespace(id="d1", provider_message_id="pd1",
+                             body_text="anything")),
+        _one(None),  # no stored original → cannot prove unmodified → preserve
+    ]
+    provider = AsyncMock()
+    out = await _drafting._resolve_existing_thread_draft(
+        db, provider, "acc", "t1")
+    assert out == "keep"
+    provider.trash_message.assert_not_called()

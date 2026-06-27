@@ -1,8 +1,12 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { X, Loader2 } from "lucide-react";
+import { X, Loader2, Paperclip } from "lucide-react";
 import { useEmailStore } from "../lib/emailStore";
+import {
+  fileToSendAttachment, type SendAttachment, type ArtifactAttachmentRef,
+} from "../lib/api";
+import { ArtifactAttachPicker } from "./ArtifactAttachPicker";
 
 interface ComposePanelProps {
   open: boolean;
@@ -15,6 +19,8 @@ interface ComposePanelProps {
     subject: string;
     bodyText: string;
     replyToMessageId?: string;
+    attachments?: SendAttachment[];
+    artifacts?: ArtifactAttachmentRef[];
   }) => Promise<void>;
   defaultTo?: string;
   defaultSubject?: string;
@@ -44,6 +50,9 @@ export function ComposePanel({
   const draftIdRef = useRef<string | null>(null);
   const dirty = useRef(false);
   const [draftStatus, setDraftStatus] = useState<"idle" | "saving" | "saved">("idle");
+  // Uploaded files (base64) + picked AI artifacts (resolved server-side).
+  const [attachments, setAttachments] = useState<SendAttachment[]>([]);
+  const [artifacts, setArtifacts] = useState<ArtifactAttachmentRef[]>([]);
 
   // A fresh compose session each time the window opens: re-sync fields from the
   // (possibly new) props and forget any prior draft so we don't update it.
@@ -56,8 +65,21 @@ export function ComposePanel({
     draftIdRef.current = null;
     dirty.current = false;
     setDraftStatus("idle");
+    setAttachments([]);
+    setArtifacts([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  /** Read picked files into base64 and append them to the attachments. */
+  const addFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    try {
+      const added = await Promise.all(Array.from(files).map(fileToSendAttachment));
+      setAttachments((prev) => [...prev, ...added]);
+    } catch {
+      setSendError("Couldn't read one of the attachments");
+    }
+  };
 
   // Debounced auto-save once the user edits the draft.
   useEffect(() => {
@@ -93,10 +115,11 @@ export function ComposePanel({
     setSendError(null);
     const toArr = to.split(",").map((s) => s.trim()).filter(Boolean);
     const ccArr = cc ? cc.split(",").map((s) => s.trim()).filter(Boolean) : [];
+    const hasAttachments = attachments.length > 0 || artifacts.length > 0;
     try {
-      // Native draft-send when auto-save produced a draft and there's no Cc
-      // (the draft write-path doesn't carry Cc); otherwise send fresh.
-      if (draftIdRef.current && ccArr.length === 0) {
+      // Native draft-send when auto-save produced a draft and there's no Cc and
+      // no attachments (the draft write-path carries neither); otherwise send fresh.
+      if (draftIdRef.current && ccArr.length === 0 && !hasAttachments) {
         const saved = await saveDraft({
           accountId,
           draftId: draftIdRef.current,
@@ -113,6 +136,8 @@ export function ComposePanel({
           subject,
           bodyText: body,
           replyToMessageId: replyToMessageId,
+          attachments: attachments.length ? attachments : undefined,
+          artifacts: artifacts.length ? artifacts : undefined,
         });
         if (draftIdRef.current) void deleteEmail(draftIdRef.current);
         // onClose is called by the store after successful send
@@ -190,6 +215,45 @@ export function ComposePanel({
               className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none resize-none leading-relaxed"
             />
           </div>
+
+          {/* Attachment chips */}
+          {(attachments.length > 0 || artifacts.length > 0) && (
+            <div className="border-t border-border pt-2 flex flex-wrap gap-1.5">
+              {attachments.map((a, i) => (
+                <span
+                  key={`f-${i}`}
+                  className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border border-border bg-secondary text-muted-foreground"
+                >
+                  <Paperclip size={10} />
+                  <span className="truncate max-w-[160px]" title={a.filename}>{a.filename}</span>
+                  <button
+                    onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+                    className="hover:text-foreground"
+                    title="Remove attachment"
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+              {artifacts.map((a, i) => (
+                <span
+                  key={`a-${i}`}
+                  className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border border-primary/40 bg-primary/5 text-primary"
+                  title={a.path}
+                >
+                  <Paperclip size={10} />
+                  <span className="truncate max-w-[160px]">{a.name || a.path}</span>
+                  <button
+                    onClick={() => setArtifacts((prev) => prev.filter((_, j) => j !== i))}
+                    className="hover:text-foreground"
+                    title="Remove attachment"
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -207,7 +271,24 @@ export function ComposePanel({
               </span>
             )}
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            <label
+              className="px-2 py-1.5 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors cursor-pointer flex items-center"
+              title="Attach files"
+            >
+              <Paperclip size={14} />
+              <input
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => { void addFiles(e.target.files); e.target.value = ""; }}
+              />
+            </label>
+            <ArtifactAttachPicker
+              exclude={artifacts.map((a) => a.path)}
+              onPick={(ref) => setArtifacts((prev) =>
+                prev.some((a) => a.path === ref.path) ? prev : [...prev, ref])}
+            />
             <button
               onClick={() => {
                 // Discard removes the auto-saved draft (closing via X keeps it).

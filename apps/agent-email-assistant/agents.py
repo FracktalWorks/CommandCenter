@@ -11,6 +11,7 @@ Dynamic Agent Loader entry point.
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import date, timedelta
 from pathlib import Path
@@ -98,6 +99,16 @@ async def _patch(path: str, body: dict[str, Any]) -> Any:
             f"{_gateway_url()}{path}", json=body, headers=_headers()
         )
         resp.raise_for_status()
+        return resp.json()
+
+
+async def _delete(path: str) -> Any:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.delete(f"{_gateway_url()}{path}", headers=_headers())
+        resp.raise_for_status()
+        # DELETEs commonly return 204 with no body.
+        if resp.status_code == 204 or not resp.content:
+            return {}
         return resp.json()
 
 
@@ -229,6 +240,106 @@ async def get_account_overview(account_id: str) -> str:
     return "\n".join(lines)
 
 
+async def query_inbox(
+    account_id: str,
+    query: str | None = None,
+    folder: str = "inbox",
+    days: int | None = None,
+    sender_category: str | None = None,
+    from_email: str | None = None,
+    unread_only: bool = False,
+    starred_only: bool = False,
+    has_attachments: bool | None = None,
+    importance: str | None = None,
+    sort: str = "newest",
+    limit: int = 25,
+) -> str:
+    """Search and filter the inbox to answer questions spanning MANY emails.
+
+    Use this for inbox-wide questions — "sales-related emails in the last month",
+    "unread mail from Acme", "marketing emails this week", "starred emails with
+    attachments". Combine any of the filters:
+      query: full-text over subject/body/sender (e.g. "sales", "invoice")
+      days: only mail received in the last N days (use 30 for "last month")
+      sender_category: the sender's category — one of Newsletter, Marketing,
+        Receipt, Calendar, Notification, Cold Email, Personal, Support
+      from_email: substring of the sender's address
+      unread_only / starred_only / has_attachments / importance (high|normal|low)
+      sort: newest | oldest | importance
+    Returns matching emails with ids; call read_email for an id's full content.
+    """
+    params: dict[str, Any] = {
+        "folder": folder, "account_id": account_id, "sort": sort,
+        "page_size": str(max(1, min(limit, 100))),
+    }
+    if query:
+        params["query"] = query
+    if days:
+        from datetime import datetime, timedelta, timezone
+        params["received_after"] = (
+            datetime.now(timezone.utc) - timedelta(days=days)
+        ).isoformat()
+    if sender_category:
+        params["sender_category"] = sender_category
+    if from_email:
+        params["from_email"] = from_email
+    if unread_only:
+        params["is_read"] = "false"
+    if starred_only:
+        params["is_starred"] = "true"
+    if has_attachments is not None:
+        params["has_attachments"] = "true" if has_attachments else "false"
+    if importance:
+        params["importance"] = importance
+    data = await _get("/email/messages", params)
+    emails = data.get("emails", [])
+    total = data.get("total", 0)
+    if not emails:
+        return "No emails matched those filters."
+    shown = emails[:limit]
+    lines = [f"Found {total} emails ({query or 'filtered'}); showing {len(shown)}:"]
+    for e in shown:
+        frm = e.get("from_address", {}) or {}
+        flags = []
+        if not e.get("is_read"):
+            flags.append("unread")
+        if e.get("is_starred"):
+            flags.append("star")
+        flag = f" [{', '.join(flags)}]" if flags else ""
+        lines.append(
+            f"• id={e.get('id')} | {(e.get('received_at') or '')[:10]} | "
+            f"{frm.get('name') or frm.get('email')}: "
+            f"{e.get('subject', '(no subject)')}{flag} — "
+            f"{(e.get('snippet') or '')[:80]}"
+        )
+    if total > len(shown):
+        lines.append(f"… and {total - len(shown)} more (refine filters or raise limit)")
+    return "\n".join(lines)
+
+
+async def get_important_emails(account_id: str, days: int = 30) -> str:
+    """The emails that most need attention — answers "what are the most important
+    emails I need to check?".
+
+    Ranks recent inbox threads by needs-reply status, unread, high importance,
+    starred, and personal/support senders; excludes newsletters, marketing,
+    notifications and cold email so the list stays high-signal."""
+    data = await _get(
+        "/email/priority",
+        {"account_id": account_id, "days": days, "limit": 20},
+    )
+    emails = data.get("emails", [])
+    if not emails:
+        return "Nothing pressing — no high-priority emails to check right now."
+    lines = ["Most important emails to check:"]
+    for e in emails:
+        lines.append(
+            f"• id={e.get('message_id')} | {e.get('from')}: "
+            f"{e.get('subject')} — ({e.get('reason')})"
+        )
+    return "\n".join(lines)
+
+
 # ── Inbox action tools ───────────────────────────────────────────────────────
 
 async def manage_inbox(
@@ -315,36 +426,113 @@ async def get_rules_and_settings(account_id: str) -> str:
 async def create_rule(
     account_id: str,
     name: str,
-    instructions: str,
-    action_type: str,
+    instructions: str = "",
+    action_type: str = "LABEL",
     label: str | None = None,
     automated: bool = True,
+    from_pattern: str | None = None,
+    to_pattern: str | None = None,
+    subject_pattern: str | None = None,
+    body_pattern: str | None = None,
+    conditional_operator: str = "OR",
+    run_on_threads: bool = False,
+    forward_to: str | None = None,
+    draft_subject: str | None = None,
+    draft_content: str | None = None,
+    second_action_type: str | None = None,
+    second_action_label: str | None = None,
 ) -> str:
-    """Create an automation rule.
+    """Create an automation rule (inbox-zero parity — full condition + action set).
 
-    Args:
-        name: short rule name.
+    Conditions (all optional; combined with ``conditional_operator``):
         instructions: plain-English condition the AI matches mail against.
+        from_pattern / to_pattern / subject_pattern / body_pattern: literal
+            substrings matched deterministically (no LLM).
+        conditional_operator: "AND" (all conditions) or "OR" (any). Default OR.
+        run_on_threads: also evaluate replies in a thread, not just new mail.
+
+    Actions:
         action_type: ARCHIVE | LABEL | MARK_READ | STAR | MARK_SPAM | TRASH |
-                     DRAFT_EMAIL | REPLY | FORWARD.
-        label: label/folder name for LABEL/MOVE_FOLDER actions.
+                     MOVE_FOLDER | REPLY | FORWARD | DRAFT_EMAIL | CALL_WEBHOOK.
+        label: label/folder name for LABEL / MOVE_FOLDER.
+        forward_to: recipient for a FORWARD action.
+        draft_subject / draft_content: subject + body for REPLY / DRAFT_EMAIL
+            (omit draft_content to let the AI write the body).
+        second_action_type / second_action_label: optional 2nd action (e.g.
+            LABEL + ARCHIVE). For 3+ actions, call update_rule afterwards.
         automated: true = apply automatically; false = propose for approval.
     """
-    action: dict[str, Any] = {"type": action_type}
-    if label:
-        action["label"] = label
+    def _mk_action(a_type: str, a_label: str | None = None) -> dict[str, Any]:
+        a: dict[str, Any] = {"type": a_type}
+        if a_label:
+            a["label"] = a_label
+        if a_type == "FORWARD" and forward_to:
+            a["to_address"] = forward_to
+        if a_type in ("REPLY", "DRAFT_EMAIL"):
+            if draft_subject:
+                a["subject"] = draft_subject
+            if draft_content:
+                a["content"] = draft_content
+                a["content_manual"] = True
+        return a
+
+    actions = [_mk_action(action_type, label)]
+    if second_action_type:
+        actions.append(_mk_action(second_action_type, second_action_label))
     rule = {
         "account_id": account_id,
         "name": name,
-        "instructions": instructions,
+        "instructions": instructions or None,
         "enabled": True,
         "automated": automated,
-        "run_on_threads": False,
-        "conditional_operator": "OR",
-        "actions": [action],
+        "run_on_threads": run_on_threads,
+        "conditional_operator": (
+            "AND" if str(conditional_operator).upper() == "AND" else "OR"
+        ),
+        "from_pattern": from_pattern,
+        "to_pattern": to_pattern,
+        "subject_pattern": subject_pattern,
+        "body_pattern": body_pattern,
+        "actions": actions,
     }
     res = await _post("/email/rules", rule)
     return f"Created rule '{name}' (id={res.get('id')})."
+
+
+async def delete_rule(account_id: str, rule_id: str) -> str:
+    """Delete an automation rule permanently. Confirm with the user first —
+    disabling (update_rule_state) is reversible; deleting is not."""
+    await _delete(f"/email/rules/{rule_id}")
+    return f"Deleted rule {rule_id}."
+
+
+async def reset_rules(account_id: str) -> str:
+    """Delete ALL of the account's rules and reinstall the default inbox-zero
+    set fresh. Destructive — always confirm with the user before running."""
+    res = await _post(f"/email/rules/reset?account_id={account_id}", {})
+    installed = res.get("installed", [])
+    return (
+        f"Reset rules: reinstalled {len(installed)} default rule(s) "
+        f"({', '.join(installed)})."
+    )
+
+
+async def run_rules_now(
+    account_id: str, dry_run: bool = True, limit: int = 20
+) -> str:
+    """Run the automation rules over recent unprocessed inbox mail now.
+
+    dry_run=true previews matches (nothing changes); dry_run=false applies the
+    matched actions. Results stream into the History tab."""
+    await _post(
+        "/email/rules/run",
+        {"account_id": account_id, "limit": limit, "dry_run": dry_run},
+    )
+    mode = "Previewing" if dry_run else "Applying"
+    return (
+        f"{mode} rules over up to {limit} recent message(s); results appear in "
+        "the History tab."
+    )
 
 
 async def update_rule_state(
@@ -445,9 +633,20 @@ async def update_assistant_settings(
     personal_instructions: str | None = None,
     writing_style: str | None = None,
     draft_replies: bool | None = None,
+    draft_confidence: str | None = None,
     follow_up_awaiting_days: int | None = None,
     follow_up_needs_reply_days: int | None = None,
     follow_up_auto_draft: bool | None = None,
+    digest_frequency: str | None = None,
+    digest_categories: list[str] | None = None,
+    digest_day_of_week: int | None = None,
+    digest_time_of_day: str | None = None,
+    digest_send_to_email: bool | None = None,
+    multi_rule_execution: bool | None = None,
+    sensitive_data_protection: bool | None = None,
+    rule_model: str | None = None,
+    draft_model: str | None = None,
+    chat_model: str | None = None,
 ) -> str:
     """Update assistant settings. Only the fields you pass change; every other
     setting is preserved.
@@ -461,15 +660,26 @@ async def update_assistant_settings(
             (e.g. "Never commit to dates without checking with me.").
         writing_style: tone/length/style guide for drafted replies.
         draft_replies: auto-draft replies for emails that need one.
+        draft_confidence: how sure the AI must be before drafting —
+            ALL_EMAILS | STANDARD | HIGH_CONFIDENCE.
         follow_up_awaiting_days: remind/label when THEY haven't replied after N
             days (0 disables). Pairs with find_follow_ups.
         follow_up_needs_reply_days: remind/label when YOU haven't replied after N
             days (0 disables).
         follow_up_auto_draft: when on, follow-up scans also draft a nudge.
+        digest_frequency: scheduled digest cadence — OFF | DAILY | WEEKLY.
+        digest_categories: rule names (+ "Cold Emails") to include; [] = all.
+        digest_day_of_week: 0=Sun … 6=Sat (used when digest is WEEKLY).
+        digest_time_of_day: "HH:MM" 24h, account-local, the digest is sent.
+        digest_send_to_email: email the digest to the account address.
+        multi_rule_execution: allow more than one rule per email.
+        sensitive_data_protection: skip auto-drafting on sensitive-looking mail.
+        rule_model / draft_model / chat_model: LiteLLM tier or model id for rule
+            classification / draft writing / the chat panel (e.g. "tier-fast",
+            "tier-balanced", "tier-powerful").
     """
     # Start from the current settings so a PUT preserves EVERY field this tool
-    # doesn't explicitly change (digest config, draft_confidence, follow-up
-    # windows, multi-rule, sensitive-data protection, …).
+    # doesn't explicitly change.
     cur = await _get("/email/assistant/settings", {"account_id": account_id})
     body: dict[str, Any] = dict(cur)
     body["account_id"] = account_id
@@ -485,9 +695,20 @@ async def update_assistant_settings(
     setif("personal_instructions", personal_instructions)
     setif("writing_style", writing_style)
     setif("draft_replies", draft_replies)
+    setif("draft_confidence", draft_confidence)
     setif("follow_up_awaiting_days", follow_up_awaiting_days)
     setif("follow_up_needs_reply_days", follow_up_needs_reply_days)
     setif("follow_up_auto_draft", follow_up_auto_draft)
+    setif("digest_frequency", digest_frequency)
+    setif("digest_categories", digest_categories)
+    setif("digest_day_of_week", digest_day_of_week)
+    setif("digest_time_of_day", digest_time_of_day)
+    setif("digest_send_to_email", digest_send_to_email)
+    setif("multi_rule_execution", multi_rule_execution)
+    setif("sensitive_data_protection", sensitive_data_protection)
+    setif("rule_model", rule_model)
+    setif("draft_model", draft_model)
+    setif("chat_model", chat_model)
     await _patch_settings(body)
     return "Assistant settings updated."
 
@@ -625,36 +846,499 @@ async def suggest_unsubscribes(account_id: str | None = None) -> str:
     return "\n".join(lines)
 
 
+# ── Labels / folders / send ──────────────────────────────────────────────────
+
+async def apply_labels(
+    account_id: str,
+    message_ids: list[str],
+    add: list[str] | None = None,
+    remove: list[str] | None = None,
+) -> str:
+    """Add and/or remove labels/categories on one or more messages (syncs to the
+    provider). Pass label NAMES in ``add`` / ``remove``."""
+    if not add and not remove:
+        return "Provide at least one label to add or remove."
+    n = 0
+    for mid in message_ids:
+        body: dict[str, Any] = {}
+        if add:
+            body["add_labels"] = add
+        if remove:
+            body["remove_labels"] = remove
+        await _patch(f"/email/messages/{mid}", body)
+        n += 1
+    bits = []
+    if add:
+        bits.append(f"+{', '.join(add)}")
+    if remove:
+        bits.append(f"-{', '.join(remove)}")
+    return f"Updated labels on {n} message(s): {' '.join(bits)}."
+
+
+async def move_to_folder(
+    account_id: str, message_ids: list[str], folder: str
+) -> str:
+    """Move one or more messages to a folder/mailbox (e.g. 'Archive', a custom
+    folder). Creates nothing — the folder must exist (see create_label)."""
+    n = 0
+    for mid in message_ids:
+        await _patch(f"/email/messages/{mid}", {"folder": folder})
+        n += 1
+    return f"Moved {n} message(s) to '{folder}'."
+
+
+async def list_labels(account_id: str) -> str:
+    """List the user-applicable label/folder names on the account."""
+    labels = await _get(f"/email/accounts/{account_id}/labels")
+    if not labels:
+        return "No user labels on this account yet."
+    return "Labels: " + ", ".join(labels)
+
+
+async def create_label(account_id: str, name: str) -> str:
+    """Create (or reuse) a label/folder on the account."""
+    res = await _post(f"/email/accounts/{account_id}/folders", {"name": name})
+    return f"Label/folder ready: {res.get('name', name)}."
+
+
+def _attachment_refs(attachments: list[str] | None) -> list[dict[str, Any]]:
+    """Parse attachment specs into workspace-artifact refs for /email/send.
+
+    Each spec is either ``"outputs/file.pdf"`` (a file in the email assistant's
+    own workspace — e.g. one you created with write_artifact) or
+    ``"<agent>:outputs/file.pdf"`` (a file produced by another agent, e.g.
+    ``"sales-assistant:outputs/quote.pdf"``)."""
+    refs: list[dict[str, Any]] = []
+    for item in attachments or []:
+        s = (item or "").strip()
+        if not s:
+            continue
+        head = s.split(":", 1)[0]
+        if ":" in s and "/" not in head and "\\" not in head:
+            agent, path = s.split(":", 1)
+            refs.append({"agent": agent.strip(), "path": path.strip()})
+        else:
+            refs.append({"path": s})
+    return refs
+
+
+async def send_email(
+    account_id: str,
+    to: list[str],
+    subject: str,
+    body: str,
+    cc: list[str] | None = None,
+    bcc: list[str] | None = None,
+    reply_to_email_id: str | None = None,
+    attachments: list[str] | None = None,
+) -> str:
+    """Send an email immediately. Outward-facing — ALWAYS confirm the recipients
+    and body with the user before calling this.
+
+    Args:
+        to: recipient address(es).
+        subject: subject line.
+        body: plain-text body.
+        cc / bcc: optional carbon-copy recipients.
+        reply_to_email_id: local id of a message this is a reply to (threads it).
+        attachments: workspace artifact paths to attach. Each is either
+            ``"outputs/file.pdf"`` (a file you made with write_artifact) or
+            ``"<agent>:outputs/file.pdf"`` for a sub-agent's file (e.g.
+            ``"sales-assistant:outputs/quote.pdf"``). Use list_artifacts to see
+            what's available; write_artifact to create one first.
+    """
+    payload: dict[str, Any] = {
+        "account_id": account_id,
+        "to": to,
+        "subject": subject,
+        "body_text": body,
+    }
+    if cc:
+        payload["cc"] = cc
+    if bcc:
+        payload["bcc"] = bcc
+    if reply_to_email_id:
+        payload["reply_to_message_id"] = reply_to_email_id
+    refs = _attachment_refs(attachments)
+    if refs:
+        payload["artifacts"] = refs
+    res = await _post("/email/send", payload)
+    note = f" with {len(refs)} attachment(s)" if refs else ""
+    return f"Sent email to {', '.join(to)}{note} (id={res.get('id', '')})."
+
+
+async def send_reply(
+    account_id: str,
+    email_id: str,
+    body: str,
+    cc: list[str] | None = None,
+    attachments: list[str] | None = None,
+) -> str:
+    """Reply to an email — derives the recipient + 'Re:' subject from the
+    original message and sends it threaded. ALWAYS confirm the body with the user
+    first. (To leave it in Drafts instead of sending, use draft_reply.)
+
+    ``attachments`` works exactly like send_email's (workspace artifact paths,
+    optionally ``"<agent>:<path>"`` for a sub-agent's file)."""
+    orig = await _get(f"/email/messages/{email_id}")
+    frm = orig.get("from_address", {}) or {}
+    to_addr = frm.get("email", "")
+    if not to_addr:
+        return "Couldn't resolve the original sender to reply to."
+    subj = orig.get("subject", "") or ""
+    if not subj.lower().startswith("re:"):
+        subj = f"Re: {subj}"
+    payload: dict[str, Any] = {
+        "account_id": account_id,
+        "to": [to_addr],
+        "subject": subj,
+        "body_text": body,
+        "reply_to_message_id": email_id,
+    }
+    if cc:
+        payload["cc"] = cc
+    refs = _attachment_refs(attachments)
+    if refs:
+        payload["artifacts"] = refs
+    res = await _post("/email/send", payload)
+    note = f" with {len(refs)} attachment(s)" if refs else ""
+    return f"Replied to {to_addr}{note} (id={res.get('id', '')})."
+
+
+# ── Attachments / artifacts ──────────────────────────────────────────────────
+
+async def list_artifacts(agent_name: str = "email-assistant") -> str:
+    """List files available to attach to emails. Defaults to your own workspace;
+    pass another agent (e.g. 'sales-assistant', 'task-manager') to see files a
+    sub-agent produced. Attach them with the path shown — for another agent's
+    file use '<agent_name>:<path>', or import_artifact to copy it into your
+    workspace first. Create new files with write_artifact."""
+    data = await _get("/agent/artifacts", {"agent": agent_name})
+    arts = [a for a in data.get("artifacts", []) if not a.get("is_dir")]
+    if not arts:
+        return f"No files in {agent_name}'s workspace yet."
+    own = agent_name == "email-assistant"
+    lines = [f"Files in {agent_name}'s workspace:"]
+    for a in arts[:30]:
+        p = a.get("path")
+        spec = p if own else f"{agent_name}:{p}"
+        size = a.get("size", 0)
+        lines.append(f"• {spec}  ({size} bytes, {a.get('mime_type', '')})")
+    lines.append("Attach any of these by passing its path in `attachments`.")
+    return "\n".join(lines)
+
+
+async def import_artifact(
+    source_agent: str, source_path: str, name: str | None = None
+) -> str:
+    """Pull a file a sub-agent produced (e.g. a quote PDF from sales-assistant,
+    a report from task-manager) into your own workspace so you can attach it to
+    an email and the user can browse/download it. Returns the new path to pass
+    in `attachments`. You can also attach a sub-agent file directly without
+    importing by using '<agent>:<path>' in `attachments`."""
+    res = await _post("/email/artifacts/import", {
+        "source_agent": source_agent,
+        "source_path": source_path,
+        "name": name,
+    })
+    return (
+        f"Imported to '{res.get('path')}' — attach it by passing that path in "
+        "`attachments`."
+    )
+
+
+async def send_draft(account_id: str, draft_id: str) -> str:
+    """Send an existing draft natively (Drafts → Sent, no duplicate). Confirm
+    with the user first."""
+    await _post(
+        "/email/drafts/send",
+        {"account_id": account_id, "draft_id": draft_id},
+    )
+    return "Draft sent."
+
+
+# ── Knowledge base (edit/remove) ─────────────────────────────────────────────
+
+async def update_knowledge(
+    account_id: str,
+    knowledge_id: str,
+    title: str | None = None,
+    content: str | None = None,
+) -> str:
+    """Edit a knowledge-base entry by id. Only the fields you pass change."""
+    entries = (await _get(
+        "/email/knowledge", {"account_id": account_id}
+    )).get("entries", [])
+    entry = next((e for e in entries if e.get("id") == knowledge_id), None)
+    if not entry:
+        return f"Knowledge entry {knowledge_id} not found."
+    body = dict(entry)
+    body["account_id"] = account_id
+    if title is not None:
+        body["title"] = title
+    if content is not None:
+        body["content"] = content
+    await _patch(f"/email/knowledge/{knowledge_id}", body)
+    return f"Updated knowledge entry '{body.get('title')}'."
+
+
+async def delete_knowledge(account_id: str, knowledge_id: str) -> str:
+    """Delete a knowledge-base entry by id."""
+    await _delete(f"/email/knowledge/{knowledge_id}")
+    return f"Deleted knowledge entry {knowledge_id}."
+
+
+# ── Unsubscribe / cold senders ───────────────────────────────────────────────
+
+async def unsubscribe_sender(
+    account_id: str,
+    email: str,
+    name: str | None = None,
+    unsubscribe_link: str | None = None,
+) -> str:
+    """Mark a newsletter/sender as unsubscribed and archive its existing mail.
+    Use after suggest_unsubscribes once the user confirms."""
+    res = await _post("/email/newsletters", {
+        "account_id": account_id,
+        "email": email,
+        "name": name,
+        "status": "UNSUBSCRIBED",
+        "unsubscribe_link": unsubscribe_link,
+    })
+    archived = res.get("archived", 0)
+    return (
+        f"Marked {email} unsubscribed; archived {archived} existing message(s). "
+        + (f"Open the unsubscribe link to finish: {unsubscribe_link}"
+           if unsubscribe_link else
+           "No one-click unsubscribe link was available.")
+    )
+
+
+async def keep_newsletter(account_id: str, email: str) -> str:
+    """Keep receiving a sender's mail (undo an unsubscribe / mark approved)."""
+    await _post("/email/newsletters", {
+        "account_id": account_id, "email": email, "status": "APPROVED",
+    })
+    return f"Keeping {email} — marked approved."
+
+
+async def list_cold_senders(account_id: str) -> str:
+    """List senders flagged by the cold-email blocker."""
+    data = await _get("/email/cold-senders", {"account_id": account_id})
+    senders = data.get("cold_senders", [])
+    if not senders:
+        return "No cold senders flagged."
+    lines = ["Cold senders:"]
+    for s in senders[:20]:
+        lines.append(f"• {s.get('from_email')} [{s.get('status')}]")
+    return "\n".join(lines)
+
+
+async def set_cold_sender(
+    account_id: str, from_email: str, is_cold: bool = True
+) -> str:
+    """Flag a sender as cold (is_cold=true) or clear the flag (is_cold=false,
+    'this sender is NOT cold')."""
+    status = "AI_LABELED_COLD" if is_cold else "USER_REJECTED_COLD"
+    await _post("/email/cold-senders", {
+        "account_id": account_id, "from_email": from_email, "status": status,
+    })
+    verb = "flagged as cold" if is_cold else "cleared (not cold)"
+    return f"{from_email} {verb}."
+
+
+# ── Reply Zero ───────────────────────────────────────────────────────────────
+
+async def mark_thread_done(
+    account_id: str, thread_id: str, done: bool = True
+) -> str:
+    """Mark a Reply-Zero thread done (handled) or reopen it (done=false)."""
+    await _post("/email/reply-zero/resolve", {
+        "account_id": account_id, "thread_id": thread_id, "done": done,
+    })
+    return f"Thread {'marked done' if done else 'reopened'}."
+
+
+async def reclassify_reply_zero(account_id: str) -> str:
+    """Rebuild Reply Zero (To Reply / Awaiting / FYI) with the current rules.
+    Runs in the background; check find_needs_reply afterwards."""
+    await _post("/email/reply-zero/reclassify", {"account_id": account_id})
+    return "Reply Zero is reclassifying in the background."
+
+
+# ── Rules history (approve / reject / undo) ──────────────────────────────────
+
+async def list_rule_history(account_id: str, limit: int = 15) -> str:
+    """List recent rule executions (what rules did to which mail), including
+    PENDING items awaiting approval and APPLIED items you can undo."""
+    data = await _get(
+        "/email/rules/history", {"account_id": account_id, "limit": limit}
+    )
+    history = data.get("history", [])
+    if not history:
+        return "No rule history yet."
+    lines = ["Recent rule activity:"]
+    for h in history[:limit]:
+        acts = ", ".join(h.get("actions", []))
+        lines.append(
+            f"• id={h.get('id')} [{h.get('status')}] {h.get('rule_name')}: "
+            f"{(h.get('subject') or '')[:50]} → {acts}"
+        )
+    return "\n".join(lines)
+
+
+async def approve_execution(execution_id: str) -> str:
+    """Approve a PENDING rule execution so its actions are applied."""
+    res = await _post(f"/email/rules/history/{execution_id}/approve", {})
+    return f"Approved — applied: {', '.join(res.get('actions', []))}."
+
+
+async def reject_execution(execution_id: str) -> str:
+    """Reject a PENDING rule execution (its actions are NOT applied)."""
+    await _post(f"/email/rules/history/{execution_id}/reject", {})
+    return "Rejected — no actions taken."
+
+
+async def undo_execution(execution_id: str) -> str:
+    """Undo an already-APPLIED rule execution (reverses its actions)."""
+    res = await _post(f"/email/rules/history/{execution_id}/undo", {})
+    return f"Undone: reversed {', '.join(res.get('reversed', []))}."
+
+
+# ── Digest ───────────────────────────────────────────────────────────────────
+
+async def get_digest(account_id: str, period: str = "day") -> str:
+    """Preview the inbox digest for 'day' or 'week' (counts + highlights)."""
+    data = await _get(
+        "/email/digest", {"account_id": account_id, "period": period}
+    )
+    sections = data.get("sections", data)
+    return f"Digest ({period}): {json.dumps(sections, default=str)[:1500]}"
+
+
+async def send_digest(account_id: str, period: str = "day") -> str:
+    """Send the inbox digest email now for 'day' or 'week'."""
+    res = await _post(
+        "/email/digest/send", {"account_id": account_id, "period": period}
+    )
+    return f"Digest sent to {res.get('to', 'your inbox')}."
+
+
+# ── Account sync ─────────────────────────────────────────────────────────────
+
+async def sync_account(account_id: str) -> str:
+    """Pull new mail for the account from the provider now (incremental)."""
+    await _post("/email/sync", {"account_id": account_id})
+    return "Sync started — new mail will appear shortly."
+
+
+async def resync_account(account_id: str, purge: bool = False) -> str:
+    """Force a COMPLETE re-sync from the provider. purge=true deletes local mail
+    first (for stale/corrupt local data). Confirm purge with the user."""
+    res = await _post(
+        f"/email/accounts/{account_id}/resync?purge="
+        f"{'true' if purge else 'false'}", {},
+    )
+    n = res.get("messages_synced")
+    return f"Re-synced{' (purged)' if purge else ''}: {n} message(s)."
+
+
+# ── Learned draft patterns ───────────────────────────────────────────────────
+
+async def list_learned_patterns(account_id: str) -> str:
+    """List preferences the assistant learned from how you edit its drafts."""
+    data = await _get(
+        "/email/learned-patterns", {"account_id": account_id}
+    )
+    patterns = data.get("patterns", [])
+    if not patterns:
+        return "No learned draft patterns yet."
+    lines = ["Learned draft preferences:"]
+    for p in patterns[:20]:
+        scope = p.get("scope_value") or p.get("scope_type") or "global"
+        lines.append(f"• id={p.get('id')} [{scope}] {p.get('pattern')}")
+    return "\n".join(lines)
+
+
+async def delete_learned_pattern(pattern_id: str) -> str:
+    """Forget a learned draft preference by id."""
+    await _delete(f"/email/learned-patterns/{pattern_id}")
+    return f"Forgot learned pattern {pattern_id}."
+
+
 # ── Tool registry ────────────────────────────────────────────────────────────
 
 # Tools attached to the MAF agent. call_agent / remember / save_memory /
 # web_search are injected by the executor, so the agent can hand off to the
 # sales / task-manager agents and read memory without listing them here.
 _TOOLS = [
+    # Read / triage
     list_accounts,
     search_emails,
+    query_inbox,
+    get_important_emails,
     read_email,
     find_urgent,
     find_needs_reply,
     get_unread_count,
     get_account_overview,
+    # Inbox actions
     manage_inbox,
+    apply_labels,
+    move_to_folder,
+    list_labels,
+    create_label,
+    # Drafting / sending
     draft_reply,
+    send_email,
+    send_reply,
+    send_draft,
+    # Attachments / artifacts
+    list_artifacts,
+    import_artifact,
+    # Senders / categorization
     categorize_senders,
     get_sender_categories,
+    # Rules + history
     get_rules_and_settings,
     create_rule,
-    update_rule_state,
     update_rule,
+    update_rule_state,
+    delete_rule,
+    reset_rules,
+    run_rules_now,
     learn_rule_pattern,
-    update_assistant_settings,
     install_default_rules,
+    list_rule_history,
+    approve_execution,
+    reject_execution,
+    undo_execution,
+    process_past_emails,
+    # Assistant config
+    update_assistant_settings,
     list_knowledge,
     add_knowledge,
+    update_knowledge,
+    delete_knowledge,
     generate_writing_style,
+    list_learned_patterns,
+    delete_learned_pattern,
+    # Follow-ups / reply zero
     find_follow_ups,
-    process_past_emails,
+    mark_thread_done,
+    reclassify_reply_zero,
+    # Unsubscribe / cold senders
     suggest_unsubscribes,
+    unsubscribe_sender,
+    keep_newsletter,
+    list_cold_senders,
+    set_cold_sender,
+    # Digest
+    get_digest,
+    send_digest,
+    # Account sync
+    sync_account,
+    resync_account,
 ]
 
 

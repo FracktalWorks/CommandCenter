@@ -39,6 +39,93 @@ class QuickActionRequest(BaseModel):
     email_id: str | None = None
 
 
+async def _build_chat_context(
+    user_id: str, account_id: str | None, email_context_id: str | None,
+    is_first_turn: bool,
+) -> tuple[str | None, list[str]]:
+    """Resolve which account the assistant should act on (defaulting to the user's
+    only account) and assemble the background context it receives via
+    ``memory_context``: an account hint, an inbox snapshot on the first turn, and
+    the email currently open in the reader. Returns ``(account_id, context_parts)``.
+    Best-effort — never raises."""
+    parts: list[str] = []
+    resolved = account_id
+    db = await _get_db()
+    try:
+        accounts = (await db.execute(text(
+            "SELECT id, email_address FROM email_accounts WHERE user_id = :uid "
+            "ORDER BY created_at"
+        ), {"uid": user_id})).fetchall()
+        acc_map = {str(a.id): a.email_address for a in accounts}
+        if account_id and account_id in acc_map:
+            resolved = account_id
+        elif len(accounts) == 1:
+            resolved = str(accounts[0].id)
+
+        if resolved and resolved in acc_map:
+            parts.append(
+                "## Email account\n"
+                f"Act on account id={resolved} ({acc_map[resolved]}). Pass this "
+                "account_id to tools unless the user names another account.")
+        elif len(accounts) > 1:
+            listing = "; ".join(
+                f"{a.email_address} (id={a.id})" for a in accounts)
+            parts.append(
+                "## Email accounts\nThe user has several accounts: " + listing
+                + ". Ask which one before account-scoped actions.")
+
+        if resolved and is_first_turn:
+            tot = (await db.execute(text(
+                "SELECT count(*) AS total, "
+                "count(*) FILTER (WHERE is_read = false) AS unread "
+                "FROM email_messages WHERE account_id = :aid "
+                "AND LOWER(folder) = 'inbox'"
+            ), {"aid": resolved})).fetchone()
+            nr = (await db.execute(text(
+                "SELECT count(*) AS c FROM email_thread_status "
+                "WHERE account_id = :aid AND status = 'NEEDS_REPLY'"
+            ), {"aid": resolved})).fetchone()
+            cats = (await db.execute(text(
+                "SELECT category, count(*) AS c FROM email_senders "
+                "WHERE account_id = :aid AND category IS NOT NULL "
+                "GROUP BY category ORDER BY c DESC LIMIT 6"
+            ), {"aid": resolved})).fetchall()
+            cat_str = ", ".join(
+                f"{r.category}: {r.c}" for r in cats) or "not categorized yet"
+            parts.append(
+                "## Inbox snapshot\n"
+                f"- Inbox: {tot.total if tot else 0} messages, "
+                f"{tot.unread if tot else 0} unread\n"
+                f"- Needs reply (Reply Zero): {nr.c if nr else 0}\n"
+                f"- Sender categories: {cat_str}\n"
+                "To answer questions about the WHOLE inbox use query_inbox "
+                "(filter by date/category/sender/read-state), get_important_emails, "
+                "find_needs_reply, or get_account_overview; read_email for one "
+                "email's full content.")
+
+        if email_context_id:
+            row = (await db.execute(text(
+                "SELECT em.subject, em.body_text, em.from_address, em.received_at "
+                "FROM email_messages em "
+                "JOIN email_accounts ea ON em.account_id = ea.id "
+                "WHERE em.id = :id AND ea.user_id = :uid"
+            ), {"id": email_context_id, "uid": user_id})).fetchone()
+            if row:
+                frm = row.from_address if isinstance(row.from_address, dict) \
+                    else json.loads(row.from_address or "{}")
+                parts.append(
+                    f"## Email open in the reader (id={email_context_id})\n"
+                    f"From: {frm.get('name') or ''} <{frm.get('email') or ''}>\n"
+                    f"Subject: {row.subject or ''}\n"
+                    f"Date: {row.received_at}\n\n"
+                    f"{(row.body_text or '')[:5000]}")
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.chat_context_failed", error=str(exc)[:160])
+    finally:
+        await db.close()
+    return resolved, parts
+
+
 @router.post("/ai/chat")
 async def ai_chat(
     req: AIChatRequest,
@@ -71,58 +158,25 @@ async def ai_chat(
                 last_user_msg = m.get("content", "")
                 break
 
-    # Build conversation history for the agent
-    history = req.messages[:-1] if req.messages else []
-    conversation_context = ""
-    if history:
-        history_lines = []
-        for m in history[-10:]:  # keep last 10 for context
-            role = m.get("role", "unknown")
-            content = m.get("content", "")[:500]
-            history_lines.append(f"[{role}]: {content}")
-        conversation_context = "## Conversation history\n" + "\n".join(history_lines)
+    # The agent's context is passed through the channels the orchestrator actually
+    # consumes: `messages` (multi-turn history, replayed into the MAF message list)
+    # and `memory_context` (injected into the agent's instructions every turn).
+    # A plain `conversation_history` string key would be silently dropped.
+    is_first_turn = sum(
+        1 for m in (req.messages or []) if m.get("role") == "user") <= 1
 
-    # Build enriched payload
+    account_id, ctx_parts = await _build_chat_context(
+        user_id, req.account_id, req.email_context_id, is_first_turn)
+
     payload: dict[str, Any] = {
         "message": last_user_msg or "Help me with my email",
         "user_query": last_user_msg,
-        "conversation_history": conversation_context,
-        "account_id": req.account_id,
+        "messages": req.messages or [],
+        "memory_context": "\n\n".join(ctx_parts),
+        "account_id": account_id,
         "email_context_id": req.email_context_id,
         "user_email": user_id,
     }
-
-    # If an email is in context, fetch its full content for the agent
-    if req.email_context_id:
-        try:
-            db = await _get_db()
-            result = await db.execute(
-                text(
-                    """SELECT em.subject, em.body_text, em.from_address,
-                              em.received_at
-                       FROM email_messages em
-                       JOIN email_accounts ea ON em.account_id = ea.id
-                       WHERE em.id = :id AND ea.user_id = :uid"""
-                ),
-                {"id": req.email_context_id, "uid": user.email or "anonymous"},
-            )
-            email_row = result.fetchone()
-            if email_row:
-                from_data = email_row.from_address
-                if isinstance(from_data, str):
-                    from_data = json.loads(from_data)
-                from_name = from_data.get("name", "") if isinstance(from_data, dict) else ""
-                from_email = from_data.get("email", "") if isinstance(from_data, dict) else ""
-                payload["current_email"] = {
-                    "id": req.email_context_id,
-                    "subject": email_row.subject,
-                    "body": (email_row.body_text or "")[:5000],
-                    "from": f"{from_name} <{from_email}>",
-                    "date": str(email_row.received_at),
-                }
-            await db.close()
-        except Exception:  # noqa: BLE001
-            pass
 
     # ── Resolve which LiteLLM tier the email CHAT should use (per-account) ──
     # The chat panel uses its own chat_model setting (default tier-balanced),
@@ -702,6 +756,56 @@ async def _mark_thread_replied(account_id: str, thread_id: str) -> None:
         await db.commit()
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.mark_thread_replied_failed", error=str(exc)[:160])
+    finally:
+        await db.close()
+
+
+async def apply_thread_status_correction(
+    account_id: str, thread_id: str, status_key: str,
+) -> dict[str, Any]:
+    """Force a thread's Reply Zero status to a user-corrected value (the Fix flow).
+
+    Conversation status (To Reply / Awaiting / FYI / Actioned) is re-derived from
+    the full thread by the classifier, so a learned sender/subject pattern would be
+    OVERRIDDEN — the only correction that sticks is to set the status directly and
+    swap the labels. ``status_key`` is TO_REPLY / AWAITING_REPLY / FYI / ACTIONED.
+    Best-effort; returns ``{ok, status, label}``."""
+    rz_status, label = _THREAD_STATUS_MAP.get(status_key, ("", ""))
+    if not rz_status or not thread_id:
+        return {"ok": False}
+    db = await _get_db()
+    try:
+        latest = (await db.execute(text(
+            "SELECT id, received_at FROM email_messages "
+            "WHERE account_id = :aid AND thread_id = :tid "
+            "ORDER BY received_at DESC NULLS LAST LIMIT 1"
+        ), {"aid": account_id, "tid": thread_id})).fetchone()
+        await _upsert_thread_status(
+            db, account_id, thread_id, rz_status,
+            latest.id if latest else None,
+            latest.received_at if latest else None, "Fix correction")
+        await db.commit()
+        # Best-effort: swap the provider/local labels to the corrected status.
+        acc = (await db.execute(text(
+            "SELECT provider, credentials_encrypted FROM email_accounts "
+            "WHERE id = :id"
+        ), {"id": account_id})).fetchone()
+        if acc:
+            from acb_llm.key_store import get_key_store  # noqa: PLC0415
+            store = get_key_store()
+            creds = json.loads(store.decrypt(acc.credentials_encrypted))
+            provider = _instantiate_provider(acc.provider, creds)
+            if await provider.authenticate():
+                await _reconcile_thread_labels(
+                    db, provider, account_id, thread_id, label)
+                if provider.credentials_dirty():
+                    await _persist_rotated_creds(db, store, account_id, provider)
+                await db.commit()
+        return {"ok": True, "status": rz_status, "label": label}
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.apply_status_correction_failed",
+                     account_id=account_id, error=str(exc)[:160])
+        return {"ok": False}
     finally:
         await db.close()
 

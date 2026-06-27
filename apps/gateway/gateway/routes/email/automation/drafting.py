@@ -200,6 +200,54 @@ async def _cleanup_thread_drafts(account_id: str, thread_id: str) -> None:
         await db.close()
 
 
+async def _resolve_existing_thread_draft(
+    db: Any, provider: Any, account_id: str, thread_id: str,
+) -> str:
+    """Decide what to do about an existing AI draft before auto-drafting again —
+    a port of inbox-zero's handlePreviousDraftDeletion (at most ONE AI draft per
+    thread; never clobber the user's edits, never pile up duplicates). Returns:
+
+      "none"    — no draft in the thread → create one.
+      "replace" — a prior AI draft existed UNMODIFIED; trashed it → create fresh
+                  (so it picks up the latest thread context).
+      "keep"    — the user edited the draft (or there's no original to compare
+                  against) → preserve it; the caller must NOT create another.
+
+    Unmodified is judged by comparing the live draft mirror against the original
+    AI text stored in ``email_ai_drafts`` (the same sync that delivers the new
+    inbound message also refreshes the draft mirror, so it is current). Best-effort
+    — returns "none" on any error so drafting still proceeds."""
+    if not thread_id or not account_id:
+        return "none"
+    try:
+        row = (await db.execute(text(
+            "SELECT id, provider_message_id, body_text FROM email_messages "
+            "WHERE account_id = :aid AND thread_id = :tid "
+            "AND LOWER(COALESCE(folder, '')) IN ('drafts', 'draft') "
+            "ORDER BY updated_at DESC NULLS LAST, received_at DESC LIMIT 1"
+        ), {"aid": account_id, "tid": thread_id})).fetchone()
+        if not row:
+            return "none"
+        orig = (await db.execute(text(
+            "SELECT draft_text FROM email_ai_drafts "
+            "WHERE account_id = :aid AND thread_id = :tid"
+        ), {"aid": account_id, "tid": thread_id})).fetchone()
+        original = (orig.draft_text if orig else "") or ""
+        if original and _normalize_text(row.body_text or "") == \
+                _normalize_text(original):
+            try:
+                await provider.trash_message(row.provider_message_id)
+            except Exception:  # noqa: BLE001 — a stuck draft shouldn't abort
+                pass
+            await db.execute(text(
+                "DELETE FROM email_messages WHERE id = :id"), {"id": row.id})
+            return "replace"
+        return "keep"  # user-edited (or unknown) → preserve, don't duplicate
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.resolve_existing_draft_failed", error=str(exc)[:160])
+        return "none"
+
+
 async def _store_ai_draft(
     db: Any, account_id: str, thread_id: str, draft_text: str
 ) -> None:

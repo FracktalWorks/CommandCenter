@@ -2480,10 +2480,12 @@ function FixDialog({
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Optional signal(s) to PIN the correction on so it's learned instantly (a
-  // sender and/or subject keyword). Off by default — like inbox-zero, the
-  // primary path is a free-text explanation handed to the assistant.
-  const [useSender, setUseSender] = useState(false);
+  // The sender is taught by default so an existing-rule / "None" correction is
+  // applied DIRECTLY (no chat round-trip): for cleanup rules it learns a
+  // sender→rule pattern; for conversation rules (To Reply/FYI/…) the backend
+  // sets the thread status instead (a sender pin there is wrong + overridden).
+  // Uncheck "from <sender>" to fix just this email without learning the sender.
+  const [useSender, setUseSender] = useState(true);
   const [useSubject, setUseSubject] = useState(false);
   const [subjectKw, setSubjectKw] = useState("");
   const setPendingChatPrompt = useEmailStore((s) => s.setPendingChatPrompt);
@@ -2504,9 +2506,9 @@ function FixDialog({
   const senderVal = expected && expected !== "new" && useSender ? email.from : "";
   const subjectVal =
     expected && expected !== "new" && useSubject ? subjectKw.trim() : "";
-  // No pinned signal (or a brand-new rule) → hand the free-text explanation to
-  // the assistant, which adjusts the rules for you (inbox-zero parity).
-  const willChat = expected === "new" || (!senderVal && !subjectVal);
+  // Only a brand-new rule needs the assistant; existing-rule / "None"
+  // corrections are applied directly and re-classified immediately.
+  const willChat = expected === "new";
 
   const submit = async () => {
     if (!expected) return;
@@ -2515,21 +2517,35 @@ function FixDialog({
       onClose();
       return;
     }
-    // A sender/subject was pinned → persist a learned pattern so it sticks.
+    // Apply the correction directly (persist a pattern for cleanup rules, or set
+    // the thread status for conversation rules) and re-classify this email.
     setBusy(true);
     setError(null);
     try {
       const matchedIds = current.ruleId ? [current.ruleId] : [];
-      await submitRuleFeedback({
+      const res = await submitRuleFeedback({
         accountId,
         sender: senderVal,
         expected: expected === "none" ? "none" : expected.id,
         matchedRuleIds: matchedIds,
         explanation,
+        messageId: messageId || undefined,
         subjectKeyword: subjectVal || undefined,
       });
-      // Re-run the rules on THIS email now that the correction is learned, so the
-      // reclassification takes effect immediately (apply the new label/action).
+      // Conversation-status fix: the thread's status + label were set directly
+      // (a learned sender pattern would be overridden for these rules) — no
+      // re-run needed.
+      if (expected !== "none" && res?.status_correction?.ok) {
+        setDone(
+          `Done — moved this thread to "${
+            res.status_correction.label || expected.name
+          }".`,
+        );
+        onReran?.();
+        return;
+      }
+      // Cleanup-rule / "None" correction → re-run THIS email so the new
+      // label/action applies immediately now that the pattern is learned.
       let reran: RunMessageResult | null = null;
       if (messageId) {
         try {
@@ -2547,7 +2563,7 @@ function FixDialog({
         subjectVal && `about "${subjectVal}"`,
       ]
         .filter(Boolean)
-        .join(" / ");
+        .join(" / ") || "like this";
       const rerunNote = !reran
         ? ""
         : reran.applied && reran.rule
@@ -2683,7 +2699,7 @@ function FixDialog({
           {expected !== "new" && (
             <details className="rounded-lg border border-border p-2.5">
               <summary className="text-[11px] font-medium text-foreground cursor-pointer select-none">
-                Pin it so it&apos;s learned instantly (optional)
+                Fine-tune what&apos;s learned (sender / subject)
               </summary>
               <div className="space-y-2 mt-2">
                 <label className="flex items-center gap-2 text-xs text-foreground cursor-pointer">

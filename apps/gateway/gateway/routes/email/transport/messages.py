@@ -13,6 +13,7 @@ from gateway.routes.email.core import (
     MAX_BODY_TEXT_BYTES,
     AttachmentModel,
     EmailMessageModel,
+    _assert_account_owner,
     _fetch_attachments,
     _get_db,
     _log,
@@ -43,6 +44,18 @@ class ListMessagesParams(BaseModel):
     page_size: int = Field(default=50, ge=1, le=200)
 
 
+def _parse_dt(value: str | None) -> Any:
+    """Parse an ISO date/datetime (tolerating a trailing 'Z') for a filter bound;
+    None when absent or unparseable (so a bad value never errors the query)."""
+    if not value:
+        return None
+    try:
+        from datetime import datetime  # noqa: PLC0415
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @router.get("/messages")
 async def list_messages(
     account_id: str | None = Query(None),
@@ -50,6 +63,17 @@ async def list_messages(
     label: str | None = Query(None),
     query: str | None = Query(None),
     thread_id: str | None = Query(None),
+    # ── Rich filters (used by the assistant's inbox-query tools; all optional and
+    # additive, so existing callers/UI are unaffected) ──────────────────────────
+    received_after: str | None = Query(None),   # ISO; received_at >= this
+    received_before: str | None = Query(None),  # ISO; received_at <= this
+    is_read: bool | None = Query(None),         # filter by read state
+    is_starred: bool | None = Query(None),
+    has_attachments: bool | None = Query(None),
+    importance: str | None = Query(None),       # high | normal | low
+    from_email: str | None = Query(None),       # substring match on sender address
+    sender_category: str | None = Query(None),  # email_senders category
+    sort: str = Query("newest"),                # newest | oldest | importance
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     user: UserContext = Depends(get_current_user),
@@ -58,6 +82,11 @@ async def list_messages(
 
     When ``thread_id`` is given the result is the whole conversation (across
     folders), oldest-first — used by the reading pane's conversation view.
+
+    The optional filters (date range, read/starred/attachment state, importance,
+    sender address, sender category) + ``sort`` let the assistant answer inbox-wide
+    questions ("sales emails in the last month", "important unread mail") without
+    pulling the whole inbox. ``query`` is a full-text match over subject/body/from.
     """
     db = await _get_db()
     try:
@@ -104,8 +133,54 @@ async def list_messages(
                    @@ plainto_tsquery('english', :query)"""
             )
             params["query"] = query
+        # Date range (received_at).
+        dt_after, dt_before = _parse_dt(received_after), _parse_dt(received_before)
+        if dt_after is not None:
+            where_clauses.append("em.received_at >= :received_after")
+            params["received_after"] = dt_after
+        if dt_before is not None:
+            where_clauses.append("em.received_at <= :received_before")
+            params["received_before"] = dt_before
+        # Boolean state filters.
+        if is_read is not None:
+            where_clauses.append("em.is_read = :is_read")
+            params["is_read"] = is_read
+        if is_starred is not None:
+            where_clauses.append("em.is_starred = :is_starred")
+            params["is_starred"] = is_starred
+        if has_attachments is not None:
+            where_clauses.append("em.has_attachments = :has_attachments")
+            params["has_attachments"] = has_attachments
+        if importance:
+            where_clauses.append("LOWER(em.importance) = LOWER(:importance)")
+            params["importance"] = importance
+        if from_email:
+            where_clauses.append(
+                "LOWER(em.from_address->>'email') LIKE :from_email")
+            params["from_email"] = f"%{from_email.strip().lower()}%"
+        if sender_category:
+            # Filter by the sender's assigned category (email_senders), e.g.
+            # "Marketing"/"Newsletter" — distinct from per-message categories[].
+            where_clauses.append(
+                "EXISTS (SELECT 1 FROM email_senders se "
+                "WHERE se.account_id = em.account_id "
+                "AND LOWER(se.email) = LOWER(em.from_address->>'email') "
+                "AND LOWER(se.category) = LOWER(:sender_category))")
+            params["sender_category"] = sender_category
 
         where_sql = " AND ".join(where_clauses)
+
+        # Ordering: conversation view is chronological; otherwise honour ``sort``.
+        if thread_id or sort == "oldest":
+            order_sql = "em.received_at ASC"
+        elif sort == "importance":
+            # Most-important first: high → normal → low, then unread, then recent.
+            order_sql = (
+                "CASE LOWER(COALESCE(em.importance, 'normal')) "
+                "WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END, "
+                "em.is_read ASC, em.received_at DESC")
+        else:
+            order_sql = "em.received_at DESC"
 
         # Count total
         count_result = await db.execute(
@@ -134,7 +209,7 @@ async def list_messages(
                    FROM email_messages em
                    JOIN email_accounts ea ON em.account_id = ea.id
                    WHERE {where_sql}
-                   ORDER BY em.received_at {"ASC" if thread_id else "DESC"}
+                   ORDER BY {order_sql}
                    LIMIT :limit OFFSET :offset"""
             ),
             params,
@@ -172,6 +247,95 @@ async def list_messages(
             "page": page,
             "page_size": page_size,
         }
+    finally:
+        await db.close()
+
+
+# Sender categories that are bulk/automated and never "important to check".
+_PRIORITY_EXCLUDE_CATEGORIES = ("newsletter", "marketing", "cold email",
+                                "notification")
+
+
+@router.get("/priority")
+async def priority_inbox(
+    account_id: str = Query(...),
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(20, ge=1, le=100),
+    user: UserContext = Depends(get_current_user),
+):
+    """The emails that most need the user's attention — answers "what are the most
+    important emails I need to check?".
+
+    Ranks recent INBOX threads (latest message each) by a blend of signals:
+    Reply Zero NEEDS_REPLY, unread, provider importance=high, starred, and a
+    Personal/Support sender. Bulk/automated senders (Newsletter / Marketing /
+    Cold Email / Notification) are excluded so the list stays high-signal. Returns
+    one row per thread with the reason it ranked, newest-first within score."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        rows = (await db.execute(text(
+            """WITH latest AS (
+                 SELECT DISTINCT ON (em.thread_id)
+                        em.id, em.thread_id, em.subject, em.from_address,
+                        em.received_at, em.is_read, em.importance, em.is_starred,
+                        ts.status AS reply_status, se.category AS sender_category
+                 FROM email_messages em
+                 LEFT JOIN email_thread_status ts
+                   ON ts.account_id = em.account_id
+                   AND ts.thread_id = em.thread_id
+                 LEFT JOIN email_senders se
+                   ON se.account_id = em.account_id
+                   AND LOWER(se.email) = LOWER(em.from_address->>'email')
+                 WHERE em.account_id = :aid
+                   AND LOWER(em.folder) = 'inbox'
+                   AND em.received_at > now() - make_interval(days => :days)
+                   AND COALESCE(LOWER(se.category), '') NOT IN
+                       ('newsletter', 'marketing', 'cold email', 'notification')
+                 ORDER BY em.thread_id, em.received_at DESC
+               )
+               SELECT *, (
+                   (CASE WHEN reply_status = 'NEEDS_REPLY' THEN 100 ELSE 0 END)
+                 + (CASE WHEN is_read THEN 0 ELSE 40 END)
+                 + (CASE LOWER(COALESCE(importance, 'normal'))
+                        WHEN 'high' THEN 30 ELSE 0 END)
+                 + (CASE WHEN is_starred THEN 20 ELSE 0 END)
+                 + (CASE WHEN LOWER(COALESCE(sender_category, '')) IN
+                        ('personal', 'support') THEN 15 ELSE 0 END)
+               ) AS score
+               FROM latest
+               ORDER BY score DESC, received_at DESC
+               LIMIT :limit"""
+        ), {"aid": account_id, "days": days, "limit": limit})).fetchall()
+
+        out = []
+        for r in rows:
+            frm = r.from_address if isinstance(r.from_address, dict) \
+                else json.loads(r.from_address or "{}")
+            reasons = []
+            if r.reply_status == "NEEDS_REPLY":
+                reasons.append("needs reply")
+            if not r.is_read:
+                reasons.append("unread")
+            if (r.importance or "").lower() == "high":
+                reasons.append("high importance")
+            if r.is_starred:
+                reasons.append("starred")
+            if (r.sender_category or "").lower() in ("personal", "support"):
+                reasons.append(f"{r.sender_category.lower()} sender")
+            out.append({
+                "message_id": str(r.id), "thread_id": r.thread_id,
+                "subject": r.subject or "(no subject)",
+                "from": frm.get("name") or frm.get("email", ""),
+                "from_email": frm.get("email", ""),
+                "received_at": r.received_at.isoformat() if r.received_at else None,
+                "is_read": r.is_read,
+                "reply_status": r.reply_status,
+                "sender_category": r.sender_category,
+                "score": int(r.score or 0),
+                "reason": ", ".join(reasons) or "recent",
+            })
+        return {"emails": out, "count": len(out), "days": days}
     finally:
         await db.close()
 

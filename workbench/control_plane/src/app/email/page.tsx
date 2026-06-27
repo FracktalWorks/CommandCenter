@@ -26,7 +26,7 @@ import { EmailList } from "./components/EmailList";
 import { EmailToolbar } from "./components/EmailToolbar";
 import { MailboxActions } from "./components/MailboxActions";
 import { EmailDetail } from "./components/EmailDetail";
-import { AIChatPanel } from "./components/AIChatPanel";
+import { EmailAssistantChat } from "./components/EmailAssistantChat";
 import { ComposePanel } from "./components/ComposePanel";
 import { CommandPalette, Command } from "./components/CommandPalette";
 import { AutomationView } from "./components/automation/AutomationView";
@@ -233,7 +233,7 @@ export default function EmailPage() {
     />
   );
 
-  aiDrawerRef.current = <AIChatPanel selectedAccountId={selectedAccountId} selectedEmailId={selectedEmailId} />;
+  aiDrawerRef.current = <EmailAssistantChat selectedAccountId={selectedAccountId} selectedEmailId={selectedEmailId} />;
 
   // Listen for bottom-nav tab events from AppShell MobileBottomNav.
   useEffect(() => {
@@ -837,7 +837,7 @@ export default function EmailPage() {
             rightOpen ? "w-72" : "w-0"
           }`}
         >
-          {rightOpen && <AIChatPanel selectedAccountId={selectedAccountId} selectedEmailId={selectedEmailId} />}
+          {rightOpen && <EmailAssistantChat selectedAccountId={selectedAccountId} selectedEmailId={selectedEmailId} />}
         </div>
       )}
       </>

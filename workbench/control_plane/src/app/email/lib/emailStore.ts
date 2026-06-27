@@ -2,7 +2,31 @@ import { create } from "zustand";
 import { Email, EmailAccount, EmailFolder, EMAIL_CATEGORIES, RunMessageResult } from "./types";
 import * as api from "./api";
 import type { EmailFolderRaw } from "./api";
-import { QUICK_ACTIONS } from "./mockData";
+import { QUICK_ACTIONS, MOCK_ACCOUNTS, MOCK_EMAILS, MOCK_FOLDERS } from "./mockData";
+
+/**
+ * Dev-only demo mode. With NEXT_PUBLIC_EMAIL_DEMO=1 (set in .env.local) the
+ * store falls back to the bundled mock accounts/emails whenever the backend is
+ * unreachable or returns nothing — so the email UI is explorable without a
+ * connected mailbox.
+ *
+ * Double-gated: it requires BOTH a non-production build AND the explicit flag.
+ * In a production build `process.env.NODE_ENV === "production"`, so DEMO is a
+ * compile-time `false` and the bundler dead-code-eliminates every demo branch
+ * (and the mock-data imports). Dummy data can never reach a deployment.
+ */
+const DEMO =
+  process.env.NODE_ENV !== "production" &&
+  process.env.NEXT_PUBLIC_EMAIL_DEMO === "1";
+
+/** Mock messages for an account, scoped to the active folder (demo mode only). */
+function demoEmailsFor(accountId: string | null, folder: string): Email[] {
+  return MOCK_EMAILS.filter(
+    (e) =>
+      (!accountId || e.accountId === accountId) &&
+      (folder === "starred" ? e.isStarred : e.folder === folder),
+  );
+}
 
 /**
  * Canonical folder keys shared with the backend (`providers/base.py`).
@@ -293,7 +317,9 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   fetchAccounts: async () => {
     set({ accountsLoading: true, error: null });
     try {
-      const accounts = await api.listEmailAccounts();
+      let accounts = await api.listEmailAccounts();
+      // Demo fallback: no real accounts connected → show the mock set.
+      if (accounts.length === 0 && DEMO) accounts = MOCK_ACCOUNTS;
       set({ accounts, accountsLoading: false });
       // Auto-select first account if none selected
       const { selectedAccountId } = get();
@@ -304,6 +330,15 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         get().fetchLabels(accounts[0].id);
       }
     } catch (err: any) {
+      // Demo fallback: backend unreachable → seed mock accounts so the UI works.
+      if (DEMO) {
+        set({ accounts: MOCK_ACCOUNTS, accountsLoading: false });
+        if (!get().selectedAccountId) {
+          set({ selectedAccountId: MOCK_ACCOUNTS[0].id, folders: MOCK_FOLDERS });
+          get().fetchEmails();
+        }
+        return;
+      }
       set({ accountsLoading: false, error: err.message || "Failed to load accounts" });
     }
   },
@@ -326,6 +361,11 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       delete cleared[aid];
       set({ folders, foldersLoading: false, authErrors: cleared });
     } catch (err: any) {
+      // Demo fallback: no backend → use the mock folder tree.
+      if (DEMO) {
+        set({ folders: MOCK_FOLDERS, foldersLoading: false });
+        return;
+      }
       // Fall back to deriving from emails
       const folders = buildFolders(get().emails);
       // A 401/403 from the live folder call means the account's OAuth token is
@@ -358,11 +398,18 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         page: 1,
         pageSize: PAGE_SIZE,
       });
-      const emails = result.emails;
+      let emails = result.emails;
+      let total = result.total;
+      // Demo fallback: backend returned nothing → show mock messages.
+      if (emails.length === 0 && DEMO) {
+        emails = demoEmailsFor(selectedAccountId, selectedFolder);
+        total = emails.length;
+      }
       // Don't clobber the provider folder tree (system + user folders) fetched
       // by fetchFolders — only seed a system-folder fallback if we have none yet.
       const existing = get().folders;
-      const folders = existing.length > 0 ? existing : buildFolders(emails);
+      const folders =
+        existing.length > 0 ? existing : DEMO ? MOCK_FOLDERS : buildFolders(emails);
       // Seed the label picker from categories actually present on messages —
       // providers like Outlook expose no master categories, so without this the
       // right-click "Label" menu would stay empty even when mail is categorized.
@@ -373,10 +420,23 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         folders,
         availableLabels: [...labelSet].sort(),
         emailsLoading: false,
-        emailsTotal: result.total,
+        emailsTotal: total,
         emailsPage: 1,
       });
     } catch (err: any) {
+      // Demo fallback: backend unreachable → show mock messages.
+      if (DEMO) {
+        const emails = demoEmailsFor(selectedAccountId, selectedFolder);
+        const existing = get().folders;
+        set({
+          emails,
+          folders: existing.length > 0 ? existing : MOCK_FOLDERS,
+          emailsLoading: false,
+          emailsTotal: emails.length,
+          emailsPage: 1,
+        });
+        return;
+      }
       set({ emailsLoading: false, error: err.message || "Failed to load emails" });
     }
   },
@@ -409,6 +469,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       ) {
         return;
       }
+      // Demo: don't let an empty background refresh wipe the seeded mock list.
+      if (result.emails.length === 0 && DEMO) return;
       const labelSet = new Set(now.availableLabels);
       for (const e of result.emails) for (const c of e.categories || []) labelSet.add(c);
       set({
@@ -607,6 +669,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         ? Math.max(0, get().emailsTotal - 1)
         : get().emailsTotal,
     });
+    // Demo: keep the optimistic change; there's no backend to persist to.
+    if (DEMO) return;
     try {
       const updated = await api.updateEmail(id, updates);
       if (!movedAway) {
@@ -658,6 +722,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     if (add && !get().availableLabels.includes(name)) {
       set({ availableLabels: [...get().availableLabels, name].sort() });
     }
+    // Demo: keep the optimistic chip change; no backend to persist to.
+    if (DEMO) return;
     try {
       const updated = await api.updateEmailLabels(
         id,
@@ -704,12 +770,20 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   deleteEmail: async (id) => {
     const prevEmails = get().emails;
     set({ emails: prevEmails.filter((e) => e.id !== id) });
-    try {
-      await api.deleteEmail(id);
-      // Clear selection if deleted was selected
+    // Clear selection if the deleted message was selected.
+    const clearSelectionIfDeleted = () => {
       if (get().selectedEmailId === id) {
         set({ selectedEmailId: get().emails[0]?.id ?? null });
       }
+    };
+    // Demo: keep the optimistic removal; no backend to delete from.
+    if (DEMO) {
+      clearSelectionIfDeleted();
+      return;
+    }
+    try {
+      await api.deleteEmail(id);
+      clearSelectionIfDeleted();
     } catch (err: any) {
       set({ emails: prevEmails, error: err.message || "Failed to delete email" });
     }
@@ -800,6 +874,11 @@ export const useEmailStore = create<EmailState>((set, get) => ({
 
   triggerSync: async (accountId: string) => {
     set({ syncStatus: { ...get().syncStatus, [accountId]: "syncing" } });
+    // Demo: no backend to sync against — settle straight back to idle.
+    if (DEMO) {
+      set({ syncStatus: { ...get().syncStatus, [accountId]: "idle" } });
+      return;
+    }
     try {
       await api.triggerSync(accountId);
       set({ syncStatus: { ...get().syncStatus, [accountId]: "idle" } });

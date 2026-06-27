@@ -691,14 +691,36 @@ async def rule_feedback(
         reason = (req.explanation or "").strip() or "Taught via Fix"
         if req.expected == "new":
             return {"created": False, "action": "new"}
-        # Each correction teaches one or more (pattern_type, value) signals.
+
+        # Conversation-status rules (To Reply / Awaiting / FYI / Actioned) are
+        # re-derived from the full thread, so a learned sender/subject pattern is
+        # OVERRIDDEN and pinning a person to one is wrong. For those, the fix that
+        # sticks is to set the thread status directly. Cleanup categories
+        # (Newsletter/Receipt/…) are sender-stable → learn FROM/SUBJECT patterns.
+        meta = {r["id"]: r for r in await _load_rules(db, req.account_id)}
+
+        # The Fix dialog passes the message id; derive its thread for a status fix.
+        thread_id = (req.thread_id or "").strip()
+        if not thread_id and req.message_id:
+            trow = (await db.execute(text(
+                "SELECT thread_id FROM email_messages "
+                "WHERE id = :mid AND account_id = :aid"
+            ), {"mid": req.message_id, "aid": req.account_id})).fetchone()
+            thread_id = (trow.thread_id if trow else "") or ""
+
+        def _conv_key(rid: str | None) -> str:
+            r = meta.get(str(rid)) or {}
+            k = ((r.get("system_type") or "").upper().strip()
+                 or (r.get("name") or "").upper().strip().replace(" ", "_"))
+            return k if k in {"TO_REPLY", "AWAITING_REPLY", "FYI", "ACTIONED"} \
+                else ""
+
+        # Pattern signals (only meaningful for cleanup rules).
         signals: list[tuple[str, str]] = []
         if sender:
             signals.append(("FROM", sender))
         if subject_kw:
             signals.append(("SUBJECT", subject_kw))
-        if not signals:
-            return {"created": False, "reason": "no sender or subject keyword"}
 
         async def _teach(rule_id: str, exclude: bool) -> None:
             for ptype, val in signals:
@@ -707,21 +729,42 @@ async def rule_feedback(
                     req.message_id, req.thread_id, pattern_type=ptype)
 
         learned: list[dict[str, Any]] = []
+        status_correction: dict[str, Any] | None = None
+
         if req.expected == "none":
+            # Stop the wrong CLEANUP rules from matching this sender (conversation
+            # rules can't be pattern-excluded — they're thread-state).
             for rid in req.matched_rule_ids:
-                await _teach(rid, True)
-                learned.append({"rule_id": rid, "exclude": True})
-        else:  # a specific rule id should have matched
-            await _teach(req.expected, False)
-            learned.append({"rule_id": req.expected, "exclude": False})
-            for rid in req.matched_rule_ids:
-                if rid and rid != req.expected:
+                if rid and not _conv_key(rid) and signals:
                     await _teach(rid, True)
                     learned.append({"rule_id": rid, "exclude": True})
+        else:
+            ck = _conv_key(req.expected)
+            if ck:
+                # Conversation status → set it directly on the thread.
+                if thread_id:
+                    from gateway.routes.email.automation.replyzero import (  # noqa: PLC0415
+                        apply_thread_status_correction,
+                    )
+                    status_correction = await apply_thread_status_correction(
+                        req.account_id, thread_id, ck)
+                learned.append({"rule_id": req.expected, "status_set": ck})
+            elif signals:
+                await _teach(req.expected, False)
+                learned.append({"rule_id": req.expected, "exclude": False})
+            # Stop the wrong CLEANUP rules from matching this sender too.
+            for rid in req.matched_rule_ids:
+                if (rid and rid != req.expected and not _conv_key(rid)
+                        and signals):
+                    await _teach(rid, True)
+                    learned.append({"rule_id": rid, "exclude": True})
+
         await db.commit()
-        return {"created": True, "learned": learned, "sender": sender,
+        created = bool(learned or status_correction)
+        return {"created": created, "learned": learned, "sender": sender,
                 "subject_keyword": subject_kw or None,
-                "signals": [t for t, _ in signals]}
+                "signals": [t for t, _ in signals],
+                "status_correction": status_correction}
     finally:
         await db.close()
 

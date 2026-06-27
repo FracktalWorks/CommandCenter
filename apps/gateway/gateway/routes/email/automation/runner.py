@@ -18,11 +18,13 @@ from gateway.routes.email.automation.drafting import (
     _fetch_sender_reply_examples,
     _fetch_thread_context,
     _is_no_draft,
+    _resolve_existing_thread_draft,
     _store_ai_draft,
     _upsert_local_draft,
 )
 from gateway.routes.email.automation.engine import (
     _email_payload_from_id,
+    _is_conversation_status_rule,
     _match_email_to_rule,
     _match_email_to_rules_multi,
     email_dict_from_row,
@@ -724,8 +726,16 @@ async def _apply_and_log_match(
         # inbox-zero's analyze-sender-pattern: only learn once the sender has
         # CONSISTENTLY matched this one rule (≥3 incl. now), so a single early
         # misclassification can't entrench itself. Best-effort.
+        #
+        # NEVER auto-learn a sender→rule pattern for the conversation-status rules
+        # (To Reply / Awaiting / FYI / Actioned): a person's mail flows between
+        # those states per-thread, so pinning a sender to one (e.g. "accounts team
+        # → always FYI") is wrong — and futile, since reply status is re-derived
+        # from the full thread and overrides any learned pattern. Sender→rule only
+        # makes sense for the stable cleanup categories (Newsletter/Receipt/etc.).
         sender = (frm.get("email") or "").strip()
         if (match.get("source") == "ai" and sender and rule.get("id")
+                and not _is_conversation_status_rule(rule)
                 and await _sender_consistent_for_rule(
                     db, account_id, sender, str(rule["id"]))):
             try:
@@ -1208,6 +1218,17 @@ async def _apply_rule_actions(
                 if not tmpl and skip_ai_drafts:
                     _log.info("email.draft_skipped_sensitive", account_id=account_id)
                     continue
+                # Dedup (inbox-zero handlePreviousDraftDeletion parity): at most
+                # one AI draft per thread — replace an unmodified prior draft,
+                # preserve one the user edited. Checked BEFORE generating so we
+                # don't waste an LLM call when preserving the user's draft.
+                tid = email.get("thread_id") or ""
+                if tid and account_id and provider is not None:
+                    if await _resolve_existing_thread_draft(
+                            db, provider, account_id, tid) == "keep":
+                        _log.info("email.draft_skipped_existing",
+                                  account_id=account_id)
+                        continue
                 # Static template wins; otherwise the orchestrating drafter
                 # (memory + sales/task-manager + thread history) writes a
                 # context-aware reply. Only the AI path needs the thread.

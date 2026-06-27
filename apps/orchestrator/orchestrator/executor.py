@@ -3251,11 +3251,21 @@ async def run_agent_stream(
                     # from a tighter window when tools inject large schemas.
                     _history_msgs = event_payload.get("messages") or []
                     _current_msg_text = event_payload.get("message") or event_payload.get("user_query") or ""
+                    _system_context = event_payload.get("system_context") or ""
                     if _is_byok_early and _history_msgs:
                         try:
                             from agent_framework import \
                                 Message as _MAFMsg  # noqa: PLC0415
                             _maf_messages: list[Any] = []
+                            # Lead with the caller's system context (persona / app
+                            # context) so multi-turn BYOK runs keep it too — the
+                            # string `message` path (used on the first turn) carries
+                            # it via _build_event_message, but the structured
+                            # message-list path here would otherwise drop it.
+                            if _system_context.strip():
+                                _maf_messages.append(
+                                    _MAFMsg(role="system", content=_system_context.strip())
+                                )
                             # Keep only the last 20 prior messages (10 exchanges)
                             for _h in _history_msgs[-20:]:
                                 _h_role = _h.get("role", "user")
@@ -3849,6 +3859,13 @@ def _build_event_message(
     memory_ctx = event_payload.get("memory_context") or ""
     if memory_ctx:
         parts.append("## Memory from past conversations\n" + memory_ctx)
+
+    # Caller-supplied system context (persona / app context — e.g. the email
+    # app's currently-selected account + open email).  Injected as a preamble so
+    # the agent operates with that context without the user having to repeat it.
+    system_ctx = event_payload.get("system_context") or ""
+    if system_ctx:
+        parts.append("## Current context\n" + system_ctx)
     if history:
         history_lines: list[str] = []
         # Cap at last 16 messages (8 exchanges) to avoid context/payload limits.

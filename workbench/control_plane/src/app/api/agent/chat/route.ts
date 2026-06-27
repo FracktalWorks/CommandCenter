@@ -680,7 +680,14 @@ export async function POST(req: NextRequest): Promise<Response> {
         headers: await buildGatewayHeaders(),
         body: JSON.stringify({
           agent: agentName,
-          payload: { mode: "chat", message, messages: messages ?? [], think_mode: thinkMode ?? "auto" },
+          payload: {
+            mode: "chat", message, messages: messages ?? [], think_mode: thinkMode ?? "auto",
+            // Forward the caller's system context (persona / persistent memory /
+            // app-specific context like the email app's selected account + open
+            // email) so named agents — not just the orchestrator — receive it.
+            // The executor injects it as a leading system message.
+            ...(context ? { system_context: context } : {}),
+          },
           thread_id: threadId ?? undefined,
           model: model ?? undefined,
         }),

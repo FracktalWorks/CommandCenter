@@ -18,6 +18,17 @@ class SendAttachment(BaseModel):
     content_b64: str  # base64-encoded file content
 
 
+class ArtifactAttachment(BaseModel):
+    """Attach a file from an agent's workspace by path (no base64 round-trip).
+
+    Lets the email-assistant attach files it (or a sub-agent like sales /
+    task-manager) produced via write_artifact, and lets the compose UI attach
+    AI-generated artifacts.  Resolved server-side, path-traversal-safe."""
+    path: str  # workspace-relative path (e.g. "outputs/quote.pdf")
+    name: str | None = None  # display filename (defaults to the file's name)
+    agent: str | None = None  # source agent workspace (defaults to email-assistant)
+
+
 class SendEmailRequest(BaseModel):
     account_id: str
     to: list[str]
@@ -28,6 +39,51 @@ class SendEmailRequest(BaseModel):
     bcc: list[str] | None = None
     reply_to_message_id: str | None = None
     attachments: list[SendAttachment] | None = None
+    # Workspace artifacts to attach (resolved to bytes server-side).
+    artifacts: list[ArtifactAttachment] | None = None
+
+
+def load_artifact_attachments(
+    refs: "list[ArtifactAttachment] | None",
+) -> list[dict]:
+    """Resolve workspace-artifact references to ``[{filename, content,
+    mime_type}]`` for a provider. Reads each ref from its source agent's
+    workspace (default ``email-assistant``). Best-effort + path-traversal-safe;
+    silently skips refs that don't resolve to a real file inside the workspace."""
+    if not refs:
+        return []
+    out: list[dict] = []
+    try:
+        import mimetypes  # noqa: PLC0415
+
+        from gateway.routes.workspace import \
+            _agent_workspace_dir  # noqa: PLC0415
+
+        ws_cache: dict[str, object] = {}
+        for ref in refs:
+            agent = (ref.agent or "email-assistant").strip() or "email-assistant"
+            rel = (ref.path or "").strip()
+            if not rel:
+                continue
+            ws = ws_cache.get(agent)
+            if ws is None:
+                ws = _agent_workspace_dir(agent)
+                ws_cache[agent] = ws
+            if not ws:
+                continue
+            ws_root = ws.resolve()
+            full = (ws / rel).resolve()
+            if not str(full).startswith(str(ws_root)) or not full.is_file():
+                continue
+            mime, _ = mimetypes.guess_type(full.name)
+            out.append({
+                "filename": ref.name or full.name,
+                "content": full.read_bytes(),
+                "mime_type": mime or "application/octet-stream",
+            })
+    except Exception:  # noqa: BLE001
+        pass
+    return out
 
 
 @router.post("/send")
@@ -76,7 +132,7 @@ async def send_email(
         if not await provider.authenticate():
             raise HTTPException(status_code=401, detail="Email account auth failed")
 
-        attachments = None
+        attachments: list[dict] | None = None
         if req.attachments:
             import base64 as _b64
             try:
@@ -93,6 +149,12 @@ async def send_email(
                     status_code=400,
                     detail=f"Invalid attachment encoding: {exc}",
                 ) from exc
+
+        # Resolve any workspace-artifact attachments (agent-created files) to
+        # bytes and merge them in alongside base64 attachments.
+        artifact_atts = load_artifact_attachments(req.artifacts)
+        if artifact_atts:
+            attachments = (attachments or []) + artifact_atts
 
         msg_id = await provider.send_message(
             to=req.to,
@@ -139,3 +201,52 @@ async def send_email(
         return {"id": msg_id, "ok": True}
     finally:
         await db.close()
+
+
+class ImportArtifactRequest(BaseModel):
+    source_agent: str
+    source_path: str
+    name: str | None = None
+
+
+@router.post("/artifacts/import")
+async def import_artifact(
+    req: ImportArtifactRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Copy a file from another agent's workspace into the email-assistant
+    workspace (``agent-data/``) so it can be attached to emails and browsed /
+    downloaded in the email artifact picker. Returns the new
+    email-assistant-relative path. Path-traversal-safe."""
+    import shutil  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from gateway.routes.workspace import \
+        _agent_workspace_dir  # noqa: PLC0415
+
+    src_ws = _agent_workspace_dir(req.source_agent)
+    dst_ws = _agent_workspace_dir("email-assistant")
+    if not src_ws or not dst_ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    src_root = src_ws.resolve()
+    src = (src_ws / (req.source_path or "").strip()).resolve()
+    if not str(src).startswith(str(src_root)) or not src.is_file():
+        raise HTTPException(status_code=404, detail="Source artifact not found")
+
+    dest_dir = (dst_ws / "agent-data").resolve()
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    # Sanitise to a bare filename (no directory traversal in the chosen name).
+    fname = Path(req.name or src.name).name or src.name
+    dest = dest_dir / fname
+    # Avoid clobbering an existing file — suffix " (1)", " (2)", …
+    if dest.exists():
+        stem, suffix = dest.stem, dest.suffix
+        i = 1
+        while (dest_dir / f"{stem} ({i}){suffix}").exists():
+            i += 1
+        dest = dest_dir / f"{stem} ({i}){suffix}"
+    shutil.copy2(src, dest)
+
+    rel = str(dest.relative_to(dst_ws.resolve())).replace("\\", "/")
+    return {"path": rel, "name": dest.name}

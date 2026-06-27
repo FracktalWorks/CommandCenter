@@ -11,8 +11,9 @@ import { fullDateLabel, initials } from "../lib/utils";
 import { useEmailStore } from "../lib/emailStore";
 import {
   getAttachmentDownloadUrl, fetchFullBody, getEmail, listThread, createRule,
-  fileToSendAttachment, type SendAttachment,
+  fileToSendAttachment, type SendAttachment, type ArtifactAttachmentRef,
 } from "../lib/api";
+import { ArtifactAttachPicker } from "./ArtifactAttachPicker";
 import { MessageContent } from "./MessageContent";
 import { ConversationView, DraftCard, isDraftEmail } from "./ConversationView";
 import { LabelMenu } from "./LabelMenu";
@@ -43,6 +44,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const [replyCc, setReplyCc] = useState("");
   const [replyBcc, setReplyBcc] = useState("");
   const [replyAttachments, setReplyAttachments] = useState<SendAttachment[]>([]);
+  const [replyArtifacts, setReplyArtifacts] = useState<ArtifactAttachmentRef[]>([]);
   const [sendErr, setSendErr] = useState<string | null>(null);
   // ── Auto-save (Gmail-style): the reply persists as a Drafts message as you
   //    type, so closing the composer never loses it. draftIdRef holds the local
@@ -277,6 +279,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
     setDraftStatus("idle");
     setReplyBcc("");
     setReplyAttachments([]);
+    setReplyArtifacts([]);
     // HTML-only mail (e.g. Outlook) has no bodyText — fall back to the snippet.
     const quoteSrc = view.bodyText || view.snippet || "";
     if (mode === "forward") {
@@ -330,6 +333,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
     setReplyCc("");
     setReplyBcc("");
     setReplyAttachments([]);
+    setReplyArtifacts([]);
   };
 
   /** Send the reply/forward. If it was auto-saved as a draft we send that draft
@@ -354,7 +358,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
       // the auto-saved draft, if any, is discarded so it doesn't linger).
       if (
         draftIdRef.current && ccArr.length === 0 && bccArr.length === 0 &&
-        replyAttachments.length === 0
+        replyAttachments.length === 0 && replyArtifacts.length === 0
       ) {
         const saved = await saveDraft({
           accountId: selectedAccountId,
@@ -375,6 +379,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
           bodyText: replyBody,
           replyToMessageId: isForward ? undefined : email.providerMessageId,
           attachments: replyAttachments.length ? replyAttachments : undefined,
+          artifacts: replyArtifacts.length ? replyArtifacts : undefined,
         });
         if (draftIdRef.current) {
           // Drop the lingering auto-saved draft now the message has been sent.
@@ -861,11 +866,11 @@ export function EmailDetail({ email }: EmailDetailProps) {
               autoFocus
               className="w-full bg-transparent px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground outline-none resize-none"
             />
-            {replyAttachments.length > 0 && (
+            {(replyAttachments.length > 0 || replyArtifacts.length > 0) && (
               <div className="px-4 pb-2 flex flex-wrap gap-1.5">
                 {replyAttachments.map((a, i) => (
                   <span
-                    key={i}
+                    key={`f-${i}`}
                     className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border border-border bg-secondary text-muted-foreground"
                   >
                     <Paperclip size={10} />
@@ -875,6 +880,25 @@ export function EmailDetail({ email }: EmailDetailProps) {
                     <button
                       onClick={() =>
                         setReplyAttachments((prev) => prev.filter((_, j) => j !== i))
+                      }
+                      className="hover:text-foreground"
+                      title="Remove attachment"
+                    >
+                      <X size={10} />
+                    </button>
+                  </span>
+                ))}
+                {replyArtifacts.map((a, i) => (
+                  <span
+                    key={`a-${i}`}
+                    className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border border-primary/40 bg-primary/5 text-primary"
+                    title={a.path}
+                  >
+                    <Paperclip size={10} />
+                    <span className="truncate max-w-[140px]">{a.name || a.path}</span>
+                    <button
+                      onClick={() =>
+                        setReplyArtifacts((prev) => prev.filter((_, j) => j !== i))
                       }
                       className="hover:text-foreground"
                       title="Remove attachment"
@@ -913,6 +937,14 @@ export function EmailDetail({ email }: EmailDetailProps) {
                     }}
                   />
                 </label>
+                <ArtifactAttachPicker
+                  exclude={replyArtifacts.map((a) => a.path)}
+                  onPick={(ref) => {
+                    replyDirty.current = true;
+                    setReplyArtifacts((prev) =>
+                      prev.some((a) => a.path === ref.path) ? prev : [...prev, ref]);
+                  }}
+                />
                 <button
                   className="px-3 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
                   onClick={popOutToComposer}

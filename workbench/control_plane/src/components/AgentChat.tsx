@@ -22,6 +22,7 @@ import AgentStatusBar from "@/components/AgentStatusBar";
 import MessageActionBar from "@/components/MessageActionBar";
 import GenerativeUIPanel from "@/components/GenerativeUIPanel";
 import ArtifactCard, { type ArtifactMeta } from "@/components/ArtifactCard";
+import EmailToolCards from "@/components/email/EmailToolCards";
 import ArtifactViewerModal from "@/components/ArtifactViewerModal";
 import type { FileEntry } from "@/components/ArtifactSidebar";
 import FileUploadButton from "@/components/FileUploadButton";
@@ -364,6 +365,12 @@ const AGENT_SUGGESTIONS: Record<string, string[]> = {
     "Create a new lead",
     "What deals are closing this month?",
   ],
+  "email-assistant": [
+    "Summarize my unread email",
+    "What needs a reply?",
+    "Draft a reply to this email",
+    "Set up a rule to archive newsletters",
+  ],
 };
 
 // ── Per-agent model memory ──────────────────────────────────────────────
@@ -428,6 +435,25 @@ interface AgentChatProps {
    * cache is empty but the server still has rows to fetch.
    */
   expectedMessageCount?: number;
+  /**
+   * Email-app context: the currently-selected account + open email. Passed down
+   * to the rich email tool cards (Save-to-Drafts / rule actions) so they can act
+   * on the user's current selection. Harmless to omit — the cards also self-source
+   * these ids from the agent's tool-call args.
+   */
+  emailContext?: { accountId?: string | null; emailId?: string | null };
+  /**
+   * Compact layout for narrow embeds (e.g. the email app's 288px rail): trims the
+   * footer disclaimer + keyboard hints to save vertical space.
+   */
+  compact?: boolean;
+  /**
+   * One-shot text to drop into the composer (not auto-sent) — used by the email
+   * Assistant's "Fix" flow to hand a correction prompt to the user for review.
+   * Changing this value injects it; `onPendingInputConsumed` fires once applied.
+   */
+  pendingInput?: string;
+  onPendingInputConsumed?: () => void;
 }
 
 export default function AgentChat({
@@ -442,6 +468,10 @@ export default function AgentChat({
   onActivity,
   onArtifact,
   expectedMessageCount,
+  emailContext,
+  compact,
+  pendingInput,
+  onPendingInputConsumed,
 }: AgentChatProps) {
   // Active agent / model can change mid-chat (VS Code Copilot style).
   const [currentAgentName, setCurrentAgentName] = useState(agentName);
@@ -672,6 +702,19 @@ export default function AgentChat({
   const prevLoadingRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Inject one-shot external text into the composer (e.g. the email Assistant's
+  // "Fix" flow hands a correction prompt here for the user to review & send).
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (pendingInput && pendingInput.trim()) {
+      setInput(pendingInput);
+      inputRef.current?.focus();
+      onPendingInputConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingInput]);
+  /* eslint-enable react-hooks/set-state-in-effect */
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [statuses, setStatuses] = useState<IntegrationStatus[]>(externalStatuses ?? []);
   const [viewerEntry, setViewerEntry] = useState<FileEntry | null>(null);
@@ -1282,7 +1325,9 @@ export default function AgentChat({
 
   return (
     <div className="flex flex-col h-full bg-background">
-      {/* Agent header — VS Code-style minimal bar */}
+      {/* Agent header — VS Code-style minimal bar (hidden in compact embeds,
+          where the host provides its own toolbar). */}
+      {!compact && (
       <div className="flex items-center gap-2 h-9 px-4 border-b border-border bg-card/40 shrink-0">
         <div className={`w-2 h-2 rounded-full shrink-0 ${isLoading ? "bg-warning animate-pulse" : "bg-success"}`} />
         <span className="text-xs font-medium text-foreground truncate">{currentAgentName}</span>
@@ -1299,6 +1344,7 @@ export default function AgentChat({
           </a>
         )}
       </div>
+      )}
 
       {/* Missing integrations banner (compact) */}
       {!bannerDismissed && missingMandatory.length > 0 && (
@@ -1424,6 +1470,7 @@ export default function AgentChat({
                   </div>
                 )}
                 <MessageBubble message={msg} sessionId={sessionId} onChoice={handleChoice}
+                  emailContext={emailContext}
                   onFileOpen={(entry) => setViewerEntry(entry)}
                   onResend={(content) => { submitText(content); }}
                   onRetry={prevUserMsg ? () => { submitText(prevUserMsg.content); } : undefined} />
@@ -1809,16 +1856,20 @@ export default function AgentChat({
                 </span>
               )}
 
-              <span className="hidden sm:inline text-muted-foreground text-[10px] ml-auto">
-                <kbd className="text-muted-foreground">⏎</kbd> send · <kbd className="text-muted-foreground">⇧⏎</kbd> newline
-              </span>
+              {!compact && (
+                <span className="hidden sm:inline text-muted-foreground text-[10px] ml-auto">
+                  <kbd className="text-muted-foreground">⏎</kbd> send · <kbd className="text-muted-foreground">⇧⏎</kbd> newline
+                </span>
+              )}
             </div>
           </div>
 
           {/* Disclaimer */}
-          <p className="text-[9px] text-muted-foreground/50 text-center mt-1.5">
-            CommandCenter can make mistakes. Please verify important information.
-          </p>
+          {!compact && (
+            <p className="text-[9px] text-muted-foreground/50 text-center mt-1.5">
+              CommandCenter can make mistakes. Please verify important information.
+            </p>
+          )}
         </div>
       </form>
 
@@ -1840,6 +1891,7 @@ function MessageBubble({
   onFileOpen,
   onResend,
   onRetry,
+  emailContext,
 }: {
   message: ChatMessage;
   sessionId: string;
@@ -1847,6 +1899,7 @@ function MessageBubble({
   onFileOpen?: (entry: FileEntry) => void;
   onResend?: (content: string) => void;
   onRetry?: () => void;
+  emailContext?: { accountId?: string | null; emailId?: string | null };
 }) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
@@ -2058,6 +2111,14 @@ function MessageBubble({
           ))}
         </div>
       )}
+      {/* Inline email-assistant cards (editable draft, rule disable/delete).
+          Inert unless the message contains email-assistant tool calls, so this
+          renders in both the chat app and the email app. */}
+      <EmailToolCards
+        toolEvents={message.toolEvents}
+        accountId={emailContext?.accountId}
+        emailId={emailContext?.emailId}
+      />
       <GenerativeUIPanel
         agentState={message.agentState}
         customEvents={message.customEvents}

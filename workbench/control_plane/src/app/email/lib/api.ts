@@ -1,5 +1,5 @@
 import {
-  ChatMessage, Email, EmailAccount,
+  Email, EmailAccount,
   AnalyticsOverview, SenderStat, NewsletterStatus,
   AutomationRule, RuleTestResult, ExecutedRule, AssistantSettings,
   RecentTestResult, ColdSender, ReplyZeroThread, KnowledgeEntry,
@@ -363,6 +363,15 @@ export interface SendAttachment {
   contentB64: string;
 }
 
+/** Attach a file from an agent workspace by path (no base64 round-trip) —
+ *  e.g. an AI-generated artifact the email assistant (or a sub-agent) produced. */
+export interface ArtifactAttachmentRef {
+  path: string;
+  name?: string;
+  /** Source agent workspace (defaults to email-assistant on the backend). */
+  agent?: string;
+}
+
 export interface SendEmailParams {
   accountId: string;
   to: string[];
@@ -373,6 +382,8 @@ export interface SendEmailParams {
   bodyHtml?: string;
   replyToMessageId?: string;
   attachments?: SendAttachment[];
+  /** Workspace artifacts to attach (resolved to bytes server-side). */
+  artifacts?: ArtifactAttachmentRef[];
 }
 
 export async function sendEmail(params: SendEmailParams): Promise<{ id: string }> {
@@ -392,6 +403,13 @@ export async function sendEmail(params: SendEmailParams): Promise<{ id: string }
       filename: a.filename,
       mime_type: a.mimeType,
       content_b64: a.contentB64,
+    }));
+  }
+  if (params.artifacts?.length) {
+    body.artifacts = params.artifacts.map((a) => ({
+      path: a.path,
+      name: a.name,
+      agent: a.agent,
     }));
   }
   return gatewayFetch<{ id: string }>("/email/send", {
@@ -439,30 +457,7 @@ export async function resyncAccount(
   );
 }
 
-// ── AI Chat ──────────────────────────────────────────────────────────────
-
-export interface AIChatRequest {
-  messages: { role: "user" | "assistant"; content: string }[];
-  accountId?: string;
-  emailContextId?: string; // currently selected email for context
-  sessionId?: string; // stable per conversation (thread continuity)
-}
-
-/** An SSE event from the email assistant chat stream. `tool` events surface
- *  AG-UI tool activity (searched inbox / read email / drafted reply / …). */
-export interface AIChatStreamEvent {
-  type: string; // start | content | tool | done | error
-  content?: string;
-  done?: boolean;
-  // tool events
-  phase?: "start" | "result";
-  id?: string;
-  name?: string;
-  result?: string;
-  args?: Record<string, unknown> | null;
-  success?: boolean;
-  error?: string;
-}
+// ── Drafts ───────────────────────────────────────────────────────────────
 
 /** Save an explicit (user-edited) reply body to the provider Drafts folder. */
 export async function saveDraftText(
@@ -522,75 +517,11 @@ export async function sendDraft(
   });
 }
 
-export async function streamAIChat(
-  request: AIChatRequest,
-  onEvent: (event: AIChatStreamEvent) => void,
-  signal?: AbortSignal
-): Promise<void> {
-  const res = await fetch("/api/email/ai/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    // The gateway expects snake_case keys.
-    body: JSON.stringify({
-      messages: request.messages,
-      account_id: request.accountId ?? null,
-      email_context_id: request.emailContextId ?? null,
-      session_id: request.sessionId ?? null,
-    }),
-    signal,
-  });
-
-  if (!res.ok) throw new Error(`AI chat failed: ${res.status}`);
-
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error("No response body");
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (line.startsWith("data: ")) {
-        try {
-          const data = JSON.parse(line.slice(6));
-          onEvent(data);
-        } catch {
-          // skip malformed SSE lines
-        }
-      }
-    }
-  }
-}
-
-// ── Quick Actions ─────────────────────────────────────────────────────────
-
-export interface QuickActionResponse {
-  action: string;
-  result: string;
-  ok: boolean;
-}
-
-export async function triggerQuickAction(
-  action: string,
-  accountId?: string,
-  emailId?: string
-): Promise<QuickActionResponse> {
-  return gatewayFetch<QuickActionResponse>("/email/ai/quick-action", {
-    method: "POST",
-    body: JSON.stringify({
-      action,
-      account_id: accountId ?? null,
-      email_id: emailId ?? null,
-    }),
-  });
-}
+// NOTE: The email AI chat now runs through the shared chat pipeline
+// (@/components/AgentChat → /api/agent/chat → the `email-assistant` agent), so
+// the old bespoke streamAIChat / triggerQuickAction clients (which hit
+// /api/email/ai/chat and /email/ai/quick-action) were removed. The backend
+// endpoints still exist for any external callers.
 
 // ── OAuth ────────────────────────────────────────────────────────────────
 
@@ -819,7 +750,15 @@ export async function submitRuleFeedback(params: {
   threadId?: string;
   /** Optional subject keyword to learn alongside (or instead of) the sender. */
   subjectKeyword?: string;
-}): Promise<{ created: boolean; action?: string; learned?: unknown[]; sender?: string }> {
+}): Promise<{
+  created: boolean;
+  action?: string;
+  learned?: unknown[];
+  sender?: string;
+  /** Set when the correction was a conversation-status fix (thread status set
+   *  directly, since learned patterns are overridden for those rules). */
+  status_correction?: { ok: boolean; status?: string; label?: string } | null;
+}> {
   return gatewayFetch("/email/rules/feedback", {
     method: "POST",
     body: JSON.stringify({

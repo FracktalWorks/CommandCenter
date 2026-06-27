@@ -618,7 +618,13 @@ export async function POST(req: NextRequest): Promise<Response> {
     try {
       // AG-UI protocol: the current message must be part of the messages array.
       // Append it after the history so the agent sees the full conversation.
+      // Lead with the caller's system context (persona + injected memories +
+      // frontend-tools addendum) as a system message so the orchestrator gets it
+      // too — the /copilot/chat body's other fields are parsed by a pydantic
+      // model that drops unknown keys, so a top-level `system_context` field
+      // would be stripped; a system message in `messages` survives.
       const agUiMessages = [
+        ...(context ? [{ role: "system" as const, content: context }] : []),
         ...(messages ?? []).map((m) => ({ role: m.role, content: m.content })),
         { role: "user" as const, content: message },
       ];

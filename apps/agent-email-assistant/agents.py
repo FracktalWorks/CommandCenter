@@ -114,6 +114,25 @@ async def _delete(path: str) -> Any:
 
 # ── Read / triage tools ──────────────────────────────────────────────────────
 
+async def _account_labels() -> dict[str, str]:
+    """Map ``account_id`` → human label, for tagging cross-account results.
+
+    Used by the tools whose ``account_id`` is optional: when none is given the
+    gateway spans ALL of the user's accounts, so results from different inboxes
+    get mixed together with no way to tell them apart. Tagging each line with
+    its account fixes that for multi-account users (a no-op for single-account).
+    """
+    try:
+        accounts = await _get("/email/accounts")
+        return {
+            str(a.get("id")): (a.get("label") or a.get("email_address") or "")
+            for a in (accounts or [])
+            if a.get("id")
+        }
+    except Exception:
+        return {}
+
+
 async def list_accounts() -> str:
     """List the user's connected email accounts (id, address, unread count)."""
     accounts = await _get("/email/accounts")
@@ -139,11 +158,14 @@ async def search_emails(
     data = await _get("/email/messages", params)
     emails = data.get("emails", [])
     total = data.get("total", 0)
+    labels = {} if account_id else await _account_labels()
+    multi = len(labels) > 1
     lines = [f"Found {total} emails matching '{query}' in {folder}:"]
     for e in emails[:10]:
         frm = e.get("from_address", {}) or {}
+        acct = f" [{labels.get(str(e.get('account_id')), '?')}]" if multi else ""
         lines.append(
-            f"• id={e.get('id')} | {frm.get('name') or frm.get('email')}: "
+            f"• id={e.get('id')}{acct} | {frm.get('name') or frm.get('email')}: "
             f"{e.get('subject', '(no subject)')} — {(e.get('snippet') or '')[:90]}"
         )
     if total > 10:
@@ -175,11 +197,16 @@ async def find_urgent(account_id: str | None = None) -> str:
     emails = data.get("emails", [])
     if not emails:
         return "No urgent emails found."
+    # Tag each result with its account when the query spans multiple accounts
+    # (no account_id given) so cross-account results aren't ambiguous.
+    labels = {} if account_id else await _account_labels()
+    multi = len(labels) > 1
     lines = ["Urgent / needs attention:"]
     for e in emails[:10]:
         frm = e.get("from_address", {}) or {}
+        acct = f" [{labels.get(str(e.get('account_id')), '?')}]" if multi else ""
         lines.append(
-            f"• id={e.get('id')} | {frm.get('name') or frm.get('email')}: "
+            f"• id={e.get('id')}{acct} | {frm.get('name') or frm.get('email')}: "
             f"{e.get('subject', '(no subject)')}"
         )
     return "\n".join(lines)

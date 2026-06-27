@@ -25,6 +25,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import functools
 import json
@@ -2402,29 +2403,147 @@ async def run_agent_stream(
                     )
                     _copilot_session_id = None  # force new session
 
-            # ── Tier 1: try native MAF AG-UI streaming ──────────────────────
-            # Skip Tier 1 for BYOK GitHub Copilot agents — the MAF AG-UI path
-            # calls agent.run() which creates a Copilot SDK session without the
-            # BYOK provider routing, causing the SDK to reject unknown models.
-            # Instead, fall through to Tier 1.5 where CommandCenterCopilotAgent
-            # properly forwards the provider config to the Copilot SDK.
-            if not (_is_byok_early and _is_copilot_sdk):
+            # ── Tier 1: native MAF agent live streaming ─────────────────────
+            # The intended ``agent_framework.ag_ui.stream_agent_response`` is not
+            # exported by the installed ``agent_framework_ag_ui``, and the Tier
+            # 1.5 Copilot path below is gated to Copilot-SDK agents.  Without this
+            # branch a native MAF agent (e.g. email-assistant) falls to the Tier
+            # 2 BATCH path: no streamed reasoning, and the answer appears only
+            # once the whole run finishes.  Here we stream MAF's native run and
+            # translate its content deltas into the SAME AG-UI events the Copilot
+            # path emits — live text, reasoning, and tool calls — while draining
+            # ``_active_run_queue`` so injected-tool events (artifacts / todos /
+            # elicitation) still surface live.
+            #
+            # Safety net: if streaming raises BEFORE emitting anything, fall
+            # through to the proven Tier 2 batch path below.
+            if not _is_copilot_sdk and hasattr(agent, "run"):
+                _native_input = _compose_maf_run_input(
+                    agent_name, run_id, event_payload, integrations,
+                    is_byok=_is_byok_early,
+                )
+                _nq: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+                _nq_token = _active_run_queue.set(_nq)
+                _n_msg_id: str | None = None
+                _n_text_started = False
+                _n_emitted = False
+                _n_fc_ctr = [0]
                 try:
-                    from agent_framework.ag_ui import \
-                        stream_agent_response  # noqa: PLC0415
-                    message = _build_event_message(
-                        agent_name, run_id, event_payload, integrations
-                    )
-                    async for line in stream_agent_response(
-                        agent, message, run_id=run_id
-                    ):
-                        # Tee to Redis: this path yields pre-encoded AG-UI
-                        # frames that bypass _sse(), so tee explicitly.
-                        _tee_sse_line(line)
-                        yield line
+                    async with contextlib.AsyncExitStack() as _nstack:
+                        if hasattr(type(agent), "__aenter__"):
+                            await _nstack.enter_async_context(agent)
+                        async for _u in agent.run(_native_input, stream=True):
+                            for _c in (getattr(_u, "contents", None) or []):
+                                _ct = getattr(_c, "type", None)
+                                if _ct == "text":
+                                    _d = getattr(_c, "text", "") or ""
+                                    if not _d:
+                                        continue
+                                    if not _n_text_started:
+                                        _n_text_started = True
+                                        _n_msg_id = (
+                                            getattr(_u, "message_id", None)
+                                            or str(uuid.uuid4())
+                                        )
+                                        yield _sse({
+                                            "type": "TEXT_MESSAGE_START",
+                                            "messageId": _n_msg_id,
+                                            "role": "assistant",
+                                        })
+                                    _n_emitted = True
+                                    yield _sse({
+                                        "type": "TEXT_MESSAGE_CONTENT",
+                                        "messageId": _n_msg_id, "delta": _d,
+                                    })
+                                elif _ct == "text_reasoning":
+                                    _d = getattr(_c, "text", "") or ""
+                                    if _d:
+                                        _n_emitted = True
+                                        yield _sse({
+                                            "type":
+                                                "THINKING_TEXT_MESSAGE_CONTENT",
+                                            "delta": _d,
+                                        })
+                                elif _ct == "function_call":
+                                    _tcid = getattr(_c, "call_id", None) or ""
+                                    if not _tcid:
+                                        _n_fc_ctr[0] += 1
+                                        _tcid = f"{run_id}:fc:{_n_fc_ctr[0]}"
+                                    _tcname = getattr(_c, "name", "") or "tool"
+                                    _targs = getattr(_c, "arguments", None)
+                                    if isinstance(_targs, str) and _targs.strip():
+                                        with contextlib.suppress(Exception):
+                                            _targs = json.loads(_targs)
+                                    _targs_str = (
+                                        json.dumps(_targs)
+                                        if isinstance(_targs, dict)
+                                        else str(_targs or "")
+                                    )
+                                    _n_emitted = True
+                                    yield _sse({
+                                        "type": "TOOL_CALL_START",
+                                        "toolCallId": _tcid,
+                                        "toolCallName": _tcname,
+                                        "args": _targs_str,
+                                    })
+                                    if _targs:
+                                        yield _sse({
+                                            "type": "TOOL_CALL_ARGS",
+                                            "toolCallId": _tcid,
+                                            "delta": _targs_str,
+                                        })
+                                elif _ct == "function_result":
+                                    _tcid = getattr(_c, "call_id", None) or ""
+                                    _exc = getattr(_c, "exception", None)
+                                    _res = getattr(_c, "result", "") or ""
+                                    yield _sse({
+                                        "type": "TOOL_CALL_RESULT",
+                                        "toolCallId": _tcid,
+                                        "content": (
+                                            str(_exc) if _exc else str(_res)
+                                        )[:2000],
+                                        "success": _exc is None,
+                                    })
+                            # Surface injected-tool events (write_artifact,
+                            # manage_todo_list, ask_questions) live as pushed.
+                            while not _nq.empty():
+                                _qev = _nq.get_nowait()
+                                if _qev:
+                                    _n_emitted = True
+                                    yield _sse(_qev)
+                    # Drain any events that landed as the stream closed.
+                    while not _nq.empty():
+                        _qev = _nq.get_nowait()
+                        if _qev:
+                            yield _sse(_qev)
+                    if _n_text_started and _n_msg_id:
+                        yield _sse({
+                            "type": "TEXT_MESSAGE_END", "messageId": _n_msg_id,
+                        })
+                    yield _sse({
+                        "type": "RUN_FINISHED", "runId": run_id,
+                        "threadId": thread_id,
+                    })
+                    _active_run_queue.reset(_nq_token)
                     return
-                except (ImportError, AttributeError):
-                    pass  # MAF AG-UI streaming not available → fall through
+                except Exception as _nexc:
+                    with contextlib.suppress(Exception):
+                        _active_run_queue.reset(_nq_token)
+                    if _n_emitted:
+                        _log.exception(
+                            "executor.native_maf_stream_error",
+                            agent=agent_name,
+                        )
+                        yield _sse({
+                            "type": "RUN_ERROR", "runId": run_id,
+                            "message": str(_nexc),
+                        })
+                        return
+                    # Nothing emitted yet — fall through to Tier 2 batch.
+                    _log.warning(
+                        "executor.native_maf_stream_fallback",
+                        agent=agent_name, error=str(_nexc)[:200],
+                    )
 
             # ── Tier 1.5: GitHubCopilotAgent native streaming ───────────────
             # agent.run(stream=True) uses _stream_updates() which subscribes to
@@ -3818,6 +3937,58 @@ async def _run_with_maf_agent(
 
     text: str = getattr(response, "text", "") or ""
     return {"answer": text, "run_id": run_id, "agent": agent_name, "result": text}
+
+
+def _compose_maf_run_input(
+    agent_name: str,
+    run_id: str,
+    event_payload: dict[str, Any],
+    integrations: dict[str, Any],
+    *,
+    is_byok: bool,
+) -> Any:
+    """Build the input passed to a native MAF ``agent.run(...)`` call.
+
+    Mirrors the Tier 2 batch path's message construction so the streaming and
+    batch paths feed the agent identically:
+
+    * BYOK + history present → a structured ``list[Message]`` (the caller's
+      ``system_context`` as a leading system message, then the last ~10
+      exchanges, then the current user turn) so the model sees full turn
+      structure.
+    * Otherwise → the composed prompt string from :func:`_build_event_message`
+      (which already folds in memory_context + system_context + history).
+    """
+    message = _build_event_message(agent_name, run_id, event_payload, integrations)
+    history_msgs = event_payload.get("messages") or []
+    current_msg_text = (
+        event_payload.get("message") or event_payload.get("user_query") or ""
+    )
+    system_context = event_payload.get("system_context") or ""
+    if is_byok and history_msgs:
+        try:
+            from agent_framework import Message as _MAFMsg
+            maf_messages: list[Any] = []
+            if system_context.strip():
+                maf_messages.append(
+                    _MAFMsg(role="system", content=system_context.strip())
+                )
+            for _h in history_msgs[-20:]:
+                _h_role = _h.get("role", "user")
+                _h_content = (_h.get("content") or "").strip()
+                if not _h_content:
+                    continue
+                if _h_role == "user" and _h_content == current_msg_text.strip():
+                    continue
+                maf_messages.append(_MAFMsg(role=_h_role, content=_h_content))
+            if current_msg_text.strip():
+                maf_messages.append(
+                    _MAFMsg(role="user", content=current_msg_text.strip())
+                )
+            return maf_messages if maf_messages else message
+        except Exception:
+            return message
+    return message
 
 
 def _build_event_message(

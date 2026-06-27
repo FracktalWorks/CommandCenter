@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -1293,6 +1294,106 @@ async def delete_learned_pattern(pattern_id: str) -> str:
     return f"Forgot learned pattern {pattern_id}."
 
 
+async def get_full_body_email(email_id: str) -> str:
+    """Fetch the COMPLETE, untruncated body of an email straight from the
+    provider. Use this when read_email shows a cut-off body (long emails are
+    capped in local storage) and you need the full text to summarize, answer a
+    detailed question, or draft an accurate reply."""
+    e = await _get(f"/email/messages/{email_id}/full-body")
+    body = (e.get("body_text") or "").strip()
+    if not body:
+        html = (e.get("body_html") or "").strip()
+        body = re.sub(r"<[^>]+>", " ", html) if html else ""
+    if not body:
+        return "(The provider returned an empty body for this email.)"
+    return (
+        f"Subject: {e.get('subject', '(no subject)')}\n"
+        f"From: {e.get('from', '')}\n---\n{body[:12000]}"
+    )
+
+
+async def list_senders(
+    account_id: str | None = None, folder: str = "inbox", limit: int = 25
+) -> str:
+    """Who emails you the most — aggregate the inbox by sender (volume, unread
+    count, and whether a one-click unsubscribe is available). Use for "who are
+    my top senders?", high-volume triage, or finding newsletters to cut."""
+    params: dict[str, Any] = {
+        "folder": folder, "limit": str(max(1, min(limit, 200))),
+    }
+    if account_id:
+        params["account_id"] = account_id
+    data = await _get("/email/senders", params)
+    senders = data.get("senders", []) if isinstance(data, dict) else (data or [])
+    if not senders:
+        return "No senders found."
+    lines = ["Top senders by volume:"]
+    for s in senders[:limit]:
+        rr = s.get("read_rate")
+        rr_str = f", {round((rr or 0) * 100)}% read" if rr is not None else ""
+        unsub = " [has unsubscribe]" if s.get("unsubscribe_link") else ""
+        lines.append(
+            f"• {s.get('name') or s.get('email')} <{s.get('email')}> — "
+            f"{s.get('count', 0)} emails, {s.get('unread', 0)} unread"
+            f"{rr_str}{unsub}"
+        )
+    return "\n".join(lines)
+
+
+async def create_rules_from_prompt(account_id: str, prompt: str) -> str:
+    """Create automation rule(s) from a PLAIN-ENGLISH description (inbox-zero's
+    natural-language rule flow) — e.g. "Label anything from my bank as Finance
+    and archive it", or describe several rules at once. The AI turns the
+    description into structured rules and creates them. Confirm the description
+    with the user first; afterwards summarize what was created. For precise
+    single-rule control (specific conditions/actions), prefer create_rule."""
+    res = await _post(
+        "/email/rules/generate", {"account_id": account_id, "prompt": prompt}
+    )
+    created = res.get("created", []) or []
+    if not created:
+        return (
+            "Couldn't turn that into a rule: "
+            f"{res.get('error', 'try rephrasing the description.')}"
+        )
+    names = ", ".join(f"'{c.get('name', '?')}' (id={c.get('id')})" for c in created)
+    return f"Created {len(created)} rule(s): {names}."
+
+
+async def test_rule_match(
+    account_id: str,
+    email_id: str | None = None,
+    subject: str | None = None,
+    from_email: str | None = None,
+    body: str | None = None,
+) -> str:
+    """Preview which automation rule WOULD match an email, without applying
+    anything. Pass an `email_id`, or a pasted sample (`subject` / `from_email` /
+    `body`). Use to debug why mail is (or isn't) being labelled/handled as
+    expected before tweaking a rule with update_rule / learn_rule_pattern."""
+    payload: dict[str, Any] = {"account_id": account_id}
+    if email_id:
+        payload["email_id"] = email_id
+    if subject:
+        payload["subject"] = subject
+    if from_email:
+        payload["from_email"] = from_email
+    if body:
+        payload["body"] = body
+    res = await _post("/email/rules/test", payload)
+    if not res.get("matched"):
+        return res.get("reason") or "No rule matched this email."
+    rule = res.get("rule", {}) or {}
+    actions = ", ".join(
+        a.get("type", "") + (f":{a['label']}" if a.get("label") else "")
+        for a in res.get("actions", [])
+    )
+    return (
+        f"Matched rule '{rule.get('name')}' (id={rule.get('id')}): "
+        f"{res.get('reason', '')} → {actions or '(no actions)'}"
+    )
+
+
 # ── Tool registry ────────────────────────────────────────────────────────────
 
 # Tools attached to the MAF agent. call_agent / remember / save_memory /
@@ -1305,6 +1406,7 @@ _TOOLS = [
     query_inbox,
     get_important_emails,
     read_email,
+    get_full_body_email,
     find_urgent,
     find_needs_reply,
     get_unread_count,
@@ -1326,14 +1428,17 @@ _TOOLS = [
     # Senders / categorization
     categorize_senders,
     get_sender_categories,
+    list_senders,
     # Rules + history
     get_rules_and_settings,
     create_rule,
+    create_rules_from_prompt,
     update_rule,
     update_rule_state,
     delete_rule,
     reset_rules,
     run_rules_now,
+    test_rule_match,
     learn_rule_pattern,
     install_default_rules,
     list_rule_history,

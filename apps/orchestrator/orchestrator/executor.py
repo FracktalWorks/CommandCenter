@@ -715,6 +715,29 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
                 for fn in _extra_tools:
                     if fn.__name__ not in existing_names:
                         _do["tools"].append(fn)
+                # Give native MAF agents the LIVE agent registry so they can
+                # discover and delegate to ALL registered specialists via
+                # call_agent (Copilot-SDK agents get this through the
+                # system-message addendum; native MAF agents otherwise only know
+                # the agents hard-named in their instructions.md, so a newly
+                # registered specialist — e.g. a product-planner — is invisible).
+                if not is_sub_agent and any(
+                    fn.__name__ == "call_agent" for fn in _extra_tools
+                ):
+                    try:
+                        _reg = _build_registry_block()
+                        _prev = _do.get("instructions") or ""
+                        if _reg and "Delegatable agents" not in _prev:
+                            _do["instructions"] = (
+                                _prev
+                                + "\n\n## Delegatable agents (call_agent)\n"
+                                "Hand off to any of these registered specialist "
+                                "agents with call_agent(name, message) and use "
+                                "their reply (e.g. to gather context before "
+                                "drafting):\n" + _reg
+                            )
+                    except Exception:
+                        pass
                 continue
         except Exception:  # noqa: BLE001
             pass

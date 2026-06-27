@@ -46,8 +46,10 @@ the UI, you can do with a tool.
   workhorse for inbox-wide questions (combine any filters; `days` = last N days).
   **get_important_emails(account_id, days)** — the ranked "what should I check?"
   list. **search_emails(query, folder, account_id)** (simple full-text),
-  **read_email(email_id)**, **find_urgent**, **find_needs_reply**,
-  **get_unread_count**.
+  **read_email(email_id)** (stored body; call **get_full_body_email(email_id)**
+  when it's truncated), **find_urgent**, **find_needs_reply**,
+  **get_unread_count**, **list_senders(account_id?, folder?, limit?)** (top
+  senders by volume — "who emails me most?").
 - **manage_inbox(action, message_ids, account_id)** — archive/trash/read/unread/
   star/unstar. **apply_labels(account_id, message_ids, add, remove)**,
   **move_to_folder(account_id, message_ids, folder)**, **list_labels**,
@@ -65,8 +67,11 @@ the UI, you can do with a tool.
   first.
 - **categorize_senders** / **get_sender_categories**.
 - **get_rules_and_settings(account_id)**, **create_rule(...)** (full conditions +
-  up to two actions), **update_rule(...)**, **update_rule_state**,
-  **delete_rule**, **reset_rules**, **run_rules_now(account_id, dry_run)**,
+  up to two actions), **create_rules_from_prompt(account_id, prompt)** (describe
+  rule(s) in plain English and the AI builds them — inbox-zero style),
+  **update_rule(...)**, **update_rule_state**, **delete_rule**, **reset_rules**,
+  **run_rules_now(account_id, dry_run)**, **test_rule_match(account_id, email_id?
+  or pasted sample)** (preview which rule matches before changing anything),
   **learn_rule_pattern**, **install_default_rules**, **process_past_emails**.
 - **list_rule_history(account_id)** + **approve_execution / reject_execution /
   undo_execution(execution_id)** — drive the History tab's pending/applied items.

@@ -443,6 +443,20 @@ interface AgentChatProps {
    */
   emailContext?: { accountId?: string | null; emailId?: string | null };
   /**
+   * Force the model this chat runs on (e.g. the email app's assistant
+   * `chat_model` setting). When set it overrides the per-agent localStorage
+   * default and stays in sync as the value changes — so the surface conforms to
+   * an externally-configured model rather than its own picker. Empty/undefined
+   * keeps the normal per-agent picker behaviour.
+   */
+  model?: string;
+  /**
+   * Hide the in-chat model picker. Use with `model` when the model is governed
+   * elsewhere (e.g. the email Assistant settings) so there's a single source of
+   * truth instead of two competing controls.
+   */
+  lockModel?: boolean;
+  /**
    * Compact layout for narrow embeds (e.g. the email app's 288px rail): trims the
    * footer disclaimer + keyboard hints to save vertical space.
    */
@@ -469,13 +483,22 @@ export default function AgentChat({
   onArtifact,
   expectedMessageCount,
   emailContext,
+  model: forcedModel,
+  lockModel,
   compact,
   pendingInput,
   onPendingInputConsumed,
 }: AgentChatProps) {
   // Active agent / model can change mid-chat (VS Code Copilot style).
   const [currentAgentName, setCurrentAgentName] = useState(agentName);
-  const [currentModel, setCurrentModel] = useState(() => getLastModel(agentName) ?? "auto");
+  const [currentModel, setCurrentModel] = useState(
+    () => forcedModel || getLastModel(agentName) || "auto",
+  );
+  // Conform to an externally-governed model (e.g. the email assistant's
+  // `chat_model` setting) and re-sync if it changes.
+  useEffect(() => {
+    if (forcedModel) setCurrentModel(forcedModel);
+  }, [forcedModel]);
   // ── Thinking mode ──────────────────────────────────────────────────
   type ThinkMode = "auto" | "thinking" | "max";
   const [thinkMode, setThinkMode] = useState<ThinkMode>("auto");
@@ -501,12 +524,15 @@ export default function AgentChat({
   // otherwise every session open inflates the "Frequently Used" ranking.
   const prevModelRef = useRef<string | null>(null);
   useEffect(() => {
+    // Don't persist/track an externally-forced model — it's governed by its own
+    // setting and would otherwise overwrite the agent's own picker default.
+    if (forcedModel) return;
     setLastModel(currentAgentName, currentModel);
     if (prevModelRef.current !== null && prevModelRef.current !== currentModel) {
       incrementModelUsage(currentModel);
     }
     prevModelRef.current = currentModel;
-  }, [currentModel, currentAgentName]);
+  }, [currentModel, currentAgentName, forcedModel]);
 
   // ── Model sorting: frequently used models float to the top ──────────────
   const sortedModels = useMemo(() => {
@@ -1786,7 +1812,9 @@ export default function AgentChat({
 
               {isOrchestrator && <span className="w-px h-3.5 bg-border shrink-0" />}
 
-              {/* Model selector */}
+              {/* Model selector — hidden when the model is governed externally
+                  (e.g. the email Assistant's chat_model setting). */}
+              {!lockModel && (
               <div className="relative">
                 <button onClick={() => setShowModelMenu((v) => !v)}
                   className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-secondary hover:text-foreground tech-transition truncate max-w-[110px] sm:max-w-[150px]">
@@ -1813,6 +1841,7 @@ export default function AgentChat({
                   </div>
                 )}
               </div>
+              )}
 
               <span className="w-px h-3.5 bg-secondary/60 shrink-0" />
 

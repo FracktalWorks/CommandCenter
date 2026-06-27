@@ -324,7 +324,7 @@ export interface AssistantSettings {
   /** Model for draft writing — replies, follow-ups, DRAFT_EMAIL rule actions
    *  (default tier-powerful). */
   draft_model: string;
-  /** Model the interactive email chat panel uses (default tier-balanced). */
+  /** Model the interactive email chat panel uses (default tier-powerful). */
   chat_model: string;
   /** Scheduled inbox-digest cadence. */
   digest_frequency: DigestFrequency;

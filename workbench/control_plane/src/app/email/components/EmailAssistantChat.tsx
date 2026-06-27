@@ -30,6 +30,7 @@ import { useActiveSessions } from "@/hooks/useActiveSessions";
 import { useChatMemories } from "@/hooks/useChatMemories";
 import { useEmailStore } from "../lib/emailStore";
 import { buildEmailAssistantPersona } from "../lib/emailAssistantPersona";
+import { getAssistantSettings } from "../lib/api";
 
 const AGENT = "email-assistant";
 
@@ -56,6 +57,29 @@ export function EmailAssistantChat({
   const [activeId, setActiveId] = useState<string>("");
   const [showSessions, setShowSessions] = useState(false);
   const [pendingInput, setPendingInput] = useState<string | undefined>();
+
+  // The email chat runs on the model configured in the account's Assistant
+  // settings (`chat_model`) — not AgentChat's generic per-agent picker — so the
+  // single source of truth is Assistant → Settings → Models. Fetched per account.
+  const [chatModel, setChatModel] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (!selectedAccountId) {
+      setChatModel(undefined);
+      return;
+    }
+    let cancelled = false;
+    getAssistantSettings(selectedAccountId)
+      .then((s) => {
+        if (!cancelled) setChatModel(s.chat_model || undefined);
+      })
+      .catch(() => {
+        // Fall back to AgentChat's default model if the lookup fails.
+        if (!cancelled) setChatModel(undefined);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAccountId]);
 
   // Inject Mem0 memories so the assistant has the SAME cross-conversation
   // continuity here as in the chat app (parity) — shared fetch + 30s poll via
@@ -265,6 +289,8 @@ export function EmailAssistantChat({
             agentName={AGENT}
             sessionId={activeSession.id}
             compact
+            model={chatModel}
+            lockModel
             persona={emailContextStr}
             emailContext={{ accountId: selectedAccountId, emailId: selectedEmailId }}
             memories={memories}

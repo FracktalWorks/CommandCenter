@@ -90,7 +90,7 @@ async def _load_assistant_about(db: Any, account_id: str) -> tuple[str, str]:
 _DEFAULT_TASK_MODELS = {
     "rule": "tier-fast",       # rule evaluation / classification / labeling
     "draft": "tier-powerful",  # draft writing
-    "chat": "tier-balanced",   # email chat panel
+    "chat": "tier-powerful",   # email chat panel (strong tool-caller)
 }
 
 
@@ -100,7 +100,7 @@ async def _account_models(db: Any, account_id: str) -> dict[str, str]:
     ``chat`` (the email chat panel).
 
     Each falls back to its per-task default (rule→tier-fast, draft→tier-powerful,
-    chat→tier-balanced) so automation works before the user saves a preference
+    chat→tier-powerful) so automation works before the user saves a preference
     or if the lookup fails."""
     out = dict(_DEFAULT_TASK_MODELS)
     if not account_id:
@@ -133,8 +133,8 @@ class AssistantSettingsModel(BaseModel):
     rule_model: str = "tier-fast"
     # Draft writing (replies, follow-ups, rule DRAFT_EMAIL actions):
     draft_model: str = "tier-powerful"
-    # The interactive email chat panel:
-    chat_model: str = "tier-balanced"
+    # The interactive email chat panel (strong tool-caller for reliability):
+    chat_model: str = "tier-powerful"
     digest_frequency: str = "OFF"  # OFF | DAILY | WEEKLY
     personal_instructions: str | None = None
     writing_style: str | None = None
@@ -298,7 +298,7 @@ async def put_assistant_settings(
             "auto": req.auto_run, "cold": req.cold_email_blocker or "OFF",
             "rule_model": req.rule_model or "tier-fast",
             "draft_model": req.draft_model or "tier-powerful",
-            "chat_model": req.chat_model or "tier-balanced",
+            "chat_model": req.chat_model or "tier-powerful",
             "digest": req.digest_frequency or "OFF",
             "pi": req.personal_instructions, "ws": req.writing_style,
             "dr": req.draft_replies, "fu": awaiting,
@@ -332,7 +332,7 @@ async def put_assistant_settings(
             "cold_email_blocker": req.cold_email_blocker or "OFF",
             "rule_model": req.rule_model or "tier-fast",
             "draft_model": req.draft_model or "tier-powerful",
-            "chat_model": req.chat_model or "tier-balanced",
+            "chat_model": req.chat_model or "tier-powerful",
             "digest_frequency": req.digest_frequency or "OFF",
             "personal_instructions": req.personal_instructions or "",
             "writing_style": req.writing_style or "",

@@ -3335,8 +3335,6 @@ async def run_agent_stream(
             # Run the agent in a background task.
             message = _build_event_message(agent_name, run_id, event_payload, integrations)
 
-            import contextlib  # noqa: PLC0415
-
             async def _run_task() -> str:
                 async with contextlib.AsyncExitStack() as stack:
                     # Pre-configure CopilotClient to deny the built-in shell tool.

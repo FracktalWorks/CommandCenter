@@ -219,7 +219,7 @@ export const PROVIDER_ENV_MAP: Record<string, string> = Object.fromEntries(
 /** id → Tailwind colour classes (includes "unknown" fallback) */
 export const PROVIDER_COLOURS: Record<string, string> = {
   ...Object.fromEntries(PROVIDERS.map((p) => [p.id, p.colour])),
-  unknown: "bg-zinc-700 text-zinc-400 border-zinc-700",
+  unknown: "bg-muted text-muted-foreground border-border",
 };
 
 /** id → display icon */

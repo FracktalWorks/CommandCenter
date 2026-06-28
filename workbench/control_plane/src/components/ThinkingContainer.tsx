@@ -540,20 +540,22 @@ export default function ThinkingContainer({
                       {open && (
                         <div className="mt-1">
                           {style.kind === "run" && (event.args || event.result) ? (
-                            <div className="rounded-md bg-[#0c0c0c] border border-border/60 overflow-hidden">
-                              {/* Terminal title bar */}
-                              <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-zinc-800 bg-card/80">
+                            <div className="rounded-md bg-[#0c0c0c] border border-white/10 overflow-hidden">
+                              {/* Terminal title bar — kept dark in both themes
+                                  (a terminal reads as a terminal), so use fixed
+                                  on-dark colors instead of theme tokens. */}
+                              <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-white/10 bg-white/5">
                                 <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f56] shrink-0" />
                                 <span className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e] shrink-0" />
                                 <span className="w-2.5 h-2.5 rounded-full bg-[#27c93f] shrink-0" />
-                                <span className="text-[10px] text-muted-foreground ml-2 font-mono tracking-wide">
+                                <span className="text-[10px] text-zinc-400 ml-2 font-mono tracking-wide">
                                   {event.args?.command ? "Terminal" : formatToolName(event.name)}
                                 </span>
                                 {isRunning && (
                                   <span className="text-[9px] text-sky-400 ml-auto animate-pulse font-mono">● running</span>
                                 )}
                                 {dur !== undefined && !isRunning && (
-                                  <span className="text-[9px] text-muted-foreground ml-auto font-mono">{dur}ms</span>
+                                  <span className="text-[9px] text-zinc-400 ml-auto font-mono">{dur}ms</span>
                                 )}
                               </div>
                               {/* Terminal body */}
@@ -561,7 +563,7 @@ export default function ThinkingContainer({
                                 {event.args && (
                                   <div className="flex gap-2 mb-1.5">
                                     <span className="text-emerald-400 shrink-0 select-none font-medium">$</span>
-                                    <span className="text-foreground break-all font-mono text-[11px] leading-relaxed">
+                                    <span className="text-zinc-100 break-all font-mono text-[11px] leading-relaxed">
                                       {highlightCommand(extractCommand(event.args, event.name))}
                                     </span>
                                   </div>

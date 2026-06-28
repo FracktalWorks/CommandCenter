@@ -233,7 +233,7 @@ function ChoiceBlock({
                 isPicked
                   ? "border-emerald-600/70 bg-emerald-900/40 text-emerald-200"
                   : picked !== null
-                  ? "border-zinc-800 bg-card/40 text-muted-foreground cursor-not-allowed"
+                  ? "border-border bg-card/40 text-muted-foreground cursor-not-allowed"
                   : "border-border bg-secondary/70 text-foreground hover:border-emerald-600/60 hover:bg-secondary"
               }`}
             >
@@ -391,7 +391,7 @@ export default function MarkdownMessage({
             </th>
           ),
           td: ({ children }) => (
-            <td className="px-4 py-2 text-foreground border-b border-zinc-800/60 last:border-b-0">
+            <td className="px-4 py-2 text-foreground border-b border-border/60 last:border-b-0">
               {children}
             </td>
           ),

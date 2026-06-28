@@ -50,9 +50,9 @@ type WizardStep =
 function ProgressBar({ current, total }: { current: number; total: number }) {
   const pct = total <= 1 ? 100 : Math.round(((current - 1) / (total - 1)) * 100);
   return (
-    <div className="w-full bg-neutral-800 rounded-full h-1">
+    <div className="w-full bg-secondary rounded-full h-1">
       <div
-        className="bg-blue-500 h-1 rounded-full transition-all duration-500"
+        className="bg-primary h-1 rounded-full transition-all duration-500"
         style={{ width: `${pct}%` }}
       />
     </div>
@@ -88,17 +88,17 @@ function IntegrationFormCard({
         state.saved
           ? "border-emerald-500 bg-emerald-500/5"
           : state.skipped
-          ? "border-neutral-600 bg-neutral-900/40 opacity-60"
-          : "border-neutral-700 bg-neutral-900"
+          ? "border-border bg-card/40 opacity-60"
+          : "border-border bg-card"
       }`}
     >
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-neutral-100">{integration.label}</span>
+            <span className="font-semibold text-foreground">{integration.label}</span>
             {optional && !state.saved && !state.skipped && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-neutral-700 text-neutral-400">
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-secondary text-muted-foreground">
                 Optional
               </span>
             )}
@@ -108,19 +108,19 @@ function IntegrationFormCard({
               </span>
             )}
             {state.skipped && (
-              <span className="text-xs text-neutral-500 bg-neutral-800 px-2 py-0.5 rounded-full">
+              <span className="text-xs text-muted-foreground bg-secondary px-2 py-0.5 rounded-full">
                 Skipped
               </span>
             )}
           </div>
-          <p className="text-sm text-neutral-400 mt-0.5">{integration.description}</p>
+          <p className="text-sm text-muted-foreground mt-0.5">{integration.description}</p>
         </div>
         {integration.setup_url && !state.saved && !state.skipped && (
           <a
             href={integration.setup_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs px-3 py-1.5 rounded-lg border border-blue-500/40 text-blue-400 hover:opacity-90/10 transition-colors shrink-0"
+            className="text-xs px-3 py-1.5 rounded-lg border border-primary/40 text-primary hover:opacity-90/10 transition-colors shrink-0"
           >
             Get credentials →
           </a>
@@ -129,7 +129,7 @@ function IntegrationFormCard({
 
       {/* Instructions */}
       {!state.saved && !state.skipped && integration.instructions && (
-        <pre className="text-xs text-neutral-400 bg-neutral-800/60 rounded-lg p-3 whitespace-pre-wrap leading-relaxed">
+        <pre className="text-xs text-muted-foreground bg-secondary/60 rounded-lg p-3 whitespace-pre-wrap leading-relaxed">
           {integration.instructions}
         </pre>
       )}
@@ -139,9 +139,9 @@ function IntegrationFormCard({
         <div className="space-y-3">
           {integration.env_vars.map((v) => (
             <div key={v.key}>
-              <label className="block text-xs text-neutral-400 mb-1">
+              <label className="block text-xs text-muted-foreground mb-1">
                 {v.label}
-                <span className="ml-2 font-mono text-neutral-500">({v.key})</span>
+                <span className="ml-2 font-mono text-muted-foreground">({v.key})</span>
               </label>
               <input
                 type={v.sensitive ? "password" : "text"}
@@ -150,7 +150,7 @@ function IntegrationFormCard({
                 value={state.values[v.key] ?? ""}
                 onChange={(e) => onValueChange(v.key, e.target.value)}
                 placeholder={`Enter ${v.label}…`}
-                className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-blue-500 transition-colors"
+                className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-ring transition-colors"
               />
             </div>
           ))}
@@ -181,21 +181,21 @@ function IntegrationFormCard({
           <button
             onClick={onSave}
             disabled={!allFilled || state.saving}
-            className="flex-1 py-2 rounded-lg bg-blue-600 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium text-white transition-colors"
+            className="flex-1 py-2 rounded-lg bg-primary hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium text-primary-foreground transition-colors"
           >
             {state.saving ? "Saving…" : "Save & continue"}
           </button>
           <button
             onClick={onTest}
             disabled={!allFilled || state.testing}
-            className="px-4 py-2 rounded-lg border border-neutral-600 hover:bg-neutral-800 disabled:opacity-40 text-sm text-neutral-300 transition-colors"
+            className="px-4 py-2 rounded-lg border border-border hover:bg-secondary disabled:opacity-40 text-sm text-foreground transition-colors"
           >
             {state.testing ? "Testing…" : "Test"}
           </button>
           {optional && onSkip && (
             <button
               onClick={onSkip}
-              className="px-4 py-2 rounded-lg border border-neutral-700 hover:bg-neutral-800 text-sm text-neutral-500 transition-colors"
+              className="px-4 py-2 rounded-lg border border-border hover:bg-secondary text-sm text-muted-foreground transition-colors"
             >
               Skip
             </button>
@@ -208,7 +208,7 @@ function IntegrationFormCard({
         <button
           onClick={onTest}
           disabled={state.testing}
-          className="px-4 py-2 rounded-lg border border-neutral-700 hover:bg-neutral-800 text-sm text-neutral-500 transition-colors"
+          className="px-4 py-2 rounded-lg border border-border hover:bg-secondary text-sm text-muted-foreground transition-colors"
         >
           {state.testing ? "Testing…" : "Re-test connection"}
         </button>
@@ -392,8 +392,8 @@ export default function AddAgentWizard({
   if (loading) {
     return (
       <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70">
-        <div className="flex flex-col items-center gap-3 text-neutral-400">
-          <div className="w-6 h-6 border-2 border-neutral-600 border-t-blue-500 rounded-full animate-spin" />
+        <div className="flex flex-col items-center gap-3 text-muted-foreground">
+          <div className="w-6 h-6 border-2 border-border border-t-blue-500 rounded-full animate-spin" />
           <span className="text-sm">Checking integrations…</span>
         </div>
       </div>
@@ -406,21 +406,21 @@ export default function AddAgentWizard({
       onClick={onCancel}
     >
       <div
-        className="w-full max-w-xl max-h-[90vh] flex flex-col rounded-2xl border border-neutral-700 bg-neutral-950 shadow-2xl"
+        className="w-full max-w-xl max-h-[90vh] flex flex-col rounded-2xl border border-border bg-card shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="px-6 py-4 border-b border-neutral-800 shrink-0">
+        <div className="px-6 py-4 border-b border-border shrink-0">
           <div className="flex items-center justify-between mb-3">
             <div>
-              <h2 className="text-base font-semibold text-neutral-100">Add agent</h2>
-              <p className="text-xs text-neutral-500 mt-0.5">
+              <h2 className="text-base font-semibold text-foreground">Add agent</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
                 Step {Math.min(stepIndex + 1, totalSteps)} of {totalSteps}
               </p>
             </div>
             <button
               onClick={onCancel}
-              className="text-neutral-500 hover:text-neutral-300 transition-colors text-sm"
+              className="text-muted-foreground hover:text-foreground transition-colors text-sm"
             >
               ✕
             </button>
@@ -435,16 +435,16 @@ export default function AddAgentWizard({
           {currentStep.kind === "overview" && (
             <div className="space-y-5">
               {/* Agent card */}
-              <div className="rounded-xl border border-neutral-700 bg-neutral-900 p-5">
+              <div className="rounded-xl border border-border bg-card p-5">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <h3 className="text-lg font-bold text-neutral-100">{agent.name}</h3>
-                    <p className="text-sm text-neutral-400 mt-1">{agent.description}</p>
+                    <h3 className="text-lg font-bold text-foreground">{agent.name}</h3>
+                    <p className="text-sm text-muted-foreground mt-1">{agent.description}</p>
                     <div className="flex gap-1.5 mt-3 flex-wrap">
                       {agent.tags.map((t) => (
                         <span
                           key={t}
-                          className="text-[10px] px-2 py-0.5 rounded bg-neutral-700 text-neutral-400"
+                          className="text-[10px] px-2 py-0.5 rounded bg-secondary text-muted-foreground"
                         >
                           {t}
                         </span>
@@ -456,34 +456,34 @@ export default function AddAgentWizard({
 
               {/* What this wizard will do */}
               <div className="space-y-2">
-                <p className="text-sm font-medium text-neutral-300">
+                <p className="text-sm font-medium text-foreground">
                   What we'll set up:
                 </p>
                 <ul className="space-y-1.5">
                   {/* GitHub is always first */}
-                  <li className="flex items-center gap-2 text-sm text-neutral-400">
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                  <li className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
                     <span>
-                      <strong className="text-neutral-300">GitHub</strong> — connect account to clone this agent's private repo
+                      <strong className="text-foreground">GitHub</strong> — connect account to clone this agent's private repo
                     </span>
                   </li>
                   {integrations
                     .filter((i) => i.service !== "github" && i.mandatory && !i.configured)
                     .map((i) => (
-                      <li key={i.service} className="flex items-center gap-2 text-sm text-neutral-400">
-                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                      <li key={i.service} className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
                         <span>
-                          <strong className="text-neutral-300">{i.label}</strong> — {i.description}
+                          <strong className="text-foreground">{i.label}</strong> — {i.description}
                         </span>
                       </li>
                     ))}
                   {integrations
                     .filter((i) => i.service !== "github" && i.mandatory && i.configured)
                     .map((i) => (
-                      <li key={i.service} className="flex items-center gap-2 text-sm text-neutral-400">
+                      <li key={i.service} className="flex items-center gap-2 text-sm text-muted-foreground">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
                         <span>
-                          <strong className="text-neutral-300">{i.label}</strong>{" "}
+                          <strong className="text-foreground">{i.label}</strong>{" "}
                           <span className="text-emerald-600 text-xs">(already configured)</span>
                         </span>
                       </li>
@@ -491,16 +491,16 @@ export default function AddAgentWizard({
                   {integrations
                     .filter((i) => i.service !== "github" && !i.mandatory && !i.configured)
                     .map((i) => (
-                      <li key={i.service} className="flex items-center gap-2 text-sm text-neutral-400">
-                        <span className="w-1.5 h-1.5 rounded-full bg-neutral-600 shrink-0" />
+                      <li key={i.service} className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <span className="w-1.5 h-1.5 rounded-full bg-secondary shrink-0" />
                         <span>
-                          <strong className="text-neutral-400">{i.label}</strong> — {i.description}{" "}
-                          <span className="text-neutral-600">(optional)</span>
+                          <strong className="text-muted-foreground">{i.label}</strong> — {i.description}{" "}
+                          <span className="text-muted-foreground">(optional)</span>
                         </span>
                       </li>
                     ))}
                   {integrations.length === 0 && (
-                    <li className="text-sm text-neutral-500">No integrations required — this agent is self-contained.</li>
+                    <li className="text-sm text-muted-foreground">No integrations required — this agent is self-contained.</li>
                   )}
                 </ul>
               </div>
@@ -524,7 +524,7 @@ export default function AddAgentWizard({
           {/* ── Mandatory integration step ────────────────────────────────── */}
           {currentStep.kind === "mandatory" && (
             <div className="space-y-3">
-              <div className="text-xs text-neutral-500 uppercase tracking-wide font-medium">
+              <div className="text-xs text-muted-foreground uppercase tracking-wide font-medium">
                 Required — {currentStep.index} of {currentStep.total}
               </div>
               <IntegrationFormCard
@@ -558,7 +558,7 @@ export default function AddAgentWizard({
           {/* ── Optional integration step ─────────────────────────────────── */}
           {currentStep.kind === "optional" && (
             <div className="space-y-3">
-              <div className="text-xs text-neutral-500 uppercase tracking-wide font-medium">
+              <div className="text-xs text-muted-foreground uppercase tracking-wide font-medium">
                 Optional — {currentStep.index} of {currentStep.total}
               </div>
               <IntegrationFormCard
@@ -599,10 +599,10 @@ export default function AddAgentWizard({
                 </svg>
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-neutral-100">
+                <h3 className="text-lg font-semibold text-foreground">
                   {agent.name} is ready
                 </h3>
-                <p className="text-sm text-neutral-400 mt-1">
+                <p className="text-sm text-muted-foreground mt-1">
                   All integrations are configured. You can start a conversation now.
                 </p>
               </div>
@@ -618,16 +618,16 @@ export default function AddAgentWizard({
                           className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] ${
                             s.saved
                               ? "bg-emerald-500/20 text-emerald-400"
-                              : "bg-neutral-700 text-neutral-500"
+                              : "bg-secondary text-muted-foreground"
                           }`}
                         >
                           {s.saved ? "✓" : "–"}
                         </span>
-                        <span className={s.saved ? "text-neutral-300" : "text-neutral-600"}>
+                        <span className={s.saved ? "text-foreground" : "text-muted-foreground"}>
                           {intg?.label ?? svc}
                         </span>
                         {s.skipped && (
-                          <span className="text-[10px] text-neutral-600">(skipped)</span>
+                          <span className="text-[10px] text-muted-foreground">(skipped)</span>
                         )}
                       </div>
                     );
@@ -638,12 +638,12 @@ export default function AddAgentWizard({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-neutral-800 shrink-0 flex items-center justify-between gap-3">
+        <div className="px-6 py-4 border-t border-border shrink-0 flex items-center justify-between gap-3">
           {/* Back button */}
           <button
             onClick={() => setStepIndex((i) => Math.max(0, i - 1))}
             disabled={stepIndex === 0 || currentStep.kind === "done"}
-            className="px-4 py-2 rounded-lg border border-neutral-700 hover:bg-neutral-800 disabled:opacity-30 disabled:cursor-not-allowed text-sm text-neutral-400 transition-colors"
+            className="px-4 py-2 rounded-lg border border-border hover:bg-secondary disabled:opacity-30 disabled:cursor-not-allowed text-sm text-muted-foreground transition-colors"
           >
             ← Back
           </button>
@@ -662,7 +662,7 @@ export default function AddAgentWizard({
                 ) : (
                   <button
                     onClick={() => setStepIndex(1)}
-                    className="px-5 py-2 rounded-lg bg-blue-600 hover:opacity-90 text-sm font-medium text-white transition-colors"
+                    className="px-5 py-2 rounded-lg bg-primary hover:opacity-90 text-sm font-medium text-primary-foreground transition-colors"
                   >
                     Set up integrations →
                   </button>
@@ -677,7 +677,7 @@ export default function AddAgentWizard({
                   setCardField("github", { skipped: true });
                   setStepIndex((i) => i + 1);
                 }}
-                className="px-4 py-2 rounded-lg border border-neutral-700 hover:bg-neutral-800 text-sm text-neutral-500 transition-colors"
+                className="px-4 py-2 rounded-lg border border-border hover:bg-secondary text-sm text-muted-foreground transition-colors"
               >
                 Skip for now
               </button>

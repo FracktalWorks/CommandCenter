@@ -2,14 +2,16 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import {
-  Loader2, MailMinus, Archive, ArchiveRestore, Check, ExternalLink, Search,
+  Loader2, Archive, ArchiveRestore, Check, ExternalLink, Search,
   ShieldX, Tags, Mail, X, MoreHorizontal, Trash2, RotateCcw, Clock,
+  ChevronDown,
 } from "lucide-react";
 import {
   listSenders, upsertNewsletter, unsubscribeSender, bulkAction,
   categorizeSenders,
 } from "../../lib/api";
 import { SenderStat, NewsletterStatus, SenderStatus } from "../../lib/types";
+import { useViewMode } from "@/components/ViewModeProvider";
 
 interface BulkUnsubscribeViewProps {
   accountId: string | null;
@@ -24,6 +26,9 @@ const AGE_OPTIONS = [
   { label: "90d", days: 90 },
   { label: "1y", days: 365 },
 ];
+
+/** AI categories that count as bulk/promotional mail for "Newsletters only". */
+const BULK_CATEGORIES = new Set(["Newsletter", "Marketing", "Notification"]);
 
 const STATUS_META: Record<SenderStatus, { label: string; cls: string }> = {
   UNHANDLED: { label: "Unhandled", cls: "bg-secondary text-muted-foreground" },
@@ -54,6 +59,7 @@ export function BulkUnsubscribeView({
   accountId,
   onArchived,
 }: BulkUnsubscribeViewProps) {
+  const { isMobile } = useViewMode();
   const [senders, setSenders] = useState<SenderStat[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -94,10 +100,14 @@ export function BulkUnsubscribeView({
   }, [notice]);
 
   const isNewsletter = (s: SenderStat) =>
-    // Always keep a sender we've already acted on visible, so the "Newsletters
-    // only" toggle can never hide a decision you might want to review or undo.
+    // Always keep a sender we've already acted on visible, so the toggle can't
+    // hide a decision. For an undecided sender, only treat it as a newsletter on
+    // a STRONG signal — a real List-Unsubscribe link, or the AI categorised it as
+    // bulk/promotional. (The old `count>=3 || read<0.4` matched almost every
+    // sender, so the toggle effectively did nothing.)
     s.status !== "UNHANDLED" ||
-    !!s.unsubscribe_link || s.count >= 3 || s.read_rate < 0.4;
+    !!s.unsubscribe_link ||
+    (s.category ? BULK_CATEGORIES.has(s.category) : false);
 
   const visible = useMemo(
     () =>
@@ -448,52 +458,6 @@ export function BulkUnsubscribeView({
         </button>
       </div>
 
-      {/* Quick clean — age-based bulk archive across ALL senders (not the
-          selection). Kept visually separate from the per-sender row actions. */}
-      <div className="flex items-center flex-wrap gap-2 px-3 sm:px-5 py-2 border-b border-border flex-shrink-0 bg-card/40">
-        <Clock size={12} className="text-primary flex-shrink-0" />
-        <span className="text-[11px] text-muted-foreground">
-          Archive {onlyRead ? "read " : ""}mail older than
-        </span>
-        <div className="flex items-center gap-0.5 bg-secondary rounded-md p-0.5">
-          {AGE_OPTIONS.map((o) => (
-            <button
-              key={o.days}
-              onClick={() => setOlderThan(o.days)}
-              className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
-                olderThan === o.days
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-        <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
-          <input
-            type="checkbox"
-            checked={onlyRead}
-            onChange={(e) => setOnlyRead(e.target.checked)}
-            className="accent-primary"
-          />
-          Only read
-        </label>
-        <button
-          onClick={quickClean}
-          disabled={busy === "__sweep__"}
-          title="Archive old inbox mail in one sweep (all senders)"
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 ml-auto"
-        >
-          {busy === "__sweep__" ? (
-            <Loader2 className="animate-spin" size={12} />
-          ) : (
-            <Archive size={12} />
-          )}
-          Archive old mail
-        </button>
-      </div>
-
       {/* Status filter tabs */}
       <div className="flex items-center gap-1 px-3 sm:px-5 py-2 border-b border-border flex-shrink-0 overflow-x-auto scrollbar-hide">
         {STATUS_TABS.map((t) => (
@@ -531,42 +495,63 @@ export function BulkUnsubscribeView({
             {selectedVisible.length} selected
           </span>
           <div className="flex-1" />
-          <ActionBtn
-            title="One-click unsubscribe each (blocks future mail when no link)"
-            onClick={() => bulkUnsubscribe()}
-            className="hover:bg-red-500/10 hover:text-red-400"
-          >
-            <ShieldX size={13} /> Unsubscribe
-          </ActionBtn>
-          <ActionBtn
-            title="Auto-archive future mail (provider filter)"
-            onClick={() => bulkAct("AUTO_ARCHIVED")}
-            className="hover:bg-amber-500/10 hover:text-amber-400"
-          >
-            <ArchiveRestore size={13} /> Auto-archive
-          </ActionBtn>
-          <ActionBtn
-            title="Keep — approve"
-            onClick={() => bulkAct("APPROVED")}
-            className="hover:bg-emerald-500/10 hover:text-emerald-400"
-          >
-            <Check size={13} /> Keep
-          </ActionBtn>
-          <div className="w-px h-4 bg-border mx-0.5" />
-          <ActionBtn
-            title="Archive all existing mail from the selected senders"
-            onClick={() => bulkMessagesAction("archive")}
-            className="hover:bg-secondary"
-          >
-            <Archive size={13} /> Archive all
-          </ActionBtn>
-          <ActionBtn
-            title="Move all existing mail from the selected senders to Trash"
-            onClick={() => bulkMessagesAction("trash")}
-            className="hover:bg-red-500/10 hover:text-red-400"
-          >
-            <Trash2 size={13} /> Delete
-          </ActionBtn>
+          {isMobile ? (
+            <ActionMenu
+              label="Actions"
+              items={[
+                { label: "Unsubscribe", icon: <ShieldX size={13} />,
+                  onClick: () => bulkUnsubscribe() },
+                { label: "Auto-archive future", icon: <ArchiveRestore size={13} />,
+                  onClick: () => bulkAct("AUTO_ARCHIVED") },
+                { label: "Keep", icon: <Check size={13} />,
+                  onClick: () => bulkAct("APPROVED") },
+                { sep: true },
+                { label: "Archive all existing", icon: <Archive size={13} />,
+                  onClick: () => bulkMessagesAction("archive") },
+                { label: "Delete all", icon: <Trash2 size={13} />, danger: true,
+                  onClick: () => bulkMessagesAction("trash") },
+              ]}
+            />
+          ) : (
+            <>
+              <ActionBtn
+                title="One-click unsubscribe each (blocks future mail when no link)"
+                onClick={() => bulkUnsubscribe()}
+                className="hover:bg-red-500/10 hover:text-red-400"
+              >
+                <ShieldX size={13} /> Unsubscribe
+              </ActionBtn>
+              <ActionBtn
+                title="Auto-archive future mail (provider filter)"
+                onClick={() => bulkAct("AUTO_ARCHIVED")}
+                className="hover:bg-amber-500/10 hover:text-amber-400"
+              >
+                <ArchiveRestore size={13} /> Auto-archive
+              </ActionBtn>
+              <ActionBtn
+                title="Keep — approve"
+                onClick={() => bulkAct("APPROVED")}
+                className="hover:bg-emerald-500/10 hover:text-emerald-400"
+              >
+                <Check size={13} /> Keep
+              </ActionBtn>
+              <div className="w-px h-4 bg-border mx-0.5" />
+              <ActionBtn
+                title="Archive all existing mail from the selected senders"
+                onClick={() => bulkMessagesAction("archive")}
+                className="hover:bg-secondary"
+              >
+                <Archive size={13} /> Archive all
+              </ActionBtn>
+              <ActionBtn
+                title="Move all existing mail from the selected senders to Trash"
+                onClick={() => bulkMessagesAction("trash")}
+                className="hover:bg-red-500/10 hover:text-red-400"
+              >
+                <Trash2 size={13} /> Delete
+              </ActionBtn>
+            </>
+          )}
           <button
             onClick={clearSelection}
             title="Clear selection"
@@ -619,6 +604,40 @@ export function BulkUnsubscribeView({
               const blocked =
                 s.status === "UNSUBSCRIBED" || s.status === "AUTO_ARCHIVED";
               const approved = s.status === "APPROVED";
+              const unsubIcon = isMailto ? (
+                <Mail size={13} />
+              ) : s.unsubscribe_link ? (
+                <ExternalLink size={13} />
+              ) : (
+                <ShieldX size={13} />
+              );
+              // One-off existing-mail cleanup (the desktop kebab + part of the
+              // mobile "Actions" menu).
+              const cleanupItems: MenuItem[] = [
+                { label: "Archive all existing", icon: <Archive size={13} />,
+                  onClick: () => messagesAction(s, "archive") },
+                { label: "Delete all", icon: <Trash2 size={13} />, danger: true,
+                  onClick: () => messagesAction(s, "trash") },
+              ];
+              // Full action set for the mobile single "Actions" button.
+              const rowItems: MenuItem[] = [
+                ...(blocked
+                  ? [{ label: "Resubscribe", icon: <RotateCcw size={13} />,
+                       onClick: () => act(s, "APPROVED") }]
+                  : [
+                      { label: s.unsubscribe_link ? "Unsubscribe" : "Block",
+                        icon: unsubIcon, onClick: () => doUnsubscribe(s) },
+                      { label: "Auto-archive future",
+                        icon: <ArchiveRestore size={13} />,
+                        onClick: () => act(s, "AUTO_ARCHIVED") },
+                      ...(approved
+                        ? []
+                        : [{ label: "Keep", icon: <Check size={13} />,
+                            onClick: () => act(s, "APPROVED") }]),
+                    ]),
+                { sep: true },
+                ...cleanupItems,
+              ];
               return (
                 <div
                   key={s.email}
@@ -685,10 +704,13 @@ export function BulkUnsubscribeView({
                     </div>
                   </div>
 
-                  {/* Actions (state-aware: Unsubscribe/Block vs Resubscribe) */}
+                  {/* Actions — collapsed into one "Actions" menu on mobile,
+                      inline buttons + cleanup kebab on desktop. */}
                   <div className="flex items-center gap-1 flex-shrink-0">
                     {busy === s.email ? (
                       <Loader2 className="animate-spin text-muted-foreground" size={14} />
+                    ) : isMobile ? (
+                      <ActionMenu label="Actions" items={rowItems} />
                     ) : blocked ? (
                       <>
                         <ActionBtn
@@ -698,10 +720,7 @@ export function BulkUnsubscribeView({
                         >
                           <RotateCcw size={13} /> Resubscribe
                         </ActionBtn>
-                        <RowMenu
-                          onArchiveAll={() => messagesAction(s, "archive")}
-                          onDeleteAll={() => messagesAction(s, "trash")}
-                        />
+                        <ActionMenu items={cleanupItems} />
                       </>
                     ) : (
                       <>
@@ -716,13 +735,7 @@ export function BulkUnsubscribeView({
                           onClick={() => doUnsubscribe(s)}
                           className="hover:bg-red-500/10 hover:text-red-400"
                         >
-                          {isMailto ? (
-                            <Mail size={13} />
-                          ) : s.unsubscribe_link ? (
-                            <ExternalLink size={13} />
-                          ) : (
-                            <ShieldX size={13} />
-                          )}
+                          {unsubIcon}
                           {s.unsubscribe_link ? "Unsub" : "Block"}
                         </ActionBtn>
                         <ActionBtn
@@ -741,10 +754,7 @@ export function BulkUnsubscribeView({
                             <Check size={13} /> Keep
                           </ActionBtn>
                         )}
-                        <RowMenu
-                          onArchiveAll={() => messagesAction(s, "archive")}
-                          onDeleteAll={() => messagesAction(s, "trash")}
-                        />
+                        <ActionMenu items={cleanupItems} />
                       </>
                     )}
                   </div>
@@ -754,11 +764,50 @@ export function BulkUnsubscribeView({
           </div>
         )}
       </div>
-      <div className="flex-shrink-0 px-3 sm:px-5 py-2 border-t border-border text-[10px] text-muted-foreground flex items-center gap-1.5">
-        <MailMinus size={11} />
-        Unsubscribe runs a real one-click request (or sends the unsubscribe email)
-        server-side and archives existing mail; with no link it blocks future mail
-        instead. Auto-archive adds a provider filter so future mail skips the inbox.
+      {/* Quick clean — age-based bulk archive across ALL senders. Pinned to the
+          bottom: it's a standalone sweep, independent of the sender list above. */}
+      <div className="flex-shrink-0 flex items-center flex-wrap gap-2 px-3 sm:px-5 py-2 border-t border-border bg-card/40">
+        <Clock size={12} className="text-primary flex-shrink-0" />
+        <span className="text-[11px] text-muted-foreground">
+          Archive {onlyRead ? "read " : ""}mail older than
+        </span>
+        <div className="flex items-center gap-0.5 bg-secondary rounded-md p-0.5">
+          {AGE_OPTIONS.map((o) => (
+            <button
+              key={o.days}
+              onClick={() => setOlderThan(o.days)}
+              className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
+                olderThan === o.days
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+        <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
+          <input
+            type="checkbox"
+            checked={onlyRead}
+            onChange={(e) => setOnlyRead(e.target.checked)}
+            className="accent-primary"
+          />
+          Only read
+        </label>
+        <button
+          onClick={quickClean}
+          disabled={busy === "__sweep__"}
+          title="Archive old inbox mail in one sweep (all senders)"
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 ml-auto"
+        >
+          {busy === "__sweep__" ? (
+            <Loader2 className="animate-spin" size={12} />
+          ) : (
+            <Archive size={12} />
+          )}
+          Archive old mail
+        </button>
       </div>
     </div>
   );
@@ -786,47 +835,63 @@ function ActionBtn({
   );
 }
 
-/** Per-row "More" menu — one-off cleanup of a sender's existing mail. Mirrors
- *  the popover pattern used in EmailToolbar (overlay catcher + absolute menu). */
-function RowMenu({
-  onArchiveAll,
-  onDeleteAll,
-}: {
-  onArchiveAll: () => void;
-  onDeleteAll: () => void;
-}) {
+type MenuItem =
+  | { sep: true }
+  | {
+      label: string;
+      icon: React.ReactNode;
+      onClick: () => void;
+      danger?: boolean;
+    };
+
+/** Dropdown of actions. With `label` it renders a labelled "Actions ▾" button
+ *  (used on mobile to collapse the row/bulk buttons into one); without one it's a
+ *  compact kebab. Mirrors the popover pattern used in EmailToolbar. */
+function ActionMenu({ items, label }: { items: MenuItem[]; label?: string }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="relative flex-shrink-0">
       <button
         onClick={() => setOpen((v) => !v)}
-        title="More actions"
-        className="p-1.5 rounded-md text-muted-foreground border border-border hover:text-foreground hover:bg-secondary transition-colors"
+        title={label || "More actions"}
+        className={`flex items-center gap-1 rounded-md text-[11px] text-muted-foreground border border-border hover:text-foreground hover:bg-secondary transition-colors ${
+          label ? "px-2.5 py-1.5 font-medium" : "p-1.5"
+        }`}
       >
-        <MoreHorizontal size={13} />
+        {label ? (
+          <>
+            {label}
+            <ChevronDown size={12} />
+          </>
+        ) : (
+          <MoreHorizontal size={13} />
+        )}
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 z-20 bg-popover border border-border rounded-lg shadow-xl py-1 w-44 text-xs">
-            <button
-              onClick={() => {
-                setOpen(false);
-                onArchiveAll();
-              }}
-              className="flex items-center gap-2 w-full px-3 py-1.5 text-left text-foreground hover:bg-secondary transition-colors"
-            >
-              <Archive size={13} /> Archive all existing
-            </button>
-            <button
-              onClick={() => {
-                setOpen(false);
-                onDeleteAll();
-              }}
-              className="flex items-center gap-2 w-full px-3 py-1.5 text-left text-red-400 hover:bg-red-500/10 transition-colors"
-            >
-              <Trash2 size={13} /> Delete all
-            </button>
+          <div className="absolute right-0 top-full mt-1 z-20 bg-popover border border-border rounded-lg shadow-xl py-1 w-52 text-xs max-h-[60vh] overflow-y-auto">
+            {items.map((it, i) =>
+              "sep" in it ? (
+                <div key={i} className="my-1 h-px bg-border" />
+              ) : (
+                <button
+                  key={i}
+                  onClick={() => {
+                    setOpen(false);
+                    it.onClick();
+                  }}
+                  className={`flex items-center gap-2 w-full px-3 py-1.5 text-left transition-colors ${
+                    it.danger
+                      ? "text-red-400 hover:bg-red-500/10"
+                      : "text-foreground hover:bg-secondary"
+                  }`}
+                >
+                  {it.icon}
+                  {it.label}
+                </button>
+              )
+            )}
           </div>
         </>
       )}

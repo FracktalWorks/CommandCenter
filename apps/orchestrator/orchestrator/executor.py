@@ -2531,21 +2531,71 @@ async def run_agent_stream(
                         _agen = agent.run(
                             _native_input, stream=True,
                         ).__aiter__()
+                        # Race the agent's next update against the injected-tool
+                        # event queue. A BLOCKING tool (ask_questions HITL) puts
+                        # its card on _nq then parks awaiting the user; the old
+                        # code only drained _nq *between* agent updates, so the
+                        # card never surfaced and the idle watchdog killed the
+                        # run. Draining concurrently makes HITL work on native MAF.
+                        _hitl_names = (
+                            "elicitation_requested",
+                            "confirmation_requested",
+                            "user_input_requested",
+                        )
+                        _hitl_idle_to = float(
+                            os.environ.get("HITL_IDLE_TIMEOUT_SECONDS", "3600")
+                        )
+                        _next_task: "asyncio.Task[Any] | None" = None
+                        _hitl_pending = False
                         while True:
-                            try:
-                                _u = await asyncio.wait_for(
-                                    _agen.__anext__(), timeout=_idle_to,
+                            if _next_task is None:
+                                _next_task = asyncio.ensure_future(
+                                    _agen.__anext__()
                                 )
-                            except StopAsyncIteration:
-                                break
-                            except TimeoutError:
-                                # No update for _idle_to seconds → the agent is
-                                # wedged.  Stop and let the post-loop emit a
-                                # RUN_ERROR instead of hanging the stream.
+                            _q_task = asyncio.ensure_future(_nq.get())
+                            _wait_to = (
+                                _hitl_idle_to if _hitl_pending else _idle_to
+                            )
+                            _done, _ = await asyncio.wait(
+                                {_next_task, _q_task},
+                                timeout=_wait_to,
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            if _q_task not in _done:
+                                _q_task.cancel()
+                            if not _done:
+                                # Genuine stall: no update, no event in window.
                                 _native_idle = True
+                                _next_task.cancel()
                                 with contextlib.suppress(Exception):
                                     await _agen.aclose()
                                 break
+                            # Surface queued injected-tool / HITL events at once
+                            # (this is what delivers a blocked tool's card live).
+                            if _q_task in _done:
+                                try:
+                                    _qev = _q_task.result()
+                                except Exception:  # noqa: BLE001
+                                    _qev = None
+                                while _qev is not None:
+                                    _n_emitted = True
+                                    if _qev.get("name") in _hitl_names:
+                                        _hitl_pending = True
+                                    yield _sse(_qev)
+                                    _qev = (
+                                        _nq.get_nowait()
+                                        if not _nq.empty() else None
+                                    )
+                            if _next_task not in _done:
+                                continue
+                            try:
+                                _u = _next_task.result()
+                            except StopAsyncIteration:
+                                break
+                            _next_task = None
+                            # Agent advanced (e.g. the HITL answer arrived) — no
+                            # longer parked on a question.
+                            _hitl_pending = False
                             for _c in (getattr(_u, "contents", None) or []):
                                 _ct = getattr(_c, "type", None)
                                 if _ct == "text":
@@ -2594,11 +2644,13 @@ async def run_agent_stream(
                                         "success": _exc is None,
                                     })
                             # Surface injected-tool events (write_artifact,
-                            # manage_todo_list, ask_questions) live as pushed.
+                            # manage_todo_list, …) emitted during this update.
                             while not _nq.empty():
                                 _qev = _nq.get_nowait()
                                 if _qev:
                                     _n_emitted = True
+                                    if _qev.get("name") in _hitl_names:
+                                        _hitl_pending = True
                                     yield _sse(_qev)
                     # Drain any events that landed as the stream closed.
                     while not _nq.empty():

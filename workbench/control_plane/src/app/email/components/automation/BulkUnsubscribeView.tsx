@@ -78,6 +78,9 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
   }, [notice]);
 
   const isNewsletter = (s: SenderStat) =>
+    // Always keep a sender we've already acted on visible, so the "Newsletters
+    // only" toggle can never hide a decision you might want to review or undo.
+    s.status !== "UNHANDLED" ||
     !!s.unsubscribe_link || s.count >= 3 || s.read_rate < 0.4;
 
   const visible = useMemo(

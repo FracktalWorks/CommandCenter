@@ -164,7 +164,21 @@ async def list_senders(
         scope = _account_scope(account_id, params)
         folder_sql = ""
         if folder:
-            folder_sql = " AND LOWER(em.folder) = LOWER(:folder)"
+            # Focus the list on the requested folder (the inbox) for discovery,
+            # but NEVER hide a sender we've already acted on: unsubscribing /
+            # auto-archiving moves their mail out of the inbox, so also include
+            # any sender that carries a saved disposition. Otherwise the
+            # Unsubscribed / Auto-archive tabs go empty after a refresh and the
+            # user can't review or undo their decisions.
+            nl_sub = "account_id IN (SELECT id FROM email_accounts WHERE user_id = :uid"
+            if account_id:
+                nl_sub += " AND id = :aid"
+            nl_sub += ")"
+            folder_sql = (
+                " AND (LOWER(em.folder) = LOWER(:folder)"
+                " OR LOWER(em.from_address->>'email') IN ("
+                f"SELECT LOWER(email) FROM email_newsletters WHERE {nl_sub}))"
+            )
             params["folder"] = folder
 
         rows = (await db.execute(text(

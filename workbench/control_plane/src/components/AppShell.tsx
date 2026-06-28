@@ -23,7 +23,7 @@ import {
   type ReactNode,
 } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { X, Monitor, Smartphone, MoreHorizontal, LogOut, Command, Mail, Sparkles } from "lucide-react";
+import { X, Monitor, Smartphone, MoreHorizontal, LogOut, Command, Mail, Zap } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useActiveSessions } from "@/hooks/useActiveSessions";
@@ -256,28 +256,35 @@ function MobileBottomNavInner({
     <nav className="flex items-center justify-around py-1.5 px-2">
         <button
           onClick={() => { open(menuContent); }}
-          className={`flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors min-w-[56px] ${
+          className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-colors min-w-[52px] ${
             isOpen ? "text-primary" : "text-muted-foreground hover:text-foreground"
           }`}
         >
-          <MenuIcon size={22} />
+          <MenuIcon size={21} />
           <span className="text-[10px] font-medium leading-none">Menu</span>
         </button>
         {isEmailPage && (
           <>
             <button
               onClick={() => dispatchNav("email-accounts")}
-              className="flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors text-primary min-w-[56px]"
+              className="flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground min-w-[52px]"
             >
-              <Mail size={22} />
+              <Mail size={21} />
               <span className="text-[10px] font-medium leading-none">Inbox</span>
             </button>
             <button
-              onClick={() => dispatchNav("email-ai")}
-              className="flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground min-w-[56px]"
+              onClick={() => dispatchNav("email-automation")}
+              className="flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground min-w-[52px]"
             >
-              <Sparkles size={22} />
-              <span className="text-[10px] font-medium leading-none">AI</span>
+              <Zap size={21} />
+              <span className="text-[10px] font-medium leading-none">Automation</span>
+            </button>
+            <button
+              onClick={() => dispatchNav("email-ai")}
+              className="flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground min-w-[52px]"
+            >
+              <MessageCircle size={21} />
+              <span className="text-[10px] font-medium leading-none">AI Chat</span>
             </button>
           </>
         )}

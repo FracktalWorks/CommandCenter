@@ -168,7 +168,10 @@ export default function EmailPage() {
 
   // ── Mobile drawer content builders ──
 
+  // Two separate mobile drawers: "Inbox" shows accounts + folders only,
+  // "Automation" shows the email-automation app list only.
   const accountsDrawerRef = useRef<React.ReactNode>(null);
+  const automationDrawerRef = useRef<React.ReactNode>(null);
 
   const handleAccountSelect = useCallback(
     (id: string) => {
@@ -227,8 +230,21 @@ export default function EmailPage() {
       onFolderSelect={handleFolderSelect}
       onAddAccount={handleAddAccount}
       onSearch={setSearchQuery}
+      showAutomation={false}
+    />
+  );
+
+  automationDrawerRef.current = (
+    <AccountSidebar
+      accounts={accounts}
+      selectedAccountId={selectedAccountId ?? ""}
+      onAccountSelect={handleAccountSelect}
+      folders={folders}
+      selectedFolder={selectedFolder}
+      onFolderSelect={handleFolderSelect}
       onOpenAutomation={handleOpenAutomation}
       activeAutomation={automationFeature}
+      showMailbox={false}
     />
   );
 
@@ -237,10 +253,14 @@ export default function EmailPage() {
     const handler = (e: Event) => {
       const tab = (e as CustomEvent<string>).detail;
       if (tab === "email-accounts" && accountsDrawerRef.current) {
+        // "Inbox" — folders/labels only (no automation section).
         openDrawer(accountsDrawerRef.current);
+      } else if (tab === "email-automation" && automationDrawerRef.current) {
+        // "Automation" — the email-automation app list.
+        openDrawer(automationDrawerRef.current);
       } else if (tab === "email-ai") {
-        // AI chat is a full scene (like Assistant / Reply Zero), not a bottom
-        // drawer — open it the same way on mobile as on desktop.
+        // "AI Chat" — jump straight to the email chat agent (a full scene,
+        // like Assistant / Reply Zero), not a bottom drawer.
         setAutomationFeature("chat");
         closeDrawer();
       }

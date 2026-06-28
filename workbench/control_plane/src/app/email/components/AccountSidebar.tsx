@@ -22,6 +22,12 @@ interface AccountSidebarProps {
   onOpenAutomation?: (feature: AutomationFeature) => void;
   /** Currently-open automation feature, for highlighting. */
   activeAutomation?: AutomationFeature | null;
+  /** Show the mailbox nav (accounts + search + folders). Default true.
+   *  Set false for the standalone "Automation" mobile drawer. */
+  showMailbox?: boolean;
+  /** Show the Email Automation app list. Default true.
+   *  Set false for the "Inbox" mobile drawer (folders only). */
+  showAutomation?: boolean;
 }
 
 const AUTOMATION_ITEMS: {
@@ -48,6 +54,8 @@ export function AccountSidebar({
   onSearch,
   onOpenAutomation,
   activeAutomation,
+  showMailbox = true,
+  showAutomation = true,
 }: AccountSidebarProps) {
   const [accountsExpanded, setAccountsExpanded] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -56,6 +64,8 @@ export function AccountSidebar({
 
   return (
     <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground overflow-hidden">
+      {showMailbox && (
+      <>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-4 border-b border-sidebar-border flex-shrink-0">
         <span className="text-xs tracking-widest uppercase text-muted-foreground font-semibold">
@@ -140,8 +150,41 @@ export function AccountSidebar({
       </div>
 
       <div className="border-t border-sidebar-border mx-3 mb-2 flex-shrink-0" />
+      </>
+      )}
+
+      {/* Email Automation — sits between accounts and folders */}
+      {showAutomation && (
+        <div className="flex-shrink-0 px-2 py-2.5">
+          <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] tracking-widest uppercase text-muted-foreground font-semibold">
+            <Zap size={11} className="text-primary" />
+            <span>Email Automation</span>
+          </div>
+          <div className="mt-1 space-y-0.5">
+            {AUTOMATION_ITEMS.map(({ key, label, icon: Icon }) => (
+              <button
+                key={key}
+                onClick={() => onOpenAutomation?.(key)}
+                className={`flex items-center gap-2.5 w-full px-2 py-1.5 rounded-md transition-colors text-left ${
+                  activeAutomation === key
+                    ? "bg-primary/15 text-primary"
+                    : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+                }`}
+              >
+                <Icon size={13} className="flex-shrink-0" />
+                <span className="text-xs">{label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {showMailbox && showAutomation && (
+        <div className="border-t border-sidebar-border mx-3 mb-2 flex-shrink-0" />
+      )}
 
       {/* Folders */}
+      {showMailbox && (
       <div className="flex-1 overflow-y-auto px-2 space-y-0.5 scrollbar-hide">
         {folders.map(({ label, key, count, type }) => {
           const IconComponent = getFolderIcon(key, type);
@@ -172,30 +215,7 @@ export function AccountSidebar({
           );
         })}
       </div>
-
-      {/* Footer — Email Automation */}
-      <div className="flex-shrink-0 border-t border-sidebar-border px-2 py-2.5">
-        <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] tracking-widest uppercase text-muted-foreground font-semibold">
-          <Zap size={11} className="text-primary" />
-          <span>Email Automation</span>
-        </div>
-        <div className="mt-1 space-y-0.5">
-          {AUTOMATION_ITEMS.map(({ key, label, icon: Icon }) => (
-            <button
-              key={key}
-              onClick={() => onOpenAutomation?.(key)}
-              className={`flex items-center gap-2.5 w-full px-2 py-1.5 rounded-md transition-colors text-left ${
-                activeAutomation === key
-                  ? "bg-primary/15 text-primary"
-                  : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent"
-              }`}
-            >
-              <Icon size={13} className="flex-shrink-0" />
-              <span className="text-xs">{label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
+      )}
     </div>
   );
 }

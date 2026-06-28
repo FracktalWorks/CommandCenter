@@ -169,7 +169,6 @@ export default function EmailPage() {
   // ── Mobile drawer content builders ──
 
   const accountsDrawerRef = useRef<React.ReactNode>(null);
-  const aiDrawerRef = useRef<React.ReactNode>(null);
 
   const handleAccountSelect = useCallback(
     (id: string) => {
@@ -233,16 +232,17 @@ export default function EmailPage() {
     />
   );
 
-  aiDrawerRef.current = <EmailAssistantChat selectedAccountId={selectedAccountId} selectedEmailId={selectedEmailId} />;
-
   // Listen for bottom-nav tab events from AppShell MobileBottomNav.
   useEffect(() => {
     const handler = (e: Event) => {
       const tab = (e as CustomEvent<string>).detail;
       if (tab === "email-accounts" && accountsDrawerRef.current) {
         openDrawer(accountsDrawerRef.current);
-      } else if (tab === "email-ai" && aiDrawerRef.current) {
-        openDrawer(aiDrawerRef.current);
+      } else if (tab === "email-ai") {
+        // AI chat is a full scene (like Assistant / Reply Zero), not a bottom
+        // drawer — open it the same way on mobile as on desktop.
+        setAutomationFeature("chat");
+        closeDrawer();
       }
     };
     window.addEventListener("cc-mobile-nav", handler);
@@ -266,19 +266,13 @@ export default function EmailPage() {
   }, [isMobile, closeDrawer]);
 
   // When the Assistant "Fix" flow queues a chat prompt, surface the AI chat so
-  // the prompt lands in its input. Desktop: open the full-scene chat; mobile:
-  // open the chat drawer.
+  // the prompt lands in its input. The chat is a full scene on both mobile and
+  // desktop, so open it the same way.
   useEffect(() => {
     if (!pendingChatPrompt) return;
-    if (isMobile) {
-      setAutomationFeature(null);
-      window.dispatchEvent(
-        new CustomEvent("cc-mobile-nav", { detail: "email-ai" })
-      );
-    } else {
-      setAutomationFeature("chat");
-    }
-  }, [pendingChatPrompt, isMobile]);
+    setAutomationFeature("chat");
+    closeDrawer();
+  }, [pendingChatPrompt, closeDrawer]);
 
   const handleEmailSelect = useCallback(
     (id: string) => {

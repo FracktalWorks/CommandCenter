@@ -249,6 +249,22 @@ export default function EmailPage() {
     return () => window.removeEventListener("cc-mobile-nav", handler);
   }, [openDrawer, closeDrawer]);
 
+  // Opening an email from a chat card (EmailToolCards) must leave any open
+  // automation scene — the full-screen Chat otherwise covers the inbox so the
+  // selected email never shows. On mobile, switch to the detail view + close
+  // the chat drawer.
+  useEffect(() => {
+    const onOpen = () => {
+      setAutomationFeature(null);
+      if (isMobile) {
+        setMobileView("detail");
+        closeDrawer();
+      }
+    };
+    window.addEventListener("cc-email-open", onOpen);
+    return () => window.removeEventListener("cc-email-open", onOpen);
+  }, [isMobile, closeDrawer]);
+
   // When the Assistant "Fix" flow queues a chat prompt, surface the AI chat so
   // the prompt lands in its input. Desktop: open the full-scene chat; mobile:
   // open the chat drawer.

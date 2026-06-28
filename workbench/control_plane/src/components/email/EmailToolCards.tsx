@@ -39,7 +39,16 @@ import { useEmailStore } from "@/app/email/lib/emailStore";
 
 const DRAFT_TOOLS = new Set(["draft_reply", "draft_email"]);
 const RULE_TOOLS = new Set(["create_rule", "update_rule"]);
-const LIST_TOOLS = new Set(["search_emails", "find_urgent", "find_needs_reply"]);
+// Tools whose result is a list of emails (each line carries `id=<id>`) — these
+// render as a clickable list that opens the message. Includes the assistant's
+// primary inbox tools (query_inbox / get_important_emails), not just search.
+const LIST_TOOLS = new Set([
+  "query_inbox",
+  "get_important_emails",
+  "search_emails",
+  "find_urgent",
+  "find_needs_reply",
+]);
 const READ_TOOL = "read_email";
 const SETTINGS_TOOL = "update_assistant_settings";
 
@@ -133,7 +142,9 @@ export default function EmailToolCards({
 
 // ── Navigation helper ─────────────────────────────────────────────────────────
 
-/** Open an email in the email app (selects it in the store + routes to /email). */
+/** Open an email in the email app: select it, leave any full-screen scene (the
+ *  Chat scene now covers the inbox, so we must exit it for the email to show),
+ *  and route to /email (a no-op in the email app, navigation from the chat app). */
 function useOpenEmail() {
   const router = useRouter();
   return (id: string) => {
@@ -141,6 +152,11 @@ function useOpenEmail() {
       useEmailStore.getState().selectEmail(id);
     } catch {
       /* store not ready — still navigate */
+    }
+    // Tell the email page to close any open automation scene (Chat / Reply Zero
+    // / …) and reveal the inbox + detail. Harmless elsewhere.
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("cc-email-open", { detail: id }));
     }
     router.push("/email");
   };
@@ -406,20 +422,43 @@ function SettingsUpdatedCard({ event: e }: { event: ToolEvent }) {
 
 interface ParsedRow { id: string; sender: string; subject: string }
 
-/** Parse the "• id=<id> | <sender>: <subject> — <snippet>" rows the read tools emit. */
+/** Parse the email-list rows the read tools emit. Handles every format the
+ *  email-assistant produces:
+ *    • id=<id> | <sender>: <subject> — <snippet>            (search/find/priority)
+ *    • id=<id> | <date> | <sender>: <subject>[flags] — <…>  (query_inbox)
+ *    • id=<id> [account] | <sender>: <subject>              (multi-account)
+ *  Strategy: pull the id, drop an optional [account] tag + leading metadata
+ *  pipe-segments, then split the LAST segment into "<sender>: <subject>". */
 function parseEmailRows(result: string): ParsedRow[] {
   const rows: ParsedRow[] = [];
   for (const line of result.split("\n")) {
-    const m = line.match(/id=([^\s|]+)\s*\|\s*([^:]+):\s*(.*)$/);
-    if (m) {
-      const subject = m[3].split(" — ")[0].trim();
-      rows.push({ id: m[1].trim(), sender: m[2].trim(), subject: subject || "(no subject)" });
-    }
+    const idM = line.match(/\bid=([^\s|\]]+)/);
+    if (!idM || idM.index === undefined) continue;
+    const id = idM[1].trim();
+    // Text after the id, minus a leading " [account]" tag.
+    const rest = line
+      .slice(idM.index + idM[0].length)
+      .replace(/^\s*\[[^\]]*\]/, "");
+    // Pipe-separated; the LAST non-empty segment is "<sender>: <subject>…".
+    // Earlier segments (date) are metadata we don't show in the row label.
+    const segs = rest.split("|").map((s) => s.trim()).filter(Boolean);
+    const last = segs[segs.length - 1] ?? "";
+    const colon = last.indexOf(":");
+    if (colon === -1) continue;
+    const sender = last.slice(0, colon).trim();
+    const subject = last
+      .slice(colon + 1)
+      .split(" — ")[0] // drop trailing snippet/reason
+      .replace(/\[[^\]]*\]\s*$/, "") // drop trailing [unread, star] flags
+      .trim();
+    rows.push({ id, sender, subject: subject || "(no subject)" });
   }
   return rows;
 }
 
 const LIST_META: Record<string, { icon: React.ElementType; label: string }> = {
+  query_inbox: { icon: Mail, label: "Inbox results" },
+  get_important_emails: { icon: Clock, label: "Important to check" },
   search_emails: { icon: Search, label: "Search results" },
   find_urgent: { icon: Clock, label: "Urgent / needs attention" },
   find_needs_reply: { icon: Reply, label: "Needs a reply" },

@@ -35,6 +35,7 @@ import {
   fetchFullBody, updateEmail as patchEmail, type FullBodyResponse,
 } from "@/app/email/lib/api";
 import { MessageContent } from "@/app/email/components/MessageContent";
+import { LabelChip } from "@/app/email/components/LabelChip";
 import { useEmailStore } from "@/app/email/lib/emailStore";
 
 // ── Tool → card routing ───────────────────────────────────────────────────────
@@ -132,6 +133,9 @@ export default function EmailToolCards({
         }
         if (LIST_TOOLS.has(e.name)) {
           return <EmailListCard key={e.id} event={e} />;
+        }
+        if (e.name === "apply_labels") {
+          return <LabelUpdateCard key={e.id} event={e} />;
         }
         if (e.name === READ_TOOL) {
           return <EmailPreviewCard key={e.id} event={e} />;
@@ -827,6 +831,64 @@ function EmailPreviewCard({ event: e }: { event: ToolEvent }) {
         row={{ id, sender: from || "(unknown sender)", subject }}
         defaultOpen
       />
+    </div>
+  );
+}
+
+// ── Label-update card ─────────────────────────────────────────────────────────
+
+/** apply_labels result — shows the labels added (as their coloured chips) and
+ *  removed (struck through), so the chat reflects what actually changed. */
+function LabelUpdateCard({ event: e }: { event: ToolEvent }) {
+  const args = e.args as Record<string, unknown> | undefined;
+  const toList = (v: unknown) =>
+    Array.isArray(v) ? v.map(String).map((s) => s.trim()).filter(Boolean) : [];
+  const add = toList(args?.add);
+  const remove = toList(args?.remove);
+  const ids = args?.message_ids;
+  const count = Array.isArray(ids) ? ids.length : 0;
+  // Nothing structured to show → fall back to the generic confirmation.
+  if (add.length === 0 && remove.length === 0) return <ActionResultCard event={e} />;
+  const failed = e.status === "error";
+
+  return (
+    <div
+      className={`rounded-lg border px-2.5 py-2 ${
+        failed ? "border-destructive/40 bg-destructive/5" : "border-sidebar-border bg-secondary/40"
+      }`}
+    >
+      <div className="flex items-center gap-1.5">
+        <Tag size={12} className={failed ? "text-destructive" : "text-primary"} />
+        <span className="text-[11px] font-medium text-foreground">
+          {failed ? "Couldn't update labels" : "Labels updated"}
+          {count > 0 && (
+            <span className="text-muted-foreground font-normal">
+              {" "}· {count} email{count > 1 ? "s" : ""}
+            </span>
+          )}
+        </span>
+      </div>
+      {add.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+          <span className="text-[10px] text-muted-foreground">Added</span>
+          {add.map((l) => (
+            <LabelChip key={l} name={l} icon className="text-[10px] px-2 py-0.5" />
+          ))}
+        </div>
+      )}
+      {remove.length > 0 && (
+        <div className="mt-1 flex flex-wrap items-center gap-1">
+          <span className="text-[10px] text-muted-foreground">Removed</span>
+          {remove.map((l) => (
+            <span
+              key={l}
+              className="text-[10px] px-2 py-0.5 rounded-full bg-secondary text-muted-foreground line-through"
+            >
+              {l}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

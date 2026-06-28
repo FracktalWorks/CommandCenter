@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import {
   Loader2, MailMinus, Archive, ArchiveRestore, Check, ExternalLink, Search,
-  ShieldX, Tags, Mail, X, MoreHorizontal, Trash2, RotateCcw,
+  ShieldX, Tags, Mail, X, MoreHorizontal, Trash2, RotateCcw, Clock,
 } from "lucide-react";
 import {
   listSenders, upsertNewsletter, unsubscribeSender, bulkAction,
@@ -13,7 +13,17 @@ import { SenderStat, NewsletterStatus, SenderStatus } from "../../lib/types";
 
 interface BulkUnsubscribeViewProps {
   accountId: string | null;
+  /** Called after a bulk archive/cleanup so the parent can refresh the inbox. */
+  onArchived?: () => void;
 }
+
+/** Age presets for the "Quick clean" sweep (archive read mail older than N). */
+const AGE_OPTIONS = [
+  { label: "7d", days: 7 },
+  { label: "30d", days: 30 },
+  { label: "90d", days: 90 },
+  { label: "1y", days: 365 },
+];
 
 const STATUS_META: Record<SenderStatus, { label: string; cls: string }> = {
   UNHANDLED: { label: "Unhandled", cls: "bg-secondary text-muted-foreground" },
@@ -40,7 +50,10 @@ function openUnsubscribe(link: string) {
   }
 }
 
-export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
+export function BulkUnsubscribeView({
+  accountId,
+  onArchived,
+}: BulkUnsubscribeViewProps) {
   const [senders, setSenders] = useState<SenderStat[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +61,9 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [onlyNewsletters, setOnlyNewsletters] = useState(true);
+  // "Quick clean" age sweep (folded in from the old Archiver).
+  const [olderThan, setOlderThan] = useState(30);
+  const [onlyRead, setOnlyRead] = useState(true);
   // Default to the "Unhandled" queue (inbox-zero parity) — the senders that
   // still need a decision, not everything.
   const [statusTab, setStatusTab] = useState<StatusTab>("UNHANDLED");
@@ -319,6 +335,39 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
     }
   };
 
+  // "Quick clean": archive inbox mail older than N days (optionally read-only),
+  // across all senders — a non-sender-specific sweep to hit inbox zero fast.
+  const quickClean = async () => {
+    if (!accountId) return;
+    const ageLabel =
+      AGE_OPTIONS.find((o) => o.days === olderThan)?.label ?? `${olderThan}d`;
+    if (
+      !window.confirm(
+        `Archive ${onlyRead ? "read " : ""}inbox mail older than ${ageLabel}?`
+      )
+    ) {
+      return;
+    }
+    setBusy("__sweep__");
+    setError(null);
+    try {
+      const { affected } = await bulkAction({
+        action: "archive",
+        accountId,
+        folder: "inbox",
+        olderThanDays: olderThan,
+        onlyRead,
+      });
+      setNotice(`Archived ${affected} old message${affected === 1 ? "" : "s"}.`);
+      onArchived?.();
+      load();
+    } catch (e) {
+      setError((e as Error).message || "Archive failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const runCategorize = async () => {
     if (!accountId) return;
     setCategorizing(true);
@@ -396,6 +445,52 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
         >
           {categorizing ? <Loader2 className="animate-spin" size={13} /> : <Tags size={13} />}
           {categorizing ? "Categorizing…" : "Categorize"}
+        </button>
+      </div>
+
+      {/* Quick clean — age-based bulk archive across ALL senders (not the
+          selection). Kept visually separate from the per-sender row actions. */}
+      <div className="flex items-center flex-wrap gap-2 px-3 sm:px-5 py-2 border-b border-border flex-shrink-0 bg-card/40">
+        <Clock size={12} className="text-primary flex-shrink-0" />
+        <span className="text-[11px] text-muted-foreground">
+          Archive {onlyRead ? "read " : ""}mail older than
+        </span>
+        <div className="flex items-center gap-0.5 bg-secondary rounded-md p-0.5">
+          {AGE_OPTIONS.map((o) => (
+            <button
+              key={o.days}
+              onClick={() => setOlderThan(o.days)}
+              className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
+                olderThan === o.days
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+        <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
+          <input
+            type="checkbox"
+            checked={onlyRead}
+            onChange={(e) => setOnlyRead(e.target.checked)}
+            className="accent-primary"
+          />
+          Only read
+        </label>
+        <button
+          onClick={quickClean}
+          disabled={busy === "__sweep__"}
+          title="Archive old inbox mail in one sweep (all senders)"
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 ml-auto"
+        >
+          {busy === "__sweep__" ? (
+            <Loader2 className="animate-spin" size={12} />
+          ) : (
+            <Archive size={12} />
+          )}
+          Archive old mail
         </button>
       </div>
 

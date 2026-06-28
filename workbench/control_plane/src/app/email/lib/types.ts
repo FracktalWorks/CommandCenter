@@ -80,7 +80,6 @@ export type AutomationFeature =
   | "reply-zero"
   | "digest"
   | "unsubscribe"
-  | "archive"
   | "analytics";
 
 export type DigestFrequency = "OFF" | "DAILY" | "WEEKLY";

@@ -4,7 +4,7 @@ import { useState } from "react";
 import {
   Inbox, Send, FileText, Trash2, Star, Archive, Tag,
   Search, Plus, ChevronDown, ChevronRight, Check,
-  ShieldAlert, Folder, Sparkles, MailMinus, Archive as ArchiveIcon,
+  ShieldAlert, Folder, Sparkles, MailMinus,
   BarChart3, Zap, Reply, Newspaper, MessageSquare,
 } from "lucide-react";
 import { EmailAccount, EmailFolder, AutomationFeature } from "../lib/types";
@@ -32,8 +32,7 @@ const AUTOMATION_ITEMS: {
   { key: "chat", label: "Chat", icon: MessageSquare },
   { key: "reply-zero", label: "Reply Zero", icon: Reply },
   { key: "digest", label: "Digest", icon: Newspaper },
-  { key: "unsubscribe", label: "Unsubscriber", icon: MailMinus },
-  { key: "archive", label: "Archiver", icon: ArchiveIcon },
+  { key: "unsubscribe", label: "Inbox Cleaner", icon: MailMinus },
   { key: "assistant", label: "AI Settings", icon: Sparkles },
   { key: "analytics", label: "Analytics", icon: BarChart3 },
 ];

@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  ArrowLeft, Sparkles, MailMinus, Archive, BarChart3, Reply, Newspaper,
+  ArrowLeft, Sparkles, MailMinus, BarChart3, Reply, Newspaper,
   MessageSquare,
 } from "lucide-react";
 import { AutomationFeature } from "../../lib/types";
@@ -9,7 +9,6 @@ import { AssistantView } from "./AssistantView";
 import { ReplyZeroView } from "./ReplyZeroView";
 import { DigestView } from "./DigestView";
 import { BulkUnsubscribeView } from "./BulkUnsubscribeView";
-import { BulkArchiveView } from "./BulkArchiveView";
 import { AnalyticsView } from "./AnalyticsView";
 
 interface AutomationViewProps {
@@ -47,14 +46,9 @@ const META: Record<
     icon: Newspaper,
   },
   unsubscribe: {
-    title: "Unsubscriber",
-    subtitle: "Clean up newsletters & subscriptions",
+    title: "Inbox Cleaner",
+    subtitle: "Unsubscribe, auto-archive & clear out the inbox",
     icon: MailMinus,
-  },
-  archive: {
-    title: "Archiver",
-    subtitle: "Archive old mail in bulk",
-    icon: Archive,
   },
   analytics: {
     title: "Analytics",
@@ -105,10 +99,7 @@ export function AutomationView({
         {feature === "reply-zero" && <ReplyZeroView accountId={accountId} />}
         {feature === "digest" && <DigestView accountId={accountId} />}
         {feature === "unsubscribe" && (
-          <BulkUnsubscribeView accountId={accountId} />
-        )}
-        {feature === "archive" && (
-          <BulkArchiveView accountId={accountId} onArchived={onArchived} />
+          <BulkUnsubscribeView accountId={accountId} onArchived={onArchived} />
         )}
         {feature === "analytics" && <AnalyticsView accountId={accountId} />}
       </div>

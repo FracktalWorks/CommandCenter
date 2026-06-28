@@ -27,7 +27,7 @@ import { useRouter } from "next/navigation";
 import {
   PenLine, Sparkles, CheckCircle2, Loader2, Send, Reply, Mail, MailOpen, Tag,
   Archive, FolderInput, Trash2, X, RefreshCw, ExternalLink, Settings2, BookOpen,
-  Clock, Wrench, Search, ChevronDown,
+  Clock, Wrench, Search, ChevronDown, Star,
 } from "lucide-react";
 import type { ToolEvent } from "@/components/MarkdownMessage";
 import {
@@ -136,6 +136,9 @@ export default function EmailToolCards({
         }
         if (e.name === "apply_labels") {
           return <LabelUpdateCard key={e.id} event={e} />;
+        }
+        if (e.name === "manage_inbox") {
+          return <ManageInboxCard key={e.id} event={e} />;
         }
         if (e.name === READ_TOOL) {
           return <EmailPreviewCard key={e.id} event={e} />;
@@ -889,6 +892,61 @@ function LabelUpdateCard({ event: e }: { event: ToolEvent }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Inbox-action card ─────────────────────────────────────────────────────────
+
+/** Per-action label/icon for manage_inbox (archive/trash/read/star/…). */
+const INBOX_ACTION_META: Record<
+  string,
+  { icon: React.ElementType; verb: string; danger?: boolean }
+> = {
+  archive: { icon: Archive, verb: "Archived" },
+  trash: { icon: Trash2, verb: "Trashed", danger: true },
+  read: { icon: MailOpen, verb: "Marked read" },
+  unread: { icon: Mail, verb: "Marked unread" },
+  star: { icon: Star, verb: "Starred" },
+  unstar: { icon: Star, verb: "Unstarred" },
+};
+
+/** manage_inbox result — names the action + email count ("Archived 3 emails")
+ *  instead of a generic "Inbox updated". */
+function ManageInboxCard({ event: e }: { event: ToolEvent }) {
+  const args = e.args as Record<string, unknown> | undefined;
+  const action = String(args?.action ?? "").toLowerCase();
+  const ids = args?.message_ids;
+  const count = Array.isArray(ids) ? ids.length : 0;
+  const meta = INBOX_ACTION_META[action];
+  // Unknown action or no count → fall back to the generic confirmation.
+  if (!meta || count === 0) return <ActionResultCard event={e} />;
+  const failed = e.status === "error";
+  const Icon = failed ? X : meta.icon;
+
+  return (
+    <div
+      className={`rounded-lg border px-2.5 py-2 ${
+        failed
+          ? "border-destructive/40 bg-destructive/5"
+          : meta.danger
+            ? "border-amber-500/40 bg-amber-500/5"
+            : "border-sidebar-border bg-secondary/40"
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={
+            failed ? "text-destructive" : meta.danger ? "text-amber-500" : "text-emerald-500"
+          }
+        >
+          <Icon size={13} />
+        </span>
+        <span className="text-[11px] font-medium text-foreground">
+          {failed ? `Couldn't ${meta.verb.toLowerCase()}` : meta.verb}{" "}
+          {count} email{count > 1 ? "s" : ""}
+        </span>
+      </div>
     </div>
   );
 }

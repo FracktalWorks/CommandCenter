@@ -1542,12 +1542,19 @@ export default function AgentChat({
                       return parts.join("\n");
                     })
                     .join("\n\n");
+                  // Single question → send the bare answer (freeform text, else
+                  // the selected option(s)). MULTIPLE questions → send the
+                  // structured block for EVERY answer; the old code took only the
+                  // first question's answer and dropped the rest.
+                  const single = elicitation.questions.length === 1;
                   const firstHeader = elicitation.questions[0]?.header ?? "Question";
                   const a = answers[firstHeader] ?? {};
-                  const selected = a.selected?.[0];
                   const freeform = a.freeform?.trim();
-                  const answer = freeform || selected || formatted;
-                  const wasFreeform = !!freeform && !selected;
+                  const selectedJoined = (a.selected ?? []).join(", ");
+                  const answer = single
+                    ? (freeform || selectedJoined || formatted)
+                    : formatted;
+                  const wasFreeform = single && !!freeform && !selectedJoined;
                   const reqId = elicitation.requestId;
                   setElicitation(null);
                   void fetch("/api/agent/respond-input", {

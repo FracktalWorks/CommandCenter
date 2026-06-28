@@ -2521,6 +2521,7 @@ async def run_agent_stream(
                 # many seconds, treat the agent as stalled and error out rather
                 # than hold the SSE open until the HTTP-level abort (~5 min).
                 _native_idle = False
+                _native_idle_after = 0.0
                 _idle_to = float(
                     os.environ.get("NATIVE_STREAM_IDLE_TIMEOUT_SECONDS", "120")
                 )
@@ -2545,6 +2546,15 @@ async def run_agent_stream(
                         _hitl_idle_to = float(
                             os.environ.get("HITL_IDLE_TIMEOUT_SECONDS", "3600")
                         )
+                        # A tool/sub-agent legitimately running parks the stream
+                        # too — give in-flight tool calls a longer budget than
+                        # the bare idle timeout so they aren't killed as stalls.
+                        _tool_idle_to = float(
+                            os.environ.get(
+                                "NATIVE_TOOL_IDLE_TIMEOUT_SECONDS", "600"
+                            )
+                        )
+                        _tools_open = 0
                         _next_task: "asyncio.Task[Any] | None" = None
                         _hitl_pending = False
                         while True:
@@ -2553,9 +2563,14 @@ async def run_agent_stream(
                                     _agen.__anext__()
                                 )
                             _q_task = asyncio.ensure_future(_nq.get())
-                            _wait_to = (
-                                _hitl_idle_to if _hitl_pending else _idle_to
-                            )
+                            # Tiered watchdog: 3600s while a HITL question is
+                            # pending, 600s while a tool is in flight, else 120s.
+                            if _hitl_pending:
+                                _wait_to = _hitl_idle_to
+                            elif _tools_open > 0:
+                                _wait_to = _tool_idle_to
+                            else:
+                                _wait_to = _idle_to
                             _done, _ = await asyncio.wait(
                                 {_next_task, _q_task},
                                 timeout=_wait_to,
@@ -2566,6 +2581,7 @@ async def run_agent_stream(
                             if not _done:
                                 # Genuine stall: no update, no event in window.
                                 _native_idle = True
+                                _native_idle_after = _wait_to
                                 _next_task.cancel()
                                 with contextlib.suppress(Exception):
                                     await _agen.aclose()
@@ -2629,9 +2645,16 @@ async def run_agent_stream(
                                         })
                                 elif _ct == "function_call":
                                     for _ev in _native_fc_events(_c, _fc_state):
+                                        # A new logical tool call is now in
+                                        # flight — the agent will park awaiting
+                                        # it, so the idle watchdog backs off
+                                        # (a long tool/sub-agent isn't a stall).
+                                        if _ev.get("type") == "TOOL_CALL_START":
+                                            _tools_open += 1
                                         _n_emitted = True
                                         yield _sse(_ev)
                                 elif _ct == "function_result":
+                                    _tools_open = max(0, _tools_open - 1)
                                     _tcid = getattr(_c, "call_id", None) or ""
                                     _exc = getattr(_c, "exception", None)
                                     _res = getattr(_c, "result", "") or ""
@@ -2664,13 +2687,14 @@ async def run_agent_stream(
                     if _native_idle:
                         _log.warning(
                             "executor.native_maf_stream_idle_timeout",
-                            agent=agent_name, idle_seconds=_idle_to,
+                            agent=agent_name, idle_seconds=_native_idle_after,
                         )
                         yield _sse({
                             "type": "RUN_ERROR", "runId": run_id,
                             "message": (
-                                f"Agent produced no output for {int(_idle_to)}s "
-                                "and was stopped (possible stall)."
+                                "Agent produced no output for "
+                                f"{int(_native_idle_after)}s and was stopped "
+                                "(possible stall)."
                             ),
                         })
                     else:

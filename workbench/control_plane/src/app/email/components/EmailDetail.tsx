@@ -637,7 +637,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                 key={cat}
                 name={cat}
                 icon
-                className="text-[10px] px-2 py-0.5"
+                className="text-[11px] px-2.5 py-1"
               />
             ))}
           </div>

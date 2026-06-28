@@ -21,7 +21,7 @@ export function LabelChip({
   active = false,
   icon = false,
   title,
-  className = "text-[9px] px-1.5 py-0.5",
+  className = "text-[11px] px-2 py-0.5",
 }: {
   name: string;
   onClick?: (e: React.MouseEvent) => void;
@@ -63,7 +63,7 @@ export function LabelChip({
         interactive ? "cursor-pointer hover:opacity-90" : ""
       } ${className}`}
     >
-      {icon && <Tag size={9} />}
+      {icon && <Tag size={11} />}
       {name}
     </span>
   );

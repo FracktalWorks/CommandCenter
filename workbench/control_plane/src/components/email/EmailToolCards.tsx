@@ -22,7 +22,7 @@
  * current selection — so they work in the chat app too.
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   PenLine, Sparkles, CheckCircle2, Loader2, Send, Reply, Mail, MailOpen, Tag,
@@ -635,40 +635,70 @@ function EmailListCard({ event: e }: { event: ToolEvent }) {
   );
 }
 
-/** One email row: click to expand the body inline (fetched on first open);
- *  Archive / Mark-read in place; "Open in inbox" jumps to the app. */
+/** One email row: click to expand the body inline (fetched lazily); Archive /
+ *  Mark-read in place; "Open in inbox" jumps to the app. Triage is controlled
+ *  by a parent (the list, for bulk) when status/handlers are passed, else
+ *  self-managed (single-email cards). `defaultOpen` shows the body immediately. */
 function EmailRow({
   row,
-  status,
-  onArchive,
-  onMarkRead,
+  status: extStatus,
+  onArchive: extArchive,
+  onMarkRead: extMarkRead,
+  defaultOpen = false,
 }: {
   row: ParsedRow;
-  status: RowStatus;
-  onArchive: () => void;
-  onMarkRead: () => void;
+  status?: RowStatus;
+  onArchive?: () => void;
+  onMarkRead?: () => void;
+  defaultOpen?: boolean;
 }) {
   const openEmail = useOpenEmail();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [body, setBody] = useState<FullBodyResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [localStatus, setLocalStatus] = useState<RowStatus>("idle");
+
+  const status = extStatus ?? localStatus;
+  const archive =
+    extArchive ??
+    (async () => {
+      setLocalStatus("busy");
+      try {
+        await patchEmail(row.id, { folder: "archive" });
+        setLocalStatus("archived");
+      } catch {
+        setLocalStatus("idle");
+      }
+    });
+  const markRead =
+    extMarkRead ??
+    (async () => {
+      setLocalStatus("busy");
+      try {
+        await patchEmail(row.id, { isRead: true });
+        setLocalStatus("read");
+      } catch {
+        setLocalStatus("idle");
+      }
+    });
 
   const archived = status === "archived";
   const done = archived || status === "read";
 
-  const toggle = () => {
-    const next = !open;
-    setOpen(next);
-    // Lazy-load the body the first time the row is expanded.
-    if (next && !body && !loading && !error) {
+  // Lazy-load the body whenever the row is open and not yet loaded — covers both
+  // click-to-expand and a defaultOpen single-email card.
+  useEffect(() => {
+    if (open && !body && !loading && !error) {
+      // Lazy body fetch on expand — a deliberate fetch-on-state-change effect.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoading(true);
       fetchFullBody(row.id)
         .then(setBody)
         .catch(() => setError(true))
         .finally(() => setLoading(false));
     }
-  };
+  }, [open, body, loading, error, row.id]);
 
   return (
     <div
@@ -678,7 +708,7 @@ function EmailRow({
     >
       <div className="flex items-center gap-1">
         <button
-          onClick={toggle}
+          onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
           className="flex items-center gap-1.5 flex-1 min-w-0 text-left px-1.5 py-1 rounded-md hover:bg-secondary/60"
         >
@@ -707,7 +737,7 @@ function EmailRow({
           ) : (
             <>
               <button
-                onClick={onMarkRead}
+                onClick={markRead}
                 title="Mark as read"
                 aria-label="Mark as read"
                 className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
@@ -715,7 +745,7 @@ function EmailRow({
                 <MailOpen size={11} />
               </button>
               <button
-                onClick={onArchive}
+                onClick={archive}
                 title="Archive"
                 aria-label="Archive"
                 className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
@@ -767,32 +797,36 @@ function EmailRow({
 
 // ── Email preview card ────────────────────────────────────────────────────────
 
-/** Opened email — show From / Subject + a button to open it in the app. */
+/** Opened email (read_email) — reuses the email row so the body expands inline
+ *  (full HTML), with Archive / Mark-read / Open. Shown expanded by default. */
 function EmailPreviewCard({ event: e }: { event: ToolEvent }) {
-  const openEmail = useOpenEmail();
   const args = e.args as Record<string, unknown> | undefined;
   const id = (args?.email_id as string) || "";
   const result = e.result || "";
   const from = result.match(/^From:\s*(.+)$/m)?.[1]?.trim() ?? "";
   const subject = result.match(/^Subject:\s*(.+)$/m)?.[1]?.trim() ?? "(no subject)";
 
+  // Without an id we can't fetch/open — fall back to a static header.
+  if (!id) {
+    return (
+      <div className="rounded-lg border border-sidebar-border bg-secondary/40 px-2.5 py-2">
+        <div className="flex items-center gap-2">
+          <Mail size={13} className="text-primary flex-shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] font-medium text-foreground truncate">{subject}</div>
+            {from && <div className="text-[10px] text-muted-foreground truncate">{from}</div>}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-lg border border-sidebar-border bg-secondary/40 px-2.5 py-2">
-      <div className="flex items-center gap-2">
-        <Mail size={13} className="text-primary flex-shrink-0" />
-        <div className="min-w-0 flex-1">
-          <div className="text-[11px] font-medium text-foreground truncate">{subject}</div>
-          {from && <div className="text-[10px] text-muted-foreground truncate">{from}</div>}
-        </div>
-        {id && (
-          <button
-            onClick={() => openEmail(id)}
-            className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary flex-shrink-0"
-          >
-            <ExternalLink size={10} /> Open
-          </button>
-        )}
-      </div>
+      <EmailRow
+        row={{ id, sender: from || "(unknown sender)", subject }}
+        defaultOpen
+      />
     </div>
   );
 }

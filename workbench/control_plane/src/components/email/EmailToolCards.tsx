@@ -27,12 +27,14 @@ import { useRouter } from "next/navigation";
 import {
   PenLine, Sparkles, CheckCircle2, Loader2, Send, Reply, Mail, Tag, Archive,
   FolderInput, Trash2, X, RefreshCw, ExternalLink, Settings2, BookOpen,
-  Clock, Wrench, Search,
+  Clock, Wrench, Search, ChevronDown,
 } from "lucide-react";
 import type { ToolEvent } from "@/components/MarkdownMessage";
 import {
   saveDraftText, sendDraft, deleteRule, listRules, updateRule,
+  fetchFullBody, type FullBodyResponse,
 } from "@/app/email/lib/api";
+import { MessageContent } from "@/app/email/components/MessageContent";
 import { useEmailStore } from "@/app/email/lib/emailStore";
 
 // ── Tool → card routing ───────────────────────────────────────────────────────
@@ -464,9 +466,9 @@ const LIST_META: Record<string, { icon: React.ElementType; label: string }> = {
   find_needs_reply: { icon: Reply, label: "Needs a reply" },
 };
 
-/** Clickable email results — each row opens the message in the email app. */
+/** Email results — each row expands its body inline (lazy-fetched) and has an
+ *  "Open in inbox" shortcut. */
 function EmailListCard({ event: e }: { event: ToolEvent }) {
-  const openEmail = useOpenEmail();
   const [expanded, setExpanded] = useState(false);
   const rows = parseEmailRows(e.result || "");
   // No parseable rows (e.g. "Nothing needs a reply") → generic summary card.
@@ -484,18 +486,7 @@ function EmailListCard({ event: e }: { event: ToolEvent }) {
       </div>
       <div className="space-y-1">
         {shown.map((r) => (
-          <button
-            key={r.id}
-            onClick={() => openEmail(r.id)}
-            className="w-full text-left rounded-md px-2 py-1 hover:bg-secondary border border-transparent hover:border-border transition-colors group"
-          >
-            <div className="flex items-center gap-1.5">
-              <Mail size={11} className="text-muted-foreground flex-shrink-0" />
-              <span className="text-[11px] text-foreground truncate flex-1">{r.subject}</span>
-              <ExternalLink size={10} className="text-muted-foreground opacity-0 group-hover:opacity-100 flex-shrink-0" />
-            </div>
-            <div className="text-[10px] text-muted-foreground truncate pl-[18px]">{r.sender}</div>
-          </button>
+          <EmailRow key={r.id} row={r} />
         ))}
       </div>
       {rows.length > 5 && (
@@ -505,6 +496,89 @@ function EmailListCard({ event: e }: { event: ToolEvent }) {
         >
           {expanded ? "Show less" : `Show ${rows.length - 5} more`}
         </button>
+      )}
+    </div>
+  );
+}
+
+/** One email row: click to expand the body inline (fetched on first open);
+ *  the side button opens it in the inbox. Mirrors inbox-zero's inline card. */
+function EmailRow({ row }: { row: ParsedRow }) {
+  const openEmail = useOpenEmail();
+  const [open, setOpen] = useState(false);
+  const [body, setBody] = useState<FullBodyResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    // Lazy-load the body the first time the row is expanded.
+    if (next && !body && !loading && !error) {
+      setLoading(true);
+      fetchFullBody(row.id)
+        .then(setBody)
+        .catch(() => setError(true))
+        .finally(() => setLoading(false));
+    }
+  };
+
+  return (
+    <div
+      className={`rounded-md border transition-colors ${
+        open ? "border-border bg-background" : "border-transparent hover:border-border"
+      }`}
+    >
+      <div className="flex items-center gap-1">
+        <button
+          onClick={toggle}
+          aria-expanded={open}
+          className="flex items-center gap-1.5 flex-1 min-w-0 text-left px-1.5 py-1 rounded-md hover:bg-secondary/60"
+        >
+          <ChevronDown
+            size={11}
+            className={`text-muted-foreground flex-shrink-0 transition-transform ${open ? "" : "-rotate-90"}`}
+          />
+          <span className="min-w-0 flex-1">
+            <span className="block text-[11px] text-foreground truncate">{row.subject}</span>
+            <span className="block text-[10px] text-muted-foreground truncate">{row.sender}</span>
+          </span>
+        </button>
+        <button
+          onClick={() => openEmail(row.id)}
+          title="Open in inbox"
+          aria-label="Open in inbox"
+          className="flex-shrink-0 p-1 mr-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
+        >
+          <ExternalLink size={11} />
+        </button>
+      </div>
+      {open && (
+        <div className="px-2 pb-2 pt-1.5 border-t border-border/50">
+          {loading ? (
+            <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground py-2">
+              <Loader2 size={11} className="animate-spin" /> Loading email…
+            </div>
+          ) : error ? (
+            <div className="text-[10px] text-muted-foreground py-1">
+              Couldn&apos;t load this email.{" "}
+              <button onClick={() => openEmail(row.id)} className="text-primary underline">
+                Open in inbox
+              </button>
+            </div>
+          ) : body ? (
+            <>
+              {body.from && (
+                <div className="text-[10px] text-muted-foreground mb-1 truncate">
+                  From: {body.from}
+                </div>
+              )}
+              <div className="max-h-72 overflow-y-auto rounded">
+                <MessageContent html={body.body_html} text={body.body_text} />
+              </div>
+            </>
+          ) : null}
+        </div>
       )}
     </div>
   );

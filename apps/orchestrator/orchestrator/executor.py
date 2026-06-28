@@ -2115,6 +2115,70 @@ def _sse(payload: dict[str, Any]) -> str:
     return line
 
 
+class _FcStreamState:
+    """Per-run state for de-duplicating streamed tool-call ids.
+
+    See :func:`_native_fc_events`.  One instance per native-MAF run.
+    """
+
+    __slots__ = ("run_id", "seen", "last_id", "counter")
+
+    def __init__(self, run_id: str) -> None:
+        self.run_id = run_id
+        self.seen: set[str] = set()
+        self.last_id: str | None = None
+        self.counter = 0
+
+
+def _native_fc_events(
+    content: Any, state: "_FcStreamState"
+) -> list[dict[str, Any]]:
+    """Map one agent-framework ``function_call`` content to TOOL_CALL_* event
+    payloads, collapsing the OpenAI streaming quirk where a tool call's id is
+    sent only on its FIRST chunk — the argument-streaming chunks that follow
+    carry ``call_id=""``.
+
+    Without this, each empty-id continuation chunk minted a fresh synthetic id,
+    so one streamed tool call rendered as several rows in the consciousness
+    timeline.  Continuation chunks are now attributed to the in-flight call, so
+    one tool call → one row.  Returns 0+ event payload dicts (no ``_stream_id``;
+    the caller wraps them with ``_sse``).
+    """
+    cid = getattr(content, "call_id", None) or ""
+    targs = getattr(content, "arguments", None)
+    # Streamed args arrive in pieces and are concatenated downstream, so forward
+    # a partial fragment verbatim (never JSON-parse a fragment).
+    delta = (
+        targs if isinstance(targs, str)
+        else json.dumps(targs) if isinstance(targs, dict)
+        else str(targs or "")
+    )
+    if not cid:
+        # Continuation chunk for the in-flight call — stream its args, no new row.
+        if state.last_id is not None:
+            return (
+                [{"type": "TOOL_CALL_ARGS",
+                  "toolCallId": state.last_id, "delta": delta}]
+                if delta else []
+            )
+        # No call started yet (defensive) — mint a synthetic id.
+        state.counter += 1
+        cid = f"{state.run_id}:fc:{state.counter}"
+    # A re-sent id for an already-started call: the row exists, don't duplicate.
+    if cid in state.seen:
+        return []
+    state.seen.add(cid)
+    state.last_id = cid
+    name = getattr(content, "name", "") or "tool"
+    out: list[dict[str, Any]] = [{
+        "type": "TOOL_CALL_START",
+        "toolCallId": cid, "toolCallName": name, "args": delta,
+    }]
+    if delta:
+        out.append({"type": "TOOL_CALL_ARGS", "toolCallId": cid, "delta": delta})
+    return out
+
+
 async def run_agent_stream(
     agent_name: str,
     event_payload: dict[str, Any],
@@ -2450,8 +2514,9 @@ async def run_agent_stream(
                 _n_msg_id: str | None = None
                 _n_text_started = False
                 _n_emitted = False
-                _n_fc_ctr = [0]
-                _n_seen_fc: set[str] = set()
+                # Tool-call id/dedup state (collapses OpenAI's streamed-id quirk
+                # where a call's id arrives only on its first chunk).
+                _fc_state = _FcStreamState(run_id)
                 # Idle watchdog: if the native stream yields no update for this
                 # many seconds, treat the agent as stalled and error out rather
                 # than hold the SSE open until the HTTP-level abort (~5 min).
@@ -2513,42 +2578,9 @@ async def run_agent_stream(
                                             "delta": _d,
                                         })
                                 elif _ct == "function_call":
-                                    _tcid = getattr(_c, "call_id", None) or ""
-                                    # Dedup: MAF can surface the SAME function_call
-                                    # across multiple streaming updates (its args
-                                    # stream in incrementally).  Emit each call's
-                                    # TOOL_CALL_* events only once per call_id so the
-                                    # consciousness timeline doesn't show the tool
-                                    # multiple times.
-                                    if _tcid and _tcid in _n_seen_fc:
-                                        continue
-                                    if not _tcid:
-                                        _n_fc_ctr[0] += 1
-                                        _tcid = f"{run_id}:fc:{_n_fc_ctr[0]}"
-                                    _n_seen_fc.add(_tcid)
-                                    _tcname = getattr(_c, "name", "") or "tool"
-                                    _targs = getattr(_c, "arguments", None)
-                                    if isinstance(_targs, str) and _targs.strip():
-                                        with contextlib.suppress(Exception):
-                                            _targs = json.loads(_targs)
-                                    _targs_str = (
-                                        json.dumps(_targs)
-                                        if isinstance(_targs, dict)
-                                        else str(_targs or "")
-                                    )
-                                    _n_emitted = True
-                                    yield _sse({
-                                        "type": "TOOL_CALL_START",
-                                        "toolCallId": _tcid,
-                                        "toolCallName": _tcname,
-                                        "args": _targs_str,
-                                    })
-                                    if _targs:
-                                        yield _sse({
-                                            "type": "TOOL_CALL_ARGS",
-                                            "toolCallId": _tcid,
-                                            "delta": _targs_str,
-                                        })
+                                    for _ev in _native_fc_events(_c, _fc_state):
+                                        _n_emitted = True
+                                        yield _sse(_ev)
                                 elif _ct == "function_result":
                                     _tcid = getattr(_c, "call_id", None) or ""
                                     _exc = getattr(_c, "exception", None)

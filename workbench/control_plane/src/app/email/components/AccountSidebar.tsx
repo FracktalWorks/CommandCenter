@@ -30,11 +30,11 @@ const AUTOMATION_ITEMS: {
   icon: React.ElementType;
 }[] = [
   { key: "chat", label: "Chat", icon: MessageSquare },
-  { key: "assistant", label: "Assistant", icon: Sparkles },
   { key: "reply-zero", label: "Reply Zero", icon: Reply },
   { key: "digest", label: "Digest", icon: Newspaper },
-  { key: "unsubscribe", label: "Bulk Unsubscribe", icon: MailMinus },
-  { key: "archive", label: "Bulk Archive", icon: ArchiveIcon },
+  { key: "unsubscribe", label: "Unsubscriber", icon: MailMinus },
+  { key: "archive", label: "Archiver", icon: ArchiveIcon },
+  { key: "assistant", label: "AI Settings", icon: Sparkles },
   { key: "analytics", label: "Analytics", icon: BarChart3 },
 ];
 

@@ -32,7 +32,7 @@ const META: Record<
     icon: MessageSquare,
   },
   assistant: {
-    title: "Assistant",
+    title: "AI Settings",
     subtitle: "Rules, testing & history",
     icon: Sparkles,
   },
@@ -47,12 +47,12 @@ const META: Record<
     icon: Newspaper,
   },
   unsubscribe: {
-    title: "Bulk Unsubscribe",
+    title: "Unsubscriber",
     subtitle: "Clean up newsletters & subscriptions",
     icon: MailMinus,
   },
   archive: {
-    title: "Bulk Archive",
+    title: "Archiver",
     subtitle: "Archive old mail in bulk",
     icon: Archive,
   },

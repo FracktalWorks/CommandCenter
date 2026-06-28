@@ -47,7 +47,7 @@ const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
   { key: "rules", label: "Rules", icon: Sparkles },
   { key: "test", label: "Test", icon: FlaskConical },
   { key: "history", label: "History", icon: HistoryIcon },
-  { key: "settings", label: "Settings", icon: Settings2 },
+  { key: "settings", label: "Advanced Settings", icon: Settings2 },
 ];
 
 const ACTION_TYPES: RuleActionType[] = [

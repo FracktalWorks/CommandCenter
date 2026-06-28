@@ -149,7 +149,7 @@ async def list_senders(
 ):
     """Aggregate messages by sender, merged with newsletter status.
 
-    Powers Bulk Archive (volume per sender) and Bulk Unsubscribe (read-rate +
+    Powers Archiver (volume per sender) and Unsubscriber (read-rate +
     unsubscribe link + approve/unsubscribe disposition).
     """
     db = await _get_db()

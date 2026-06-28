@@ -4,7 +4,6 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   PanelLeftClose,
   PanelLeftOpen,
-  MessageSquare,
   Columns2,
   ArrowLeft,
   RefreshCw,
@@ -184,6 +183,9 @@ export default function EmailPage() {
   const handleFolderSelect = useCallback(
     (f: string) => {
       selectFolder(f);
+      // Picking a folder is a "take me to my mail" signal — leave any open
+      // automation scene (Assistant / Reply Zero / Chat / …) and show the inbox.
+      setAutomationFeature(null);
       if (isMobile) {
         setMobileView("inbox");
         closeDrawer();
@@ -423,7 +425,7 @@ export default function EmailPage() {
       );
     }
     for (const f of folders) {
-      cmds.push({ id: `go-${f.key}`, label: `Go to ${f.label}`, run: () => selectFolder(f.key) });
+      cmds.push({ id: `go-${f.key}`, label: `Go to ${f.label}`, run: () => handleFolderSelect(f.key) });
     }
     if (selectedAccountId) {
       cmds.push({ id: "sync", label: "Sync now", run: () => triggerSync(selectedAccountId) });
@@ -431,7 +433,7 @@ export default function EmailPage() {
     return cmds;
   }, [
     selectedEmail, folders, selectedAccountId, openCompose,
-    handleToolbarAction, updateEmail, deleteEmail, selectFolder, triggerSync,
+    handleToolbarAction, updateEmail, deleteEmail, handleFolderSelect, triggerSync,
   ]);
 
   // ── Render ──
@@ -587,7 +589,7 @@ export default function EmailPage() {
               onAccountSelect={selectAccount}
               folders={folders.length > 0 ? folders : []}
               selectedFolder={selectedFolder}
-              onFolderSelect={selectFolder}
+              onFolderSelect={handleFolderSelect}
               onAddAccount={handleAddAccount}
               onSearch={setSearchQuery}
               onOpenAutomation={handleOpenAutomation}
@@ -661,11 +663,6 @@ export default function EmailPage() {
                   ⌘K
                 </span>
               </button>
-              <IconBtn
-                icon={MessageSquare}
-                label="Open AI chat"
-                onClick={() => setAutomationFeature("chat")}
-              />
             </div>
           </div>
         )}

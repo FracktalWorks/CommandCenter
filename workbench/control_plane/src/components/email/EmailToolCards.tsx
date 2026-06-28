@@ -25,14 +25,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  PenLine, Sparkles, CheckCircle2, Loader2, Send, Reply, Mail, Tag, Archive,
-  FolderInput, Trash2, X, RefreshCw, ExternalLink, Settings2, BookOpen,
+  PenLine, Sparkles, CheckCircle2, Loader2, Send, Reply, Mail, MailOpen, Tag,
+  Archive, FolderInput, Trash2, X, RefreshCw, ExternalLink, Settings2, BookOpen,
   Clock, Wrench, Search, ChevronDown,
 } from "lucide-react";
 import type { ToolEvent } from "@/components/MarkdownMessage";
 import {
   saveDraftText, sendDraft, deleteRule, listRules, updateRule,
-  fetchFullBody, type FullBodyResponse,
+  fetchFullBody, updateEmail as patchEmail, type FullBodyResponse,
 } from "@/app/email/lib/api";
 import { MessageContent } from "@/app/email/components/MessageContent";
 import { useEmailStore } from "@/app/email/lib/emailStore";
@@ -466,10 +466,15 @@ const LIST_META: Record<string, { icon: React.ElementType; label: string }> = {
   find_needs_reply: { icon: Reply, label: "Needs a reply" },
 };
 
-/** Email results — each row expands its body inline (lazy-fetched) and has an
- *  "Open in inbox" shortcut. */
+/** A row's optimistic triage state (lifted to the card so bulk + per-row share). */
+type RowStatus = "idle" | "busy" | "archived" | "read";
+
+/** Email results — each row expands its body inline (lazy), can be
+ *  Archived / Marked-read in place (optimistic, with bulk "all" shortcuts), and
+ *  has an "Open in inbox" jump. Mirrors inbox-zero's inline list. */
 function EmailListCard({ event: e }: { event: ToolEvent }) {
   const [expanded, setExpanded] = useState(false);
+  const [statuses, setStatuses] = useState<Record<string, RowStatus>>({});
   const rows = parseEmailRows(e.result || "");
   // No parseable rows (e.g. "Nothing needs a reply") → generic summary card.
   if (rows.length === 0) return <ActionResultCard event={e} />;
@@ -477,16 +482,69 @@ function EmailListCard({ event: e }: { event: ToolEvent }) {
   const Icon = meta.icon;
   const shown = expanded ? rows : rows.slice(0, 5);
 
+  const set = (id: string, s: RowStatus) =>
+    setStatuses((prev) => ({ ...prev, [id]: s }));
+
+  // Archive / mark-read fire to the provider directly (the inbox view, when
+  // loaded, picks the change up on its next background poll).
+  const archive = async (id: string) => {
+    set(id, "busy");
+    try {
+      await patchEmail(id, { folder: "archive" });
+      set(id, "archived");
+    } catch {
+      set(id, "idle");
+    }
+  };
+  const markRead = async (id: string) => {
+    set(id, "busy");
+    try {
+      await patchEmail(id, { isRead: true });
+      set(id, "read");
+    } catch {
+      set(id, "idle");
+    }
+  };
+
+  // Bulk acts on the visible, not-yet-handled rows.
+  const actionable = shown.filter(
+    (r) => !["archived", "read", "busy"].includes(statuses[r.id] ?? "idle"),
+  );
+
   return (
     <div className="rounded-lg border border-sidebar-border bg-secondary/40 px-2.5 py-2">
       <div className="flex items-center gap-1.5 mb-1.5">
         <Icon size={12} className="text-primary" />
         <span className="text-[11px] font-medium text-foreground">{meta.label}</span>
         <span className="text-[10px] text-muted-foreground">({rows.length})</span>
+        {actionable.length > 1 && (
+          <div className="ml-auto flex items-center gap-1">
+            <button
+              onClick={() => actionable.forEach((r) => markRead(r.id))}
+              title="Mark all as read"
+              className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary"
+            >
+              <MailOpen size={10} /> Read all
+            </button>
+            <button
+              onClick={() => actionable.forEach((r) => archive(r.id))}
+              title="Archive all"
+              className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary"
+            >
+              <Archive size={10} /> Archive all
+            </button>
+          </div>
+        )}
       </div>
       <div className="space-y-1">
         {shown.map((r) => (
-          <EmailRow key={r.id} row={r} />
+          <EmailRow
+            key={r.id}
+            row={r}
+            status={statuses[r.id] ?? "idle"}
+            onArchive={() => archive(r.id)}
+            onMarkRead={() => markRead(r.id)}
+          />
         ))}
       </div>
       {rows.length > 5 && (
@@ -502,13 +560,26 @@ function EmailListCard({ event: e }: { event: ToolEvent }) {
 }
 
 /** One email row: click to expand the body inline (fetched on first open);
- *  the side button opens it in the inbox. Mirrors inbox-zero's inline card. */
-function EmailRow({ row }: { row: ParsedRow }) {
+ *  Archive / Mark-read in place; "Open in inbox" jumps to the app. */
+function EmailRow({
+  row,
+  status,
+  onArchive,
+  onMarkRead,
+}: {
+  row: ParsedRow;
+  status: RowStatus;
+  onArchive: () => void;
+  onMarkRead: () => void;
+}) {
   const openEmail = useOpenEmail();
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState<FullBodyResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+
+  const archived = status === "archived";
+  const done = archived || status === "read";
 
   const toggle = () => {
     const next = !open;
@@ -527,7 +598,7 @@ function EmailRow({ row }: { row: ParsedRow }) {
     <div
       className={`rounded-md border transition-colors ${
         open ? "border-border bg-background" : "border-transparent hover:border-border"
-      }`}
+      } ${archived ? "opacity-60" : ""}`}
     >
       <div className="flex items-center gap-1">
         <button
@@ -540,18 +611,52 @@ function EmailRow({ row }: { row: ParsedRow }) {
             className={`text-muted-foreground flex-shrink-0 transition-transform ${open ? "" : "-rotate-90"}`}
           />
           <span className="min-w-0 flex-1">
-            <span className="block text-[11px] text-foreground truncate">{row.subject}</span>
+            <span
+              className={`block text-[11px] truncate ${
+                archived ? "line-through text-muted-foreground" : "text-foreground"
+              }`}
+            >
+              {row.subject}
+            </span>
             <span className="block text-[10px] text-muted-foreground truncate">{row.sender}</span>
           </span>
         </button>
-        <button
-          onClick={() => openEmail(row.id)}
-          title="Open in inbox"
-          aria-label="Open in inbox"
-          className="flex-shrink-0 p-1 mr-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
-        >
-          <ExternalLink size={11} />
-        </button>
+        <div className="flex items-center flex-shrink-0 mr-0.5">
+          {done ? (
+            <span className="flex items-center gap-0.5 text-[9px] text-emerald-500 px-1">
+              <CheckCircle2 size={10} /> {archived ? "Archived" : "Read"}
+            </span>
+          ) : status === "busy" ? (
+            <Loader2 size={12} className="animate-spin text-muted-foreground mx-1" />
+          ) : (
+            <>
+              <button
+                onClick={onMarkRead}
+                title="Mark as read"
+                aria-label="Mark as read"
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
+              >
+                <MailOpen size={11} />
+              </button>
+              <button
+                onClick={onArchive}
+                title="Archive"
+                aria-label="Archive"
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
+              >
+                <Archive size={11} />
+              </button>
+              <button
+                onClick={() => openEmail(row.id)}
+                title="Open in inbox"
+                aria-label="Open in inbox"
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary"
+              >
+                <ExternalLink size={11} />
+              </button>
+            </>
+          )}
+        </div>
       </div>
       {open && (
         <div className="px-2 pb-2 pt-1.5 border-t border-border/50">

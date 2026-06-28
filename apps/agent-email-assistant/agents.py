@@ -1160,21 +1160,29 @@ async def unsubscribe_sender(
     name: str | None = None,
     unsubscribe_link: str | None = None,
 ) -> str:
-    """Mark a newsletter/sender as unsubscribed and archive its existing mail.
-    Use after suggest_unsubscribes once the user confirms."""
-    res = await _post("/email/newsletters", {
+    """Actually unsubscribe from a sender and archive its existing mail.
+
+    Performs a real server-side one-click unsubscribe (RFC 8058) for an https
+    List-Unsubscribe target, or sends the unsubscribe email for a mailto: one.
+    If there's no usable link or the request fails, the sender is blocked
+    instead (future mail auto-archived via a provider filter). Use after
+    suggest_unsubscribes once the user confirms."""
+    res = await _post("/email/unsubscribe", {
         "account_id": account_id,
         "email": email,
         "name": name,
-        "status": "UNSUBSCRIBED",
         "unsubscribe_link": unsubscribe_link,
     })
     archived = res.get("archived", 0)
+    if res.get("ok"):
+        verb = ("Sent an unsubscribe email for" if res.get("method") == "mailto"
+                else "Unsubscribed from")
+        return (f"{verb} {email}; archived {archived} existing message(s). "
+                "The sender should stop emailing you.")
     return (
-        f"Marked {email} unsubscribed; archived {archived} existing message(s). "
-        + (f"Open the unsubscribe link to finish: {unsubscribe_link}"
-           if unsubscribe_link else
-           "No one-click unsubscribe link was available.")
+        f"Couldn't auto-unsubscribe from {email} (no one-click link), so I "
+        f"blocked it instead — future mail is auto-archived and {archived} "
+        "existing message(s) were archived."
     )
 
 

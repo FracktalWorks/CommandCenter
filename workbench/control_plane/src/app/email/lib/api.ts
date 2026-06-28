@@ -1,6 +1,6 @@
 import {
   Email, EmailAccount,
-  AnalyticsOverview, SenderStat, NewsletterStatus,
+  AnalyticsOverview, SenderStat, NewsletterStatus, UnsubscribeResult,
   AutomationRule, RuleTestResult, ExecutedRule, AssistantSettings,
   RecentTestResult, ColdSender, ReplyZeroThread, KnowledgeEntry,
   LearnedPattern, RunMessageResult, LearnedRulePattern, LabelInfo,
@@ -637,6 +637,27 @@ export async function upsertNewsletter(params: {
       email: params.email,
       name: params.name,
       status: params.status,
+      unsubscribe_link: params.unsubscribeLink ?? null,
+    }),
+  });
+}
+
+/** Actually unsubscribe from a sender: a real server-side RFC 8058 one-click
+ *  POST (https) or unsubscribe email (mailto). When there's no usable link or
+ *  the attempt fails, the sender is blocked (auto-archive + provider filter).
+ *  Existing inbox mail is archived either way. */
+export async function unsubscribeSender(params: {
+  accountId: string;
+  email: string;
+  name?: string;
+  unsubscribeLink?: string | null;
+}): Promise<UnsubscribeResult> {
+  return gatewayFetch("/email/unsubscribe", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: params.accountId,
+      email: params.email,
+      name: params.name,
       unsubscribe_link: params.unsubscribeLink ?? null,
     }),
   });

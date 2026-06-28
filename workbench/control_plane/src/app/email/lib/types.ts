@@ -189,7 +189,22 @@ export interface SenderStat {
   last_received: string | null;
   unsubscribe_link: string | null;
   status: SenderStatus;
+  /** True when a provider-native auto-archive filter is in place for this sender
+   *  (future mail blocked at the source — Gmail filter / Outlook rule). */
+  filter_active?: boolean;
   category?: string | null;
+}
+
+/** Result of a real unsubscribe attempt (POST /email/unsubscribe). */
+export interface UnsubscribeResult {
+  ok: boolean;
+  /** What was actually done: a one-click POST, a mailto send, or a block
+   *  (auto-archive + provider filter) when no usable link / the attempt failed. */
+  method: "one-click" | "mailto" | "blocked" | "none";
+  detail: string;
+  status: NewsletterStatus;
+  archived: number;
+  unsubscribe_link: string | null;
 }
 
 // ── Assistant rules ─────────────────────────────────────────────────────────

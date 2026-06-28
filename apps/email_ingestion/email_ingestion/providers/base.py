@@ -6,6 +6,7 @@ The sync engine calls these methods without knowing the provider details.
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -46,6 +47,75 @@ def canonical_folder(name: str | None) -> str:
         return "inbox"
     key = name.strip().lower()
     return _CANONICAL_FOLDERS.get(key, key)
+
+
+# Anchor tags + the words that signal an unsubscribe / opt-out link in a body.
+_UNSUB_ANCHOR_RE = re.compile(
+    r'<a\b[^>]*\bhref\s*=\s*["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+    re.IGNORECASE | re.DOTALL,
+)
+_UNSUB_WORDS = (
+    "unsubscribe", "opt out", "opt-out", "optout", "manage preferences",
+    "manage your subscription", "manage subscription", "email preferences",
+    "notification settings", "subscription preferences", "stop receiving",
+    "remove me", "update your preferences",
+)
+
+
+def find_unsubscribe_link_in_html(html: str | None) -> str | None:
+    """Best-effort: scrape an unsubscribe URL from an email's HTML body.
+
+    Fallback for senders that ship no ``List-Unsubscribe`` header but do put an
+    "Unsubscribe" link in the body (very common for marketing mail). Returns the
+    first ``http(s)`` href whose URL or visible anchor text mentions
+    unsubscribe / opt-out / preferences, else ``None``. Mirrors inbox-zero's
+    ``findUnsubscribeLink`` (which uses cheerio); we use a dependency-free regex.
+    """
+    if not html:
+        return None
+    for m in _UNSUB_ANCHOR_RE.finditer(html):
+        href = (m.group(1) or "").strip()
+        if not href.lower().startswith("http"):
+            continue
+        text = re.sub(r"<[^>]+>", " ", m.group(2) or "").lower()
+        haystack = f"{href.lower()} {text}"
+        if any(word in haystack for word in _UNSUB_WORDS):
+            # Decode the entity-escaped ampersands mailers put in href query
+            # strings so the resulting URL is actually fetchable.
+            return href.replace("&amp;", "&")
+    return None
+
+
+def best_unsubscribe_link(header_value: str | None, html: str | None) -> str | None:
+    """Pick the best unsubscribe target: the RFC ``List-Unsubscribe`` header
+    (one-click capable — https preferred, else mailto:) when present, otherwise a
+    link scraped from the HTML body. Returns ``None`` when neither exists."""
+    return _parse_list_unsubscribe(header_value) or find_unsubscribe_link_in_html(html)
+
+
+def _parse_list_unsubscribe(header: str | None) -> str | None:
+    """Pick the best target from a ``List-Unsubscribe`` header.
+
+    The header is a comma-separated list of ``<...>`` targets, e.g.
+    ``<https://x.com/unsub?id=1>, <mailto:unsub@x.com>``. Prefer an https
+    one-click URL (RFC 8058); fall back to a ``mailto:``. ``None`` if neither.
+    """
+    if not header:
+        return None
+    targets: list[str] = []
+    for part in header.split(","):
+        part = part.strip()
+        if part.startswith("<") and part.endswith(">"):
+            part = part[1:-1].strip()
+        if part:
+            targets.append(part)
+    for t in targets:
+        if t.lower().startswith("http"):
+            return t
+    for t in targets:
+        if t.lower().startswith("mailto:"):
+            return t
+    return targets[0] if targets else None
 
 
 @dataclass
@@ -248,6 +318,32 @@ class BaseEmailProvider(ABC):
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support creating folders"
         )
+
+    async def create_filter(
+        self,
+        *,
+        from_email: str,
+        archive: bool = True,
+        label: str | None = None,
+    ) -> str | None:
+        """Create a provider-native filter so FUTURE mail from ``from_email`` is
+        auto-archived (skips the inbox) and optionally labeled.
+
+        Returns a provider filter/rule id, or ``None`` when the provider has no
+        filter concept (generic IMAP) or the filter already exists. Gmail
+        creates a settings filter; Outlook creates an Inbox message rule. When
+        this returns ``None`` the server-side ``_maybe_auto_archive`` sweep is
+        the fallback that keeps the inbox clean on each sync.
+        """
+        return None
+
+    async def delete_filter(self, filter_id: str) -> None:
+        """Remove a previously-created auto-archive filter/rule by its id.
+
+        Called when a sender is re-approved ("Keep") so future mail stops being
+        auto-archived at the provider. Default no-op for providers without
+        filters; an already-missing filter is ignored."""
+        return None
 
     async def list_labels(self) -> list[dict[str, str | None]]:
         """User-applicable labels/categories as ``{name, color}`` dicts.

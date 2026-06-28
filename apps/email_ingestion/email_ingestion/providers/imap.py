@@ -40,6 +40,7 @@ from .base import (
     EmailMessage,
     SyncResult,
     canonical_folder,
+    find_unsubscribe_link_in_html,
 )
 
 
@@ -738,7 +739,7 @@ def _parse_imap_raw_message(
 
     unsubscribe_link = _parse_list_unsubscribe(
         str(parsed.get("List-Unsubscribe", ""))
-    )
+    ) or find_unsubscribe_link_in_html(body_html)
 
     return EmailMessage(
         provider_message_id=uid,

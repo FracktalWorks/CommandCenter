@@ -3,9 +3,14 @@ actions, auto-archive, sender categorization, and cold-email blocking."""
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import json
+import socket
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
+import httpx
 from acb_auth import UserContext, get_current_user
 from fastapi import BackgroundTasks, Depends, HTTPException, Query
 from gateway.routes.email.core import (
@@ -15,6 +20,7 @@ from gateway.routes.email.core import (
     _instantiate_provider,
     _log,
     _persist_rotated_creds,
+    _provider_for_account,
     _safe_json,
     router,
 )
@@ -186,9 +192,13 @@ async def list_senders(
             nl_params["aid"] = account_id
         nl_scope += ")"
         nl_rows = (await db.execute(text(
-            f"SELECT LOWER(email) AS email, status FROM email_newsletters WHERE {nl_scope}"
+            f"SELECT LOWER(email) AS email, status, auto_archive_filter_id "
+            f"FROM email_newsletters WHERE {nl_scope}"
         ), nl_params)).fetchall()
         status_by_email = {r.email: r.status for r in nl_rows}
+        filtered_emails = {
+            r.email for r in nl_rows if r.auto_archive_filter_id
+        }
 
         # Merge assigned categories (same account scope as newsletters).
         cat_rows = (await db.execute(text(
@@ -213,6 +223,9 @@ async def list_senders(
                     # "UNHANDLED" = no decision yet (inbox-zero parity); only the
                     # three real dispositions are ever persisted.
                     "status": status_by_email.get(r.email, "UNHANDLED"),
+                    # True when a provider-native auto-archive filter is in place
+                    # (future mail blocked at the source, not just our sweep).
+                    "filter_active": r.email in filtered_emails,
                     "category": category_by_email.get(r.email),
                 }
                 for r in rows
@@ -415,7 +428,8 @@ async def list_newsletters(
             params["aid"] = account_id
         scope += ")"
         rows = (await db.execute(text(
-            f"""SELECT id, account_id, email, name, status, unsubscribe_link, updated_at
+            f"""SELECT id, account_id, email, name, status, unsubscribe_link,
+                       auto_archive_filter_id, updated_at
                 FROM email_newsletters WHERE {scope} ORDER BY updated_at DESC"""
         ), params)).fetchall()
         return {
@@ -423,12 +437,75 @@ async def list_newsletters(
                 {"id": str(r.id), "account_id": str(r.account_id), "email": r.email,
                  "name": r.name or "", "status": r.status,
                  "unsubscribe_link": r.unsubscribe_link,
+                 "filter_active": bool(r.auto_archive_filter_id),
                  "updated_at": r.updated_at.isoformat() if r.updated_at else None}
                 for r in rows
             ]
         }
     finally:
         await db.close()
+
+
+async def _apply_newsletter_status(
+    db: Any,
+    background: BackgroundTasks,
+    account_id: str,
+    email: str,
+    name: str | None,
+    status: str,
+    link: str | None,
+    *,
+    create_filter: bool,
+) -> int:
+    """Persist a sender's disposition and apply its side-effects.
+
+    UNSUBSCRIBED/AUTO_ARCHIVED archive the sender's existing inbox mail (locally
+    + provider in the background). ``create_filter`` additionally schedules a
+    provider-native auto-archive filter so FUTURE mail is blocked at the source
+    (Gmail filter / Outlook rule), with the sync-time sweep as the fallback.
+    Returns the number of existing messages archived."""
+    await db.execute(text(
+        """INSERT INTO email_newsletters
+             (account_id, email, name, status, unsubscribe_link, updated_at)
+           VALUES (:aid, LOWER(:email), :name, :status, :link, now())
+           ON CONFLICT (account_id, email) DO UPDATE SET
+             name = COALESCE(EXCLUDED.name, email_newsletters.name),
+             status = EXCLUDED.status,
+             unsubscribe_link = COALESCE(EXCLUDED.unsubscribe_link,
+                                         email_newsletters.unsubscribe_link),
+             updated_at = now()"""
+    ), {"aid": account_id, "email": email, "name": name,
+        "status": status, "link": link})
+    await db.commit()
+
+    archived = 0
+    if status in ("UNSUBSCRIBED", "AUTO_ARCHIVED"):
+        rows = (await db.execute(text(
+            """SELECT em.id, em.provider_message_id
+               FROM email_messages em
+               WHERE em.account_id = :aid
+                 AND LOWER(em.from_address->>'email') = LOWER(:email)
+                 AND LOWER(em.folder) = 'inbox'"""
+        ), {"aid": account_id, "email": email})).fetchall()
+        if rows:
+            ids = [str(r.id) for r in rows]
+            await db.execute(text(
+                "UPDATE email_messages SET folder = 'archive', updated_at = now() "
+                "WHERE id::text = ANY(:ids)"
+            ), {"ids": ids})
+            await db.commit()
+            archived = len(ids)
+            background.add_task(
+                _bulk_reconcile_provider, account_id,
+                [r.provider_message_id for r in rows], "archive",
+            )
+    if create_filter:
+        background.add_task(_create_block_filter, account_id, email)
+    elif status == "APPROVED":
+        # Re-approving a sender must tear down any auto-archive filter, else
+        # future mail keeps getting archived at the provider.
+        background.add_task(_remove_block_filter, account_id, email)
+    return archived
 
 
 @router.post("/newsletters")
@@ -438,49 +515,247 @@ async def upsert_newsletter(
     user: UserContext = Depends(get_current_user),
 ):
     """Set a sender's disposition. UNSUBSCRIBED/AUTO_ARCHIVED also archives the
-    sender's existing inbox mail (locally + provider in the background)."""
+    sender's existing inbox mail; AUTO_ARCHIVED additionally creates a
+    provider-native filter so future mail skips the inbox at the source."""
     if req.status not in ("APPROVED", "UNSUBSCRIBED", "AUTO_ARCHIVED"):
         raise HTTPException(status_code=400, detail=f"Bad status: {req.status}")
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
-        await db.execute(text(
-            """INSERT INTO email_newsletters
-                 (account_id, email, name, status, unsubscribe_link, updated_at)
-               VALUES (:aid, LOWER(:email), :name, :status, :link, now())
-               ON CONFLICT (account_id, email) DO UPDATE SET
-                 name = COALESCE(EXCLUDED.name, email_newsletters.name),
-                 status = EXCLUDED.status,
-                 unsubscribe_link = COALESCE(EXCLUDED.unsubscribe_link,
-                                             email_newsletters.unsubscribe_link),
-                 updated_at = now()"""
-        ), {"aid": req.account_id, "email": req.email, "name": req.name,
-            "status": req.status, "link": req.unsubscribe_link})
-        await db.commit()
-
-        archived = 0
-        if req.status in ("UNSUBSCRIBED", "AUTO_ARCHIVED"):
-            rows = (await db.execute(text(
-                """SELECT em.id, em.provider_message_id
-                   FROM email_messages em
-                   WHERE em.account_id = :aid
-                     AND LOWER(em.from_address->>'email') = LOWER(:email)
-                     AND LOWER(em.folder) = 'inbox'"""
-            ), {"aid": req.account_id, "email": req.email})).fetchall()
-            if rows:
-                ids = [str(r.id) for r in rows]
-                await db.execute(text(
-                    "UPDATE email_messages SET folder = 'archive', updated_at = now() "
-                    "WHERE id::text = ANY(:ids)"
-                ), {"ids": ids})
-                await db.commit()
-                archived = len(ids)
-                background.add_task(
-                    _bulk_reconcile_provider, req.account_id,
-                    [r.provider_message_id for r in rows], "archive",
-                )
-
+        archived = await _apply_newsletter_status(
+            db, background, req.account_id, req.email, req.name, req.status,
+            req.unsubscribe_link, create_filter=(req.status == "AUTO_ARCHIVED"),
+        )
         return {"ok": True, "status": req.status, "archived": archived}
+    finally:
+        await db.close()
+
+
+# ── Real unsubscribe: RFC 8058 one-click + mailto, with SSRF guard ───────────
+
+
+def _host_is_public(host: str) -> bool:
+    """True only if every address ``host`` resolves to is a public IP (SSRF
+    guard — blocks localhost, private ranges, link-local, etc.)."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:  # noqa: BLE001 — unresolvable host → unsafe
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return False
+    return True
+
+
+async def _is_safe_external_url(url: str) -> bool:
+    """http(s) scheme + a hostname resolving only to public IPs."""
+    try:
+        parsed = urlparse(url)
+    except Exception:  # noqa: BLE001
+        return False
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    return await asyncio.to_thread(_host_is_public, parsed.hostname)
+
+
+async def _http_unsubscribe(url: str) -> tuple[bool, str]:
+    """Unsubscribe via an https List-Unsubscribe target.
+
+    Tries the RFC 8058 one-click POST (``List-Unsubscribe=One-Click``) first,
+    then falls back to a plain GET (many mailers honour a GET on the same URL).
+    Returns ``(succeeded, detail)``."""
+    if not await _is_safe_external_url(url):
+        return False, "unsafe-url"
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True, max_redirects=5, timeout=10.0,
+            headers={"User-Agent": "CommandCenter-Unsubscribe/1.0"},
+        ) as client:
+            try:
+                resp = await client.post(
+                    url, content=b"List-Unsubscribe=One-Click",
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                if resp.is_success:
+                    return True, "one-click-post"
+            except httpx.HTTPError:
+                pass  # fall through to GET
+            resp = await client.get(url)
+            return resp.is_success, ("get" if resp.is_success
+                                     else f"http-{resp.status_code}")
+    except httpx.HTTPError as exc:
+        return False, str(exc)[:120]
+
+
+async def _mailto_unsubscribe(provider: Any, mailto: str) -> tuple[bool, str]:
+    """Send the unsubscribe email a ``mailto:`` List-Unsubscribe target asks for
+    (RFC 2369), using the account's own send path."""
+    try:
+        parsed = urlparse(mailto)
+        to_addr = parsed.path.strip()
+        if not to_addr:
+            return False, "no-address"
+        qs = parse_qs(parsed.query)
+        subject = (qs.get("subject") or ["unsubscribe"])[0]
+        body = (qs.get("body") or ["Please unsubscribe me from this list."])[0]
+        await provider.send_message(to=[to_addr], subject=subject, body_text=body)
+        return True, "mailto"
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)[:120]
+
+
+async def _create_block_filter(
+    account_id: str, email: str, label: str | None = None
+) -> None:
+    """Best-effort background task: create a provider-native auto-archive filter
+    for ``email`` and record its id on the newsletter row. No-ops gracefully for
+    providers without filters (IMAP) — the AUTO_ARCHIVED sweep covers those."""
+    db = await _get_db()
+    try:
+        row = (await db.execute(text(
+            "SELECT provider, credentials_encrypted FROM email_accounts WHERE id = :id"
+        ), {"id": account_id})).fetchone()
+        if not row:
+            return
+        from acb_llm.key_store import get_key_store  # noqa: PLC0415
+        store = get_key_store()
+        creds = json.loads(store.decrypt(row.credentials_encrypted))
+        provider = _instantiate_provider(row.provider, creds)
+        if not await provider.authenticate():
+            return
+        filter_id = await provider.create_filter(
+            from_email=email, archive=True, label=label
+        )
+        await _persist_rotated_creds(db, store, account_id, provider)
+        if filter_id:
+            await db.execute(text(
+                "UPDATE email_newsletters SET auto_archive_filter_id = :fid, "
+                "updated_at = now() WHERE account_id = :aid "
+                "AND LOWER(email) = LOWER(:email)"
+            ), {"fid": filter_id, "aid": account_id, "email": email})
+        await db.commit()
+        _log.info("email.block_filter", account_id=account_id, email=email,
+                  filter_id=filter_id or "none")
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.block_filter_failed", account_id=account_id,
+                     error=str(exc)[:200])
+    finally:
+        await db.close()
+
+
+async def _remove_block_filter(account_id: str, email: str) -> None:
+    """Best-effort background task: delete the provider-native auto-archive
+    filter recorded for ``email`` and clear it on the newsletter row. No-ops when
+    no filter is recorded (e.g. IMAP, or never auto-archived)."""
+    db = await _get_db()
+    try:
+        row = (await db.execute(text(
+            """SELECT n.auto_archive_filter_id AS fid, a.provider,
+                      a.credentials_encrypted AS creds
+               FROM email_newsletters n
+               JOIN email_accounts a ON a.id = n.account_id
+               WHERE n.account_id = :aid AND LOWER(n.email) = LOWER(:email)"""
+        ), {"aid": account_id, "email": email})).fetchone()
+        if not row or not row.fid:
+            return
+        from acb_llm.key_store import get_key_store  # noqa: PLC0415
+        store = get_key_store()
+        creds = json.loads(store.decrypt(row.creds))
+        provider = _instantiate_provider(row.provider, creds)
+        if await provider.authenticate():
+            await provider.delete_filter(row.fid)
+            await _persist_rotated_creds(db, store, account_id, provider)
+        await db.execute(text(
+            "UPDATE email_newsletters SET auto_archive_filter_id = NULL, "
+            "updated_at = now() WHERE account_id = :aid "
+            "AND LOWER(email) = LOWER(:email)"
+        ), {"aid": account_id, "email": email})
+        await db.commit()
+        _log.info("email.block_filter_removed", account_id=account_id, email=email)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.block_filter_remove_failed", account_id=account_id,
+                     error=str(exc)[:200])
+    finally:
+        await db.close()
+
+
+class UnsubscribeRequest(BaseModel):
+    account_id: str
+    email: str
+    name: str | None = None
+    unsubscribe_link: str | None = None
+
+
+@router.post("/unsubscribe")
+async def unsubscribe_sender(
+    req: UnsubscribeRequest,
+    background: BackgroundTasks,
+    user: UserContext = Depends(get_current_user),
+):
+    """Actually unsubscribe from a sender.
+
+    Performs a real RFC 8058 one-click POST for an https List-Unsubscribe target,
+    or sends the unsubscribe email for a ``mailto:`` target. On success → marks
+    UNSUBSCRIBED. If there's no usable link or the attempt fails, falls through
+    to a *block* (AUTO_ARCHIVED + a provider-native filter) so future mail is
+    still handled rather than silently continuing to the inbox. Either way the
+    sender's existing inbox mail is archived. Returns what was actually done so
+    the UI can tell the user (unsubscribed vs blocked)."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+
+        # Use the link the UI passed; otherwise recover the best one we stored.
+        link = req.unsubscribe_link
+        if not link:
+            row = (await db.execute(text(
+                """SELECT MAX(unsubscribe_link) AS link FROM email_messages
+                   WHERE account_id = :aid
+                     AND LOWER(from_address->>'email') = LOWER(:email)
+                     AND unsubscribe_link IS NOT NULL"""
+            ), {"aid": req.account_id, "email": req.email})).fetchone()
+            link = row.link if row else None
+
+        ok = False
+        method = "none"
+        detail = "no-link"
+        low = (link or "").lower()
+        if low.startswith("http"):
+            method = "one-click"
+            ok, detail = await _http_unsubscribe(link)
+        elif low.startswith("mailto:"):
+            method = "mailto"
+            provider, store, _ = await _provider_for_account(
+                db, req.account_id, user.email or "anonymous")
+            if await provider.authenticate():
+                ok, detail = await _mailto_unsubscribe(provider, link)
+                await _persist_rotated_creds(db, store, req.account_id, provider)
+                await db.commit()
+            else:
+                detail = "auth-failed"
+
+        # Unsubscribe worked → UNSUBSCRIBED (the sender stops; no filter needed).
+        # Otherwise block: AUTO_ARCHIVED + a provider filter so future mail is
+        # auto-archived instead of silently arriving.
+        if ok:
+            status = "UNSUBSCRIBED"
+        else:
+            status = "AUTO_ARCHIVED"
+            method = "blocked"
+
+        archived = await _apply_newsletter_status(
+            db, background, req.account_id, req.email, req.name, status, link,
+            create_filter=(status == "AUTO_ARCHIVED"),
+        )
+        return {"ok": ok, "method": method, "detail": detail,
+                "status": status, "archived": archived, "unsubscribe_link": link}
     finally:
         await db.close()
 

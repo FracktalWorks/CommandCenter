@@ -24,6 +24,7 @@ from .base import (
     EmailMessage,
     SyncResult,
     canonical_folder,
+    find_unsubscribe_link_in_html,
 )
 
 # Gmail label IDs → canonical folder keys.  A message can carry several labels;
@@ -510,6 +511,52 @@ class GmailProvider(BaseEmailProvider):
             provider_folder_id=label_id, name=name, type="user"
         )
 
+    async def create_filter(
+        self,
+        *,
+        from_email: str,
+        archive: bool = True,
+        label: str | None = None,
+    ) -> str | None:
+        """Create a Gmail settings filter so future mail from ``from_email``
+        skips the inbox (and is optionally labeled) — provider-native, so it
+        applies instantly and on every client, not just our sync sweep."""
+        if not from_email:
+            return None
+        remove_ids: list[str] = ["INBOX"] if archive else []
+        add_ids: list[str] = []
+        if label:
+            lid = await self._ensure_label_id(label)
+            if lid:
+                add_ids.append(lid)
+        action: dict[str, Any] = {}
+        if remove_ids:
+            action["removeLabelIds"] = remove_ids
+        if add_ids:
+            action["addLabelIds"] = add_ids
+        if not action:
+            return None
+        client = await self._get_client()
+        resp = await client.post(
+            "/users/me/settings/filters",
+            json={"criteria": {"from": from_email}, "action": action},
+        )
+        # Gmail 409s when an identical filter already exists — treat as success
+        # (the future-mail rule is in place either way), no duplicate.
+        if resp.status_code == 409:
+            return None
+        resp.raise_for_status()
+        return resp.json().get("id")
+
+    async def delete_filter(self, filter_id: str) -> None:
+        """Delete a Gmail settings filter (e.g. when a sender is re-approved)."""
+        if not filter_id:
+            return
+        client = await self._get_client()
+        resp = await client.delete(f"/users/me/settings/filters/{filter_id}")
+        if resp.status_code not in (200, 204, 404):
+            resp.raise_for_status()
+
     async def set_labels(
         self,
         provider_message_id: str,
@@ -758,7 +805,7 @@ class GmailProvider(BaseEmailProvider):
 
         unsubscribe_link = _parse_list_unsubscribe(
             headers.get("List-Unsubscribe", "")
-        )
+        ) or find_unsubscribe_link_in_html(body_html)
 
         return EmailMessage(
             provider_message_id=raw["id"],

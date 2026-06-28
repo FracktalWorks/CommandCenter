@@ -2,10 +2,13 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import {
-  Loader2, MailMinus, Archive, Check, ExternalLink, Search, ShieldX, Tags,
-  Mail, X,
+  Loader2, MailMinus, Archive, ArchiveRestore, Check, ExternalLink, Search,
+  ShieldX, Tags, Mail, X, MoreHorizontal, Trash2, RotateCcw,
 } from "lucide-react";
-import { listSenders, upsertNewsletter, categorizeSenders } from "../../lib/api";
+import {
+  listSenders, upsertNewsletter, unsubscribeSender, bulkAction,
+  categorizeSenders,
+} from "../../lib/api";
 import { SenderStat, NewsletterStatus, SenderStatus } from "../../lib/types";
 
 interface BulkUnsubscribeViewProps {
@@ -41,10 +44,13 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
   const [senders, setSenders] = useState<SenderStat[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [onlyNewsletters, setOnlyNewsletters] = useState(true);
-  const [statusTab, setStatusTab] = useState<StatusTab>("all");
+  // Default to the "Unhandled" queue (inbox-zero parity) — the senders that
+  // still need a decision, not everything.
+  const [statusTab, setStatusTab] = useState<StatusTab>("UNHANDLED");
   const [categorizing, setCategorizing] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sortBy, setSortBy] = useState<"count" | "read">("count");
@@ -63,6 +69,13 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
   }, [accountId]);
 
   useEffect(load, [load]);
+
+  // Auto-dismiss the transient result banner.
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 6000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   const isNewsletter = (s: SenderStat) =>
     !!s.unsubscribe_link || s.count >= 3 || s.read_rate < 0.4;
@@ -132,13 +145,95 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
     );
   };
 
-  const act = async (s: SenderStat, status: NewsletterStatus, openLink = false) => {
+  // Approve / auto-archive — a plain disposition set (the backend also creates a
+  // provider auto-archive filter for AUTO_ARCHIVED).
+  const act = async (s: SenderStat, status: NewsletterStatus) => {
     setBusy(s.email);
     try {
-      if (openLink && s.unsubscribe_link) openUnsubscribe(s.unsubscribe_link);
       await persist(s, status);
+      setNotice(
+        status === "AUTO_ARCHIVED"
+          ? `Auto-archiving future mail from ${s.name || s.email}.`
+          : `Keeping ${s.name || s.email}.`
+      );
     } catch (e) {
       setError((e as Error).message || "Action failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Real unsubscribe: the server does a one-click POST / sends the unsubscribe
+  // email; if there's no usable link or it fails, the sender is blocked
+  // (auto-archived + a provider filter). We reflect whatever actually happened.
+  const doUnsubscribe = async (s: SenderStat) => {
+    if (!accountId) return;
+    setBusy(s.email);
+    setError(null);
+    try {
+      const res = await unsubscribeSender({
+        accountId, email: s.email, name: s.name,
+        unsubscribeLink: s.unsubscribe_link,
+      });
+      setSenders((prev) =>
+        prev.map((x) => (x.email === s.email ? { ...x, status: res.status } : x))
+      );
+      if (res.ok) {
+        setNotice(
+          res.method === "mailto"
+            ? `Unsubscribe request emailed for ${s.name || s.email}.`
+            : `Unsubscribed from ${s.name || s.email}.`
+        );
+      } else {
+        // Couldn't auto-unsubscribe — future mail is now blocked. Open the link
+        // (if any) so the user can finish manually.
+        const link = res.unsubscribe_link || s.unsubscribe_link;
+        if (link && link.toLowerCase().startsWith("http")) openUnsubscribe(link);
+        setNotice(
+          `No one-click unsubscribe for ${s.name || s.email} — blocked future mail` +
+            (link ? " and opened its unsubscribe page." : ".")
+        );
+      }
+    } catch (e) {
+      setError((e as Error).message || "Unsubscribe failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const bulkUnsubscribe = async () => {
+    if (!accountId) return;
+    const targets = visible.filter((s) => selected.has(s.email));
+    if (targets.length === 0) return;
+    setBusy("__bulk__");
+    setError(null);
+    let unsubbed = 0;
+    let blocked = 0;
+    try {
+      // Sequential — each does a real server-side unsubscribe (no tab-opening in
+      // bulk; that's reserved for the per-row fallback).
+      for (const s of targets) {
+        try {
+          const res = await unsubscribeSender({
+            accountId, email: s.email, name: s.name,
+            unsubscribeLink: s.unsubscribe_link,
+          });
+          setSenders((prev) =>
+            prev.map((x) =>
+              x.email === s.email ? { ...x, status: res.status } : x
+            )
+          );
+          if (res.ok) unsubbed++;
+          else blocked++;
+        } catch {
+          blocked++;
+        }
+      }
+      clearSelection();
+      setNotice(
+        `Unsubscribed from ${unsubbed}` +
+          (blocked ? `, blocked ${blocked} with no one-click link.` : ".")
+      );
     } finally {
       setBusy(null);
     }
@@ -149,12 +244,73 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
     if (targets.length === 0) return;
     setBusy("__bulk__");
     try {
-      // Sequential to keep optimistic updates simple; no link auto-open in bulk
-      // (opening dozens of tabs is hostile — use per-row Unsub for the link).
       for (const s of targets) await persist(s, status);
       clearSelection();
+      setNotice(
+        `${status === "AUTO_ARCHIVED" ? "Auto-archiving" : "Keeping"} ` +
+          `${targets.length} sender${targets.length > 1 ? "s" : ""}.`
+      );
     } catch (e) {
       setError((e as Error).message || "Bulk action failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // One-off cleanup of a sender's EXISTING mail (no disposition change) — the
+  // inbox-zero "Archive all" / "Delete all" row + bulk actions.
+  const messagesAction = async (
+    s: SenderStat,
+    action: "archive" | "trash",
+  ) => {
+    if (!accountId) return;
+    if (action === "trash" &&
+        !window.confirm(`Move all mail from ${s.name || s.email} to Trash?`)) {
+      return;
+    }
+    setBusy(s.email);
+    try {
+      const { affected } = await bulkAction({
+        action, accountId, senderEmail: s.email,
+      });
+      setNotice(
+        `${action === "archive" ? "Archived" : "Trashed"} ${affected} ` +
+          `email${affected === 1 ? "" : "s"} from ${s.name || s.email}.`
+      );
+    } catch (e) {
+      setError((e as Error).message || "Action failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const bulkMessagesAction = async (action: "archive" | "trash") => {
+    if (!accountId) return;
+    const targets = visible.filter((s) => selected.has(s.email));
+    if (targets.length === 0) return;
+    if (action === "trash" &&
+        !window.confirm(
+          `Move all mail from ${targets.length} sender(s) to Trash?`)) {
+      return;
+    }
+    setBusy("__bulk__");
+    let total = 0;
+    try {
+      for (const s of targets) {
+        try {
+          const { affected } = await bulkAction({
+            action, accountId, senderEmail: s.email,
+          });
+          total += affected;
+        } catch {
+          /* skip a failed sender, keep going */
+        }
+      }
+      clearSelection();
+      setNotice(
+        `${action === "archive" ? "Archived" : "Trashed"} ${total} ` +
+          `email(s) from ${targets.length} sender(s).`
+      );
     } finally {
       setBusy(null);
     }
@@ -263,6 +419,12 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
           {error}
         </div>
       )}
+      {notice && (
+        <div className="px-3 sm:px-5 py-2 text-xs text-primary bg-primary/10 border-b border-border flex items-center gap-1.5">
+          <Check size={12} className="flex-shrink-0" />
+          {notice}
+        </div>
+      )}
 
       {/* Bulk action bar */}
       {selectedVisible.length > 0 && (
@@ -272,18 +434,18 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
           </span>
           <div className="flex-1" />
           <ActionBtn
-            title="Unsubscribe & archive existing mail"
-            onClick={() => bulkAct("UNSUBSCRIBED")}
+            title="One-click unsubscribe each (blocks future mail when no link)"
+            onClick={() => bulkUnsubscribe()}
             className="hover:bg-red-500/10 hover:text-red-400"
           >
             <ShieldX size={13} /> Unsubscribe
           </ActionBtn>
           <ActionBtn
-            title="Auto-archive future mail"
+            title="Auto-archive future mail (provider filter)"
             onClick={() => bulkAct("AUTO_ARCHIVED")}
             className="hover:bg-amber-500/10 hover:text-amber-400"
           >
-            <Archive size={13} /> Archive
+            <ArchiveRestore size={13} /> Auto-archive
           </ActionBtn>
           <ActionBtn
             title="Keep — approve"
@@ -291,6 +453,21 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
             className="hover:bg-emerald-500/10 hover:text-emerald-400"
           >
             <Check size={13} /> Keep
+          </ActionBtn>
+          <div className="w-px h-4 bg-border mx-0.5" />
+          <ActionBtn
+            title="Archive all existing mail from the selected senders"
+            onClick={() => bulkMessagesAction("archive")}
+            className="hover:bg-secondary"
+          >
+            <Archive size={13} /> Archive all
+          </ActionBtn>
+          <ActionBtn
+            title="Move all existing mail from the selected senders to Trash"
+            onClick={() => bulkMessagesAction("trash")}
+            className="hover:bg-red-500/10 hover:text-red-400"
+          >
+            <Trash2 size={13} /> Delete
           </ActionBtn>
           <button
             onClick={clearSelection}
@@ -341,6 +518,9 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
             {visible.map((s) => {
               const isSel = selected.has(s.email);
               const isMailto = (s.unsubscribe_link || "").toLowerCase().startsWith("mailto:");
+              const blocked =
+                s.status === "UNSUBSCRIBED" || s.status === "AUTO_ARCHIVED";
+              const approved = s.status === "APPROVED";
               return (
                 <div
                   key={s.email}
@@ -362,6 +542,14 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
                       <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${STATUS_META[s.status].cls}`}>
                         {STATUS_META[s.status].label}
                       </span>
+                      {s.filter_active && (
+                        <span
+                          title="Future mail blocked at the source by a provider filter"
+                          className="text-[9px] px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-400 flex items-center gap-0.5"
+                        >
+                          <ShieldX size={9} /> Filtered
+                        </span>
+                      )}
                       {s.category && s.category !== "Unknown" && (
                         <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary/15 text-primary">
                           {s.category}
@@ -399,21 +587,35 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
                     </div>
                   </div>
 
-                  {/* Actions */}
+                  {/* Actions (state-aware: Unsubscribe/Block vs Resubscribe) */}
                   <div className="flex items-center gap-1 flex-shrink-0">
                     {busy === s.email ? (
                       <Loader2 className="animate-spin text-muted-foreground" size={14} />
+                    ) : blocked ? (
+                      <>
+                        <ActionBtn
+                          title="Resubscribe — keep this sender and remove its auto-archive filter"
+                          onClick={() => act(s, "APPROVED")}
+                          className="hover:bg-emerald-500/10 hover:text-emerald-400"
+                        >
+                          <RotateCcw size={13} /> Resubscribe
+                        </ActionBtn>
+                        <RowMenu
+                          onArchiveAll={() => messagesAction(s, "archive")}
+                          onDeleteAll={() => messagesAction(s, "trash")}
+                        />
+                      </>
                     ) : (
                       <>
                         <ActionBtn
                           title={
                             isMailto
-                              ? "Send unsubscribe email & archive"
+                              ? "Send the unsubscribe email & archive"
                               : s.unsubscribe_link
-                                ? "Open unsubscribe link & archive"
+                                ? "One-click unsubscribe & archive"
                                 : "Block sender & archive existing"
                           }
-                          onClick={() => act(s, "UNSUBSCRIBED", !!s.unsubscribe_link)}
+                          onClick={() => doUnsubscribe(s)}
                           className="hover:bg-red-500/10 hover:text-red-400"
                         >
                           {isMailto ? (
@@ -423,22 +625,28 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
                           ) : (
                             <ShieldX size={13} />
                           )}
-                          Unsub
+                          {s.unsubscribe_link ? "Unsub" : "Block"}
                         </ActionBtn>
                         <ActionBtn
                           title="Auto-archive future mail from this sender"
                           onClick={() => act(s, "AUTO_ARCHIVED")}
                           className="hover:bg-amber-500/10 hover:text-amber-400"
                         >
-                          <Archive size={13} /> Archive
+                          <ArchiveRestore size={13} /> Auto-archive
                         </ActionBtn>
-                        <ActionBtn
-                          title="Keep — approve this sender"
-                          onClick={() => act(s, "APPROVED")}
-                          className="hover:bg-emerald-500/10 hover:text-emerald-400"
-                        >
-                          <Check size={13} /> Keep
-                        </ActionBtn>
+                        {!approved && (
+                          <ActionBtn
+                            title="Keep — approve this sender"
+                            onClick={() => act(s, "APPROVED")}
+                            className="hover:bg-emerald-500/10 hover:text-emerald-400"
+                          >
+                            <Check size={13} /> Keep
+                          </ActionBtn>
+                        )}
+                        <RowMenu
+                          onArchiveAll={() => messagesAction(s, "archive")}
+                          onDeleteAll={() => messagesAction(s, "trash")}
+                        />
                       </>
                     )}
                   </div>
@@ -450,8 +658,9 @@ export function BulkUnsubscribeView({ accountId }: BulkUnsubscribeViewProps) {
       </div>
       <div className="flex-shrink-0 px-3 sm:px-5 py-2 border-t border-border text-[10px] text-muted-foreground flex items-center gap-1.5">
         <MailMinus size={11} />
-        Unsubscribe opens the sender&apos;s List-Unsubscribe link (or email) when
-        available and archives their existing mail. Auto-archive blocks future inbox delivery.
+        Unsubscribe runs a real one-click request (or sends the unsubscribe email)
+        server-side and archives existing mail; with no link it blocks future mail
+        instead. Auto-archive adds a provider filter so future mail skips the inbox.
       </div>
     </div>
   );
@@ -476,5 +685,53 @@ function ActionBtn({
     >
       {children}
     </button>
+  );
+}
+
+/** Per-row "More" menu — one-off cleanup of a sender's existing mail. Mirrors
+ *  the popover pattern used in EmailToolbar (overlay catcher + absolute menu). */
+function RowMenu({
+  onArchiveAll,
+  onDeleteAll,
+}: {
+  onArchiveAll: () => void;
+  onDeleteAll: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative flex-shrink-0">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title="More actions"
+        className="p-1.5 rounded-md text-muted-foreground border border-border hover:text-foreground hover:bg-secondary transition-colors"
+      >
+        <MoreHorizontal size={13} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1 z-20 bg-popover border border-border rounded-lg shadow-xl py-1 w-44 text-xs">
+            <button
+              onClick={() => {
+                setOpen(false);
+                onArchiveAll();
+              }}
+              className="flex items-center gap-2 w-full px-3 py-1.5 text-left text-foreground hover:bg-secondary transition-colors"
+            >
+              <Archive size={13} /> Archive all existing
+            </button>
+            <button
+              onClick={() => {
+                setOpen(false);
+                onDeleteAll();
+              }}
+              className="flex items-center gap-2 w-full px-3 py-1.5 text-left text-red-400 hover:bg-red-500/10 transition-colors"
+            >
+              <Trash2 size={13} /> Delete all
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }

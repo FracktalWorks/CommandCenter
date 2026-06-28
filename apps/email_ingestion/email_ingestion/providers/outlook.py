@@ -21,6 +21,7 @@ from .base import (
     EmailMessage,
     SyncResult,
     canonical_folder,
+    find_unsubscribe_link_in_html,
 )
 
 
@@ -678,6 +679,57 @@ class OutlookProvider(BaseEmailProvider):
         except Exception:  # noqa: BLE001
             return None
 
+    async def create_filter(
+        self,
+        *,
+        from_email: str,
+        archive: bool = True,
+        label: str | None = None,
+    ) -> str | None:
+        """Create an Inbox message rule so future mail from ``from_email`` is
+        moved to Archive (and optionally categorized) at the provider.
+
+        Consumer (MSA) accounts or a missing ``MailboxSettings.ReadWrite`` scope
+        make ``/messageRules`` 403/404 — degrade to ``None`` so the server-side
+        AUTO_ARCHIVED sweep keeps handling future mail."""
+        if not from_email:
+            return None
+        actions: dict[str, Any] = {}
+        if archive:
+            actions["moveToFolder"] = self._MOVE_TARGETS.get("archive", "archive")
+        if label:
+            await self._ensure_categories([label])
+            actions["assignCategories"] = [label]
+        if not actions:
+            return None
+        actions["stopProcessingRules"] = True
+        body = {
+            "displayName": f"Auto-archive {from_email}"[:255],
+            "sequence": 1,
+            "isEnabled": True,
+            "conditions": {
+                "fromAddresses": [{"emailAddress": {"address": from_email}}]
+            },
+            "actions": actions,
+        }
+        client = await self._get_client()
+        resp = await client.post("/me/mailFolders/inbox/messageRules", json=body)
+        if resp.status_code in (403, 404):
+            return None
+        resp.raise_for_status()
+        return resp.json().get("id")
+
+    async def delete_filter(self, filter_id: str) -> None:
+        """Delete an Inbox message rule (e.g. when a sender is re-approved)."""
+        if not filter_id:
+            return
+        client = await self._get_client()
+        resp = await client.delete(
+            f"/me/mailFolders/inbox/messageRules/{filter_id}"
+        )
+        if resp.status_code not in (200, 204, 403, 404):
+            resp.raise_for_status()
+
     # ── Labels (Outlook categories) ──────────────────────────────────────
 
     async def list_labels(self) -> list[dict[str, str | None]]:
@@ -1024,12 +1076,15 @@ class OutlookProvider(BaseEmailProvider):
         body_text = body.get("content", "") if body.get("contentType") == "text" else ""
         body_html = body.get("content") if body.get("contentType") == "html" else None
 
-        # List-Unsubscribe (present when internetMessageHeaders was $select'd).
+        # List-Unsubscribe (present when internetMessageHeaders was $select'd);
+        # fall back to scraping the HTML body for an unsubscribe link.
         unsubscribe_link = None
         for h in raw.get("internetMessageHeaders", []) or []:
             if str(h.get("name", "")).lower() == "list-unsubscribe":
                 unsubscribe_link = _parse_list_unsubscribe(h.get("value", ""))
                 break
+        if not unsubscribe_link:
+            unsubscribe_link = find_unsubscribe_link_in_html(body_html)
 
         return EmailMessage(
             provider_message_id=raw["id"],

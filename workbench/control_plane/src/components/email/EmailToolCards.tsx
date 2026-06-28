@@ -276,7 +276,40 @@ function DraftResultCard({
 
 const RULE_ID_RE = /id=([0-9a-fA-F-]{8,})/;
 
-/** Rule made/updated — disable or delete it. */
+/** Condition rows ("When") from a create/update_rule tool call's args. */
+function ruleConditions(a: Record<string, unknown>): { label: string; value: string }[] {
+  const out: { label: string; value: string }[] = [];
+  const push = (label: string, v: unknown) => {
+    if (v != null && String(v).trim()) out.push({ label, value: String(v).trim() });
+  };
+  push("AI", a.instructions);
+  push("From", a.from_pattern);
+  push("To", a.to_pattern);
+  push("Subject", a.subject_pattern);
+  push("Body", a.body_pattern);
+  return out;
+}
+
+/** Action badges ("Then") from a create/update_rule tool call's args. */
+function ruleActions(a: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const norm = (t: unknown) => String(t).replace(/_/g, " ");
+  if (a.action_type) {
+    out.push(a.label ? `${norm(a.action_type)}: ${a.label}` : norm(a.action_type));
+  } else if (a.label) {
+    out.push(`LABEL: ${a.label}`); // create_rule defaults action_type to LABEL
+  }
+  if (a.second_action_type) {
+    out.push(a.second_action_label ? `${norm(a.second_action_type)}: ${a.second_action_label}` : norm(a.second_action_type));
+  }
+  if (a.add_action_type) {
+    out.push(a.add_action_label ? `${norm(a.add_action_type)}: ${a.add_action_label}` : norm(a.add_action_type));
+  }
+  if (a.forward_to) out.push(`FORWARD → ${a.forward_to}`);
+  return out;
+}
+
+/** Rule made/updated — shows its When → Then, and can disable or delete it. */
 function RuleResultCard({
   event: e,
   accountId,
@@ -289,6 +322,10 @@ function RuleResultCard({
   const ruleId = (args?.rule_id as string) || (e.result?.match(RULE_ID_RE)?.[1] ?? "");
   const name = (args?.name as string) || e.result?.match(/'([^']+)'/)?.[1] || "rule";
   const created = e.name === "create_rule";
+  const a = args ?? {};
+  const conds = ruleConditions(a);
+  const actions = ruleActions(a);
+  const op = String(a.conditional_operator ?? "OR").toUpperCase() === "AND" ? "and" : "or";
   const [state, setState] = useState<"idle" | "busy" | "deleted" | "disabled">("idle");
 
   const del = async () => {
@@ -345,6 +382,45 @@ function RuleResultCard({
         )}
         {state === "busy" && <Loader2 size={12} className="animate-spin text-muted-foreground" />}
       </div>
+
+      {/* When → Then summary (from the tool-call args). For update_rule these
+          are just the changed fields; for create_rule, the whole rule. */}
+      {state !== "deleted" && (conds.length > 0 || actions.length > 0) && (
+        <div className="mt-1.5 pl-[21px] space-y-1">
+          {conds.length > 0 && (
+            <div className="text-[10px] leading-relaxed">
+              <span className="text-muted-foreground">When </span>
+              {conds.map((c, i) => (
+                <span key={i}>
+                  {i > 0 && <span className="text-muted-foreground/70"> {op} </span>}
+                  <span className="text-muted-foreground">{c.label}:</span>{" "}
+                  <span className="text-foreground">
+                    {c.value.length > 60 ? c.value.slice(0, 60) + "…" : c.value}
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
+          {actions.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1 text-[10px]">
+              <span className="text-muted-foreground">Then</span>
+              {actions.map((act, i) => (
+                <span
+                  key={i}
+                  className="px-1.5 py-0.5 rounded bg-secondary/70 text-foreground"
+                >
+                  {act}
+                </span>
+              ))}
+            </div>
+          )}
+          {a.automated === false && (
+            <div className="text-[10px] text-amber-500">
+              Proposes for approval (not auto-applied)
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

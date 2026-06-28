@@ -1026,6 +1026,17 @@ async def send_email(
     refs = _attachment_refs(attachments)
     if refs:
         payload["artifacts"] = refs
+    # Confirm-before-send: park on a HITL card so the user approves the actual
+    # send (outward-facing + irreversible). Degrades to send when there's no
+    # interactive stream to deliver the card (automated callers).
+    from acb_skills.ask_tools import request_confirmation  # noqa: PLC0415
+    _cc_note = f", cc {', '.join(cc)}" if cc else ""
+    if not await request_confirmation(
+        title="Send this email?",
+        detail=f"To {', '.join(to)}{_cc_note} · Subject: {subject or '(none)'}",
+        context=body,
+    ):
+        return "Send cancelled — the email was not sent."
     res = await _post("/email/send", payload)
     note = f" with {len(refs)} attachment(s)" if refs else ""
     return f"Sent email to {', '.join(to)}{note} (id={res.get('id', '')})."
@@ -1064,6 +1075,16 @@ async def send_reply(
     refs = _attachment_refs(attachments)
     if refs:
         payload["artifacts"] = refs
+    # Confirm-before-send (see send_email): park on a HITL card before the
+    # reply actually goes out.
+    from acb_skills.ask_tools import request_confirmation  # noqa: PLC0415
+    _cc_note = f", cc {', '.join(cc)}" if cc else ""
+    if not await request_confirmation(
+        title="Send this reply?",
+        detail=f"To {to_addr}{_cc_note} · Subject: {subj}",
+        context=body,
+    ):
+        return "Send cancelled — the reply was not sent."
     res = await _post("/email/send", payload)
     note = f" with {len(refs)} attachment(s)" if refs else ""
     return f"Replied to {to_addr}{note} (id={res.get('id', '')})."
@@ -1112,8 +1133,14 @@ async def import_artifact(
 
 
 async def send_draft(account_id: str, draft_id: str) -> str:
-    """Send an existing draft natively (Drafts → Sent, no duplicate). Confirm
-    with the user first."""
+    """Send an existing draft natively (Drafts → Sent, no duplicate). Shows a
+    confirmation card before sending."""
+    from acb_skills.ask_tools import request_confirmation  # noqa: PLC0415
+    if not await request_confirmation(
+        title="Send this draft?",
+        detail="Send the saved draft now? (Drafts → Sent)",
+    ):
+        return "Send cancelled — the draft was not sent."
     await _post(
         "/email/drafts/send",
         {"account_id": account_id, "draft_id": draft_id},

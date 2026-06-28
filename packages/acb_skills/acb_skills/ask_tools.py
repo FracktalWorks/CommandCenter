@@ -310,3 +310,94 @@ async def ask_questions(questions: str) -> str:
         "Waiting for response — do NOT continue until you receive "
         "the user's answers in the next message."
     )
+
+
+async def request_confirmation(
+    title: str, detail: str = "", context: str = "",
+) -> bool:
+    """Emit a HITL confirmation card and BLOCK until the user approves/rejects.
+
+    Renders a ``ConfirmationCard`` inline in the chat with Approve / Reject
+    buttons and parks the agent on a Future (same blocking mechanism as
+    :func:`ask_questions`).  Use this to gate an outward-facing or irreversible
+    action — e.g. before actually sending an email.
+
+    Args:
+        title: short card heading, e.g. ``"Send this email?"``.
+        detail: one-line summary, e.g. ``"To a@b.com · Subject: Hi"``.
+        context: longer preformatted body shown in a scrollable block
+            (e.g. the email body the user is about to send).
+
+    Returns:
+        ``True`` if the user approved, ``False`` if they rejected or did not
+        respond.  When there is no active stream to deliver the card (a
+        non-interactive run), returns ``True`` so automated callers proceed.
+    """
+    _title = str(title or "Confirm action").strip()[:120]
+    _detail = str(detail or "").strip()[:500]
+    _context = str(context or "").strip()[:4000]
+
+    def _event(request_id: str) -> dict:
+        return {
+            "type": "CUSTOM",
+            "name": "confirmation_requested",
+            "value": {
+                "title": _title,
+                "detail": _detail,
+                "context": _context,
+                "request_id": request_id,
+            },
+        }
+
+    async def _block_on(_fut, _rid, _pending) -> bool:
+        import asyncio as _asyncio
+        try:
+            _result = await _asyncio.wait_for(_fut, timeout=3600)
+        except _asyncio.TimeoutError:
+            return False
+        finally:
+            _pending.pop(_rid, None)
+        return str(_result.get("answer", "")).strip().upper() == "APPROVE"
+
+    # ── Path A: _active_run_queue (native MAF / Tier 2 blocking) ──────────
+    try:
+        from orchestrator.executor import (  # noqa: PLC0415
+            _active_run_queue,
+            _pending_user_input,
+        )
+        queue = _active_run_queue.get(None)
+    except Exception:  # noqa: BLE001
+        queue = None
+    if queue is not None:
+        import asyncio as _asyncio
+        import uuid as _uuid
+
+        _rid = _uuid.uuid4().hex
+        _fut = _asyncio.get_running_loop().create_future()
+        _pending_user_input[_rid] = _fut
+        await queue.put(_event(_rid))
+        return await _block_on(_fut, _rid, _pending_user_input)
+
+    # ── Path C: Redis relay (native MAF when queue not in context) ───────
+    try:
+        from orchestrator.executor import (  # noqa: PLC0415
+            _pending_user_input,
+            _push_sse_to_stream,
+            _stream_relay_thread_id,
+        )
+        _tid = _stream_relay_thread_id.get(None)
+        if _tid:
+            import asyncio as _asyncio
+            import uuid as _uuid
+
+            _rid = _uuid.uuid4().hex
+            _fut = _asyncio.get_running_loop().create_future()
+            _pending_user_input[_rid] = _fut
+            _line = f"data: {_json.dumps(_event(_rid))}\n\n"
+            await _push_sse_to_stream(_tid, _line)
+            return await _block_on(_fut, _rid, _pending_user_input)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # No delivery channel (non-interactive run) — don't block automation.
+    return True

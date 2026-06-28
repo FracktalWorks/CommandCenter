@@ -863,8 +863,13 @@ export default function AgentChat({
   }, [compacting, isLoading, applyCompaction]);
 
   // ── HITL (Human-in-the-Loop) confirmation state ────────────────────────
+  // When requestId is set the tool is blocking (the agent is parked on a
+  // Future — e.g. confirm-before-send); Approve/Reject POST to
+  // /api/agent/respond-input to resume the SAME stream.  Without requestId the
+  // legacy non-blocking path sends APPROVE/REJECT as a new chat message.
   const [confirmation, setConfirmation] = useState<{
     id: string; title: string; detail?: string; context?: string;
+    requestId?: string;
   } | null>(null);
 
   // ── HITL elicitation state (VS Code ask_questions parity) ────────────
@@ -897,11 +902,13 @@ export default function AgentChat({
       if (threadId && threadId !== sessionId) return;
       if (name === "confirmation_requested" && value && typeof value === "object") {
         const v = value as Record<string, unknown>;
+        const reqId = v.request_id ? String(v.request_id) : undefined;
         setConfirmation({
-          id: String(v.id ?? Date.now()),
+          id: String(v.id ?? v.request_id ?? Date.now()),
           title: String(v.title ?? "Confirm action"),
           detail: v.detail ? String(v.detail) : undefined,
           context: v.context ? String(v.context) : undefined,
+          requestId: reqId,
         });
       }
       if (name === "elicitation_requested" && value && typeof value === "object") {
@@ -931,8 +938,10 @@ export default function AgentChat({
     onRunFinalized: ({ threadId }) => {
       if (threadId && threadId !== sessionId) return;
       // Clear any stale HITL state when a run completes — a finished
-      // run can never be waiting on input anymore.
-      setConfirmation((prev) => prev ? null : prev);
+      // run can never be waiting on input anymore.  Only clear a BLOCKING
+      // confirmation (requestId, parked on a Future): a non-blocking one must
+      // persist until the user answers (its answer is a new chat message).
+      setConfirmation((prev) => prev && prev.requestId ? null : prev);
       // Only clear elicitation when the agent was BLOCKED on a Future
       // (requestId present, MAF Tier 2 path).  For the Copilot SDK
       // non-blocking path (no requestId), the card must persist until
@@ -1512,8 +1521,35 @@ export default function AgentChat({
 
           {confirmation && (
             <ConfirmationCard title={confirmation.title} detail={confirmation.detail} context={confirmation.context}
-              onApprove={() => { submitText(`APPROVE: ${confirmation.id}`); setConfirmation(null); }}
-              onReject={() => { submitText(`REJECT: ${confirmation.id}`); setConfirmation(null); }} />
+              onApprove={() => {
+                const reqId = confirmation.requestId;
+                const id = confirmation.id;
+                setConfirmation(null);
+                if (reqId) {
+                  // Blocking path — unblock the parked agent in the SAME stream.
+                  void fetch("/api/agent/respond-input", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ request_id: reqId, answer: "APPROVE", was_freeform: false }),
+                  }).catch(() => {});
+                } else {
+                  submitText(`APPROVE: ${id}`);
+                }
+              }}
+              onReject={() => {
+                const reqId = confirmation.requestId;
+                const id = confirmation.id;
+                setConfirmation(null);
+                if (reqId) {
+                  void fetch("/api/agent/respond-input", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ request_id: reqId, answer: "REJECT", was_freeform: false }),
+                  }).catch(() => {});
+                } else {
+                  submitText(`REJECT: ${id}`);
+                }
+              }} />
           )}
 
           {elicitation && (

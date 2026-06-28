@@ -8,16 +8,17 @@ from __future__ import annotations
 from gateway.routes.email import AssistantSettingsModel
 
 
-def test_settings_defaults_match_litellm_balanced_tier() -> None:
+def test_settings_default_model_tiers() -> None:
     s = AssistantSettingsModel(account_id="acc-1")
     # auto_run is the global "run rules automatically" switch; defaults ON so a
     # fresh account auto-runs once it has rules (an explicit OFF stops it).
     assert s.auto_run is True
     assert s.cold_email_blocker == "OFF"
-    # Three task-specific models, each defaulting to its recommended tier.
+    # Three task-specific models, each defaulting to its recommended tier. Chat
+    # defaults to tier-powerful (strong tool-caller) so chat actions are reliable.
     assert s.rule_model == "tier-fast"
     assert s.draft_model == "tier-powerful"
-    assert s.chat_model == "tier-balanced"
+    assert s.chat_model == "tier-powerful"
     assert s.digest_frequency == "OFF"
     assert s.about is None
     assert s.signature is None

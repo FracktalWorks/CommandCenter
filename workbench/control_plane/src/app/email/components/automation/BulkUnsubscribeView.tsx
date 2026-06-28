@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   Loader2, Archive, ArchiveRestore, Check, ExternalLink, Search,
-  ShieldX, Tags, Mail, X, MoreHorizontal, Trash2, RotateCcw, Clock,
+  ShieldX, Mail, X, MoreHorizontal, Trash2, RotateCcw, Clock,
   ChevronDown,
 } from "lucide-react";
 import {
@@ -98,6 +98,33 @@ export function BulkUnsubscribeView({
     const t = setTimeout(() => setNotice(null), 6000);
     return () => clearTimeout(t);
   }, [notice]);
+
+  // Categorisation already runs automatically on every sync (just-in-time, per
+  // the ingestion scheduler) — so there's no manual "Categorize" button. If a
+  // backlog of uncategorised senders is still showing (e.g. a fresh account the
+  // sync hasn't caught up on), kick off ONE catch-up pass per account so the
+  // category chips + "Newsletters only" filter fill in on their own.
+  const autoCategorized = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!accountId || loading || autoCategorized.current.has(accountId)) return;
+    const uncategorized = senders.filter(
+      (s) => !s.category || s.category === "Unknown"
+    ).length;
+    if (uncategorized < 10) return;
+    autoCategorized.current.add(accountId);
+    void (async () => {
+      setCategorizing(true);
+      try {
+        await categorizeSenders(accountId, 100);
+      } catch {
+        /* sync will categorise on its next cycle anyway */
+      }
+      setTimeout(() => {
+        load();
+        setCategorizing(false);
+      }, 8000);
+    })();
+  }, [accountId, loading, senders, load]);
 
   const isNewsletter = (s: SenderStat) =>
     // Always keep a sender we've already acted on visible, so the toggle can't
@@ -378,20 +405,6 @@ export function BulkUnsubscribeView({
     }
   };
 
-  const runCategorize = async () => {
-    if (!accountId) return;
-    setCategorizing(true);
-    try {
-      await categorizeSenders(accountId, 100);
-      setTimeout(() => {
-        load();
-        setCategorizing(false);
-      }, 8000);
-    } catch {
-      setCategorizing(false);
-    }
-  };
-
   if (!accountId) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
@@ -447,15 +460,11 @@ export function BulkUnsubscribeView({
             </button>
           ))}
         </div>
-        <button
-          onClick={runCategorize}
-          disabled={categorizing}
-          title="Auto-categorize senders with AI"
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50 ml-auto"
-        >
-          {categorizing ? <Loader2 className="animate-spin" size={13} /> : <Tags size={13} />}
-          {categorizing ? "Categorizing…" : "Categorize"}
-        </button>
+        {categorizing && (
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground ml-auto whitespace-nowrap">
+            <Loader2 className="animate-spin" size={13} /> Categorizing…
+          </div>
+        )}
       </div>
 
       {/* Status filter tabs */}
@@ -676,36 +685,22 @@ export function BulkUnsubscribeView({
                     <div className="text-[11px] text-muted-foreground truncate">{s.email}</div>
                   </div>
 
-                  {/* Stats */}
-                  <div className="hidden sm:flex items-center gap-4 text-[11px] text-muted-foreground tabular-nums">
-                    <div className="text-center">
-                      <div className="text-foreground font-medium">{s.count}</div>
-                      <div className="text-[9px]">emails</div>
-                    </div>
-                    <div className="w-20">
-                      <div className="flex items-center justify-between mb-0.5">
-                        <span
-                          className={`font-medium ${
-                            s.read_rate < 0.3 ? "text-amber-400" : "text-foreground"
-                          }`}
-                        >
-                          {Math.round(s.read_rate * 100)}%
-                        </span>
-                        <span className="text-[9px]">read</span>
+                  {/* Stats — email volume (the priority signal) + a compact
+                      read-rate ring. Visible on mobile and desktop alike. */}
+                  <div className="flex items-center gap-2.5 flex-shrink-0">
+                    <div className="text-right leading-none">
+                      <div className="text-xs font-semibold text-foreground tabular-nums">
+                        {s.count}
                       </div>
-                      <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
-                        <div
-                          className={`h-full rounded-full ${
-                            s.read_rate < 0.3 ? "bg-amber-400" : "bg-primary"
-                          }`}
-                          style={{ width: `${Math.round(s.read_rate * 100)}%` }}
-                        />
+                      <div className="text-[8px] text-muted-foreground mt-0.5">
+                        emails
                       </div>
                     </div>
+                    <ReadRing value={s.read_rate} />
                   </div>
 
-                  {/* Actions — collapsed into one "Actions" menu on mobile,
-                      inline buttons + cleanup kebab on desktop. */}
+                  {/* Actions — one "Actions" menu on mobile; on desktop every
+                      action is surfaced inline (there's room for the icons). */}
                   <div className="flex items-center gap-1 flex-shrink-0">
                     {busy === s.email ? (
                       <Loader2 className="animate-spin text-muted-foreground" size={14} />
@@ -720,7 +715,20 @@ export function BulkUnsubscribeView({
                         >
                           <RotateCcw size={13} /> Resubscribe
                         </ActionBtn>
-                        <ActionMenu items={cleanupItems} />
+                        <ActionBtn
+                          title="Archive all existing mail from this sender"
+                          onClick={() => messagesAction(s, "archive")}
+                          className="hover:bg-secondary"
+                        >
+                          <Archive size={13} />
+                        </ActionBtn>
+                        <ActionBtn
+                          title="Delete all mail from this sender (move to Trash)"
+                          onClick={() => messagesAction(s, "trash")}
+                          className="hover:bg-red-500/10 hover:text-red-400"
+                        >
+                          <Trash2 size={13} />
+                        </ActionBtn>
                       </>
                     ) : (
                       <>
@@ -754,7 +762,20 @@ export function BulkUnsubscribeView({
                             <Check size={13} /> Keep
                           </ActionBtn>
                         )}
-                        <ActionMenu items={cleanupItems} />
+                        <ActionBtn
+                          title="Archive all existing mail from this sender"
+                          onClick={() => messagesAction(s, "archive")}
+                          className="hover:bg-secondary"
+                        >
+                          <Archive size={13} />
+                        </ActionBtn>
+                        <ActionBtn
+                          title="Delete all mail from this sender (move to Trash)"
+                          onClick={() => messagesAction(s, "trash")}
+                          className="hover:bg-red-500/10 hover:text-red-400"
+                        >
+                          <Trash2 size={13} />
+                        </ActionBtn>
                       </>
                     )}
                   </div>
@@ -832,6 +853,42 @@ function ActionBtn({
     >
       {children}
     </button>
+  );
+}
+
+/** Compact circular read-rate indicator — fits on mobile and web without the
+ *  horizontal space a linear bar needs. Amber when the read rate is low (a
+ *  strong "worth unsubscribing" signal), primary otherwise. */
+function ReadRing({ value }: { value: number }) {
+  const pct = Math.max(0, Math.min(100, Math.round(value * 100)));
+  const r = 9;
+  const circ = 2 * Math.PI * r;
+  const low = value < 0.3;
+  return (
+    <div
+      className="relative flex items-center justify-center flex-shrink-0"
+      title={`${pct}% read`}
+    >
+      <svg width="26" height="26" viewBox="0 0 26 26" className="-rotate-90">
+        <circle
+          cx="13" cy="13" r={r} fill="none" strokeWidth="3"
+          className="stroke-secondary"
+        />
+        <circle
+          cx="13" cy="13" r={r} fill="none" strokeWidth="3" strokeLinecap="round"
+          className={low ? "stroke-amber-400" : "stroke-primary"}
+          strokeDasharray={circ}
+          strokeDashoffset={circ * (1 - pct / 100)}
+        />
+      </svg>
+      <span
+        className={`absolute text-[8px] font-semibold tabular-nums ${
+          low ? "text-amber-400" : "text-foreground"
+        }`}
+      >
+        {pct}
+      </span>
+    </div>
   );
 }
 

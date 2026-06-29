@@ -78,3 +78,52 @@ export function truncate(text: string, maxLen: number): string {
 export function isUnread(email: Email): boolean {
   return !email.isRead;
 }
+
+/**
+ * Build a local, optimistic "sent" message to drop into the open thread the
+ * instant a reply is sent — the provider copy only lands on the next sync (and
+ * Outlook's send returns no id at all), so without this the reply briefly
+ * vanishes from the conversation. Carries a `local-sent-*` id; the thread merge
+ * drops it once the real synced message arrives.
+ */
+export function buildOptimisticSent(params: {
+  accountId: string;
+  threadId?: string;
+  fromEmail: string;
+  to: string[];
+  cc?: string[];
+  subject: string;
+  bodyText: string;
+  hasAttachments?: boolean;
+}): Email {
+  const now = new Date().toISOString();
+  return {
+    id: `local-sent-${Date.now()}`,
+    providerMessageId: "",
+    threadId: params.threadId,
+    accountId: params.accountId,
+    from: { name: "You", email: params.fromEmail },
+    to: params.to.map((e) => ({ name: "", email: e })),
+    cc: (params.cc || []).map((e) => ({ name: "", email: e })),
+    subject: params.subject,
+    bodyText: params.bodyText,
+    bodyTruncated: false,
+    snippet: params.bodyText.replace(/\s+/g, " ").trim().slice(0, 140),
+    hasAttachments: !!params.hasAttachments,
+    isRead: true,
+    isStarred: false,
+    isFlagged: false,
+    importance: "normal",
+    labels: [],
+    categories: [],
+    folder: "sent",
+    receivedAt: now,
+    syncedAt: now,
+  };
+}
+
+/** First-N-chars normalized key of a body, for matching an optimistic sent
+ *  message to its real synced counterpart (so the optimistic copy is dropped). */
+export function bodyMatchKey(text: string): string {
+  return (text || "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 60);
+}

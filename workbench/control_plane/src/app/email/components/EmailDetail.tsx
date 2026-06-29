@@ -7,7 +7,7 @@ import {
   MailOpen, Tag, Printer, ExternalLink, X, AlertTriangle, Loader2, Send,
 } from "lucide-react";
 import { Email } from "../lib/types";
-import { fullDateLabel, initials } from "../lib/utils";
+import { fullDateLabel, initials, buildOptimisticSent, bodyMatchKey } from "../lib/utils";
 import { useEmailStore } from "../lib/emailStore";
 import {
   getAttachmentDownloadUrl, fetchFullBody, getEmail, listThread, createRule,
@@ -30,7 +30,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const {
     updateEmail, deleteEmail, openCompose, hydrateEmail, folders,
     accounts, selectedAccountId, sendEmail, saveDraft, sendDraft,
-    viewerCommand, setViewerCommand,
+    viewerCommand, setViewerCommand, triggerSync, softRefresh,
   } = useEmailStore();
   const { isMobile } = useViewMode();
   const [starred, setStarred] = useState(email?.isStarred ?? false);
@@ -81,6 +81,48 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const [loadingDetail, setLoadingDetail] = useState(false);
   // The full conversation (all messages sharing this thread_id), if any.
   const [thread, setThread] = useState<Email[] | null>(null);
+  // Just-sent replies shown optimistically until the provider sync mirrors the
+  // real copy (kept in a ref so the periodic refetch can re-merge them).
+  const optimisticSentRef = useRef<Email[]>([]);
+
+  // Merge any still-unsynced optimistic sent replies into a freshly-fetched
+  // thread, dropping the ones the real synced message now covers.
+  const mergeThread = (fetched: Email[]): Email[] => {
+    const pend = optimisticSentRef.current.filter((o) => {
+      const key = bodyMatchKey(o.bodyText);
+      if (!key) return false;
+      const covered = fetched.some(
+        (f) =>
+          (f.folder || "").toLowerCase() === "sent" &&
+          bodyMatchKey(f.bodyText).includes(key)
+      );
+      return !covered;
+    });
+    optimisticSentRef.current = pend;
+    return pend.length ? [...fetched, ...pend] : fetched;
+  };
+
+  // After a reply is sent: show it instantly, then pull the real copy (sync +
+  // a few staged thread/list refetches so the conversation and the Reply Zero
+  // chip update within a couple of seconds, not on the next 20s tick).
+  const refreshThreadAfterSend = (sent?: Email) => {
+    if (sent) {
+      optimisticSentRef.current = [...optimisticSentRef.current, sent];
+      setThread((cur) => mergeThread(cur ?? []));
+    }
+    const acct = selectedAccountId ?? undefined;
+    const threadId = email?.threadId;
+    if (acct) void triggerSync(acct);
+    if (!threadId) return;
+    [1500, 4000, 8000].forEach((d) =>
+      setTimeout(() => {
+        listThread(acct, threadId)
+          .then((t) => setThread(mergeThread(t)))
+          .catch(() => {});
+      }, d)
+    );
+    setTimeout(() => void softRefresh(), 5000);
+  };
 
   // Create an archive rule for this sender, then archive the open message.
   const blockSender = async () => {
@@ -138,7 +180,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
     const tick = () => {
       if (document.visibilityState !== "visible") return;
       listThread(selectedAccountId ?? undefined, threadId)
-        .then(setThread)
+        .then((t) => setThread(mergeThread(t)))
         .catch(() => {});
     };
     const id = setInterval(tick, 20000);
@@ -155,6 +197,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
     let cancelled = false;
     setDetail(null);
     setThread(null);
+    optimisticSentRef.current = []; // new conversation — drop pending sent cards
     setFullBodyText(null);
     setReplyMode(null);
     setReplyTargetId(null);
@@ -167,7 +210,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
     // Pull the whole conversation so we can show a Gmail-style thread view.
     if (email.threadId) {
       listThread(selectedAccountId ?? undefined, email.threadId)
-        .then((t) => { if (!cancelled) setThread(t); })
+        .then((t) => { if (!cancelled) setThread(mergeThread(t)); })
         .catch(() => { if (!cancelled) setThread(null); });
     }
     const needsBody = !email.bodyHtml && !email.bodyText;
@@ -486,7 +529,22 @@ export function EmailDetail({ email }: EmailDetailProps) {
       setSendErr(e?.message || "Failed to send");
       return;
     }
+    // Show the reply in the conversation at once, then pull the real synced copy.
+    const sent = email.threadId
+      ? buildOptimisticSent({
+          accountId: selectedAccountId,
+          threadId: email.threadId,
+          fromEmail: ownEmail || "",
+          to: toArr,
+          cc: ccArr,
+          subject: replySubject(),
+          bodyText: composedReply(replyBody),
+          hasAttachments:
+            replyAttachments.length > 0 || replyArtifacts.length > 0,
+        })
+      : undefined;
     resetReplySession();
+    refreshThreadAfterSend(sent);
   };
 
   /** Read picked files into base64 and append them to the reply's attachments. */
@@ -745,6 +803,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
             messages={thread}
             openedId={email.id}
             onReply={(m, mode) => startReply(mode, m)}
+            onSent={refreshThreadAfterSend}
           />
         ) : isDraftEmail(email) ? (
           /* Standalone draft — editable composer */

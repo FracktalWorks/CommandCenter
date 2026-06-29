@@ -6,7 +6,7 @@ import {
   Reply, ReplyAll, Forward,
 } from "lucide-react";
 import { Email } from "../lib/types";
-import { fullDateLabel, initials } from "../lib/utils";
+import { fullDateLabel, initials, buildOptimisticSent } from "../lib/utils";
 import { getEmail, fetchFullBody, composeAssist } from "../lib/api";
 import { splitQuotedText } from "../lib/quoting";
 import { useEmailStore } from "../lib/emailStore";
@@ -36,12 +36,16 @@ export function ConversationView({
   messages,
   openedId,
   onReply,
+  onSent,
 }: {
   messages: Email[];
   openedId: string;
   /** Reply / Reply All / Forward a specific message in the thread. Opens the
    *  composer (in EmailDetail) threaded onto that message. */
   onReply?: (message: Email, mode: "reply" | "reply-all" | "forward") => void;
+  /** Called after an in-thread draft is sent so the parent can surface the
+   *  reply immediately and pull the real synced copy. */
+  onSent?: (sent?: Email) => void;
 }) {
   // Locally-discarded drafts hide instantly (the provider delete is async).
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
@@ -98,6 +102,7 @@ export function ConversationView({
               key={m.id}
               draft={m}
               replyTo={replyTarget}
+              onSent={onSent}
               onDismiss={() =>
                 setDismissed((s) => new Set(s).add(m.id))
               }
@@ -221,10 +226,12 @@ export function DraftCard({
   draft,
   replyTo,
   onDismiss,
+  onSent,
 }: {
   draft: Email;
   replyTo?: Email;
   onDismiss?: () => void;
+  onSent?: (sent?: Email) => void;
 }) {
   const {
     deleteEmail, selectedAccountId, saveDraft, sendDraft, sendEmail, accounts,
@@ -372,6 +379,18 @@ export function DraftCard({
         });
         await sendDraft(accountId, draft.id);
       }
+      // Surface the reply in the conversation at once + pull the real copy.
+      onSent?.(
+        buildOptimisticSent({
+          accountId,
+          threadId: replyTo?.threadId || draft.threadId,
+          fromEmail: ownEmail || "",
+          to: recipients(),
+          cc: ccList(),
+          subject: draft.subject || "",
+          bodyText: combinedBody(),
+        })
+      );
     } catch {
       /* send failure — the draft stays in Drafts so the user can retry */
     } finally {

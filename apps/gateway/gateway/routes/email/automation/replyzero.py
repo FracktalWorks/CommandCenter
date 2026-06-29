@@ -3,6 +3,7 @@ follow-up reminders, and the inbox AI chat/quick-action endpoints."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -668,14 +669,18 @@ async def _reconcile_thread_labels(
         to_remove = [c for c in list(r.categories or []) if c in stale]
         if not to_remove:
             continue
+        # Update our mirror FIRST so the chip reflects the change immediately,
+        # even if the provider call fails or lags; the provider apply is a
+        # best-effort follow-up (it must NOT gate the local state, or the UI
+        # ends up with a label removed and the replacement never applied).
+        await db.execute(text(
+            "UPDATE email_messages SET categories = ARRAY("
+            "  SELECT c FROM unnest(categories) AS c WHERE NOT (c = ANY(:rm))"
+            "), updated_at = now() WHERE id = :id"
+        ), {"id": r.id, "rm": to_remove})
         try:
             await provider.set_labels(
                 r.provider_message_id, add=[], remove=to_remove)
-            await db.execute(text(
-                "UPDATE email_messages SET categories = ARRAY("
-                "  SELECT c FROM unnest(categories) AS c WHERE NOT (c = ANY(:rm))"
-                "), updated_at = now() WHERE id = :id"
-            ), {"id": r.id, "rm": to_remove})
         except Exception:  # noqa: BLE001 — one bad message shouldn't abort
             continue
     if not keep_label:
@@ -686,17 +691,18 @@ async def _reconcile_thread_labels(
     target = inbound[-1] if inbound else rows[-1]
     if keep_label in list(target.categories or []):
         return
-    try:
+    # Mirror first (see above), then best-effort provider apply — so a thread
+    # that's just been replied to flips to "Actioned"/"Awaiting Reply" in the UI
+    # at once instead of losing "To Reply" and showing no tag at all.
+    await db.execute(text(
+        "UPDATE email_messages SET categories = CASE "
+        "WHEN :lbl = ANY(categories) THEN categories "
+        "ELSE array_append(categories, :lbl) END, "
+        "updated_at = now() WHERE id = :id"
+    ), {"id": target.id, "lbl": keep_label})
+    with contextlib.suppress(Exception):  # provider apply is best-effort
         await provider.set_labels(
             target.provider_message_id, add=[keep_label], remove=[])
-        await db.execute(text(
-            "UPDATE email_messages SET categories = CASE "
-            "WHEN :lbl = ANY(categories) THEN categories "
-            "ELSE array_append(categories, :lbl) END, "
-            "updated_at = now() WHERE id = :id"
-        ), {"id": target.id, "lbl": keep_label})
-    except Exception:  # noqa: BLE001
-        pass
 
 
 async def _mark_thread_replied(

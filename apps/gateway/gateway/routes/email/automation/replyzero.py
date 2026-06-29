@@ -1151,13 +1151,21 @@ async def reply_zero(
             if has_any is None:
                 background.add_task(_maybe_classify_threads, account_id)
 
-        fu_days = 0
+        fu_cutoff = None
         if type == "awaiting":
             fu_row = (await db.execute(text(
-                "SELECT follow_up_days FROM email_assistant_settings "
-                "WHERE account_id = :aid"
+                "SELECT follow_up_awaiting_days, follow_up_days "
+                "FROM email_assistant_settings WHERE account_id = :aid"
             ), {"aid": account_id})).fetchone()
-            fu_days = (fu_row.follow_up_days if fu_row else 0) or 0
+            fu_days = 0
+            if fu_row:
+                fu_days = (getattr(fu_row, "follow_up_awaiting_days", 0)
+                           or getattr(fu_row, "follow_up_days", 0) or 0)
+            # Use the SAME business-day window as the reminder job so the badge
+            # appears exactly when the "Follow-up" label / nudge fires — not a
+            # day or two early because a weekend was counted.
+            if fu_days > 0:
+                fu_cutoff = _business_days_cutoff(float(fu_days))
         now = datetime.now(timezone.utc)
         out = []
         for r in rows:
@@ -1174,7 +1182,8 @@ async def reply_zero(
                 "is_read": r.is_read, "reason": r.reason or "",
                 "awaiting_days": days,
                 "needs_follow_up": bool(
-                    fu_days and days is not None and days >= fu_days),
+                    fu_cutoff and r.last_message_at is not None
+                    and r.last_message_at < fu_cutoff),
                 # An existing draft in the thread (auto-drafted or saved) so the
                 # UI shows "View draft" rather than drafting another reply.
                 "draft_id": str(r.draft_id) if r.draft_id else None,
@@ -1327,7 +1336,7 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bo
                         }
                         body = await _agent_draft_reply(
                             email, about, signature, acc.user_id, use_agent=True,
-                            model=fu_model,
+                            follow_up=True, model=fu_model,
                         )
                         # Confidence gate (defense-in-depth): don't persist a
                         # declined / empty draft as a real provider draft.

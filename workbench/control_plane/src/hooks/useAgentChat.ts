@@ -94,6 +94,7 @@ export interface ArtifactEntry {
   path: string;
   sha256?: string;
   size?: number;
+  mimeType?: string;
 }
 
 interface UseAgentChatOptions {
@@ -397,6 +398,7 @@ export function useAgentChat({
                     path: String(data?.path ?? ""),
                     sha256: data?.sha256 ? String(data.sha256) : undefined,
                     size: data?.size != null ? Number(data.size) : undefined,
+                    mimeType: data?.mime_type ? String(data.mime_type) : undefined,
                   });
                 }
                 // HITL control events (ask_questions / ask_user / confirm) are
@@ -711,6 +713,7 @@ export function useAgentChat({
                     path: String(data?.path ?? ""),
                     sha256: data?.sha256 ? String(data.sha256) : undefined,
                     size: data?.size != null ? Number(data.size) : undefined,
+                    mimeType: data?.mime_type ? String(data.mime_type) : undefined,
                   });
                 }
                 if (!HITL_CONTROL_EVENTS.has(evtName)) {

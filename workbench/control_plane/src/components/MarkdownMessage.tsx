@@ -406,8 +406,11 @@ export default function MarkdownMessage({
             const lang = match ? match[1].toLowerCase() : "";
             const codeString = String(children).replace(/\n$/, "");
 
-            // Block code (has a language class)
-            if (match) {
+            // Block code. react-markdown adds a `language-xxx` class only when a
+            // language is specified; a fenced block WITHOUT a language has no
+            // class, so also treat any multi-line code as a block — otherwise an
+            // unlabeled ``` block renders cramped as inline with literal newlines.
+            if (match || codeString.includes("\n")) {
               // MCQ choices block — render interactive buttons instead of code.
               if (lang === "choices") {
                 return <ChoiceBlock raw={codeString} onChoice={onChoice} />;
@@ -427,8 +430,10 @@ export default function MarkdownMessage({
         {content}
       </ReactMarkdown>
 
-      {/* Streaming cursor */}
-      {streaming && (
+      {/* Streaming cursor — only once text is actually streaming, so it doesn't
+          float with no text during a tool-only phase (the ThinkingContainer
+          shows activity there instead). */}
+      {streaming && content.trim().length > 0 && (
         <span className="inline-block w-[2px] h-[1em] bg-zinc-300 animate-pulse ml-0.5 align-middle rounded-full" />
       )}
     </div>

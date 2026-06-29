@@ -809,10 +809,11 @@ function ChatPageInner() {
     } else if (drawerTabRef.current === "files" && filesRef.current) {
       openDrawer(filesRef.current);
     }
-    // Keyed on the data that rebuilds the drawer content; openDrawer only
-    // updates AppShell state (won't loop — our own deps don't change from it).
+    // Keyed on the data that rebuilds the drawer content (incl. memories, so the
+    // open chats drawer's MemoryPanel refreshes); openDrawer only updates
+    // AppShell state (won't loop — our own deps don't change from it).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions, artifactUpdates, activeSessionId, drawerIsOpen]);
+  }, [sessions, artifactUpdates, activeSessionId, drawerIsOpen, memories]);
 
   // ── Render ─────────────────────────────────────────────────────────────
   return (
@@ -927,16 +928,21 @@ function ChatPageInner() {
                 expectedMessageCount={activeSession.messageCount}
                 onActivity={(info) => handleActivity(activeSession.id, info)}
                 onArtifact={(entry: ArtifactEntry) => {
-                  setArtifactUpdates((prev) => [
-                    ...prev,
-                    {
+                  setArtifactUpdates((prev) => {
+                    // Merge by path (artifact_created -> artifact_updated for the
+                    // same file is one entry, not two) and keep a prior size /
+                    // mime when a later event omits them, so the file tree doesn't
+                    // regress to 0 B / a generic icon.
+                    const prior = prev.find((f) => f.path === entry.path);
+                    const fe: FileEntry = {
                       path: entry.path,
                       name: entry.path.split("/").pop() ?? entry.path,
-                      size: entry.size ?? 0,
+                      size: entry.size ?? prior?.size ?? 0,
                       modified_at: new Date().toISOString(),
-                      mime_type: "",
-                    } satisfies FileEntry,
-                  ]);
+                      mime_type: entry.mimeType ?? prior?.mime_type ?? "",
+                    };
+                    return [...prev.filter((f) => f.path !== entry.path), fe];
+                  });
                 }}
               />
           ) : (

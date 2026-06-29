@@ -59,8 +59,8 @@ const SEND_MODE_LABELS: Record<SendMode, string> = {
 };
 
 const SEND_MODE_DESCRIPTIONS: Record<SendMode, string> = {
-  steer: "Interrupt current reply and send now (default)",
-  send:  "Send when idle, queue if busy",
+  steer: "Interrupt current reply and send now",
+  send:  "Send when idle, queue if busy (default)",
   queue: "Wait for current reply, then send",
 };
 
@@ -449,6 +449,10 @@ export default function AgentChat({
   const isRunActive =
     isLoading || recovering || (!!runStatus && runStatus !== "idle");
   const prevLoadingRef = useRef(false);
+  // Guards the queue-drain effect against re-entrancy: a second isLoading→false
+  // edge (e.g. a poll clearing a stale flag right as a steer lands) must not
+  // shift+send a second queued message while the first drained send is starting.
+  const drainingRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -781,11 +785,16 @@ export default function AgentChat({
 
   // Drain the queue when a generation finishes (Queue / Steer send modes).
   useEffect(() => {
-    if (prevLoadingRef.current && !isLoading && queueRef.current.length > 0) {
+    if (prevLoadingRef.current && !isLoading && queueRef.current.length > 0 && !drainingRef.current) {
+      drainingRef.current = true;
       const next = queueRef.current.shift();
       setQueuedCount(queueRef.current.length);
       saveQueue(sessionIdRef.current, queueRef.current);
-      if (next) void sendMessage(next);
+      // Clear the guard only once this send settles, so a second isLoading edge
+      // mid-send can't drain another item; sequential drains still work because
+      // the next edge fires after this promise (and the guard) resolves.
+      if (next) void sendMessage(next).finally(() => { drainingRef.current = false; });
+      else drainingRef.current = false;
     }
     prevLoadingRef.current = isLoading;
   }, [isLoading, sendMessage]);

@@ -268,7 +268,14 @@ export default function ArtifactSidebar({
     if (artifactUpdates.length === 0) return;
     setFiles((prev) => {
       const map = new Map(prev.map((f) => [f.path, f]));
-      for (const u of artifactUpdates) map.set(u.path, u);
+      for (const u of artifactUpdates) {
+        const old = map.get(u.path);
+        // Merge rather than replace: an SSE update that omits size/mime must not
+        // wipe values a /workspace fetch already filled in.
+        map.set(u.path, old
+          ? { ...old, ...u, size: u.size || old.size, mime_type: u.mime_type || old.mime_type }
+          : u);
+      }
       return Array.from(map.values());
     });
   }, [artifactUpdates]);

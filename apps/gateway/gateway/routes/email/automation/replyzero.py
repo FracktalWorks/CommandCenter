@@ -699,13 +699,22 @@ async def _reconcile_thread_labels(
         pass
 
 
-async def _mark_thread_replied(account_id: str, thread_id: str) -> None:
+async def _mark_thread_replied(
+    account_id: str, thread_id: str,
+    sent_body: str | None = None, sent_subject: str | None = None,
+) -> None:
     """After the user sends a reply, re-determine the thread's status with the
     AI (exact inbox-zero aiDetermineThreadStatus parity) and reconcile labels:
     set the Reply Zero status and collapse the thread to a SINGLE conversation
     label (removing any stale To Reply / Awaiting / FYI / Follow-up). Since the
     user just sent, FYI is excluded — the AI picks AWAITING_REPLY (waiting on
-    them) or ACTIONED (done). Best-effort."""
+    them) or ACTIONED (done). Best-effort.
+
+    ``sent_body``/``sent_subject`` carry the reply the user just sent. It usually
+    isn't mirrored into email_messages yet (it lands on the next sync), so pass it
+    here and we append it to the thread the AI reads — making the Awaiting-vs-
+    Actioned call accurate immediately (inbox-zero sees the sent message at once)
+    instead of defaulting to Awaiting and only correcting on the next sync."""
     if not thread_id:
         return
     db = await _get_db()
@@ -728,6 +737,15 @@ async def _mark_thread_replied(account_id: str, thread_id: str) -> None:
         acc_email = (acc.email_address if acc else "") or ""
 
         thread_text = "\n\n---\n\n".join(_fmt_thread_msg(r) for r in rows)
+        # The just-sent reply usually isn't mirrored locally yet — append it so
+        # the AI judges the thread WITH the reply (accurate Awaiting vs Actioned
+        # immediately). Skip if the latest stored message is already a sent one.
+        if sent_body and (latest.folder or "").lower() != "sent":
+            thread_text += (
+                f"\n\n---\n\nFrom: {acc_email} (you sent)\n"
+                f"Subject: {sent_subject or latest.subject or ''}\n"
+                f"{sent_body[:1500]}"
+            )
         status = await _llm_determine_thread_status(
             thread_text, acc_email, about, user_sent_last=True)
         rz_status, new_cat = _THREAD_STATUS_MAP.get(

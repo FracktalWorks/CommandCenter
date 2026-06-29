@@ -1257,7 +1257,8 @@ async def send_draft_endpoint(
                 _learn_from_sent, req.account_id, drow.thread_id,
                 drow.body_text or "")
             background.add_task(
-                _mark_thread_replied, req.account_id, drow.thread_id)
+                _mark_thread_replied, req.account_id, drow.thread_id,
+                drow.body_text or "", drow.subject or "")
             # Trash any other drafts left in the thread (e.g. an AI draft).
             background.add_task(
                 _cleanup_thread_drafts, req.account_id, drow.thread_id)

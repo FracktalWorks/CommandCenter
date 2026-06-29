@@ -189,9 +189,12 @@ async def send_email(
                     background.add_task(
                         _learn_from_sent, req.account_id, trow.thread_id,
                         req.body_text)
-                    # Move the thread out of "To Reply" → Awaiting Reply.
+                    # Move the thread out of "To Reply" → Awaiting Reply /
+                    # Actioned. Pass the just-sent reply so the AI judges the
+                    # thread WITH it (the send isn't mirrored locally yet).
                     background.add_task(
-                        _mark_thread_replied, req.account_id, trow.thread_id)
+                        _mark_thread_replied, req.account_id, trow.thread_id,
+                        req.body_text, req.subject)
                     # Trash leftover drafts in the thread (AI draft / auto-save).
                     background.add_task(
                         _cleanup_thread_drafts, req.account_id, trow.thread_id)

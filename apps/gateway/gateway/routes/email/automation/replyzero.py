@@ -746,7 +746,8 @@ async def _mark_thread_replied(
         # The just-sent reply usually isn't mirrored locally yet — append it so
         # the AI judges the thread WITH the reply (accurate Awaiting vs Actioned
         # immediately). Skip if the latest stored message is already a sent one.
-        if sent_body and (latest.folder or "").lower() != "sent":
+        reply_pending = bool(sent_body) and (latest.folder or "").lower() != "sent"
+        if reply_pending:
             thread_text += (
                 f"\n\n---\n\nFrom: {acc_email} (you sent)\n"
                 f"Subject: {sent_subject or latest.subject or ''}\n"
@@ -757,9 +758,18 @@ async def _mark_thread_replied(
         rz_status, new_cat = _THREAD_STATUS_MAP.get(
             status, ("AWAITING", "Awaiting Reply"))
 
+        # Anchor "last activity" to the reply we just sent (it isn't in the DB
+        # yet) so the follow-up clock + awaiting_days start from NOW — not from
+        # the inbound message we replied to. Otherwise replying to an OLD thread
+        # would immediately look overdue and a manual follow-up scan could nudge
+        # right after you replied. The next sync re-stamps this with the real
+        # sent message (same time) once it mirrors.
+        last_at = (
+            datetime.now(timezone.utc) if reply_pending else latest.received_at
+        )
         await _upsert_thread_status(
             db, account_id, thread_id, rz_status, latest.id,
-            latest.received_at, f"Replied — {status}")
+            last_at, f"Replied — {status}")
         await db.commit()
 
         # Reconcile the thread to a SINGLE conversation label (mutually exclusive,

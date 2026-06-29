@@ -1111,8 +1111,13 @@ async def reply_zero(
     try:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         want = {"awaiting": "AWAITING", "done": "DONE"}.get(type, "NEEDS_REPLY")
+        # Trash is hidden from every bucket; archiving a thread also drops it from
+        # the ACTIVE buckets ("archived = off my reply queue") while it still shows
+        # under Done. (Controlled literal — safe to inline.)
+        excluded = ("'trash', 'archive'"
+                    if want in ("NEEDS_REPLY", "AWAITING") else "'trash'")
         rows = (await db.execute(text(
-            """SELECT ts.thread_id, ts.reason, ts.last_message_at,
+            f"""SELECT ts.thread_id, ts.reason, ts.last_message_at,
                       em.id, em.subject, em.from_address, em.is_read,
                       d.id AS draft_id, d.body_text AS draft_text
                FROM email_thread_status ts
@@ -1126,8 +1131,8 @@ async def reply_zero(
                  LIMIT 1
                ) d ON true
                WHERE ts.account_id = :aid AND ts.status = :st
-                 -- A trashed thread shouldn't surface in any Reply Zero bucket.
-                 AND LOWER(COALESCE(em.folder, '')) <> 'trash'
+                 -- Hide trashed (all buckets) / archived (active buckets) threads.
+                 AND LOWER(COALESCE(em.folder, '')) NOT IN ({excluded})
                ORDER BY ts.last_message_at DESC NULLS LAST LIMIT :limit"""
         ), {"aid": account_id, "st": want, "limit": limit})).fetchall()
 

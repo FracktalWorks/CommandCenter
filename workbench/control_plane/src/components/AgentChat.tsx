@@ -18,7 +18,6 @@ import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { UnifiedModel } from "@/app/api/models/all/route";
 import MarkdownMessage from "@/components/MarkdownMessage";
-import AgentStatusBar from "@/components/AgentStatusBar";
 import MessageActionBar from "@/components/MessageActionBar";
 import GenerativeUIPanel from "@/components/GenerativeUIPanel";
 import ArtifactCard, { type ArtifactMeta } from "@/components/ArtifactCard";
@@ -1169,12 +1168,26 @@ export default function AgentChat({
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Auto-scroll only when user is near the bottom
+  // Auto-scroll only when the user is near the bottom.  Use "auto" (instant),
+  // NOT "smooth": this fires on every streamed token, and queuing a smooth-
+  // scroll animation per token causes visible stutter during long responses.
   useEffect(() => {
     if (isNearBottomRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      bottomRef.current?.scrollIntoView({ behavior: "auto" });
     }
   }, [messages]);
+
+  // When the USER sends a new message, snap to the bottom even if they had
+  // scrolled up to read history — otherwise sending looks like it did nothing.
+  const userMessageCount = useMemo(
+    () => messages.reduce((n, m) => (m.role === "user" ? n + 1 : n), 0),
+    [messages],
+  );
+  useEffect(() => {
+    if (userMessageCount === 0) return;
+    isNearBottomRef.current = true;
+    bottomRef.current?.scrollIntoView({ behavior: "auto" });
+  }, [userMessageCount]);
 
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1221,7 +1234,11 @@ export default function AgentChat({
   const submitText = useCallback(
     (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed) return;
+      // Guard ALL senders (suggestion pills, MCQ choices, HITL card submits,
+      // the email "Fix" flow) — not just the textarea form — against sending
+      // while history is still hydrating from Postgres, which would clobber the
+      // about-to-be-replaced messages array.
+      if (!trimmed || loadingHistory) return;
       if (!isLoading) {
         void sendMessage(trimmed);
         return;
@@ -1240,7 +1257,7 @@ export default function AgentChat({
         enqueue(trimmed); // queue (also the fallback for "send" while busy)
       }
     },
-    [isLoading, sendMode, sendMessage, stopGeneration, enqueue, setMessages]
+    [isLoading, loadingHistory, sendMode, sendMessage, stopGeneration, enqueue, setMessages]
   );
 
   /** Explicit Stop — also clears the queue so steered/queued messages don't
@@ -2010,24 +2027,29 @@ function MessageBubble({
   }, [message.toolEvents]);
 
   // ── Extract artifact events from custom events ──────────────────────────
-  const artifactEvents: ArtifactMeta[] = (message.customEvents ?? [])
-    .filter(
-      (e) =>
+  // Dedup by path (last write wins) so an artifact_created followed by an
+  // artifact_updated for the SAME file renders as one card, not two.
+  const artifactEvents: ArtifactMeta[] = (() => {
+    const byPath = new Map<string, ArtifactMeta>();
+    for (const e of message.customEvents ?? []) {
+      if (
         (e.name === "artifact_created" || e.name === "artifact_updated") &&
         e.value &&
-        typeof e.value === "object",
-    )
-    .map((e) => {
-      const v = e.value as Record<string, unknown>;
-      const path = String(v.path ?? "");
-      return {
-        path,
-        name: path.split("/").pop() ?? path,
-        size: typeof v.size === "number" ? v.size : undefined,
-        mimeType: typeof v.mime_type === "string" ? v.mime_type : undefined,
-        sha256: typeof v.sha256 === "string" ? v.sha256 : undefined,
-      } satisfies ArtifactMeta;
-    });
+        typeof e.value === "object"
+      ) {
+        const v = e.value as Record<string, unknown>;
+        const path = String(v.path ?? "");
+        byPath.set(path, {
+          path,
+          name: path.split("/").pop() ?? path,
+          size: typeof v.size === "number" ? v.size : undefined,
+          mimeType: typeof v.mime_type === "string" ? v.mime_type : undefined,
+          sha256: typeof v.sha256 === "string" ? v.sha256 : undefined,
+        } satisfies ArtifactMeta);
+      }
+    }
+    return [...byPath.values()];
+  })();
 
   if (isSystem) {
     const content = message.content;
@@ -2193,9 +2215,9 @@ function MessageBubble({
       {/* Inline artifact cards */}
       {artifactEvents.length > 0 && (
         <div className="mt-3 space-y-2">
-          {artifactEvents.map((a, i) => (
+          {artifactEvents.map((a) => (
             <ArtifactCard
-              key={`${a.path}-${i}`}
+              key={a.sha256 ?? a.path}
               artifact={a}
               sessionId={sessionId}
               onOpen={onFileOpen}

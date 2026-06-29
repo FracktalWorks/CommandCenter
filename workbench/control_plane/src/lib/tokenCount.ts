@@ -20,6 +20,11 @@ export interface ContextUsage {
  * (e.g. "claude-sonnet" matches "claude-sonnet-4.6").
  */
 const CONTEXT_LIMITS: [string, number][] = [
+  // Explicit 1M-context build tag (e.g. "claude-opus-4-8[1m]") — must precede
+  // the family entries below, which would otherwise cap it at 200k and make the
+  // context ring read 5x high (triggering premature auto-compaction) whenever
+  // the dynamic context-window map is unavailable.
+  ["[1m]",                  1_000_000],
   // Claude (incl. current 4.x naming variants)
   ["claude-opus-4",           200_000],
   ["claude-sonnet-4",         200_000],

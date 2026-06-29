@@ -13,6 +13,7 @@ interface MessageActionBarProps {
   content: string;
   messageId: string;
   role: "user" | "assistant";
+  sessionId?: string;
   onEdit?: () => void;
   onRetry?: () => void;
 }
@@ -21,6 +22,7 @@ export default function MessageActionBar({
   content,
   messageId,
   role,
+  sessionId,
   onEdit,
   onRetry,
 }: MessageActionBarProps) {
@@ -37,8 +39,15 @@ export default function MessageActionBar({
   const sendVote = (v: "up" | "down") => {
     const next = vote === v ? null : v;
     setVote(next);
+    // Persist the vote (best-effort) as an audit event via /api/feedback.
+    // Un-voting (next === null) just clears the local highlight.
     if (next) {
-      console.debug("[feedback]", { messageId, vote: next });
+      void fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message_id: messageId, vote: next, session_id: sessionId }),
+        keepalive: true,
+      }).catch(() => {});
     }
   };
 

@@ -346,6 +346,36 @@ async def save_messages(
     return {"ok": True, "saved": len(messages)}
 
 
+class MessageFeedbackRequest(BaseModel):
+    message_id: str
+    vote: str          # "up" | "down"
+    session_id: str | None = None
+
+
+@router.post("/feedback", summary="Record thumbs up/down feedback on a message")
+async def record_message_feedback(
+    req: MessageFeedbackRequest,
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Persist a 👍/👎 vote as an audit event (actor = the voting user)."""
+    if req.vote not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="vote must be 'up' or 'down'")
+    from acb_audit import AuditEvent, record  # noqa: PLC0415
+
+    def _write() -> None:
+        record(
+            AuditEvent(
+                actor=f"human:{user.email or 'anonymous'}",
+                action="message_feedback",
+                target=f"message:{req.message_id}",
+                payload={"vote": req.vote, "session_id": req.session_id},
+            )
+        )
+
+    await asyncio.to_thread(_write)
+    return {"ok": True}
+
+
 @router.get(
     "/active-sessions",
     summary="List session IDs that currently have an active (running) agent",

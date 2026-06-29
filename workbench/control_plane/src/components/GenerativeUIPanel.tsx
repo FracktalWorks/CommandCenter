@@ -94,6 +94,19 @@ const HITL_CONTROL_EVENTS = new Set([
   "confirmation_requested",
 ]);
 
+/** A typed renderer for a specific custom-event `name`, returning the card body
+ *  (the panel supplies the wrapper). */
+export type CustomEventRenderer = (value: unknown) => React.ReactNode;
+
+/**
+ * name → renderer registry.  Empty by default: an unregistered event falls back
+ * to the generic JsonView below.  Register a typed card here (e.g.
+ * `CUSTOM_EVENT_RENDERERS.clickup_task_card = (v) => <ClickupTaskCard data={v} />`)
+ * and it renders automatically — no change to this panel.  This is the "renderer
+ * registry keyed by name" the module docstring referred to.
+ */
+export const CUSTOM_EVENT_RENDERERS: Record<string, CustomEventRenderer> = {};
+
 export default function GenerativeUIPanel({
   agentState,
   customEvents,
@@ -124,14 +137,23 @@ export default function GenerativeUIPanel({
             </div>
           )}
           {hasCustom &&
-            displayEvents.map((ev, i) => (
-              <div key={i} className="rounded-md bg-card/50 p-2">
-                <div className="mb-1 text-[10px] uppercase tracking-wide text-sky-400/80">
-                  {ev.name || "custom"}
+            displayEvents.map((ev, i) => {
+              const renderer = CUSTOM_EVENT_RENDERERS[ev.name];
+              return (
+                <div key={i} className="rounded-md bg-card/50 p-2">
+                  {renderer ? (
+                    renderer(ev.value)
+                  ) : (
+                    <>
+                      <div className="mb-1 text-[10px] uppercase tracking-wide text-sky-400/80">
+                        {ev.name || "custom"}
+                      </div>
+                      <JsonView value={ev.value} />
+                    </>
+                  )}
                 </div>
-                <JsonView value={ev.value} />
-              </div>
-            ))}
+              );
+            })}
         </div>
       )}
     </div>

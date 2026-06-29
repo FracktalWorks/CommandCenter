@@ -277,6 +277,7 @@ function MessageBubble({
               content={message.content}
               messageId={message.id}
               role="assistant"
+              sessionId={sessionId}
               onRetry={onRetryMessage ? () => onRetryMessage(message) : undefined}
             />
           )}

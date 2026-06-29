@@ -11,9 +11,11 @@ import { fullDateLabel, initials } from "../lib/utils";
 import { useEmailStore } from "../lib/emailStore";
 import {
   getAttachmentDownloadUrl, fetchFullBody, getEmail, listThread, createRule,
-  fileToSendAttachment, type SendAttachment, type ArtifactAttachmentRef,
+  fileToSendAttachment, composeAssist,
+  type SendAttachment, type ArtifactAttachmentRef,
 } from "../lib/api";
 import { ArtifactAttachPicker } from "./ArtifactAttachPicker";
+import { ComposerQuote, AiButton, AiAssistBar } from "./ComposerAI";
 import { MessageContent } from "./MessageContent";
 import { ConversationView, DraftCard, isDraftEmail } from "./ConversationView";
 import { LabelMenu } from "./LabelMenu";
@@ -40,10 +42,20 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const [replyMode, setReplyMode] = useState<"reply" | "reply-all" | "forward" | null>(
     null
   );
+  // Which message in the thread the open composer is replying to (Outlook lets
+  // you reply to any message in a conversation, not just the latest).
+  const [replyTargetId, setReplyTargetId] = useState<string | null>(null);
   const [replyBody, setReplyBody] = useState("");
+  // The quoted trailing email, kept OUT of the editable textarea so it's never
+  // edited (or fed to the AI drafter); reattached to the body on send.
+  const [replyQuote, setReplyQuote] = useState("");
   const [replyTo, setReplyTo] = useState("");
   const [replyCc, setReplyCc] = useState("");
   const [replyBcc, setReplyBcc] = useState("");
+  // AI draft/improve bar (sparkles button in the composer footer).
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiInstruction, setAiInstruction] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
   const [replyAttachments, setReplyAttachments] = useState<SendAttachment[]>([]);
   const [replyArtifacts, setReplyArtifacts] = useState<ArtifactAttachmentRef[]>([]);
   const [sendErr, setSendErr] = useState<string | null>(null);
@@ -51,6 +63,13 @@ export function EmailDetail({ email }: EmailDetailProps) {
   //    type, so closing the composer never loses it. draftIdRef holds the local
   //    id of the saved draft so repeated saves update it in place (no dupes). ──
   const draftIdRef = useRef<string | null>(null);
+  // The resolved message object the composer is replying to — kept in a ref so
+  // the auto-save effect / send handlers (which sit above the early return) read
+  // the live target without re-subscribing. Set each render once `view` exists.
+  const replyTargetRef = useRef<Email | null>(null);
+  // The reply/forward composer block — scrolled into view when opened from a
+  // conversation card so the draft box isn't off-screen below a long thread.
+  const composerRef = useRef<HTMLDivElement>(null);
   const replyDirty = useRef(false);
   const [draftStatus, setDraftStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [loadingFullBody, setLoadingFullBody] = useState(false);
@@ -138,6 +157,10 @@ export function EmailDetail({ email }: EmailDetailProps) {
     setThread(null);
     setFullBodyText(null);
     setReplyMode(null);
+    setReplyTargetId(null);
+    setReplyQuote("");
+    setAiOpen(false);
+    setAiInstruction("");
     draftIdRef.current = null;
     replyDirty.current = false;
     setDraftStatus("idle");
@@ -184,19 +207,23 @@ export function EmailDetail({ email }: EmailDetailProps) {
     const toArr = replyTo.split(",").map((s) => s.trim()).filter(Boolean);
     if (!replyBody.trim() && toArr.length === 0) return;
     const isForward = replyMode === "forward";
-    const subj0 = email.subject || "";
+    const target = replyTargetRef.current ?? email;
+    const subj0 = target.subject || "";
     const subject = isForward
       ? (subj0.startsWith("Fwd:") ? subj0 : `Fwd: ${subj0}`)
       : (subj0.startsWith("Re:") ? subj0 : `Re: ${subj0}`);
-    const body = replyBody;
+    // Persist the full outgoing message — new text plus the quoted trailing chain.
+    const body = replyQuote
+      ? `${replyBody.replace(/\s+$/, "")}\n\n${replyQuote}`
+      : replyBody;
     const handle = setTimeout(async () => {
       try {
         setDraftStatus("saving");
         const saved = await saveDraft({
           accountId: selectedAccountId,
           draftId: draftIdRef.current ?? undefined,
-          // Reply/Reply-All thread onto the open message; Forward is standalone.
-          replyToMessageId: isForward ? undefined : email.id,
+          // Reply/Reply-All thread onto the target message; Forward is standalone.
+          replyToMessageId: isForward ? undefined : target.id,
           to: toArr,
           subject,
           body,
@@ -209,7 +236,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
     }, 1200);
     return () => clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [replyBody, replyTo, replyCc, replyMode, selectedAccountId, email?.id]);
+  }, [replyBody, replyQuote, replyTo, replyCc, replyMode, selectedAccountId, email?.id]);
 
   // Bridge for the desktop unified toolbar: it issues a transient store command
   // (reply/forward/block/download) that this viewer executes via the live
@@ -259,6 +286,13 @@ export function EmailDetail({ email }: EmailDetailProps) {
   // Render the fullest copy we have (the lazily-fetched detail, or the list row).
   const view: Email = detail ?? email;
 
+  // The message the composer replies to. Defaults to the open message; a
+  // conversation card can target any message in the thread (Outlook parity).
+  const replyTarget: Email =
+    (replyTargetId ? thread?.find((m) => m.id === replyTargetId) : undefined) ??
+    view;
+  replyTargetRef.current = replyTarget;
+
   const replyLabel =
     replyMode === "forward"
       ? "Forward"
@@ -271,8 +305,15 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const ownEmail = accounts
     .find((a) => a.id === selectedAccountId)?.emailAddress?.toLowerCase();
 
-  /** Open the inline composer with recipients + a quoted body prefilled. */
-  const startReply = (mode: "reply" | "reply-all" | "forward") => {
+  /** Open the inline composer with recipients + a quoted body prefilled.
+   *  `target` is the message being replied to (defaults to the open message);
+   *  a conversation card passes the specific message the user chose. */
+  const startReply = (
+    mode: "reply" | "reply-all" | "forward",
+    target?: Email
+  ) => {
+    const src = target ?? view;
+    setReplyTargetId(src.id);
     setSendErr(null);
     // New reply session: forget any previous draft so we don't update it.
     draftIdRef.current = null;
@@ -281,48 +322,61 @@ export function EmailDetail({ email }: EmailDetailProps) {
     setReplyBcc("");
     setReplyAttachments([]);
     setReplyArtifacts([]);
+    setAiOpen(false);
+    setAiInstruction("");
     // HTML-only mail (e.g. Outlook) has no bodyText — fall back to the snippet.
-    const quoteSrc = view.bodyText || view.snippet || "";
+    const quoteSrc = src.bodyText || src.snippet || "";
+    // The editable box starts EMPTY (just your new text). The quoted trailing
+    // chain is kept separate in `replyQuote`, shown collapsed below the box and
+    // reattached on send — so it can never be edited or AI-rewritten by mistake.
+    setReplyBody("");
     if (mode === "forward") {
       setReplyTo("");
       setReplyCc("");
-      setReplyBody(
-        `\n\n---------- Forwarded message ----------\n` +
-        `From: ${view.from.name} <${view.from.email}>\n` +
-        `Date: ${view.receivedAt}\nSubject: ${view.subject}\n\n${quoteSrc}`
+      setReplyQuote(
+        `---------- Forwarded message ----------\n` +
+        `From: ${src.from.name} <${src.from.email}>\n` +
+        `Date: ${src.receivedAt}\nSubject: ${src.subject}\n\n${quoteSrc}`
       );
     } else {
       const recips =
         mode === "reply-all"
-          ? [view.from.email, ...(view.to || []).map((t) => t.email)]
-          : [view.from.email];
+          ? [src.from.email, ...(src.to || []).map((t) => t.email)]
+          : [src.from.email];
       const to = recips.filter(
         (e, i) => e && recips.indexOf(e) === i && e.toLowerCase() !== ownEmail
       );
       const cc =
         mode === "reply-all"
-          ? (view.cc || [])
+          ? (src.cc || [])
               .map((c) => c.email)
               .filter((e) => e && e.toLowerCase() !== ownEmail)
           : [];
       setReplyTo(to.join(", "));
       setReplyCc(cc.join(", "));
-      setReplyBody(
-        `\n\nOn ${view.receivedAt}, ${view.from.name} wrote:\n> ` +
+      setReplyQuote(
+        `On ${src.receivedAt}, ${src.from.name} wrote:\n> ` +
         quoteSrc.replace(/\n/g, "\n> ")
       );
     }
     setReplyMode(mode);
+    // Bring the composer into view (it renders below a possibly-long thread).
+    setTimeout(
+      () => composerRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
+      60
+    );
   };
 
-  const replySubject = () =>
-    replyMode === "forward"
-      ? email.subject.startsWith("Fwd:")
-        ? email.subject
-        : `Fwd: ${email.subject}`
-      : email.subject.startsWith("Re:")
-        ? email.subject
-        : `Re: ${email.subject}`;
+  const replySubject = () => {
+    const subj = replyTarget.subject || "";
+    return replyMode === "forward"
+      ? subj.startsWith("Fwd:")
+        ? subj
+        : `Fwd: ${subj}`
+      : subj.startsWith("Re:")
+        ? subj
+        : `Re: ${subj}`;
+  };
 
   const resetReplySession = () => {
     draftIdRef.current = null;
@@ -330,11 +384,51 @@ export function EmailDetail({ email }: EmailDetailProps) {
     setDraftStatus("idle");
     setReplyMode(null);
     setReplyBody("");
+    setReplyQuote("");
     setReplyTo("");
     setReplyCc("");
     setReplyBcc("");
     setReplyAttachments([]);
     setReplyArtifacts([]);
+    setAiOpen(false);
+    setAiInstruction("");
+  };
+
+  /** The full outgoing body: the user's new text plus the quoted trailing chain. */
+  const composedReply = (newBody: string) =>
+    replyQuote ? `${newBody.replace(/\s+$/, "")}\n\n${replyQuote}` : newBody;
+
+  /** Draft or improve the reply with AI — operates on the NEW text only (the
+   *  quoted trailing chain is never sent), then drops the result into the box. */
+  const runAiDraft = async () => {
+    if (!selectedAccountId || aiBusy) return;
+    setSendErr(null);
+    setAiBusy(true);
+    try {
+      const target = replyTargetRef.current ?? email;
+      const toArr = replyTo.split(",").map((s) => s.trim()).filter(Boolean);
+      const res = await composeAssist({
+        accountId: selectedAccountId,
+        body: replyBody, // NEW text only — the quote is excluded by design
+        instruction: aiInstruction.trim(),
+        mode: replyMode === "forward" ? "forward" : "reply",
+        messageId: target.id,
+        to: toArr,
+        subject: replyTarget.subject,
+      });
+      if (res.draft) {
+        replyDirty.current = true;
+        setReplyBody(res.draft);
+        setAiOpen(false);
+        setAiInstruction("");
+      } else {
+        setSendErr("AI couldn't draft this — try adding a quick instruction.");
+      }
+    } catch (e: any) {
+      setSendErr(e?.message || "AI draft failed");
+    } finally {
+      setAiBusy(false);
+    }
   };
 
   /** Send the reply/forward. If it was auto-saved as a draft we send that draft
@@ -353,6 +447,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
     const ccArr = replyCc.split(",").map((s) => s.trim()).filter(Boolean);
     const bccArr = replyBcc.split(",").map((s) => s.trim()).filter(Boolean);
     const isForward = replyMode === "forward";
+    const target = replyTargetRef.current ?? email;
     try {
       // Native draft-send only when there's no Cc/Bcc and no attachments — the
       // draft write-path doesn't carry them, so those go via the full send (and
@@ -364,10 +459,10 @@ export function EmailDetail({ email }: EmailDetailProps) {
         const saved = await saveDraft({
           accountId: selectedAccountId,
           draftId: draftIdRef.current,
-          replyToMessageId: isForward ? undefined : email.id,
+          replyToMessageId: isForward ? undefined : target.id,
           to: toArr,
           subject: replySubject(),
-          body: replyBody,
+          body: composedReply(replyBody),
         });
         await sendDraft(selectedAccountId, saved.id);
       } else {
@@ -377,8 +472,8 @@ export function EmailDetail({ email }: EmailDetailProps) {
           cc: ccArr.length ? ccArr : undefined,
           bcc: bccArr.length ? bccArr : undefined,
           subject: replySubject(),
-          bodyText: replyBody,
-          replyToMessageId: isForward ? undefined : email.providerMessageId,
+          bodyText: composedReply(replyBody),
+          replyToMessageId: isForward ? undefined : target.providerMessageId,
           attachments: replyAttachments.length ? replyAttachments : undefined,
           artifacts: replyArtifacts.length ? replyArtifacts : undefined,
         });
@@ -411,9 +506,10 @@ export function EmailDetail({ email }: EmailDetailProps) {
     openCompose({
       to: replyTo,
       subject: replySubject(),
-      replyToBody: replyBody,
+      replyToBody: replyBody,   // the typed new text
+      quote: replyQuote,        // the collapsed trailing chain
       replyToMessageId:
-        replyMode === "forward" ? undefined : email.providerMessageId,
+        replyMode === "forward" ? undefined : replyTarget.providerMessageId,
     });
     setReplyMode(null);
   };
@@ -645,7 +741,11 @@ export function EmailDetail({ email }: EmailDetailProps) {
 
         {thread && thread.length > 1 ? (
           /* Conversation view — the whole thread, stacked */
-          <ConversationView messages={thread} openedId={email.id} />
+          <ConversationView
+            messages={thread}
+            openedId={email.id}
+            onReply={(m, mode) => startReply(mode, m)}
+          />
         ) : isDraftEmail(email) ? (
           /* Standalone draft — editable composer */
           <DraftCard draft={email} />
@@ -807,12 +907,15 @@ export function EmailDetail({ email }: EmailDetailProps) {
 
         {/* Reply / Forward composer */}
         {replyMode && (
-          <div className="mt-8 border border-primary/30 rounded-lg overflow-hidden bg-secondary/30">
+          <div
+            ref={composerRef}
+            className="mt-8 border border-primary/30 rounded-lg overflow-hidden bg-secondary/30"
+          >
             <div className="px-4 py-2 bg-secondary text-xs text-muted-foreground border-b border-border flex items-center justify-between">
               <span>
                 {replyLabel} to{" "}
                 <span className="text-foreground">
-                  {replyMode === "forward" ? "…" : email.from.name}
+                  {replyMode === "forward" ? "…" : replyTarget.from.name}
                 </span>
               </span>
               <button
@@ -910,6 +1013,19 @@ export function EmailDetail({ email }: EmailDetailProps) {
                 ))}
               </div>
             )}
+            {/* Quoted trailing email — collapsed, read-only (reattached on send) */}
+            <ComposerQuote quote={replyQuote} />
+            {/* AI draft/improve bar */}
+            {aiOpen && (
+              <AiAssistBar
+                instruction={aiInstruction}
+                onInstruction={setAiInstruction}
+                busy={aiBusy}
+                hasText={replyBody.trim().length > 0}
+                onRun={runAiDraft}
+                onClose={() => setAiOpen(false)}
+              />
+            )}
             <div className="px-4 py-2 bg-secondary/50 border-t border-border flex items-center justify-between gap-2">
               <span className="text-[10px] truncate">
                 {sendErr ? (
@@ -923,6 +1039,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                 )}
               </span>
               <div className="flex gap-2 flex-shrink-0 items-center">
+                <AiButton active={aiOpen} onClick={() => setAiOpen((v) => !v)} />
                 <label
                   className="px-2 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors cursor-pointer flex items-center"
                   title="Attach files"

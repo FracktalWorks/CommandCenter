@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
-import { ImageOff } from "lucide-react";
+import { ImageOff, MoreHorizontal } from "lucide-react";
+import { splitQuotedHtml, splitQuotedText } from "../lib/quoting";
 
 interface MessageContentProps {
   /** Raw HTML body from the provider (preferred when present). */
@@ -72,26 +73,49 @@ function sanitizeEmailHtml(
   return { clean, hasRemote };
 }
 
+/** The "•••" Outlook-style toggle for showing/hiding the quoted trailing mail. */
+function QuoteToggle({
+  open,
+  onClick,
+}: {
+  open: boolean;
+  onClick: () => void;
+}) {
+  const label = open ? "Hide trimmed content" : "Show trimmed content";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      aria-expanded={open}
+      className={`inline-flex items-center gap-1 my-1.5 px-2 py-0.5 rounded border text-xs transition-colors ${
+        open
+          ? "border-primary/40 bg-primary/10 text-primary"
+          : "border-border bg-secondary text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
+      }`}
+    >
+      <MoreHorizontal size={14} />
+    </button>
+  );
+}
+
 /**
- * Renders an email body.
+ * A single sandboxed HTML email frame — auto-sizing, with the remote-image gate.
  *
- * HTML emails are rendered inside a sandboxed <iframe srcDoc>:
+ * HTML is rendered inside a sandboxed <iframe srcDoc>:
  *  - DOMPurify sanitizes the markup before it ever reaches the frame.
  *  - The sandbox has no allow-scripts, so JS never runs (allow-same-origin is
  *    present only so the parent can measure content height for auto-sizing).
  *  - A Content-Security-Policy meta blocks scripts entirely and gates remote
  *    images: blocked by default (defeats tracking pixels), allowed once the
  *    user clicks "Show images".
- *
- * Plain-text emails fall back to a pre-wrapped block.
  */
-export function MessageContent({ html, text }: MessageContentProps) {
+function HtmlFrame({ html, quoted = false }: { html: string; quoted?: boolean }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [height, setHeight] = useState(400);
+  const [height, setHeight] = useState(quoted ? 160 : 400);
   const [mounted, setMounted] = useState(false);
   const [showImages, setShowImages] = useState(false);
-
-  const hasHtml = !!html && html.trim().length > 0;
 
   // DOMPurify needs the DOM — defer sanitization to the client to avoid SSR
   // crashes and hydration mismatches on the iframe srcDoc.
@@ -108,11 +132,11 @@ export function MessageContent({ html, text }: MessageContentProps) {
   }
 
   const sanitized = useMemo(() => {
-    if (!hasHtml || !mounted) return null;
+    if (!mounted) return null;
     // When showing images, rewrite them through our proxy (same-origin), so the
     // CSP only ever needs to allow 'self' — remote hosts never load directly.
-    return sanitizeEmailHtml(html as string, showImages);
-  }, [hasHtml, mounted, html, showImages]);
+    return sanitizeEmailHtml(html, showImages);
+  }, [mounted, html, showImages]);
 
   const srcDoc = useMemo(() => {
     if (!sanitized) return "";
@@ -148,7 +172,7 @@ export function MessageContent({ html, text }: MessageContentProps) {
   body {
     font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
     font-size: 14px; line-height: 1.6; color: #1f2937; background: #ffffff;
-    padding: 12px 14px;
+    padding: ${quoted ? "8px 12px" : "12px 14px"};
     word-wrap: break-word; overflow-wrap: anywhere;
   }
   img, table { max-width: 100% !important; height: auto; }
@@ -156,7 +180,7 @@ export function MessageContent({ html, text }: MessageContentProps) {
   blockquote { border-left: 3px solid #d1d5db; margin: 0; padding-left: 12px; color: #6b7280; }
   pre { white-space: pre-wrap; }
 </style></head><body>${sanitized.clean}</body></html>`;
-  }, [sanitized, showImages]);
+  }, [sanitized, showImages, quoted]);
 
   useEffect(() => {
     if (!srcDoc) return;
@@ -195,46 +219,117 @@ export function MessageContent({ html, text }: MessageContentProps) {
     };
   }, [srcDoc]);
 
-  if (hasHtml) {
-    return (
-      <div className="w-full">
-        {sanitized?.hasRemote && !showImages && (
-          <div className="flex items-center justify-between gap-2 mb-2 px-3 py-2 rounded-md bg-secondary border border-border text-xs">
-            <span className="flex items-center gap-2 text-muted-foreground">
-              <ImageOff size={13} />
-              Remote images are blocked to protect your privacy.
-            </span>
-            <button
-              onClick={() => setShowImages(true)}
-              className="text-primary hover:opacity-80 font-medium whitespace-nowrap"
-            >
-              Show images
-            </button>
-          </div>
-        )}
-        {/* Render the frame only after mount so srcDoc is the sanitized client
-            value (avoids an SSR hydration mismatch on the attribute). */}
-        {mounted ? (
-          <iframe
-            ref={iframeRef}
-            title="Email content"
-            srcDoc={srcDoc}
-            // allow-same-origin (without allow-scripts) lets us measure content
-            // height for auto-sizing; scripts still never run.
-            sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-            className="w-full border border-border rounded-md bg-white"
-            style={{ height, minHeight: 200 }}
-          />
-        ) : (
-          <div style={{ minHeight: 200 }} />
-        )}
-      </div>
-    );
-  }
-
   return (
-    <div className="text-sm text-foreground/85 leading-relaxed whitespace-pre-wrap max-w-2xl">
-      {text}
+    <div className="w-full">
+      {sanitized?.hasRemote && !showImages && (
+        <div className="flex items-center justify-between gap-2 mb-2 px-3 py-2 rounded-md bg-secondary border border-border text-xs">
+          <span className="flex items-center gap-2 text-muted-foreground">
+            <ImageOff size={13} />
+            Remote images are blocked to protect your privacy.
+          </span>
+          <button
+            onClick={() => setShowImages(true)}
+            className="text-primary hover:opacity-80 font-medium whitespace-nowrap"
+          >
+            Show images
+          </button>
+        </div>
+      )}
+      {/* Render the frame only after mount so srcDoc is the sanitized client
+          value (avoids an SSR hydration mismatch on the attribute). */}
+      {mounted ? (
+        <iframe
+          ref={iframeRef}
+          title="Email content"
+          srcDoc={srcDoc}
+          // allow-same-origin (without allow-scripts) lets us measure content
+          // height for auto-sizing; scripts still never run.
+          sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+          className="w-full border border-border rounded-md bg-white"
+          style={{ height, minHeight: quoted ? 80 : 200 }}
+        />
+      ) : (
+        <div style={{ minHeight: quoted ? 80 : 200 }} />
+      )}
     </div>
   );
+}
+
+/** An HTML body with Outlook-style collapsing of the quoted trailing chain. */
+function HtmlMessage({ html }: { html: string }) {
+  const [mounted, setMounted] = useState(false);
+  const [showQuoted, setShowQuoted] = useState(false);
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => setMounted(true), []);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  // Re-collapse the quote whenever the message changes (render-time pattern).
+  const [prevHtml, setPrevHtml] = useState(html);
+  if (html !== prevHtml) {
+    setPrevHtml(html);
+    setShowQuoted(false);
+  }
+
+  // Splitting parses HTML — only meaningful in the browser. Before mount we
+  // render the whole body (matches SSR), then refine once we can detect quotes.
+  const split = useMemo(
+    () => (mounted ? splitQuotedHtml(html) : { main: html, quoted: null }),
+    [mounted, html]
+  );
+
+  if (!split.quoted) return <HtmlFrame html={html} />;
+
+  return (
+    <div className="w-full">
+      <HtmlFrame html={split.main} />
+      <QuoteToggle open={showQuoted} onClick={() => setShowQuoted((v) => !v)} />
+      {showQuoted && (
+        <div className="border-l-2 border-border pl-2 mt-1">
+          <HtmlFrame html={split.quoted} quoted />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A plain-text body with Outlook-style collapsing of the quoted trailing chain. */
+function TextMessage({ text }: { text: string }) {
+  const [showQuoted, setShowQuoted] = useState(false);
+  const split = useMemo(() => splitQuotedText(text), [text]);
+
+  const [prevText, setPrevText] = useState(text);
+  if (text !== prevText) {
+    setPrevText(text);
+    setShowQuoted(false);
+  }
+
+  const base =
+    "text-sm text-foreground/85 leading-relaxed whitespace-pre-wrap break-words";
+  if (!split.quoted)
+    return <div className={`${base} max-w-2xl`}>{text}</div>;
+
+  return (
+    <div className="max-w-2xl">
+      <div className={base}>{split.main}</div>
+      <QuoteToggle open={showQuoted} onClick={() => setShowQuoted((v) => !v)} />
+      {showQuoted && (
+        <div className="border-l-2 border-border pl-3 mt-1">
+          <div className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap break-words">
+            {split.quoted}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Renders an email body. HTML emails render in a sandboxed iframe; plain-text
+ * falls back to a pre-wrapped block. In both cases the quoted trailing
+ * conversation is collapsed behind a "•••" toggle (Outlook-style).
+ */
+export function MessageContent({ html, text }: MessageContentProps) {
+  const hasHtml = !!html && html.trim().length > 0;
+  if (hasHtml) return <HtmlMessage html={html as string} />;
+  return <TextMessage text={text} />;
 }

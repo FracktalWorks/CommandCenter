@@ -4,9 +4,12 @@ import { useState, useEffect, useRef } from "react";
 import { X, Loader2, Paperclip } from "lucide-react";
 import { useEmailStore } from "../lib/emailStore";
 import {
-  fileToSendAttachment, type SendAttachment, type ArtifactAttachmentRef,
+  fileToSendAttachment, composeAssist,
+  type SendAttachment, type ArtifactAttachmentRef,
 } from "../lib/api";
+import { splitQuotedText } from "../lib/quoting";
 import { ArtifactAttachPicker } from "./ArtifactAttachPicker";
+import { ComposerQuote, AiButton, AiAssistBar } from "./ComposerAI";
 
 interface ComposePanelProps {
   open: boolean;
@@ -24,7 +27,11 @@ interface ComposePanelProps {
   }) => Promise<void>;
   defaultTo?: string;
   defaultSubject?: string;
+  /** Seeds the editable body (e.g. text carried over from a popped-out reply). */
   replyToBody?: string;
+  /** The quoted trailing chain — shown collapsed below the box, reattached on
+   *  send, and kept OUT of the editable body so AI/edits never touch it. */
+  quote?: string;
   replyToMessageId?: string;
 }
 
@@ -36,6 +43,7 @@ export function ComposePanel({
   defaultTo = "",
   defaultSubject = "",
   replyToBody,
+  quote,
   replyToMessageId,
 }: ComposePanelProps) {
   const [to, setTo] = useState(defaultTo);
@@ -44,6 +52,10 @@ export function ComposePanel({
   const [body, setBody] = useState(replyToBody || "");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  // AI draft/improve bar (sparkles button in the footer).
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiInstruction, setAiInstruction] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
   const { saveDraft, sendDraft, deleteEmail } = useEmailStore();
   // Gmail-style auto-save: the composed message persists as a Drafts row as you
   // type (draftIdRef holds the local id so repeated saves update it in place).
@@ -67,8 +79,48 @@ export function ComposePanel({
     setDraftStatus("idle");
     setAttachments([]);
     setArtifacts([]);
+    setAiOpen(false);
+    setAiInstruction("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  /** The full outgoing body: the editable text plus the quoted trailing chain. */
+  const combinedBody = () =>
+    quote ? `${body.replace(/\s+$/, "")}\n\n${quote}` : body;
+
+  /** Draft or improve with AI. Operates only on the NEW text — any inline quote
+   *  in the body is split off (and the separate `quote` prop is never sent) so
+   *  the AI never rewrites the trailing email. */
+  const runAi = async () => {
+    if (!accountId || aiBusy) return;
+    setSendError(null);
+    setAiBusy(true);
+    try {
+      const { main, quoted } = splitQuotedText(body);
+      const toArr = to.split(",").map((s) => s.trim()).filter(Boolean);
+      const res = await composeAssist({
+        accountId,
+        body: main,
+        instruction: aiInstruction.trim(),
+        mode: replyToMessageId ? "reply" : "new",
+        to: toArr,
+        subject,
+      });
+      if (res.draft) {
+        dirty.current = true;
+        // Reattach any inline quote that lived in the body so we don't drop it.
+        setBody(quoted ? `${res.draft.replace(/\s+$/, "")}\n\n${quoted}` : res.draft);
+        setAiOpen(false);
+        setAiInstruction("");
+      } else {
+        setSendError("AI couldn't draft this — try adding a quick instruction.");
+      }
+    } catch (err: any) {
+      setSendError(err?.message || "AI draft failed");
+    } finally {
+      setAiBusy(false);
+    }
+  };
 
   /** Read picked files into base64 and append them to the attachments. */
   const addFiles = async (files: FileList | null) => {
@@ -95,7 +147,7 @@ export function ComposePanel({
           replyToMessageId: draftIdRef.current ? undefined : (replyToMessageId || undefined),
           to: toArr,
           subject,
-          body,
+          body: combinedBody(),
         });
         draftIdRef.current = saved.id;
         setDraftStatus("saved");
@@ -125,7 +177,7 @@ export function ComposePanel({
           draftId: draftIdRef.current,
           to: toArr,
           subject,
-          body,
+          body: combinedBody(),
         });
         await sendDraft(accountId, saved.id);
         onClose();
@@ -134,7 +186,7 @@ export function ComposePanel({
           to: toArr,
           cc: ccArr.length ? ccArr : undefined,
           subject,
-          bodyText: body,
+          bodyText: combinedBody(),
           replyToMessageId: replyToMessageId,
           attachments: attachments.length ? attachments : undefined,
           artifacts: artifacts.length ? artifacts : undefined,
@@ -216,6 +268,9 @@ export function ComposePanel({
             />
           </div>
 
+          {/* Quoted trailing email — collapsed, read-only (reattached on send) */}
+          <ComposerQuote quote={quote || ""} className="pb-1" />
+
           {/* Attachment chips */}
           {(attachments.length > 0 || artifacts.length > 0) && (
             <div className="border-t border-border pt-2 flex flex-wrap gap-1.5">
@@ -256,6 +311,18 @@ export function ComposePanel({
           )}
         </div>
 
+        {/* AI draft/improve bar */}
+        {aiOpen && (
+          <AiAssistBar
+            instruction={aiInstruction}
+            onInstruction={setAiInstruction}
+            busy={aiBusy}
+            hasText={body.trim().length > 0}
+            onRun={runAi}
+            onClose={() => setAiOpen(false)}
+          />
+        )}
+
         {/* Footer */}
         <div className="px-4 py-3 border-t border-border flex items-center justify-between">
           <div className="flex-1">
@@ -272,6 +339,7 @@ export function ComposePanel({
             )}
           </div>
           <div className="flex gap-2 items-center">
+            <AiButton active={aiOpen} onClick={() => setAiOpen((v) => !v)} />
             <label
               className="px-2 py-1.5 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors cursor-pointer flex items-center"
               title="Attach files"

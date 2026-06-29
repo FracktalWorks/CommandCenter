@@ -186,7 +186,7 @@ interface EmailState {
 
   // UI
   composeOpen: boolean;
-  composeDefaults: { to: string; subject: string; replyToBody?: string; replyToMessageId?: string } | null;
+  composeDefaults: { to: string; subject: string; replyToBody?: string; quote?: string; replyToMessageId?: string } | null;
   /** A message queued to send, shown with an "Undo" toast until the timer fires. */
   pendingSend: api.SendEmailParams | null;
   /** A prompt handed from the Assistant's "Fix" flow to the AI chat panel, which
@@ -233,7 +233,7 @@ interface EmailState {
   /** Send a transient command to the open email viewer (reply/forward/etc.). */
   setViewerCommand: (cmd: EmailState["viewerCommand"]) => void;
   setSearchQuery: (q: string) => void;
-  openCompose: (defaults?: { to: string; subject: string; replyToBody?: string; replyToMessageId?: string }) => void;
+  openCompose: (defaults?: { to: string; subject: string; replyToBody?: string; quote?: string; replyToMessageId?: string }) => void;
   closeCompose: () => void;
   hydrateEmail: (email: Email) => void;
   updateEmail: (id: string, updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>) => Promise<void>;

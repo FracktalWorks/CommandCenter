@@ -1,11 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Paperclip, PenLine, Send, Loader2, Trash2 } from "lucide-react";
+import {
+  ChevronDown, Paperclip, PenLine, Send, Loader2, Trash2,
+  Reply, ReplyAll, Forward,
+} from "lucide-react";
 import { Email } from "../lib/types";
 import { fullDateLabel, initials } from "../lib/utils";
-import { getEmail, fetchFullBody } from "../lib/api";
+import { getEmail, fetchFullBody, composeAssist } from "../lib/api";
+import { splitQuotedText } from "../lib/quoting";
 import { useEmailStore } from "../lib/emailStore";
+import { ComposerQuote, AiButton, AiAssistBar } from "./ComposerAI";
 import { MessageContent } from "./MessageContent";
 
 const isDraft = (m: Email) =>
@@ -30,9 +35,13 @@ const INPUT =
 export function ConversationView({
   messages,
   openedId,
+  onReply,
 }: {
   messages: Email[];
   openedId: string;
+  /** Reply / Reply All / Forward a specific message in the thread. Opens the
+   *  composer (in EmailDetail) threaded onto that message. */
+  onReply?: (message: Email, mode: "reply" | "reply-all" | "forward") => void;
 }) {
   // Locally-discarded drafts hide instantly (the provider delete is async).
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
@@ -139,8 +148,29 @@ export function ConversationView({
             </button>
             {isOpen && (
               <div className="px-3 pb-3">
-                <div className="text-[11px] text-muted-foreground mb-2">
-                  To: {m.to.map((t) => t.name || t.email).join(", ")}
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div className="text-[11px] text-muted-foreground min-w-0 truncate">
+                    To: {m.to.map((t) => t.name || t.email).join(", ")}
+                  </div>
+                  {onReply && (
+                    <div className="flex items-center gap-0.5 flex-shrink-0 -mt-0.5">
+                      <CardAction
+                        icon={Reply}
+                        label="Reply"
+                        onClick={() => onReply(view, "reply")}
+                      />
+                      <CardAction
+                        icon={ReplyAll}
+                        label="Reply all"
+                        onClick={() => onReply(view, "reply-all")}
+                      />
+                      <CardAction
+                        icon={Forward}
+                        label="Forward"
+                        onClick={() => onReply(view, "forward")}
+                      />
+                    </div>
+                  )}
                 </div>
                 {view.bodyHtml || view.bodyText ? (
                   <MessageContent html={view.bodyHtml} text={view.bodyText} />
@@ -155,6 +185,32 @@ export function ConversationView({
         );
       })}
     </div>
+  );
+}
+
+/** Small per-message action button (Reply / Reply All / Forward) on a card. */
+function CardAction({
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  icon: React.ElementType;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+    >
+      <Icon size={13} />
+    </button>
   );
 }
 
@@ -193,8 +249,13 @@ export function DraftCard({
     .map((c) => c.email)
     .filter((e) => e && e.toLowerCase() !== ownEmail);
 
+  // Split any quoted trailing chain out of the draft body so the editable box
+  // holds only the new text (and AI never rewrites the quote); it's reattached
+  // on send. `initSplit` covers a draft that already arrived with a body.
+  const initSplit = splitQuotedText(draft.bodyText || "");
   const [hydratedBody, setHydratedBody] = useState<string | null>(null);
-  const [body, setBody] = useState(draft.bodyText || "");
+  const [body, setBody] = useState(initSplit.main);
+  const [quote, setQuote] = useState(initSplit.quoted || "");
   const [to, setTo] = useState(replyAllTo.join(", "));
   const [cc, setCc] = useState(replyAllCc.join(", "));
   const [bcc, setBcc] = useState("");
@@ -202,6 +263,14 @@ export function DraftCard({
   const [sending, setSending] = useState(false);
   const dirty = useRef(false);
   const [draftStatus, setDraftStatus] = useState<"idle" | "saving" | "saved">("idle");
+  // AI draft/improve bar.
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiInstruction, setAiInstruction] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+
+  /** The full outgoing body: the editable text plus the quoted trailing chain. */
+  const combinedBody = () =>
+    quote ? `${body.replace(/\s+$/, "")}\n\n${quote}` : body;
 
   const ccList = () => cc.split(",").map((s) => s.trim()).filter(Boolean);
   const bccList = () => bcc.split(",").map((s) => s.trim()).filter(Boolean);
@@ -231,7 +300,9 @@ export function DraftCard({
       }
       if (cancelled) return;
       setHydratedBody(text);
-      setBody((b) => (b ? b : text));
+      const sp = splitQuotedText(text);
+      setBody((b) => (b ? b : sp.main));
+      setQuote((q) => q || sp.quoted || "");
     })();
     return () => {
       cancelled = true;
@@ -255,7 +326,7 @@ export function DraftCard({
           draftId: draft.id,
           to: recipients(),
           subject: draft.subject || "",
-          body,
+          body: combinedBody(),
         });
         setDraftStatus("saved");
       } catch {
@@ -264,7 +335,7 @@ export function DraftCard({
     }, 1200);
     return () => clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [body, to]);
+  }, [body, quote, to]);
 
   const send = async () => {
     const accountId = draft.accountId || selectedAccountId;
@@ -280,7 +351,7 @@ export function DraftCard({
           cc: ccList(),
           bcc: bccList(),
           subject: draft.subject || "",
-          bodyText: body,
+          bodyText: combinedBody(),
           replyToMessageId: replyTo?.providerMessageId,
         });
         onDismiss?.();
@@ -297,7 +368,7 @@ export function DraftCard({
           draftId: draft.id,
           to: recipients(),
           subject: draft.subject || "",
-          body,
+          body: combinedBody(),
         });
         await sendDraft(accountId, draft.id);
       }
@@ -315,6 +386,35 @@ export function DraftCard({
       await deleteEmail(draft.id);
     } catch {
       /* already hidden locally; the sweep will reconcile */
+    }
+  };
+
+  /** Draft or improve the reply with AI — operates on the NEW text only (the
+   *  quoted trailing chain is kept separate, never sent). */
+  const runAi = async () => {
+    const accountId = draft.accountId || selectedAccountId;
+    if (!accountId || aiBusy) return;
+    setAiBusy(true);
+    try {
+      const res = await composeAssist({
+        accountId,
+        body,
+        instruction: aiInstruction.trim(),
+        mode: replyTo ? "reply" : "new",
+        messageId: replyTo?.id,
+        to: recipients(),
+        subject: draft.subject || "",
+      });
+      if (res.draft) {
+        dirty.current = true;
+        setBody(res.draft);
+        setAiOpen(false);
+        setAiInstruction("");
+      }
+    } catch {
+      /* leave the draft as-is on failure; the user can retry */
+    } finally {
+      setAiBusy(false);
     }
   };
 
@@ -368,7 +468,21 @@ export function DraftCard({
           placeholder="Write your reply…"
           className={`${INPUT} resize-y leading-relaxed`}
         />
+        {/* Quoted trailing email — collapsed, read-only (reattached on send) */}
+        <ComposerQuote quote={quote} className="" />
       </div>
+      {aiOpen && (
+        <div className="mt-2 -mx-3 border-y border-border">
+          <AiAssistBar
+            instruction={aiInstruction}
+            onInstruction={setAiInstruction}
+            busy={aiBusy}
+            hasText={body.trim().length > 0}
+            onRun={runAi}
+            onClose={() => setAiOpen(false)}
+          />
+        </div>
+      )}
       <div className="flex items-center gap-2 mt-2">
         <button
           onClick={send}
@@ -388,6 +502,7 @@ export function DraftCard({
         >
           <Trash2 size={13} /> Discard
         </button>
+        <AiButton active={aiOpen} onClick={() => setAiOpen((v) => !v)} />
         <span className="text-[10px] text-muted-foreground ml-auto">
           {draftStatus === "saving"
             ? "Saving draft…"

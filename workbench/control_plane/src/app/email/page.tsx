@@ -323,7 +323,7 @@ export default function EmailPage() {
           openCompose({
             to: email.from.email,
             subject: email.subject.startsWith("Re:") ? email.subject : `Re: ${email.subject}`,
-            replyToBody: `\n\nOn ${email.receivedAt}, ${email.from.name} wrote:\n> ${quoteSrc.replace(/\n/g, "\n> ")}`,
+            quote: `On ${email.receivedAt}, ${email.from.name} wrote:\n> ${quoteSrc.replace(/\n/g, "\n> ")}`,
             replyToMessageId: email.providerMessageId,
           });
           break;
@@ -334,7 +334,7 @@ export default function EmailPage() {
           openCompose({
             to: allTo,
             subject: email.subject.startsWith("Re:") ? email.subject : `Re: ${email.subject}`,
-            replyToBody: `\n\nOn ${email.receivedAt}, ${email.from.name} wrote:\n> ${quoteSrc.replace(/\n/g, "\n> ")}`,
+            quote: `On ${email.receivedAt}, ${email.from.name} wrote:\n> ${quoteSrc.replace(/\n/g, "\n> ")}`,
             replyToMessageId: email.providerMessageId,
           });
           break;
@@ -344,7 +344,7 @@ export default function EmailPage() {
           openCompose({
             to: "",
             subject: email.subject.startsWith("Fwd:") ? email.subject : `Fwd: ${email.subject}`,
-            replyToBody: `\n\n---------- Forwarded message ----------\nFrom: ${email.from.name} <${email.from.email}>\nDate: ${email.receivedAt}\nSubject: ${email.subject}\n\n${quoteSrc}`,
+            quote: `---------- Forwarded message ----------\nFrom: ${email.from.name} <${email.from.email}>\nDate: ${email.receivedAt}\nSubject: ${email.subject}\n\n${quoteSrc}`,
           });
           break;
         }
@@ -901,6 +901,7 @@ export default function EmailPage() {
         defaultTo={composeDefaults?.to}
         defaultSubject={composeDefaults?.subject}
         replyToBody={composeDefaults?.replyToBody}
+        quote={composeDefaults?.quote}
         replyToMessageId={composeDefaults?.replyToMessageId}
       />
 

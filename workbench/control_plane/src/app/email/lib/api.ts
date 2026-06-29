@@ -1163,6 +1163,36 @@ export async function draftReplySmart(
   });
 }
 
+/**
+ * Draft or improve the body the user is composing. Pass ONLY the new text
+ * (`body`) — the caller must strip the quoted trailing chain first so the AI
+ * never rewrites the quote. Empty `body` ⇒ draft from scratch; non-empty ⇒
+ * improve in place. For a reply/forward, pass `messageId` so the original thread
+ * is loaded as context (never quoted back). Returns the drafted/improved body.
+ */
+export async function composeAssist(args: {
+  accountId: string;
+  body?: string;
+  instruction?: string;
+  mode?: "new" | "reply" | "forward";
+  messageId?: string;
+  to?: string[];
+  subject?: string;
+}): Promise<{ draft: string; skipped?: string }> {
+  return gatewayFetch("/email/compose-assist", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: args.accountId,
+      body: args.body ?? "",
+      instruction: args.instruction ?? "",
+      mode: args.mode ?? "new",
+      message_id: args.messageId,
+      to: args.to,
+      subject: args.subject ?? "",
+    }),
+  });
+}
+
 // ── Digest ──────────────────────────────────────────────────────────────────
 
 export async function getDigest(

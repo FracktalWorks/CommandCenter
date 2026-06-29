@@ -629,6 +629,109 @@ async def _llm_draft_reply(
     return body
 
 
+async def _llm_compose_assist(
+    *, about: str, signature: str, current_body: str, instruction: str,
+    mode: str, recipient: str = "", subject: str = "", thread: str = "",
+    user_email: str = "", model: str = "tier-powerful",
+) -> str:
+    """Draft OR improve an outgoing email body for the compose box.
+
+    Unlike ``_llm_draft_reply`` (which always writes a fresh reply to an inbound
+    message), this works on the OWNER'S OWN text: when ``current_body`` is set it
+    polishes that draft in place; when it's empty it drafts from the instruction
+    and context. The trailing quoted conversation is NEVER passed in (the client
+    strips it) — ``thread`` is supplied for context only and must not be quoted.
+
+    Returns the NO_DRAFT sentinel if the model declines; otherwise the body with
+    the configured signature appended.
+    """
+    improving = bool((current_body or "").strip())
+    try:
+        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
+        sig_rule = (
+            "Do NOT add any closing, sign-off, name, title, or signature block — a "
+            "signature is appended automatically."
+            if (signature or "").strip()
+            else "You do not need to sign off with the user's name; a simple close "
+            "(e.g. 'Best regards,') is fine, but NEVER invent a name or leave a "
+            "placeholder."
+        )
+        mode_rule = (
+            "- IMPROVE the owner's existing draft (given below): preserve their "
+            "intent, facts, names, commitments and any concrete details; fix "
+            "clarity, structure, grammar and tone. Do NOT invent new facts, add "
+            "new asks, or change the meaning.\n"
+            if improving
+            else "- DRAFT a new email body from the owner's instruction and "
+            "context. Ground every fact in the instruction/context; never invent "
+            "specifics — if something is missing, keep it open or ask.\n"
+        )
+        sys_prompt = (
+            "You help the account owner write and refine THEIR OWN outgoing email. "
+            "Rules:\n"
+            "- Output ONLY the email body the owner will send — no subject line, no "
+            "quoted prior conversation, and never narrate what you are doing (no "
+            "\"here is a draft\" or apologies).\n"
+            "- Write in the owner's first-person voice. Never greet or address the "
+            "owner by name; if a greeting fits, address the RECIPIENT.\n"
+            f"{mode_rule}"
+            "- Plain text only (markdown links allowed); separate paragraphs with "
+            "blank lines; match the language of the draft/thread; be clear and "
+            "professional, not a single terse line.\n"
+            "- Never use placeholders for names (e.g. [Your Name], [Name]). "
+            f"{sig_rule}\n"
+            "- If the context contains <personal_instructions> or <writing_style>, "
+            "follow them. The prior thread (if any) is context ONLY — do not quote, "
+            "restate, or reply to it line by line."
+        )
+        owner = f"You are writing as: {user_email}\n" if user_email else ""
+        ctx = f"{owner}User context:\n{about}\n\n" if (about or owner) else ""
+        today = datetime.now(timezone.utc).strftime("%A, %d %B %Y")
+        parts = [ctx, f"Today is {today}.\n"]
+        if mode in ("reply", "forward") and recipient:
+            verb = "reply" if mode == "reply" else "forward"
+            parts.append(f"This email is a {verb}. Recipient: {recipient}\n")
+        elif recipient:
+            parts.append(f"Recipient: {recipient}\n")
+        if subject:
+            parts.append(f"Subject: {subject}\n")
+        if thread:
+            parts.append(
+                "\nPrior conversation for context only (do NOT quote it):\n"
+                f"{thread[:_DRAFT_THREAD_MAX_CHARS]}\n"
+            )
+        if improving:
+            parts.append(
+                "\nThe owner's current draft — improve THIS, keeping their "
+                f"meaning:\n{current_body[:_DRAFT_BODY_MAX_CHARS]}\n"
+            )
+        guide = (instruction or "").strip()
+        if guide:
+            parts.append(f"\nThe owner's instruction: {guide}\n")
+        elif not improving:
+            parts.append(
+                "\nThe owner's instruction: Draft a suitable, well-structured "
+                "email for the recipient and subject above.\n"
+            )
+        user_prompt = "".join(parts)
+        _messages = [{"role": "system", "content": sys_prompt},
+                     {"role": "user", "content": user_prompt}]
+        resp, _used = await acompletion_with_fallback(
+            model=model,
+            messages=_messages, temperature=0.3, max_tokens=3000,
+        )
+        body = _clean_draft_body((resp.choices[0].message.content or "").strip())
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.compose_assist_failed", error=str(exc)[:200])
+        # Fall back to the owner's own text (improve) or a neutral opener (draft).
+        return (current_body or "").strip() or DRAFT_NO_DRAFT_SENTINEL
+    if _is_no_draft(body):
+        return DRAFT_NO_DRAFT_SENTINEL
+    if (signature or "").strip() and signature.strip() not in body:
+        body = f"{body}\n\n{signature.strip()}"
+    return body
+
+
 async def _draft_consult_plan(email: dict[str, str]) -> list[dict[str, str]]:
     """Decide which specialist agents (if any) could improve this reply.
 
@@ -1037,6 +1140,72 @@ async def draft_reply_smart(
                 _log.warning("email.draft_reply_create_failed", error=str(exc)[:160])
 
         return {"draft": draft, "created": created}
+    finally:
+        await db.close()
+
+
+class ComposeAssistRequest(BaseModel):
+    account_id: str
+    # The current NEW body the user has typed (the quoted trailing chain is
+    # stripped client-side, so the model never rewrites the quote). Empty = draft
+    # from scratch; non-empty = improve this text in place.
+    body: str = ""
+    instruction: str = ""           # optional guidance ("make it shorter", …)
+    mode: str = "new"               # "new" | "reply" | "forward"
+    message_id: str | None = None   # reply/forward: pulls thread context
+    to: list[str] | None = None     # new email: recipient(s) for context
+    subject: str = ""
+
+
+@router.post("/compose-assist")
+async def compose_assist(
+    req: ComposeAssistRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Draft or improve the body the user is composing. Operates ONLY on the new
+    text (the client strips the quoted trailing email first); for a reply/forward
+    the original thread is loaded as context but never quoted back. Returns the
+    drafted/improved body."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        about, signature = await _load_assistant_about(db, req.account_id)
+        models = await _account_models(db, req.account_id)
+        recipient = ""
+        subject = req.subject or ""
+        thread = ""
+        if req.message_id:
+            row = (await db.execute(text(
+                """SELECT provider_message_id, thread_id, subject, from_address
+                   FROM email_messages
+                   WHERE id = :mid AND account_id = :aid"""
+            ), {"mid": req.message_id, "aid": req.account_id})).fetchone()
+            if row:
+                # For a reply, the recipient is the message's sender. For a
+                # forward, the recipient is whoever the user is forwarding TO
+                # (req.to) — NOT the original sender — so only derive it here for
+                # replies; the thread/subject are loaded for context either way.
+                if req.mode != "forward":
+                    frm = row.from_address if isinstance(row.from_address, dict) \
+                        else json.loads(row.from_address or "{}")
+                    nm, addr = frm.get("name", "") or "", frm.get("email", "") or ""
+                    recipient = (f"{nm} <{addr}>" if nm else addr).strip()
+                subject = subject or (row.subject or "")
+                thread = await _fetch_thread_context(
+                    db, req.account_id, row.thread_id or "",
+                    row.provider_message_id or "")
+        if not recipient and req.to:
+            recipient = ", ".join([a for a in req.to if a])
+
+        draft = await _llm_compose_assist(
+            about=about, signature=signature, current_body=req.body,
+            instruction=req.instruction, mode=req.mode, recipient=recipient,
+            subject=subject, thread=thread, user_email=user.email or "",
+            model=models["draft"],
+        )
+        if _is_no_draft(draft):
+            return {"draft": "", "skipped": "low_confidence"}
+        return {"draft": draft}
     finally:
         await db.close()
 

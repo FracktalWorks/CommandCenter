@@ -296,7 +296,11 @@ async function translateAndPersistStream(
           out = {
             type: "tool_end", id: ev.toolCallId, name,
             args: parseToolArgs(toolArgs[id]),
-            result, success: true,
+            // Honour the backend's success flag (TOOL_CALL_RESULT carries
+            // success=_exc is None). Treat a missing flag as success for
+            // backward compatibility (TOOL_CALL_END may omit it). Mirrors the
+            // sub-agent path below and the live reducer in chatStream.ts.
+            result, success: ev.success !== false,
           };
         } else if (t === "STATE_SNAPSHOT") {
           out = { type: "state", snapshot: ev.snapshot ?? {} };

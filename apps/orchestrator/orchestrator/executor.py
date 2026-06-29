@@ -45,10 +45,11 @@ _MAX_ANNEAL_ATTEMPTS = 2
 
 # ── Tool execution timeout ────────────────────────────────────────────────
 # When the agent calls a tool (shell command, sub-agent, web fetch, etc.),
-# the tool runs inside the Copilot SDK's async event loop.  If the tool
-# hangs (infinite loop, waiting for stdin, network partition), the entire
-# stream blocks forever.  This timeout bounds individual tool execution so
-# a hung tool is detected and surfaced as an error instead of a silent hang.
+# the tool runs inside the agent's async event loop.  If the tool hangs
+# (infinite loop, waiting for stdin, network partition), the stream blocks
+# until the HTTP-level abort.  This bounds individual ASYNC tool execution in
+# the Tier-2 batch shim (the native MAF path has its own per-tool idle
+# watchdog) so a hung tool is surfaced as an error instead of a silent hang.
 # Set via COPILOT_TOOL_TIMEOUT_SECONDS (default 300 = 5 min).
 _TOOL_EXECUTION_TIMEOUT: float = float(
     os.environ.get("COPILOT_TOOL_TIMEOUT_SECONDS", "300")
@@ -3415,10 +3416,36 @@ async def run_agent_stream(
                         })
 
                     try:
-                        if inspect.iscoroutinefunction(original_fn):
+                        if not inspect.iscoroutinefunction(original_fn):
+                            # Sync tools run inline and can't be interrupted by
+                            # wait_for — run them directly.
+                            result = original_fn(*args, **kwargs)
+                        elif tool_name == "call_agent":
+                            # Sub-agent delegation can legitimately run for many
+                            # minutes (deep multi-step sub-tasks); do not bound it
+                            # by the per-tool timeout — it has its own watchdog.
                             result = await original_fn(*args, **kwargs)
                         else:
-                            result = original_fn(*args, **kwargs)
+                            # Per-tool timeout: bound async tool execution so a
+                            # hung tool (infinite loop, stuck await, network
+                            # partition) surfaces as an error instead of blocking
+                            # the whole stream until the HTTP-level abort.
+                            result = await asyncio.wait_for(
+                                original_fn(*args, **kwargs),
+                                timeout=_TOOL_EXECUTION_TIMEOUT,
+                            )
+                    except asyncio.TimeoutError:
+                        await queue.put({
+                            "type": "TOOL_CALL_RESULT",
+                            "toolCallId": tool_call_id,
+                            "content": (
+                                f"Error: tool '{tool_name}' exceeded "
+                                f"{int(_TOOL_EXECUTION_TIMEOUT)}s and was "
+                                "cancelled (possible hang)."
+                            ),
+                            "success": False,
+                        })
+                        raise
                     except Exception as exc:
                         await queue.put({
                             "type": "TOOL_CALL_RESULT",
@@ -4083,6 +4110,14 @@ async def _run_with_maf_agent(
                 )
 
             messages_for_run: list[Any] = []
+            # Lead with the caller's system_context (persona / account_id /
+            # open-email / injected memories) so this batch fallback sees the
+            # SAME context the streaming path injects via _compose_maf_run_input.
+            # Without it, a multi-turn email chat that falls back to Tier 2
+            # silently loses its persona and account context.
+            system_context = event_payload.get("system_context") or ""
+            if system_context.strip():
+                messages_for_run.append(_Message("system", [system_context.strip()]))
             if system_parts:
                 messages_for_run.append(_Message("system", ["\n".join(system_parts)]))
 

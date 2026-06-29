@@ -168,3 +168,55 @@ export function getActiveSessionIdsStable(): Set<string> {
   _cachedActiveIdsStr = str;
   return fresh;
 }
+
+// ── Stream ownership (single-writer-per-message) ─────────────────────────────
+//
+// One assistant message can be targeted by more than one SSE loop:
+//   • the LIVE send loop, and
+//   • the RECONNECT/replay loop, which resets the message and replays the Redis
+//     stream from the beginning.
+// React StrictMode also double-invokes the reconnect effect in dev.  When two
+// loops append to the same message concurrently, every chunk lands twice — the
+// "duplicated tokens" bug ("email email-specific-specific card card …"): the
+// first token survives single (cleared by the reset) and everything after
+// doubles.
+//
+// Ownership makes the LAST loop to start the only writer: each loop claims a
+// unique token for (threadId, messageId) before streaming; every mutation
+// checks it still owns the message and silently no-ops if a newer loop took
+// over.  The superseded loop stops contributing and the new owner rebuilds the
+// message from its reset baseline, so the text is never doubled.
+
+const _streamOwners = new Map<string, string>();
+const _streamOwnerKey = (threadId: string, messageId: string): string =>
+  `${threadId}::${messageId}`;
+
+/** Claim exclusive write ownership of (threadId, messageId) for `token`.  Any
+ *  loop that previously claimed the same message immediately loses ownership. */
+export function claimStreamOwnership(
+  threadId: string,
+  messageId: string,
+  token: string,
+): void {
+  _streamOwners.set(_streamOwnerKey(threadId, messageId), token);
+}
+
+/** True while `token` is still the current owner of (threadId, messageId). */
+export function ownsStream(
+  threadId: string,
+  messageId: string,
+  token: string,
+): boolean {
+  return _streamOwners.get(_streamOwnerKey(threadId, messageId)) === token;
+}
+
+/** Release ownership iff `token` still holds it — never clobber a newer owner's
+ *  claim during this (superseded) loop's cleanup. */
+export function releaseStreamOwnership(
+  threadId: string,
+  messageId: string,
+  token: string,
+): void {
+  const key = _streamOwnerKey(threadId, messageId);
+  if (_streamOwners.get(key) === token) _streamOwners.delete(key);
+}

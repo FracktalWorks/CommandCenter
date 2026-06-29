@@ -196,10 +196,13 @@ def _get_messages(
 
         if limit is not None and limit > 0:
             # Newest-first with LIMIT, then reverse to oldest→newest below.
-            cols += " ORDER BY timestamp_ms DESC LIMIT :limit"
+            # Secondary sort by id keeps ties (messages sharing a timestamp_ms,
+            # e.g. a user turn and its assistant reply stamped the same ms)
+            # deterministic across reads instead of arbitrary.
+            cols += " ORDER BY timestamp_ms DESC, id DESC LIMIT :limit"
             params["limit"] = limit
         else:
-            cols += " ORDER BY timestamp_ms ASC"
+            cols += " ORDER BY timestamp_ms ASC, id ASC"
 
         rows = s.execute(text(cols), params).fetchall()
 

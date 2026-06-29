@@ -18,6 +18,9 @@ import {
   getSessionState,
   setSessionState,
   subscribeSession,
+  claimStreamOwnership,
+  ownsStream,
+  releaseStreamOwnership,
 } from "@/lib/chatStore";
 import type { ChatMessage, ToolEvent } from "@/lib/chatStore";
 import { parseAgentError } from "@/lib/parseAgentError";
@@ -145,14 +148,25 @@ export function useAgentChat({
       if (!content.trim() || getSessionState(threadId).isLoading) return;
 
       const controller = new AbortController();
+      // Stamp the assistant 1ms after the user so the pair never shares a
+      // timestamp_ms. The DB orders by (timestamp_ms, id); an identical ms for
+      // both would let a reload render the reply before its own prompt.
+      const turnTs = Date.now();
       const userMsg: ChatMessage = {
-        id: nanoid(), role: "user", content: content.trim(), timestamp: Date.now(),
+        id: nanoid(), role: "user", content: content.trim(), timestamp: turnTs,
       };
       const assistantId = nanoid();
       const assistantMsg: ChatMessage = {
-        id: assistantId, role: "assistant", content: "", timestamp: Date.now(),
+        id: assistantId, role: "assistant", content: "", timestamp: turnTs + 1,
         streaming: true, toolEvents: [], progressLines: [], isThinkingActive: true,
       };
+
+      // Claim exclusive write ownership of this message.  If a reconnect/replay
+      // loop later takes over the same message, this loop's writes silently
+      // no-op (see ownsStream below) — preventing the two loops from both
+      // appending deltas and doubling the text.
+      const streamToken = nanoid();
+      claimStreamOwnership(threadId, assistantId, streamToken);
 
       setSessionState(threadId, (prev) => ({
         ...prev,
@@ -209,14 +223,21 @@ export function useAgentChat({
         // delta and read at run end by unfoldTrailingAnswer.
         const fold: StreamFold = { foldedAnswerIdx: -1 };
 
-        // Helper: update just the assistant message
-        const upd = (fn: (m: ChatMessage) => ChatMessage) =>
+        // Helper: update just the assistant message.  No-op once another loop
+        // (reconnect/replay) has claimed this message — only the current owner
+        // may mutate it, so concurrent loops can't both append the same deltas.
+        const upd = (fn: (m: ChatMessage) => ChatMessage) => {
+          if (!ownsStream(threadId, assistantId, streamToken)) return;
           setSessionState(threadId, (prev) => ({
             ...prev,
             messages: prev.messages.map((m) => m.id === assistantId ? fn(m) : m),
           }));
+        };
 
         while (true) {
+          // A newer loop took over this message — stop reading this (now dead)
+          // stream so it can't keep mutating shared state.
+          if (!ownsStream(threadId, assistantId, streamToken)) break;
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
@@ -427,7 +448,16 @@ export function useAgentChat({
             }),
         }));
       } finally {
-        setSessionState(threadId, (prev) => ({ ...prev, isLoading: false, abortController: null }));
+        // If a reconnect/replay loop superseded us mid-stream it now owns the
+        // message AND the shared loading/abort state. A superseded loop must NOT
+        // reset isLoading/abortController or it would kill the live reconnect
+        // (Stop button stops working, the spinner flickers off, and polling
+        // clobbers the replay). Only the still-current owner clears them.
+        const stillOwner = ownsStream(threadId, assistantId, streamToken);
+        releaseStreamOwnership(threadId, assistantId, streamToken);
+        if (stillOwner) {
+          setSessionState(threadId, (prev) => ({ ...prev, isLoading: false, abortController: null }));
+        }
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -551,6 +581,10 @@ export function useAgentChat({
       }
 
       // ── Attempt live SSE reconnection ────────────────────────────────
+      // Ownership token for the message we replay into — claimed once we commit
+      // to streaming (after res.ok) so any still-running live loop for the same
+      // message stops writing and we rebuild it without doubling the text.
+      let reconToken: string | null = null;
       try {
         const curState = getSessionState(threadId);
         const res = await fetch("/api/agent/chat", {
@@ -575,6 +609,12 @@ export function useAgentChat({
         });
 
         if (!res.ok || !res.body) { return; }  // Fall back to polling.
+
+        // Take exclusive ownership of the replay target before resetting it.
+        // Any live loop still writing this message now loses ownership and
+        // stops, so its deltas don't interleave with the replayed ones.
+        reconToken = nanoid();
+        claimStreamOwnership(threadId, lastId, reconToken);
 
         // ── Reset the interrupted message before replay ─────────────────
         // The reconnect replays ALL events from the Redis stream (since
@@ -609,15 +649,20 @@ export function useAgentChat({
         // replaying into (matched by lastId).  Previous messages — even those
         // without terminal punctuation — must never be modified by replayed
         // delta events; only the reset target message should accumulate content.
-        const updLast = (fn: (m: ChatMessage) => ChatMessage) =>
+        const updLast = (fn: (m: ChatMessage) => ChatMessage) => {
+          // No-op once a newer loop has claimed this message (see ownsStream).
+          if (!reconToken || !ownsStream(threadId, lastId, reconToken)) return;
           setSessionState(threadId, (prev) => ({
             ...prev,
             messages: prev.messages.map((m) =>
               m.id === lastId ? fn(m) : m
             ),
           }));
+        };
 
         while (true) {
+          // Superseded by a newer loop — stop draining this dead stream.
+          if (!reconToken || !ownsStream(threadId, lastId, reconToken)) break;
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
@@ -745,6 +790,9 @@ export function useAgentChat({
           }));
         }
       } finally {
+        // Release replay ownership iff we still hold it (a newer loop that
+        // superseded us keeps its own claim).
+        if (reconToken) releaseStreamOwnership(threadId, lastId, reconToken);
         // If we never reconnected, make sure recovering is set for polling.
         if (!reconnected && !cancelled) {
           setSessionState(threadId, (prev) =>

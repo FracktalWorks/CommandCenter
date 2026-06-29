@@ -778,6 +778,44 @@ async def _mark_thread_replied(
         await db.close()
 
 
+async def _reconcile_labels_bg(
+    account_id: str, thread_id: str, keep_label: str | None,
+) -> None:
+    """Background: instantiate the provider and collapse a thread's Reply Zero
+    labels to ``keep_label`` (None clears all conversation + Follow-up labels).
+
+    Used by Mark Done / Reopen so the provider + local labels match the new
+    status — without this the status row alone moved the thread in our view but
+    left the stale To Reply / Awaiting / Follow-up labels behind on the provider.
+    Best-effort."""
+    if not thread_id:
+        return
+    db = await _get_db()
+    try:
+        acc = (await db.execute(text(
+            "SELECT provider, credentials_encrypted FROM email_accounts "
+            "WHERE id = :id"
+        ), {"id": account_id})).fetchone()
+        if not acc:
+            return
+        from acb_llm.key_store import get_key_store  # noqa: PLC0415
+        store = get_key_store()
+        creds = json.loads(store.decrypt(acc.credentials_encrypted))
+        provider = _instantiate_provider(acc.provider, creds)
+        if not await provider.authenticate():
+            return
+        await _reconcile_thread_labels(
+            db, provider, account_id, thread_id, keep_label)
+        if provider.credentials_dirty():
+            await _persist_rotated_creds(db, store, account_id, provider)
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.reconcile_labels_bg_failed",
+                     account_id=account_id, error=str(exc)[:160])
+    finally:
+        await db.close()
+
+
 async def apply_thread_status_correction(
     account_id: str, thread_id: str, status_key: str,
 ) -> dict[str, Any]:
@@ -964,15 +1002,19 @@ class ThreadResolveRequest(BaseModel):
 @router.post("/reply-zero/resolve")
 async def resolve_thread(
     req: ThreadResolveRequest,
+    background: BackgroundTasks,
     user: UserContext = Depends(get_current_user),
 ):
     """Mark a thread done (inbox-zero's "Mark Done" / resolved=true) or reopen it.
 
-    Done → status='DONE' (shows under the Done tab). Reopen → re-derive
-    NEEDS_REPLY/AWAITING from the latest message's folder."""
+    Done → status='DONE' (shows under the Done tab) and the provider/local labels
+    are collapsed to "Actioned" (clearing stale To Reply / Awaiting / Follow-up).
+    Reopen → re-derive NEEDS_REPLY/AWAITING from the latest message's folder and
+    swap the label back to To Reply / Awaiting Reply."""
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        keep_label = "Actioned"
         if req.done:
             res = await db.execute(text(
                 "UPDATE email_thread_status SET status = 'DONE', "
@@ -1006,11 +1048,17 @@ async def resolve_thread(
             ), {"aid": req.account_id, "tid": req.thread_id})).fetchone()
             new_status = "AWAITING" if (
                 lm and (lm.folder or "").lower() == "sent") else "NEEDS_REPLY"
+            keep_label = (
+                "Awaiting Reply" if new_status == "AWAITING" else "To Reply")
             await db.execute(text(
                 "UPDATE email_thread_status SET status = :st, classified_at = now() "
                 "WHERE account_id = :aid AND thread_id = :tid"
             ), {"st": new_status, "aid": req.account_id, "tid": req.thread_id})
         await db.commit()
+        # Collapse the provider/local labels to match the new status (clears the
+        # stale To Reply / Awaiting / Follow-up that the status update alone left).
+        background.add_task(
+            _reconcile_labels_bg, req.account_id, req.thread_id, keep_label)
         return {"ok": True, "thread_id": req.thread_id, "done": req.done}
     finally:
         await db.close()
@@ -1078,6 +1126,8 @@ async def reply_zero(
                  LIMIT 1
                ) d ON true
                WHERE ts.account_id = :aid AND ts.status = :st
+                 -- A trashed thread shouldn't surface in any Reply Zero bucket.
+                 AND LOWER(COALESCE(em.folder, '')) <> 'trash'
                ORDER BY ts.last_message_at DESC NULLS LAST LIMIT :limit"""
         ), {"aid": account_id, "st": want, "limit": limit})).fetchall()
 

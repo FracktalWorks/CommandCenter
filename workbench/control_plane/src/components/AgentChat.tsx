@@ -30,7 +30,6 @@ import ConfirmationCard from "@/components/ConfirmationCard";
 import ElicitationCard from "@/components/ElicitationCard";
 import type { ElicitationQuestion, ElicitationAnswers } from "@/components/ElicitationCard";
 import TodoPanel from "@/components/TodoPanel";
-import { parseAgentError } from "@/lib/parseAgentError";
 import type { ParsedAgentError } from "@/lib/parseAgentError";
 import { getMessages, saveMessages, fetchMessagesFromDb, getQueue, saveQueue, type PersistedMessage } from "@/lib/sessions";
 import { computeContextUsage, activeContextSlice, isCompactionCheckpoint } from "@/lib/tokenCount";
@@ -833,8 +832,10 @@ export default function AgentChat({
   }, [sessionId, setMessages]);
 
   // Auto-compact at 80% of the model's context window (GitHub Copilot CLI
-  // parity; Claude Code uses ~83%).  70/80 hysteresis so it fires once per
+  // parity; Claude Code uses ~83%).  75/80 hysteresis so it fires once per
   // fill-up and re-arms after a compaction drops usage.  Between turns only.
+  // (A narrow 75/80 band — rather than 70/80 — re-arms even when a compaction
+  // only partially reduced usage, so it can't wedge ≥80% and stop firing.)
   // Because contextUsage uses the model's REAL window, switching mid-chat to a
   // smaller-context model re-triggers compaction if the history now overflows.
   useEffect(() => {
@@ -845,7 +846,7 @@ export default function AgentChat({
     // defer to the SDK.  Our compaction is authoritative for MAF agents and the
     // orchestrator (stateless per request — they use the messages we send).
     if (agentRuntime === "github-copilot") return;
-    if (contextUsage.pct < 70) compactArmedRef.current = true;
+    if (contextUsage.pct < 75) compactArmedRef.current = true;
     if (contextUsage.pct < 80) return;
     if (isLoading || compacting) return;
     if (!compactArmedRef.current) return;
@@ -1035,6 +1036,11 @@ export default function AgentChat({
   }, [onActivity]);
   useEffect(() => {
     if (!onActivityRef.current) return;
+    // Only enrich on SETTLED turns. This effect runs on every streamed token;
+    // firing onActivity (which PATCHes the session row in Postgres) per token
+    // spammed dozens of writes per turn. Skip while the last message is still
+    // streaming — the title/preview only need to reflect settled content.
+    if (messages[messages.length - 1]?.streaming) return;
     const firstUser = messages.find((m) => m.role === "user" && m.content.trim());
     const lastAssistant = [...messages]
       .reverse()
@@ -1531,7 +1537,13 @@ export default function AgentChat({
                   emailContext={emailContext}
                   onFileOpen={(entry) => setViewerEntry(entry)}
                   onResend={(content) => { submitText(content); }}
-                  onRetry={prevUserMsg ? () => { submitText(prevUserMsg.content); } : undefined} />
+                  onRetry={prevUserMsg ? () => {
+                    // Regenerate: drop this assistant turn AND its prompt before
+                    // re-sending, so we don't append a duplicate user+assistant
+                    // pair on top of the old (rejected) answer.
+                    setMessages((prev) => prev.filter((m) => m.id !== msg.id && m.id !== prevUserMsg.id));
+                    submitText(prevUserMsg.content);
+                  } : undefined} />
               </div>
             );
           })}
@@ -1690,7 +1702,9 @@ export default function AgentChat({
             return null;
           })()}
 
-          {error && !isLoading && <ErrorCard parsed={parseAgentError(error)} />}
+          {/* Turn errors render once, inline in the thread, via the __ERROR__
+              system message (see MessageBubble). The old bottom banner here was
+              a duplicate and lingered after recovery, so it was removed. */}
         </div>
         <div ref={bottomRef} />
       </div>

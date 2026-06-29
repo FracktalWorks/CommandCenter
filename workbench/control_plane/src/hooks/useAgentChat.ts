@@ -42,6 +42,54 @@ const HITL_CONTROL_EVENTS = new Set([
   "confirmation_requested",
 ]);
 
+/**
+ * Read an SSE response body and yield each parsed event object.
+ *
+ * Centralises the reader/decoder/buffer/line-parsing boilerplate that the LIVE
+ * and RECONNECT loops both carried verbatim, plus the `lastEventId` tracking.
+ * `isOwner()` is checked before every network read so a loop that has been
+ * superseded by a newer one (ownership handover) stops draining its now-dead
+ * stream — exactly the guard both loops had at their while-loop top.
+ *
+ * The per-event EFFECT (the switch) stays in each caller on purpose: the live
+ * loop handles sub_agent_* / state / state_delta / todos and throws on error,
+ * while the reconnect loop handles a smaller set with its own done/recovery and
+ * non-throwing error handling.  Merging those would be a leaky over-
+ * generalisation; only the transport is shared here.
+ */
+async function* readSSEEvents(
+  body: ReadableStream<Uint8Array>,
+  threadId: string,
+  isOwner: () => boolean,
+): AsyncGenerator<Record<string, unknown>> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    if (!isOwner()) return;
+    const { done, value } = await reader.read();
+    if (done) return;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const raw = line.slice(6).trim();
+      if (!raw || raw === "[DONE]") continue;
+      let evt: Record<string, unknown>;
+      try { evt = JSON.parse(raw) as Record<string, unknown>; } catch { continue; }
+      // Track the last SSE event id for reconnection support.
+      if (evt._stream_id) {
+        setSessionState(threadId, (prev) => ({
+          ...prev,
+          lastEventId: String(evt._stream_id),
+        }));
+      }
+      yield evt;
+    }
+  }
+}
+
 export interface ArtifactEntry {
   path: string;
   sha256?: string;
@@ -216,9 +264,6 @@ export function useAgentChat({
           throw new Error(text);
         }
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
         // Per-stream fold cursor — mutated by applyStreamEvent at tool_start /
         // delta and read at run end by unfoldTrailingAnswer.
         const fold: StreamFold = { foldedAnswerIdx: -1 };
@@ -234,32 +279,11 @@ export function useAgentChat({
           }));
         };
 
-        while (true) {
-          // A newer loop took over this message — stop reading this (now dead)
-          // stream so it can't keep mutating shared state.
-          if (!ownsStream(threadId, assistantId, streamToken)) break;
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const raw = line.slice(6).trim();
-            if (!raw || raw === "[DONE]") continue;
-            let evt: Record<string, unknown>;
-            try { evt = JSON.parse(raw) as Record<string, unknown>; } catch (_e) { continue; }
-
-            // Track the last SSE event ID for reconnection support.
-            if (evt._stream_id) {
-              setSessionState(threadId, (prev) => ({
-                ...prev,
-                lastEventId: String(evt._stream_id),
-              }));
-            }
-
-
+        // Drain the SSE stream via the shared reader; the owner check stops it
+        // once a reconnect supersedes this message.
+        for await (const evt of readSSEEvents(
+          res.body, threadId, () => ownsStream(threadId, assistantId, streamToken),
+        )) {
             switch (evt.type) {
               // Common message-state events (delta, reasoning, tool_start,
               // tool_end, tool_partial, progress, todos) — handled identically
@@ -389,7 +413,6 @@ export function useAgentChat({
               case "error":
                 throw new Error(String(evt.content ?? "Stream error"));
             }
-          }
         }
 
         // Ensure streaming flag is cleared even if "done" was missing.
@@ -639,9 +662,6 @@ export function useAgentChat({
           ),
         }));
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
         // Per-stream fold cursor (mirror of the live loop).
         const fold: StreamFold = { foldedAnswerIdx: -1 };
 
@@ -660,30 +680,11 @@ export function useAgentChat({
           }));
         };
 
-        while (true) {
-          // Superseded by a newer loop — stop draining this dead stream.
-          if (!reconToken || !ownsStream(threadId, lastId, reconToken)) break;
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const raw = line.slice(6).trim();
-            if (!raw || raw === "[DONE]") continue;
-            let evt: Record<string, unknown>;
-            try { evt = JSON.parse(raw); } catch { continue; }
-
-            // Track stream ID for future reconnections.
-            if (evt._stream_id) {
-              setSessionState(threadId, (prev) => ({
-                ...prev,
-                lastEventId: String(evt._stream_id),
-              }));
-            }
-
+        // Drain the replay stream via the shared reader; the owner check stops
+        // it once a newer loop supersedes this message.
+        for await (const evt of readSSEEvents(
+          res.body, threadId, () => !!reconToken && ownsStream(threadId, lastId, reconToken),
+        )) {
             switch (evt.type) {
               // Common message-state events — same handling as the live loop
               // (see applyStreamEvent).  A replayed stream never carries todos,
@@ -759,7 +760,6 @@ export function useAgentChat({
                 }));
                 break;
             }
-          }
         }
 
         // If we got here without a "done" event, the stream ended cleanly.

@@ -1030,6 +1030,23 @@ export default function AgentChat({
     [submitText]
   );
 
+  // Stable callbacks for MessageBubble so React.memo can skip re-rendering
+  // unchanged messages (per-message closures used to defeat the memoization —
+  // every message re-ran ReactMarkdown on every streamed token).
+  const handleFileOpen = useCallback((entry: FileEntry) => setViewerEntry(entry), []);
+  const handleResend = useCallback((content: string) => { submitText(content); }, [submitText]);
+  const handleRetryMessage = useCallback((m: ChatMessage) => {
+    const all = messagesRef.current;
+    const idx = all.findIndex((x) => x.id === m.id);
+    if (idx < 0) return;
+    const prevUser = [...all.slice(0, idx)].reverse().find((x) => x.role === "user");
+    if (!prevUser) return;
+    // Regenerate: drop this assistant turn AND its prompt, then re-send — no
+    // duplicate user+assistant pair on top of the old (rejected) answer.
+    setMessages((prev) => prev.filter((x) => x.id !== m.id && x.id !== prevUser.id));
+    submitText(prevUser.content);
+  }, [submitText, setMessages]);
+
   /** Ask the agent to help configure a specific integration. */
   const handleAskAgentConfigure = (svc: IntegrationStatus) => {
     setBannerDismissed(true);
@@ -1267,15 +1284,9 @@ export default function AgentChat({
                 )}
                 <MessageBubble message={msg} sessionId={sessionId} onChoice={handleChoice}
                   emailContext={emailContext}
-                  onFileOpen={(entry) => setViewerEntry(entry)}
-                  onResend={(content) => { submitText(content); }}
-                  onRetry={prevUserMsg ? () => {
-                    // Regenerate: drop this assistant turn AND its prompt before
-                    // re-sending, so we don't append a duplicate user+assistant
-                    // pair on top of the old (rejected) answer.
-                    setMessages((prev) => prev.filter((m) => m.id !== msg.id && m.id !== prevUserMsg.id));
-                    submitText(prevUserMsg.content);
-                  } : undefined} />
+                  onFileOpen={handleFileOpen}
+                  onResend={handleResend}
+                  onRetryMessage={prevUserMsg ? handleRetryMessage : undefined} />
               </div>
             );
           })}

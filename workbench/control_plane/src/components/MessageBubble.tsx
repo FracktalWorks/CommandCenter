@@ -12,13 +12,13 @@ import ArtifactCard, { type ArtifactMeta } from "@/components/ArtifactCard";
 import EmailToolCards from "@/components/email/EmailToolCards";
 import ErrorCard from "@/components/ChatErrorCard";
 
-export default function MessageBubble({
+function MessageBubble({
   message,
   sessionId,
   onChoice,
   onFileOpen,
   onResend,
-  onRetry,
+  onRetryMessage,
   emailContext,
 }: {
   message: ChatMessage;
@@ -26,7 +26,7 @@ export default function MessageBubble({
   onChoice?: (choice: string) => void;
   onFileOpen?: (entry: FileEntry) => void;
   onResend?: (content: string) => void;
-  onRetry?: () => void;
+  onRetryMessage?: (m: ChatMessage) => void;
   emailContext?: { accountId?: string | null; emailId?: string | null };
 }) {
   const isUser = message.role === "user";
@@ -277,7 +277,7 @@ export default function MessageBubble({
               content={message.content}
               messageId={message.id}
               role="assistant"
-              onRetry={onRetry}
+              onRetry={onRetryMessage ? () => onRetryMessage(message) : undefined}
             />
           )}
           <div className="text-[10px] text-muted-foreground">{timestamp}</div>
@@ -286,3 +286,19 @@ export default function MessageBubble({
     </div>
   );
 }
+
+// Memoised: the message store updates immutably (every change yields a NEW
+// message object), so a reference check on `message` re-renders exactly the
+// messages that changed and skips the rest — without this, every streamed token
+// re-ran ReactMarkdown for every message in the thread. Callbacks are stable
+// (the parent useCallback's them), so comparing their identity is safe.
+export default React.memo(MessageBubble, (a, b) =>
+  a.message === b.message &&
+  a.sessionId === b.sessionId &&
+  a.onChoice === b.onChoice &&
+  a.onResend === b.onResend &&
+  a.onRetryMessage === b.onRetryMessage &&
+  a.onFileOpen === b.onFileOpen &&
+  a.emailContext?.accountId === b.emailContext?.accountId &&
+  a.emailContext?.emailId === b.emailContext?.emailId,
+);

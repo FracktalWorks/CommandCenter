@@ -577,6 +577,17 @@ function ChatPageInner() {
   }, [isMobile]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
+  // Auto-reveal the artifact sidebar the first time an agent writes a file
+  // (desktop only — on mobile it's a drawer the user opens explicitly).
+  const artifactsRevealedRef = useRef(false);
+  useEffect(() => {
+    if (artifactUpdates.length > 0 && !artifactsRevealedRef.current && !isMobile) {
+      artifactsRevealedRef.current = true;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setArtifactPanelOpen(true);
+    }
+  }, [artifactUpdates.length, isMobile]);
+
   // Fetch agents once at page level so AgentChat knows agent_runtime before first render.
   const [agentList, setAgentList] = useState<AgentEntry[]>([]);
   useEffect(() => {
@@ -661,12 +672,19 @@ function ChatPageInner() {
 
   const handleDeleteSession = useCallback(
     (id: string) => {
+      const deleted = getSessions().find((s) => s.id === id);
       deleteSession(id);
       const remaining = getSessions();
       setSessions(remaining);
       if (id === activeSessionId) {
         if (remaining.length > 0) {
-          setActiveSessionId(remaining[0].id);
+          // Prefer a sibling of the SAME agent so deleting a session doesn't
+          // bounce the user into an unrelated agent's conversation (sessions are
+          // sorted across all agents by recency).
+          const sameAgent = deleted
+            ? remaining.find((s) => s.agentName === deleted.agentName)
+            : undefined;
+          setActiveSessionId((sameAgent ?? remaining[0]).id);
         } else {
           // All sessions gone — show the agent picker instead of
           // silently defaulting to the orchestrator.

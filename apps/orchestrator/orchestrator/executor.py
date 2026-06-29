@@ -641,6 +641,7 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
 
     for agent in agents:
         injected = False
+        _agent_label = getattr(agent, "name", None) or type(agent).__name__
 
         # ── GitHubCopilotAgent (agent-framework-ag-ui) ──────────────────────
         # Stores tools in self._tools (a list); fed into SessionConfig at run time.
@@ -695,8 +696,12 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
                     pass
 
                 injected = True
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as _exc:  # noqa: BLE001
+            _log.warning(
+                "executor.tool_injection_failed",
+                agent=_agent_label, shape="copilot_tools",
+                error=str(_exc)[:200],
+            )
 
         if injected:
             continue
@@ -740,8 +745,12 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
                     except Exception:
                         pass
                 continue
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as _exc:  # noqa: BLE001
+            _log.warning(
+                "executor.tool_injection_failed",
+                agent=_agent_label, shape="native_maf",
+                error=str(_exc)[:200],
+            )
 
         # ── MAF Agent (agent-framework) ─────────────────────────────────────
         # agent.tools is a list[FunctionTool | callable].  MAF accepts plain
@@ -756,8 +765,12 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
                     if fn.__name__ not in existing_names:
                         agent.tools.append(fn)
                 continue
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as _exc:  # noqa: BLE001
+            _log.warning(
+                "executor.tool_injection_failed",
+                agent=_agent_label, shape="maf_tools",
+                error=str(_exc)[:200],
+            )
 
         # ── Legacy: _default_options.tools (older Copilot SDK wrapper) ──────
         # Same wrapping requirement as _tools above: raw callables are silently
@@ -781,8 +794,22 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
                         wrapped = _norm_legacy([fn])[0] if _norm_legacy is not None else fn
                         existing.append(wrapped)
                 opts.tools = existing
-        except Exception:  # noqa: BLE001
-            pass
+                injected = True
+        except Exception as _exc:  # noqa: BLE001
+            _log.warning(
+                "executor.tool_injection_failed",
+                agent=_agent_label, shape="legacy_copilot",
+                error=str(_exc)[:200],
+            )
+
+        # No agent shape matched — the agent silently got NONE of the injected
+        # platform tools (call_agent / web_search / write_artifact / …). Surface
+        # it so the symptom isn't just a mysteriously "missing" tool at run time.
+        if not injected:
+            _log.warning(
+                "executor.tool_injection_no_shape_matched",
+                agent=_agent_label, agent_type=type(agent).__name__,
+            )
 
 
 async def _inject_mcp_servers(agent: Any, agent_name: str) -> None:

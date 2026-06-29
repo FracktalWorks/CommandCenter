@@ -189,9 +189,20 @@ export async function fetchAndMergeSessionsFromDb(): Promise<ChatSession[]> {
     // Add any sessions from Postgres that aren't in localStorage.
     for (const r of remote) {
       if (!localIds.has(r.id)) {
+        // Fall back to a formatted date (matching createSession) — NEVER the
+        // raw UUID — so restored-from-DB sessions with no title don't show an
+        // unreadable id in the sidebar.
+        const fallbackName = (() => {
+          const d = new Date(r.createdAt);
+          return isNaN(d.getTime())
+            ? "Conversation"
+            : d.toLocaleString("en-IN", {
+                day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+              });
+        })();
         local.push({
           id: r.id,
-          name: r.title ?? r.id,
+          name: r.title ?? fallbackName,
           agentName: r.agentName,
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
@@ -310,7 +321,24 @@ export function saveMessages(sessionId: string, messages: PersistedMessage[]): v
 
   // 2. Persist to Postgres (async, background)
   if (settled.length === 0) return;
-  const payload = settled.map((m) => ({
+  // The server-side stream route (translateAndPersistStream in
+  // app/api/agent/chat/route.ts) is the AUTHORITATIVE writer for an assistant
+  // message while it streams — it accumulates the full SSE stream and re-upserts
+  // the SAME row (by id) every ~3s and at completion.  If the client also POSTs
+  // its partial / possibly-stale snapshot of a still-streaming assistant row,
+  // the two last-writer-wins upserts race and a late client write can TRUNCATE
+  // the server's final content.  Exclude still-streaming assistant rows from the
+  // DB write; the client persists them once settled (streaming=false), which is
+  // idempotent with the server's final.  (localStorage above still keeps the
+  // streaming rows for refresh-recovery detection.)
+  // NOTE: litellm mode has NO server-side persister, so a litellm reply is
+  // durable only in localStorage until it settles (streaming=false), after which
+  // this path writes the final.  Don't "fix" that by re-adding streaming-row
+  // writes — it reintroduces the truncation race on the copilot/executor path
+  // (which IS persisted server-side during the stream).
+  const forDb = settled.filter((m) => !(m.role === "assistant" && m.streaming));
+  if (forDb.length === 0) return;
+  const payload = forDb.map((m) => ({
     id: m.id,
     role: m.role,
     content: m.content,

@@ -65,20 +65,22 @@ export function EmailAssistantChat({
   // The email chat runs on the model configured in the account's Assistant
   // settings (`chat_model`) — not AgentChat's generic per-agent picker — so the
   // single source of truth is Assistant → Settings → Models. Fetched per account.
-  const [chatModel, setChatModel] = useState<string | undefined>(undefined);
+  // Default to the documented email-chat default (tier-powerful) so a send
+  // during the brief settings-fetch window uses a sensible model instead of
+  // "auto". Refined to the account's saved chat_model once the fetch resolves.
+  const [chatModel, setChatModel] = useState<string | undefined>("tier-powerful");
   useEffect(() => {
     if (!selectedAccountId) {
-      setChatModel(undefined);
+      setChatModel("tier-powerful");
       return;
     }
     let cancelled = false;
     getAssistantSettings(selectedAccountId)
       .then((s) => {
-        if (!cancelled) setChatModel(s.chat_model || undefined);
+        if (!cancelled) setChatModel(s.chat_model || "tier-powerful");
       })
       .catch(() => {
-        // Fall back to AgentChat's default model if the lookup fails.
-        if (!cancelled) setChatModel(undefined);
+        // Keep the tier-powerful default if the lookup fails.
       });
     return () => {
       cancelled = true;

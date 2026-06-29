@@ -180,9 +180,11 @@ async def ai_chat(
     }
 
     # ── Resolve which LiteLLM tier the email CHAT should use (per-account) ──
-    # The chat panel uses its own chat_model setting (default tier-balanced),
-    # independent of rule evaluation and draft writing.
-    chat_model = "tier-balanced"
+    # The chat panel uses its own chat_model setting (default tier-powerful — a
+    # strong tool-caller, matching _DEFAULT_TASK_MODELS["chat"]), independent of
+    # rule evaluation and draft writing.  This fallback only applies when there
+    # is no account_id or the per-account lookup fails.
+    chat_model = "tier-powerful"
     if req.account_id:
         try:
             from gateway.routes.email.automation.assistant import (  # noqa: PLC0415

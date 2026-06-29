@@ -15,6 +15,7 @@ import {
 } from "@/lib/sessions";
 import type { Mem0Memory } from "@/lib/memory";
 import { buildEmailAssistantPersona } from "@/app/email/lib/emailAssistantPersona";
+import { getAssistantSettings } from "@/app/email/lib/api";
 import AgentChat from "@/components/AgentChat";
 import type { ArtifactEntry } from "@/hooks/useAgentChat";
 import ArtifactSidebar, { type FileEntry } from "@/components/ArtifactSidebar";
@@ -534,6 +535,28 @@ function ChatPageInner() {
         : undefined,
     [activeAgentName, emailAccounts],
   );
+
+  // Lock the email-assistant chat to the account's configured chat_model — the
+  // SAME single source of truth the email app uses (Assistant → Settings →
+  // Models) — so the agent runs on the SAME model regardless of which surface
+  // launched it.  The chat app has no account selector, so this only applies
+  // when the user has exactly one account (mirrors the emailContext account
+  // resolution in the AgentChat render below).
+  const emailChatAccountId =
+    emailAccounts.length === 1 ? emailAccounts[0].id : null;
+  // Default to the documented email-chat default (tier-powerful) so a send during
+  // the brief settings-fetch window uses a sensible model instead of "auto"
+  // (which the backend would coerce to a different tier). Refined to the
+  // account's saved chat_model once the fetch resolves; kept on lookup failure.
+  const [emailChatModel, setEmailChatModel] = useState<string | undefined>("tier-powerful");
+  useEffect(() => {
+    if (activeAgentName !== "email-assistant" || !emailChatAccountId) return;
+    let cancelled = false;
+    getAssistantSettings(emailChatAccountId)
+      .then((s) => { if (!cancelled) setEmailChatModel(s.chat_model || "tier-powerful"); })
+      .catch(() => { /* keep the tier-powerful default on lookup failure */ });
+    return () => { cancelled = true; };
+  }, [activeAgentName, emailChatAccountId]);
   const [showPicker, setShowPicker] = useState(false);
   // Desktop: collapsible side panel.  Mobile: drawer-based (never a sidebar).
   const [sessionPanelOpen, setSessionPanelOpen] = useState(true);
@@ -872,6 +895,14 @@ function ChatPageInner() {
                       }
                     : undefined
                 }
+                // Email-assistant locks to the account chat_model (parity with
+                // the email app); all other agents keep the generic picker.
+                model={
+                  activeSession.agentName === "email-assistant"
+                    ? emailChatModel
+                    : undefined
+                }
+                lockModel={activeSession.agentName === "email-assistant"}
                 memories={memories.map((m) => m.memory)}
                 memoryUserId={userId}
                 availableAgents={agentList.length > 0 ? agentList : undefined}

@@ -188,8 +188,12 @@ async def get_assistant_settings(
             or "tier-fast",
             "draft_model": (getattr(row, "draft_model", None) if row else None)
             or "tier-powerful",
+            # Default must match _DEFAULT_TASK_MODELS["chat"] and
+            # AssistantSettingsModel.chat_model (tier-powerful — a strong
+            # tool-caller). A divergent default here previously made the email
+            # chat lock to tier-balanced while automation used tier-powerful.
             "chat_model": (getattr(row, "chat_model", None) if row else None)
-            or "tier-balanced",
+            or "tier-powerful",
             "digest_frequency": (row.digest_frequency if row else "OFF") or "OFF",
             "personal_instructions": (
                 getattr(row, "personal_instructions", None) if row else ""

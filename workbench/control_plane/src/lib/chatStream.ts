@@ -101,6 +101,43 @@ export function groupReasoningBlocks(
   return [...cur.slice(0, -1), ...parts];
 }
 
+/** Legacy separator for the `reasoning` TEXT column — kept ONLY for reading rows
+ *  written before the JSON format below. */
+const LEGACY_REASONING_SEP = "\n---\n";
+
+/**
+ * Serialize reasoning blocks for the `chat_message.reasoning` TEXT column.
+ *
+ * JSON (not a "\n---\n"-joined string): a reasoning block can itself contain a
+ * markdown "---" rule on its own line, and the old join/split silently tore such
+ * a block in two on read — misaligning every later tool's `reasoningCutoff`
+ * index.  Empty sentinel blocks are preserved (indices must stay aligned).
+ * Returns null for an empty/absent list.
+ */
+export function serializeReasoning(blocks: string[] | undefined | null): string | null {
+  if (!blocks || blocks.length === 0) return null;
+  return JSON.stringify(blocks);
+}
+
+/**
+ * Parse the `reasoning` column back into blocks.  Accepts the new JSON-array
+ * form and falls back to the legacy "\n---\n"-joined form for rows written
+ * before the change (the legacy split keeps empty segments so block indices stay
+ * aligned with each tool's `reasoningCutoff`).  Returns undefined when empty.
+ */
+export function parseReasoning(raw: string | null | undefined): string[] | undefined {
+  if (typeof raw !== "string" || !raw) return undefined;
+  if (raw.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.every((b) => typeof b === "string")) {
+        return parsed as string[];
+      }
+    } catch { /* not JSON — fall through to the legacy split */ }
+  }
+  return raw.split(LEGACY_REASONING_SEP);
+}
+
 /** Per-stream fold cursor threaded through {@link applyStreamEvent}. */
 export interface StreamFold {
   /** Index of the most recently folded answer block — text that streamed as the

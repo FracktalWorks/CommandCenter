@@ -27,7 +27,7 @@ import { parseAgentError } from "@/lib/parseAgentError";
 import { activeContextSlice, isCompactionCheckpoint } from "@/lib/tokenCount";
 import { emitAgentEvent } from "@/lib/agentEvents";
 import { applyStateSnapshot, applyStateDelta } from "@/hooks/useAgentState";
-import { applyStreamEvent, nanoid, type StreamFold } from "@/lib/chatStream";
+import { applyStreamEvent, nanoid, parseReasoning, type StreamFold } from "@/lib/chatStream";
 
 // Re-export types for backward compatibility with AgentChat.tsx imports.
 export type { ChatMessage, ToolEvent };
@@ -913,9 +913,7 @@ export function useAgentChat({
           // Split WITHOUT dropping empty segments — block indices must stay
           // aligned with each tool's reasoningCutoff (empty sentinels are
           // skipped at render time instead).
-          reasoningBlocks: (typeof r.reasoning === "string" && r.reasoning)
-            ? r.reasoning.split("\n---\n")
-            : undefined,
+          reasoningBlocks: parseReasoning(r.reasoning),
           agentState: r.agent_state ?? undefined,
           // Restore the todo list from agent_state (where it was persisted
           // by persistAssistantMessage).  Mirrors the mapping in

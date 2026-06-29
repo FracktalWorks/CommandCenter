@@ -41,6 +41,7 @@ import {
   foldForToolStart,
   unfoldTrailingAnswer,
   groupReasoningBlocks,
+  serializeReasoning,
 } from "@/lib/chatStream";
 
 export const runtime = "nodejs";
@@ -116,7 +117,7 @@ async function persistAssistantMessage(
       timestamp: Date.now(),
       tool_events: toolEvents,
       progress_lines: progressLines,
-      reasoning: reasoningBlocks.length > 0 ? reasoningBlocks.join("\n---\n") : null,
+      reasoning: serializeReasoning(reasoningBlocks),
       // Carry the structured todo list in agent_state so the Todos panel
       // survives a page refresh (no dedicated DB column needed).
       agent_state: todos.length > 0 ? { todos } : null,

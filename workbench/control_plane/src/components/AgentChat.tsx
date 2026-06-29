@@ -29,6 +29,7 @@ import ContextRing from "@/components/ContextRing";
 import MessageBubble from "@/components/MessageBubble";
 import { getMessages, saveMessages, fetchMessagesFromDb, getQueue, saveQueue, type PersistedMessage } from "@/lib/sessions";
 import { computeContextUsage, activeContextSlice, isCompactionCheckpoint } from "@/lib/tokenCount";
+import { serializeReasoning } from "@/lib/chatStream";
 import { useAgentEvents } from "@/lib/agentEvents";
 import { buildFrontendToolsAddendum } from "@/hooks/useFrontendTool";
 
@@ -727,9 +728,7 @@ export default function AgentChat({
         timestamp: m.timestamp,
         tool_events: m.toolEvents ?? [],
         progress_lines: m.progressLines ?? [],
-        reasoning: m.reasoningBlocks && m.reasoningBlocks.length > 0
-          ? m.reasoningBlocks.join("\n---\n")
-          : null,
+        reasoning: serializeReasoning(m.reasoningBlocks),
         agent_state: m.agentState ?? null,
         custom_events: m.customEvents ?? [],
         todos: m.todos ?? [],

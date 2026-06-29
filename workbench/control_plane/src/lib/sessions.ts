@@ -9,6 +9,8 @@
  * store and write-through to localStorage for instant reads on mount.
  */
 
+import { serializeReasoning, parseReasoning } from "@/lib/chatStream";
+
 export interface ChatSession {
   id: string;
   name: string;
@@ -345,11 +347,9 @@ export function saveMessages(sessionId: string, messages: PersistedMessage[]): v
     timestamp: m.timestamp,
     tool_events: m.toolEvents ?? [],
     progress_lines: m.progressLines ?? [],
-    // Gateway expects a string — join blocks with the \n---\n separator so
-    // restore can split them back with indices intact (reasoningCutoff).
-    reasoning: m.reasoningBlocks && m.reasoningBlocks.length > 0
-      ? m.reasoningBlocks.join("\n---\n")
-      : null,
+    // Stored as JSON (serializeReasoning) so a block containing a "---" line
+    // can't be torn apart on restore — see chatStream.parseReasoning.
+    reasoning: serializeReasoning(m.reasoningBlocks),
     // Persist the structured todo list inside agent_state so the Todos
     // panel survives a refresh (no dedicated DB column needed).
     agent_state: m.todos && m.todos.length > 0
@@ -409,7 +409,7 @@ export async function fetchMessagesFromDb(
     // indices stay aligned with each tool's reasoningCutoff.
     const mapped = remote.map((r) => ({
       ...r,
-      reasoningBlocks: r.reasoning ? r.reasoning.split("\n---\n") : undefined,
+      reasoningBlocks: parseReasoning(r.reasoning),
       reasoning: undefined,
       // Restore the todo list from agent_state (where it was persisted).
       todos: r.todos

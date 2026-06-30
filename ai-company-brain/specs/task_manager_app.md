@@ -1,7 +1,7 @@
 # Task Manager App — Project Plan (GTD philosophy)
 
 > **Product:** CommandCenter · **Feature:** Task Manager App (Getting Things Done) · **Updated:** 2026-06-30 · **Version:** 0.2 (planning — reviewed)
-> **Status:** 🔲 Planned — design only. No code yet. Builds on the existing `agent-task-manager` + `skill-clickup-sync` scaffolding.
+> **Status:** 🔄 UI-first build in progress on `main` — frontend slices 1–2 (Shell + Browse, Clarify) shipped against mock data; **backend not started.** Builds on the existing `agent-task-manager` + `skill-clickup-sync` scaffolding. **Resume point: Slice 3 — Engage "Now" (F4).** See §9.1.
 > **v0.2 review pass:** reconciled the GTD "lightweight project" vs "first-class project" framing (§5.1); clarified the delegation-write vs Action-Broker sequencing (§6, Phase 3); pinned the migration (`48_*`, idempotent, FK-dependency apply order — §4); placed the new GTD tools in `skill-task-gtd` over the canonical store and demoted `skill-clickup-sync` to the reference connector (§3.1); matched the gateway route to the `routes/<app>/` package precedent (§8); de-duplicated horizon levels vs projects/items (§4); aligned F1 capture channels with the phasing (Q3); added a build-order summary (§9).
 > **Sibling spec:** [`email_ai_assistant.md`](email_ai_assistant.md) — the Task Manager app deliberately mirrors its architecture (multi-panel client + AI assistant + provider abstraction + Postgres sync + automation engine + follow-up tracking). Read it first; this doc reuses its patterns by reference.
 
@@ -486,6 +486,26 @@ UI must follow `workbench/control_plane/DESIGN_SYSTEM.md` and reuse shared compo
 ---
 
 ## 9. Implementation phases
+
+### 9.1 UI-first build progress (frontend slices, on `main`)
+
+> **Decision (2026-06-30):** build the `/tasks` Control Plane app **UI-first against mock data**, feature by feature, before any backend — mirroring how the email app was built (`lib/mockData` + Zustand store + components, wired to the gateway later). All frontend code lives in **`workbench/control_plane/src/app/tasks/`** (`lib/{types,mockData,taskStore,utils}.ts`, `components/`, `page.tsx`). No backend, schema, or gateway work has started yet.
+
+| Slice | Feature(s) | Status | Key files |
+|---|---|---|---|
+| 0 — Shell | 4-panel layout | ✅ done | `page.tsx`, `ListsSidebar`, `AssistantRail` (framed) |
+| 1 — Browse | F1 capture · F3 lists/contexts | ✅ done | `CaptureBar`, `ItemList`/`ItemRow`, `ProjectsList`, `ItemDetail`, `SourceBadge` |
+| 2 — Clarify | F2 decision tree | ✅ done | `ClarifyPanel` + `taskStore.clarify` + mocked `suggestClarification` |
+| 3 — Engage "Now" | F4 | 🔲 **NEXT** | filter Next Actions by context + time + energy; unlocks the `Engage · Now` nav (currently "soon") |
+| 4 — Weekly Review | F5 | 🔲 | get-clear / get-current / get-creative wizard; surface no-next-action projects + stale waiting-fors |
+| 5 — Waiting-For / Delegate | F6 | 🔲 | dedicated monitoring view (delegation already partly in Clarify) |
+| 6 — Plan / Horizons | F8 · F7 | 🔲 | natural-planning project flow + Horizons (currently "soon") |
+| 7 — Assistant wired | F9 | 🔲 | replace the mocked suggestion + rail with the live `task-manager` agent (stream + quick actions) |
+
+**Commits on `main`:** shell+browse `9dfa571` · clarify `c26890f`.
+**Resume here →** Slice 3 (Engage "Now"). After the UI slices feel right, start the backend at §9.2 Phase 1 (migration `48_*` + interface layer + gateway), then wire the mock store to the live API.
+
+### 9.2 Backend phases (after the UI slices)
 
 **Build order at a glance** — strictly dependency-ordered, so each step is independently shippable:
 1. **Migration `48_task_manager_gtd.sql`** (the canonical store) → 2. **interface layer + ClickUp API connector** (read-only sync into `gtd_items`) → 3. **gateway `/tasks/` read endpoints** → 4. **`/tasks` UI shell** (ported from `/email`, read-only lens) → 5. **`skill-task-gtd` + extend `agent-task-manager`**. Everything in Phase 1 is **read-only**; no writes to source systems, so nothing is blocked on the Action Broker. Capture/LOCAL-CRUD/clarify (Phase 2) and delegation-write (Phase 4) come after.

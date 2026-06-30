@@ -54,7 +54,7 @@ Operators interact via a thin **Control Plane** (Next.js browser UI) with chat Q
 | **Integration OAuth framework (authorize→callback→refresh)** | ✅ Done | M2.6 — `routes/oauth.py`, HMAC-signed state, zoho-crm/clickup/google |
 | **VS Code Copilot tools in chat (HITL Q, errors, repo memory, history, GitHub search, images)** | 🔄 Mostly done | See [`specs/vscode_tool_integration.md`](specs/vscode_tool_integration.md) |
 | **Email app — multi-account client (Gmail/Outlook/IMAP) + AI assistant** | 🔄 In progress | M2.9 — `workbench/control_plane/src/app/email/`, gateway `routes/email.py`, `apps/email_ingestion/`. Outlook display bugs fixed (PR #4). See [`specs/email_ai_assistant.md`](specs/email_ai_assistant.md) |
-| **Task Manager app — GTD-philosophy client + `task-manager` agent (PM-agnostic: any tool via API or MCP)** | 🔲 Planned | Plan only. Provider interface layer (API/MCP connectors) + LOCAL-vs-SYNCED dual source. Extends `apps/agent-task-manager/` + `apps/skill-clickup-sync/` (ClickUp = first connector). M3 workstream. See [`specs/task_manager_app.md`](specs/task_manager_app.md) |
+| **Task Manager app — GTD-philosophy client + `task-manager` agent (PM-agnostic: any tool via API or MCP)** | 🔄 UI-first build | Frontend slices 1–2 (Shell+Browse, Clarify) shipped on `main` vs mock data (`workbench/control_plane/src/app/tasks/`); backend not started. Resume: Slice 3 (Engage). Plan: provider interface layer (API/MCP) + LOCAL-vs-SYNCED dual source; extends `apps/agent-task-manager/` + `apps/skill-clickup-sync/`. See [`specs/task_manager_app.md`](specs/task_manager_app.md) §9.1 |
 | `agent-sales` + `skill-zoho-ingest` | 🔲 Phase 2 | Phase 2 (WBS 2.2) |
 | `agent-triage` + `skill-gmail-capture` | 🔲 Phase 2 | Phase 2 (WBS 2.3) |
 | Meeting bot (Vexa + WhisperX) | 🔲 Phase 3 | Phase 3 (WBS 3.1) |
@@ -97,7 +97,7 @@ Status: 🟢 live/shipped · 🔄 in progress · 🔲 planned/not started. *(Ind
 | [`email_ai_assistant.md`](specs/email_ai_assistant.md) | **Email app** — overview, architecture, full classified feature inventory + pending work (the master email doc) | 🟢 live |
 | [`email_inbox_zero_parity_plan.md`](specs/email_inbox_zero_parity_plan.md) | Email — inbox-zero parity audit, remaining roadmap, deferred backend hardening | 🟢 / 🔄 |
 | [`email_app_review.md`](specs/email_app_review.md) | Email — milestone build log (chronological history M0→M9) | 🟢 log |
-| [`task_manager_app.md`](specs/task_manager_app.md) | **Task Manager app (GTD)** — PM-agnostic GTD client + `task-manager` agent; provider interface layer (API/MCP connectors), LOCAL-vs-SYNCED dual source, delegation/monitoring | 🔲 planned |
+| [`task_manager_app.md`](specs/task_manager_app.md) | **Task Manager app (GTD)** — PM-agnostic GTD client + `task-manager` agent; provider interface layer (API/MCP connectors), LOCAL-vs-SYNCED dual source, delegation/monitoring | 🔄 UI slices 1–2 (mock) |
 | [`drawio_integration.md`](specs/drawio_integration.md) | **draw.io** — architecture, components, tickets ST-DRW-01…13, roadmap (master) | 🔲 proposed |
 | [`drawio_diagram_svc_contract.md`](specs/drawio_diagram_svc_contract.md) | draw.io — wire contract for `diagram-svc` / `create_diagram` / `DrawioEditor` (freeze-gated) | 🔲 proposed |
 | [`chat_ux.md`](specs/chat_ux.md) | Chat thinking/progress/tool rendering UI | 🔄 Phase 1 ✅, Phase 2 |

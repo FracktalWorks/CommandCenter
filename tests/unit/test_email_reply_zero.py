@@ -99,7 +99,7 @@ async def test_project_status_maps_rule_to_status_with_priority() -> None:
     db = AsyncMock()
     row = SimpleNamespace(thread_id="t1", id="m1", received_at=None)
 
-    def rec(_db, _aid, tid, status, *_a):
+    def rec(_db, _aid, tid, status, *_a, **_kw):
         recorded.append((tid, status))
 
     with patch.object(_rz, "_upsert_thread_status", AsyncMock(side_effect=rec)):
@@ -181,7 +181,7 @@ async def test_project_status_respects_system_type_over_name() -> None:
     db = AsyncMock()
     row = SimpleNamespace(thread_id="t9", id="m9", received_at=None)
 
-    def rec(_d, _a, tid, st, *_rest):
+    def rec(_d, _a, tid, st, *_rest, **_kw):
         recorded.append((tid, st))
 
     with patch.object(_rz, "_upsert_thread_status", AsyncMock(side_effect=rec)):
@@ -218,7 +218,7 @@ async def test_resolve_uses_full_thread_status_over_per_message_pick() -> None:
     with patch.object(_rz, "_load_assistant_about",
                       AsyncMock(return_value=("", ""))), \
             patch.object(_rz, "_llm_determine_thread_status",
-                         AsyncMock(return_value="ACTIONED")), \
+                         AsyncMock(return_value=("ACTIONED", True))), \
             patch.object(_rz, "_conversation_rule_for_status",
                          AsyncMock(return_value=actioned)):
         out = await _rz.resolve_conversation_status_matches(
@@ -241,7 +241,7 @@ async def test_resolve_keeps_original_when_no_rule_for_status() -> None:
     with patch.object(_rz, "_load_assistant_about",
                       AsyncMock(return_value=("", ""))), \
             patch.object(_rz, "_llm_determine_thread_status",
-                         AsyncMock(return_value="ACTIONED")), \
+                         AsyncMock(return_value=("ACTIONED", True))), \
             patch.object(_rz, "_conversation_rule_for_status",
                          AsyncMock(return_value=None)):  # no enabled Actioned rule
         out = await _rz.resolve_conversation_status_matches(
@@ -276,7 +276,7 @@ async def test_backfill_handles_outbound_reply_and_engine_for_inbound() -> None:
     db = _backfill_db(latest, [])
     recorded: list[tuple[str, str]] = []
 
-    def rec(_db, _aid, tid, status, *_a):
+    def rec(_db, _aid, tid, status, *_a, **_kw):
         recorded.append((tid, status))
 
     to_reply_match = {"rule": {"name": "To Reply", "system_type": None},
@@ -301,27 +301,108 @@ async def test_backfill_handles_outbound_reply_and_engine_for_inbound() -> None:
     assert dict(recorded)["t2"] == "NEEDS_REPLY"
 
 
-async def test_backfill_caps_outbound_reply_determination() -> None:
+async def test_backfill_leaves_overflow_unwritten_for_retry() -> None:
     n = _rz._REPLY_DETERMINE_CAP + 2
     latest = [_row(f"t{i}", f"m{i}", "me@x.com", "sent") for i in range(n)]
     db = _backfill_db(latest, [])
-    overflow: list[tuple[str, str]] = []
+    writes: list[tuple[str, str]] = []
     mark = AsyncMock()
     with patch.object(_rz, "_get_db", AsyncMock(return_value=db)), \
             patch.object(_rz, "_load_assistant_about",
                          AsyncMock(return_value=("", ""))), \
             patch.object(_rz, "_mark_thread_replied", mark), \
             patch.object(_rz, "_upsert_thread_status",
-                         AsyncMock(side_effect=lambda _d, _a, tid, st, *x:
-                                   overflow.append((tid, st)))), \
+                         AsyncMock(side_effect=lambda _d, _a, tid, st, *x, **k:
+                                   writes.append((tid, st)))), \
             patch.object(_eng, "_match_email_to_rule", AsyncMock(return_value=None)):
         await m._maybe_classify_threads("acc-1")
 
-    # Newest _REPLY_DETERMINE_CAP sent threads get full AI handling; the rest
-    # fall back to a cheap AWAITING so they're still classified.
+    # Newest _REPLY_DETERMINE_CAP sent threads get the full AI determination; the
+    # rest are LEFT UNWRITTEN (no blind AWAITING) so they retry next cycle — the
+    # fix for "concluded replies stuck showing Awaiting".
     assert mark.await_count == _rz._REPLY_DETERMINE_CAP
-    assert len(overflow) == 2
-    assert all(st == "AWAITING" for _tid, st in overflow)
+    assert writes == []
+
+
+async def test_backfill_reprocesses_provisional_auto_thread() -> None:
+    # Unchanged latest message, but the stored status is a provisional LLM
+    # fallback ("· auto") — it must be re-determined, not left stuck on a guess.
+    latest = [_row("t5", "m5", "me@x.com", "sent")]
+    existing = [SimpleNamespace(
+        thread_id="t5", last_message_id="m5",
+        reason="Replied — AWAITING_REPLY · auto")]
+    db = _backfill_db(latest, existing)
+    mark = AsyncMock()
+    with patch.object(_rz, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(_rz, "_load_assistant_about",
+                         AsyncMock(return_value=("", ""))), \
+            patch.object(_rz, "_mark_thread_replied", mark), \
+            patch.object(_rz, "_upsert_thread_status", AsyncMock()), \
+            patch.object(_eng, "_match_email_to_rule", AsyncMock(return_value=None)):
+        await m._maybe_classify_threads("acc-1")
+    mark.assert_awaited_once_with("acc-1", "t5")
+
+
+# ── Determiner hardening: tail-clip, confident-flag, outbound detection ───────
+
+def test_clip_thread_keeps_tail_with_last_message() -> None:
+    sep = "\n\n---\n\n"
+    older = [f"From: a\nSubject: s\n{'x' * 1000}" for _ in range(10)]
+    last = "From: me@x.com (you sent)\nSubject: s\nTHE_LAST_REPLY"
+    thread = sep.join([*older, last])
+    clipped = _rz._clip_thread_for_prompt(thread, limit=3000)
+    # The closing reply (what decides Awaiting vs Actioned) survives the clip…
+    assert "THE_LAST_REPLY" in clipped
+    # …and the OLDEST messages are the ones dropped, with an elision marker.
+    assert clipped.startswith("[… earlier messages omitted …]")
+    assert len(clipped) <= 3000 + 64
+    # Short threads pass through untouched.
+    assert _rz._clip_thread_for_prompt("short thread") == "short thread"
+
+
+def test_fmt_thread_msg_marks_outbound_by_sender_not_just_folder() -> None:
+    # A sent reply mirrored under a non-'sent' folder is still "you sent" when
+    # the sender is the connected account — so the determiner sees the reply.
+    mine = SimpleNamespace(from_address={"email": "me@x.com"}, subject="s",
+                           body_text="hi", snippet="", folder="archive")
+    assert "(you sent)" in _rz._fmt_thread_msg(mine, "me@x.com")
+    theirs = SimpleNamespace(from_address={"email": "a@b.com"}, subject="s",
+                             body_text="hi", snippet="", folder="inbox")
+    assert "(you sent)" not in _rz._fmt_thread_msg(theirs, "me@x.com")
+    # Without self_email, falls back to folder-only (unchanged legacy behaviour).
+    assert "(you sent)" not in _rz._fmt_thread_msg(mine)
+
+
+async def test_upsert_preserve_done_guards_status_in_sql() -> None:
+    db = AsyncMock()
+    await _rz._upsert_thread_status(
+        db, "a", "t", "FYI", "m", None, "r", preserve_done=True)
+    sql = str(db.execute.call_args[0][0])
+    assert "CASE WHEN email_thread_status.status = 'DONE'" in sql
+    assert "EXCLUDED.status <> 'NEEDS_REPLY'" in sql
+    # Default (user actions / own reply) overwrites unconditionally.
+    db2 = AsyncMock()
+    await _rz._upsert_thread_status(db2, "a", "t", "FYI", "m", None, "r")
+    sql2 = str(db2.execute.call_args[0][0])
+    assert "CASE WHEN email_thread_status.status = 'DONE'" not in sql2
+    assert "status = EXCLUDED.status" in sql2
+
+
+async def test_project_status_preserves_done_on_automated_path() -> None:
+    # The inbound re-projection must pass preserve_done=True so a trailing
+    # notification can't silently re-open a thread the user marked Done.
+    captured: dict[str, object] = {}
+    db = AsyncMock()
+    row = SimpleNamespace(thread_id="t1", id="m1", received_at=None)
+
+    async def fake_upsert(_db, _aid, tid, status, *_a, **kw):
+        captured["status"] = status
+        captured["preserve_done"] = kw.get("preserve_done", False)
+
+    with patch.object(_rz, "_upsert_thread_status", AsyncMock(side_effect=fake_upsert)):
+        await _rz.project_reply_status_from_matches(
+            db, "acc-1", row, [{"rule": {"name": "FYI"}}])
+    assert captured["preserve_done"] is True
 
 
 async def test_backfill_marks_fyi_when_no_conversation_rule_matches() -> None:
@@ -329,7 +410,7 @@ async def test_backfill_marks_fyi_when_no_conversation_rule_matches() -> None:
     db = _backfill_db(latest, [])
     recorded: list[tuple[str, str]] = []
 
-    def rec(_db, _aid, tid, status, *_a):
+    def rec(_db, _aid, tid, status, *_a, **_kw):
         recorded.append((tid, status))
 
     with patch.object(_rz, "_get_db", AsyncMock(return_value=db)), \
@@ -345,7 +426,8 @@ async def test_backfill_marks_fyi_when_no_conversation_rule_matches() -> None:
 
 async def test_backfill_skips_unchanged_threads() -> None:
     latest = [_row("t4", "m4", "a@b.com", "inbox")]
-    existing = [SimpleNamespace(thread_id="t4", last_message_id="m4")]
+    existing = [SimpleNamespace(
+        thread_id="t4", last_message_id="m4", reason="Auto-classified")]
     db = _backfill_db(latest, existing)
     match = AsyncMock()
     with patch.object(_rz, "_get_db", AsyncMock(return_value=db)), \

@@ -400,15 +400,30 @@ def _addr_dict(raw: Any) -> dict:
 
 async def _upsert_thread_status(
     db: Any, account_id: str, thread_id: str, status: str,
-    msg_id: Any, msg_at: Any, reason: str,
+    msg_id: Any, msg_at: Any, reason: str, *, preserve_done: bool = False,
 ) -> None:
+    """Write a thread's Reply Zero status.
+
+    ``preserve_done`` is for the AUTOMATED re-projection paths (the live runner
+    and the backfill, via ``project_reply_status_from_matches``): a thread the
+    user MARKED DONE must not be silently re-opened by a trailing notification or
+    FYI. With it set, a DONE thread is only re-opened when the new message
+    genuinely NEEDS A REPLY (→ NEEDS_REPLY); any other determined status keeps it
+    DONE. Explicit user actions (Mark Done / Reopen / Fix) and the user's own
+    reply (``_mark_thread_replied``) leave it False, so their intent still wins."""
+    status_expr = "EXCLUDED.status"
+    if preserve_done:
+        status_expr = (
+            "CASE WHEN email_thread_status.status = 'DONE' "
+            "AND EXCLUDED.status <> 'NEEDS_REPLY' THEN 'DONE' "
+            "ELSE EXCLUDED.status END")
     await db.execute(text(
-        """INSERT INTO email_thread_status
+        f"""INSERT INTO email_thread_status
              (account_id, thread_id, status, last_message_id, last_message_at,
               reason, classified_at)
            VALUES (:aid, :tid, :st, :mid, :mat, :reason, now())
            ON CONFLICT (account_id, thread_id) DO UPDATE SET
-             status = EXCLUDED.status,
+             status = {status_expr},
              last_message_id = EXCLUDED.last_message_id,
              last_message_at = EXCLUDED.last_message_at,
              reason = EXCLUDED.reason, classified_at = now(),
@@ -489,19 +504,64 @@ async def project_reply_status_from_matches(
                           < _CONVERSATION_PRIORITY.index(chosen)):
             chosen, reason = key, (m.get("reason") or "")
     status = _CONVERSATION_RULE_STATUS.get(chosen, "FYI")
+    # preserve_done: this is an AUTOMATED inbound re-projection — never let a
+    # trailing FYI/notification silently re-open a thread the user marked DONE
+    # (only a genuine NEEDS_REPLY re-opens it). A non-empty reason keeps the row
+    # from looking like an un-determined blank so the backfill doesn't re-chew it.
     await _upsert_thread_status(
         db, account_id, thread_id, status, message_row.id,
-        getattr(message_row, "received_at", None), reason)
+        getattr(message_row, "received_at", None),
+        reason or "Auto-classified", preserve_done=True)
     return _THREAD_STATUS_MAP[chosen][1] if chosen else None
+
+
+# The thread-status judgment is hard to do well on a weak model (it's a
+# multi-turn "whose court is it?" call), and any wrong/empty answer collapses to
+# the AWAITING fallback — so default to a mid tier and ESCALATE once on failure
+# rather than silently mis-classifying. Configurable hook left for a future
+# per-account "status" model role.
+_STATUS_MODEL = "tier-balanced"
+_STATUS_MODEL_ESCALATION = "tier-powerful"
+# How many chars of the thread the determiner reads. Kept as the TAIL (newest
+# messages, incl. the user's closing reply) — never the head, which is what's
+# safe to drop as a thread grows.
+_THREAD_PROMPT_BUDGET = 8000
+
+
+def _clip_thread_for_prompt(thread_text: str, limit: int = _THREAD_PROMPT_BUDGET) -> str:
+    """Trim ``thread_text`` to its TAIL within ``limit`` chars.
+
+    The determiner reads the thread oldest→newest, but when it's too long the
+    OLDEST messages are the safe ones to drop — the status hinges on the NEWEST
+    ones (especially the user's closing reply, which callers append last). The
+    old ``thread_text[:6000]`` head-slice dropped exactly those, so a long thread
+    the user had just replied to read as ending on the other person's message →
+    AWAITING. Snap the cut to a message boundary so we never start mid-message,
+    and mark the elision."""
+    if len(thread_text) <= limit:
+        return thread_text
+    tail = thread_text[-limit:]
+    sep = "\n\n---\n\n"
+    idx = tail.find(sep)
+    if idx != -1:
+        tail = tail[idx + len(sep):]
+    return "[… earlier messages omitted …]\n\n---\n\n" + tail
 
 
 async def _llm_determine_thread_status(
     thread_text: str, user_email: str, about: str, *, user_sent_last: bool = True,
-) -> str:
+    model: str = _STATUS_MODEL,
+) -> tuple[str, bool]:
     """Determine an email thread's status from the user's perspective — a faithful
-    port of inbox-zero's aiDetermineThreadStatus. Returns TO_REPLY /
-    AWAITING_REPLY / ACTIONED (and FYI only when the user did NOT send last).
-    Defaults to AWAITING_REPLY (the user just replied) on any failure."""
+    port of inbox-zero's aiDetermineThreadStatus.
+
+    Returns ``(status, confident)`` where status is TO_REPLY / AWAITING_REPLY /
+    ACTIONED (and FYI only when the user did NOT send last). ``confident`` is
+    False when the call FELL BACK (LLM error, unparseable, or out-of-set) — the
+    fallback is always AWAITING_REPLY/FYI, a one-directional bias, so callers
+    should treat a non-confident status as PROVISIONAL (mark it for re-check)
+    instead of trusting a fabricated AWAITING. One escalating retry to a stronger
+    tier is attempted before falling back."""
     fallback = "AWAITING_REPLY" if user_sent_last else "FYI"
     try:
         from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
@@ -514,7 +574,9 @@ async def _llm_determine_thread_status(
         last_rule = (
             "\n- Because the user sent the last email, FYI is NOT an option: "
             "choose AWAITING_REPLY if waiting on a response, or ACTIONED if the "
-            "thread is complete." if user_sent_last else "")
+            "thread is complete. If the user's last message asks no question and "
+            "makes no commitment (e.g. a thank-you, acknowledgement, or 'sounds "
+            "good'), prefer ACTIONED." if user_sent_last else "")
         sys_prompt = (
             "You analyze an email thread and determine its current status from "
             "the user's perspective. It is in ONE of these mutually exclusive "
@@ -537,10 +599,11 @@ async def _llm_determine_thread_status(
             "isn't waiting for anything. Taking ownership ('I'll handle it') "
             "fulfils a request unless it promises a later deliverable."
             f"{fyi_rules}\n\n"
-            "RULES: scan the ENTIRE thread, not just the latest message; an "
-            "earlier unanswered question/request still governs. If SOMEONE ELSE "
-            "promised something → AWAITING_REPLY; if the USER promised a future "
-            "reply/deliverable → TO_REPLY."
+            "RULES: weigh the WHOLE thread but the LAST message decides whose "
+            "court the ball is in now; an earlier unanswered question/request "
+            "still governs only if the last message didn't resolve it. If "
+            "SOMEONE ELSE promised something → AWAITING_REPLY; if the USER "
+            "promised a future reply/deliverable → TO_REPLY."
             f"{last_rule}\n\n"
             'Respond with ONLY a JSON object: {"status": "<one of TO_REPLY, '
             f'AWAITING_REPLY, {fyi_opt}ACTIONED>", "rationale": "<one line>"}}.'
@@ -549,33 +612,47 @@ async def _llm_determine_thread_status(
         if (about or "").strip():
             ctx += f"{about.strip()[:1200]}\n"
         user_prompt = (
-            f"{ctx}\nEmail thread (oldest to newest):\n{thread_text[:6000]}\n\n"
+            f"{ctx}\nEmail thread (oldest to newest):\n"
+            f"{_clip_thread_for_prompt(thread_text)}\n\n"
             "Determine the current status of this thread."
         )
-        resp, _ = await acompletion_with_fallback(
-            model="tier-fast",
-            messages=[{"role": "system", "content": sys_prompt},
-                      {"role": "user", "content": user_prompt}],
-            temperature=0, max_tokens=500,
-            response_format={"type": "json_object"},
-        )
-        data = _safe_json(resp.choices[0].message.content or "")
-        st = ((data.get("status") if isinstance(data, dict) else "") or "")
-        st = st.strip().upper()
         allowed = {"TO_REPLY", "AWAITING_REPLY", "ACTIONED"}
         if not user_sent_last:
             allowed.add("FYI")
-        return st if st in allowed else fallback
+        messages = [{"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": user_prompt}]
+        # Try the configured tier, then escalate once. A wrong/empty answer here
+        # always biases AWAITING, so a second stronger attempt is cheap insurance.
+        for attempt_model in (model, _STATUS_MODEL_ESCALATION):
+            resp, _ = await acompletion_with_fallback(
+                model=attempt_model,
+                messages=messages,
+                temperature=0, max_tokens=500,
+                response_format={"type": "json_object"},
+            )
+            data = _safe_json(resp.choices[0].message.content or "")
+            st = ((data.get("status") if isinstance(data, dict) else "") or "")
+            st = st.strip().upper()
+            if st in allowed:
+                return st, True
+        return fallback, False
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.determine_status_failed", error=str(exc)[:160])
-        return fallback
+        return fallback, False
 
 
-def _fmt_thread_msg(r: Any) -> str:
+def _fmt_thread_msg(r: Any, self_email: str = "") -> str:
     frm = r.from_address if isinstance(r.from_address, dict) \
         else json.loads(r.from_address or "{}")
     sender = frm.get("name") or frm.get("email") or "?"
-    direction = "(you sent)" if (r.folder or "").lower() == "sent" else ""
+    # Outbound detection: folder='sent' OR the sender IS the connected account.
+    # A reply mirrored before it lands in the 'sent' folder (or under a
+    # provider-specific folder name) would otherwise render without "(you sent)",
+    # so the determiner couldn't tell the user replied last → AWAITING bias.
+    sender_email = (frm.get("email") or "").strip().lower()
+    is_outbound = (r.folder or "").lower() == "sent" or (
+        bool(self_email) and sender_email == self_email.strip().lower())
+    direction = "(you sent)" if is_outbound else ""
     body = (r.body_text or r.snippet or "").strip()
     return f"From: {sender} {direction}\nSubject: {r.subject or ''}\n{body[:1500]}"
 
@@ -627,8 +704,9 @@ async def resolve_conversation_status_matches(
             "SELECT email_address FROM email_accounts WHERE id = :id"
         ), {"id": account_id})).fetchone()
         acc_email = (acc.email_address if acc else "") or ""
-        thread_text = "\n\n---\n\n".join(_fmt_thread_msg(r) for r in rows)
-        status = await _llm_determine_thread_status(
+        thread_text = "\n\n---\n\n".join(
+            _fmt_thread_msg(r, acc_email) for r in rows)
+        status, _confident = await _llm_determine_thread_status(
             thread_text, acc_email, about, user_sent_last=False)
         target = await _conversation_rule_for_status(db, account_id, status)
         if not target:
@@ -744,7 +822,8 @@ async def _mark_thread_replied(
         ), {"id": account_id})).fetchone()
         acc_email = (acc.email_address if acc else "") or ""
 
-        thread_text = "\n\n---\n\n".join(_fmt_thread_msg(r) for r in rows)
+        thread_text = "\n\n---\n\n".join(
+            _fmt_thread_msg(r, acc_email) for r in rows)
         # The just-sent reply usually isn't mirrored locally yet — append it so
         # the AI judges the thread WITH the reply (accurate Awaiting vs Actioned
         # immediately). Skip if the latest stored message is already a sent one.
@@ -755,10 +834,15 @@ async def _mark_thread_replied(
                 f"Subject: {sent_subject or latest.subject or ''}\n"
                 f"{sent_body[:1500]}"
             )
-        status = await _llm_determine_thread_status(
+        status, confident = await _llm_determine_thread_status(
             thread_text, acc_email, about, user_sent_last=True)
         rz_status, new_cat = _THREAD_STATUS_MAP.get(
             status, ("AWAITING", "Awaiting Reply"))
+        # When the determination FELL BACK (LLM error/unparseable) it always
+        # yields AWAITING — a guess, not a judgment. Tag the reason "· auto" so
+        # the backfill re-determines it next cycle instead of trusting it as a
+        # final Awaiting (which is the user's exact "should be Actioned" complaint).
+        reason = f"Replied — {status}" if confident else f"Replied — {status} · auto"
 
         # Anchor "last activity" to the reply we just sent (it isn't in the DB
         # yet) so the follow-up clock + awaiting_days start from NOW — not from
@@ -770,8 +854,7 @@ async def _mark_thread_replied(
             datetime.now(timezone.utc) if reply_pending else latest.received_at
         )
         await _upsert_thread_status(
-            db, account_id, thread_id, rz_status, latest.id,
-            last_at, f"Replied — {status}")
+            db, account_id, thread_id, rz_status, latest.id, last_at, reason)
         await db.commit()
 
         # Reconcile the thread to a SINGLE conversation label (mutually exclusive,
@@ -885,10 +968,13 @@ async def apply_thread_status_correction(
 
 
 # How many newly-detected outbound replies (sent threads) get the full AI status
-# determination + label swap per backfill cycle. Bounds AI/provider cost; older
-# sent threads beyond the cap fall back to a cheap AWAITING. New replies are
-# processed newest-first, so genuine just-sent replies always get full handling.
-_REPLY_DETERMINE_CAP = 15
+# determination + label swap per backfill cycle. Replies are bounded USER actions
+# (you don't send hundreds a cycle), so this cap is generous. Threads past the cap
+# are LEFT UNWRITTEN — NOT stamped a blind AWAITING — so they keep
+# `existing[thread] != latest_id` and are re-tried next cycle until they get a
+# real determination (newest-first, so the most recent drain first). Stamping a
+# blind AWAITING here was the bug that showed concluded replies as "Awaiting".
+_REPLY_DETERMINE_CAP = 40
 # How many inbound gap threads get an engine match (classification) per cycle.
 _BACKFILL_INBOUND_CAP = 25
 
@@ -906,12 +992,13 @@ async def _maybe_classify_threads(account_id: str) -> None:
     determination + label swap as a CC-initiated reply (``_mark_thread_replied``),
     so a reply sent from Gmail/Outlook directly still reaches Awaiting/Actioned and
     loses its "To Reply" label — inbox-zero handleOutboundMessage parity. This is
-    capped per cycle; older sent threads beyond the cap fall back to a cheap
-    AWAITING. Inbound-last gap threads are matched by the engine (which applies the
-    Reply Zero pre-filter that keeps newsletters/broadcasts out of "To Reply") and
-    projected via the matched conversation-status rule (FYI when none matches).
-    Only touches threads whose latest message changed and caps work per cycle.
-    Best-effort (never raises)."""
+    capped per cycle; sent threads beyond the cap are left UNWRITTEN and re-tried
+    next cycle (never blind-stamped AWAITING). Inbound-last gap threads are matched
+    by the engine (which applies the Reply Zero pre-filter that keeps newsletters/
+    broadcasts out of "To Reply") and projected via the matched conversation-status
+    rule (FYI when none matches). Touches threads whose latest message changed OR
+    whose stored status is provisional ("· auto" — a prior LLM fallback), so a
+    guessed AWAITING self-heals. Caps work per cycle. Best-effort (never raises)."""
     db = await _get_db()
     try:
         from gateway.routes.email.automation.engine import (  # noqa: PLC0415
@@ -932,11 +1019,15 @@ async def _maybe_classify_threads(account_id: str) -> None:
         ), {"aid": account_id})).fetchall()
         if not rows:
             return
+        # Carry last_message_id + reason so we can both (a) skip threads whose
+        # latest message is unchanged, and (b) STILL re-determine a thread whose
+        # stored status is PROVISIONAL — a "· auto" reason means a prior LLM
+        # fallback guessed AWAITING. Those self-heal here instead of sticking.
         existing = {
-            r.thread_id: str(r.last_message_id)
+            r.thread_id: (str(r.last_message_id), r.reason or "")
             for r in (await db.execute(text(
-                "SELECT thread_id, last_message_id FROM email_thread_status "
-                "WHERE account_id = :aid"
+                "SELECT thread_id, last_message_id, reason "
+                "FROM email_thread_status WHERE account_id = :aid"
             ), {"aid": account_id})).fetchall()
         }
         about, _sig = await _load_assistant_about(db, account_id)
@@ -948,20 +1039,20 @@ async def _maybe_classify_threads(account_id: str) -> None:
         gap_inbound = []
         sent_handled = 0
         for r in rows:
-            if existing.get(r.thread_id) == str(r.id):
-                continue  # latest message unchanged → status still valid
+            prev = existing.get(r.thread_id)
+            provisional = bool(prev) and prev[1].endswith("· auto")
+            if prev and prev[0] == str(r.id) and not provisional:
+                continue  # latest message unchanged + confidently classified
             folder = (r.folder or "").lower()
             if folder == "sent":
                 # New outbound message (CC reply OR native-client reply) →
                 # re-determine status with the AI and swap labels, exactly like a
-                # CC send. Capped; overflow falls back to a cheap AWAITING.
+                # CC send. Capped per cycle; threads past the cap are left
+                # UNWRITTEN (not blind-AWAITING) so they retry next cycle.
                 if sent_handled < _REPLY_DETERMINE_CAP:
                     await _mark_thread_replied(account_id, r.thread_id)
                     sent_handled += 1
-                else:
-                    await _upsert_thread_status(
-                        db, account_id, r.thread_id, "AWAITING", r.id,
-                        r.received_at, "")
+                # else: overflow — leave it for the next cycle, never guess.
             elif folder == "inbox":
                 gap_inbound.append(r)
         await db.commit()

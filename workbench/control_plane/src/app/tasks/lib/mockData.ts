@@ -3,7 +3,15 @@
 // fully explorable with no backend. When the gateway `/tasks` API lands, the
 // store swaps these for live data; nothing else changes.
 
-import { GtdContext, GtdItem, GtdProject } from "./types";
+import { GtdContext, GtdItem, GtdProject, Person } from "./types";
+
+/** Teammates available for delegation (the Waiting-For directory). */
+export const MOCK_PEOPLE: Person[] = [
+  { name: "Sai Kumar", email: "sai@fracktal.in", accent: "primary" },
+  { name: "Priya", email: "priya@fracktal.in", accent: "accent" },
+  { name: "Arjun", email: "arjun@fracktal.in", accent: "primary" },
+  { name: "Meera", email: "meera@fracktal.in", accent: "accent" },
+];
 
 export const MOCK_CONTEXTS: GtdContext[] = [
   { name: "@computer", icon: "Monitor" },

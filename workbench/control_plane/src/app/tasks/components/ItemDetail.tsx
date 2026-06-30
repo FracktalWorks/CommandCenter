@@ -19,6 +19,7 @@ import {
   relativeTime,
 } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
+import { ClarifyPanel } from "./ClarifyPanel";
 
 const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
 
@@ -32,6 +33,12 @@ export function ItemDetail() {
   const item = selectedItemId
     ? items.find((i) => i.id === selectedItemId)
     : undefined;
+
+  // Inbox items get the Clarify decision tree (F2); everything else is read-only.
+  // Keyed by id so the wizard resets when a different item is selected.
+  if (item && item.disposition === "INBOX") {
+    return <ClarifyPanel key={item.id} item={item} />;
+  }
 
   if (item) {
     const project = item.projectId

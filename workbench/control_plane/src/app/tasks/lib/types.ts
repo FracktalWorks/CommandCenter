@@ -91,6 +91,10 @@ export interface GtdItem {
 
   createdAt: string;
   updatedAt: string;
+  /** set when disposition becomes DONE (e.g. the 2-minute rule) */
+  completedAt?: string;
+  /** set when the item leaves the inbox (clarified) */
+  clarifiedAt?: string;
 }
 
 /** The left-rail views. */

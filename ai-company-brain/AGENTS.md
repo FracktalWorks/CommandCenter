@@ -54,7 +54,7 @@ Operators interact via a thin **Control Plane** (Next.js browser UI) with chat Q
 | **Integration OAuth framework (authorize→callback→refresh)** | ✅ Done | M2.6 — `routes/oauth.py`, HMAC-signed state, zoho-crm/clickup/google |
 | **VS Code Copilot tools in chat (HITL Q, errors, repo memory, history, GitHub search, images)** | 🔄 Mostly done | See [`specs/vscode_tool_integration.md`](specs/vscode_tool_integration.md) |
 | **Email app — multi-account client (Gmail/Outlook/IMAP) + AI assistant** | 🔄 In progress | M2.9 — `workbench/control_plane/src/app/email/`, gateway `routes/email.py`, `apps/email_ingestion/`. Outlook display bugs fixed (PR #4). See [`specs/email_ai_assistant.md`](specs/email_ai_assistant.md) |
-| **Task Manager app — GTD-philosophy client + `task-manager` agent (ClickUp/Asana/Jira)** | 🔲 Planned | Plan only. Extends existing `apps/agent-task-manager/` + `apps/skill-clickup-sync/`. M3 workstream. See [`specs/task_manager_app.md`](specs/task_manager_app.md) |
+| **Task Manager app — GTD-philosophy client + `task-manager` agent (PM-agnostic: any tool via API or MCP)** | 🔲 Planned | Plan only. Provider interface layer (API/MCP connectors) + LOCAL-vs-SYNCED dual source. Extends `apps/agent-task-manager/` + `apps/skill-clickup-sync/` (ClickUp = first connector). M3 workstream. See [`specs/task_manager_app.md`](specs/task_manager_app.md) |
 | `agent-sales` + `skill-zoho-ingest` | 🔲 Phase 2 | Phase 2 (WBS 2.2) |
 | `agent-triage` + `skill-gmail-capture` | 🔲 Phase 2 | Phase 2 (WBS 2.3) |
 | Meeting bot (Vexa + WhisperX) | 🔲 Phase 3 | Phase 3 (WBS 3.1) |

@@ -8,7 +8,7 @@
 
 ## 0. One-paragraph thesis
 
-The Task Manager app is the **"Getting Things Done" operating layer** on top of the company's real project-management tool (ClickUp first; Asana / Jira later). The app is the *methodology surface* — capture, clarify, organize, reflect, engage. The **`task-manager` MAF agent** is the *cognitive engine* — it does the GTD "clarify/organize" thinking a person normally does by hand (define the next action, detect projects, assign contexts, run the weekly review, draft delegation follow-ups). For **collaborative** work, ClickUp/Asana/Jira remain the **source of truth** (per CommandCenter constraint #8) and CommandCenter is a read-mostly mirror with approval-gated writes through the Action Broker; for **personal/solo** work, projects can be **LOCAL** — stored and owned entirely in CommandCenter Postgres — and both sources render in one unified interface (see §5.1). The relationship is exactly the email app's: *client UI + AI assistant + provider backend* — here the "providers" are PM tools instead of mailboxes, and "inbox zero" becomes **"mind like water."**
+The Task Manager app is the **"Getting Things Done" operating layer** on top of *whatever* project-management tool(s) the company connects — ClickUp, Asana, Jira, Linear, Monday, or anything that exposes an MCP server — through a single **provider interface layer** (§5.2). The app is the *methodology surface* — capture, clarify, organize, reflect, engage. The **`task-manager` MAF agent** is the *cognitive engine* — it does the GTD "clarify/organize" thinking a person normally does by hand (define the next action, detect projects, assign contexts, run the weekly review, draft delegation follow-ups). For **collaborative** work, ClickUp/Asana/Jira remain the **source of truth** (per CommandCenter constraint #8) and CommandCenter is a read-mostly mirror with approval-gated writes through the Action Broker; for **personal/solo** work, projects can be **LOCAL** — stored and owned entirely in CommandCenter Postgres — and both sources render in one unified interface (see §5.1). The relationship is exactly the email app's: *client UI + AI assistant + provider backend* — here the "providers" are PM tools instead of mailboxes, and "inbox zero" becomes **"mind like water."**
 
 ---
 
@@ -115,7 +115,7 @@ The Task Manager app reuses the email app's three-tier shape verbatim: **Control
 │  │ sidebar  │  / Waiting /  │ Project planner │  + quick     │  │
 │  │ + Horizon│  Projects…)   │                 │  actions     │  │
 │  └──────────┴───────────────┴─────────────────┴──────────────┘  │
-│  /integrations — connect ClickUp / Asana / Jira workspaces       │
+│  /integrations — connect ANY PM workspace (API key/OAuth or MCP) │
 └──────────────────────────┬──────────────────────────────────────┘
                            │ HTTP/SSE
 ┌──────────────────────────▼──────────────────────────────────────┐
@@ -132,13 +132,19 @@ The Task Manager app reuses the email app's three-tier shape verbatim: **Control
 └──────────────────────────┬──────────────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────────────┐
-│            TASK INGESTION (apps/task_ingestion/)                 │
-│  Providers (canonical GTD model ↔ native PM schema):            │
-│  ├── ClickUpProvider   (ClickUp REST v2 — builds on skill-clickup-sync) │
-│  ├── AsanaProvider     (Asana REST)                             │
-│  └── JiraProvider      (Jira Cloud REST)                        │
+│         PROVIDER INTERFACE LAYER (apps/task_ingestion/)          │
+│  ONE canonical contract: BaseTaskProvider (GTD model ↔ native)  │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │  Connector kinds (a PM tool plugs in via EITHER):        │    │
+│  │   • API connector  — REST/OAuth adapter per tool         │    │
+│  │       e.g. ClickUp v2 (reuses skill-clickup-sync), Asana,│    │
+│  │       Jira, Linear, Trello, Monday … (registry-driven)   │    │
+│  │   • MCP connector  — generic adapter over the tool's MCP │    │
+│  │       server; maps MCP tools → BaseTaskProvider methods  │    │
+│  │  Per-provider descriptor: capabilities + field-map JSON  │    │
+│  └─────────────────────────────────────────────────────────┘    │
 │  Sync engine: polling + incremental (webhooks later), maps      │
-│  provider tasks → gtd_items, two-way write-back (via Action Broker)│
+│  provider tasks → gtd_items; two-way write-back via Action Broker│
 └──────────────────────────┬──────────────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────────────┐
@@ -148,22 +154,24 @@ The Task Manager app reuses the email app's three-tier shape verbatim: **Control
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+> **PM-agnostic by design.** Nothing above the interface layer knows which PM tool is connected. A new backend is added by registering a **connector** (API or MCP) plus a **provider descriptor** (capabilities + field-map) — no changes to the schema, gateway, agent, or UI. ClickUp is the **first reference connector**, not the model.
+
 ### 3.1 Agent architecture (`agent-task-manager`, extended)
 
-The agent already exists (`apps/agent-task-manager/`, ClickUp Q&A only). We extend its tool surface from read-only status queries to the full GTD engine — mirroring how `agent-email-assistant` grew the inbox-zero tool surface.
+The agent already exists (`apps/agent-task-manager/`, read-only status Q&A over the first connected PM tool). We extend its tool surface from read-only status queries to the full GTD engine — mirroring how `agent-email-assistant` grew the inbox-zero tool surface. **The agent calls the canonical GTD tools, never a specific PM tool's API** — the interface layer resolves which connector (API or MCP) actually serves each call, so the agent is provider-agnostic.
 
 ```
-EXISTING tools (skill-clickup-sync):
+EXISTING tools (first reference connector):
   get_task_status(task_id)              list_project_tasks(project_name)
 
-NEW GTD tools (skill-task-gtd / extended skill-clickup-sync):
-  capture(text, source)                 → create inbox item
+NEW GTD tools (provider-agnostic — resolved by the interface layer):
+  capture(text, source)                 → create inbox item (LOCAL or synced)
   clarify(item_id)                      → GTD decision-tree proposal (structured)
   organize(item_id, disposition, fields)→ apply clarify decision
   next_action(context?, time?, energy?) → recommend what to do now (4-criteria)
   list_inbox() / list_next(context)     list_waiting() / list_someday() / list_projects()
   define_project(outcome)               → natural-planning → outcome + next actions
-  delegate(item_id, assignee)           → assign in PM tool + add to Waiting For
+  delegate(item_id, assignee)           → assign in the connected PM tool + add to Waiting For
   monitor_delegated(person?)            → status of delegated/others' tasks + blockers
   draft_follow_up(waiting_id)           → nudge message for a stale waiting-for
   weekly_review()                       → 3-phase review, returns structured summary
@@ -173,23 +181,26 @@ Injected tools (from executor): memory (Mem0/Graphiti), web_search, call_agent
   → hand-off to `email-assistant` (send a nudge), `sales`, etc.
 ```
 
-All writes (create/assign/move/close in ClickUp/Asana/Jira) flow through the **Action Broker** once it's live; until then they are **suggest-only** (draft the change, user applies) — consistent with C-04 and the email app's "create drafts, never auto-send" stance.
+All writes (create/assign/move/close in the connected PM tool) flow through the **Action Broker** once it's live; until then they are **suggest-only** (draft the change, user applies) — consistent with C-04 and the email app's "create drafts, never auto-send" stance. Writes to **LOCAL** items/projects are direct (CommandCenter owns them).
 
 ---
 
 ## 4. Canonical GTD data model (Postgres)
 
-The core decision (same as email): **sync provider tasks into a canonical Postgres store with a GTD-semantic overlay**, rather than proxying the PM API on every render. GTD semantics (disposition, context, energy, horizon link) live in *our* columns; the provider task is the source of truth for title/status/assignee/dates.
+The core decision (same as email): **sync provider tasks into a canonical Postgres store with a GTD-semantic overlay**, rather than proxying the PM API on every render. GTD semantics (disposition, context, energy, horizon link) live in *our* columns; for synced items the provider task is the source of truth for title/status/assignee/dates. **The schema is provider-agnostic** — `provider` is a free string registered at connect time, not an enum.
 
 ```sql
--- A connected PM-tool workspace (multi-account, like email_accounts)
+-- A connected PM-tool workspace (multi-account, multi-provider, like email_accounts)
 CREATE TABLE task_accounts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id TEXT NOT NULL,
-    provider TEXT NOT NULL,              -- 'clickup' | 'asana' | 'jira'
-    workspace_id TEXT NOT NULL,          -- ClickUp team / Asana workspace / Jira cloud id
+    provider TEXT NOT NULL,              -- free string: 'clickup' | 'asana' | 'jira' | 'linear' | 'monday' | …
+    connector_kind TEXT NOT NULL DEFAULT 'api', -- 'api' (REST/OAuth adapter) | 'mcp' (talks to the tool's MCP server)
+    workspace_id TEXT NOT NULL,          -- provider-native workspace/team/cloud id
     label TEXT,                          -- display name e.g. 'Fracktal ClickUp'
-    credentials_encrypted TEXT NOT NULL, -- AES-256-GCM JSON blob (token/oauth)
+    credentials_encrypted TEXT NOT NULL, -- AES-256-GCM JSON blob (api key / oauth / mcp endpoint+auth)
+    capabilities JSONB DEFAULT '{}',     -- what this backend supports (create, assign, custom_fields, members, webhooks…)
+    field_map JSONB DEFAULT '{}',        -- canonical GTD field ↔ native field mapping (status, context, project, assignee)
     sync_enabled BOOLEAN DEFAULT true,
     sync_interval_secs INTEGER DEFAULT 300,
     last_synced_at TIMESTAMPTZ,
@@ -202,8 +213,8 @@ CREATE TABLE task_accounts (
 -- The unified GTD item cache (the "task_messages" of this app)
 CREATE TABLE gtd_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source TEXT NOT NULL DEFAULT 'LOCAL',-- 'LOCAL' (GTD-only) | 'CLICKUP' | 'ASANA' | 'JIRA'
-    account_id UUID REFERENCES task_accounts(id) ON DELETE CASCADE, -- NULL for LOCAL items
+    source TEXT NOT NULL DEFAULT 'LOCAL',-- 'LOCAL' (GTD-only, we own it) | 'SYNCED' (mirrors a connected provider)
+    account_id UUID REFERENCES task_accounts(id) ON DELETE CASCADE, -- NULL for LOCAL; which provider for SYNCED
     provider_task_id TEXT,               -- native id; NULL for LOCAL items (we are source of truth)
     provider_url TEXT,
     title TEXT NOT NULL,
@@ -239,9 +250,9 @@ CREATE INDEX idx_gtd_items_search ON gtd_items USING GIN(to_tsvector('english', 
 -- GTD projects (lightweight: an outcome needing >1 action)
 CREATE TABLE gtd_projects (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source TEXT NOT NULL DEFAULT 'LOCAL',-- 'LOCAL' (GTD-only) | 'CLICKUP' | 'ASANA' | 'JIRA'
+    source TEXT NOT NULL DEFAULT 'LOCAL',-- 'LOCAL' (GTD-only, we own it) | 'SYNCED' (mirrors a connected provider)
     account_id UUID REFERENCES task_accounts(id) ON DELETE CASCADE, -- NULL for LOCAL projects
-    provider_ref TEXT,                   -- ClickUp List/Project · Asana Project · Jira Epic; NULL for LOCAL
+    provider_ref TEXT,                   -- native project/list/epic id; NULL for LOCAL
     outcome TEXT NOT NULL,               -- the "wild success" statement
     purpose TEXT,                        -- natural-planning: why
     status TEXT DEFAULT 'ACTIVE',        -- ACTIVE | SOMEDAY | DONE | DROPPED
@@ -288,65 +299,97 @@ CREATE TABLE gtd_reviews (
 
 ---
 
-## 5. Backend integration — mapping GTD ↔ ClickUp / Asana / Jira
+## 5. Backend integration — the provider interface layer (PM-agnostic)
 
-This is the crux of the "brainstorm." GTD is a *semantic* model; each PM tool has a *different* native schema. A **provider abstraction** (exactly like `BaseEmailProvider`) maps the canonical GTD model to each tool. The agent does the fuzzy translation; the provider does the API mechanics.
+This is the crux of the "brainstorm." GTD is a *semantic* model; every PM tool has a *different* native schema and a *different* way in (REST, OAuth, or an MCP server). We do **not** build the app around any one tool. Instead we define **one canonical contract — `BaseTaskProvider` — and an interface layer that adapts any backend to it**, via either an API connector or an MCP connector. Everything above the interface layer (schema, gateway, agent, UI) is provider-agnostic. ClickUp is simply the first connector we ship.
 
-### 5.1 Dual-source model — LOCAL vs ClickUp, one interface
+### 5.1 Dual-source model — LOCAL vs SYNCED, one interface
 
-**Projects and tasks come from two sources, rendered in a single unified interface.** GTD projects are **first-class and at the same level as ClickUp projects** — not subtasks. The difference is *where the project/task is stored and who is the source of truth*:
+**Projects and tasks come from two sources, rendered in a single unified interface.** GTD projects are **first-class and at the same level as a provider's projects** — not subtasks. The difference is *where the project/task is stored and who is the source of truth*:
 
 | Source | Source of truth | When | Storage |
 |---|---|---|---|
 | **LOCAL** (GTD-only) | **CommandCenter Postgres** | Personal / solo work only *I* touch | `gtd_projects`/`gtd_items` with `source='LOCAL'`, no provider ref. Full CRUD locally. |
-| **CLICKUP** (mirrored) | **ClickUp** | Collaborative work involving other people | ClickUp is authoritative; a local copy in `gtd_*` **auto-syncs** both ways. |
+| **SYNCED** (mirrored) | **The connected PM tool** (whichever) | Collaborative work involving other people | The provider is authoritative; a local copy in `gtd_*` **auto-syncs** both ways through the interface layer. |
 
 Rules of the model (from the product owner):
-- **Default sync target by collaboration.** Anything collaborated on → **ClickUp**. Anything purely personal/solo → **LOCAL**. The agent applies this default; the user can override.
-- **Decide at add-time.** When a task or project is captured/created, the app resolves its **sync target** (LOCAL vs ClickUp). Captured *inbox* items can stay LOCAL until clarified, then commit to a target.
-- **Projects not in ClickUp are created and tracked locally** — they live entirely in Postgres and never leave CommandCenter unless promoted.
-- **Promotion (LOCAL → ClickUp).** A personal project that gains collaborators can be **pushed to ClickUp**: create it there (Action-Broker-gated), flip `source` to `CLICKUP`, store the `provider_ref`, and start two-way sync. (Demotion is possible but rare; not v1.)
-- **Unified queries.** Every list/view (`Inbox`, `Next`, `Projects`, `Waiting`, …) reads across both sources; `source` is just a badge/filter, not a separate app.
+- **Default sync target by collaboration.** Anything collaborated on → **the connected PM tool**. Anything purely personal/solo → **LOCAL**. The agent applies this default; the user can override.
+- **Decide at add-time.** When a task or project is captured/created, the app resolves its **sync target** (LOCAL vs which connected provider). Captured *inbox* items can stay LOCAL until clarified, then commit to a target. If several PM tools are connected, the target includes *which* provider/workspace.
+- **Projects not in any connected tool are created and tracked locally** — they live entirely in Postgres and never leave CommandCenter unless promoted.
+- **Promotion (LOCAL → SYNCED).** A personal project that gains collaborators can be **pushed to a connected PM tool**: create it there (Action-Broker-gated), flip `source` to `SYNCED`, set `account_id` + `provider_ref`, and start two-way sync. (Demotion is possible but rare; not v1.)
+- **Unified queries.** Every list/view (`Inbox`, `Next`, `Projects`, `Waiting`, …) reads across all sources; `source`/provider is just a badge/filter, not a separate app.
 
 ```
                     ┌──────────── /tasks unified interface ────────────┐
    capture/clarify  │  Inbox · Next@ctx · Projects · Waiting · Someday  │
         │           └───────────────┬───────────────┬──────────────────┘
         ▼                           │               │
-  decide sync target          LOCAL projects   CLICKUP projects
-  (collab? → ClickUp)         (Postgres only)  (ClickUp = SoT, local mirror auto-syncs)
+  decide sync target          LOCAL projects   SYNCED projects (any connected tool)
+  (collab? → PM tool)         (Postgres only)  (provider = SoT, local mirror auto-syncs)
                                                       ▲
-                                          two-way sync via Action Broker
+                              interface layer ── two-way sync via Action Broker
 ```
 
-### 5.2 Construct mapping
+### 5.2 The interface layer — connect any PM tool via API or MCP
 
-| GTD construct | ClickUp | Asana | Jira | Notes |
+A backend is plugged in by registering a **connector** plus a **provider descriptor**. The connector is one of two kinds; the descriptor tells the layer what the backend can do and how its fields map to GTD.
+
+**Connector kinds:**
+
+| Kind | How it connects | Implementation | Use when |
+|---|---|---|---|
+| **API connector** | The tool's REST API + OAuth/API-key | A per-tool adapter implementing `BaseTaskProvider` with `httpx` (ClickUp v2 reuses `skill-clickup-sync/core.py`; Asana, Jira, Linear, Monday … each add an adapter). | The tool has a documented REST API and we want full control / webhooks. |
+| **MCP connector** | The tool's **MCP server** | A single **generic `MCPTaskProvider`** that connects to the MCP endpoint, discovers its tools, and maps them onto the `BaseTaskProvider` methods (list/create/update/assign/members). Reuses CommandCenter's existing MCP plumbing (`mcp_servers=` config, ToolSearch). | The tool ships an MCP server, or we want zero-code onboarding of a new backend. |
+
+**Provider descriptor** (stored per connection in `task_accounts.capabilities` + `field_map`):
+- **`capabilities`** — what the backend supports: `{list, create, update, assign, custom_fields, members, others_tasks, webhooks, …}`. The layer reads this and **degrades gracefully** — e.g. a read-only or no-custom-fields backend still works as a GTD lens; missing capabilities just disable the corresponding write paths.
+- **`field_map`** — the canonical GTD field ↔ native field mapping (which native status = `NEXT`/`WAITING`/`DONE`, which field carries `@context`, what object is a "project", how an assignee is referenced). This is what makes the mapping in §5.3 *configuration*, not code.
+
+```
+   agent / gateway / UI  ─────────────►  BaseTaskProvider (canonical contract)
+                                                 │
+                 ┌───────────────────────────────┼───────────────────────────────┐
+                 ▼                                ▼                               ▼
+        API connector (ClickUp)         API connector (Asana/Jira/…)      MCP connector (generic)
+         httpx + OAuth/key                 httpx + OAuth                  talks to tool's MCP server
+                 └───── descriptor: capabilities + field_map per connection ──────┘
+```
+
+A connection is created from `/integrations`: pick a provider (or "Generic MCP"), choose connector kind, supply credentials (API key/OAuth, or MCP endpoint+auth), and the layer probes capabilities + seeds a default field-map the user can tweak.
+
+### 5.3 Construct mapping (examples — driven by each connection's field-map)
+
+The GTD↔native mapping below is **illustrative**; the real mapping for each connection lives in its `field_map`. Columns show how three common tools *could* map — a new tool just supplies its own.
+
+| GTD construct | ClickUp (example) | Asana (example) | Jira (example) | Notes |
 |---|---|---|---|---|
-| **Inbox** | Tasks with status `Inbox` in a dedicated "Inbox" List, or a custom field `gtd_disposition=INBOX` | Tasks in an "Inbox" section / `gtd` custom field | Issues in a triage status / `gtd` field | Recommend a **custom field** `gtd_disposition` so we don't fight the tool's own statuses. |
-| **Next Action** | status `Next` + custom dropdown `@context` | section "Next" + tag context | status `Selected` + label context | Context as **tag/label** or dropdown custom field. |
+| **Inbox** | status `Inbox` / custom field `gtd_disposition=INBOX` | "Inbox" section / `gtd` field | triage status / `gtd` field | Prefer a **custom field** `gtd_disposition` so we don't fight the tool's own statuses. |
+| **Next Action** | status `Next` + dropdown `@context` | "Next" section + tag | status `Selected` + label | Context as **tag/label** or dropdown custom field. |
 | **Context (`@`)** | Tag or dropdown custom field | Tag | Label / component | Free-form, user-defined set. |
-| **Project (GTD)** | A **List/Project** (same level as a ClickUp project) | A **Project** | An **Epic** | First-class, *same level* as a ClickUp project. A **LOCAL** GTD project has no provider ref and lives only in Postgres; a **CLICKUP** project mirrors a real ClickUp project. See §5.1. |
-| **Waiting For** | status `Waiting` + assignee = other person | section "Waiting" + assignee | status `Waiting`/`In Review` + assignee | Delegation = assign to someone else and mirror into `gtd_waiting`. |
-| **Calendar (hard date)** | Due date + `is_hard_date` custom field | Due date | Due date | Only *must-happen-that-day* items; sync to actual calendar later. |
-| **Someday/Maybe** | status `Someday` or a "Someday" List | "Someday" section | Backlog status | Reviewed weekly. |
-| **Reference** | ClickUp **Doc** / not a task | Asana doc/attachment | Confluence/attachment | Non-actionable → route to Docs or the entity graph / Mem0 memory, **not** the task list. |
+| **Project (GTD)** | a **List/Project** (same level as a native project) | a **Project** | an **Epic** | First-class, *same level* as the tool's project object. A **LOCAL** project has no provider ref; a **SYNCED** project mirrors a real one. See §5.1. |
+| **Waiting For** | status `Waiting` + assignee = other person | "Waiting" section + assignee | `Waiting`/`In Review` + assignee | Delegation = assign to someone else and mirror into `gtd_waiting`. |
+| **Calendar (hard date)** | Due date + `is_hard_date` field | Due date | Due date | Only *must-happen-that-day* items. |
+| **Someday/Maybe** | status `Someday` / "Someday" List | "Someday" section | Backlog status | Reviewed weekly. |
+| **Reference** | Doc / not a task | doc/attachment | Confluence/attachment | Non-actionable → route to Docs or the entity graph / Mem0 memory, **not** the task list. |
 | **Areas of Focus (H2)** | **Space** / Folder | Team / Portfolio | Project category | The roles you maintain. |
-| **Goals (H3)** | ClickUp **Goals** feature | Asana **Goals** | (custom / Advanced Roadmaps) | Native goal objects where they exist. |
-| **Vision/Purpose (H4/H5)** | Doc / `gtd_horizons` table | Doc | Doc | Mostly lives in our `gtd_horizons`; PM tools have no native slot. |
+| **Goals (H3)** | **Goals** feature | **Goals** | (custom / Advanced Roadmaps) | Native goal objects where they exist; else `gtd_horizons`. |
+| **Vision/Purpose (H4/H5)** | Doc / `gtd_horizons` | Doc | Doc | Mostly lives in our `gtd_horizons`; PM tools have no native slot. |
 
-### 5.3 Why a canonical overlay (not raw pass-through)
+### 5.4 Why a canonical overlay (not raw pass-through)
 
-The GTD layer (`disposition`, `context`, `energy`, `next_action`, horizon links) is **not natively representable** the same way across three tools — and we don't want to pollute the customer's ClickUp with CommandCenter-only fields beyond a couple of opt-in custom fields. So:
+The GTD layer (`disposition`, `context`, `energy`, `next_action`, horizon links) is **not natively representable** the same way across tools — and we don't want to pollute the customer's workspace with CommandCenter-only fields beyond a couple of opt-in custom fields. So:
 
-- **Canonical store (`gtd_items`) holds the GTD overlay.** Provider holds title/status/assignee/dates as source of truth.
-- **Two-way sync:** provider → canonical on every sync (status, assignee, dates); canonical → provider for the *few* fields we write back (a `gtd_disposition` / `@context` custom field if the user opts in, plus assignment on delegate, plus close/move on do/complete). All write-back is **Action-Broker-gated**.
-- **Graceful degradation:** if a workspace forbids custom fields, the GTD overlay stays purely in CommandCenter and we never write it back — the app still works as a GTD lens over read-only data (the existing `agent-task-manager` already does read-only).
+- **Canonical store (`gtd_items`) holds the GTD overlay.** The provider holds title/status/assignee/dates as source of truth (for SYNCED items).
+- **Two-way sync:** provider → canonical on every sync (status, assignee, dates); canonical → provider for the *few* fields we write back (a `gtd_disposition`/`@context` custom field if the user opts in, plus assignment on delegate, plus close/move on do/complete). All write-back is **Action-Broker-gated** and **capability-gated** (skipped if the backend doesn't support it).
+- **Graceful degradation:** if a backend forbids custom fields or is read-only, the GTD overlay stays purely in CommandCenter and we never write it back — the app still works as a GTD lens over read-only data (the existing `agent-task-manager` already does read-only).
 
-### 5.4 Provider abstraction (mirrors `BaseEmailProvider`)
+### 5.5 The canonical contract (`BaseTaskProvider`, mirrors `BaseEmailProvider`)
+
+Both connector kinds (API and MCP) implement the *same* interface, so nothing upstream cares which is in play.
 
 ```python
-class BaseTaskProvider:
+class BaseTaskProvider:                                   # implemented by API adapters AND MCPTaskProvider
+    descriptor: ProviderDescriptor                        # capabilities + field_map for this connection
     async def list_tasks(self, since: str | None) -> list[CanonicalTask]: ...
     async def get_task(self, provider_task_id: str) -> CanonicalTask: ...
     async def create_task(self, task: CanonicalTask) -> str: ...          # via Action Broker
@@ -354,7 +397,9 @@ class BaseTaskProvider:
     async def assign_task(self, id: str, assignee: str) -> None: ...       # delegation
     async def list_members(self) -> list[Member]: ...                      # for delegation+monitoring
     async def list_others_tasks(self, person: str) -> list[CanonicalTask]: # monitoring
-# ClickUpProvider builds directly on the existing skill-clickup-sync core.py (already hits ClickUp v2).
+    async def list_projects(self) -> list[CanonicalProject]: ...
+# API: ClickUpProvider builds on skill-clickup-sync/core.py; AsanaProvider/JiraProvider/… add adapters.
+# MCP: MCPTaskProvider connects to the tool's MCP server and maps discovered tools → these methods.
 ```
 
 ---
@@ -368,7 +413,7 @@ This is the explicitly-requested capability: not just *my* tasks, but **delegati
 | **Delegate** | `delegate(item_id, assignee)` → assign the task to a teammate in the PM tool (Action-Broker-gated write) → create a `gtd_waiting` row with `waiting_on`, `delegated_at`, `expected_by`. The item leaves my Next Actions, appears on my **Waiting For**. |
 | **Monitor others' tasks** | Sync pulls tasks where `assignee != me` (`gtd_items.is_mine = false`) for the people/projects I track. A **Delegated / Team** view shows their status, due dates, and movement since last sync. |
 | **Blocker & overdue detection** | Background pass flags `gtd_waiting` rows past `expected_by`, and others' tasks that are overdue or stalled (no status change in N days). Surfaced in the Weekly Review and as "What am I waiting on?" |
-| **Follow-up drafting** | `draft_follow_up(waiting_id)` → agent drafts a nudge (chat/email/ClickUp comment). Hand-off to `email-assistant` via `call_agent` to actually send (draft-only until approved — same posture as Reply Zero). |
+| **Follow-up drafting** | `draft_follow_up(waiting_id)` → agent drafts a nudge (chat / email / a comment on the task in whatever PM tool holds it). Hand-off to `email-assistant` via `call_agent` to actually send (draft-only until approved — same posture as Reply Zero). |
 | **Project monitoring** | Roll up a tracked project's tasks: % done, overdue count, next milestone, who's blocking. The agent answers "What's the status of the Alpha project and who's behind?" with citations (extends the existing `list_project_tasks`). |
 
 **Waiting-For Zero** is the goal state: every delegated item is either progressing, nudged, or escalated — nothing silently rotting.
@@ -407,7 +452,8 @@ UI must follow `workbench/control_plane/DESIGN_SYSTEM.md` and reuse shared compo
 
 | Method | Path | Description |
 |---|---|---|
-| `GET/POST/DELETE/PATCH` | `/tasks/accounts[/{id}]` | CRUD PM-tool workspace connections (multi-account) |
+| `GET/POST/DELETE/PATCH` | `/tasks/accounts[/{id}]` | CRUD PM-tool connections (multi-account, multi-provider; connector_kind `api`\|`mcp`) |
+| `GET` | `/tasks/providers` | Registered connector types + capability probe for a candidate connection |
 | `GET` | `/tasks/items` | List/search items (disposition, context, account, page) |
 | `POST` | `/tasks/items` | Capture a new inbox item |
 | `GET/PATCH` | `/tasks/items/{id}` | Detail / organize (set disposition, context, next_action…) |
@@ -419,25 +465,26 @@ UI must follow `workbench/control_plane/DESIGN_SYSTEM.md` and reuse shared compo
 | `POST` | `/tasks/sync` | Manual sync trigger |
 | `POST` | `/tasks/ai/chat` | Assistant chat (SSE) |
 | `POST` | `/tasks/ai/quick-action` | clarify-inbox / next-action / review / monitor |
-| `GET` | `/tasks/oauth/{provider}/authorize` · `/callback` | OAuth connect (ClickUp/Asana/Jira) |
+| `GET` | `/tasks/oauth/{provider}/authorize` · `/callback` | OAuth connect for API connectors (provider is dynamic) |
 
 ---
 
 ## 9. Implementation phases
 
-### Phase 1 — Foundation (boilerplate + read-only GTD lens)
+### Phase 1 — Foundation (interface layer + read-only GTD lens)
 - [ ] This plan (done) + DOX index updates.
-- [ ] `task_accounts` + `gtd_items` + `gtd_projects` + `gtd_waiting` + `gtd_contexts`/`gtd_horizons`/`gtd_reviews` schema (numbered migration), incl. the `source` (LOCAL/CLICKUP/…) discriminator and nullable provider linkage.
-- [ ] Gateway `routes/tasks.py` skeleton.
-- [ ] `apps/task_ingestion/` provider abstraction + **ClickUpProvider** (reuse `skill-clickup-sync/core.py`).
-- [ ] ClickUp sync → `gtd_items` (read-only; `is_mine` + others' tasks).
+- [ ] `task_accounts` + `gtd_items` + `gtd_projects` + `gtd_waiting` + `gtd_contexts`/`gtd_horizons`/`gtd_reviews` schema (numbered migration), incl. the `source` (LOCAL/SYNCED) discriminator, nullable provider linkage, and the per-connection `capabilities`/`field_map` descriptor.
+- [ ] Gateway `routes/tasks.py` skeleton + `/tasks/providers` capability probe.
+- [ ] `apps/task_ingestion/` **interface layer**: `BaseTaskProvider` contract + connector registry + provider descriptor (capabilities + field-map).
+- [ ] **First API connector — ClickUp** (reuse `skill-clickup-sync/core.py`) as the reference implementation; sync → `gtd_items` (read-only; `is_mine` + others' tasks).
 - [ ] `/tasks` Control Plane app ported from the email 4-panel shell (mock → live).
-- [ ] Extend `agent-task-manager` instructions/tools toward the GTD surface.
+- [ ] Extend `agent-task-manager` instructions/tools toward the (provider-agnostic) GTD surface.
 
-### Phase 2 — Capture + Clarify + Organize (the GTD core)
+### Phase 2 — Capture + Clarify + Organize + generic MCP connector
 - [ ] Capture bar + universal inbox (F1).
 - [ ] **LOCAL project/task CRUD** — create & track personal/solo projects entirely in Postgres (`source='LOCAL'`).
-- [ ] **Sync-target resolution** at add/clarify time — default LOCAL vs CLICKUP by collaboration; user override; **promotion** LOCAL→ClickUp when a project gains collaborators (§5.1).
+- [ ] **Sync-target resolution** at add/clarify time — default LOCAL vs a connected provider by collaboration; user override; **promotion** LOCAL→SYNCED when a project gains collaborators (§5.1).
+- [ ] **Generic `MCPTaskProvider`** — connect any PM tool that exposes an MCP server; map its tools → `BaseTaskProvider`; `/integrations` "Generic MCP" connect flow + capability probe.
 - [ ] Agent **clarify** tool + ClarifyPanel — GTD decision tree with structured output (F2). Pattern-match the email AI-rules engine's "NL → structured" design.
 - [ ] Organize: Next-Actions-by-context, Projects, Calendar, Someday, Reference routing (F3).
 - [ ] Assistant chat + quick actions (F9).
@@ -448,13 +495,13 @@ UI must follow `workbench/control_plane/DESIGN_SYSTEM.md` and reuse shared compo
 - [ ] **Delegate & Monitor / Waiting-For Zero** (F6): delegate, monitor others' tasks, blocker/overdue detection, follow-up drafting via `call_agent` → `email-assistant`.
 - [ ] Natural-planning project flow (F8).
 
-### Phase 4 — Horizons, multi-provider, write-back
+### Phase 4 — Horizons, more connectors, write-back
 - [ ] Horizons of Focus (F7) + Goals mapping.
-- [ ] **AsanaProvider** + **JiraProvider**.
-- [ ] Two-way write-back through the **Action Broker** (assignment, status/move, opt-in custom fields). Until then: suggest-only.
-- [ ] Webhook/push sync (ClickUp webhooks) replacing polling.
+- [ ] Additional **API connectors** (Asana / Jira / Linear / Monday …) — each just an adapter + default field-map.
+- [ ] Two-way write-back through the **Action Broker** (capability-gated: assignment, status/move, opt-in custom fields). Until then: suggest-only.
+- [ ] Webhook/push sync (per-provider, where the descriptor advertises `webhooks`) replacing polling.
 
-> **Sequencing note:** autonomous write-back to ClickUp/Asana/Jira is **blocked on the Action Broker** (project plan Phase 4 / WBS 2.4). Phases 1–3 here are read + suggest-only, which fits the current platform state and constraints C-03/C-04. This app is a natural **M3 (Full Agent Ecosystem)** workstream alongside the email app.
+> **Sequencing note:** autonomous write-back to any connected PM tool is **blocked on the Action Broker** (project plan Phase 4 / WBS 2.4). Phases 1–3 here are read + suggest-only, which fits the current platform state and constraints C-03/C-04. This app is a natural **M3 (Full Agent Ecosystem)** workstream alongside the email app.
 
 ---
 
@@ -462,12 +509,13 @@ UI must follow `workbench/control_plane/DESIGN_SYSTEM.md` and reuse shared compo
 
 | Decision | Rationale |
 |---|---|
-| **Dual-source, one interface: LOCAL (Postgres SoT) vs CLICKUP (mirrored)** | Personal/solo projects live only in CommandCenter; collaborative projects mirror ClickUp. Sync target chosen at add-time, default by collaboration, promotable LOCAL→ClickUp. All sources render in one unified `/tasks` UI. See §5.1. |
-| **GTD overlay in canonical Postgres; for synced projects, PM tool = source of truth** | Same as email (`email_messages`): fast queries, FTS, offline, and GTD semantics that don't exist natively. Honors constraint #8 (read-mostly mirror) for the CLICKUP source; LOCAL items are wholly ours. |
-| **Provider abstraction (ClickUp/Asana/Jira)** | Direct parallel to `BaseEmailProvider`. ClickUp first (skill + agent already exist). |
+| **PM-agnostic interface layer; connect via API or MCP** | One `BaseTaskProvider` contract; a backend plugs in as an **API connector** (REST/OAuth adapter) or a generic **MCP connector** (talks to the tool's MCP server), described by a per-connection `capabilities`+`field_map`. Nothing upstream knows which tool is connected. ClickUp is the first connector, not the model. See §5.2. |
+| **Dual-source, one interface: LOCAL (Postgres SoT) vs SYNCED (mirrored)** | Personal/solo projects live only in CommandCenter; collaborative projects mirror whichever PM tool holds them. Sync target chosen at add-time, default by collaboration, promotable LOCAL→SYNCED. All sources render in one unified `/tasks` UI. See §5.1. |
+| **GTD overlay in canonical Postgres; for synced projects, the PM tool = source of truth** | Same as email (`email_messages`): fast queries, FTS, offline, and GTD semantics that don't exist natively. Honors constraint #8 (read-mostly mirror) for SYNCED items; LOCAL items are wholly ours. |
+| **Mapping is config (`field_map`), not code** | Each connection declares how GTD fields map to its native schema, so new tools need no schema/UI/agent changes — just an adapter (or nothing, for MCP) + a default field-map. |
 | **Agent does Clarify/Organize cognition** | The GTD "thinking" (next action, project detection, context tagging) is exactly an LLM strength; user stays in approve/edit control — same posture as the email AI-rules engine. |
 | **Writes via Action Broker, suggest-only until then** | Constraints C-03/C-04. Mirrors email's "create drafts, never auto-send." |
-| **Reuse `agent-task-manager` + `skill-clickup-sync`** | Don't fork; extend the existing agent's tool surface (like `agent-email-assistant` grew). |
+| **Reuse `agent-task-manager` + `skill-clickup-sync` as the first connector** | Don't fork; extend the existing agent's tool surface (like `agent-email-assistant` grew) and wrap the existing ClickUp skill as the reference API connector. |
 | **Delegation = Waiting-For + monitoring, modeled on Reply Zero** | Proven pattern in the email app; "Waiting-For Zero" is "Reply Zero" for tasks. |
 | **Custom field `gtd_disposition`/`@context` is opt-in** | Avoid polluting customer workspaces; degrade to CC-only overlay if disallowed. |
 
@@ -477,22 +525,25 @@ UI must follow `workbench/control_plane/DESIGN_SYSTEM.md` and reuse shared compo
 
 | Risk / question | Note |
 |---|---|
-| **R1 — GTD project granularity (RESOLVED 2026-06-30)** | GTD projects are **first-class, same level as ClickUp projects** — not subtasks. Each project/task has a **source**: `LOCAL` (personal/solo, Postgres = SoT) or `CLICKUP` (collaborative, mirrored). Both render in one unified interface; sync target is chosen at add-time, default by collaboration, promotable. See §5.1. |
+| **R1 — GTD project granularity (RESOLVED 2026-06-30)** | GTD projects are **first-class, same level as a provider's projects** — not subtasks. Each project/task has a **source**: `LOCAL` (personal/solo, Postgres = SoT) or `SYNCED` (collaborative, mirrors a connected PM tool). Both render in one unified interface; sync target is chosen at add-time, default by collaboration, promotable. See §5.1. |
 | **R2 — Multi-user tool scoping** | Same caveat the email app hit: agent tools must resolve "which user" reliably (ContextVar + `ACB_AGENT_USER_EMAIL` fallback). Fine single-user; needs work for multi-user. |
 | **R3 — Write-back depends on Action Broker** | Phases 1–3 are read/suggest-only by design; full two-way write is gated on WBS 2.4. |
-| **R4 — Custom-field availability** | Some workspaces restrict custom fields → GTD overlay stays CC-only. Handled by graceful degradation. |
-| **R5 — Provider API quota / rate limits** | ClickUp/Asana/Jira all rate-limit; reuse the email app's incremental-sync + backoff approach. |
-| **Q1 — Which provider after ClickUp?** | Asana vs Jira first? (Codebase currently ClickUp-only.) |
+| **R4 — Capability variance across backends** | Tools differ wildly (custom fields, members, others'-tasks, webhooks). Handled by the per-connection `capabilities` descriptor + graceful degradation — missing capabilities disable only the matching write paths. |
+| **R5 — MCP-server quality varies** | A tool's MCP server may expose an incomplete/unstable tool surface (e.g. no assignment or no incremental list). The capability probe must detect this and fall back to read-only; prefer an API connector when the MCP surface is too thin. |
+| **R6 — Provider API/MCP quota + rate limits** | All backends rate-limit; reuse the email app's incremental-sync + backoff approach per connector. |
+| **Q1 — Which API connectors after ClickUp?** | Asana / Jira / Linear / Monday — driven by which tools we actually connect. (Codebase currently ClickUp-only.) |
 | **Q2 — Calendar source** | Hard-date items → Google Calendar sync, or stay in-app? |
 | **Q3 — Capture channels for v1** | Global hotkey + chat-to-task are cheap; email-to-task reuses the email app; voice/mobile later. |
+| **Q4 — Default field-maps** | Ship curated default `field_map`s per known tool, or always probe + let the user confirm the mapping on connect? |
 
 ---
 
 ## 12. Success criteria (v1 — through Phase 3)
 
-- [ ] User connects a ClickUp workspace; their tasks + teammates' tracked tasks sync into `/tasks` within 5 min.
-- [ ] **Dual source works in one view:** a personal LOCAL project and a collaborative ClickUp project both appear in the unified Projects list, badged by source; a LOCAL project can be promoted to ClickUp.
-- [ ] **Capture** an item in < 5 seconds from a global hotkey; the app resolves its sync target (LOCAL vs ClickUp) with a sensible default.
+- [ ] User connects a PM workspace (ClickUp via API connector); their tasks + teammates' tracked tasks sync into `/tasks` within 5 min.
+- [ ] **A second backend connects with no app changes** — via the generic MCP connector (or a second API adapter), proving the interface layer is provider-agnostic.
+- [ ] **Dual source works in one view:** a personal LOCAL project and a collaborative SYNCED project both appear in the unified Projects list, badged by source; a LOCAL project can be promoted to a connected PM tool.
+- [ ] **Capture** an item in < 5 seconds from a global hotkey; the app resolves its sync target (LOCAL vs which connected provider) with a sensible default.
 - [ ] **Clarify**: the agent proposes a correct GTD disposition + a concrete next action for an inbox item; user approves with one click.
 - [ ] **Organize**: Next Actions are browsable by `@context`; every active project shows whether it has a next action.
 - [ ] **Engage**: "Now" view returns a sensible action given context + time + energy.

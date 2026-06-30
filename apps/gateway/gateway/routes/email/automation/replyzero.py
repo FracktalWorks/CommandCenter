@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -14,6 +15,7 @@ from fastapi import BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from gateway.routes.email.automation.assistant import _load_assistant_about
 from gateway.routes.email.automation.drafting import _agent_draft_reply, _is_no_draft
+from gateway.routes.email.automation.identity import sender_scope
 from gateway.routes.email.core import (
     _assert_account_owner,
     _get_db,
@@ -187,8 +189,7 @@ async def ai_chat(
     chat_model = "tier-powerful"
     if req.account_id:
         try:
-            from gateway.routes.email.automation.assistant import (  # noqa: PLC0415
-                _account_models)
+            from gateway.routes.email.automation.assistant import _account_models  # noqa: PLC0415
             _mdb = await _get_db()
             try:
                 chat_model = (await _account_models(_mdb, req.account_id))["chat"]
@@ -444,6 +445,14 @@ _THREAD_STATUS_MAP = {
     "FYI": ("FYI", "FYI"),
 }
 
+# Friendly reason prefix per recompute_thread_status trigger (shown in the UI).
+_TRIGGER_REASON = {
+    "outbound": "Replied",
+    "inbound": "Inbound",
+    "backfill": "Backfill",
+    "reopen": "Reopened",
+}
+
 # The four conversation-status category labels are MUTUALLY EXCLUSIVE per thread
 # (inbox-zero's removeConflictingThreadStatusLabels): when a thread's status
 # changes, the other three must be cleared so an old label never lingers on the
@@ -601,7 +610,10 @@ async def _llm_determine_thread_status(
             f"{fyi_rules}\n\n"
             "RULES: weigh the WHOLE thread but the LAST message decides whose "
             "court the ball is in now; an earlier unanswered question/request "
-            "still governs only if the last message didn't resolve it. If "
+            "still governs only if the last message didn't resolve it. A message "
+            "marked '(you sent)' or '(your organisation sent)' is from YOUR side — "
+            "a reply from the user's own organisation counts as your side having "
+            "acted, so the ball is then in the OTHER party's court. If "
             "SOMEONE ELSE promised something → AWAITING_REPLY; if the USER "
             "promised a future reply/deliverable → TO_REPLY."
             f"{last_rule}\n\n"
@@ -641,20 +653,35 @@ async def _llm_determine_thread_status(
         return fallback, False
 
 
-def _fmt_thread_msg(r: Any, self_email: str = "") -> str:
+def _msg_scope(
+    r: Any, self_email: str,
+    extra_domains: frozenset[str] | set[str] = frozenset(),
+) -> str:
+    """Direction of one stored message: 'self' (the owner sent it — folder='sent'
+    or the from-address is the owner), 'internal' (the owner's organisation sent
+    it — same/extra domain), or 'external'. The 'sent' folder is authoritative for
+    'self' so an owner reply mirrored before its from-address resolves is still
+    recognised as ours."""
+    if (getattr(r, "folder", "") or "").lower() == "sent":
+        return "self"
+    raw = getattr(r, "from_address", None)
+    frm = raw if isinstance(raw, dict) else json.loads(raw or "{}")
+    return sender_scope(frm.get("email", ""), self_email, extra_domains)
+
+
+def _fmt_thread_msg(
+    r: Any, self_email: str = "",
+    extra_domains: frozenset[str] | set[str] = frozenset(),
+) -> str:
     frm = r.from_address if isinstance(r.from_address, dict) \
         else json.loads(r.from_address or "{}")
     sender = frm.get("name") or frm.get("email") or "?"
-    # Outbound detection: folder='sent' OR the sender IS the connected account.
-    # A reply mirrored before it lands in the 'sent' folder (or under a
-    # provider-specific folder name) would otherwise render without "(you sent)",
-    # so the determiner couldn't tell the user replied last → AWAITING bias.
-    sender_email = (frm.get("email") or "").strip().lower()
-    is_outbound = (r.folder or "").lower() == "sent" or (
-        bool(self_email) and sender_email == self_email.strip().lower())
-    direction = "(you sent)" if is_outbound else ""
+    direction = {
+        "self": " (you sent)",
+        "internal": " (your organisation sent)",
+    }.get(_msg_scope(r, self_email, extra_domains), "")
     body = (r.body_text or r.snippet or "").strip()
-    return f"From: {sender} {direction}\nSubject: {r.subject or ''}\n{body[:1500]}"
+    return f"From: {sender}{direction}\nSubject: {r.subject or ''}\n{body[:1500]}"
 
 
 async def _conversation_rule_for_status(
@@ -678,36 +705,33 @@ async def resolve_conversation_status_matches(
 
     The per-message engine match decides only whether the email is a conversation
     (it picked one of the conversation-status rules). When it did, re-determine the
-    status from the FULL thread with ``aiDetermineThreadStatus``
-    (``_llm_determine_thread_status``, user_sent_last=False) and replace the
-    conversation match with the rule for the determined status — so the RIGHT
-    rule's actions run (e.g. an Actioned thread doesn't auto-draft a reply) and the
-    right label is applied. Non-conversation matches pass through unchanged. On any
-    failure (or no enabled rule for the determined status) returns the input
-    unchanged, so classification degrades to the per-message pick."""
+    status from the FULL thread (via ``build_thread_context`` — the same context
+    the other triggers use, with ``user_sent_last`` taken from the real last
+    message, so a thread your side already replied to can resolve to ACTIONED) and
+    replace the conversation match with the rule for the determined status — so the
+    RIGHT rule's actions run (e.g. an Actioned thread doesn't auto-draft a reply)
+    and the right label is applied. Non-conversation matches pass through
+    unchanged. On any failure (or no enabled rule for the determined status)
+    returns the input unchanged, so classification degrades to the per-message
+    pick."""
     if not matches or not any(_match_conversation_key(m) for m in matches):
         return matches
     thread_id = getattr(message_row, "thread_id", None)
     if not thread_id:
         return matches
     try:
-        rows = (await db.execute(text(
-            """SELECT from_address, subject, body_text, snippet, folder
-               FROM email_messages
-               WHERE account_id = :aid AND thread_id = :tid
-               ORDER BY received_at ASC NULLS FIRST"""
-        ), {"aid": account_id, "tid": thread_id})).fetchall()
-        if not rows:
-            return matches
         about, _sig = await _load_assistant_about(db, account_id)
         acc = (await db.execute(text(
             "SELECT email_address FROM email_accounts WHERE id = :id"
         ), {"id": account_id})).fetchone()
         acc_email = (acc.email_address if acc else "") or ""
-        thread_text = "\n\n---\n\n".join(
-            _fmt_thread_msg(r, acc_email) for r in rows)
+        ctx = await build_thread_context(
+            db, account_id, thread_id, acc_email)
+        if ctx is None:
+            return matches
         status, _confident = await _llm_determine_thread_status(
-            thread_text, acc_email, about, user_sent_last=False)
+            ctx.thread_text, acc_email, about,
+            user_sent_last=ctx.our_side_last)
         target = await _conversation_rule_for_status(db, account_id, status)
         if not target:
             return matches
@@ -785,6 +809,115 @@ async def _reconcile_thread_labels(
             target.provider_message_id, add=[keep_label], remove=[])
 
 
+# ── Thread-status authority ──────────────────────────────────────────────────
+# One place builds a thread's context and one function determines + writes its
+# status, so every trigger (a sent reply, a new inbound, the backfill, a reopen)
+# decides identically — over the WHOLE thread, with direction resolved the same
+# way — instead of each call site assembling the thread and guessing
+# ``user_sent_last`` for itself.
+
+
+@dataclass
+class ThreadContext:
+    """A thread prepared for the status determiner.
+
+    ``our_side_last`` — the last message was sent by YOUR side (the owner or the
+    owner's organisation), so FYI is off and the determiner weighs Awaiting vs
+    Actioned. ``thread_text`` is direction-annotated (you / your organisation /
+    external) and ``last_message_id``/``last_message_at`` are what the status row
+    should be stamped with (``now()`` when an unsynced just-sent reply is folded
+    in)."""
+    thread_id: str
+    last_message_id: Any
+    last_message_at: Any
+    our_side_last: bool
+    has_external: bool
+    thread_text: str
+
+
+async def build_thread_context(
+    db: Any, account_id: str, thread_id: str, self_email: str, *,
+    extra_domains: frozenset[str] | set[str] = frozenset(),
+    pending_reply: tuple[str, str] | None = None,
+) -> ThreadContext | None:
+    """Load a thread and render it for the determiner, once, for every caller.
+
+    ``pending_reply`` is ``(body, subject)`` of a reply the owner JUST sent that
+    isn't mirrored into ``email_messages`` yet — it's appended as the final
+    ``(you sent)`` message so the determination is accurate immediately (and
+    ``our_side_last`` becomes True). Returns None when the thread has no rows."""
+    rows = (await db.execute(text(
+        """SELECT id, from_address, subject, body_text, snippet, folder,
+                  received_at
+           FROM email_messages
+           WHERE account_id = :aid AND thread_id = :tid
+           ORDER BY received_at ASC NULLS FIRST"""
+    ), {"aid": account_id, "tid": thread_id})).fetchall()
+    if not rows:
+        return None
+    latest = rows[-1]
+    parts = [_fmt_thread_msg(r, self_email, extra_domains) for r in rows]
+    scopes = [_msg_scope(r, self_email, extra_domains) for r in rows]
+    has_external = any(s == "external" for s in scopes)
+    our_side_last = scopes[-1] != "external"
+
+    reply_pending = bool(pending_reply and pending_reply[0]) and (
+        (latest.folder or "").lower() != "sent")
+    if reply_pending:
+        body, subject = pending_reply  # type: ignore[misc]
+        parts.append(
+            f"From: {self_email} (you sent)\n"
+            f"Subject: {subject or latest.subject or ''}\n{body[:1500]}")
+        our_side_last = True
+
+    # Anchor last activity to the just-sent reply (not yet in the DB) so the
+    # follow-up clock starts from NOW, not the inbound message we replied to.
+    last_at = (datetime.now(timezone.utc)
+               if reply_pending else latest.received_at)
+    return ThreadContext(
+        thread_id=thread_id, last_message_id=latest.id, last_message_at=last_at,
+        our_side_last=our_side_last, has_external=has_external,
+        thread_text="\n\n---\n\n".join(parts))
+
+
+async def recompute_thread_status(
+    db: Any, account_id: str, thread_id: str, *, trigger: str,
+    about: str = "", acc_email: str = "",
+    extra_domains: frozenset[str] | set[str] = frozenset(),
+    pending_reply: tuple[str, str] | None = None,
+    model: str = _STATUS_MODEL,
+) -> tuple[str, str] | None:
+    """THE thread-status authority: build the context, determine the status over
+    the whole thread (with ``user_sent_last`` taken from the real last message —
+    not assumed by the trigger), and write it through the single writer.
+
+    ``trigger`` is one of ``outbound`` / ``inbound`` / ``backfill`` / ``reopen``.
+    Automated triggers (inbound / backfill) PRESERVE a user's DONE; a reply the
+    owner sent (outbound) or an explicit reopen may move it. A low-confidence
+    (fallback) determination is tagged ``· auto`` so the backfill re-checks it.
+    Returns ``(rz_status, label)`` or None when the thread has no messages.
+    Caller commits; reconciling provider labels is the caller's job."""
+    ctx = await build_thread_context(
+        db, account_id, thread_id, acc_email,
+        extra_domains=extra_domains, pending_reply=pending_reply)
+    if ctx is None:
+        return None
+    status, confident = await _llm_determine_thread_status(
+        ctx.thread_text, acc_email, about,
+        user_sent_last=ctx.our_side_last, model=model)
+    rz_status, label = _THREAD_STATUS_MAP.get(
+        status, ("AWAITING", "Awaiting Reply"))
+    prefix = _TRIGGER_REASON.get(trigger, trigger.capitalize())
+    # A low-confidence (fallback) determination keeps the "· auto" marker so the
+    # backfill re-checks it instead of trusting a guessed AWAITING.
+    reason = f"{prefix} — {status}" + ("" if confident else " · auto")
+    await _upsert_thread_status(
+        db, account_id, thread_id, rz_status, ctx.last_message_id,
+        ctx.last_message_at, reason,
+        preserve_done=(trigger in ("inbound", "backfill")))
+    return rz_status, label
+
+
 async def _mark_thread_replied(
     account_id: str, thread_id: str,
     sent_body: str | None = None, sent_subject: str | None = None,
@@ -805,16 +938,6 @@ async def _mark_thread_replied(
         return
     db = await _get_db()
     try:
-        rows = (await db.execute(text(
-            """SELECT id, provider_message_id, from_address, subject, body_text,
-                      snippet, categories, folder, received_at
-               FROM email_messages
-               WHERE account_id = :aid AND thread_id = :tid
-               ORDER BY received_at ASC NULLS FIRST"""
-        ), {"aid": account_id, "tid": thread_id})).fetchall()
-        if not rows:
-            return
-        latest = rows[-1]
         about, _sig = await _load_assistant_about(db, account_id)
         acc = (await db.execute(text(
             "SELECT email_address, provider, credentials_encrypted "
@@ -822,40 +945,17 @@ async def _mark_thread_replied(
         ), {"id": account_id})).fetchone()
         acc_email = (acc.email_address if acc else "") or ""
 
-        thread_text = "\n\n---\n\n".join(
-            _fmt_thread_msg(r, acc_email) for r in rows)
-        # The just-sent reply usually isn't mirrored locally yet — append it so
-        # the AI judges the thread WITH the reply (accurate Awaiting vs Actioned
-        # immediately). Skip if the latest stored message is already a sent one.
-        reply_pending = bool(sent_body) and (latest.folder or "").lower() != "sent"
-        if reply_pending:
-            thread_text += (
-                f"\n\n---\n\nFrom: {acc_email} (you sent)\n"
-                f"Subject: {sent_subject or latest.subject or ''}\n"
-                f"{sent_body[:1500]}"
-            )
-        status, confident = await _llm_determine_thread_status(
-            thread_text, acc_email, about, user_sent_last=True)
-        rz_status, new_cat = _THREAD_STATUS_MAP.get(
-            status, ("AWAITING", "Awaiting Reply"))
-        # When the determination FELL BACK (LLM error/unparseable) it always
-        # yields AWAITING — a guess, not a judgment. Tag the reason "· auto" so
-        # the backfill re-determines it next cycle instead of trusting it as a
-        # final Awaiting (which is the user's exact "should be Actioned" complaint).
-        reason = f"Replied — {status}" if confident else f"Replied — {status} · auto"
-
-        # Anchor "last activity" to the reply we just sent (it isn't in the DB
-        # yet) so the follow-up clock + awaiting_days start from NOW — not from
-        # the inbound message we replied to. Otherwise replying to an OLD thread
-        # would immediately look overdue and a manual follow-up scan could nudge
-        # right after you replied. The next sync re-stamps this with the real
-        # sent message (same time) once it mirrors.
-        last_at = (
-            datetime.now(timezone.utc) if reply_pending else latest.received_at
-        )
-        await _upsert_thread_status(
-            db, account_id, thread_id, rz_status, latest.id, last_at, reason)
+        # The thread-status authority does the whole-thread determination + write
+        # (over the SAME context, with the just-sent reply folded in). Outbound
+        # trigger: the owner replied, so this may move a DONE thread.
+        result = await recompute_thread_status(
+            db, account_id, thread_id, trigger="outbound",
+            about=about, acc_email=acc_email,
+            pending_reply=(sent_body, sent_subject or "") if sent_body else None)
         await db.commit()
+        if result is None:
+            return
+        _rz_status, new_cat = result
 
         # Reconcile the thread to a SINGLE conversation label (mutually exclusive,
         # inbox-zero parity): clear any stale To Reply / Awaiting / FYI / Follow-up

@@ -205,10 +205,11 @@ async def test_resolve_passthrough_for_non_conversation() -> None:
 async def test_resolve_uses_full_thread_status_over_per_message_pick() -> None:
     db = AsyncMock()
     db.execute.side_effect = [
-        _result(fetchall=[SimpleNamespace(
-            from_address={"email": "a@b.com"}, subject="s", body_text="thanks",
-            snippet="", folder="inbox")]),                 # thread messages
         _result(fetchone=SimpleNamespace(email_address="me@x.com")),  # acc email
+        _result(fetchall=[SimpleNamespace(
+            id="m1", from_address={"email": "a@b.com"}, subject="s",
+            body_text="thanks", snippet="", folder="inbox",
+            received_at=None)]),                           # thread messages
     ]
     row = SimpleNamespace(thread_id="t1")
     actioned = {"id": "r1", "name": "Actioned", "system_type": None,
@@ -231,10 +232,10 @@ async def test_resolve_uses_full_thread_status_over_per_message_pick() -> None:
 async def test_resolve_keeps_original_when_no_rule_for_status() -> None:
     db = AsyncMock()
     db.execute.side_effect = [
-        _result(fetchall=[SimpleNamespace(
-            from_address={"email": "a@b.com"}, subject="s", body_text="b",
-            snippet="", folder="inbox")]),
         _result(fetchone=SimpleNamespace(email_address="me@x.com")),
+        _result(fetchall=[SimpleNamespace(
+            id="m1", from_address={"email": "a@b.com"}, subject="s",
+            body_text="b", snippet="", folder="inbox", received_at=None)]),
     ]
     row = SimpleNamespace(thread_id="t1")
     matches = [{"rule": {"name": "To Reply"}, "reason": "picked"}]
@@ -437,3 +438,115 @@ async def test_backfill_skips_unchanged_threads() -> None:
             patch.object(_eng, "_match_email_to_rule", match):
         await m._maybe_classify_threads("acc-1")
     match.assert_not_awaited()  # latest message unchanged → no engine cost
+
+
+# ── Phase 2: thread-status authority (context builder + recompute) ───────────
+
+def _msg(folder="inbox", email="a@b.com", body="hi", mid="m1"):
+    return SimpleNamespace(
+        id=mid, from_address={"email": email}, subject="s", body_text=body,
+        snippet="", folder=folder, received_at=None)
+
+
+def test_msg_scope_direction() -> None:
+    # folder='sent' is authoritative for 'self'; otherwise by sender identity.
+    assert _rz._msg_scope(_msg(folder="sent"), "me@acme.com") == "self"
+    assert _rz._msg_scope(_msg(email="me@acme.com"), "me@acme.com") == "self"
+    assert _rz._msg_scope(_msg(email="sales@acme.com"), "me@acme.com") == "internal"
+    assert _rz._msg_scope(_msg(email="ext@other.com"), "me@acme.com") == "external"
+
+
+def test_fmt_thread_msg_annotates_org() -> None:
+    assert "(your organisation sent)" in _rz._fmt_thread_msg(
+        _msg(email="sales@acme.com"), "me@acme.com")
+    assert "(you sent)" in _rz._fmt_thread_msg(_msg(folder="sent"), "me@acme.com")
+    assert "sent)" not in _rz._fmt_thread_msg(_msg(email="x@other.com"), "me@acme.com")
+
+
+async def test_build_thread_context_marks_our_side_last() -> None:
+    db = AsyncMock()
+    db.execute.return_value = _result(fetchall=[
+        _msg(folder="inbox", email="cust@other.com", mid="m1"),
+        _msg(folder="sent", email="me@acme.com", mid="m2"),
+    ])
+    ctx = await _rz.build_thread_context(db, "acc", "t1", "me@acme.com")
+    assert ctx is not None
+    assert ctx.our_side_last is True       # last message is owner-sent
+    assert ctx.has_external is True        # an external message is present
+    assert ctx.last_message_id == "m2"
+    assert "(you sent)" in ctx.thread_text
+
+
+async def test_build_thread_context_external_last_and_org_counts() -> None:
+    db = AsyncMock()
+    # Last message is a TEAMMATE (same org) — our side acted, not external.
+    db.execute.return_value = _result(fetchall=[
+        _msg(folder="inbox", email="cust@other.com", mid="m1"),
+        _msg(folder="inbox", email="sales@acme.com", mid="m2"),
+    ])
+    ctx = await _rz.build_thread_context(db, "acc", "t1", "me@acme.com")
+    assert ctx.our_side_last is True       # org reply counts as our side
+    assert "(your organisation sent)" in ctx.thread_text
+
+    db.execute.return_value = _result(fetchall=[
+        _msg(folder="inbox", email="cust@other.com", mid="m1")])
+    ctx2 = await _rz.build_thread_context(db, "acc", "t1", "me@acme.com")
+    assert ctx2.our_side_last is False
+
+
+async def test_build_thread_context_pending_reply_and_empty() -> None:
+    db = AsyncMock()
+    db.execute.return_value = _result(fetchall=[
+        _msg(folder="inbox", email="cust@other.com", mid="m1")])
+    ctx = await _rz.build_thread_context(
+        db, "acc", "t1", "me@acme.com",
+        pending_reply=("Thanks, all set.", "Re: s"))
+    assert ctx.our_side_last is True
+    assert "Thanks, all set." in ctx.thread_text
+
+    db.execute.return_value = _result(fetchall=[])
+    assert await _rz.build_thread_context(db, "acc", "t1", "me@acme.com") is None
+
+
+async def test_recompute_outbound_writes_and_may_move_done() -> None:
+    db = AsyncMock()
+    db.execute.return_value = _result(fetchall=[
+        _msg(folder="sent", email="me@acme.com", mid="m2")])
+    cap: dict[str, object] = {}
+
+    async def fake_upsert(_db, _aid, tid, status, _mid, _mat, reason, **kw):
+        cap.update(status=status, reason=reason,
+                   preserve_done=kw.get("preserve_done"))
+
+    det = AsyncMock(return_value=("ACTIONED", True))
+    with patch.object(_rz, "_llm_determine_thread_status", det), \
+            patch.object(_rz, "_upsert_thread_status",
+                         AsyncMock(side_effect=fake_upsert)):
+        out = await _rz.recompute_thread_status(
+            db, "acc", "t1", trigger="outbound", acc_email="me@acme.com")
+    assert out == ("DONE", "Actioned")
+    assert cap["status"] == "DONE"
+    assert cap["reason"] == "Replied — ACTIONED"
+    assert cap["preserve_done"] is False        # owner reply may move DONE
+    # user_sent_last derived True (last message is owner-sent).
+    assert det.await_args.kwargs["user_sent_last"] is True
+
+
+async def test_recompute_inbound_preserves_done_and_flags_fallback() -> None:
+    db = AsyncMock()
+    db.execute.return_value = _result(fetchall=[
+        _msg(folder="inbox", email="cust@other.com", mid="m1")])
+    cap: dict[str, object] = {}
+
+    async def fake_upsert(_db, _aid, tid, status, _mid, _mat, reason, **kw):
+        cap.update(reason=reason, preserve_done=kw.get("preserve_done"))
+
+    det = AsyncMock(return_value=("AWAITING_REPLY", False))  # low confidence
+    with patch.object(_rz, "_llm_determine_thread_status", det), \
+            patch.object(_rz, "_upsert_thread_status",
+                         AsyncMock(side_effect=fake_upsert)):
+        await _rz.recompute_thread_status(
+            db, "acc", "t1", trigger="inbound", acc_email="me@acme.com")
+    assert cap["preserve_done"] is True          # inbound must not clobber DONE
+    assert str(cap["reason"]).endswith("· auto")  # fallback tagged for re-check
+    assert det.await_args.kwargs["user_sent_last"] is False

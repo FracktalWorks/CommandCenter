@@ -68,6 +68,17 @@ async def _build_chat_context(
         elif len(accounts) == 1:
             resolved = str(accounts[0].id)
 
+        # The user's OWN addresses — so the model never reports the user as a
+        # sender / "someone who emails you"; mail from these was sent BY the user.
+        own_addrs = ", ".join(sorted(acc_map.values()))
+        if own_addrs:
+            parts.append(
+                "## You (the account owner)\n"
+                f"You are acting on behalf of the user, whose own email "
+                f"address(es) are: {own_addrs}. NEVER report any of these as a "
+                "sender, a top sender, or someone who emails the user — messages "
+                "from them were sent BY the user.")
+
         if resolved and resolved in acc_map:
             parts.append(
                 "## Email account\n"

@@ -65,6 +65,9 @@ async def analytics_overview(
                 GROUP BY day ORDER BY day"""
         ), params)).fetchall()
 
+        # "Top senders" = who emails YOU, so exclude the user's own addresses
+        # (else the whole 'sent' folder, all from-self, makes the user their own
+        # #1 sender / "most unread from yourself") and received mail only.
         sender_rows = (await db.execute(text(
             f"""SELECT from_address->>'email' AS email,
                        MAX(from_address->>'name') AS name,
@@ -72,6 +75,10 @@ async def analytics_overview(
                        COUNT(*) FILTER (WHERE is_read = false) AS unread
                 FROM email_messages em
                 WHERE {scope} AND COALESCE(from_address->>'email','') <> ''
+                  AND LOWER(folder) <> 'sent'
+                  AND LOWER(from_address->>'email') NOT IN (
+                    SELECT LOWER(email_address) FROM email_accounts
+                    WHERE user_id = :uid)
                 GROUP BY email ORDER BY count DESC LIMIT 12"""
         ), params)).fetchall()
 
@@ -193,6 +200,11 @@ async def list_senders(
                 FROM email_messages em
                 WHERE {scope}{folder_sql}
                   AND COALESCE(from_address->>'email','') <> ''
+                  -- Never list the user themselves as a sender (the 'sent' folder
+                  -- + self-CC'd mail is all from-self).
+                  AND LOWER(from_address->>'email') NOT IN (
+                    SELECT LOWER(email_address) FROM email_accounts
+                    WHERE user_id = :uid)
                 GROUP BY LOWER(from_address->>'email')
                 ORDER BY count DESC LIMIT :limit"""
         ), params)).fetchall()
@@ -873,6 +885,12 @@ async def _categorize_senders_job(account_id: str, limit: int) -> None:
              "scope": sender_scope(r.email, self_email, org_domains)}
             for r in rows
         ]
+        # Never categorize the user's OWN address as a "sender" (it would persist
+        # a self sender row that surfaces as "you email yourself"). Keep teammates
+        # ('internal') — they are legitimate senders.
+        items = [it for it in items if it["scope"] != "self"]
+        if not items:
+            return
         from gateway.routes.email.automation.assistant import _account_models  # noqa: PLC0415
         rule_model = (await _account_models(db, account_id))["rule"]
         for i in range(0, len(items), 10):

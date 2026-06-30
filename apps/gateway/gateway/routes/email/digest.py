@@ -39,6 +39,12 @@ async def _generate_digest(
     params: dict[str, Any] = {"aid": account_id, "days": period_days}
     win = ("em.account_id = :aid AND em.received_at >= "
            "now() - make_interval(days => :days)")
+    # The account's own address — excluded from "top senders" so the user is never
+    # listed as someone who emails them (self-notes / BCC-to-self / automation).
+    self_row = (await db.execute(text(
+        "SELECT LOWER(email_address) AS self FROM email_accounts WHERE id = :aid"
+    ), {"aid": account_id})).fetchone()
+    params["self"] = (getattr(self_row, "self", "") or "") if self_row else ""
     cats = ["Cold Email" if c == "Cold Emails" else c for c in (categories or [])]
     cat_clause = ""
     if cats:
@@ -69,6 +75,7 @@ async def _generate_digest(
             FROM email_messages em
             WHERE {win} AND LOWER(folder) = 'inbox'
               AND COALESCE(from_address->>'email','') <> ''
+              AND (:self = '' OR LOWER(from_address->>'email') <> :self)
             GROUP BY 2 ORDER BY 3 DESC LIMIT 8"""
     ), params)).fetchall()
 

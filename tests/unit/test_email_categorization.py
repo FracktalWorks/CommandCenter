@@ -39,6 +39,28 @@ async def test_categorizes_uncategorized_senders_and_commits() -> None:
     db.commit.assert_awaited()
 
 
+async def test_categorizer_excludes_the_account_owner_as_a_sender() -> None:
+    # The account's own address must never be categorized as a "sender" (else it
+    # surfaces as "you email yourself"); teammates/externals are kept.
+    db = _mock_db([
+        SimpleNamespace(email="me@acme.com", name="Me", subjects=["note"]),
+        SimpleNamespace(email="news@a.com", name="A", subjects=["Weekly"]),
+    ])  # _mock_db sets the account email_address = me@acme.com
+
+    captured: dict[str, list[str]] = {}
+
+    async def llm(items, *, model):
+        captured["emails"] = [it["email"] for it in items]
+        return {it["email"]: "Newsletter" for it in items}
+
+    with patch.object(m.automation.senders, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m.automation.senders, "_llm_categorize_senders",
+                         AsyncMock(side_effect=llm)):
+        await m._categorize_senders_job("acc-1", 25)
+    assert "me@acme.com" not in captured["emails"]   # self dropped
+    assert captured["emails"] == ["news@a.com"]
+
+
 async def test_no_llm_cost_when_nothing_to_categorize() -> None:
     db = _mock_db([])
     llm = AsyncMock()

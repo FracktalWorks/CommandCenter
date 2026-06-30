@@ -33,6 +33,7 @@ import type { ToolEvent } from "@/components/MarkdownMessage";
 import {
   saveDraftText, sendDraft, deleteRule, listRules, updateRule,
   fetchFullBody, updateEmail as patchEmail, getEmail, listThread,
+  deleteLearnedPattern, deleteRulePattern,
   type FullBodyResponse,
 } from "@/app/email/lib/api";
 import type { Email } from "@/app/email/lib/types";
@@ -80,11 +81,27 @@ const INFO_META: Record<string, { icon: React.ElementType; label: string }> = {
   suggest_unsubscribes: { icon: Archive, label: "Unsubscribe candidates" },
   get_account_overview: { icon: Mail, label: "Account overview" },
   get_digest: { icon: Send, label: "Digest" },
-  list_learned_patterns: { icon: Sparkles, label: "Learned patterns" },
   create_rules_from_prompt: { icon: Sparkles, label: "Rules created" },
   test_rule_match: { icon: Wrench, label: "Rule match test" },
 };
 const INFO_TOOLS = new Set(Object.keys(INFO_META));
+
+/** Learned-pattern tools render an EDITABLE list: each pattern is a row you can
+ *  delete (forget). Two separate systems — drafting style (list_learned_patterns)
+ *  and rule classification pins from Fix (list_rule_patterns) — each with its own
+ *  delete endpoint. */
+const PATTERN_META: Record<
+  string,
+  { icon: React.ElementType; label: string; remove: (id: string) => Promise<void> }
+> = {
+  list_learned_patterns: {
+    icon: PenLine, label: "Learned writing preferences", remove: deleteLearnedPattern,
+  },
+  list_rule_patterns: {
+    icon: Sparkles, label: "Learned rule patterns", remove: deleteRulePattern,
+  },
+};
+const PATTERN_TOOLS = new Set(Object.keys(PATTERN_META));
 
 /** Friendly label + icon for the generic confirmation card (mutating tools). */
 const ACTION_META: Record<string, { icon: React.ElementType; label: string; danger?: boolean }> = {
@@ -110,6 +127,7 @@ const ACTION_META: Record<string, { icon: React.ElementType; label: string; dang
   update_knowledge: { icon: BookOpen, label: "Knowledge updated" },
   delete_knowledge: { icon: Trash2, label: "Knowledge deleted", danger: true },
   delete_learned_pattern: { icon: Trash2, label: "Pattern forgotten" },
+  delete_rule_pattern: { icon: Trash2, label: "Pattern forgotten" },
   find_follow_ups: { icon: Clock, label: "Follow-ups scanned" },
   mark_thread_done: { icon: CheckCircle2, label: "Thread updated" },
   reclassify_reply_zero: { icon: RefreshCw, label: "Reply Zero reclassifying" },
@@ -131,6 +149,7 @@ function hasEmailCard(e: ToolEvent): boolean {
     RULE_TOOLS.has(e.name) ||
     LIST_TOOLS.has(e.name) ||
     INFO_TOOLS.has(e.name) ||
+    PATTERN_TOOLS.has(e.name) ||
     e.name === READ_THREAD_TOOL ||
     e.name === SETTINGS_TOOL ||
     e.name in ACTION_META
@@ -325,6 +344,11 @@ export default function EmailToolCards({
     flushReads();
     if (e.name === READ_THREAD_TOOL) {
       items.push(<ThreadCard key={e.id} event={e} accountId={accountId} />);
+      continue;
+    }
+    // Editable learned-pattern list (delete per row) — own chrome.
+    if (PATTERN_TOOLS.has(e.name)) {
+      items.push(<PatternListCard key={e.id} event={e} meta={PATTERN_META[e.name]} />);
       continue;
     }
     // Info/list cards bring their own ToolCardShell chrome (collapse + X), so
@@ -1164,6 +1188,123 @@ function ManageInboxCard({ event: e }: { event: ToolEvent }) {
         </span>
       </div>
     </div>
+  );
+}
+
+// ── Learned-pattern list card (editable) ──────────────────────────────────────
+
+interface PatternRow { id: string; chip?: string; text: string }
+
+/** Parse learned-pattern tool output: lines like "• id=<id> [<chip>] <text>".
+ *  The id + leading [chip] are pulled out so each pattern renders as a row with
+ *  a delete button. */
+function parsePatternRows(result: string): PatternRow[] {
+  const rows: PatternRow[] = [];
+  for (const line of result.split("\n")) {
+    const m = line.match(/^\s*•\s*id=(\S+)\s*(.*)$/);
+    if (!m) continue;
+    let rest = m[2].trim();
+    let chip: string | undefined;
+    const chipM = rest.match(/^\[([^\]]*)\]\s*/);
+    if (chipM) {
+      chip = chipM[1];
+      rest = rest.slice(chipM[0].length);
+    }
+    rows.push({ id: m[1], chip, text: rest || "(pattern)" });
+  }
+  return rows;
+}
+
+/** Editable list of learned patterns — each row can be forgotten (deleted),
+ *  optimistically. Used for BOTH learned writing preferences and learned rule
+ *  pins (the delete endpoint differs, passed via `meta.remove`). Shows the WHOLE
+ *  pattern text (no truncation) so the full list is visible and manageable in
+ *  chat. There is no edit endpoint, so "edit" is forget-and-re-teach. */
+function PatternListCard({
+  event: e,
+  meta,
+}: {
+  event: ToolEvent;
+  meta: { icon: React.ElementType; label: string; remove: (id: string) => Promise<void> };
+}) {
+  const Icon = meta.icon;
+  const [rows, setRows] = useState<PatternRow[]>(() => parsePatternRows(e.result || ""));
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+
+  const forget = async (id: string) => {
+    setBusy(id);
+    setError(false);
+    try {
+      await meta.remove(id);
+      setRows((rs) => rs.filter((r) => r.id !== id));
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // No parseable rows → show the tool's text (e.g. "No learned patterns yet.").
+  if (rows.length === 0) {
+    return (
+      <ToolCardShell
+        title={meta.label}
+        icon={<Icon size={12} />}
+        onDismiss={() => dismissToolCard(e.id)}
+      >
+        <div className="text-[11px] text-muted-foreground whitespace-pre-wrap break-words">
+          {(e.result || "").trim() || "Nothing learned yet."}
+        </div>
+      </ToolCardShell>
+    );
+  }
+
+  return (
+    <ToolCardShell
+      title={`${meta.label} (${rows.length})`}
+      icon={<Icon size={12} />}
+      onDismiss={() => dismissToolCard(e.id)}
+    >
+      <div className="space-y-1">
+        {rows.map((r) => (
+          <div
+            key={r.id}
+            className="flex items-start gap-1.5 rounded-md px-1.5 py-1 hover:bg-secondary/50"
+          >
+            {r.chip && (
+              <span
+                className="text-[9px] px-1 py-0.5 rounded bg-secondary text-muted-foreground flex-shrink-0 mt-0.5 max-w-[120px] truncate"
+                title={r.chip}
+              >
+                {r.chip}
+              </span>
+            )}
+            <span className="text-[11px] text-foreground/90 flex-1 min-w-0 break-words leading-relaxed">
+              {r.text}
+            </span>
+            <button
+              onClick={() => forget(r.id)}
+              disabled={busy === r.id}
+              title="Forget this pattern"
+              aria-label="Forget this pattern"
+              className="p-0.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 flex-shrink-0 disabled:opacity-50"
+            >
+              {busy === r.id ? (
+                <Loader2 size={11} className="animate-spin" />
+              ) : (
+                <Trash2 size={11} />
+              )}
+            </button>
+          </div>
+        ))}
+      </div>
+      {error && (
+        <div className="mt-1 text-[10px] text-destructive">
+          Couldn&apos;t forget that one — try again.
+        </div>
+      )}
+    </ToolCardShell>
   );
 }
 

@@ -1434,6 +1434,34 @@ async def delete_learned_pattern(pattern_id: str) -> str:
     return f"Forgot learned pattern {pattern_id}."
 
 
+async def list_rule_patterns(account_id: str) -> str:
+    """List the sender/subject patterns the assistant LEARNED for RULES from the
+    user's Fix corrections — i.e. "mail from X (or about Y) should / shouldn't
+    match rule Z". This is SEPARATE from list_learned_patterns (which is drafting
+    style); use this when the user asks what's been learned about how mail is
+    classified/labelled, or to clean up a bad pin. Forget one with
+    delete_rule_pattern."""
+    data = await _get("/email/rules/patterns", {"account_id": account_id})
+    patterns = data.get("patterns", [])
+    if not patterns:
+        return "No learned rule patterns yet."
+    lines = ["Learned rule patterns (from your Fix corrections):"]
+    for p in patterns[:30]:
+        verb = "never match" if p.get("exclude") else "always match"
+        rule = p.get("rule_name") or p.get("rule_id") or "a rule"
+        lines.append(
+            f"• id={p.get('id')} [{p.get('pattern_type')}={p.get('value')}] "
+            f"{verb} '{rule}'"
+        )
+    return "\n".join(lines)
+
+
+async def delete_rule_pattern(pattern_id: str) -> str:
+    """Forget a learned rule pattern by id (from list_rule_patterns)."""
+    await _delete(f"/email/rules/patterns/{pattern_id}")
+    return f"Forgot rule pattern {pattern_id}."
+
+
 async def get_full_body_email(email_id: str) -> str:
     """Fetch the COMPLETE, untruncated body of an email straight from the
     provider. Use this when read_email shows a cut-off body (long emails are
@@ -1596,6 +1624,8 @@ _TOOLS = [
     generate_writing_style,
     list_learned_patterns,
     delete_learned_pattern,
+    list_rule_patterns,
+    delete_rule_pattern,
     # Follow-ups / reply zero
     find_follow_ups,
     mark_thread_done,

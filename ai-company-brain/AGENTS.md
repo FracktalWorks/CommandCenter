@@ -54,6 +54,7 @@ Operators interact via a thin **Control Plane** (Next.js browser UI) with chat Q
 | **Integration OAuth framework (authorize→callback→refresh)** | ✅ Done | M2.6 — `routes/oauth.py`, HMAC-signed state, zoho-crm/clickup/google |
 | **VS Code Copilot tools in chat (HITL Q, errors, repo memory, history, GitHub search, images)** | 🔄 Mostly done | See [`specs/vscode_tool_integration.md`](specs/vscode_tool_integration.md) |
 | **Email app — multi-account client (Gmail/Outlook/IMAP) + AI assistant** | 🔄 In progress | M2.9 — `workbench/control_plane/src/app/email/`, gateway `routes/email.py`, `apps/email_ingestion/`. Outlook display bugs fixed (PR #4). See [`specs/email_ai_assistant.md`](specs/email_ai_assistant.md) |
+| **Task Manager app — GTD-philosophy client + `task-manager` agent (ClickUp/Asana/Jira)** | 🔲 Planned | Plan only. Extends existing `apps/agent-task-manager/` + `apps/skill-clickup-sync/`. M3 workstream. See [`specs/task_manager_app.md`](specs/task_manager_app.md) |
 | `agent-sales` + `skill-zoho-ingest` | 🔲 Phase 2 | Phase 2 (WBS 2.2) |
 | `agent-triage` + `skill-gmail-capture` | 🔲 Phase 2 | Phase 2 (WBS 2.3) |
 | Meeting bot (Vexa + WhisperX) | 🔲 Phase 3 | Phase 3 (WBS 3.1) |
@@ -85,7 +86,7 @@ The planning folder was consolidated on 2026-06-20 (15 files → 5 + `specs/`).
 | **System design: containers, data model, ADRs** | [`system_architecture.md`](system_architecture.md) |
 | **How to build a compatible agent repo** | [`agent_repo_compatibility.md`](agent_repo_compatibility.md) |
 | **Library notes: MAF, Copilot SDK, memory** | [`reference.md`](reference.md) |
-| **Per-feature specs** (email app, chat UX, stream reconnection, VS Code tools, LLM caching, MCP/plugins, artifact viewer) | [`specs/`](specs/) |
+| **Per-feature specs** (email app, **task manager (GTD)**, chat UX, stream reconnection, VS Code tools, LLM caching, MCP/plugins, artifact viewer) | [`specs/`](specs/) |
 
 ---
 

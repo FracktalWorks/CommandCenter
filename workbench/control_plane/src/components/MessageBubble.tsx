@@ -11,6 +11,8 @@ import GenerativeUIPanel from "@/components/GenerativeUIPanel";
 import ArtifactCard, { type ArtifactMeta } from "@/components/ArtifactCard";
 import EmailToolCards from "@/components/email/EmailToolCards";
 import ErrorCard from "@/components/ChatErrorCard";
+import { DismissableCard } from "@/components/ToolCardShell";
+import { useDismissedToolCards, dismissToolCard } from "@/lib/dismissedTools";
 
 function MessageBubble({
   message,
@@ -58,6 +60,10 @@ function MessageBubble({
       return true;
     });
   }, [message.toolEvents]);
+
+  // Dismissed tool/artifact cards (persisted) — filter them out of every card
+  // surface so closing a card sticks across reloads.
+  const dismissed = useDismissedToolCards();
 
   // ── Extract artifact events from custom events ──────────────────────────
   // Dedup by path (last write wins) so an artifact_created followed by an
@@ -245,19 +251,29 @@ function MessageBubble({
         onChoice={onChoice}
         sessionId={sessionId}
       />
-      {/* Inline artifact cards */}
-      {artifactEvents.length > 0 && (
-        <div className="mt-3 space-y-2">
-          {artifactEvents.map((a) => (
-            <ArtifactCard
-              key={a.sha256 ?? a.path}
-              artifact={a}
-              sessionId={sessionId}
-              onOpen={onFileOpen}
-            />
-          ))}
-        </div>
-      )}
+      {/* Inline artifact cards — dismissable (persisted), keyed by sha/path. */}
+      {(() => {
+        const visible = artifactEvents.filter(
+          (a) => !dismissed.has(a.sha256 ?? a.path),
+        );
+        if (visible.length === 0) return null;
+        return (
+          <div className="mt-3 space-y-2">
+            {visible.map((a) => {
+              const id = a.sha256 ?? a.path;
+              return (
+                <DismissableCard key={id} onDismiss={() => dismissToolCard(id)}>
+                  <ArtifactCard
+                    artifact={a}
+                    sessionId={sessionId}
+                    onOpen={onFileOpen}
+                  />
+                </DismissableCard>
+              );
+            })}
+          </div>
+        );
+      })()}
       {/* Inline email-assistant cards (editable draft, rule disable/delete).
           Inert unless the message contains email-assistant tool calls, so this
           renders in both the chat app and the email app. */}

@@ -37,6 +37,8 @@ import {
 import { MessageContent } from "@/app/email/components/MessageContent";
 import { LabelChip } from "@/app/email/components/LabelChip";
 import { useEmailStore } from "@/app/email/lib/emailStore";
+import { ToolCardShell, DismissableCard } from "@/components/ToolCardShell";
+import { useDismissedToolCards, dismissToolCard } from "@/lib/dismissedTools";
 
 // ── Tool → card routing ───────────────────────────────────────────────────────
 
@@ -53,6 +55,7 @@ const LIST_TOOLS = new Set([
   "find_needs_reply",
 ]);
 const READ_TOOL = "read_email";
+const READ_THREAD_TOOL = "read_thread";
 const SETTINGS_TOOL = "update_assistant_settings";
 
 /** Friendly label + icon for the generic confirmation card (mutating tools). */
@@ -91,22 +94,84 @@ const ACTION_META: Record<string, { icon: React.ElementType; label: string; dang
   resync_account: { icon: RefreshCw, label: "Re-syncing" },
 };
 
-/** True when this completed tool event has a rich card to render. */
+/** True when this completed tool event has a rich card to render. read_email is
+ *  handled separately (folded into one group), so it is NOT listed here. */
 function hasEmailCard(e: ToolEvent): boolean {
   if (e.status !== "done") return false;
   return (
     DRAFT_TOOLS.has(e.name) ||
     RULE_TOOLS.has(e.name) ||
     LIST_TOOLS.has(e.name) ||
-    e.name === READ_TOOL ||
+    e.name === READ_THREAD_TOOL ||
     e.name === SETTINGS_TOOL ||
     e.name in ACTION_META
+  );
+}
+
+/** Dispatch a single tool event to its card component (read_email + read_thread
+ *  are handled by the caller — folded group / collapsed thread card). */
+function renderCard(
+  e: ToolEvent, accountId?: string | null, emailId?: string | null,
+): React.ReactNode {
+  if (DRAFT_TOOLS.has(e.name)) {
+    return <DraftResultCard event={e} accountId={accountId} emailId={emailId} />;
+  }
+  if (RULE_TOOLS.has(e.name)) return <RuleResultCard event={e} accountId={accountId} />;
+  if (e.name === SETTINGS_TOOL) return <SettingsUpdatedCard event={e} />;
+  if (LIST_TOOLS.has(e.name)) return <EmailListCard event={e} />;
+  if (e.name === "apply_labels") return <LabelUpdateCard event={e} />;
+  if (e.name === "manage_inbox") return <ManageInboxCard event={e} />;
+  return <ActionResultCard event={e} />;
+}
+
+/** Folded "Read N message(s)" card for a run of read_email context calls — one
+ *  collapsed line instead of N full email cards flooding the chat. The full
+ *  preview for each only mounts (and fetches its body) once expanded. */
+function ReadGroupCard({ events }: { events: ToolEvent[] }) {
+  const n = events.length;
+  return (
+    <ToolCardShell
+      title={`Read ${n} message${n > 1 ? "s" : ""}`}
+      icon={<MailOpen size={12} />}
+      defaultCollapsed
+      onDismiss={() => events.forEach((e) => dismissToolCard(e.id))}
+    >
+      <div className="space-y-2">
+        {events.map((e) => (
+          <EmailPreviewCard key={e.id} event={e} />
+        ))}
+      </div>
+    </ToolCardShell>
+  );
+}
+
+/** Collapsed card for a whole-thread read (read_thread) — the result is already
+ *  a formatted oldest-first summary; show it on expand. */
+function ThreadCard({ event }: { event: ToolEvent }) {
+  const first = (event.result || "").split("\n")[0] || "Email thread";
+  const title = first.replace(/,?\s*oldest first:?\s*$/i, "").trim() || "Email thread";
+  return (
+    <ToolCardShell
+      title={title}
+      icon={<MailOpen size={12} />}
+      defaultCollapsed
+      onDismiss={() => dismissToolCard(event.id)}
+    >
+      <div className="text-xs whitespace-pre-wrap text-foreground/90 max-h-80 overflow-y-auto scrollbar-thin">
+        {event.result}
+      </div>
+    </ToolCardShell>
   );
 }
 
 /**
  * Render rich, interactive cards for the email-assistant tool calls in a message.
  * Returns null when there are none (inert for non-email agents).
+ *
+ * Cards render INLINE in transcript order. A run of read_email context calls is
+ * folded into one collapsed "Read N messages" group (instead of N full email
+ * cards), read_thread renders as one collapsed thread card, and every card is
+ * dismissable (persisted via the dismissed-tool registry).
  */
 export default function EmailToolCards({
   toolEvents,
@@ -117,36 +182,40 @@ export default function EmailToolCards({
   accountId?: string | null;
   emailId?: string | null;
 }) {
-  const cards = (toolEvents ?? []).filter(hasEmailCard);
-  if (cards.length === 0) return null;
-  return (
-    <div className="mt-3 space-y-2">
-      {cards.map((e) => {
-        if (DRAFT_TOOLS.has(e.name)) {
-          return <DraftResultCard key={e.id} event={e} accountId={accountId} emailId={emailId} />;
-        }
-        if (RULE_TOOLS.has(e.name)) {
-          return <RuleResultCard key={e.id} event={e} accountId={accountId} />;
-        }
-        if (e.name === SETTINGS_TOOL) {
-          return <SettingsUpdatedCard key={e.id} event={e} />;
-        }
-        if (LIST_TOOLS.has(e.name)) {
-          return <EmailListCard key={e.id} event={e} />;
-        }
-        if (e.name === "apply_labels") {
-          return <LabelUpdateCard key={e.id} event={e} />;
-        }
-        if (e.name === "manage_inbox") {
-          return <ManageInboxCard key={e.id} event={e} />;
-        }
-        if (e.name === READ_TOOL) {
-          return <EmailPreviewCard key={e.id} event={e} />;
-        }
-        return <ActionResultCard key={e.id} event={e} />;
-      })}
-    </div>
-  );
+  const dismissed = useDismissedToolCards();
+  const all = (toolEvents ?? []).filter((e) => !dismissed.has(e.id));
+
+  const items: React.ReactNode[] = [];
+  let readRun: ToolEvent[] = [];
+  const flushReads = () => {
+    if (readRun.length > 0) {
+      const run = readRun;
+      items.push(<ReadGroupCard key={`reads-${run[0].id}`} events={run} />);
+      readRun = [];
+    }
+  };
+  for (const e of all) {
+    // Fold consecutive read_email context calls into one group.
+    if (e.status === "done" && e.name === READ_TOOL) {
+      readRun.push(e);
+      continue;
+    }
+    if (!hasEmailCard(e)) continue;
+    flushReads();
+    if (e.name === READ_THREAD_TOOL) {
+      items.push(<ThreadCard key={e.id} event={e} />);
+      continue;
+    }
+    items.push(
+      <DismissableCard key={e.id} onDismiss={() => dismissToolCard(e.id)}>
+        {renderCard(e, accountId, emailId)}
+      </DismissableCard>,
+    );
+  }
+  flushReads();
+
+  if (items.length === 0) return null;
+  return <div className="mt-3 space-y-2">{items}</div>;
 }
 
 // ── Navigation helper ─────────────────────────────────────────────────────────

@@ -240,6 +240,49 @@ async def read_email(email_id: str) -> str:
     return "\n".join(lines) + "\n---\n" + (e.get("body_text") or "")[:4000]
 
 
+async def read_thread(
+    email_id: str = "", thread_id: str = "", account_id: str | None = None,
+) -> str:
+    """Read an ENTIRE email conversation in ONE call — every message's sender,
+    date and body, oldest first.
+
+    PREFER THIS over calling read_email repeatedly to gather a thread's context:
+    one call returns the whole chain. Pass the open email's id (its thread is
+    resolved automatically) or a thread_id directly."""
+    tid = (thread_id or "").strip()
+    acct = account_id
+    if not tid:
+        if not email_id:
+            return "Provide an email_id or a thread_id to read a thread."
+        head = await _get(f"/email/messages/{email_id}")
+        tid = (head.get("thread_id") or "").strip()
+        acct = acct or head.get("account_id")
+        if not tid:
+            return await read_email(email_id)  # standalone message, no thread
+    params: dict[str, Any] = {"thread_id": tid, "page_size": "50"}
+    if acct:
+        params["account_id"] = str(acct)
+    data = await _get("/email/messages", params)
+    msgs = data.get("emails", [])
+    if not msgs:
+        return "No messages found in that thread."
+    subject = next(
+        (m.get("subject") for m in msgs if m.get("subject")), "(no subject)")
+    out = [f"Thread: {subject} — {len(msgs)} message(s), oldest first:"]
+    for i, e in enumerate(msgs[:25], 1):
+        frm = e.get("from_address", {}) or {}
+        you = " (you sent)" if (e.get("folder") or "").lower() == "sent" else ""
+        body = (e.get("body_text") or e.get("snippet") or "").strip()
+        out.append(
+            f"[{i}] From: {frm.get('name')} <{frm.get('email')}>{you}  "
+            f"Date: {e.get('received_at', '')}\n"
+            f"    {body[:1500]}"
+        )
+    if len(msgs) > 25:
+        out.append(f"… and {len(msgs) - 25} earlier message(s) omitted.")
+    return "\n\n".join(out)
+
+
 async def find_urgent(account_id: str | None = None) -> str:
     """Find emails that look urgent / need attention soon."""
     params: dict[str, Any] = {
@@ -1503,6 +1546,7 @@ _TOOLS = [
     query_inbox,
     get_important_emails,
     read_email,
+    read_thread,
     get_full_body_email,
     find_urgent,
     find_needs_reply,

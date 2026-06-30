@@ -85,7 +85,25 @@ The planning folder was consolidated on 2026-06-20 (15 files → 5 + `specs/`).
 | **System design: containers, data model, ADRs** | [`system_architecture.md`](system_architecture.md) |
 | **How to build a compatible agent repo** | [`agent_repo_compatibility.md`](agent_repo_compatibility.md) |
 | **Library notes: MAF, Copilot SDK, memory** | [`reference.md`](reference.md) |
-| **Per-feature specs** (email app, chat UX, stream reconnection, VS Code tools, LLM caching, MCP/plugins, artifact viewer) | [`specs/`](specs/) |
+| **Per-feature specs** | [`specs/`](specs/) — see the status index below |
+
+### Per-feature specs (`specs/`)
+
+Status: 🟢 live/shipped · 🔄 in progress · 🔲 planned/not started. *(Index refreshed 2026-06-29.)*
+
+| Spec | Concern | Status |
+|---|---|---|
+| [`email_ai_assistant.md`](specs/email_ai_assistant.md) | **Email app** — overview, architecture, full classified feature inventory + pending work (the master email doc) | 🟢 live |
+| [`email_inbox_zero_parity_plan.md`](specs/email_inbox_zero_parity_plan.md) | Email — inbox-zero parity audit, remaining roadmap, deferred backend hardening | 🟢 / 🔄 |
+| [`email_app_review.md`](specs/email_app_review.md) | Email — milestone build log (chronological history M0→M9) | 🟢 log |
+| [`drawio_integration.md`](specs/drawio_integration.md) | **draw.io** — architecture, components, tickets ST-DRW-01…13, roadmap (master) | 🔲 proposed |
+| [`drawio_diagram_svc_contract.md`](specs/drawio_diagram_svc_contract.md) | draw.io — wire contract for `diagram-svc` / `create_diagram` / `DrawioEditor` (freeze-gated) | 🔲 proposed |
+| [`chat_ux.md`](specs/chat_ux.md) | Chat thinking/progress/tool rendering UI | 🔄 Phase 1 ✅, Phase 2 |
+| [`stream_reconnection.md`](specs/stream_reconnection.md) | Fire-and-forget chat + Redis stream replay/reconnect | 🟢 implemented |
+| [`vscode_tool_integration.md`](specs/vscode_tool_integration.md) | 6 VS Code Copilot-Chat tools (HITL, errors, memory, history, GitHub search) | 🔄 impl. done, verify |
+| [`artifact_viewer.md`](specs/artifact_viewer.md) | Right-sidebar file browser + inline document viewer | 🔲 M3 target |
+| [`llm_caching_memory.md`](specs/llm_caching_memory.md) | Prompt caching + session-scoped memory (ADR-008) | 🔲 Phase 2 |
+| [`mcp_plugin_integration.md`](specs/mcp_plugin_integration.md) | MCP servers vs Claude plugins vs REST — design proposal | 🔲 brainstorm |
 
 ---
 

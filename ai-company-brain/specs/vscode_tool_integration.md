@@ -1,7 +1,7 @@
 # VS Code Tool Integration — Implementation Plan
 
-**Date**: 2026-06-17
-**Status**: Mostly implemented, needs persistence fixes + verification
+**Date**: 2026-06-17 · **Updated**: 2026-06-29
+**Status**: ✅ Implemented incl. the localStorage / Postgres / reconnect persistence fixes (§4 — all done). **Open:** a live end-to-end pass to confirm todos + HITL cards + tool results render and survive refresh/reconnect in the running app (§7).
 
 ---
 
@@ -69,22 +69,22 @@ All tools injected via `_inject_agent_tools()` in `executor.py`:
 
 ### 3.2 ElicitationCard — HITL question card
 
-- [ ] **Renders inline in chat thread**: ✅ After messages list, before suggestions
-- [ ] **Options as buttons**: ✅ With ⭐ for recommended, ✓ for selected
-- [ ] **Multi-select checkboxes**: ✅ When `multiSelect: true`
-- [ ] **Freeform text input**: ✅ Textarea when `allowFreeformInput: true`
-- [ ] **Submit formats answers**: ✅ Formatted as `[Header]\nSelected: ...\nAnswer: ...`
-- [ ] **Clears on submit**: ✅ `setElicitation(null)` after submit
-- [ ] **Handled in route.ts**: ✅ `CUSTOM` events forwarded
-- [ ] **Handled in useAgentChat.ts**: ✅ `emitAgentEvent("onCustomEvent", ...)` 
-- [ ] **Handled in AgentChat.tsx**: ✅ `useAgentEvents` → `setElicitation`
+- [x] **Renders inline in chat thread**: After messages list, before suggestions
+- [x] **Options as buttons**: With ⭐ for recommended, ✓ for selected
+- [x] **Multi-select checkboxes**: When `multiSelect: true`
+- [x] **Freeform text input**: Textarea when `allowFreeformInput: true`
+- [x] **Submit formats answers**: Formatted as `[Header]\nSelected: ...\nAnswer: ...`
+- [x] **Clears on submit**: `setElicitation(null)` after submit
+- [x] **Handled in route.ts**: `CUSTOM` events forwarded
+- [x] **Handled in useAgentChat.ts**: `emitAgentEvent("onCustomEvent", ...)`
+- [x] **Handled in AgentChat.tsx**: `useAgentEvents` → `setElicitation`
 
 ### 3.3 Tool result rendering
 
-- [ ] **get_errors output**: Returns text — renders in MarkdownMessage ✅
-- [ ] **query_history output**: Returns JSON — renders in MarkdownMessage ✅
-- [ ] **github_search output**: Returns text — renders in MarkdownMessage ✅
-- [ ] **save_note/recall_notes output**: Returns text — renders in MarkdownMessage ✅
+- [x] **get_errors output**: Returns text — renders in MarkdownMessage
+- [x] **query_history output**: Returns JSON — renders in MarkdownMessage
+- [x] **github_search output**: Returns text — renders in MarkdownMessage
+- [x] **save_note/recall_notes output**: Returns text — renders in MarkdownMessage
 
 ---
 
@@ -168,7 +168,19 @@ Both MAF and Copilot SDK agents can use ALL tools:
 | `apps/orchestrator/AGENTS.md` | Modified — DOX pass |
 | `workbench/AGENTS.md` | Modified — DOX pass |
 
-**Still to fix:**
-| `workbench/control_plane/src/lib/sessions.ts` | Add `todos` to `PersistedMessage` |
-| `workbench/control_plane/src/components/AgentChat.tsx` | Include `todos` in persistence calls |
-| `workbench/control_plane/src/app/api/agent/chat/route.ts` | Include `todos` in `persistAssistantMessage` |
+*(The persistence work formerly listed here — `sessions.ts`, `AgentChat.tsx`, `route.ts` — is
+complete; see §4, all marked ✅ FIXED.)*
+
+---
+
+## 7. Open: live end-to-end verification
+
+Implementation and persistence are done. What remains is a manual pass in the running app
+(not yet signed off):
+
+- [ ] Todos render above the input, update live during streaming, and **survive page refresh + reconnect** (localStorage + Postgres rehydrate).
+- [ ] `ask_questions` HITL card renders inline, submits, and the answer round-trips to the agent on both runtimes (Copilot SDK + MAF).
+- [ ] `get_errors` / `query_history` / `github_search` / `save_note` / `recall_notes` results render in the thinking timeline + message body.
+- [ ] Repo-scoped memory (`save_note` / `recall_notes`) persists across sessions.
+
+Once verified, flip the status line to fully ✅ and date it.

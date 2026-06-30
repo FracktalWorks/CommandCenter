@@ -1,788 +1,333 @@
-# Email AI Assistant — Project Plan
+# Email AI Assistant — Overview, Architecture & Feature Inventory
 
-> **Product:** CommandCenter · **Feature:** Email AI Assistant App · **Updated:** 2026-06-20 · **Version:** 1.1
-> **Status:** 🔄 In progress — UI, multi-account OAuth (Gmail/Outlook/IMAP), background sync, and AI chat shipped and live on the VPS.
-> **Current state (2026-06-20):** Outlook end-to-end works after fixing five bugs that hid synced mail — doubled `/api/email` proxy path (404s), provider folders persisted as opaque IDs vs the canonical `inbox` key, the background sync scheduler crashing at boot (stdlib-logger kwargs `TypeError`), OAuth callback not storing client_id/secret/tenant (token refresh impossible), and Gmail `received_at` always null. Fixes in PR #4. **Remaining:** reconnect mailboxes post-deploy; Drafts/Junk sync; entity-graph linkage (email → CUSTOMER/DEAL) tracked under M3.
+> **Product:** CommandCenter · **Feature:** Email AI Assistant App · **Updated:** 2026-06-29 · **Version:** 2.0
+> **Status:** 🟢 Live on the VPS. Full email client (Gmail / Microsoft 365 / IMAP) with multi-account sync, two-way write-back, conversation/threading UI, a complete inbox-zero-parity automation suite (rules, Reply Zero, drafting, sender categorization, cold-email blocker, inbox cleaner, analytics, digests) and an agent-backed assistant chat.
+>
+> **Companion docs:**
+> - [`email_inbox_zero_parity_plan.md`](./email_inbox_zero_parity_plan.md) — the forward-looking roadmap, remaining inbox-zero gaps, and deferred backend hardening.
+> - [`email_app_review.md`](./email_app_review.md) — the milestone build log (chronological history of what shipped).
+>
+> This doc is the **single source of truth for what the email app *is* and *has*.** §6 is the classified feature inventory; §8 lists what is **not yet built or only partial**.
 
 ---
 
 ## 1. Overview
 
-The Email AI Assistant is a **custom app** within the CommandCenter Control Plane that provides a full-featured email client with AI-powered assistance. It connects to multiple email providers (Gmail, Microsoft 365/Outlook, generic IMAP/SMTP), syncs emails into the CommandCenter data store, and provides a 4-panel UI: account switcher, email list, email detail, and AI chat assistant.
+The Email AI Assistant is a **custom app** in the CommandCenter Control Plane that provides a full-featured, AI-assisted email client. It connects to multiple providers (Gmail, Microsoft 365 / Outlook, generic IMAP/SMTP), syncs mail into Postgres, presents a multi-panel UI (accounts · folders · list · conversation reader · automation scenes · assistant chat), and layers an inbox-zero-style automation suite plus a tool-using MAF agent on top.
 
-### User Intent (from Figma Mockup)
+### Key requirements (original intent)
 
-The Figma mockup (`Email Assistant AI Client`) shows a 4-panel email client:
+- **R1** — Multiple providers: Gmail (Workspace/personal), Microsoft 365/Outlook, IMAP/SMTP.
+- **R2** — Multiple accounts per provider.
+- **R3** — Connected from the Integrations page / in-app OAuth.
+- **R4** — Per-account credentials (own OAuth tokens).
+- **R5** — AI assistant reads, summarizes, drafts, finds urgent, suggests unsubscribes, manages rules.
+- **R6** — Full email ops: read, send, reply, forward, archive, delete, flag, label, move.
+- **R7** — Near-real-time sync (polling + Outlook Graph webhook; Gmail Pub/Sub still backlog).
+- **R8** — Search across all connected accounts.
 
-1. **Left Sidebar** — Multi-account switcher (3 accounts: Gmail personal, Gmail work, Outlook personal), folder navigation (Inbox, Starred, Sent, Drafts, Archive, Labels, Trash), search bar, settings link
-2. **Email List** — Middle-left panel with toolbar rows (Compose, Delete, Archive, Flag, Move / Reply, Reply All, Forward, Mark Read, Label), email thread list with sender, subject, preview, labels, timestamps
-3. **Email Detail** — Main reading pane with full email content, sender info, attachments, and inline reply/forward composer
-4. **AI Chat (Right Sidebar)** — AI assistant panel with quick actions (Summarize inbox, Find urgent emails, Draft reply, Unsubscribe suggestions), chat interface with streaming bot responses
-
-### Key Requirements
-
-- **R1** — Integrate multiple email providers: Gmail (Google Workspace / personal), Microsoft 365/Outlook
-- **R2** — Support multiple accounts per provider (e.g., 2× Gmail, 1× Outlook)
-- **R3** — Email integration managed from the Integrations page (uses existing credential store)
-- **R4** — Multiple API keys / credentials per integration type (each account has its own OAuth tokens)
-- **R5** — AI assistant can read emails, summarize, draft replies, find urgent items, suggest unsubscribes
-- **R6** — Full email operations: read, send, reply, forward, archive, delete, flag, label, move
-- **R7** — Real-time or near-real-time email sync (polling initially, webhook/push later)
-- **R8** — Email search across all connected accounts
+All eight are met today (R7 partially — Gmail push is still polling-only; see §8).
 
 ---
 
-## 2. Architecture
+## 2. Architecture (current)
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    CONTROL PLANE (Next.js)                       │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  /email — Email AI Assistant App                         │   │
-│  │  ┌─────────┬────────────┬──────────────┬──────────────┐  │   │
-│  │  │Account  │ Email List │ Email Detail │  AI Chat     │  │   │
-│  │  │Sidebar  │ + Toolbar  │ + Reply      │  Assistant   │  │   │
-│  │  │         │            │              │              │  │   │
-│  │  └─────────┴────────────┴──────────────┴──────────────┘  │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  /integrations — Email account setup (existing, extended)        │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │ HTTP/SSE
-┌──────────────────────────▼──────────────────────────────────────┐
-│                     GATEWAY (FastAPI)                            │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  /email/accounts     — CRUD email account connections    │    │
-│  │  /email/messages     — List, search, fetch emails        │    │
-│  │  /email/send         — Compose and send                  │    │
-│  │  /email/folders      — List folders/labels               │    │
-│  │  /email/sync         — Trigger manual sync               │    │
-│  │  /email/ai/chat      — AI assistant chat (→ orchestrator)│    │
-│  │  /email/ai/actions   — Quick actions (summarize, etc.)   │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                                                                  │
-│  /integrations (existing) — Email OAuth setup + credential CRUD  │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────────────────┐
-│                EMAIL INGESTION (apps/email_ingestion/)           │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  Providers:                                              │    │
-│  │  ├── GmailProvider      (Google Gmail API)               │    │
-│  │  ├── OutlookProvider    (Microsoft Graph API)            │    │
-│  │  └── IMAPProvider       (Generic IMAP + SMTP)            │    │
-│  │                                                          │    │
-│  │  Sync Engine:                                            │    │
-│  │  ├── Polling sync (configurable interval per account)    │    │
-│  │  ├── Incremental sync (historyId / deltaToken)           │    │
-│  │  └── Webhook receiver (Gmail Pub/Sub, Outlook webhooks)  │    │
-│  └─────────────────────────────────────────────────────────┘    │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────────────────┐
-│                     DATA STORE (Postgres)                        │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  email_accounts — Multi-account credentials (encrypted)  │    │
-│  │  email_messages — Synced email cache                     │    │
-│  │  email_folders   — Folder/label mappings                 │    │
-│  │  email_attachments — Attachment metadata                 │    │
-│  └─────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                       CONTROL PLANE (Next.js)                          │
+│  /email — Email AI Assistant App                                       │
+│  ┌──────────┬────────────┬───────────────┬──────────────────────────┐ │
+│  │ Accounts │ Email list │ Conversation  │ Automation scenes /       │ │
+│  │ + folders│ + toolbar  │ reader+composer│ Assistant chat (overlay) │ │
+│  └──────────┴────────────┴───────────────┴──────────────────────────┘ │
+└───────────────────────────────┬────────────────────────────────────────┘
+                                 │ HTTP/SSE  (Next.js /api/email proxy)
+┌───────────────────────────────▼────────────────────────────────────────┐
+│                          GATEWAY (FastAPI)                               │
+│  routes/email/  — layered package (~6k LOC across submodules)            │
+│   core.py           shared kernel: router, models, DB/Redis, provider    │
+│                     instantiation, mappers, body caps, safe-JSON          │
+│   transport/        accounts · messages · folders · attachments ·         │
+│                     oauth · send · sync   (mailbox I/O + two-way sync)    │
+│   automation/       rules · engine · runner · drafting · replyzero ·      │
+│                     senders · assistant   (inbox-zero parity)            │
+│   digest.py         digest generation + scheduling                        │
+└───────────────────────────────┬────────────────────────────────────────┘
+                                 │
+┌───────────────────────────────▼────────────────────────────────────────┐
+│           EMAIL INGESTION  (apps/email_ingestion/)                       │
+│   providers/{base,gmail,outlook,imap}.py   provider abstraction          │
+│   providers/label_colors.py                25-preset cross-provider palette│
+│   scheduler.py     per-account async sync loop + post-sync automation     │
+│   reconcile.py     full-snapshot deletion reconciliation (Outlook)        │
+│   inbound.py       optional aiosmtpd inbound SMTP receiver                 │
+└───────────────────────────────┬────────────────────────────────────────┘
+                                 │
+┌───────────────────────────────▼────────────────────────────────────────┐
+│                         DATA STORE (Postgres)                            │
+│  email_accounts · email_messages · email_attachments · email_folders ·   │
+│  email_sync_log · email_rules · email_actions · email_executed_rules ·   │
+│  email_rule_patterns · email_newsletters · email_senders ·               │
+│  email_cold_senders · email_assistant_settings · email_knowledge ·       │
+│  email_thread_status · email_ai_drafts · email_learned_patterns          │
+│  (migrations 17 → 43 — see §7)                                           │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Agent Architecture
+### Agent architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│              EMAIL ASSISTANT AGENT (apps/agent-email-assistant/) │
-│                                                                  │
-│  Runtime: MAF (agent-framework-core)                             │
-│  Model: GitHub Copilot SDK or LiteLLM BYOK                       │
-│                                                                  │
-│  Tools:                                                          │
-│  ├── search_emails(query, folder, account) → Email[]             │
-│  ├── get_email(id) → Email                                       │
-│  ├── summarize_thread(thread_id) → str                           │
-│  ├── draft_reply(email_id, tone, instructions) → str             │
-│  ├── find_urgent() → Email[]                                     │
-│  ├── suggest_unsubscribes() → Suggestion[]                       │
-│  ├── send_email(to, subject, body) → bool                        │
-│  └── manage_labels(email_ids, add[], remove[]) → bool            │
-│                                                                  │
-│  Injected tools (from executor):                                 │
-│  ├── memory tools (remember, recall_timeline, save_memory, etc.) │
-│  ├── web_search                                                  │
-│  └── call_agent (inter-agent delegation)                         │
-└─────────────────────────────────────────────────────────────────┘
+EMAIL ASSISTANT AGENT  (apps/agent-email-assistant/)
+  Runtime : native MAF (agent-framework-core), OpenAIChatCompletionClient → gateway /v1
+  Model   : per-account model roles (rule / draft / chat); default chat = tier-powerful
+  Tools   : 67 explicit email tools (read/triage, actions, drafting/send, rules CRUD,
+            settings, KB, sender categorization, reply-zero, follow-ups, unsubscribe,
+            cold-email, digest, sync, artifacts) + injected (call_agent, web_search,
+            memory: remember/recall_timeline/save_memory/save_episode, write_artifact)
+  Surfaces: runs identically in the Chat app and the Email app (dual-surface parity)
 ```
 
 ---
 
-## 3. Multi-Account Credential Model
+## 3. Multi-account credential model
 
-### Problem
+`email_accounts` holds one row per connected mailbox with an **AES-256-GCM-encrypted JSON credential blob** (provider-specific: OAuth client/refresh/access tokens + scopes for Gmail/Microsoft; host/port/username/password for IMAP). OAuth app credentials are persisted alongside user tokens so refresh-token rotation works. Tokens auto-rotate on 401 and the rotated blob is re-persisted by the sync loop and on any provider call.
 
-The existing credential store uses flat `{service}:{suffix}` keys (e.g., `gmail:sa_json_path`). This works for single-account integrations. For multiple Gmail/Microsoft accounts, we need a new model.
-
-### Solution: `email_accounts` Table
-
-```sql
-CREATE TABLE email_accounts (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id TEXT NOT NULL,              -- CC user who owns this connection
-    provider TEXT NOT NULL,             -- 'gmail' | 'microsoft' | 'imap'
-    email_address TEXT NOT NULL,        -- e.g., 'alex.morgan@gmail.com'
-    label TEXT,                         -- Display name e.g., 'Personal', 'Work'
-    credentials_encrypted TEXT NOT NULL, -- AES-256-GCM encrypted JSON blob
-    sync_enabled BOOLEAN DEFAULT true,
-    sync_interval_secs INTEGER DEFAULT 300, -- 5 min default
-    last_synced_at TIMESTAMPTZ,
-    last_history_id TEXT,               -- Gmail: historyId | Outlook: deltaToken
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    UNIQUE(user_id, provider, email_address)
-);
-```
-
-### Credential Blob Structure (per provider)
-
-**Gmail (OAuth 2.0):**
-```json
-{
-  "client_id": "...",
-  "client_secret": "...",
-  "refresh_token": "...",
-  "access_token": "...",
-  "token_expiry": "2026-06-17T12:00:00Z",
-  "scopes": ["https://mail.google.com/"]
-}
-```
-
-**Microsoft 365 (OAuth 2.0):**
-```json
-{
-  "client_id": "...",
-  "client_secret": "...",
-  "tenant_id": "common",
-  "refresh_token": "...",
-  "access_token": "...",
-  "token_expiry": "2026-06-17T12:00:00Z",
-  "scopes": ["https://graph.microsoft.com/Mail.ReadWrite", "https://graph.microsoft.com/User.Read"]
-}
-```
-
-**IMAP/SMTP:**
-```json
-{
-  "imap_host": "imap.gmail.com",
-  "imap_port": 993,
-  "smtp_host": "smtp.gmail.com",
-  "smtp_port": 587,
-  "username": "user@gmail.com",
-  "password_encrypted": "..."
-}
-```
-
-### Integration Page Extension
-
-The existing `/integrations` page already has an "Email" category with Gmail and SMTP setup guides. We extend it to support:
-- **"Add Account"** button for each email provider
-- OAuth flow initiation (redirect to Google/Microsoft consent screen)
-- OAuth callback handling (store tokens in `email_accounts`)
-- Account listing with status badges (connected, sync active, last synced)
-- Per-account sync toggle and manual sync trigger
+Per-account: `sync_enabled`, `sync_interval_secs` (default 300), `last_synced_at`, `last_history_id` (Gmail historyId / Outlook delta / IMAP `uid:uidvalidity`), `initial_sync_done` (gates the one-time deep backfill), `sync_status`.
 
 ---
 
-## 4. Email Sync Strategy
+## 4. Sync strategy (current)
 
-### Phase 1: Polling (M3 — initial release)
-
-- Background task per account polls every N seconds (configurable, default 300s)
-- Uses Gmail `history.list()` / Outlook `delta` queries for incremental sync
-- Stores emails in `email_messages` table with full text search index
-- Handles rate limits with exponential backoff
-
-### Phase 2: Push Notifications (M4)
-
-- Gmail: Google Cloud Pub/Sub push to webhook endpoint
-- Microsoft: Outlook webhooks / change notifications
-- Dramatically reduces latency and API quota usage
-
-### Phase 3: Intelligent Sync (M5)
-
-- AI-driven priority sync (sync important senders first)
-- Attachment downloading on-demand
-- Offline cache with conflict resolution
+- **Deep sync (first connect):** 1-year multi-folder backfill (inbox/sent/drafts/archive/junk/trash + user folders/labels), gated by `initial_sync_done`.
+- **Incremental sync (recurring, default 300s):**
+  - **Gmail** — `history.list` (historyId); detects add/delete/labelAdded/labelRemoved.
+  - **Outlook** — **full-snapshot sweep** (delta is **disabled in production** — it returned 0 changes while mail arrived, silently halting sync; full sweep is the reliable fallback) + Graph **push subscription** for instant wake.
+  - **IMAP** — UID-based (`UIDNEXT`/`UIDVALIDITY`), **INBOX-only**.
+- **Post-sync automation** (runs only when new mail arrived): auto-run rules → auto-categorize new senders → classify thread reply-status → auto-archive AUTO_ARCHIVED senders → send scheduled digest → send follow-up reminders → ensure/renew Outlook push subscription.
+- **Deletion reconciliation:** Outlook full snapshots trash local messages absent from the refetched window; incremental providers skip this.
+- **Learn-from-the-client:** incremental sync diffs old↔new categories per message and teaches FROM include/exclude rule patterns from user-applied/removed labels.
 
 ---
 
-## 5. Email Messages Schema
+## 5. Frontend layout
 
-```sql
-CREATE TABLE email_messages (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    account_id UUID NOT NULL REFERENCES email_accounts(id) ON DELETE CASCADE,
-    provider_message_id TEXT NOT NULL,   -- Gmail message ID / Outlook immutableId
-    thread_id TEXT,                      -- Gmail threadId / Outlook conversationId
-    folder TEXT NOT NULL DEFAULT 'INBOX', -- e.g., 'INBOX', 'SENT', 'DRAFTS'
-    labels TEXT[],                       -- Gmail labels / Outlook categories
-    from_address JSONB NOT NULL,         -- {name, email}
-    to_addresses JSONB NOT NULL,         -- [{name, email}]
-    cc_addresses JSONB,                  -- [{name, email}]
-    bcc_addresses JSONB,                 -- [{name, email}]
-    subject TEXT,
-    body_text TEXT,                      -- Plain text body
-    body_html TEXT,                      -- HTML body
-    snippet TEXT,                        -- Short preview (first ~200 chars)
-    has_attachments BOOLEAN DEFAULT false,
-    is_read BOOLEAN DEFAULT false,
-    is_starred BOOLEAN DEFAULT false,
-    is_flagged BOOLEAN DEFAULT false,
-    received_at TIMESTAMPTZ,
-    synced_at TIMESTAMPTZ DEFAULT now(),
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    UNIQUE(account_id, provider_message_id)
-);
-
-CREATE INDEX idx_email_messages_account_folder ON email_messages(account_id, folder, received_at DESC);
-CREATE INDEX idx_email_messages_thread ON email_messages(account_id, thread_id);
-CREATE INDEX idx_email_messages_search ON email_messages USING GIN(to_tsvector('english', coalesce(subject,'') || ' ' || coalesce(body_text,'')));
-```
+`workbench/control_plane/src/app/email/` — `page.tsx` orchestrates:
+- **Desktop:** left rail (accounts + folder tree + automation nav) → email list → conversation reader, with one **unified toolbar** spanning list+reader below the top bar.
+- **Mobile:** single-pane list/detail with a 4-tab bottom bar; AI chat opens full-screen.
+- **Automation scenes** replace the list+reader as full overlays (left rail stays); folder click exits the scene.
+- Background **soft refresh** every 20s (visible tab only) surfaces assistant/upstream changes without a manual reload.
 
 ---
 
-## 6. API Endpoints
+## 6. Feature inventory (SHIPPED) — classified
 
-### Gateway Routes (`apps/gateway/gateway/routes/email.py`)
+Legend: ✅ shipped · 🟡 shipped with a documented limitation. Provider gaps are called out per item; see the matrix in §6.12.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/email/accounts` | List connected email accounts |
-| `POST` | `/email/accounts` | Add a new email account (OAuth callback) |
-| `DELETE` | `/email/accounts/{id}` | Remove an email account |
-| `PATCH` | `/email/accounts/{id}` | Update account settings (sync toggle, label) |
-| `GET` | `/email/accounts/{id}/folders` | List folders/labels for account |
-| `GET` | `/email/messages` | List/search emails (query, folder, account, page) |
-| `GET` | `/email/messages/{id}` | Get full email detail |
-| `PATCH` | `/email/messages/{id}` | Update email (read, starred, labels, move) |
-| `DELETE` | `/email/messages/{id}` | Delete/trash email |
-| `POST` | `/email/send` | Send a new email |
-| `POST` | `/email/sync` | Trigger manual sync for an account |
-| `POST` | `/email/ai/chat` | AI assistant chat (streams SSE) |
-| `POST` | `/email/ai/quick-action` | Trigger quick action (summarize, find urgent, etc.) |
-| `GET` | `/email/oauth/{provider}/authorize` | Start OAuth flow for provider |
-| `GET` | `/email/oauth/{provider}/callback` | OAuth callback handler |
+### 6.1 Accounts & connectivity
+- ✅ Multi-account, multi-provider (Gmail, Microsoft 365/Outlook, IMAP/SMTP); per-account color/label/avatar.
+- ✅ In-app **OAuth** for Gmail and Microsoft (Entra ID, tenant-aware) — gateway-side token exchange, CSRF `state`, auto workbench-URL derivation, scopes incl. `Mail.ReadWrite`/`Mail.Send`/`MailboxSettings.ReadWrite`.
+- ✅ **IMAP/SMTP** manual add (host/port/SSL/credentials) with connection validation.
+- ✅ **Account reconnect** flow (refresh stale tokens in place, force re-sync); per-account OAuth-expiry banner with "Reconnect".
+- ✅ Account CRUD (add/update label & sync toggle/delete + cascade message purge); scheduler lifecycle hooks on create/update/delete.
 
-### Frontend API Routes (Next.js proxy)
+### 6.2 Sync engine
+- ✅ Per-account background async sync loop (configurable interval); manual **Sync now**, **Resync**, and **Hard resync** (purge + refetch).
+- ✅ Deep 1-year initial backfill; incremental thereafter (Gmail history / Outlook full-sweep / IMAP UID).
+- ✅ Outlook **Graph push webhook** (`/email/webhook/microsoft`) — create/renew/delete subscription; instant wake on new mail.
+- ✅ On-demand **backfill** endpoint (paged, older history).
+- ✅ Message upsert preserves body on conflict (no first-sync content loss); body caps (500 KB text / 2 MB HTML) at sync time.
+- ✅ Importance + categories + `List-Unsubscribe` link captured at sync time.
+- 🟡 Outlook **delta disabled** (full-sweep fallback); IMAP **INBOX-only** (UIDs not folder-namespaced); incremental deletion only tracked via Outlook full snapshots.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/email/accounts` | Proxy → gateway email accounts |
-| `POST` | `/api/email/accounts` | Proxy → gateway |
-| `GET` | `/api/email/messages` | Proxy → gateway |
-| `GET` | `/api/email/ai/chat` | SSE proxy for AI chat streaming |
+### 6.3 Mailbox & reading
+- ✅ Canonical system folders (Inbox/Starred/Sent/Drafts/Archive/Junk/Trash) **+ provider user folders/labels** with per-folder counts and unread badges.
+- ✅ Email list: sender, unread dot, **thread-count badge**, importance triangle, attachment icon, star, flag, snippet, colored label chips; multi-select with select-all; pull-to-refresh (mobile); infinite scroll + "Load older from server".
+- ✅ **Conversation / threading view** (Gmail-style oldest→newest), collapse/expand cards, draft-in-thread renders as an editable composer.
+- ✅ **Outlook-style trailing-mail collapse** — quoted history hidden behind a "•••" toggle, never edited, reattached verbatim on send.
+- ✅ **Lazy body hydration** — Outlook syncs headers only; full body fetched + persisted on first open; "Load full message from provider" for truncated bodies.
+- ✅ **Sandboxed HTML rendering** (DOMPurify; scripts/handlers stripped, `<style>` kept) with a **remote-image proxy** (SSRF-guarded, size-capped) and a per-message "Show images" toggle; plain-text fallback.
+- ✅ Per-message badges: Important / Flagged / Unread, recipients, date, applied labels with colors.
+- ✅ **Priority inbox** ranking (`/email/priority`): blends needs-reply / unread / importance / starred / personal-sender, excludes bulk.
+- ✅ Full-text **search** (tsvector over subject/body/sender) + rich filters (date range, read/starred/attachments/importance/from/sender-category, sort newest/oldest/importance).
+- ✅ **Label filtering** — click a label chip to filter the inbox; active-filter strip.
+
+### 6.4 Labels & colors
+- ✅ User-applicable labels listed with color info; create-label inline with color picker.
+- ✅ **Settable label/category colours** via a single **25-preset cross-provider palette** (`label_colors.py`); preset id is the wire token; colours **round-trip to Gmail labels and Outlook master categories** (deterministic fallback color by name).
+- 🟡 Gmail label-id→name surfacing handled; IMAP has no label/category concept (no-op).
+
+### 6.5 Compose / reply / forward
+- ✅ Full-screen **composer** (To/Cc/Bcc, subject, body) and **inline reply/forward composer** in the reader.
+- ✅ Reply / **Reply-All** (auto-recipients minus self, Cc/Bcc editable) / Forward, with the original quoted below (read-only, reattached on send).
+- ✅ **Drafts**: Gmail-style **auto-save** (debounced, creates/updates a real provider Draft), **edit-in-place** in the thread, **native draft send**, discard; "pop out" inline → full composer for Bcc/attachments.
+- ✅ **Attachments**: native file picker **and** workspace-artifact attach (agent outputs); base64 + artifact resolution; send attachments end-to-end across providers.
+- ✅ **AI compose** (`ComposerAI` → `/email/compose-assist`): "Draft" / "Improve" on the editable body only — quote-safe (trailing quotes never sent to the LLM).
+- ✅ **Undo-send** toast with grace period.
+- 🟡 IMAP draft update/native-send not implemented (falls back to create-new + delete-old); Outlook has no star (kept local-only).
+
+### 6.6 Actions & two-way sync
+- ✅ Mark read/unread, star, flag, archive, delete/trash, **move to folder**, **add/remove labels** — all **write back to the provider best-effort** after the authoritative local commit (provider failures logged, never fail the UX).
+- ✅ **Bulk actions** (`/email/messages/bulk`): archive / delete / label / unsubscribe by selector (sender / category / older-than date).
+- ✅ Toolbars & surfaces: unified desktop toolbar, per-message + bulk action rows, **Command Palette (Cmd/Ctrl+K)**, right-click context menu (move/categories flyouts), mailbox actions (refresh, mark-spam, resync), more-menu (mark spam, report phishing, block sender→archive rule, download `.eml`, print).
+
+### 6.7 AI automation — Rules engine
+- ✅ **Rule CRUD** + **NL→rule generation** (`/email/rules/generate`); preset pack install (To Reply, Awaiting Reply, FYI, Actioned, Newsletter, Marketing, Calendar, Receipt, Notification, Cold Email) in canonical system order; reset.
+- ✅ **Conditions:** NL instruction + static From/To/Subject/Body patterns, **AND/OR** operator, `run_on_threads`, Cc/Bcc awareness; classifier given owner address, To/Cc roles, `about`, date, and inbox-zero guidelines; **forced JSON output**.
+- ✅ **Actions:** ARCHIVE, LABEL (fixed **or** AI-resolved via `{{…}}` prompt), MOVE_FOLDER, MARK_READ, STAR, MARK_SPAM/TRASH, REPLY, FORWARD, DRAFT_EMAIL, CALL_WEBHOOK/URL — with per-action `delay_minutes` and **workspace-artifact attachments**.
+- ✅ **Learned classification patterns** (`email_rule_patterns`): bidirectional-substring FROM + number/ID-generalised SUBJECT, include/exclude, source-tagged (FIX / LABEL_ADDED / LABEL_REMOVED / AI / USER), **consistency-gated** (≥3 consistent matches), short-circuit the LLM; learned **from manual labels in the client** too; **Fix** flow teaches FROM+SUBJECT and applies directly.
+- ✅ **Multi-rule execution** toggle (apply >1 matching rule) with `isPrimary` (most-specific) ordering.
+- ✅ **History** tab: per-execution log with status (APPLIED/PENDING/SKIPPED/REJECTED/UNDONE/ERROR), matched-rule + match-source + AI reasoning, action breakdown & per-action errors, **approve / reject / undo** (undo restores folder + removes added labels).
+- ✅ **Test** tab: single-email test + **test-on-recent-inbox** sweep with per-email match rationale (non-mutating).
+- ✅ **Process-past** — bulk apply rules to historical mail with live progress.
+- ✅ **Auto-run on arrival** (sync-loop hook + Outlook webhook), gated by the Auto-run setting; drafts are **held for approval / never auto-sent**.
+
+### 6.8 AI automation — Reply Zero (reply tracking)
+- ✅ First-class **needs-reply classifier** (full-thread inbound status determination), now a **projection of the rules pipeline** (not a parallel classifier); statuses NEEDS_REPLY / AWAITING / FYI / DONE, mutually exclusive on re-evaluation.
+- ✅ Reply Zero scene with **To reply / Awaiting reply / Done** tabs; per-thread auto-draft, save-to-drafts, mark-done/reopen.
+- ✅ **Follow-up reminders**: configurable **business-day** windows (awaiting + needs-reply, fractional days), "Follow-up" label, auto-draft nudge using the nudge prompt, badge matching the window; on-demand scan + scheduled run; idempotent. Follow-up clock anchors to the **reply time**, not the inbound message.
+- ✅ Replying flips To Reply → Awaiting/Actioned immediately; a just-sent reply shows in the thread and flips the chip; archiving a thread drops it from active buckets; trashed threads hidden.
+
+### 6.9 AI automation — Drafting (the email agent)
+- ✅ All drafting routes through the **email MAF agent** (`_agent_draft_reply` / `/email/draft-reply`), context-injected:
+  - **Writing style** (explicit + auto-derived `learned_writing_style`, regenerated as evidence accrues),
+  - **Knowledge base** (per-account titled snippets, budgeted),
+  - **Personal instructions**,
+  - **Scoped reply memories** (kind FACT/PROCEDURE/PREFERENCE × scope SENDER>DOMAIN>TOPIC>GLOBAL),
+  - **Full thread context** (oldest→newest),
+  - **Similar-thread precedent** (Mem0 retrieval) + **past replies to this sender** (sent-mail tone mirroring),
+  - **Classification hints**, today's date, signature auto-append.
+- ✅ **Learn-from-edits**: the AI draft is captured per thread (`email_ai_drafts`); on send the diff is distilled into deduped/weighted scoped memories.
+- ✅ **Confidence gate** (`draft_confidence`: ALL_EMAILS / STANDARD / HIGH_CONFIDENCE) with an inbox-zero HIGH/MEDIUM/LOW grounded-vs-assumption rubric and a robust NO_DRAFT matcher; **sensitive-data protection** skips drafting on sensitive mail; AI-placeholder lines (`[Your Name]`) stripped.
+- ✅ Inter-agent **handoff** to `sales` / `task-manager` specialists via `call_agent`.
+
+### 6.10 AI automation — Sender categorization, cold-email, inbox cleaner
+- ✅ **Sender categorization** (LLM, 8 categories) — manual trigger **and just-in-time on new senders** in the sync loop; category counts; learned auto-assignment.
+- ✅ **Cold-email blocker** (first-time/unreplied senders) — OFF / LABEL / ARCHIVE modes + whitelist (`email_cold_senders`).
+- ✅ **Inbox Cleaner** (merged Unsubscriber + Archiver): sender list by frequency/read-rate with status (Unhandled/Approved/Unsubscribed/Auto-archived); **real one-click unsubscribe** (RFC 8058 `List-Unsubscribe` HTTP(S) + mailto + provider filters: Gmail filter / Outlook rule via migration 43; HTML-link scrape fallback); **block-on-failure**; bulk **age-sweep archive** (7/30/90/365 days, "Newsletters only"); auto-categorize button.
+
+### 6.11 Analytics, digest & assistant chat
+- ✅ **Analytics** (`/email/analytics/overview`): totals (unread/sent/archived/starred/attachments), read-rate, volume-over-time, top senders (+unread), by-folder, **rule-automation stats** (processed count, by-rule, action breakdown).
+- ✅ **Digest**: view (markdown, counts + top senders + needs-reply + category breakdown); email-to-self; **scheduled** OFF/DAILY/WEEKLY with day-of-week + time-of-day; last-sent dedup; runs via the sync loop.
+- ✅ **Assistant chat** (`EmailAssistantChat`): full-scene panel pinned to the `email-assistant` agent, **dual-surface** (identical in the Chat app + Email app via shared `AgentChat` + `buildEmailAssistantPersona`), session restore/merge across devices, **Mem0** memory injection, **inbox context** (account list + first-turn snapshot + open email), and the **"Fix" bridge** from the Assistant tab into chat.
+  - ✅ Rich **chat cards**: clickable inbox lists that open the email, inline body expansion, read_email card, manage_inbox card (names action + count), apply_labels card (coloured chips), rule cards (When→Then), in-chat triage (archive/mark-read).
+  - ✅ **Confirm-before-send**: `send_email`/`send_reply`/`send_draft` block on a confirmation card (`request_confirmation`) — the user approves the actual send in chat; degrades to send when non-interactive.
+
+### 6.12 Model configuration
+- ✅ **Three per-account task-specific models** (migration 42): **`rule_model`** (default tier-fast — classification/labeling), **`draft_model`** (default tier-powerful — writing), **`chat_model`** (default tier-powerful — the chat panel). Selectable from Settings; all configured LiteLLM tiers/models exposed.
+- ✅ Routed **BYOK** through the gateway `/v1`; native MAF agents honor the selected tier; **JSON mode forced** wherever structured output is parsed.
+- 🟡 The non-streaming `run_agent` BYOK path still detours via Copilot→402→self-anneal to DeepSeek (works, wasteful — see §8).
+
+### Provider capability matrix
+
+| Capability | Gmail | Outlook (M365) | IMAP/SMTP |
+|---|---|---|---|
+| List / fetch / send / reply / forward | ✅ | ✅ | ✅ |
+| Native drafts (create/update/send) | ✅ | ✅ | 🟡 create only |
+| Flags (read/star/flag) | ✅ | 🟡 no star | 🟡 flag only, no star |
+| Move to folder | ✅ | ✅ (re-IDs message) | ❌ no-op |
+| Labels/categories + colors | ✅ | ✅ (master categories) | ❌ |
+| Auto-archive filter on unsubscribe | ✅ filter | ✅ inbox rule | ❌ |
+| Attachments (send + download) | ✅ | ✅ | ✅ |
+| Importance / categories capture | ✅ | ✅ | partial |
+| Incremental sync | ✅ history | 🟡 full-sweep (delta off) | 🟡 UID, INBOX-only |
+| Push / webhook | ❌ (polling) | ✅ Graph subscription | ❌ |
+| Multi-folder sync | ✅ | ✅ | ❌ INBOX-only |
 
 ---
 
-## 7. Frontend Component Tree
+## 7. Database schema (migrations 17 → 43)
 
-```
-src/app/email/
-├── page.tsx                    — Main layout: 4-panel email app
-├── layout.tsx                  — Email app layout (no sidebar from AppShell)
-├── components/
-│   ├── AccountSidebar.tsx      — Multi-account switcher + folders
-│   ├── EmailListToolbar.tsx    — Primary + secondary toolbar rows
-│   ├── EmailList.tsx           — Email thread list
-│   ├── EmailDetail.tsx         — Email reading pane
-│   ├── EmailComposer.tsx       — New email / reply / forward composer
-│   ├── AIChatPanel.tsx         — AI assistant chat sidebar
-│   ├── QuickActions.tsx        — Quick action pills
-│   ├── FolderTree.tsx          — Collapsible folder tree
-│   ├── SearchBar.tsx           — Email search
-│   └── MessageContent.tsx      — Email body renderer (HTML + plain text)
-├── lib/
-│   ├── types.ts                — TypeScript interfaces
-│   ├── emailStore.ts           — Zustand state management
-│   ├── api.ts                  — API client functions
-│   └── utils.ts                — Date formatting, etc.
-└── hooks/
-    ├── useEmails.ts            — Email list/data fetching
-    ├── useEmailAccounts.ts     — Account management
-    └── useAIChat.ts            — AI chat hook (reuses useAgentChat pattern)
-```
+| Table | Added | Stores |
+|---|---|---|
+| `email_accounts` | 17 (+34) | Connected mailboxes; encrypted creds; sync state; `initial_sync_done` (34) |
+| `email_messages` | 17 (+18,21) | Synced mail cache; FTS index; `importance`/`categories` (18); `rules_processed_at` (21) |
+| `email_attachments` | 17 | Attachment metadata |
+| `email_folders` | 17 | Per-account folder/label metadata + counts |
+| `email_sync_log` | 17 | Sync audit trail |
+| `email_rules` | 19 | Automation rules (NL + static conditions, system_type) |
+| `email_actions` | 19 (+32,33) | Rule actions; `delay_minutes`+`attachments` (32); `label_ai`/`content_manual` (33) |
+| `email_executed_rules` | 19 (+36) | Rule-execution audit; `match_source`+`action_errors` (36) |
+| `email_newsletters` | 19 (+43) | Unsubscribe disposition; `auto_archive_filter_id` (43) |
+| `email_assistant_settings` | 20 (+22,26,27,39,40,41,42) | Per-account config (see below) |
+| `email_senders` | 22 | Per-sender category |
+| `email_cold_senders` | 22 | Cold-email verdicts + whitelist |
+| `email_knowledge` | 26 | Draft knowledge base |
+| `email_thread_status` | 27 | Reply Zero per-thread status |
+| `email_ai_drafts` | 28 | Captured AI draft per thread (learn-from-edits) |
+| `email_learned_patterns` | 28 (+38,39) | Draft preferences; `kind`/`scope_type`/`scope_value`/`is_style_evidence` (38) |
+| `email_rule_patterns` | 31 | Deterministic per-rule FROM/SUBJECT patterns |
+| (webhooks) | 25 | Graph push subscription state |
 
----
+**`email_assistant_settings` evolution:** `about`/`signature`/`auto_run` (20) → `cold_email_blocker` (22) → `personal_instructions`/`writing_style`/`draft_replies` (26) → `follow_up_days` (27) → `learned_writing_style`+evidence count (39) → `fallback_model` (40, **removed in 42**) → `chat_model` (41) → **`rule_model`/`draft_model`/`chat_model`** roles (42). Also holds digest cadence, draft_confidence, follow-up windows, multi_rule_execution, sensitive_data_protection.
 
-## 8. Implementation Phases
-
-### Phase 1: Foundation (this PR) — Boilerplate
-
-- [x] Project plan document (this file)
-- [ ] Port Figma frontend components into workbench `/email`
-- [ ] `email_accounts` + `email_messages` DB schema
-- [ ] Gateway email routes skeleton
-- [ ] Email provider abstraction (`apps/email_ingestion/`)
-- [ ] Gmail OAuth flow skeleton
-- [ ] Email assistant agent skeleton (`apps/agent-email-assistant/`)
-- [ ] Integrations page extended for multi-account email
-
-### Phase 2: Core Email Reading (M3)
-
-- [ ] Gmail provider: full sync (history.list), message fetch, folder list
-- [ ] Microsoft provider: full sync (delta), message fetch, folder list
-- [ ] Email list/detail UI connected to real data
-- [ ] Search across accounts
-- [ ] Read/unread, star, label operations
-
-### Phase 3: Email Sending + AI (M3)
-
-- [ ] Compose and send via Gmail API + Microsoft Graph
-- [ ] Reply, reply-all, forward
-- [ ] AI assistant agent with email tools
-- [ ] Quick actions: summarize, find urgent, draft reply
-- [ ] AI chat panel connected to streaming agent
-
-### Phase 4: Polish + Push (M4)
-
-- [ ] Push notification webhooks (Gmail Pub/Sub, Outlook webhooks)
-- [ ] Attachment handling
-- [ ] Offline support
-- [ ] Mobile-responsive email UI
-- [ ] Email templates
-- [ ] Scheduled send
+**Recent migrations (29+) at a glance:** 31 learned rule patterns · 32 delayed actions + artifacts · 33 AI-vs-manual action toggles · 34 initial-sync flag · 36 rule-exec metadata · 38 scoped reply memory · 39 learned writing style · 40 fallback model (removed) · 41 chat model · 42 three model roles · 43 provider-native unsubscribe filters.
 
 ---
 
-## 9. Key Design Decisions
+## 8. NOT YET BUILT / PARTIAL
+
+Grouped by area. Detailed acceptance criteria and the inbox-zero parity audit live in [`email_inbox_zero_parity_plan.md`](./email_inbox_zero_parity_plan.md).
+
+### 8.1 Provider / sync gaps
+- 🟡 **Outlook delta sync** disabled — running on full-snapshot sweep; needs a verified delta/deletion approach for true incremental + instant non-inbox changes.
+- 🟡 **IMAP multi-folder sync** — INBOX-only until provider message IDs are folder-namespaced end-to-end (UID uniqueness collision); IMAP `move_to_folder`, labels, filters, draft update/send are no-ops by design.
+- ❌ **Gmail Pub/Sub push** — Gmail still polls; Outlook Graph push already shipped.
+- 🟡 **Outlook `/move` re-IDs the message** — stored `provider_message_id` can go stale until the next sync re-keys it (local folder already correct).
+- 🟡 Scheduler has no exponential-backoff retry on sync errors (catches + logs).
+
+### 8.2 Automation / intelligence gaps
+- ❌ **Calendar / scheduling context in drafts** (availability + booking links) — needs a calendar integration first.
+- ❌ **PDF / attachment content into draft context** — extract attached-PDF text for grounding.
+- ❌ **AI "Clean" flow** — AI-scored bulk inbox cleanup with a review queue (beyond rule-based age-sweep + cleaner).
+- ❌ **Attachment auto-filing** → Drive/OneDrive.
+- ❌ **Meeting briefs** (email + calendar context).
+- 🟡 **External MCP / CRM tools** in drafting context — approximated today via the sales/task-manager specialist agents; real MCP tools land with Command Center's MCP integrations.
+- 🟡 Categorization **historical backfill with a date range** ("how far back") + a coverage report — today is limit-based / just-in-time.
+- 🟡 Learning is per-draft-edit; no learning from **bulk actions** (e.g. "always archive newsletters").
+
+### 8.3 Notifications / channels
+- ⏳ **Chat-tool follow-up notifications** (Slack / Microsoft Teams / Telegram) — inbox-zero pushes follow-up nudges as interactive cards (Open / Mark-done). We surface follow-ups **in-app only**; needs a messaging-channel integration (OAuth + routing + outbound card + Mark-done webhook).
+- 🟡 Digest delivery is **email-to-self only**; no custom recipient list or in-app/channel delivery.
+
+### 8.4 Reliability / scale hardening (single-primary-user safe today)
+- 🟡 **Non-streaming `run_agent`** BYOK detours via Copilot→402→self-anneal to DeepSeek; mirror the BYOK pre-injection block to make it DeepSeek-primary.
+- 🟡 **OAuth `state` in-memory dict** → move to Redis+TTL for multi-worker deploys.
+- 🟡 **DB session held across LLM/provider I/O** in rule/update paths → release before slow calls (pool-starvation risk under concurrency).
+- 🟡 **LLM rule-matching is one call per email** with no shared cap → batch + global concurrency cap / per-account daily budget.
+- 🟡 **N+1 queries + missing indexes** (`list_accounts`, `_load_rules`, reply-zero `DISTINCT ON`) → batch + add `email_messages(account_id, thread_id, received_at DESC)` index + FK on `email_thread_status.last_message_id`.
+- 🟡 Multi-user tool scoping relies on the memory ContextVar + `ACB_AGENT_USER_EMAIL` fallback (reliable single-user; multi-user needs ContextVar propagation into the Copilot SDK tool-callback context).
+- 🟡 Sanitize raw provider error text before surfacing/persisting (can embed tokens/URLs); encode `Content-Disposition` filename.
+- 🟡 History tab: full per-message **timeline** view is the remaining parity gap.
+
+### 8.5 UI polish
+- 🟡 Demo mode (`NEXT_PUBLIC_EMAIL_DEMO=1`) falls back to bundled mock data when offline (dev-only).
+- 🟡 Mobile uses per-view toolbars; the unified toolbar is desktop-only.
+
+---
+
+## 9. Key design decisions
 
 | Decision | Rationale |
-|----------|-----------|
-| **`email_accounts` as a separate table** | The existing `provider_keys` table is 1:1 service→key. Multi-account needs N:1. A separate table with encrypted JSONB credentials is cleaner than trying to multiplex keys. |
-| **Polling before push** | Gmail Pub/Sub and Outlook webhooks require additional cloud infra setup. Polling is simpler for the initial release and works everywhere. |
-| **Sync to Postgres, not proxy** | Proxying live to Gmail/MS APIs for every UI render would be slow and rate-limited. Syncing to Postgres gives fast queries, full-text search, and offline access. |
-| **Reuse existing agent infrastructure** | The email assistant agent uses the same MAF executor, streaming, mutation, and tool injection as all other agents. No special code path. |
-| **OAuth flow through gateway** | The gateway handles OAuth token exchange server-side to keep client secrets secure. The frontend redirects to the gateway's authorize endpoint. |
-| **One agent per email domain** | The email assistant is one MAF agent with all email tools injected, rather than separate agents per provider. Simpler routing, unified context. |
+|---|---|
+| `email_accounts` separate table (encrypted JSONB blob) | The `provider_keys` store is 1:1 service→key; multi-account needs N:1 with rotating tokens. |
+| Sync to Postgres, not live-proxy | Fast queries, FTS, offline; avoids per-render rate limits. |
+| Local commit authoritative, provider write-back best-effort | UX never blocks on a provider hiccup; failures logged, reconciled on next sync. |
+| Reply Zero as a **projection of the rules pipeline** | One classifier, not a parallel system; fixed "all mail in To Reply" and keeps statuses consistent. |
+| One MAF agent, all tools injected, dual-surface | Same executor/streaming/mutation/memory as every other agent; identical in Chat + Email apps. |
+| Three per-account model roles | Cheap/fast classification, powerful drafting, powerful chat — tuned independently; replaced the agent+fallback model. |
+| 25-preset cross-provider color palette | One canonical token round-trips to both Gmail label colors and Outlook master categories. |
+| Confirm-before-send in chat | The agent never silently sends; the user approves the actual outbound in a blocking card. |
+| Layered `routes/email/` package | `core` kernel + `transport` (mailbox I/O) + `automation` (inbox-zero) + `digest`; replaced a ~5.6k-line monolith. |
 
 ---
 
-## 10. Dependencies & Risks
-
-| Dependency | Status | Mitigation |
-|------------|--------|------------|
-| Gmail API quota (1B quota units/day free) | ✅ Available | Sync interval tuning, incremental sync |
-| Microsoft Graph API quota | ✅ Available | Delta queries reduce calls |
-| Google Cloud Console project setup | Manual per-deployment | Document setup steps in Integrations page |
-| Microsoft Azure App Registration | Manual per-deployment | Document setup steps |
-| OAuth redirect URI (HTTPS required) | Requires domain | Already have `api.commandcenter.fracktal.in` |
-| Email storage growth | Monitor | Archive/delete policies, attachment on-demand loading |
-
----
-
-## 11. Success Criteria
-
-- [ ] User can connect 2+ Gmail accounts and 1+ Microsoft account
-- [ ] Emails from all accounts appear in a unified inbox within 5 minutes of arrival
-- [ ] AI assistant can summarize the last 20 unread emails correctly
-- [ ] AI assistant can draft a professional reply that the user would send with minor edits
-- [ ] Email send/reply/forward works through connected accounts
-- [ ] Full-text search returns results across all accounts in < 2 seconds
-- [ ] Mobile-responsive layout works on iOS and Android
-
----
-
-## 12. Competitive Analysis — Inbox Zero (elie222/inbox-zero)
-
-*Analysis date: 2026-06-17*
-
-### Overview
-
-[Inbox Zero](https://github.com/elie222/inbox-zero) is the leading open-source AI email assistant
-(11.3k stars, 1.4k forks). It's a TypeScript monorepo (Next.js + Prisma + Tailwind +
-shadcn/ui + Turborepo) supporting Gmail and Microsoft 365 via OAuth.
-
-**Tech stack:** Next.js App Router, Prisma (Postgres), Upstash Redis, Tinybird (analytics),
-OpenAI / Anthropic / Google AI / Groq / Ollama for AI, Resend for transactional email.
-
-**Key reference files:**
-- [`ARCHITECTURE.md`](https://github.com/elie222/inbox-zero/blob/main/ARCHITECTURE.md) — full system architecture
-- [`apps/web/prisma/schema.prisma`](https://github.com/elie222/inbox-zero/blob/main/apps/web/prisma/schema.prisma) — complete DB schema (1839 lines)
-- [`apps/web/utils/ai/`](https://github.com/elie222/inbox-zero/tree/main/apps/web/utils/ai) — all AI/LLM logic
-- [`apps/web/utils/gmail/`](https://github.com/elie222/inbox-zero/tree/main/apps/web/utils/gmail) — all Gmail API integration
-- [`LICENSE`](https://github.com/elie222/inbox-zero/blob/main/LICENSE) — AGPLv3 + additional terms
-
-**License:** AGPL v3 + commercial restrictions. Since CommandCenter is also free
-and open source (AGPLv3-compatible), we **CAN reuse their code** under the copyleft
-terms — any modifications we make must also be released under AGPLv3.
-
-### Porting Strategy: TypeScript → Python
-
-### Feature Comparison
-
-| Feature | Inbox Zero | Our Email App (Planned) | Priority to Add |
-|---------|-----------|------------------------|-----------------|
-| Multi-account Gmail | ✅ | ✅ | — |
-| Microsoft 365 support | ✅ | ✅ | — |
-| AI email classification | ✅ AI Rules engine | ❌ | HIGH |
-| Cold email blocker | ✅ LLM-based detection | ❌ | HIGH |
-| Bulk unsubscribe | ✅ One-click unsub+archive | ❌ Quick action only | HIGH |
-| Bulk archive | ✅ Archive old emails | ❌ | MEDIUM |
-| Reply tracking | ✅ (Reply Zero) | ❌ | HIGH |
-| AI reply drafting | ✅ Tone-aware drafts | 🔲 Skeleton | HIGH |
-| Meeting briefs | ✅ Email+calendar context | ❌ | LOW (later) |
-| Smart attachment filing | ✅ → Google Drive/OneDrive | ❌ | LOW (later) |
-| Email analytics | ✅ Trends, activity stats | ❌ | MEDIUM |
-| Slack/Telegram integration | ✅ Chat from messaging apps | ❌ | MEDIUM |
-| Gmail Pub/Sub webhooks | ✅ Real-time push | 🔲 Polling first | MEDIUM |
-
-### Code Files to Port (TypeScript → Python)
-
-Since CommandCenter is AGPLv3 free software, we can directly port the following
-Inbox Zero modules. Listed by priority with our Python destination.
-
-| Inbox Zero File | Our Python Destination | Lines | Value |
-|-----------------|----------------------|-------|-------|
-| [`categorize-sender/ai-categorize-single-sender.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/categorize-sender/ai-categorize-single-sender.ts) | `email_ingestion/providers/ai_categorize.py` | ~80 | Cold email LLM classification |
-| [`choose-rule/ai-choose-rule.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/choose-rule/ai-choose-rule.ts) | `email_ingestion/providers/ai_rules.py` | ~120 | Rule matching engine |
-| [`choose-rule/match-rules.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/choose-rule/match-rules.ts) | `email_ingestion/providers/ai_rules.py` | ~90 | Static rule matching (from/to/subject) |
-| [`choose-rule/execute.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/choose-rule/execute.ts) | `email_ingestion/providers/ai_rules.py` | ~100 | Execute matched actions |
-| [`reply/draft-reply.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/reply/draft-reply.ts) | `agent-email-assistant/agents.py` | ~150 | AI reply drafting with context |
-| [`reply/reply-context-collector.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/reply/reply-context-collector.ts) | `email_ingestion/providers/ai_reply.py` | ~80 | Gather thread context for replies |
-| [`clean/draft-cleanup.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/clean/draft-cleanup.ts) | `email_ingestion/providers/email_cleanup.py` | ~60 | Auto-cleanup old drafts |
-| [`gmail/mail.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/mail.ts) | `email_ingestion/providers/gmail.py` | ~200 | Gmail send/reply/forward with retry |
-| [`gmail/batch.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/batch.ts) | `email_ingestion/providers/gmail.py` | ~80 | Batch Gmail operations |
-| [`gmail/decode.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/decode.ts) | `email_ingestion/providers/email_decode.py` | ~60 | MIME decoding + HTML→text |
-| [`gmail/watch.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/watch.ts) | `email_ingestion/providers/gmail.py` | ~70 | Gmail Pub/Sub watch setup |
-| [`choose-rule/bulk-process-emails.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/choose-rule/bulk-process-emails.ts) | `email_ingestion/providers/ai_rules.py` | ~60 | Bulk rule evaluation |
-
-#### Prisma Schema → Our Postgres Schema
-
-Key tables from Inbox Zero's Prisma schema that map to our existing/new tables:
-
-| Inbox Zero Prisma Model | Our Postgres Table | Status |
-|------------------------|-------------------|--------|
-| `EmailAccount` | `email_accounts` | ✅ Exists |
-| `EmailMessage` | `email_messages` | ✅ Exists |
-| `Rule` + `Action` | `email_rules` + `email_actions` | 🔲 New — see §13.1 |
-| `ExecutedRule` + `ExecutedAction` | `email_executed_rules` + `email_executed_actions` | 🔲 New |
-| `Newsletter` | `email_newsletters` | 🔲 New |
-| `ColdEmail` (deprecated — migrating to GroupItem) | `email_cold_senders` | 🔲 New |
-| `ThreadTracker` | `email_thread_trackers` | 🔲 New |
-| `Group` + `GroupItem` | `email_sender_groups` + `email_sender_group_items` | 🔲 New |
-| `Category` | `email_sender_categories` | 🔲 New |
-| `Knowledge` | (use Mem0 memory tools) | ✅ Exists |
-| `ReplyMemory` | (use Mem0 memory tools) | ✅ Exists |
-| `CleanupJob` + `CleanupThread` | `email_cleanup_jobs` | 🔲 New |
-
-### New Tables to Add (Porting from Inbox Zero Schema)
-
-#### `email_rules` + `email_actions`
-
-```sql
-CREATE TABLE email_rules (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    account_id UUID NOT NULL REFERENCES email_accounts(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    instructions TEXT,               -- Natural language rule description
-    enabled BOOLEAN DEFAULT true,
-    run_on_threads BOOLEAN DEFAULT false,
-    conditional_operator TEXT DEFAULT 'AND', -- 'AND' | 'OR'
-    -- Static conditions
-    from_pattern TEXT,               -- regex or exact match
-    to_pattern TEXT,
-    subject_pattern TEXT,
-    body_pattern TEXT,
-    -- AI conditions (instructions field above)
-    -- Category filter
-    category_filter_type TEXT,       -- 'INCLUDE' | 'EXCLUDE'
-    system_type TEXT,                -- 'REPLY_ZERO' | 'COLD_EMAIL' | etc.
-    prompt_text TEXT,                -- Natural language representation for prompt file sync
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    UNIQUE(account_id, name)
-);
-
-CREATE TABLE email_actions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    rule_id UUID NOT NULL REFERENCES email_rules(id) ON DELETE CASCADE,
-    account_id UUID NOT NULL REFERENCES email_accounts(id) ON DELETE CASCADE,
-    type TEXT NOT NULL,              -- 'ARCHIVE' | 'LABEL' | 'REPLY' | 'SEND_EMAIL' | 'FORWARD' | 'DRAFT_EMAIL' | 'MARK_SPAM' | 'MARK_READ' | 'STAR' | 'MOVE_FOLDER' | 'CALL_WEBHOOK'
-    label TEXT,                      -- Label name or ID
-    subject TEXT,                    -- For reply/send actions
-    content TEXT,                    -- Reply/send body template
-    to_address TEXT,
-    cc_address TEXT,
-    bcc_address TEXT,
-    url TEXT,                        -- For CALL_WEBHOOK
-    folder_name TEXT,                -- For MOVE_FOLDER
-    delay_minutes INT,               -- Delay before executing
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now()
-);
-```
-
-#### `email_newsletters` and `email_cold_senders`
-
-```sql
-CREATE TABLE email_newsletters (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    account_id UUID NOT NULL REFERENCES email_accounts(id) ON DELETE CASCADE,
-    email TEXT NOT NULL,             -- Sender email
-    name TEXT,                       -- Sender display name
-    status TEXT DEFAULT 'APPROVED',  -- 'APPROVED' | 'UNSUBSCRIBED' | 'AUTO_ARCHIVED'
-    category_id UUID,                -- Optional category
-    pattern_analyzed BOOLEAN DEFAULT false,
-    last_analyzed_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    UNIQUE(account_id, email)
-);
-
-CREATE TABLE email_cold_senders (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    account_id UUID NOT NULL REFERENCES email_accounts(id) ON DELETE CASCADE,
-    from_email TEXT NOT NULL,
-    status TEXT DEFAULT 'AI_LABELED_COLD', -- 'AI_LABELED_COLD' | 'USER_REJECTED_COLD'
-    reason TEXT,                     -- LLM classification reason
-    thread_id TEXT,
-    message_id TEXT,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    UNIQUE(account_id, from_email)
-);
-```
-
-#### `email_thread_trackers`
-
-```sql
-CREATE TABLE email_thread_trackers (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    account_id UUID NOT NULL REFERENCES email_accounts(id) ON DELETE CASCADE,
-    thread_id TEXT NOT NULL,
-    message_id TEXT NOT NULL,
-    type TEXT NOT NULL DEFAULT 'NEEDS_REPLY', -- 'NEEDS_REPLY' | 'AWAITING_REPLY' | 'NEEDS_ACTION'
-    sent_at TIMESTAMPTZ NOT NULL,
-    resolved BOOLEAN DEFAULT false,
-    follow_up_applied_at TIMESTAMPTZ,
-    follow_up_draft_id TEXT,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    UNIQUE(account_id, thread_id, message_id)
-);
-CREATE INDEX idx_email_thread_trackers_unresolved
-    ON email_thread_trackers(account_id, resolved, type, sent_at)
-    WHERE resolved = false;
-```
-
-### Prototype Architecture Patterns
-
-#### 1. AI Rules Engine — Plain English → Structured Rules
-
-Inbox Zero's approach: user writes plain English rules in a "prompt file" →
-parsed into structured database rules → LLM evaluates conditions → executes
-static actions. This two-layer design (human-readable prompt → machine-executable
-rules) is the right architecture for explainable AI email handling.
-
-**Our adaptation (porting from [`choose-rule/`](https://github.com/elie222/inbox-zero/tree/main/apps/web/utils/ai/choose-rule)):**
-- Port [`match-rules.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/choose-rule/match-rules.ts) → Python: static rule matching (from/to/subject/body patterns)
-- Port [`ai-choose-rule.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/choose-rule/ai-choose-rule.ts) → Python: LLM-based rule selection with structured output
-- Port [`execute.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/choose-rule/execute.ts) → Python: execute matched actions (archive, label, reply, forward, webhook)
-- MAF agent `agent-email-assistant` gets a `process_rules` tool
-
-#### 2. Cold Email Blocker — First-Time Sender LLM Classification
-
-Inbox Zero monitors incoming emails, checks if sender has ever been replied to,
-and if not, runs the email through an LLM to classify as cold/spam. This is
-separate from their main AI rules engine.
-
-**Our adaptation (porting from [`categorize-sender/`](https://github.com/elie222/inbox-zero/tree/main/apps/web/utils/ai/categorize-sender)):**
-- Port [`ai-categorize-single-sender.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/categorize-sender/ai-categorize-single-sender.ts) → Python: LLM classification of sender type
-- Port [`format-categories.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/categorize-sender/format-categories.ts) → Python: structured category formatting
-- `email_messages` table already tracks `from_address` — can query reply history
-- New tool: `detect_cold_email(email_id)` → calls LLM with structured prompt
-- Automatically labels cold emails; user can whitelist senders
-- Whitelist stored in `email_cold_senders` table (ported from `ColdEmail` model)
-
-#### 3. Bulk Unsubscribe — Newsletter Detection + One-Click Actions
-
-Inbox Zero uses Tinybird analytics to identify newsletter patterns (frequency,
-engagement), then presents a UI to unsubscribe and archive in bulk.
-
-**Our adaptation (without Tinybird):**
-- SQL query on `email_messages` to find senders with >5 emails, 0 replies, low
-  open rates → classify as "newsletter"
-- `suggest_unsubscribes` tool already exists — enhance with sender frequency data
-- Bulk action: select multiple senders → generate unsubscribe requests / auto-archive
-
-#### 4. Reply Tracking (Reply Zero)
-
-Inbox Zero tracks emails that need a response and those awaiting responses.
-Implemented as a special AI rule type.
-
-**Our adaptation (porting from [`reply/`](https://github.com/elie222/inbox-zero/tree/main/apps/web/utils/ai/reply)):**
-- Port [`draft-reply.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/reply/draft-reply.ts) → Python: AI reply drafting with tone parameters
-- Port [`reply-context-collector.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/reply/reply-context-collector.ts) → Python: gather thread context for replies
-- Port [`determine-thread-status.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/reply/determine-thread-status.ts) → Python: classify thread as needs-reply vs awaiting-reply
-- Port [`draft-follow-up.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/ai/reply/draft-follow-up.ts) → Python: generate follow-up nudge emails
-- SQL query on `email_thread_trackers`: unresolved threads needing response
-- New tool: `find_needing_reply(days=3)` → returns prioritized list
-- Integrates with `draft_reply` — one click from "needs reply" to draft
-
-#### 5. Gmail Pub/Sub Watch — Real-Time Notifications
-
-Inbox Zero uses Gmail's `users.watch()` API to receive push notifications via
-Google Cloud Pub/Sub when new emails arrive, rather than polling.
-
-**Our adaptation (porting from [`gmail/watch.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/watch.ts)):**
-- Gmail provider already has watch scaffolding
-- Port watch.ts → Python: Gmail `users.watch()` API setup + Pub/Sub topic management
-- Need: Google Cloud Pub/Sub topic + subscription → webhook endpoint
-- Gateway route: `POST /email/webhook/gmail` — receives Pub/Sub push
-- On push: trigger incremental sync for that account
-- Benefit: near-instant email delivery, zero polling API quota usage
-
-#### 6. Batch Gmail Operations
-
-Inbox Zero has robust batching for archive/delete/label operations
-(`batch.ts`, `batch-with-retry.ts`) with exponential backoff.
-
-**Our adaptation (porting from [`gmail/`](https://github.com/elie222/inbox-zero/tree/main/apps/web/utils/gmail)):**
-- Port [`mail.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/mail.ts) → Python: send/reply/forward with proper MIME construction + retry logic
-- Port [`batch.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/batch.ts) → Python: batch Gmail API calls with exponential backoff
-- Port [`batch-with-retry.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/batch-with-retry.ts) → Python: retry wrapper for 429/503 errors
-- `bulk_archive(message_ids)` — batch modify with remove INBOX label
-- `bulk_label(message_ids, add_labels, remove_labels)` — batch label changes
-
-#### 7. Email Content Decoding
-
-Inbox Zero handles quoted-printable, base64, multipart MIME, and HTML email
-bodies robustly (`decode.ts`, `content-sanitizer.ts`).
-
-**Our adaptation (porting from [`gmail/decode.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/decode.ts)):**
-- Port [`decode.ts`](https://github.com/elie222/inbox-zero/blob/main/apps/web/utils/gmail/decode.ts) → Python `email_decode.py`: base64, quoted-printable, multipart MIME
-- Port content sanitization: HTML→text for AI processing (strip tags, decode entities)
-- Enhance `GmailProvider._parse_gmail_message()` with proper MIME parsing
-- Handle multipart/alternative (prefer text/plain, fallback to text/html→text)
-
-#### 8. Prompt Engineering Patterns
-
-Inbox Zero uses structured, use-case-specific LLM prompts with clear output
-schemas. Key prompts to study:
-- `choose-rule/` — matching emails to user-defined rules
-- `categorize-sender/` — classifying sender types
-- `reply/` — drafting replies with tone/style options
-- `digest/` — generating email summaries
-
-**Our adaptation:**
-- Already defined in `instructions.md` — enhance with structured output formats
-- Add JSON output schemas for rule matching: `{matched: bool, rule_id: str, confidence: float}`
-- Add tone/style parameters to `draft_reply` tool (formal/casual/concise/detailed)
-
----
-
-## 13. Revised Implementation Phases
-
-### Phase 1: Foundation ✅ COMPLETE (2026-06-17)
-
-- [x] Project plan document
-- [x] Port Figma frontend into workbench `/email`
-- [x] `email_accounts` + `email_messages` DB schema
-- [x] Gateway email routes skeleton
-- [x] Email provider abstraction (`apps/email_ingestion/`)
-- [x] Gmail + Outlook provider implementations
-- [x] Gmail OAuth flow skeleton
-- [x] Email assistant agent skeleton (`apps/agent-email-assistant/`)
-- [x] Mobile-responsive layout with global bottom nav
-- [x] DOX chain updated
-
-### Phase 2: Core Email Reading + AI Classification (target: M3)
-
-- [ ] Real Gmail OAuth: Google Cloud Console project → live OAuth flow
-- [ ] Real Microsoft OAuth: Azure App Registration → live OAuth flow
-- [ ] Live email sync: Gmail history.list + Outlook delta queries → Postgres
-- [ ] **Cold email blocker**: first-time sender LLM classification
-- [ ] **Bulk unsubscribe**: newsletter detection + one-click unsubscribe suggestions
-- [ ] Email list/detail connected to real data (replace mock)
-- [ ] Search across accounts via Postgres FTS
-
-### Phase 3: AI Reply + Actions (target: M3)
-
-- [ ] **AI reply drafting**: tone-aware drafts with email context
-- [ ] **Reply tracking**: find emails needing response, track awaiting replies
-- [ ] Send/reply/forward via Gmail API + Microsoft Graph
-- [ ] **AI Rules Engine (v1)**: simple NL rules → label/archive actions
-- [ ] Batch operations: bulk archive, bulk label, bulk mark-read
-- [ ] AI chat panel connected to live agent streaming
-
-### Phase 4: Real-Time + Polish (target: M4)
-
-- [ ] **Gmail Pub/Sub push notifications** → instant sync
-- [ ] Outlook webhooks → instant sync
-- [ ] Attachment handling (download, preview, save to Drive)
-- [x] Email analytics dashboard (volume, response time, top senders)
-- [ ] Slack integration: manage inbox from Slack
-- [ ] Email templates + scheduled send
-- [ ] Offline support (service worker cache)
-
----
-
-## 14. Email Automation — Shipped (2026-06-21) + Backlog
-
-The **Email Automation** section (sidebar of `/email`) reached broad inbox-zero
-parity in this milestone. All of the following are live on the VPS and were
-live-tested against the connected Microsoft account:
-
-### Shipped ✅
-- **Assistant** (rules/test/history/settings): plain-English + static + sender-
-  **category** conditions, AND/OR, per-rule **Auto/Manual**, default-rule
-  installer (To Reply, Newsletter, Marketing, Calendar, Receipt, Notification,
-  Cold Email), **Test** (single email + recent-inbox), **History + approval
-  queue**, **auto-run on arrival** (sync-loop hook, gated by setting).
-- **Sender categorization** (LLM) + category counts; **cold-email blocker**
-  (first-time/unreplied senders) + whitelist.
-- **Reply Zero** (needs-reply / awaiting-reply) + **follow-up drafting**.
-- **Bulk Unsubscribe** (real `List-Unsubscribe`: Gmail + Outlook + IMAP) and
-  **Bulk Archive** (by age/read/sender).
-- **Analytics** (volume, read-rate, top senders, by-folder).
-- **AI drafting** via the **`email-assistant` MAF agent** — context from Mem0
-  memory + hand-off to `sales`/`task-manager` (`call_agent`); REPLY/FORWARD/
-  DRAFT_EMAIL create provider **drafts** (Gmail/Outlook/IMAP), never auto-send.
-- **Assistant chat** with the full inbox-zero tool surface (search/read/manage-
-  inbox/draft/categorize/rules-CRUD/settings) — user-scoped, verified reading
-  the live inbox.
-- **Model selection**: all configured LiteLLM tiers/models in Settings;
-  **default `tier-balanced` → DeepSeek**, routed BYOK through the gateway `/v1`
-  (agents flipped to `github-copilot` runtime; `copilot_chat_model` default set).
-- **Digests**: view + email-to-self + scheduled (Off/Daily/Weekly) via sync loop.
-- Tables: `email_rules`/`email_actions`/`email_executed_rules`,
-  `email_newsletters`, `email_senders`, `email_cold_senders`,
-  `email_assistant_settings`; migrations `19`–`24`.
-
-### Backlog — build later 🔲
-Priority order (highest automation value first):
-1. **Learned patterns** — update rules from approve/reject corrections so
-   matching improves over time (inbox-zero `getLearnedPatterns`/`updateLearnedPatterns`).
-2. **Knowledge base for drafting** — upload docs (pricing, FAQs, policies) the
-   drafter cites; currently only Mem0 memory is used.
-3. **Calendar tools in replies** — availability + booking links when drafting.
-4. **AI "Clean" flow** — AI-scored bulk inbox cleanup with a review queue
-   (beyond rule-based Bulk Archive).
-5. **Attachment auto-filing** → Drive/OneDrive.
-6. **Meeting briefs** (email + calendar context).
-7. **Slack/Telegram** inbox control; **scheduled send / snooze**.
-
-### Known limitations / follow-ups 🛠
-- **Non-streaming `run_agent` BYOK**: the chat (`run_agent_stream`) routes
-  DeepSeek-primary; the background draft path (`run_agent`) still detours through
-  Copilot → 402 → self-anneal to DeepSeek (works, wasteful). Mirror the BYOK
-  pre-injection block into `run_agent` to make it DeepSeek-primary.
-- **Multi-user tool scoping**: agent tools resolve the user via the memory
-  ContextVar with an `ACB_AGENT_USER_EMAIL` env fallback (reliable for the
-  single-user VPS; multi-user needs the ContextVar to propagate into the Copilot
-  SDK tool-callback context).
-- **Outlook/IMAP draft creation + `List-Unsubscribe`**: implemented but not
-  end-to-end verified against live Outlook/IMAP (capture needs a re-sync).
-- **Cold-email/categorization LLM cost**: bounded per run, but watch token usage
-  on large inboxes when auto-run is enabled.
+## 10. Success criteria — status
+
+- ✅ Connect 2+ Gmail + 1+ Microsoft accounts.
+- ✅ Unified inbox; mail appears within a sync cycle (instant on Outlook via webhook).
+- ✅ Assistant summarizes/triages unread; drafts personalized replies (style + KB + memory).
+- ✅ Send/reply/forward + attachments across connected accounts.
+- ✅ Cross-account full-text search.
+- ✅ Mobile-responsive layout.
+- 🟡 Sub-5-min latency on Gmail depends on the polling interval (Pub/Sub push backlog).

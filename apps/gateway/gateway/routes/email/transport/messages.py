@@ -15,6 +15,7 @@ from gateway.routes.email.core import (
     EmailMessageModel,
     _assert_account_owner,
     _fetch_attachments,
+    _fetch_attachments_batch,
     _get_db,
     _log,
     _persist_rotated_creds,
@@ -217,6 +218,17 @@ async def list_messages(
         rows = result.fetchall()
 
         messages = [_row_to_message(row) for row in rows]
+
+        # Conversation load (thread_id given): populate EACH message's
+        # attachments so earlier messages' files are viewable too — not just the
+        # one open in the reader. One batched query; the folder list stays lean
+        # (it keeps only the has_attachments flag).
+        if thread_id:
+            with_atts = [str(m.id) for m in messages if m.has_attachments]
+            if with_atts:
+                atts_by_msg = await _fetch_attachments_batch(db, with_atts)
+                for m in messages:
+                    m.attachments = atts_by_msg.get(str(m.id), [])
 
         # Thread sizes — one extra grouped query so the list can flag which rows
         # are conversations (badge with the message count).

@@ -127,3 +127,10 @@ export function buildOptimisticSent(params: {
 export function bodyMatchKey(text: string): string {
   return (text || "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 60);
 }
+
+/** Human-readable byte size for an attachment (B / KB / MB). */
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}

@@ -154,3 +154,79 @@ async def test_priority_inbox_ranks_and_excludes_bulk():
     assert e["message_id"] == "m1"
     assert "needs reply" in e["reason"] and "unread" in e["reason"]
     assert e["score"] == 170
+
+
+# ── Per-message attachments in a conversation load (thread_id) ────────────────
+
+def _msg_row(*, has_attachments: bool):
+    return SimpleNamespace(
+        id="m1", provider_message_id="pm1", thread_id="t1", account_id="acc-1",
+        folder="inbox", labels=[],
+        from_address={"name": "Jo", "email": "jo@x.com"},
+        to_addresses=[], cc_addresses=[], bcc_addresses=[], subject="Hi",
+        body_text="b", body_html=None, snippet="b",
+        has_attachments=has_attachments, is_read=True, is_starred=False,
+        is_flagged=False, importance="normal", categories=[],
+        received_at=None, synced_at=None,
+    )
+
+
+async def _run_thread_list(*, thread_id, msg_row, att_rows):
+    """Drive list_messages with a routed mock so we can feed the page query a
+    real message row, the batch attachment query its rows, and inspect both."""
+    captured: list[str] = []
+
+    async def fake_execute(stmt, params=None):
+        sql = str(stmt)
+        captured.append(sql)
+        r = MagicMock()
+        if "FROM email_attachments" in sql:
+            r.fetchall.return_value = att_rows
+        elif "GROUP BY thread_id" in sql:
+            r.fetchall.return_value = []          # thread-count query
+        elif "COUNT(*)" in sql:
+            r.scalar.return_value = 1             # total
+            r.fetchall.return_value = []
+        else:
+            r.fetchall.return_value = [msg_row]   # page query
+        return r
+
+    db = AsyncMock()
+    db.execute.side_effect = fake_execute
+    user = SimpleNamespace(email="u@example.com")
+    with patch.object(m.transport.messages, "_get_db", AsyncMock(return_value=db)):
+        resp = await m.list_messages(
+            account_id="acc-1", folder=None, label=None, query=None,
+            thread_id=thread_id, received_after=None, received_before=None,
+            is_read=None, is_starred=None, has_attachments=None, importance=None,
+            from_email=None, sender_category=None, sort="oldest",
+            page=1, page_size=50, user=user,
+        )
+    return resp, captured
+
+
+async def test_thread_list_populates_per_message_attachments():
+    # The conversation load batch-hydrates each message's attachments so an
+    # earlier message's files are viewable, not just the open one.
+    att = SimpleNamespace(
+        message_id="m1", id="att1", filename="quote.pdf",
+        mime_type="application/pdf", size_bytes=2048)
+    resp, captured = await _run_thread_list(
+        thread_id="t1", msg_row=_msg_row(has_attachments=True), att_rows=[att])
+
+    assert any("FROM email_attachments" in s for s in captured)  # batched query ran
+    atts = resp["emails"][0]["attachments"]
+    assert len(atts) == 1
+    assert atts[0]["id"] == "att1"
+    assert atts[0]["filename"] == "quote.pdf"
+
+
+async def test_folder_list_skips_attachment_hydration():
+    # No thread_id (a folder list) → no per-message attachment query; the list
+    # keeps only the has_attachments flag, staying lean.
+    resp, captured = await _run_thread_list(
+        thread_id=None, msg_row=_msg_row(has_attachments=True), att_rows=[])
+
+    assert not any("FROM email_attachments" in s for s in captured)
+    assert resp["emails"][0]["attachments"] == []
+    assert resp["emails"][0]["has_attachments"] is True

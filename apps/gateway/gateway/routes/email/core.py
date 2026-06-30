@@ -585,3 +585,37 @@ async def _fetch_attachments(db: Any, message_id: str) -> list[AttachmentModel]:
         )
         for r in rows
     ]
+
+
+async def _fetch_attachments_batch(
+    db: Any, message_ids: list[str]
+) -> dict[str, list[AttachmentModel]]:
+    """Attachment metadata for MANY messages in one query, keyed by message id.
+
+    The conversation/thread list uses this so EVERY message in the thread carries
+    its own attachments (the single-message detail path uses _fetch_attachments).
+    Mirrors that helper's download_url construction. Returns {} on no input."""
+    out: dict[str, list[AttachmentModel]] = {}
+    if not message_ids:
+        return out
+    result = await db.execute(
+        text(
+            "SELECT message_id, id, filename, mime_type, size_bytes "
+            "FROM email_attachments WHERE message_id::text = ANY(:mids) "
+            "ORDER BY message_id, filename"
+        ),
+        {"mids": [str(m) for m in message_ids]},
+    )
+    gateway_url = os.environ.get("GATEWAY_EXTERNAL_URL", "")
+    for r in result.fetchall():
+        out.setdefault(str(r.message_id), []).append(
+            AttachmentModel(
+                id=str(r.id),
+                filename=r.filename,
+                mime_type=r.mime_type,
+                size_bytes=r.size_bytes,
+                download_url=f"{gateway_url}/email/attachments/{r.id}/download"
+                if gateway_url else None,
+            )
+        )
+    return out

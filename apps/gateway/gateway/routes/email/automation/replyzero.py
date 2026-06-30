@@ -1204,8 +1204,13 @@ async def _maybe_classify_threads(account_id: str) -> None:
                 gap_inbound.append(r)
         await db.commit()
 
-        for r in gap_inbound[:_BACKFILL_INBOUND_CAP]:  # cap engine work per cycle
-            email = email_dict_from_row(r, self_email, about, extra_domains)
+        gap = gap_inbound[:_BACKFILL_INBOUND_CAP]  # cap engine work per cycle
+        gap_attach = await _attachment_summaries(db, [r.id for r in gap])
+        for r in gap:
+            # extra_domains is a KEYWORD arg (positional lands it in self_name).
+            email = email_dict_from_row(
+                r, self_email, about, extra_domains=extra_domains,
+                attachments=gap_attach.get(str(r.id), ""))
             match = await _match_email_to_rule(db, account_id, email)
             # Full-thread status determination (same parity as the live runner)
             # when the match is a conversation.

@@ -9,9 +9,12 @@ from typing import Any
 
 from fastapi import HTTPException
 from gateway.routes.email.automation.assistant import _account_models
-from gateway.routes.email.automation.identity import sender_scope
+from gateway.routes.email.automation.identity import (
+    resolve_org_domains,
+    sender_scope,
+)
 from gateway.routes.email.automation.rules import _load_rules
-from gateway.routes.email.core import _log, _safe_json
+from gateway.routes.email.core import _attachment_summaries, _log, _safe_json
 from sqlalchemy import text
 
 
@@ -37,6 +40,7 @@ def _fmt_recipients(field: Any) -> str:
 def email_dict_from_row(
     row: Any, self_email: str = "", about: str = "", self_name: str = "",
     extra_domains: frozenset[str] | set[str] = frozenset(),
+    attachments: str = "",
 ) -> dict[str, str]:
     """Build the classifier's email dict from an ``email_messages`` row.
 
@@ -65,6 +69,8 @@ def email_dict_from_row(
         "thread_id": getattr(row, "thread_id", "") or "",
         "sender_scope": sender_scope(
             frm.get("email", ""), self_email or "", extra_domains),
+        # "Attachments: file.pdf (…)" line (or "") — see core._attachment_summaries.
+        "attachments": attachments or "",
     }
 
 
@@ -623,12 +629,16 @@ async def _match_email_to_rules_multi(
 
 async def _email_payload_from_id(db: Any, message_id: str, user_email: str) -> dict[str, str]:
     row = (await db.execute(text(
-        """SELECT em.subject, em.body_text, em.snippet, em.from_address,
-                  em.to_addresses, em.cc_addresses, em.thread_id, em.received_at,
-                  ea.email_address
+        """SELECT em.id, em.account_id, em.subject, em.body_text, em.snippet,
+                  em.from_address, em.to_addresses, em.cc_addresses, em.thread_id,
+                  em.received_at, ea.email_address
            FROM email_messages em JOIN email_accounts ea ON em.account_id = ea.id
            WHERE em.id = :mid AND ea.user_id = :uid"""
     ), {"mid": message_id, "uid": user_email})).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Message not found")
-    return email_dict_from_row(row, getattr(row, "email_address", "") or "")
+    org_domains = await resolve_org_domains(db, str(row.account_id))
+    attach = (await _attachment_summaries(db, [row.id])).get(str(row.id), "")
+    return email_dict_from_row(
+        row, getattr(row, "email_address", "") or "",
+        extra_domains=org_domains, attachments=attach)

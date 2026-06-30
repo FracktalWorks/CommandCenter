@@ -29,10 +29,12 @@ from gateway.routes.email.automation.engine import (
     _match_email_to_rules_multi,
     email_dict_from_row,
 )
+from gateway.routes.email.automation.identity import resolve_org_domains
 from gateway.routes.email.automation.rules import _upsert_rule_pattern
 from gateway.routes.email.automation.senders import _maybe_block_cold
 from gateway.routes.email.core import (
     _assert_account_owner,
+    _attachment_summaries,
     _date_range_clause,
     _get_db,
     _instantiate_provider,
@@ -120,11 +122,15 @@ async def test_rules_recent(
                WHERE account_id = :aid AND LOWER(folder) = 'inbox'
                ORDER BY received_at DESC LIMIT :limit"""
         ), {"aid": req.account_id, "limit": min(req.limit, 15)})).fetchall()
+        org_domains = await resolve_org_domains(db, req.account_id)
+        attach = await _attachment_summaries(db, [r.id for r in rows])
         results = []
         for r in rows:
             frm = r.from_address if isinstance(r.from_address, dict) \
                 else json.loads(r.from_address or "{}")
-            email = email_dict_from_row(r, self_email, about)
+            email = email_dict_from_row(
+                r, self_email, about, extra_domains=org_domains,
+                attachments=attach.get(str(r.id), ""))
             match = await _match_email_to_rule(db, req.account_id, email)
             results.append({
                 "email_id": str(r.id),
@@ -593,8 +599,11 @@ async def run_rules_on_message(
         frm = row.from_address if isinstance(row.from_address, dict) \
             else json.loads(row.from_address or "{}")
         about, _ = await _load_assistant_about(db, req.account_id)
+        org_domains = await resolve_org_domains(db, req.account_id)
+        attach = (await _attachment_summaries(db, [row.id])).get(str(row.id), "")
         email = email_dict_from_row(
-            row, await _account_self_email(db, req.account_id), about)
+            row, await _account_self_email(db, req.account_id), about,
+            extra_domains=org_domains, attachments=attach)
         match = await _match_email_to_rule(db, req.account_id, email)
 
         if req.is_test:
@@ -802,6 +811,8 @@ async def _process_past_emails_job(
             "WHERE account_id = :aid"
         ), {"aid": account_id})).fetchone()
         multi_rule = bool(mr_row and getattr(mr_row, "multi_rule_execution", None))
+        org_domains = await resolve_org_domains(db, account_id)
+        attach = await _attachment_summaries(db, [r.id for r in rows])
 
         provider = None
         if not dry_run:
@@ -820,7 +831,9 @@ async def _process_past_emails_job(
         for r in rows:
             frm = r.from_address if isinstance(r.from_address, dict) \
                 else json.loads(r.from_address or "{}")
-            email = email_dict_from_row(r, self_email, about)
+            email = email_dict_from_row(
+                r, self_email, about, extra_domains=org_domains,
+                attachments=attach.get(str(r.id), ""))
             if multi_rule:
                 matches = await _match_email_to_rules_multi(db, account_id, email)
             else:
@@ -928,11 +941,16 @@ async def _run_rules_job(
         # thread is the latest — project only that one (older ones must not clobber
         # a newer status).
         projected_threads: set[str] = set()
+        attach = await _attachment_summaries(db, [r.id for r in rows])
 
         for r in rows:
             frm = r.from_address if isinstance(r.from_address, dict) \
                 else json.loads(r.from_address or "{}")
-            email = email_dict_from_row(r, self_email, about, org_domains)
+            # extra_domains is a KEYWORD arg — passing it positionally lands it in
+            # self_name and silently drops the configured org domains.
+            email = email_dict_from_row(
+                r, self_email, about, extra_domains=org_domains,
+                attachments=attach.get(str(r.id), ""))
             # Multi-rule execution (inbox-zero parity): when on, every matching
             # rule applies; otherwise just the single best match.
             if multi_rule:
@@ -1239,7 +1257,6 @@ async def _apply_rule_actions(
                 if tmpl:
                     body = tmpl
                 else:
-                    from gateway.routes.email.core import _attachment_summaries  # noqa: PLC0415
                     draft_email = {
                         **email,
                         "thread": await _fetch_thread_context(

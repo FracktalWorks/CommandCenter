@@ -18,6 +18,8 @@ from gateway.routes.email.automation.assistant import (
 )
 from gateway.routes.email.core import (
     _assert_account_owner,
+    _attachment_summaries,
+    _fmt_addr_list,
     _get_db,
     _instantiate_provider,
     _log,
@@ -1083,8 +1085,9 @@ async def draft_reply_smart(
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         row = (await db.execute(text(
-            """SELECT em.provider_message_id, em.thread_id, em.subject,
-                      em.body_text, em.snippet, em.from_address
+            """SELECT em.id, em.provider_message_id, em.thread_id, em.subject,
+                      em.body_text, em.snippet, em.from_address,
+                      em.to_addresses, em.cc_addresses
                FROM email_messages em
                WHERE em.id = :mid AND em.account_id = :aid"""
         ), {"mid": req.message_id, "aid": req.account_id})).fetchone()
@@ -1095,6 +1098,10 @@ async def draft_reply_smart(
         email = {
             "subject": row.subject or "", "from": frm.get("email", ""),
             "from_name": frm.get("name", "") or "",
+            "to": _fmt_addr_list(row.to_addresses),
+            "cc": _fmt_addr_list(row.cc_addresses),
+            "attachments": (await _attachment_summaries(
+                db, [row.id])).get(str(row.id), ""),
             "body": row.body_text or row.snippet or "",
             "thread_id": row.thread_id or "",
             "thread": await _fetch_thread_context(

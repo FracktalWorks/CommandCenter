@@ -387,6 +387,8 @@ async def query_inbox(
             flags.append("unread")
         if e.get("is_starred"):
             flags.append("star")
+        if e.get("has_attachments"):
+            flags.append("attachment")
         flag = f" [{', '.join(flags)}]" if flags else ""
         lines.append(
             f"• id={e.get('id')} | {(e.get('received_at') or '')[:10]} | "

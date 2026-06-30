@@ -113,6 +113,17 @@ def test_extra_domain_makes_cross_domain_teammate_internal() -> None:
     assert _id.sender_scope("ops@acme.io", "me@acme.com", frozenset()) == "external"
 
 
+def test_email_dict_extra_domains_must_be_keyword() -> None:
+    # extra_domains is the 5th param; passing it positionally lands it in
+    # self_name and drops the org domains. As a keyword it reaches sender_scope.
+    d = _eng.email_dict_from_row(
+        _row("ops@acme.io"), "me@acme.com", extra_domains={"acme.io"},
+        attachments="Attachments: q.pdf (application/pdf)")
+    assert d["sender_scope"] == "internal"     # configured domain applied
+    assert d["self_name"] == ""                # not polluted by the domain set
+    assert d["attachments"] == "Attachments: q.pdf (application/pdf)"
+
+
 async def test_resolve_org_domains_normalizes_and_fails_safe() -> None:
     db = AsyncMock()
     res = MagicMock()

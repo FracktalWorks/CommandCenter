@@ -813,17 +813,28 @@ async def _llm_categorize_senders(
         def _line(i: int, it: dict[str, Any]) -> str:
             tag = (" [YOUR ORGANISATION — internal/outbound]"
                    if it.get("scope") in ("self", "internal") else "")
-            return (f"{i}. {it.get('name') or ''} <{it['email']}>{tag} — "
+            # Volume / read-rate / one-click-unsubscribe are strong signals:
+            # high-volume + low-read + has-unsubscribe ⇒ Newsletter/Marketing.
+            vol = int(it.get("volume", 0) or 0)
+            unread = int(it.get("unread", 0) or 0)
+            read_pct = round((vol - unread) / vol * 100) if vol else 0
+            unsub = " [has one-click unsubscribe]" if it.get("has_unsub") else ""
+            stats = f" ({vol} emails, {read_pct}% read){unsub}" if vol else unsub
+            return (f"{i}. {it.get('name') or ''} <{it['email']}>{tag}{stats} — "
                     f"subjects: {'; '.join((it.get('subjects') or [])[:3])}")
         listing = "\n".join(_line(i, it) for i, it in enumerate(items))
         sys_prompt = (
             "Classify each email sender into exactly one category from: "
-            f"{', '.join(EMAIL_CATEGORIES)}. Use the sender address and recent "
-            "subjects. Senders tagged [YOUR ORGANISATION] are the user's own "
-            "address or company (same domain) — their mail is internal/outbound, "
-            "so NEVER classify them as Receipt, Newsletter, Marketing, Cold Email "
-            "or Notification (those are for mail RECEIVED from outside parties); "
-            "use Personal, Support, Calendar or Unknown instead. Respond with ONLY "
+            f"{', '.join(EMAIL_CATEGORIES)}. Use the sender address, recent "
+            "subjects, and the signals in brackets: a sender with a one-click "
+            "unsubscribe and/or high volume + low read-rate is almost certainly "
+            "Newsletter or Marketing; a low-volume sender you read is more likely "
+            "Personal/Support. Senders tagged [YOUR ORGANISATION] are the user's "
+            "own address or company (same domain) — their mail is internal/"
+            "outbound, so NEVER classify them as Receipt, Newsletter, Marketing, "
+            "Cold Email or Notification (those are for mail RECEIVED from outside "
+            "parties); use Personal, Support, Calendar or Unknown instead. "
+            "Respond with ONLY "
             'a JSON object '
             '{"results": [{"index": <n>, "category": "<one category>"}]}.'
         )
@@ -860,7 +871,10 @@ async def _categorize_senders_job(account_id: str, limit: int) -> None:
         rows = (await db.execute(text(
             """SELECT LOWER(from_address->>'email') AS email,
                       MAX(from_address->>'name') AS name,
-                      (array_agg(subject ORDER BY received_at DESC))[1:3] AS subjects
+                      (array_agg(subject ORDER BY received_at DESC))[1:3] AS subjects,
+                      COUNT(*) AS volume,
+                      COUNT(*) FILTER (WHERE is_read = false) AS unread,
+                      bool_or(unsubscribe_link IS NOT NULL) AS has_unsub
                FROM email_messages
                WHERE account_id = :aid
                  AND COALESCE(from_address->>'email','') <> ''
@@ -882,7 +896,10 @@ async def _categorize_senders_job(account_id: str, limit: int) -> None:
         items = [
             {"email": r.email, "name": r.name or "",
              "subjects": [s for s in (r.subjects or []) if s],
-             "scope": sender_scope(r.email, self_email, org_domains)}
+             "scope": sender_scope(r.email, self_email, org_domains),
+             "volume": int(getattr(r, "volume", 0) or 0),
+             "unread": int(getattr(r, "unread", 0) or 0),
+             "has_unsub": bool(getattr(r, "has_unsub", False))}
             for r in rows
         ]
         # Never categorize the user's OWN address as a "sender" (it would persist

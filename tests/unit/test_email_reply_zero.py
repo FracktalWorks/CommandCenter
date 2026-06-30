@@ -263,6 +263,7 @@ def _backfill_db(latest, existing):
         _result(fetchall=existing),
         _result(fetchone=SimpleNamespace(email_address="me@x.com")),
         _result(fetchone=None),  # resolve_org_domains (none configured)
+        _result(fetchall=[]),    # _attachment_summaries for inbound-gap rows
     ]
     return db
 

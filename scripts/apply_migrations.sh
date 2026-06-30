@@ -42,11 +42,16 @@ fi
 
 say "Applying migrations to db '$PG_DB' as '$PG_USER' (container: $PG_CONTAINER)"
 
-# Apply 02+ in numeric order. 00/01 are init-only (handled by initdb on first
-# boot) and contain statements that aren't re-runnable (CREATE DATABASE etc.).
+# Apply 02+ in numeric order. Only NUMBERED migration files (NN_*.sql) are
+# applied — non-numbered .sql files in this dir are reference artifacts, NOT
+# migrations. In particular schema.generated.sql is a full pg_dump snapshot (the
+# consolidated schema, for humans/tools) whose raw CREATE TYPE/TABLE statements
+# are NOT idempotent and MUST NOT be replayed onto an already-migrated DB (it
+# errors with `type "..." already exists`). 00/01 are init-only (handled by
+# initdb on first boot) and contain statements that aren't re-runnable.
 shopt -s nullglob
 applied=0
-for f in $(ls "$MIGRATIONS_DIR"/*.sql | sort); do
+for f in $(ls "$MIGRATIONS_DIR"/[0-9][0-9]_*.sql | sort); do
   base="$(basename "$f")"
   case "$base" in
     00_*|01_*) continue ;;  # init-only, skip

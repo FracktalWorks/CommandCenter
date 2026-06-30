@@ -163,6 +163,12 @@ async def ai_chat(
     run_id = str(uuid.uuid4())
 
     # ── Set user context for memory tools ──
+    # Deliberately the BARE user email, NOT an account-scoped key: the agent
+    # reuses this same ContextVar as its X-User-Email gateway-auth identity (see
+    # agents._current_user_email), so a "#acct:" suffix would break every tool
+    # call. The drafting pipeline's per-account Mem0 scope (email_memory_scope)
+    # lives on the gateway side only — the chat agent's free-form remember()
+    # intentionally reads the user-global namespace.
     try:
         from acb_skills.memory_tools import _set_memory_user_id  # noqa: PLC0415
         _set_memory_user_id(user_id)
@@ -1591,7 +1597,7 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bo
                         }
                         body = await _agent_draft_reply(
                             email, about, signature, acc.user_id, use_agent=True,
-                            follow_up=True, model=fu_model,
+                            follow_up=True, model=fu_model, account_id=account_id,
                         )
                         # Confidence gate (defense-in-depth): don't persist a
                         # declined / empty draft as a real provider draft.

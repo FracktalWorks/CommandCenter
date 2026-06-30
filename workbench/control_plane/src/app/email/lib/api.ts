@@ -63,6 +63,7 @@ function mapAccount(raw: Record<string, unknown>): EmailAccount {
     lastSyncedAt: raw.last_synced_at ? String(raw.last_synced_at) : undefined,
     syncStatus: raw.sync_status ? String(raw.sync_status) : undefined,
     syncError: raw.sync_error ? String(raw.sync_error) : undefined,
+    isDefault: Boolean(raw.is_default ?? false),
   };
 }
 
@@ -155,6 +156,15 @@ export async function createEmailAccount(
 
 export async function deleteEmailAccount(id: string): Promise<void> {
   await gatewayFetch(`/email/accounts/${id}`, { method: "DELETE" });
+}
+
+/** Make this account the user's default mailbox (the inbox the UI opens on). */
+export async function setDefaultEmailAccount(id: string): Promise<EmailAccount> {
+  const raw = await gatewayFetch<Record<string, unknown>>(
+    `/email/accounts/${id}/default`,
+    { method: "POST" }
+  );
+  return mapAccount(raw);
 }
 
 export async function updateEmailAccount(

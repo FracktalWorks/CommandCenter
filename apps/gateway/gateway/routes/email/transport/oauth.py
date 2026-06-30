@@ -239,9 +239,11 @@ async def oauth_callback(
                 text(
                     """INSERT INTO email_accounts
                        (id, user_id, provider, email_address, label,
-                        avatar_color, credentials_encrypted)
+                        avatar_color, credentials_encrypted, is_default)
                        VALUES (:id, :user_id, :provider, :email, :label,
-                                :color, :creds)
+                                :color, :creds,
+                                NOT EXISTS (SELECT 1 FROM email_accounts
+                                            WHERE user_id = :user_id))
                        RETURNING id"""
                 ),
                 {

@@ -264,6 +264,8 @@ interface EmailState {
   clearTestResults: () => void;
   triggerSync: (accountId: string) => Promise<void>;
   deleteAccount: (id: string) => Promise<void>;
+  /** Make an account the user's default mailbox (the inbox the UI opens on). */
+  setDefaultAccount: (id: string) => Promise<void>;
   clearError: () => void;
 }
 
@@ -275,6 +277,61 @@ let _sendTimer: ReturnType<typeof setTimeout> | undefined;
 let _stopTestRun = false;
 /** How long the user has to undo a send. */
 const UNDO_SEND_MS = 5000;
+
+/** localStorage key + URL param that persist the selected mailbox so the right
+ *  inbox survives a refresh and is deep-linkable (the inbox-zero pattern, minus
+ *  a dynamic route segment). */
+const ACCOUNT_LS_KEY = "cc.email.selectedAccountId";
+const ACCOUNT_URL_PARAM = "account";
+
+/** Read the preferred account id: an explicit ?account= URL param wins (shared
+ *  link), else the last selection from localStorage. Null on the server or when
+ *  neither is set. */
+function readPreferredAccountId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get(
+      ACCOUNT_URL_PARAM,
+    );
+    if (fromUrl) return fromUrl;
+  } catch {
+    /* malformed URL — fall through to storage */
+  }
+  try {
+    return window.localStorage.getItem(ACCOUNT_LS_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Persist the active account to localStorage and reflect it in the URL (without
+ *  a navigation) so a refresh or shared link reopens the same mailbox. */
+function persistAccountId(id: string | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (id) window.localStorage.setItem(ACCOUNT_LS_KEY, id);
+    else window.localStorage.removeItem(ACCOUNT_LS_KEY);
+  } catch {
+    /* storage disabled (private mode) — URL still carries it */
+  }
+  try {
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set(ACCOUNT_URL_PARAM, id);
+    else url.searchParams.delete(ACCOUNT_URL_PARAM);
+    window.history.replaceState({}, "", url);
+  } catch {
+    /* history unavailable — localStorage still carries it */
+  }
+}
+
+/** Choose the initial account from a fetched list: a still-valid persisted/URL
+ *  choice wins, else the user's default mailbox, else the first account. */
+function pickInitialAccount(accounts: EmailAccount[]): string | null {
+  if (accounts.length === 0) return null;
+  const preferred = readPreferredAccountId();
+  if (preferred && accounts.some((a) => a.id === preferred)) return preferred;
+  return accounts.find((a) => a.isDefault)?.id ?? accounts[0].id;
+}
 
 export const useEmailStore = create<EmailState>((set, get) => ({
   // Data
@@ -327,13 +384,18 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       // Demo fallback: no real accounts connected → show the mock set.
       if (accounts.length === 0 && DEMO) accounts = MOCK_ACCOUNTS;
       set({ accounts, accountsLoading: false });
-      // Auto-select first account if none selected
+      // Pick the initial mailbox when none is selected yet: a persisted/URL
+      // choice wins, else the user's default account, else the first one — so a
+      // refresh or shared ?account= link reopens the right inbox.
       const { selectedAccountId } = get();
       if (!selectedAccountId && accounts.length > 0) {
-        set({ selectedAccountId: accounts[0].id });
-        // Fetch folders + labels for the auto-selected account
-        get().fetchFolders(accounts[0].id);
-        get().fetchLabels(accounts[0].id);
+        const initial = pickInitialAccount(accounts);
+        if (initial) {
+          set({ selectedAccountId: initial });
+          persistAccountId(initial);
+          get().fetchFolders(initial);
+          get().fetchLabels(initial);
+        }
       }
     } catch (err: any) {
       // Demo fallback: backend unreachable → seed mock accounts so the UI works.
@@ -573,6 +635,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
 
   selectAccount: (id: string) => {
     set({ selectedAccountId: id, selectedEmailId: null, selectedIds: new Set() });
+    // Remember the choice (localStorage + URL) so it survives a refresh.
+    persistAccountId(id);
     // Fetch folders, labels and emails for the newly selected account
     get().fetchFolders(id);
     get().fetchLabels(id);
@@ -922,14 +986,41 @@ export const useEmailStore = create<EmailState>((set, get) => ({
 
   deleteAccount: async (id) => {
     try {
+      const removed = get().accounts.find((a) => a.id === id);
       await api.deleteEmailAccount(id);
-      const accounts = get().accounts.filter((a) => a.id !== id);
+      let accounts = get().accounts.filter((a) => a.id !== id);
+      // If we deleted the default mailbox, the backend re-elects the earliest
+      // remaining one — mirror that locally so the Star doesn't vanish until the
+      // next refetch (accounts come ordered is_default DESC, created_at).
+      if (removed?.isDefault && accounts.length > 0 && !accounts.some((a) => a.isDefault)) {
+        accounts = accounts.map((a, i) => (i === 0 ? { ...a, isDefault: true } : a));
+      }
       set({ accounts });
       if (get().selectedAccountId === id) {
-        set({ selectedAccountId: accounts[0]?.id ?? null });
+        const next = accounts.find((a) => a.isDefault)?.id ?? accounts[0]?.id ?? null;
+        set({ selectedAccountId: next });
+        persistAccountId(next);
+        if (next) {
+          get().fetchFolders(next);
+          get().fetchLabels(next);
+          get().fetchEmails();
+        }
       }
     } catch (err: any) {
       set({ error: err.message || "Failed to delete account" });
+    }
+  },
+
+  setDefaultAccount: async (id) => {
+    // Optimistically move the default flag, then persist to the backend.
+    const prev = get().accounts;
+    set({
+      accounts: prev.map((a) => ({ ...a, isDefault: a.id === id })),
+    });
+    try {
+      await api.setDefaultEmailAccount(id);
+    } catch (err: any) {
+      set({ accounts: prev, error: err.message || "Failed to set default account" });
     }
   },
 

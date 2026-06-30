@@ -364,6 +364,28 @@ def _default_label(provider: str) -> str:
     return labels.get(provider, "Email")
 
 
+def email_memory_scope(user_email: str, account_id: str | None) -> str:
+    """Namespace email-assistant Mem0 memory PER connected account.
+
+    A user with several inboxes (work + personal) must not have one account's
+    learned writing style / reply preferences leak into another's drafting.
+    Mem0 keys by a single ``user_id`` string, so we fold the account id into it.
+
+    CRITICAL: reads (``remember`` / ``get_memory_context``) and writes
+    (``add_memories_background``) for a given account MUST both pass the value
+    returned here, or retrieval silently misses. Falls back to the bare user
+    email when no account is resolved (legacy / cross-account global scope).
+
+    This is used ONLY for the gateway-side direct Mem0 calls. It is deliberately
+    NOT pushed into the agent's memory ContextVar — the email-assistant reuses
+    that same var as its ``X-User-Email`` gateway-auth identity, so a scoped
+    value there would break the agent's tool calls.
+    """
+    uid = (user_email or "").strip().lower()
+    aid = (account_id or "").strip()
+    return f"{uid}#acct:{aid}" if (uid and aid) else uid
+
+
 def _is_body_truncated(body_text: str, body_html: str) -> bool:
     """Check whether a stored message body was truncated at sync time."""
     if body_text and len(body_text.encode("utf-8", errors="replace")) >= MAX_BODY_TEXT_BYTES:

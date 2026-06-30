@@ -82,6 +82,7 @@ export default function EmailPage() {
     loadMoreEmails,
     backfillOlder,
     selectAccount,
+    setDefaultAccount,
     selectFolder,
     selectEmail,
     setSearchQuery,
@@ -229,6 +230,7 @@ export default function EmailPage() {
       selectedFolder={selectedFolder}
       onFolderSelect={handleFolderSelect}
       onAddAccount={handleAddAccount}
+      onSetDefault={setDefaultAccount}
       onSearch={setSearchQuery}
       showAutomation={false}
     />
@@ -242,6 +244,7 @@ export default function EmailPage() {
       folders={folders}
       selectedFolder={selectedFolder}
       onFolderSelect={handleFolderSelect}
+      onSetDefault={setDefaultAccount}
       onOpenAutomation={handleOpenAutomation}
       activeAutomation={automationFeature}
       showMailbox={false}
@@ -621,6 +624,7 @@ export default function EmailPage() {
               selectedFolder={selectedFolder}
               onFolderSelect={handleFolderSelect}
               onAddAccount={handleAddAccount}
+              onSetDefault={setDefaultAccount}
               onSearch={setSearchQuery}
               onOpenAutomation={handleOpenAutomation}
               activeAutomation={automationFeature}

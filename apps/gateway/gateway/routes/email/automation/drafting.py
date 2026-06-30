@@ -28,6 +28,7 @@ from gateway.routes.email.core import (
     _provider_for_message,
     _row_to_message,
     _safe_json,
+    email_memory_scope,
     router,
 )
 from pydantic import BaseModel
@@ -416,8 +417,9 @@ async def _learn_from_sent(account_id: str, thread_id: str, sent_text: str) -> N
         await db.commit()
         _log.info("email.learned_memories", account_id=account_id,
                   count=len(stored))
-        # Also remember the strongest memory in Mem0 (keyed by the account owner)
-        # so it surfaces during future drafting retrieval, not just this table.
+        # Also remember the strongest memory in Mem0 — scoped to THIS account
+        # (email_memory_scope) so future drafting retrieval on this inbox sees it
+        # and other inboxes don't. Surfaces during the drafter's remember() pass.
         try:
             urow = (await db.execute(text(
                 "SELECT user_id FROM email_accounts WHERE id = :aid"
@@ -425,7 +427,7 @@ async def _learn_from_sent(account_id: str, thread_id: str, sent_text: str) -> N
             uid = (urow.user_id if urow else None) or "default"
             from acb_memory import add_memories_background  # noqa: PLC0415
             await add_memories_background(
-                uid,
+                email_memory_scope(uid, account_id),
                 [{"role": "assistant",
                   "content": f"Email reply preference: {stored[0]}"}],
                 agent_id="email",
@@ -826,7 +828,14 @@ async def _draft_via_maf_agent(
 ) -> str | None:
     """Draft by running the email-assistant MAF agent (which can hand off to
     agent-sales-assistant / task-manager and read memory). Returns None on any failure so the
-    caller can fall back to the in-gateway orchestrator."""
+    caller can fall back to the in-gateway orchestrator.
+
+    NOTE: currently dead — ``_agent_draft_reply`` always routes to
+    ``_orchestrate_draft`` instead (see the comment there). The bare-email memory
+    scope below would be a per-account retrieval MISS if this is ever revived;
+    thread ``account_id`` through and use ``email_memory_scope`` if you do. (It
+    can't be scoped here anyway without breaking the agent's X-User-Email auth —
+    the executor re-derives the ContextVar from the run_agent payload below.)"""
     try:
         from acb_skills.memory_tools import _set_memory_user_id  # noqa: PLC0415
         _set_memory_user_id(user_email or "")
@@ -940,7 +949,7 @@ async def _agent_draft_reply(
     email: dict[str, str], about: str, signature: str, user_email: str,
     *, use_agent: bool = False, max_agents: int = 2, agent_timeout: float = 90.0,
     follow_up: bool = False, confidence: str = "ALL_EMAILS",
-    model: str = "tier-powerful",
+    model: str = "tier-powerful", account_id: str = "",
 ) -> str:
     """Draft a reply (or a follow-up nudge). When ``use_agent`` is set (background
     rule actions), run the email-assistant MAF agent first; otherwise — and on any
@@ -965,19 +974,25 @@ async def _agent_draft_reply(
     return await _orchestrate_draft(
         email, about, signature, user_email,
         max_agents=max_agents, agent_timeout=agent_timeout,
-        instructions=instructions, model=model,
+        instructions=instructions, model=model, account_id=account_id,
     )
 
 
 async def _orchestrate_draft(
     email: dict[str, str], about: str, signature: str, user_email: str,
     *, max_agents: int = 2, agent_timeout: float = 90.0, instructions: str = "",
-    model: str = "tier-powerful",
+    model: str = "tier-powerful", account_id: str = "",
 ) -> str:
     """In-gateway orchestrating drafter: gather context from memory + specialist
     agents (sales / task-manager), then draft. Best-effort; degrades to an
-    About-only draft."""
+    About-only draft.
+
+    ``account_id`` scopes the Mem0 read/write to this inbox (email_memory_scope)
+    so a user's other mailboxes don't bleed their reply context into this draft.
+    Setting the ContextVar here only steers this in-process ``remember`` call —
+    it is NOT the agent's gateway-auth identity, so a scoped value is safe."""
     context_parts: list[str] = []
+    mem_scope = email_memory_scope(user_email or "", account_id)
 
     # 1) Memory: what do we know about this sender / relationship?
     try:
@@ -985,7 +1000,7 @@ async def _orchestrate_draft(
             _set_memory_user_id,
             remember,
         )
-        _set_memory_user_id(user_email or "")
+        _set_memory_user_id(mem_scope)
         mem = await remember(
             f"past context, agreements, and preferences relevant to "
             f"{email.get('from', '')} and: {email.get('subject', '')}"
@@ -1044,10 +1059,11 @@ async def _orchestrate_draft(
     # 3) Record this exchange in Mem0 (episodic, pgvector) so future drafts to
     # this correspondent have context. Use add_memories_background — NOT
     # add_episode, which targets Graphiti/Neo4j (disabled → silent no-op).
+    # Scoped to this inbox (mem_scope) so it reads back under the same key.
     try:
         from acb_memory import add_memories_background  # noqa: PLC0415
         await add_memories_background(
-            user_email or "default",
+            mem_scope or "default",
             [
                 {"role": "user",
                  "content": (
@@ -1119,7 +1135,7 @@ async def draft_reply_smart(
         draft = await _agent_draft_reply(
             email, about, signature, user.email or "",
             max_agents=1, agent_timeout=18.0, follow_up=req.follow_up,
-            model=models["draft"],
+            model=models["draft"], account_id=req.account_id,
         )
 
         # Confidence gate (defense-in-depth): if the drafter declined, never

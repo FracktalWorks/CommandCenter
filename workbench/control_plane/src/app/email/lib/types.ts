@@ -57,6 +57,8 @@ export interface EmailAccount {
   syncStatus?: string;
   /** Last sync error (e.g. expired OAuth token), when syncStatus is 'error'. */
   syncError?: string;
+  /** The user's default mailbox — the inbox the UI lands on. At most one. */
+  isDefault?: boolean;
 }
 
 export interface ChatMessage {

@@ -24,6 +24,7 @@ class EmailAccountModel(BaseModel):
     sync_error: str | None = None
     last_synced_at: str | None = None
     unread_count: int = 0
+    is_default: bool = False
 
 
 class AccountUpdateModel(BaseModel):
@@ -49,10 +50,11 @@ async def list_accounts(
         result = await db.execute(
             text(
                 """SELECT id, provider, email_address, label, avatar_color,
-                          sync_enabled, sync_status, sync_error, last_synced_at
+                          sync_enabled, sync_status, sync_error, last_synced_at,
+                          is_default
                    FROM email_accounts
                    WHERE user_id = :user_id
-                   ORDER BY created_at"""
+                   ORDER BY is_default DESC, created_at"""
             ),
             {"user_id": user.email or "anonymous"},
         )
@@ -81,6 +83,7 @@ async def list_accounts(
                 last_synced_at=row.last_synced_at.isoformat()
                 if row.last_synced_at else None,
                 unread_count=unread,
+                is_default=bool(row.is_default),
             ))
         return accounts
     finally:
@@ -143,13 +146,18 @@ async def create_account(
             )
 
         account_id = str(uuid4())
-        await db.execute(
+        # The user's FIRST connected mailbox becomes their default (the inbox the
+        # UI lands on). The partial unique index guarantees at most one default.
+        is_default_row = await db.execute(
             text(
                 """INSERT INTO email_accounts
                    (id, user_id, provider, email_address, label,
-                    avatar_color, credentials_encrypted)
+                    avatar_color, credentials_encrypted, is_default)
                    VALUES (:id, :user_id, :provider, :email, :label,
-                           :color, :creds)"""
+                           :color, :creds,
+                           NOT EXISTS (SELECT 1 FROM email_accounts
+                                       WHERE user_id = :user_id))
+                   RETURNING is_default"""
             ),
             {
                 "id": account_id,
@@ -161,6 +169,7 @@ async def create_account(
                 "creds": encrypted_creds,
             },
         )
+        created_default = bool(is_default_row.scalar())
         await db.commit()
 
         # Start background sync for this account
@@ -180,6 +189,77 @@ async def create_account(
             sync_status="idle",
             last_synced_at=None,
             unread_count=0,
+            is_default=created_default,
+        )
+    finally:
+        await db.close()
+
+
+@router.post("/accounts/{account_id}/default", response_model=EmailAccountModel)
+async def set_default_account(
+    account_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Make this account the user's default mailbox (the inbox the UI opens on).
+
+    Clears the flag on the user's other accounts first so the partial unique
+    index (one default per user) is never violated, then sets it on this one.
+    """
+    db = await _get_db()
+    try:
+        owner = user.email or "anonymous"
+        # Verify ownership before mutating anything.
+        owned = await db.execute(
+            text("SELECT 1 FROM email_accounts WHERE id = :id AND user_id = :uid"),
+            {"id": account_id, "uid": owner},
+        )
+        if not owned.fetchone():
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        # Demote the current default(s), then promote this one — same txn so the
+        # one-default-per-user index can't transiently see two.
+        await db.execute(
+            text(
+                """UPDATE email_accounts SET is_default = false, updated_at = now()
+                   WHERE user_id = :uid AND is_default AND id <> :id"""
+            ),
+            {"uid": owner, "id": account_id},
+        )
+        result = await db.execute(
+            text(
+                """UPDATE email_accounts
+                   SET is_default = true, updated_at = now()
+                   WHERE id = :id AND user_id = :uid
+                   RETURNING id, provider, email_address, label, avatar_color,
+                             sync_enabled, sync_status, sync_error,
+                             last_synced_at, is_default"""
+            ),
+            {"id": account_id, "uid": owner},
+        )
+        row = result.fetchone()
+        await db.commit()
+
+        unread_result = await db.execute(
+            text(
+                """SELECT COUNT(*) FROM email_messages
+                   WHERE account_id = :account_id AND is_read = false"""
+            ),
+            {"account_id": account_id},
+        )
+        unread = unread_result.scalar() or 0
+        return EmailAccountModel(
+            id=str(row.id),
+            provider=row.provider,
+            email_address=row.email_address,
+            label=row.label or "",
+            avatar_color=row.avatar_color or "#6366f1",
+            sync_enabled=row.sync_enabled,
+            sync_status=row.sync_status or "idle",
+            sync_error=row.sync_error,
+            last_synced_at=row.last_synced_at.isoformat()
+            if row.last_synced_at else None,
+            unread_count=unread,
+            is_default=bool(row.is_default),
         )
     finally:
         await db.close()
@@ -193,15 +273,33 @@ async def delete_account(
     """Remove an email account and all its synced messages."""
     db = await _get_db()
     try:
+        owner = user.email or "anonymous"
         result = await db.execute(
             text(
                 """DELETE FROM email_accounts
-                   WHERE id = :id AND user_id = :user_id"""
+                   WHERE id = :id AND user_id = :user_id
+                   RETURNING is_default"""
             ),
-            {"id": account_id, "user_id": user.email or "anonymous"},
+            {"id": account_id, "user_id": owner},
         )
-        if result.rowcount == 0:
+        deleted = result.fetchone()
+        if deleted is None:
             raise HTTPException(status_code=404, detail="Account not found")
+        # If the deleted account was the default, re-elect the earliest-created
+        # remaining account so the user always has a default to land on.
+        if bool(deleted.is_default):
+            await db.execute(
+                text(
+                    """UPDATE email_accounts SET is_default = true, updated_at = now()
+                       WHERE id = (
+                           SELECT id FROM email_accounts
+                           WHERE user_id = :uid
+                           ORDER BY created_at, id
+                           LIMIT 1
+                       )"""
+                ),
+                {"uid": owner},
+            )
         await db.commit()
 
         # Stop background sync for this account

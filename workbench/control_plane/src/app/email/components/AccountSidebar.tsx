@@ -17,6 +17,8 @@ interface AccountSidebarProps {
   selectedFolder: string;
   onFolderSelect: (folder: string) => void;
   onAddAccount?: () => void;
+  /** Make an account the user's default mailbox (the inbox the UI opens on). */
+  onSetDefault?: (id: string) => void;
   onSearch?: (query: string) => void;
   /** Open one of the Email Automation feature views. */
   onOpenAutomation?: (feature: AutomationFeature) => void;
@@ -51,6 +53,7 @@ export function AccountSidebar({
   selectedFolder,
   onFolderSelect,
   onAddAccount,
+  onSetDefault,
   onSearch,
   onOpenAutomation,
   activeAutomation,
@@ -110,31 +113,57 @@ export function AccountSidebar({
         {accountsExpanded && (
           <div className="mt-1 space-y-0.5">
             {accounts.map((account) => (
-              <button
+              <div
                 key={account.id}
-                onClick={() => onAccountSelect(account.id)}
-                className={`flex items-center gap-2.5 w-full px-2 py-2 rounded-md transition-colors text-left group ${
+                className={`group flex items-center gap-1 w-full px-2 py-2 rounded-md transition-colors ${
                   selectedAccountId === account.id
                     ? "bg-sidebar-accent text-sidebar-foreground"
                     : "hover:bg-sidebar-accent/60 text-sidebar-foreground/70 hover:text-sidebar-foreground"
                 }`}
               >
-                <div
-                  className="w-7 h-7 rounded-full flex items-center justify-center text-white flex-shrink-0"
-                  style={{
-                    backgroundColor: account.color,
-                    fontSize: "10px",
-                    fontWeight: 600,
-                  }}
+                <button
+                  onClick={() => onAccountSelect(account.id)}
+                  className="flex items-center gap-2.5 flex-1 min-w-0 text-left"
                 >
-                  {account.avatar}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium truncate">{account.label}</div>
-                  <div className="text-[10px] text-muted-foreground truncate">
-                    {account.emailAddress}
+                  <div
+                    className="w-7 h-7 rounded-full flex items-center justify-center text-white flex-shrink-0"
+                    style={{
+                      backgroundColor: account.color,
+                      fontSize: "10px",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {account.avatar}
                   </div>
-                </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs font-medium truncate">{account.label}</span>
+                      {account.isDefault && (
+                        <Star
+                          size={10}
+                          className="text-amber-400 fill-amber-400 flex-shrink-0"
+                          aria-label="Default mailbox"
+                        />
+                      )}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground truncate">
+                      {account.emailAddress}
+                    </div>
+                  </div>
+                </button>
+                {/* Set-as-default: revealed on hover for non-default accounts. */}
+                {!account.isDefault && onSetDefault && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSetDefault(account.id);
+                    }}
+                    title="Set as default mailbox"
+                    className="p-1 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-amber-400 transition-opacity flex-shrink-0"
+                  >
+                    <Star size={11} />
+                  </button>
+                )}
                 {selectedAccountId === account.id && (
                   <Check size={11} className="text-primary flex-shrink-0" />
                 )}
@@ -143,7 +172,7 @@ export function AccountSidebar({
                     {account.unreadCount}
                   </span>
                 )}
-              </button>
+              </div>
             ))}
           </div>
         )}

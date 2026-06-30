@@ -1273,7 +1273,7 @@ async def _apply_rule_actions(
                     body = await _agent_draft_reply(
                         draft_email, about, signature, user_email, use_agent=True,
                         confidence=draft_conf,
-                        model=draft_model,
+                        model=draft_model, account_id=account_id,
                     )
                 # Draft-confidence gate: the drafter returns the NO_DRAFT
                 # sentinel (or empty) when it isn't confident enough — skip.

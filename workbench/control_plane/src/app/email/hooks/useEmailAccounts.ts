@@ -16,6 +16,7 @@ export function useEmailAccounts() {
   const fetchAccounts = useEmailStore((s) => s.fetchAccounts);
   const selectAccount = useEmailStore((s) => s.selectAccount);
   const deleteAccount = useEmailStore((s) => s.deleteAccount);
+  const setDefaultAccount = useEmailStore((s) => s.setDefaultAccount);
   const triggerSync = useEmailStore((s) => s.triggerSync);
 
   const selectedAccount = accounts.find((a) => a.id === selectedAccountId) ?? null;
@@ -32,6 +33,7 @@ export function useEmailAccounts() {
     error,
     selectAccount,
     deleteAccount,
+    setDefaultAccount,
     triggerSync,
     loadAccounts,
   };

@@ -8,7 +8,13 @@ from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, Query, status
-from gateway.routes.email.core import _assert_account_owner, _get_db, _log, router
+from gateway.routes.email.core import (
+    _assert_account_owner,
+    _get_db,
+    _log,
+    email_memory_scope,
+    router,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -553,12 +559,13 @@ async def generate_writing_style(
                  writing_style = EXCLUDED.writing_style, updated_at = now()"""
         ), {"aid": account_id, "ws": style})
         await db.commit()
-        # Index the derived style into Mem0 (keyed by the account owner) so the
-        # drafter's memory retrieval has substance from the user's own sent mail.
+        # Index the derived style into Mem0 — keyed PER ACCOUNT so a user's other
+        # mailboxes don't inherit this inbox's writing voice (see
+        # email_memory_scope). The drafter reads it back under the same scope.
         try:
             from acb_memory import add_memories_background  # noqa: PLC0415
             await add_memories_background(
-                user.email or "default",
+                email_memory_scope(user.email or "default", account_id),
                 [{"role": "assistant",
                   "content": f"My email writing style: {style}"}],
                 agent_id="email",

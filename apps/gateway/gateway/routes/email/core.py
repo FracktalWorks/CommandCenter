@@ -281,6 +281,53 @@ def _safe_json(content: str) -> Any | None:
     return None
 
 
+def _fmt_addr_list(field: Any) -> str:
+    """A JSONB ``[{name, email}]`` list → ``"Name <email>, …"`` for an LLM prompt
+    (To/Cc rendering). Empty string when there are none. Mirrors the classifier's
+    recipient formatter so every engine renders recipients identically."""
+    try:
+        items = field if isinstance(field, list) else json.loads(field or "[]")
+    except Exception:  # noqa: BLE001
+        return ""
+    out: list[str] = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        em, nm = (it.get("email") or "").strip(), (it.get("name") or "").strip()
+        if em and nm:
+            out.append(f"{nm} <{em}>")
+        elif em or nm:
+            out.append(em or nm)
+    return ", ".join(out)
+
+
+async def _attachment_summaries(db: Any, message_ids: Any) -> dict[str, str]:
+    """Batched: ``{str(message_id): "Attachments: invoice.pdf (application/pdf),
+    q3.xlsx (…)"}`` for the messages that HAVE attachments. One query, so callers
+    can enrich an LLM prompt with attachment metadata (filename + MIME) without an
+    N+1. Empty dict on error / none — callers simply omit the line. Metadata only;
+    extracting attachment TEXT (PDF/doc) is a separate, larger feature."""
+    ids = [str(m) for m in (message_ids or []) if m]
+    if not ids:
+        return {}
+    try:
+        rows = (await db.execute(text(
+            "SELECT message_id, filename, mime_type FROM email_attachments "
+            "WHERE message_id::text = ANY(:ids) ORDER BY filename"
+        ), {"ids": ids})).fetchall()
+    except Exception:  # noqa: BLE001 — table optional / DB hiccup
+        return {}
+    by_msg: dict[str, list[str]] = {}
+    for r in rows:
+        name = (getattr(r, "filename", None) or "file").strip()
+        mime = (getattr(r, "mime_type", None) or "").strip()
+        mid = str(getattr(r, "message_id", "") or "")
+        if mid:
+            by_msg.setdefault(mid, []).append(
+                f"{name} ({mime})" if mime else name)
+    return {mid: "Attachments: " + ", ".join(p) for mid, p in by_msg.items()}
+
+
 def _parse_iso_date(s: str | None, end_of_day: bool) -> datetime | None:
     """Parse a 'YYYY-MM-DD' string into a UTC datetime (or None)."""
     if not s:

@@ -589,6 +589,22 @@ async def _llm_draft_reply(
             "apply the ones that fit; explicit instructions still win):\n"
             f"{memories[:2000]}\n\n" if memories else ""
         )
+        # Recipients of the email being replied to — so the drafter knows who
+        # else was addressed (To vs Cc) and can word a reply-all appropriately.
+        to_line = (email.get("to") or "").strip()
+        cc_line = (email.get("cc") or "").strip()
+        recip_block = ""
+        if to_line or cc_line:
+            recip_block = f"Original recipients — To: {to_line or '(unknown)'}"
+            if cc_line:
+                recip_block += f"; Cc: {cc_line}"
+            recip_block += "\n"
+        # Attachment metadata on the message being replied to (already formatted
+        # as "Attachments: file.pdf (…)") so the reply can acknowledge them.
+        attach_block = ""
+        attach = (email.get("attachments") or "").strip()
+        if attach:
+            attach_block = f"{attach}\n"
         today = datetime.now(timezone.utc).strftime("%A, %d %B %Y")
         user_prompt = (
             f"{ctx}Today is {today}.\n"
@@ -597,7 +613,9 @@ async def _llm_draft_reply(
             "Reply to — greet this recipient by name: "
             f"{email.get('from_name') or email.get('from', '')} "
             f"<{email.get('from', '')}>\n"
-            f"Subject: {email.get('subject', '')}\n\n"
+            f"{recip_block}"
+            f"Subject: {email.get('subject', '')}\n"
+            f"{attach_block}\n"
             f"{memories_block}"
             f"{examples_block}"
             f"{thread_block}"

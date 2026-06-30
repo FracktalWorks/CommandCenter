@@ -967,8 +967,18 @@ async def _llm_is_cold(email: dict[str, str]) -> tuple[bool, str]:
             "recruiting outreach from someone with no prior relationship to the "
             'recipient. Respond ONLY JSON {"cold": <bool>, "reason": "<short>"}.'
         )
+        # Richer envelope (the cold check reuses the classifier email dict, which
+        # carries from_name/to/cc/date): a name + direct-vs-bulk addressing helps
+        # tell a personal approach from a blast.
+        frm = email.get("from", "")
+        from_disp = (f"{email['from_name']} <{frm}>"
+                     if email.get("from_name") else frm)
+        to_line = f"To: {email['to']}\n" if email.get("to") else ""
+        cc_line = f"Cc: {email['cc']}\n" if email.get("cc") else ""
+        date_line = f"Date: {email['date']}\n" if email.get("date") else ""
         user_prompt = (
-            f"From: {email.get('from', '')}\nSubject: {email.get('subject', '')}\n"
+            f"From: {from_disp}\n{to_line}{cc_line}{date_line}"
+            f"Subject: {email.get('subject', '')}\n"
             f"Body:\n{(email.get('body', '') or '')[:1500]}"
         )
         resp, _ = await acompletion_with_fallback(

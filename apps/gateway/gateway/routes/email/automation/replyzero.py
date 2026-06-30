@@ -21,6 +21,8 @@ from gateway.routes.email.automation.identity import (
 )
 from gateway.routes.email.core import (
     _assert_account_owner,
+    _attachment_summaries,
+    _fmt_addr_list,
     _get_db,
     _instantiate_provider,
     _log,
@@ -593,7 +595,8 @@ async def _llm_determine_thread_status(
         fyi_rules = "" if user_sent_last else (
             "\n- FYI: ONLY when there are absolutely no questions, requests, or "
             "pending actions anywhere in the thread, and the user RECEIVED the "
-            "last message.")
+            "last message. A message where the user is only on Cc (not in To) "
+            "and isn't directly asked anything is FYI, not TO_REPLY.")
         last_rule = (
             "\n- Because the user sent the last email, FYI is NOT an option: "
             "choose AWAITING_REPLY if waiting on a response, or ACTIONED if the "
@@ -686,16 +689,35 @@ def _msg_scope(
 def _fmt_thread_msg(
     r: Any, self_email: str = "",
     extra_domains: frozenset[str] | set[str] = frozenset(),
+    attach_line: str = "",
 ) -> str:
     frm = r.from_address if isinstance(r.from_address, dict) \
         else json.loads(r.from_address or "{}")
     sender = frm.get("name") or frm.get("email") or "?"
+    scope = _msg_scope(r, self_email, extra_domains)
     direction = {
         "self": " (you sent)",
         "internal": " (your organisation sent)",
-    }.get(_msg_scope(r, self_email, extra_domains), "")
+    }.get(scope, "")
+    lines = [f"From: {sender}{direction}"]
+    # Recipients on INBOUND messages so the determiner can tell a direct (To)
+    # recipient from a Cc-only one (Cc-only + no ask → FYI, not To-Reply).
+    if scope == "external":
+        to = _fmt_addr_list(getattr(r, "to_addresses", None))
+        cc = _fmt_addr_list(getattr(r, "cc_addresses", None))
+        if to:
+            lines.append(f"To: {to}")
+        if cc:
+            lines.append(f"Cc: {cc}")
+    dt = getattr(r, "received_at", None)
+    if hasattr(dt, "isoformat"):
+        lines.append(f"Date: {dt.isoformat()}")
+    lines.append(f"Subject: {r.subject or ''}")
+    if attach_line:
+        lines.append(attach_line)
     body = (r.body_text or r.snippet or "").strip()
-    return f"From: {sender}{direction}\nSubject: {r.subject or ''}\n{body[:1500]}"
+    lines.append(body[:1500])
+    return "\n".join(lines)
 
 
 async def _conversation_rule_for_status(
@@ -867,8 +889,8 @@ async def build_thread_context(
     if extra_domains is None:
         extra_domains = await resolve_org_domains(db, account_id)
     rows = (await db.execute(text(
-        """SELECT id, from_address, subject, body_text, snippet, folder,
-                  received_at
+        """SELECT id, from_address, to_addresses, cc_addresses, subject,
+                  body_text, snippet, folder, received_at
            FROM email_messages
            WHERE account_id = :aid AND thread_id = :tid
            ORDER BY received_at ASC NULLS FIRST"""
@@ -876,7 +898,11 @@ async def build_thread_context(
     if not rows:
         return None
     latest = rows[-1]
-    parts = [_fmt_thread_msg(r, self_email, extra_domains) for r in rows]
+    # Attachment metadata (filename + MIME) per message, so the determiner sees
+    # "Attachments: invoice.pdf (…)" — a strong signal for status/intent.
+    attach = await _attachment_summaries(db, [r.id for r in rows])
+    parts = [_fmt_thread_msg(r, self_email, extra_domains,
+                             attach.get(str(r.id), "")) for r in rows]
     scopes = [_msg_scope(r, self_email, extra_domains) for r in rows]
     has_external = any(s == "external" for s in scopes)
     our_side_last = scopes[-1] != "external"

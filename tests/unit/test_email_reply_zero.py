@@ -211,6 +211,7 @@ async def test_resolve_uses_full_thread_status_over_per_message_pick() -> None:
             id="m1", from_address={"email": "a@b.com"}, subject="s",
             body_text="thanks", snippet="", folder="inbox",
             received_at=None)]),                           # thread messages
+        _result(fetchall=[]),                              # attachments (none)
     ]
     row = SimpleNamespace(thread_id="t1")
     actioned = {"id": "r1", "name": "Actioned", "system_type": None,
@@ -238,6 +239,7 @@ async def test_resolve_keeps_original_when_no_rule_for_status() -> None:
         _result(fetchall=[SimpleNamespace(
             id="m1", from_address={"email": "a@b.com"}, subject="s",
             body_text="b", snippet="", folder="inbox", received_at=None)]),
+        _result(fetchall=[]),                              # attachments (none)
     ]
     row = SimpleNamespace(thread_id="t1")
     matches = [{"rule": {"name": "To Reply"}, "reason": "picked"}]
@@ -464,6 +466,38 @@ def test_fmt_thread_msg_annotates_org() -> None:
         _msg(email="sales@acme.com"), "me@acme.com")
     assert "(you sent)" in _rz._fmt_thread_msg(_msg(folder="sent"), "me@acme.com")
     assert "sent)" not in _rz._fmt_thread_msg(_msg(email="x@other.com"), "me@acme.com")
+
+
+def test_fmt_thread_msg_renders_to_cc_date_attachments() -> None:
+    import datetime as _dt
+    inbound = SimpleNamespace(
+        id="m1", from_address={"email": "cust@other.com", "name": "Cust"},
+        to_addresses=[{"email": "me@acme.com", "name": "Me"}],
+        cc_addresses=[{"email": "team@acme.com"}],
+        subject="Q", body_text="hi", snippet="", folder="inbox",
+        received_at=_dt.datetime(2026, 6, 30, tzinfo=_dt.timezone.utc))
+    out = _rz._fmt_thread_msg(
+        inbound, "me@acme.com", frozenset(),
+        "Attachments: invoice.pdf (application/pdf)")
+    assert "To: Me <me@acme.com>" in out
+    assert "Cc: team@acme.com" in out
+    assert "Date: 2026-06-30" in out
+    assert "Attachments: invoice.pdf" in out
+    # An OUTBOUND (you sent) message does NOT render To/Cc — only inbound does.
+    sent = SimpleNamespace(
+        id="m2", from_address={"email": "me@acme.com"},
+        to_addresses=[{"email": "cust@other.com"}], cc_addresses=[],
+        subject="Re", body_text="ok", snippet="", folder="sent", received_at=None)
+    out2 = _rz._fmt_thread_msg(sent, "me@acme.com")
+    assert "(you sent)" in out2 and "To:" not in out2
+
+
+def test_core_email_context_helpers() -> None:
+    from gateway.routes.email.core import _fmt_addr_list
+    assert _fmt_addr_list([{"name": "A", "email": "a@x.com"}]) == "A <a@x.com>"
+    assert _fmt_addr_list([{"email": "b@x.com"}]) == "b@x.com"
+    assert _fmt_addr_list(None) == ""
+    assert _fmt_addr_list("not-json") == ""
 
 
 async def test_build_thread_context_marks_our_side_last() -> None:

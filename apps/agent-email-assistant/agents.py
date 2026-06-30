@@ -204,16 +204,40 @@ async def search_emails(
     return "\n".join(lines)
 
 
+def _fmt_recipients(lst: Any) -> str:
+    """A list of {name, email} → "Name <email>, …" for display."""
+    out: list[str] = []
+    for it in lst or []:
+        if not isinstance(it, dict):
+            continue
+        nm, em = (it.get("name") or "").strip(), (it.get("email") or "").strip()
+        val = f"{nm} <{em}>" if nm and em else (em or nm)
+        if val:
+            out.append(val)
+    return ", ".join(out)
+
+
 async def read_email(email_id: str) -> str:
-    """Fetch the full content of one email by id."""
+    """Fetch the full content of one email by id — incl. To/Cc and attachments."""
     e = await _get(f"/email/messages/{email_id}")
     frm = e.get("from_address", {}) or {}
-    return (
-        f"From: {frm.get('name')} <{frm.get('email')}>\n"
-        f"Subject: {e.get('subject', '(no subject)')}\n"
-        f"Date: {e.get('received_at', '')}\n---\n"
-        f"{(e.get('body_text') or '')[:4000]}"
-    )
+    you_sent = " (you sent)" if (e.get("folder") or "").lower() == "sent" else ""
+    lines = [f"From: {frm.get('name')} <{frm.get('email')}>{you_sent}"]
+    to = _fmt_recipients(e.get("to_addresses"))
+    cc = _fmt_recipients(e.get("cc_addresses"))
+    if to:
+        lines.append(f"To: {to}")
+    if cc:
+        lines.append(f"Cc: {cc}")
+    lines.append(f"Subject: {e.get('subject', '(no subject)')}")
+    lines.append(f"Date: {e.get('received_at', '')}")
+    atts = [a for a in (e.get("attachments") or []) if isinstance(a, dict)]
+    if atts:
+        names = ", ".join(
+            f"{a.get('filename') or 'file'} ({a.get('mime_type') or ''})"
+            for a in atts)
+        lines.append(f"Attachments: {names}")
+    return "\n".join(lines) + "\n---\n" + (e.get("body_text") or "")[:4000]
 
 
 async def find_urgent(account_id: str | None = None) -> str:

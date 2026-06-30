@@ -99,14 +99,21 @@ def _email_block(email: dict[str, str]) -> str:
     applied to the owner's own outbound/internal mail."""
     date_line = f"Date: {email['date']}\n" if email.get("date") else ""
     prov_line = _PROVENANCE_LINE.get(email.get("sender_scope", ""), "")
+    # Render the sender's display name (inbox-zero passes it); from_name is
+    # captured by email_dict_from_row but was previously unused here.
+    frm = email.get("from", "")
+    from_disp = f"{email['from_name']} <{frm}>" if email.get("from_name") else frm
+    attach = (email.get("attachments") or "").strip()
+    attach_line = f"{attach}\n" if attach else ""
     return (
         _user_info_block(email)
-        + f"EMAIL\n{prov_line}From: {email.get('from', '')}\n"
+        + f"EMAIL\n{prov_line}From: {from_disp}\n"
         f"To: {email.get('to', '') or '(unknown)'}\n"
         f"Cc: {email.get('cc', '') or '(none)'}\n"
         + date_line
         + f"Subject: {email.get('subject', '')}\n"
-        f"Body: {(email.get('body', '') or '')[:1500]}"
+        + attach_line
+        + f"Body: {(email.get('body', '') or '')[:1500]}"
     )
 
 

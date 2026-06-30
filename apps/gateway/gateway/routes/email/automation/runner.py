@@ -1239,6 +1239,7 @@ async def _apply_rule_actions(
                 if tmpl:
                     body = tmpl
                 else:
+                    from gateway.routes.email.core import _attachment_summaries  # noqa: PLC0415
                     draft_email = {
                         **email,
                         "thread": await _fetch_thread_context(
@@ -1248,6 +1249,9 @@ async def _apply_rule_actions(
                             db, account_id, email.get("from", "")),
                         "reply_memories": await _fetch_reply_memories(
                             db, account_id, email),
+                        # Attachment metadata on the message being replied to.
+                        "attachments": (await _attachment_summaries(
+                            db, [message_id])).get(str(message_id), ""),
                     }
                     body = await _agent_draft_reply(
                         draft_email, about, signature, user_email, use_agent=True,

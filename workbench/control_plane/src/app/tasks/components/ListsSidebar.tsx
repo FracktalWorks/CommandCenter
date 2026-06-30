@@ -1,0 +1,261 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import {
+  Inbox,
+  ListChecks,
+  Clock,
+  Calendar,
+  FolderKanban,
+  Lightbulb,
+  Zap,
+  Mountain,
+  ChevronRight,
+  Monitor,
+  Phone,
+  Car,
+  Building2,
+  Home,
+  Users,
+  Circle,
+  type LucideIcon,
+} from "lucide-react";
+import { useTaskStore, viewCounts, contextCounts } from "../lib/taskStore";
+import { ViewKey } from "../lib/types";
+
+const CONTEXT_ICONS: Record<string, LucideIcon> = {
+  Monitor, Phone, Car, Building2, Home, Users,
+};
+
+type NavRow = {
+  view: ViewKey;
+  label: string;
+  icon: LucideIcon;
+  /** show the count badge */
+  showCount?: boolean;
+  /** not yet built — rendered disabled with a "soon" tag */
+  soon?: boolean;
+};
+
+const PRIMARY: NavRow[] = [
+  { view: "inbox", label: "Inbox", icon: Inbox, showCount: true },
+  { view: "next", label: "Next Actions", icon: ListChecks, showCount: true },
+  { view: "waiting", label: "Waiting For", icon: Clock, showCount: true },
+  { view: "calendar", label: "Calendar", icon: Calendar, showCount: true },
+  { view: "projects", label: "Projects", icon: FolderKanban },
+  { view: "someday", label: "Someday / Maybe", icon: Lightbulb, showCount: true },
+];
+
+const SECONDARY: NavRow[] = [
+  { view: "engage", label: "Engage · Now", icon: Zap, soon: true },
+  { view: "horizons", label: "Horizons of Focus", icon: Mountain, soon: true },
+];
+
+export function ListsSidebar() {
+  const items = useTaskStore((s) => s.items);
+  const contexts = useTaskStore((s) => s.contexts);
+  const projects = useTaskStore((s) => s.projects);
+  const selectedView = useTaskStore((s) => s.selectedView);
+  const selectedContext = useTaskStore((s) => s.selectedContext);
+  const selectView = useTaskStore((s) => s.selectView);
+  const selectContext = useTaskStore((s) => s.selectContext);
+
+  const counts = useMemo(() => viewCounts(items), [items]);
+  const ctxCounts = useMemo(() => contextCounts(items), [items]);
+  const [nextExpanded, setNextExpanded] = useState(true);
+
+  return (
+    <nav className="flex h-full flex-col gap-1 overflow-y-auto p-3 text-sm">
+      <div className="px-2 pb-2 pt-1">
+        <h2 className="text-sm font-semibold text-foreground">Tasks</h2>
+        <p className="text-[11px] text-muted-foreground">Getting Things Done</p>
+      </div>
+
+      {PRIMARY.map((row) => {
+        if (row.view === "next") {
+          return (
+            <NextActionsRow
+              key="next"
+              row={row}
+              active={selectedView === "next"}
+              activeContext={selectedContext}
+              count={counts.next}
+              contexts={contexts.map((c) => c.name)}
+              contextIcons={Object.fromEntries(
+                contexts.map((c) => [c.name, CONTEXT_ICONS[c.icon] ?? Circle]),
+              )}
+              ctxCounts={ctxCounts}
+              expanded={nextExpanded}
+              onToggle={() => setNextExpanded((v) => !v)}
+              onSelectAll={() => selectView("next")}
+              onSelectContext={(c) => selectContext(c)}
+            />
+          );
+        }
+        const count = row.view === "projects" ? projects.length : counts[row.view];
+        return (
+          <NavButton
+            key={row.view}
+            row={row}
+            active={selectedView === row.view && !selectedContext}
+            count={count}
+            onClick={() => selectView(row.view)}
+          />
+        );
+      })}
+
+      <div className="mt-3 border-t border-border pt-3">
+        <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Higher altitude
+        </p>
+        {SECONDARY.map((row) => (
+          <NavButton key={row.view} row={row} active={false} onClick={() => {}} />
+        ))}
+      </div>
+    </nav>
+  );
+}
+
+function NavButton({
+  row,
+  active,
+  count,
+  onClick,
+}: {
+  row: NavRow;
+  active: boolean;
+  count?: number;
+  onClick: () => void;
+}) {
+  const Icon = row.icon;
+  return (
+    <button
+      type="button"
+      disabled={row.soon}
+      onClick={onClick}
+      className={[
+        "tech-transition flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left",
+        row.soon
+          ? "cursor-default text-muted-foreground/50"
+          : active
+            ? "bg-primary/10 text-primary"
+            : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+      ].join(" ")}
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+      <span className="flex-1 truncate">{row.label}</span>
+      {row.soon ? (
+        <span className="rounded bg-muted px-1.5 py-0.5 text-[9px] font-medium uppercase text-muted-foreground">
+          soon
+        </span>
+      ) : row.showCount && count ? (
+        <span
+          className={[
+            "min-w-[18px] rounded-full px-1.5 py-0.5 text-center text-[10px] font-semibold",
+            active ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground",
+          ].join(" ")}
+        >
+          {count}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function NextActionsRow({
+  row,
+  active,
+  activeContext,
+  count,
+  contexts,
+  contextIcons,
+  ctxCounts,
+  expanded,
+  onToggle,
+  onSelectAll,
+  onSelectContext,
+}: {
+  row: NavRow;
+  active: boolean;
+  activeContext: string | null;
+  count: number;
+  contexts: string[];
+  contextIcons: Record<string, LucideIcon>;
+  ctxCounts: Record<string, number>;
+  expanded: boolean;
+  onToggle: () => void;
+  onSelectAll: () => void;
+  onSelectContext: (c: string) => void;
+}) {
+  const Icon = row.icon;
+  return (
+    <div>
+      <div
+        className={[
+          "tech-transition flex w-full items-center gap-1 rounded-lg pr-2",
+          active && !activeContext
+            ? "bg-primary/10 text-primary"
+            : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+        ].join(" ")}
+      >
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-label={expanded ? "Collapse contexts" : "Expand contexts"}
+          className="rounded p-1 hover:bg-secondary"
+        >
+          <ChevronRight
+            className={`h-3.5 w-3.5 tech-transition ${expanded ? "rotate-90" : ""}`}
+          />
+        </button>
+        <button
+          type="button"
+          onClick={onSelectAll}
+          className="flex flex-1 items-center gap-2.5 py-2 text-left"
+        >
+          <Icon className="h-4 w-4 shrink-0" />
+          <span className="flex-1 truncate">{row.label}</span>
+          {count ? (
+            <span
+              className={[
+                "min-w-[18px] rounded-full px-1.5 py-0.5 text-center text-[10px] font-semibold",
+                active && !activeContext
+                  ? "bg-primary/20 text-primary"
+                  : "bg-muted text-muted-foreground",
+              ].join(" ")}
+            >
+              {count}
+            </span>
+          ) : null}
+        </button>
+      </div>
+
+      {expanded && (
+        <div className="ml-3 mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2">
+          {contexts.map((ctx) => {
+            const CtxIcon = contextIcons[ctx] ?? Circle;
+            const c = ctxCounts[ctx] ?? 0;
+            const isActive = activeContext === ctx;
+            return (
+              <button
+                key={ctx}
+                type="button"
+                onClick={() => onSelectContext(ctx)}
+                className={[
+                  "tech-transition flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px]",
+                  isActive
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+                ].join(" ")}
+              >
+                <CtxIcon className="h-3.5 w-3.5 shrink-0" />
+                <span className="flex-1 truncate font-mono text-[12px]">{ctx}</span>
+                {c ? <span className="text-[10px] text-muted-foreground">{c}</span> : null}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

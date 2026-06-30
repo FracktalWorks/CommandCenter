@@ -57,9 +57,10 @@ export function ToolCardShell({
 }
 
 /**
- * Thin wrapper that overlays a hover-reveal dismiss (X) on a card that brings its
- * own chrome (draft card, rule card, …), so it becomes closable without altering
- * the card's internals.
+ * Thin wrapper that overlays a dismiss (X) on a card that brings its own chrome
+ * (draft card, rule card, …), so it becomes closable without altering the card's
+ * internals. The X stays visible (faint by default, solid on hover) — a
+ * hover-only control read as "no close button" on these cards.
  */
 export function DismissableCard({
   onDismiss,
@@ -74,7 +75,7 @@ export function DismissableCard({
         onClick={onDismiss}
         title="Dismiss"
         aria-label="Dismiss"
-        className="absolute top-1.5 right-1.5 z-10 p-0.5 rounded text-muted-foreground bg-card/80 opacity-0 group-hover/dismiss:opacity-100 hover:text-foreground hover:bg-secondary transition-opacity"
+        className="absolute top-1.5 right-1.5 z-10 p-0.5 rounded text-muted-foreground bg-card/80 opacity-60 hover:opacity-100 hover:text-foreground hover:bg-secondary transition-opacity"
       >
         <X size={12} />
       </button>

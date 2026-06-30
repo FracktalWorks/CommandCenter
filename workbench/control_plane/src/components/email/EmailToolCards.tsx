@@ -238,6 +238,7 @@ function ThreadBody({ event, accountId }: { event: ToolEvent; accountId?: string
             id: m.id,
             sender: m.from?.name || m.from?.email || "(unknown sender)",
             subject: m.subject || "(no subject)",
+            date: threadDate(m.receivedAt),
           }}
           defaultOpen={i === msgs.length - 1}
         />
@@ -267,6 +268,14 @@ export default function EmailToolCards({
   const dismissed = useDismissedToolCards();
   const all = (toolEvents ?? []).filter((e) => !dismissed.has(e.id));
 
+  // When the agent read a whole thread, the thread card IS the canonical view —
+  // the per-message read_email reads and the search/list lookup that led to it
+  // are redundant and just clutter. Show only the thread (+ any draft/action
+  // cards) so "show me this thread" yields one card, not three.
+  const hasThread = all.some(
+    (e) => e.status === "done" && e.name === READ_THREAD_TOOL,
+  );
+
   const items: React.ReactNode[] = [];
   let readRun: ToolEvent[] = [];
   const flushReads = () => {
@@ -277,12 +286,15 @@ export default function EmailToolCards({
     }
   };
   for (const e of all) {
-    // Fold consecutive read_email context calls into one group.
+    // Fold consecutive read_email context calls into one group — dropped
+    // entirely when a thread card is present (subsumed by the thread).
     if (e.status === "done" && e.name === READ_TOOL) {
-      readRun.push(e);
+      if (!hasThread) readRun.push(e);
       continue;
     }
     if (!hasEmailCard(e)) continue;
+    // Drop the search/list lookup card when a thread is shown.
+    if (hasThread && LIST_TOOLS.has(e.name)) continue;
     flushReads();
     if (e.name === READ_THREAD_TOOL) {
       items.push(<ThreadCard key={e.id} event={e} accountId={accountId} />);
@@ -515,7 +527,7 @@ function RuleResultCard({
 
   return (
     <div className="rounded-lg border border-primary/40 bg-primary/5 px-2.5 py-2">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 pr-5">
         <Sparkles size={13} className="text-primary flex-shrink-0" />
         <div className="min-w-0 flex-1">
           <div className="text-[11px] font-medium text-foreground">
@@ -631,7 +643,7 @@ function SettingsUpdatedCard({ event: e }: { event: ToolEvent }) {
 
   return (
     <div className="rounded-lg border border-primary/40 bg-primary/5 px-2.5 py-2">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 pr-5">
         <Settings2 size={13} className="text-primary flex-shrink-0" />
         <span className="text-[11px] font-medium text-foreground flex-1">Settings updated</span>
         <button
@@ -660,7 +672,17 @@ function SettingsUpdatedCard({ event: e }: { event: ToolEvent }) {
 
 // ── Email list card ───────────────────────────────────────────────────────────
 
-interface ParsedRow { id: string; sender: string; subject: string }
+interface ParsedRow { id: string; sender: string; subject: string; date?: string }
+
+/** Compact "Jun 28, 3:42 PM" for ordering messages within a thread. */
+function threadDate(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleString([], {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+}
 
 /** Parse the email-list rows the read tools emit. Handles every format the
  *  email-assistant produces:
@@ -751,7 +773,8 @@ function EmailListCard({ event: e }: { event: ToolEvent }) {
 
   return (
     <div className="rounded-lg border border-sidebar-border bg-secondary/40 px-2.5 py-2">
-      <div className="flex items-center gap-1.5 mb-1.5">
+      {/* pr-5 leaves room for the dismiss (X) overlay at the card's corner. */}
+      <div className="flex items-center gap-1.5 mb-1.5 pr-5">
         <Icon size={12} className="text-primary" />
         <span className="text-[11px] font-medium text-foreground">{meta.label}</span>
         <span className="text-[10px] text-muted-foreground">({rows.length})</span>
@@ -886,7 +909,12 @@ function EmailRow({
             >
               {row.subject}
             </span>
-            <span className="block text-[10px] text-muted-foreground truncate">{row.sender}</span>
+            <span className="block text-[10px] text-muted-foreground truncate">
+              {row.date && (
+                <span className="text-foreground/70">{row.date} · </span>
+              )}
+              {row.sender}
+            </span>
           </span>
         </button>
         <div className="flex items-center flex-shrink-0 mr-0.5">

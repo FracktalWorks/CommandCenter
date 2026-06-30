@@ -1,7 +1,8 @@
 # Task Manager App — Project Plan (GTD philosophy)
 
-> **Product:** CommandCenter · **Feature:** Task Manager App (Getting Things Done) · **Updated:** 2026-06-30 · **Version:** 0.1 (planning)
+> **Product:** CommandCenter · **Feature:** Task Manager App (Getting Things Done) · **Updated:** 2026-06-30 · **Version:** 0.2 (planning — reviewed)
 > **Status:** 🔲 Planned — design only. No code yet. Builds on the existing `agent-task-manager` + `skill-clickup-sync` scaffolding.
+> **v0.2 review pass:** reconciled the GTD "lightweight project" vs "first-class project" framing (§5.1); clarified the delegation-write vs Action-Broker sequencing (§6, Phase 3); pinned the migration (`48_*`, idempotent, FK-dependency apply order — §4); placed the new GTD tools in `skill-task-gtd` over the canonical store and demoted `skill-clickup-sync` to the reference connector (§3.1); matched the gateway route to the `routes/<app>/` package precedent (§8); de-duplicated horizon levels vs projects/items (§4); aligned F1 capture channels with the phasing (Q3); added a build-order summary (§9).
 > **Sibling spec:** [`email_ai_assistant.md`](email_ai_assistant.md) — the Task Manager app deliberately mirrors its architecture (multi-panel client + AI assistant + provider abstraction + Postgres sync + automation engine + follow-up tracking). Read it first; this doc reuses its patterns by reference.
 
 ---
@@ -89,7 +90,7 @@ Each GTD step becomes a first-class surface in the app. This is the product's fe
 
 | # | Feature (app surface) | GTD step it implements | Email-app analogue |
 |---|---|---|---|
-| **F1** | **Capture Bar / Universal Inbox** — frictionless quick-add from anywhere (global hotkey, chat-to-task, email-to-task, voice, mobile); one unified inbox aggregating every connected workspace. | Capture | Compose / unified inbox |
+| **F1** | **Capture Bar / Universal Inbox** — frictionless quick-add from anywhere (v1: global hotkey + chat-to-task + email-to-task; voice + mobile later — see Q3); one unified inbox aggregating every connected workspace plus LOCAL. | Capture | Compose / unified inbox |
 | **F2** | **Clarify (AI triage)** — the agent walks each inbox item through the GTD decision tree and *proposes* the disposition: trash / reference / someday / next-action / project / delegate / do-now, with a concrete **next action** and **outcome** drafted. User approves or edits. | Clarify | AI Rules engine + "Clarify" classifier |
 | **F3** | **Organize (Lists & Contexts)** — Next Actions by `@context`, Projects, Waiting For, Calendar, Someday/Maybe, Reference. Drag/keyboard reorganize; context & energy tagging. | Organize | Folders / labels / categories |
 | **F4** | **Engage ("Now" view)** — focused execution surface that filters by Context + Time + Energy + Priority and shows "what should I do right now." | Engage | (new — no email analogue) |
@@ -160,6 +161,8 @@ The Task Manager app reuses the email app's three-tier shape verbatim: **Control
 
 The agent already exists (`apps/agent-task-manager/`, read-only status Q&A over the first connected PM tool). We extend its tool surface from read-only status queries to the full GTD engine — mirroring how `agent-email-assistant` grew the inbox-zero tool surface. **The agent calls the canonical GTD tools, never a specific PM tool's API** — the interface layer resolves which connector (API or MCP) actually serves each call, so the agent is provider-agnostic.
 
+**Where the tools live (so this is unambiguous to build):** the new GTD tools (`capture`/`clarify`/`organize`/`list_*`/`weekly_review`/…) are a **new skill, `skill-task-gtd`**, that operates on **our canonical store** (`gtd_*` tables) through the gateway `/tasks` API + the interface layer — *not* on any PM REST API. The **existing `skill-clickup-sync`** is *not* called directly by the agent for GTD operations any more; it is **wrapped as the reference ClickUp API connector inside the interface layer** (the layer is what syncs `gtd_items` ↔ ClickUp). The two legacy read-only tools (`get_task_status`, `list_project_tasks`) remain available for direct status Q&A during the transition.
+
 ```
 EXISTING tools (first reference connector):
   get_task_status(task_id)              list_project_tasks(project_name)
@@ -189,9 +192,11 @@ All writes (create/assign/move/close in the connected PM tool) flow through the 
 
 The core decision (same as email): **sync provider tasks into a canonical Postgres store with a GTD-semantic overlay**, rather than proxying the PM API on every render. GTD semantics (disposition, context, energy, horizon link) live in *our* columns; for synced items the provider task is the source of truth for title/status/assignee/dates. **The schema is provider-agnostic** — `provider` is a free string registered at connect time, not an enum.
 
+> **Implementation note (per `infra/postgres/README.md`).** This ships as **one** numbered migration — **`48_task_manager_gtd.sql`** (next free number; verify before writing) — and **must be idempotent**: every statement uses `CREATE TABLE/INDEX IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS` because `apply_migrations.sh` re-runs all `02+` migrations on every deploy. After writing it, run `scripts/dump_schema.sh` and commit the refreshed `schema.generated.sql`. The DDL below is **grouped by concern for readability, not apply order** — the real migration must create tables in **FK-dependency order**: `gtd_contexts` → `gtd_horizons` → `gtd_projects` (FK→horizons) → `gtd_items` (FK→projects, horizons) → `gtd_waiting` (FK→items) → `task_accounts` (independent) → `gtd_reviews` (independent). (`IF NOT EXISTS` is shown only on the first table below to keep the listing readable; apply it to every object.)
+
 ```sql
 -- A connected PM-tool workspace (multi-account, multi-provider, like email_accounts)
-CREATE TABLE task_accounts (
+CREATE TABLE IF NOT EXISTS task_accounts (   -- apply IF NOT EXISTS to every object below too
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id TEXT NOT NULL,
     provider TEXT NOT NULL,              -- free string: 'clickup' | 'asana' | 'jira' | 'linear' | 'monday' | …
@@ -220,7 +225,9 @@ CREATE TABLE gtd_items (
     title TEXT NOT NULL,
     description TEXT,
     -- GTD overlay (ours)
-    disposition TEXT DEFAULT 'INBOX',    -- INBOX | NEXT | WAITING | SOMEDAY | PROJECT | REFERENCE | CALENDAR | DONE | TRASH
+    disposition TEXT DEFAULT 'INBOX',    -- INBOX | NEXT | WAITING | SOMEDAY | PROJECT | REFERENCE | DONE | TRASH
+                                         -- (no CALENDAR bucket: the Calendar is a VIEW over date-specific actions —
+                                         --  a calendar item keeps its disposition + carries is_hard_date=true & due_at)
     next_action TEXT,                    -- the clarified physical next action
     context TEXT,                        -- '@computer' | '@calls' | '@errands' | '@agenda:<person>' ...
     energy TEXT,                         -- 'low' | 'medium' | 'high'
@@ -284,7 +291,8 @@ CREATE TABLE gtd_contexts (
 CREATE TABLE gtd_horizons (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id TEXT NOT NULL,
-    level INT NOT NULL,                  -- 1=Projects .. 5=Purpose (see horizon table)
+    level INT NOT NULL,                  -- 2=Areas · 3=Goals · 4=Vision · 5=Purpose
+                                         -- (Ground=current actions=gtd_items; H1=Projects=gtd_projects — not duplicated here)
     title TEXT NOT NULL, notes TEXT,
     created_at TIMESTAMPTZ DEFAULT now()
 );
@@ -305,7 +313,11 @@ This is the crux of the "brainstorm." GTD is a *semantic* model; every PM tool h
 
 ### 5.1 Dual-source model — LOCAL vs SYNCED, one interface
 
-**Projects and tasks come from two sources, rendered in a single unified interface.** GTD projects are **first-class and at the same level as a provider's projects** — not subtasks. The difference is *where the project/task is stored and who is the source of truth*:
+**Projects and tasks come from two sources, rendered in a single unified interface.** GTD projects are **first-class and at the same level as a provider's projects** — not subtasks.
+
+> **Reconciling with §1.1.** GTD *semantically* defines a project as merely "any outcome needing >1 action" (lightweight). That is the **clarify-time test** the agent applies — it does **not** mean a GTD project is a sub-object. Once something is a project, we **store** it as a first-class `gtd_projects` row at the same level as a provider's project object. So: lightweight *concept*, first-class *representation*. The two statements are not in conflict.
+
+The difference between the two sources is *where the project/task is stored and who is the source of truth*:
 
 | Source | Source of truth | When | Storage |
 |---|---|---|---|
@@ -418,6 +430,8 @@ This is the explicitly-requested capability: not just *my* tasks, but **delegati
 
 **Waiting-For Zero** is the goal state: every delegated item is either progressing, nudged, or escalated — nothing silently rotting.
 
+> **What lands when (sequencing).** *Monitoring* others' tasks, *Waiting-For tracking*, blocker/overdue detection, and follow-up **drafting** are read-only/local and ship in **Phase 3**. The *delegation write* — actually assigning the task to a teammate in a connected PM tool — is a write to a source system, so it is **suggest-only until the Action Broker is live (Phase 4)**: until then we stage the assignment for one-click apply and record the Waiting-For locally. Delegating inherently makes work collaborative, so a delegated **LOCAL** item promotes to **SYNCED** — and that promotion write is gated the same way.
+
 ---
 
 ## 7. Frontend (mirrors `/email`, GTD-shaped)
@@ -448,7 +462,9 @@ UI must follow `workbench/control_plane/DESIGN_SYSTEM.md` and reuse shared compo
 
 ---
 
-## 8. API endpoints (gateway `routes/tasks.py`)
+## 8. API endpoints (gateway `routes/tasks/` package)
+
+> Follows the email precedent — `routes/email/` is a package (`core.py`, `automation/`, `digest.py`, `transport/`), not a single file. `routes/tasks/` should likewise be a package (e.g. `core.py` for items/lists, `accounts.py`, `review.py`, `ai.py`).
 
 | Method | Path | Description |
 |---|---|---|
@@ -471,10 +487,13 @@ UI must follow `workbench/control_plane/DESIGN_SYSTEM.md` and reuse shared compo
 
 ## 9. Implementation phases
 
+**Build order at a glance** — strictly dependency-ordered, so each step is independently shippable:
+1. **Migration `48_task_manager_gtd.sql`** (the canonical store) → 2. **interface layer + ClickUp API connector** (read-only sync into `gtd_items`) → 3. **gateway `/tasks/` read endpoints** → 4. **`/tasks` UI shell** (ported from `/email`, read-only lens) → 5. **`skill-task-gtd` + extend `agent-task-manager`**. Everything in Phase 1 is **read-only**; no writes to source systems, so nothing is blocked on the Action Broker. Capture/LOCAL-CRUD/clarify (Phase 2) and delegation-write (Phase 4) come after.
+
 ### Phase 1 — Foundation (interface layer + read-only GTD lens)
 - [ ] This plan (done) + DOX index updates.
 - [ ] `task_accounts` + `gtd_items` + `gtd_projects` + `gtd_waiting` + `gtd_contexts`/`gtd_horizons`/`gtd_reviews` schema (numbered migration), incl. the `source` (LOCAL/SYNCED) discriminator, nullable provider linkage, and the per-connection `capabilities`/`field_map` descriptor.
-- [ ] Gateway `routes/tasks.py` skeleton + `/tasks/providers` capability probe.
+- [ ] Gateway `routes/tasks/` package skeleton + `/tasks/providers` capability probe.
 - [ ] `apps/task_ingestion/` **interface layer**: `BaseTaskProvider` contract + connector registry + provider descriptor (capabilities + field-map).
 - [ ] **First API connector — ClickUp** (reuse `skill-clickup-sync/core.py`) as the reference implementation; sync → `gtd_items` (read-only; `is_mine` + others' tasks).
 - [ ] `/tasks` Control Plane app ported from the email 4-panel shell (mock → live).
@@ -492,7 +511,7 @@ UI must follow `workbench/control_plane/DESIGN_SYSTEM.md` and reuse shared compo
 ### Phase 3 — Engage + Reflect + Delegate
 - [ ] Engage "Now" view — 4-criteria selection (F4).
 - [ ] Weekly Review wizard + `gtd_reviews` summary (F5).
-- [ ] **Delegate & Monitor / Waiting-For Zero** (F6): delegate, monitor others' tasks, blocker/overdue detection, follow-up drafting via `call_agent` → `email-assistant`.
+- [ ] **Delegate & Monitor / Waiting-For Zero** (F6): monitor others' tasks, Waiting-For tracking, blocker/overdue detection, follow-up drafting via `call_agent` → `email-assistant`. *(Delegation write-back to a connected PM tool is suggest-only here — full write lands with the Action Broker in Phase 4. See §6.)*
 - [ ] Natural-planning project flow (F8).
 
 ### Phase 4 — Horizons, more connectors, write-back

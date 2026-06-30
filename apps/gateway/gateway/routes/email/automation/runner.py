@@ -897,13 +897,17 @@ async def _run_rules_job(
         cold_blocker = "OFF"
         multi_rule = False
         cb_row = (await db.execute(text(
-            "SELECT cold_email_blocker, multi_rule_execution "
+            "SELECT cold_email_blocker, multi_rule_execution, org_domains "
             "FROM email_assistant_settings WHERE account_id = :aid"
         ), {"aid": account_id})).fetchone()
         if cb_row and cb_row.cold_email_blocker:
             cold_blocker = cb_row.cold_email_blocker
         if cb_row and getattr(cb_row, "multi_rule_execution", None):
             multi_rule = bool(cb_row.multi_rule_execution)
+        # Configured extra "your organisation" domains → direction-aware
+        # classification (outbound/internal mail isn't a received category).
+        org_domains = frozenset(getattr(cb_row, "org_domains", None) or []) \
+            if cb_row else frozenset()
 
         provider = None
         store = None
@@ -928,7 +932,7 @@ async def _run_rules_job(
         for r in rows:
             frm = r.from_address if isinstance(r.from_address, dict) \
                 else json.loads(r.from_address or "{}")
-            email = email_dict_from_row(r, self_email, about)
+            email = email_dict_from_row(r, self_email, about, org_domains)
             # Multi-rule execution (inbox-zero parity): when on, every matching
             # rule applies; otherwise just the single best match.
             if multi_rule:

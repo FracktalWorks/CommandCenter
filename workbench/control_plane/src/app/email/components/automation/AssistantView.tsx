@@ -3313,6 +3313,94 @@ const CONFIGURE_BTN =
   "text-xs text-muted-foreground hover:text-foreground hover:bg-secondary " +
   "transition-colors";
 
+/** Normalize a user-entered domain to a bare host (mirrors the backend's
+ *  normalize_domain): strip a leading @, an email local-part, a trailing path. */
+function normDomain(raw: string): string {
+  let d = raw.trim().toLowerCase().replace(/^@+/, "");
+  if (d.includes("@")) d = d.split("@").pop() ?? "";
+  return d.split("/")[0].trim();
+}
+
+/** Advanced-settings editor for the extra "your organisation" domains. The
+ *  account's own domain is always internal (shown as a locked chip); the user
+ *  can add more so multi-brand / secondary-domain mail also counts as internal
+ *  (outbound) instead of being mislabelled as a received Receipt/Newsletter. */
+function OrgDomainsCard({
+  ownDomain,
+  domains,
+  onChange,
+}: {
+  ownDomain: string;
+  domains: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [input, setInput] = useState("");
+  const add = () => {
+    const d = normDomain(input);
+    setInput("");
+    if (!d || d === ownDomain || domains.includes(d)) return;
+    onChange([...domains, d]);
+  };
+  return (
+    <SettingCard
+      title="Organisation domains"
+      description="Mail from these domains is treated as your own side (outbound) — so it's never mislabelled as a received Receipt or Newsletter, and a teammate's reply counts toward a thread's status. Your account domain is always included."
+    >
+      <div className="flex flex-wrap items-center gap-1.5">
+        {ownDomain && (
+          <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] bg-secondary border border-border text-muted-foreground">
+            {ownDomain}
+            <span className="text-[9px] uppercase tracking-wide opacity-60">
+              your domain
+            </span>
+          </span>
+        )}
+        {domains.map((d) => (
+          <span
+            key={d}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] bg-primary/10 border border-primary/20 text-foreground"
+          >
+            {d}
+            <button
+              onClick={() => onChange(domains.filter((x) => x !== d))}
+              className="text-muted-foreground hover:text-destructive transition-colors"
+              aria-label={`Remove ${d}`}
+            >
+              <X size={11} />
+            </button>
+          </span>
+        ))}
+        {!ownDomain && domains.length === 0 && (
+          <span className="text-[11px] text-muted-foreground italic">
+            No extra domains — your account domain is used.
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-2 mt-2.5">
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              add();
+            }
+          }}
+          placeholder="add a domain, e.g. acmecorp.io"
+          className={`${INPUT_BASE} flex-1`}
+        />
+        <button
+          onClick={add}
+          disabled={!input.trim()}
+          className="flex items-center gap-1 px-2.5 py-2 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
+        >
+          <Plus size={12} /> Add
+        </button>
+      </div>
+    </SettingCard>
+  );
+}
+
 function SettingsTab({ accountId }: { accountId: string | null }) {
   const [settings, setSettings] = useState<AssistantSettings | null>(null);
   const [loading, setLoading] = useState(true);
@@ -3578,6 +3666,11 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
             }
           />
           <ColdSendersList accountId={accountId} />
+          <OrgDomainsCard
+            ownDomain={s.own_domain || ""}
+            domains={s.org_domains || []}
+            onChange={(next) => persistPatch({ org_domains: next })}
+          />
           {([
             {
               key: "rule_model" as const,

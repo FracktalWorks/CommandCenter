@@ -33,9 +33,9 @@ async def test_categorizes_uncategorized_senders_and_commits() -> None:
             patch.object(m.automation.senders, "_llm_categorize_senders", llm):
         await m._categorize_senders_job("acc-1", 25)
     llm.assert_awaited_once()
-    # 1 SELECT senders + 1 SELECT account address (sender_scope) + 1 SELECT
-    # account models (rule_model) + 2 INSERTs.
-    assert db.execute.await_count == 5
+    # 1 SELECT senders + 1 SELECT account address + 1 SELECT org_domains
+    # (sender_scope) + 1 SELECT account models (rule_model) + 2 INSERTs.
+    assert db.execute.await_count == 6
     db.commit.assert_awaited()
 
 

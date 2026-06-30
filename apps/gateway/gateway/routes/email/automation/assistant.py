@@ -152,6 +152,11 @@ class AssistantSettingsModel(BaseModel):
     # inbox-zero parity (migration 30)
     multi_rule_execution: bool = False  # allow >1 rule to run on one email
     sensitive_data_protection: bool = True  # skip drafting on sensitive emails
+    # Extra "your organisation" domains (migration 46). The account's own domain
+    # is always internal; these are additional domains/aliases (multi-brand orgs)
+    # whose mail also counts as outbound/internal for direction-aware
+    # classification. Read-only ``own_domain`` is returned by GET for display.
+    org_domains: list[str] = Field(default_factory=list)
 
 
 @router.get("/assistant/settings")
@@ -171,9 +176,17 @@ async def get_assistant_settings(
                       follow_up_awaiting_days, follow_up_needs_reply_days,
                       follow_up_auto_draft, digest_categories, digest_day_of_week,
                       digest_time_of_day, digest_send_to_email,
-                      multi_rule_execution, sensitive_data_protection
+                      multi_rule_execution, sensitive_data_protection,
+                      org_domains
                FROM email_assistant_settings WHERE account_id = :aid"""
         ), {"aid": account_id})).fetchone()
+        # The account's own email domain is ALWAYS treated as internal; surface
+        # it (read-only) so the UI can show it as the always-included default.
+        acc_row = (await db.execute(text(
+            "SELECT email_address FROM email_accounts WHERE id = :aid"
+        ), {"aid": account_id})).fetchone()
+        from gateway.routes.email.automation.identity import _domain_of  # noqa: PLC0415
+        own_domain = _domain_of(getattr(acc_row, "email_address", "") or "")
         awaiting = (getattr(row, "follow_up_awaiting_days", 0) if row else 0) or 0
         # Fall back to the legacy single field if the new column is still 0.
         if not awaiting and row:
@@ -242,6 +255,11 @@ async def get_assistant_settings(
                 if row and getattr(row, "sensitive_data_protection", None) is not None
                 else True
             ),
+            "org_domains": (
+                list(getattr(row, "org_domains", None) or []) if row else []
+            ),
+            # Read-only: the account's own domain, always treated as internal.
+            "own_domain": own_domain,
         }
     finally:
         await db.close()
@@ -259,6 +277,12 @@ async def put_assistant_settings(
         # `follow_up_awaiting_days` is canonical; accept the legacy `follow_up_days`
         # as a fallback so older clients keep working.
         awaiting = req.follow_up_awaiting_days or req.follow_up_days or 0
+        # Normalize + dedupe the extra org domains (the account's own domain is
+        # always internal, so it never needs to be stored here).
+        from gateway.routes.email.automation.identity import normalize_domain  # noqa: PLC0415
+        org_domains = list(dict.fromkeys(
+            nd for d in (req.org_domains or [])
+            if isinstance(d, str) and (nd := normalize_domain(d))))
         await db.execute(text(
             """INSERT INTO email_assistant_settings
                  (account_id, about, signature, auto_run, cold_email_blocker,
@@ -268,12 +292,13 @@ async def put_assistant_settings(
                   follow_up_awaiting_days, follow_up_needs_reply_days,
                   follow_up_auto_draft, digest_categories, digest_day_of_week,
                   digest_time_of_day, digest_send_to_email,
-                  multi_rule_execution, sensitive_data_protection, updated_at)
+                  multi_rule_execution, sensitive_data_protection, org_domains,
+                  updated_at)
                VALUES (:aid, :about, :sig, :auto, :cold, :rule_model,
                        :draft_model, :chat_model,
                        :digest,
                        :pi, :ws, :dr, :fu, :dc, :fua, :funr, :fuad, :dcat,
-                       :ddow, :dtod, :dste, :mre, :sdp, now())
+                       :ddow, :dtod, :dste, :mre, :sdp, :orgd, now())
                ON CONFLICT (account_id) DO UPDATE SET
                  about = EXCLUDED.about,
                  signature = EXCLUDED.signature,
@@ -297,6 +322,7 @@ async def put_assistant_settings(
                  digest_send_to_email = EXCLUDED.digest_send_to_email,
                  multi_rule_execution = EXCLUDED.multi_rule_execution,
                  sensitive_data_protection = EXCLUDED.sensitive_data_protection,
+                 org_domains = EXCLUDED.org_domains,
                  updated_at = now()"""
         ), {"aid": req.account_id, "about": req.about, "sig": req.signature,
             "auto": req.auto_run, "cold": req.cold_email_blocker or "OFF",
@@ -314,7 +340,8 @@ async def put_assistant_settings(
             "dtod": req.digest_time_of_day or "09:00",
             "dste": req.digest_send_to_email,
             "mre": req.multi_rule_execution,
-            "sdp": req.sensitive_data_protection})
+            "sdp": req.sensitive_data_protection,
+            "orgd": org_domains})
         await db.commit()
         # inbox-zero parity: the "Auto draft replies" toggle adds/removes the
         # DRAFT_EMAIL action on the "To Reply" rule (like inbox-zero's
@@ -328,6 +355,11 @@ async def put_assistant_settings(
         except Exception as exc:  # noqa: BLE001 — settings already saved; best-effort
             _log.warning("email.draft_replies_sync_failed",
                          account_id=req.account_id, error=str(exc)[:200])
+        acc_row = (await db.execute(text(
+            "SELECT email_address FROM email_accounts WHERE id = :aid"
+        ), {"aid": req.account_id})).fetchone()
+        from gateway.routes.email.automation.identity import _domain_of  # noqa: PLC0415
+        own_domain = _domain_of(getattr(acc_row, "email_address", "") or "")
         return {
             "account_id": req.account_id,
             "about": req.about or "",
@@ -352,6 +384,8 @@ async def put_assistant_settings(
             "digest_send_to_email": req.digest_send_to_email,
             "multi_rule_execution": req.multi_rule_execution,
             "sensitive_data_protection": req.sensitive_data_protection,
+            "org_domains": org_domains,
+            "own_domain": own_domain,
         }
     finally:
         await db.close()

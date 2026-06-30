@@ -15,7 +15,10 @@ from fastapi import BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from gateway.routes.email.automation.assistant import _load_assistant_about
 from gateway.routes.email.automation.drafting import _agent_draft_reply, _is_no_draft
-from gateway.routes.email.automation.identity import sender_scope
+from gateway.routes.email.automation.identity import (
+    resolve_org_domains,
+    sender_scope,
+)
 from gateway.routes.email.core import (
     _assert_account_owner,
     _get_db,
@@ -837,15 +840,21 @@ class ThreadContext:
 
 async def build_thread_context(
     db: Any, account_id: str, thread_id: str, self_email: str, *,
-    extra_domains: frozenset[str] | set[str] = frozenset(),
+    extra_domains: frozenset[str] | set[str] | None = None,
     pending_reply: tuple[str, str] | None = None,
 ) -> ThreadContext | None:
     """Load a thread and render it for the determiner, once, for every caller.
+
+    ``extra_domains`` defaults to None → the account's configured org domains are
+    resolved here (so every status path is org-domain-aware without each caller
+    plumbing it). Pass an explicit set (e.g. ``frozenset()``) to skip the lookup.
 
     ``pending_reply`` is ``(body, subject)`` of a reply the owner JUST sent that
     isn't mirrored into ``email_messages`` yet — it's appended as the final
     ``(you sent)`` message so the determination is accurate immediately (and
     ``our_side_last`` becomes True). Returns None when the thread has no rows."""
+    if extra_domains is None:
+        extra_domains = await resolve_org_domains(db, account_id)
     rows = (await db.execute(text(
         """SELECT id, from_address, subject, body_text, snippet, folder,
                   received_at
@@ -883,7 +892,7 @@ async def build_thread_context(
 async def recompute_thread_status(
     db: Any, account_id: str, thread_id: str, *, trigger: str,
     about: str = "", acc_email: str = "",
-    extra_domains: frozenset[str] | set[str] = frozenset(),
+    extra_domains: frozenset[str] | set[str] | None = None,
     pending_reply: tuple[str, str] | None = None,
     model: str = _STATUS_MODEL,
 ) -> tuple[str, str] | None:
@@ -1135,6 +1144,7 @@ async def _maybe_classify_threads(account_id: str) -> None:
             "SELECT email_address FROM email_accounts WHERE id = :id"
         ), {"id": account_id})).fetchone()
         self_email = (acc.email_address if acc else "") or ""
+        extra_domains = await resolve_org_domains(db, account_id)
 
         gap_inbound = []
         sent_handled = 0
@@ -1158,7 +1168,7 @@ async def _maybe_classify_threads(account_id: str) -> None:
         await db.commit()
 
         for r in gap_inbound[:_BACKFILL_INBOUND_CAP]:  # cap engine work per cycle
-            email = email_dict_from_row(r, self_email, about)
+            email = email_dict_from_row(r, self_email, about, extra_domains)
             match = await _match_email_to_rule(db, account_id, email)
             # Full-thread status determination (same parity as the live runner)
             # when the match is a conversation.

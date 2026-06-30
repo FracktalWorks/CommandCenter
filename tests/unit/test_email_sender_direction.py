@@ -9,6 +9,7 @@ the sender categorizer so they refuse receive-only categories for own/org mail.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 from gateway.routes.email.automation import engine as _eng
 from gateway.routes.email.automation import identity as _id
@@ -94,3 +95,38 @@ def test_classifier_guidelines_mention_direction() -> None:
     # The directive that stops outbound mail matching a Receipt-style rule.
     assert "DIRECTION MATTERS" in _eng._CLASSIFIER_GUIDELINES
     assert "Receipt" in _eng._CLASSIFIER_GUIDELINES
+
+
+# ── Configurable extra org domains (Advanced settings) ───────────────────────
+
+def test_normalize_domain() -> None:
+    assert _id.normalize_domain("@Acme.com") == "acme.com"
+    assert _id.normalize_domain("user@acme.io") == "acme.io"     # pasted address
+    assert _id.normalize_domain("  ACME.NET  ") == "acme.net"
+    assert _id.normalize_domain("acme.com/") == "acme.com"       # trailing path
+    assert _id.normalize_domain("") == ""
+
+
+def test_extra_domain_makes_cross_domain_teammate_internal() -> None:
+    # A configured extra domain treats a different-domain teammate as internal.
+    assert _id.sender_scope("ops@acme.io", "me@acme.com", {"acme.io"}) == "internal"
+    assert _id.sender_scope("ops@acme.io", "me@acme.com", frozenset()) == "external"
+
+
+async def test_resolve_org_domains_normalizes_and_fails_safe() -> None:
+    db = AsyncMock()
+    res = MagicMock()
+    res.fetchone.return_value = SimpleNamespace(
+        org_domains=["@Acme.io", "user@brand.co", "", None])
+    db.execute.return_value = res
+    assert await _id.resolve_org_domains(db, "acc") == frozenset(
+        {"acme.io", "brand.co"})
+
+    # No row / empty config → empty set.
+    res.fetchone.return_value = None
+    assert await _id.resolve_org_domains(db, "acc") == frozenset()
+
+    # DB error (e.g. column missing pre-migration) → empty, never raises.
+    err_db = AsyncMock()
+    err_db.execute.side_effect = RuntimeError("no such column")
+    assert await _id.resolve_org_domains(err_db, "acc") == frozenset()

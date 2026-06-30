@@ -206,6 +206,7 @@ async def test_resolve_uses_full_thread_status_over_per_message_pick() -> None:
     db = AsyncMock()
     db.execute.side_effect = [
         _result(fetchone=SimpleNamespace(email_address="me@x.com")),  # acc email
+        _result(fetchone=None),                            # org_domains (none)
         _result(fetchall=[SimpleNamespace(
             id="m1", from_address={"email": "a@b.com"}, subject="s",
             body_text="thanks", snippet="", folder="inbox",
@@ -233,6 +234,7 @@ async def test_resolve_keeps_original_when_no_rule_for_status() -> None:
     db = AsyncMock()
     db.execute.side_effect = [
         _result(fetchone=SimpleNamespace(email_address="me@x.com")),
+        _result(fetchone=None),                            # org_domains (none)
         _result(fetchall=[SimpleNamespace(
             id="m1", from_address={"email": "a@b.com"}, subject="s",
             body_text="b", snippet="", folder="inbox", received_at=None)]),
@@ -258,6 +260,7 @@ def _backfill_db(latest, existing):
         _result(fetchall=latest),
         _result(fetchall=existing),
         _result(fetchone=SimpleNamespace(email_address="me@x.com")),
+        _result(fetchone=None),  # resolve_org_domains (none configured)
     ]
     return db
 

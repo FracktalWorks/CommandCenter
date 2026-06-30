@@ -858,16 +858,19 @@ async def _categorize_senders_job(account_id: str, limit: int) -> None:
                GROUP BY LOWER(from_address->>'email')
                ORDER BY COUNT(*) DESC LIMIT :limit"""
         ), {"aid": account_id, "limit": limit})).fetchall()
-        # The account's own address → sender_scope, so the categorizer never
-        # buckets the user's own / same-org senders into a RECEIVE category.
+        # The account's own address + configured org domains → sender_scope, so
+        # the categorizer never buckets the user's own / same-org senders into a
+        # RECEIVE category.
         acc = (await db.execute(text(
             "SELECT email_address FROM email_accounts WHERE id = :id"
         ), {"id": account_id})).fetchone()
         self_email = (acc.email_address if acc else "") or ""
+        from gateway.routes.email.automation.identity import resolve_org_domains  # noqa: PLC0415
+        org_domains = await resolve_org_domains(db, account_id)
         items = [
             {"email": r.email, "name": r.name or "",
              "subjects": [s for s in (r.subjects or []) if s],
-             "scope": sender_scope(r.email, self_email)}
+             "scope": sender_scope(r.email, self_email, org_domains)}
             for r in rows
         ]
         from gateway.routes.email.automation.assistant import _account_models  # noqa: PLC0415

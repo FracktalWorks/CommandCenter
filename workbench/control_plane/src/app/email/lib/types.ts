@@ -371,6 +371,12 @@ export interface AssistantSettings {
   multi_rule_execution: boolean;
   /** Skip auto-drafting on emails that look like they carry sensitive data. */
   sensitive_data_protection: boolean;
+  /** Extra "your organisation" domains (beyond the account's own) whose mail is
+   *  treated as internal/outbound for direction-aware classification. */
+  org_domains: string[];
+  /** Read-only: the account's own email domain, always treated as internal.
+   *  Returned by GET/PUT for display; never sent back to change it. */
+  own_domain?: string;
 }
 
 export type DraftConfidence = "ALL_EMAILS" | "STANDARD" | "HIGH_CONFIDENCE";

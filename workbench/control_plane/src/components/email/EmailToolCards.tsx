@@ -60,6 +60,32 @@ const READ_TOOL = "read_email";
 const READ_THREAD_TOOL = "read_thread";
 const SETTINGS_TOOL = "update_assistant_settings";
 
+/** Tools that return a human-readable LIST / overview (a header + bullet lines,
+ *  with no clickable email ids) — e.g. list_learned_patterns, list_senders.
+ *  These used to render NO card, so their output only appeared in the thinking
+ *  timeline ("does not show properly"). They render as a titled, scrollable
+ *  full-text card (InfoResultCard) so the whole list is visible. */
+const INFO_META: Record<string, { icon: React.ElementType; label: string }> = {
+  list_accounts: { icon: Mail, label: "Accounts" },
+  get_unread_count: { icon: Mail, label: "Unread counts" },
+  generate_writing_style: { icon: PenLine, label: "Writing style" },
+  list_labels: { icon: Tag, label: "Labels" },
+  list_artifacts: { icon: BookOpen, label: "Files" },
+  get_sender_categories: { icon: Tag, label: "Sender categories" },
+  list_senders: { icon: Mail, label: "Top senders" },
+  get_rules_and_settings: { icon: Sparkles, label: "Rules & settings" },
+  list_rule_history: { icon: Clock, label: "Rule history" },
+  list_knowledge: { icon: BookOpen, label: "Knowledge base" },
+  list_cold_senders: { icon: Archive, label: "Cold senders" },
+  suggest_unsubscribes: { icon: Archive, label: "Unsubscribe candidates" },
+  get_account_overview: { icon: Mail, label: "Account overview" },
+  get_digest: { icon: Send, label: "Digest" },
+  list_learned_patterns: { icon: Sparkles, label: "Learned patterns" },
+  create_rules_from_prompt: { icon: Sparkles, label: "Rules created" },
+  test_rule_match: { icon: Wrench, label: "Rule match test" },
+};
+const INFO_TOOLS = new Set(Object.keys(INFO_META));
+
 /** Friendly label + icon for the generic confirmation card (mutating tools). */
 const ACTION_META: Record<string, { icon: React.ElementType; label: string; danger?: boolean }> = {
   manage_inbox: { icon: Archive, label: "Inbox updated" },
@@ -79,10 +105,10 @@ const ACTION_META: Record<string, { icon: React.ElementType; label: string; dang
   approve_execution: { icon: CheckCircle2, label: "Approved" },
   reject_execution: { icon: X, label: "Rejected" },
   undo_execution: { icon: RefreshCw, label: "Undone" },
+  import_artifact: { icon: BookOpen, label: "Artifact imported" },
   add_knowledge: { icon: BookOpen, label: "Knowledge added" },
   update_knowledge: { icon: BookOpen, label: "Knowledge updated" },
   delete_knowledge: { icon: Trash2, label: "Knowledge deleted", danger: true },
-  generate_writing_style: { icon: PenLine, label: "Writing style saved" },
   delete_learned_pattern: { icon: Trash2, label: "Pattern forgotten" },
   find_follow_ups: { icon: Clock, label: "Follow-ups scanned" },
   mark_thread_done: { icon: CheckCircle2, label: "Thread updated" },
@@ -104,6 +130,7 @@ function hasEmailCard(e: ToolEvent): boolean {
     DRAFT_TOOLS.has(e.name) ||
     RULE_TOOLS.has(e.name) ||
     LIST_TOOLS.has(e.name) ||
+    INFO_TOOLS.has(e.name) ||
     e.name === READ_THREAD_TOOL ||
     e.name === SETTINGS_TOOL ||
     e.name in ACTION_META
@@ -298,6 +325,12 @@ export default function EmailToolCards({
     flushReads();
     if (e.name === READ_THREAD_TOOL) {
       items.push(<ThreadCard key={e.id} event={e} accountId={accountId} />);
+      continue;
+    }
+    // Info/list cards bring their own ToolCardShell chrome (collapse + X), so
+    // render them directly rather than inside a DismissableCard.
+    if (INFO_TOOLS.has(e.name)) {
+      items.push(<InfoResultCard key={e.id} event={e} />);
       continue;
     }
     items.push(
@@ -1131,6 +1164,32 @@ function ManageInboxCard({ event: e }: { event: ToolEvent }) {
         </span>
       </div>
     </div>
+  );
+}
+
+// ── Info / list card ──────────────────────────────────────────────────────────
+
+/** Titled, scrollable, full-text card for the read-only list/overview tools
+ *  (list_learned_patterns, list_senders, get_rules_and_settings, …). Shows the
+ *  WHOLE result (no 160-char truncation) so the list is actually readable, with
+ *  collapse + dismiss from ToolCardShell. Counts the bullet lines for the title.
+ */
+function InfoResultCard({ event: e }: { event: ToolEvent }) {
+  const meta = INFO_META[e.name] ?? { icon: Wrench, label: e.name.replace(/_/g, " ") };
+  const Icon = meta.icon;
+  const text = (e.result || "").trim();
+  const bullets = text.split("\n").filter((l) => l.trim().startsWith("•")).length;
+  const title = bullets > 0 ? `${meta.label} (${bullets})` : meta.label;
+  return (
+    <ToolCardShell
+      title={title}
+      icon={<Icon size={12} />}
+      onDismiss={() => dismissToolCard(e.id)}
+    >
+      <div className="text-[11px] whitespace-pre-wrap break-words text-foreground/90 max-h-72 overflow-y-auto overflow-x-hidden scrollbar-thin">
+        {text || "(no result)"}
+      </div>
+    </ToolCardShell>
   );
 }
 

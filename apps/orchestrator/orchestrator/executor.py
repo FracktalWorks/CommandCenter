@@ -61,6 +61,47 @@ _elicitation_tc_ids: dict[str, str] = {}
 
 _log = get_logger("orchestrator.executor")
 
+
+# ── agent_framework OpenTelemetry instrumentation kill switch ────────────────
+# MAF's telemetry is enabled-by-default but exports NOWHERE in this deployment
+# (no OTLP / App Insights backend is configured), and its streaming-telemetry
+# cleanup hook (_finalize_stream) resets a ContextVar in a DIFFERENT async
+# context than the one it set it in — its reset runs in the asyncio.ensure_future
+# child context used to pull each stream chunk — so CPython raises
+# "Token was created in a different Context" at the END of a streamed run, after
+# the full answer already streamed, turning a successful run into a RUN_ERROR.
+# Disabling the dead instrumentation removes the cause (the wrapper is bypassed
+# entirely when OBSERVABILITY_SETTINGS.ENABLED is False). Re-enable by setting
+# ENABLE_INSTRUMENTATION=1 once an actual trace backend is wired up.
+_telemetry_disabled = False
+
+
+def _disable_agent_telemetry_once() -> None:
+    """Disable agent_framework instrumentation process-wide (idempotent, sticky).
+
+    Called at the top of every agent entry point so it runs before the first
+    ``agent.run(stream=True)``. No-op when the operator opted in via
+    ``ENABLE_INSTRUMENTATION``."""
+    global _telemetry_disabled
+    if _telemetry_disabled:
+        return
+    _telemetry_disabled = True
+    if os.getenv("ENABLE_INSTRUMENTATION", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    ):
+        return  # operator explicitly wants tracing — leave it on
+    try:
+        from agent_framework.observability import (  # noqa: PLC0415
+            disable_instrumentation,
+        )
+        disable_instrumentation()
+        _log.info("executor.agent_telemetry_disabled")
+    except Exception as exc:  # noqa: BLE001
+        # Best-effort — the executor's ValueError guard still catches the symptom.
+        _log.warning(
+            "executor.agent_telemetry_disable_failed", error=str(exc)[:160])
+
+
 # Pre-compiled regex for tool result clearing (technique #1).
 # Matches tool-result code blocks embedded in assistant messages so they can
 # be stripped from old history turns — avoids re-sending 5k-token API dumps.
@@ -1808,6 +1849,7 @@ async def run_agent(
     Raises:
         :class:`AgentRunError` on failure (includes mutation PR URL if one was opened).
     """
+    _disable_agent_telemetry_once()
     settings = get_settings()
     run_id = run_id or str(uuid.uuid4())
     thread_id = thread_id or f"{agent_name}:{run_id}"
@@ -2235,6 +2277,7 @@ async def run_agent_stream(
     Either way the caller (FastAPI StreamingResponse or the Next.js route) sees
     a standards-compliant AG-UI event stream.
     """
+    _disable_agent_telemetry_once()
     run_id = run_id or str(uuid.uuid4())
     thread_id = thread_id or f"{agent_name}:{run_id}"
 
@@ -2636,6 +2679,25 @@ async def run_agent_stream(
                                 _u = _next_task.result()
                             except StopAsyncIteration:
                                 break
+                            except ValueError as _ve:
+                                # Defense-in-depth for the agent_framework
+                                # streaming-telemetry teardown bug: its cleanup
+                                # hook resets a ContextVar in a different async
+                                # context and raises "Token was created in a
+                                # different Context" AT END OF STREAM — after the
+                                # answer already streamed. Treat that benign
+                                # teardown error as a clean end-of-stream so a
+                                # successful run is never reported as RUN_ERROR.
+                                # (Root cause is removed by
+                                # _disable_agent_telemetry_once; this guards any
+                                # residual / re-enabled case.)
+                                if "different Context" in str(_ve):
+                                    _log.warning(
+                                        "executor.native_maf_telemetry_teardown",
+                                        agent=agent_name,
+                                    )
+                                    break
+                                raise
                             _next_task = None
                             # Agent advanced (e.g. the HITL answer arrived) — no
                             # longer parked on a question.

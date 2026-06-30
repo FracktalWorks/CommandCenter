@@ -32,8 +32,10 @@ import {
 import type { ToolEvent } from "@/components/MarkdownMessage";
 import {
   saveDraftText, sendDraft, deleteRule, listRules, updateRule,
-  fetchFullBody, updateEmail as patchEmail, type FullBodyResponse,
+  fetchFullBody, updateEmail as patchEmail, getEmail, listThread,
+  type FullBodyResponse,
 } from "@/app/email/lib/api";
+import type { Email } from "@/app/email/lib/types";
 import { MessageContent } from "@/app/email/components/MessageContent";
 import { LabelChip } from "@/app/email/components/LabelChip";
 import { useEmailStore } from "@/app/email/lib/emailStore";
@@ -145,22 +147,102 @@ function ReadGroupCard({ events }: { events: ToolEvent[] }) {
   );
 }
 
-/** Collapsed card for a whole-thread read (read_thread) — the result is already
- *  a formatted oldest-first summary; show it on expand. */
-function ThreadCard({ event }: { event: ToolEvent }) {
+/** One whole conversation (read_thread) as a SINGLE collapsed card whose body is
+ *  the thread's messages — each an expandable row (latest open). This is the key
+ *  difference from read_email (one message): a thread is shown as one thread, not
+ *  N separate email cards. The body fetches the real conversation (so each
+ *  message is openable) and falls back to the tool's text summary if that fails. */
+function ThreadCard({ event, accountId }: { event: ToolEvent; accountId?: string | null }) {
   const first = (event.result || "").split("\n")[0] || "Email thread";
-  const title = first.replace(/,?\s*oldest first:?\s*$/i, "").trim() || "Email thread";
+  // "Thread: <subject> — N message(s), oldest first:" → just the subject + count.
+  const title =
+    first
+      .replace(/^Thread:\s*/i, "")
+      .replace(/,?\s*oldest first:?\s*$/i, "")
+      .trim() || "Email thread";
   return (
     <ToolCardShell
       title={title}
-      icon={<MailOpen size={12} />}
+      icon={<Mail size={12} />}
       defaultCollapsed
       onDismiss={() => dismissToolCard(event.id)}
     >
-      <div className="text-xs whitespace-pre-wrap text-foreground/90 max-h-80 overflow-y-auto scrollbar-thin">
+      <ThreadBody event={event} accountId={accountId} />
+    </ToolCardShell>
+  );
+}
+
+/** Fetches and renders a thread's messages. Mounts only when the card is
+ *  expanded (ToolCardShell renders children lazily), so the fetch is on-demand. */
+function ThreadBody({ event, accountId }: { event: ToolEvent; accountId?: string | null }) {
+  const args = event.args as Record<string, unknown> | undefined;
+  const threadId = (args?.thread_id as string) || "";
+  const emailId = (args?.email_id as string) || "";
+  const acct = (args?.account_id as string) || accountId || undefined;
+  const [msgs, setMsgs] = useState<Email[] | null>(null);
+  const [state, setState] = useState<"loading" | "error" | "done">("loading");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        let tid = threadId;
+        let single: Email | null = null;
+        if (!tid && emailId) {
+          single = await getEmail(emailId);
+          tid = single.threadId || "";
+        }
+        const list = tid
+          ? await listThread(acct, tid)
+          : single
+            ? [single]
+            : [];
+        if (alive) {
+          setMsgs(list);
+          setState("done");
+        }
+      } catch {
+        if (alive) setState("error");
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [threadId, emailId, acct]);
+
+  if (state === "loading") {
+    return (
+      <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground py-2">
+        <Loader2 size={11} className="animate-spin" /> Loading thread…
+      </div>
+    );
+  }
+  // Couldn't fetch the conversation — show the tool's text summary so the user
+  // still gets the content.
+  if (state === "error" || !msgs) {
+    return (
+      <div className="text-xs whitespace-pre-wrap break-words text-foreground/90 max-h-80 overflow-y-auto overflow-x-hidden scrollbar-thin">
         {event.result}
       </div>
-    </ToolCardShell>
+    );
+  }
+  if (msgs.length === 0) {
+    return <div className="text-[10px] text-muted-foreground py-1">No messages in this thread.</div>;
+  }
+  return (
+    <div className="space-y-1">
+      {msgs.map((m, i) => (
+        <EmailRow
+          key={m.id}
+          row={{
+            id: m.id,
+            sender: m.from?.name || m.from?.email || "(unknown sender)",
+            subject: m.subject || "(no subject)",
+          }}
+          defaultOpen={i === msgs.length - 1}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -203,7 +285,7 @@ export default function EmailToolCards({
     if (!hasEmailCard(e)) continue;
     flushReads();
     if (e.name === READ_THREAD_TOOL) {
-      items.push(<ThreadCard key={e.id} event={e} />);
+      items.push(<ThreadCard key={e.id} event={e} accountId={accountId} />);
       continue;
     }
     items.push(
@@ -215,7 +297,9 @@ export default function EmailToolCards({
   flushReads();
 
   if (items.length === 0) return null;
-  return <div className="mt-3 space-y-2">{items}</div>;
+  // min-w-0 + overflow-hidden keep a wide email body (tables, long URLs) from
+  // forcing the card — and the chat column — to scroll sideways.
+  return <div className="mt-3 space-y-2 min-w-0 overflow-hidden">{items}</div>;
 }
 
 // ── Navigation helper ─────────────────────────────────────────────────────────
@@ -227,7 +311,9 @@ function useOpenEmail() {
   const router = useRouter();
   return (id: string) => {
     try {
-      useEmailStore.getState().selectEmail(id);
+      // Fetch-and-show even when the message isn't in the current folder's list,
+      // so opening works from any view (not just when the inbox is active).
+      void useEmailStore.getState().openEmailById(id);
     } catch {
       /* store not ready — still navigate */
     }
@@ -860,7 +946,7 @@ function EmailRow({
                   From: {body.from}
                 </div>
               )}
-              <div className="max-h-72 overflow-y-auto rounded">
+              <div className="max-h-72 overflow-y-auto overflow-x-hidden rounded">
                 <MessageContent html={body.body_html} text={body.body_text} />
               </div>
             </>
@@ -898,7 +984,7 @@ function EmailPreviewCard({ event: e }: { event: ToolEvent }) {
   }
 
   return (
-    <div className="rounded-lg border border-sidebar-border bg-secondary/40 px-2.5 py-2">
+    <div className="rounded-lg border border-sidebar-border bg-secondary/40 px-2.5 py-2 min-w-0 overflow-hidden">
       <EmailRow
         row={{ id, sender: from || "(unknown sender)", subject }}
         defaultOpen

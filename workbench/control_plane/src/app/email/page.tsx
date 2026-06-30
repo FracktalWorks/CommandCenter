@@ -71,6 +71,7 @@ export default function EmailPage() {
     selectedAccountId,
     selectedFolder,
     selectedEmailId,
+    selectedEmailOverride,
     composeOpen,
     composeDefaults,
     pendingSend,
@@ -127,7 +128,11 @@ export default function EmailPage() {
 
   // Derived data
   const selectedAccount = accounts.find((a) => a.id === selectedAccountId) ?? null;
-  const selectedEmail = emails.find((e) => e.id === selectedEmailId) ?? null;
+  // Prefer the loaded-list message; fall back to an out-of-list message opened
+  // by id from a chat card (so "Open in inbox" works from any folder/view).
+  const selectedEmail =
+    emails.find((e) => e.id === selectedEmailId) ??
+    (selectedEmailOverride?.id === selectedEmailId ? selectedEmailOverride : null);
   const unreadCount = emails.filter(
     (e) => e.folder === selectedFolder && !e.isRead
   ).length;

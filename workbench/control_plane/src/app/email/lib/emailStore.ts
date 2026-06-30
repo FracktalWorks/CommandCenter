@@ -176,6 +176,10 @@ interface EmailState {
   /** Active label/category filter (null = no label filter). */
   selectedLabel: string | null;
   selectedEmailId: string | null;
+  /** A message opened by id (e.g. from a chat card) that is NOT in the current
+   *  folder's loaded list — fetched on demand so the detail pane can show it
+   *  without first switching to the folder it lives in. */
+  selectedEmailOverride: Email | null;
   searchQuery: string;
   /** Checkbox multi-selection in the list, shared with the unified toolbar so
    *  bulk actions can live in the page-level bar instead of inside EmailList. */
@@ -220,6 +224,10 @@ interface EmailState {
   /** Filter the list by a label/category (null clears the filter). */
   selectLabel: (label: string | null) => void;
   selectEmail: (id: string | null) => void;
+  /** Open a message by id even when it isn't in the current folder's list
+   *  (chat-card "Open in inbox"): selects it and, if absent, fetches it so the
+   *  detail pane renders it regardless of the active folder/view. */
+  openEmailById: (id: string) => Promise<void>;
   /** Toggle one message in the checkbox multi-selection. */
   toggleEmailSelected: (id: string) => void;
   /** Replace the checkbox multi-selection (used by "select all"). */
@@ -360,6 +368,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   selectedFolder: "inbox",
   selectedLabel: null,
   selectedEmailId: null,
+  selectedEmailOverride: null,
   searchQuery: "",
   selectedIds: new Set<string>(),
   viewerCommand: null,
@@ -634,7 +643,10 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   selectAccount: (id: string) => {
-    set({ selectedAccountId: id, selectedEmailId: null, selectedIds: new Set() });
+    set({
+      selectedAccountId: id, selectedEmailId: null,
+      selectedEmailOverride: null, selectedIds: new Set(),
+    });
     // Remember the choice (localStorage + URL) so it survives a refresh.
     persistAccountId(id);
     // Fetch folders, labels and emails for the newly selected account
@@ -649,25 +661,48 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       selectedFolder: folder,
       selectedLabel: null,
       selectedEmailId: null,
+      selectedEmailOverride: null,
       selectedIds: new Set(),
     });
     get().fetchEmails();
   },
 
   selectLabel: (label: string | null) => {
-    set({ selectedLabel: label, selectedEmailId: null });
+    set({ selectedLabel: label, selectedEmailId: null, selectedEmailOverride: null });
     get().fetchEmails();
   },
 
   selectEmail: (id: string | null) => {
-    // Opening a different message cancels any pending viewer command.
-    set({ selectedEmailId: id, viewerCommand: null });
+    // Opening a different message cancels any pending viewer command and any
+    // out-of-list override (a normal list selection is in `emails`).
+    set({ selectedEmailId: id, selectedEmailOverride: null, viewerCommand: null });
     // Mark as read if unread
     if (id) {
       const email = get().emails.find((e) => e.id === id);
       if (email && !email.isRead) {
         get().updateEmail(id, { isRead: true });
       }
+    }
+  },
+
+  openEmailById: async (id: string) => {
+    set({ selectedEmailId: id, selectedEmailOverride: null, viewerCommand: null });
+    // Already loaded in the current folder → behave like a normal selection.
+    const inList = get().emails.find((e) => e.id === id);
+    if (inList) {
+      if (!inList.isRead) get().updateEmail(id, { isRead: true });
+      return;
+    }
+    // Not in the loaded list (different folder / not yet paged in). Fetch the
+    // single message so the detail pane can render it without the user first
+    // navigating to the folder it lives in.
+    try {
+      const email = await api.getEmail(id);
+      // A late-arriving fetch must not clobber a newer selection.
+      if (get().selectedEmailId !== id) return;
+      set({ selectedEmailOverride: email });
+    } catch {
+      set({ error: "Couldn't open that email." });
     }
   },
 

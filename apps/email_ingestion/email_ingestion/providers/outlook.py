@@ -1060,16 +1060,8 @@ class OutlookProvider(BaseEmailProvider):
         if importance not in ("low", "normal", "high"):
             importance = "normal"
 
-        # Attachments
-        attachments: list[Attachment] = []
-        for att in raw.get("attachments", []):
-            attachments.append(Attachment(
-                id=att["id"],
-                filename=att.get("name", "attachment"),
-                mime_type=att.get("contentType", "application/octet-stream"),
-                size_bytes=att.get("size", 0),
-                provider_attachment_id=att["id"],
-            ))
+        # Attachments — real files only (inline ``cid:`` body images skipped).
+        attachments = _outlook_attachments(raw)
 
         # Body
         body = raw.get("body", {})
@@ -1099,7 +1091,14 @@ class OutlookProvider(BaseEmailProvider):
             body_text=body_text,
             body_html=body_html,
             snippet=raw.get("bodyPreview", "") or body_text[:200],
-            has_attachments=raw.get("hasAttachments", False),
+            # When attachments were expanded (detail fetch), trust the filtered
+            # count so an inline-only message doesn't show an empty paperclip;
+            # for the list fetch (no $expand) fall back to Graph's flag.
+            has_attachments=(
+                len(attachments) > 0
+                if raw.get("attachments")
+                else raw.get("hasAttachments", False)
+            ),
             attachments=attachments,
             is_read=raw.get("isRead", False),
             is_starred=False,  # Outlook doesn't have stars — use flag/categories
@@ -1110,6 +1109,29 @@ class OutlookProvider(BaseEmailProvider):
             received_at=self._parse_received_datetime(raw.get("receivedDateTime")),
             raw=raw,
         )
+
+
+def _outlook_attachments(raw: dict) -> list[Attachment]:
+    """Real (non-inline) attachments from an expanded Graph message.
+
+    Microsoft Graph returns inline body images (signature logos, pasted
+    screenshots referenced from the HTML via ``cid:``) in the same
+    ``attachments`` collection as real files, flagged with ``isInline: true``.
+    Skip those — they belong in the body, not the attachment list — otherwise a
+    signature with three logos shows as "3 attachments".
+    """
+    out: list[Attachment] = []
+    for att in raw.get("attachments", []) or []:
+        if att.get("isInline"):
+            continue
+        out.append(Attachment(
+            id=att["id"],
+            filename=att.get("name", "attachment"),
+            mime_type=att.get("contentType", "application/octet-stream"),
+            size_bytes=att.get("size", 0),
+            provider_attachment_id=att["id"],
+        ))
+    return out
 
 
 def _parse_list_unsubscribe(header: str) -> str | None:

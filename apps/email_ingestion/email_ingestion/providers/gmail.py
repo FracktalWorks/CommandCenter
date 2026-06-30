@@ -46,6 +46,63 @@ def _gmail_folder_from_labels(label_ids: list[str]) -> str:
     return "inbox"
 
 
+def _gmail_part_header(part: dict, name: str) -> str:
+    """Case-insensitively read a MIME header value off a Gmail payload part."""
+    target = name.lower()
+    for h in part.get("headers", []) or []:
+        if str(h.get("name", "")).lower() == target:
+            return str(h.get("value", ""))
+    return ""
+
+
+def _gmail_part_is_inline(part: dict) -> bool:
+    """True when a part is an inline body image (a ``cid:`` reference such as a
+    signature logo or pasted screenshot), not a real downloadable attachment.
+
+    Gmail flags these with ``Content-Disposition: inline``; some senders omit
+    the disposition but still set a ``Content-ID``, which means the image is
+    referenced from the HTML body rather than offered as a file. Either way it
+    belongs in the body, not in the attachment list — counting them is what
+    floods a one-line signature email with "3 attachments".
+    """
+    disposition = _gmail_part_header(part, "Content-Disposition").strip().lower()
+    if disposition.startswith("inline"):
+        return True
+    if not disposition and _gmail_part_header(part, "Content-ID"):
+        return True
+    return False
+
+
+def _collect_gmail_attachments(part: dict, msg_id: str) -> list[Attachment]:
+    """Walk a Gmail payload tree and collect real (non-inline) attachments.
+
+    Recurses through nested multiparts (``multipart/mixed`` →
+    ``multipart/related`` → …) so attachments below the top level are found,
+    and skips inline body images (see ``_gmail_part_is_inline``). A part counts
+    as an attachment only when it has both a filename and a provider
+    ``attachmentId`` (the handle used to download its bytes).
+    """
+    out: list[Attachment] = []
+
+    def _walk(p: dict) -> None:
+        body = p.get("body", {}) or {}
+        att_id = body.get("attachmentId")
+        filename = p.get("filename")
+        if filename and att_id and not _gmail_part_is_inline(p):
+            out.append(Attachment(
+                id=f"{msg_id}_{att_id}",
+                filename=filename,
+                mime_type=p.get("mimeType", "application/octet-stream"),
+                size_bytes=int(body.get("size", 0) or 0),
+                provider_attachment_id=att_id,
+            ))
+        for sub in p.get("parts", []) or []:
+            _walk(sub)
+
+    _walk(part)
+    return out
+
+
 def _parse_list_unsubscribe(header: str) -> str | None:
     """Pick the best link from a List-Unsubscribe header.
 
@@ -780,18 +837,9 @@ class GmailProvider(BaseEmailProvider):
         # Snippet
         snippet = raw.get("snippet", "")
 
-        # Attachments
-        attachments: list[Attachment] = []
-        if "parts" in payload:
-            for part in payload["parts"]:
-                if part.get("filename"):
-                    attachments.append(Attachment(
-                        id=f"{raw['id']}_{part.get('body', {}).get('attachmentId', '')}",
-                        filename=part["filename"],
-                        mime_type=part.get("mimeType", "application/octet-stream"),
-                        size_bytes=int(part.get("body", {}).get("size", 0)),
-                        provider_attachment_id=part.get("body", {}).get("attachmentId", ""),
-                    ))
+        # Attachments — real files only; inline ``cid:`` body images (signature
+        # logos, pasted screenshots) are skipped, and nested multiparts walked.
+        attachments = _collect_gmail_attachments(payload, raw["id"])
 
         # Labels
         label_ids = raw.get("labelIds", [])

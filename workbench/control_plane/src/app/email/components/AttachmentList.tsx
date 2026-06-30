@@ -1,9 +1,15 @@
 "use client";
 
-import { Download, FileText } from "lucide-react";
+import { useState } from "react";
+import { ChevronDown, Download, FileText } from "lucide-react";
 import { Attachment } from "../lib/types";
 import { getAttachmentDownloadUrl } from "../lib/api";
 import { formatBytes } from "../lib/utils";
+
+// Show this many attachment cards before rolling the rest up behind a toggle —
+// a long signature email (or a message with many files) would otherwise flood
+// the reading pane with attachment chips.
+const COLLAPSED_COUNT = 4;
 
 /**
  * The attachment "download card" list — shared by the single-message reader
@@ -22,14 +28,20 @@ export function AttachmentList({
   attachments?: Attachment[];
   className?: string;
 }) {
+  const [expanded, setExpanded] = useState(false);
   if (!attachments || attachments.length === 0) return null;
+
+  const total = attachments.length;
+  const overflow = total - COLLAPSED_COUNT;
+  const shown = expanded ? attachments : attachments.slice(0, COLLAPSED_COUNT);
+
   return (
     <div className={className}>
       <p className="text-xs text-muted-foreground mb-2">
-        Attachments ({attachments.length})
+        Attachments ({total})
       </p>
       <div className="flex flex-wrap gap-2">
-        {attachments.map((att) => {
+        {shown.map((att) => {
           // Always go through the authenticated Next proxy — the absolute
           // gateway downloadUrl can't carry the internal token from a browser,
           // so it would 401.
@@ -87,6 +99,18 @@ export function AttachmentList({
           );
         })}
       </div>
+      {overflow > 0 && (
+        <button
+          onClick={() => setExpanded((e) => !e)}
+          className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ChevronDown
+            size={12}
+            className={`transition-transform ${expanded ? "rotate-180" : ""}`}
+          />
+          {expanded ? "Show fewer" : `Show all ${total} attachments`}
+        </button>
+      )}
     </div>
   );
 }

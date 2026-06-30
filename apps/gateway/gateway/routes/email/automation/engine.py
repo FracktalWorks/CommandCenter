@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import HTTPException
 from gateway.routes.email.automation.assistant import _account_models
+from gateway.routes.email.automation.identity import sender_scope
 from gateway.routes.email.automation.rules import _load_rules
 from gateway.routes.email.core import _log, _safe_json
 from sqlalchemy import text
@@ -35,13 +36,18 @@ def _fmt_recipients(field: Any) -> str:
 
 def email_dict_from_row(
     row: Any, self_email: str = "", about: str = "", self_name: str = "",
+    extra_domains: frozenset[str] | set[str] = frozenset(),
 ) -> dict[str, str]:
     """Build the classifier's email dict from an ``email_messages`` row.
 
     Mirrors the inputs inbox-zero feeds its rule AI: the recipient envelope
     (``to`` / ``cc``) + the account's own address/name (``self`` / ``self_name``)
     so it can tell direct-recipient from CC'd, the email ``date``, and the user's
-    free-text ``about`` context (role / preferences) for relevance judgement."""
+    free-text ``about`` context (role / preferences) for relevance judgement.
+
+    Also carries ``sender_scope`` (self / internal / external — see identity.py):
+    the provenance signal that stops an OUTBOUND/internal email (e.g. an invoice
+    your org sent a customer) being mislabelled as a RECEIVED category."""
     raw_from = getattr(row, "from_address", None)
     frm = raw_from if isinstance(raw_from, dict) else json.loads(raw_from or "{}")
     received = getattr(row, "received_at", None)
@@ -57,6 +63,8 @@ def email_dict_from_row(
         "about": about or "",
         "date": received.isoformat() if hasattr(received, "isoformat") else "",
         "thread_id": getattr(row, "thread_id", "") or "",
+        "sender_scope": sender_scope(
+            frm.get("email", ""), self_email or "", extra_domains),
     }
 
 
@@ -76,13 +84,24 @@ def _user_info_block(email: dict[str, str]) -> str:
     return f"USER (you are acting on behalf of this person):\n{body}\n\n"
 
 
+_PROVENANCE_LINE = {
+    "self": "Provenance: OUTBOUND — the mailbox owner SENT this email.\n",
+    "internal": ("Provenance: INTERNAL/OUTBOUND — sent by the owner's own "
+                 "organisation (same domain), not received from an outside "
+                 "party.\n"),
+}
+
+
 def _email_block(email: dict[str, str]) -> str:
     """Render the email envelope for the classifier prompt — including To/Cc, the
-    date, and who "You" are, so recipient role (direct vs CC'd) is visible."""
+    date, who "You" are (so recipient role, direct vs CC'd, is visible), and the
+    sender PROVENANCE (self/internal → outbound) so receive-only categories aren't
+    applied to the owner's own outbound/internal mail."""
     date_line = f"Date: {email['date']}\n" if email.get("date") else ""
+    prov_line = _PROVENANCE_LINE.get(email.get("sender_scope", ""), "")
     return (
         _user_info_block(email)
-        + f"EMAIL\nFrom: {email.get('from', '')}\n"
+        + f"EMAIL\n{prov_line}From: {email.get('from', '')}\n"
         f"To: {email.get('to', '') or '(unknown)'}\n"
         f"Cc: {email.get('cc', '') or '(none)'}\n"
         + date_line
@@ -107,7 +126,13 @@ _CLASSIFIER_GUIDELINES = (
     "for those. (3) Prioritise reply-related rules only when the email clearly "
     "needs a response from the mailbox owner. " + _RECIPIENT_GUIDELINE + " "
     "(4) Use the USER context (their role and what they care about) to judge "
-    "relevance, and only fall back to a catch-all rule when no specific rule fits."
+    "relevance, and only fall back to a catch-all rule when no specific rule fits. "
+    "(5) DIRECTION MATTERS: if the Provenance line says OUTBOUND or "
+    "INTERNAL/OUTBOUND, the owner (or their organisation) SENT this — do NOT pick "
+    "a rule meant for RECEIVED mail (e.g. Receipt, Newsletter, Marketing, Cold "
+    "Email). An invoice/quote/document your side sent a customer is your own "
+    "outbound correspondence, not a receipt you got; treat it as FYI/informational "
+    "unless a rule specifically targets your outbound mail."
 )
 
 

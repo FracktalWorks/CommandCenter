@@ -16,6 +16,8 @@ def _mock_db(fetchall_rows):
     db = AsyncMock()
     result = MagicMock()
     result.fetchall.return_value = fetchall_rows
+    # The account-address lookup (for sender_scope) uses fetchone().
+    result.fetchone.return_value = SimpleNamespace(email_address="me@acme.com")
     db.execute.return_value = result  # SELECT returns rows; INSERTs ignore it
     return db
 
@@ -31,8 +33,9 @@ async def test_categorizes_uncategorized_senders_and_commits() -> None:
             patch.object(m.automation.senders, "_llm_categorize_senders", llm):
         await m._categorize_senders_job("acc-1", 25)
     llm.assert_awaited_once()
-    # 1 SELECT senders + 1 SELECT account models (rule_model) + 2 INSERTs.
-    assert db.execute.await_count == 4
+    # 1 SELECT senders + 1 SELECT account address (sender_scope) + 1 SELECT
+    # account models (rule_model) + 2 INSERTs.
+    assert db.execute.await_count == 5
     db.commit.assert_awaited()
 
 

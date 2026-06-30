@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 from acb_auth import UserContext, get_current_user
 from fastapi import BackgroundTasks, Depends, HTTPException, Query
+from gateway.routes.email.automation.identity import sender_scope
 from gateway.routes.email.core import (
     _account_scope,
     _assert_account_owner,
@@ -783,25 +784,35 @@ EMAIL_CATEGORIES = [
 async def _llm_categorize_senders(
     items: list[dict[str, Any]], *, model: str = "tier-fast",
 ) -> dict[str, str]:
-    """Categorize a batch of senders. items: [{email, name, subjects}].
+    """Categorize a batch of senders. items: [{email, name, subjects, scope?}].
 
     Runs on the account's rule-evaluation ``model`` (labeling is part of rule
-    evaluation). Returns {email: category}; empty dict on LLM failure (callers
-    default to 'Unknown').
+    evaluation). ``scope`` (self/internal/external — see identity.py) lets the
+    model refuse RECEIVE-only categories for the user's own / same-org senders, so
+    a teammate's address that sends invoices isn't bucketed as ``Receipt``.
+    Returns {email: category}; empty dict on LLM failure (callers default to
+    'Unknown').
     """
     if not items:
         return {}
     try:
         from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
-        listing = "\n".join(
-            f"{i}. {it.get('name') or ''} <{it['email']}> — subjects: "
-            f"{'; '.join((it.get('subjects') or [])[:3])}"
-            for i, it in enumerate(items)
-        )
+
+        def _line(i: int, it: dict[str, Any]) -> str:
+            tag = (" [YOUR ORGANISATION — internal/outbound]"
+                   if it.get("scope") in ("self", "internal") else "")
+            return (f"{i}. {it.get('name') or ''} <{it['email']}>{tag} — "
+                    f"subjects: {'; '.join((it.get('subjects') or [])[:3])}")
+        listing = "\n".join(_line(i, it) for i, it in enumerate(items))
         sys_prompt = (
             "Classify each email sender into exactly one category from: "
             f"{', '.join(EMAIL_CATEGORIES)}. Use the sender address and recent "
-            "subjects. Respond with ONLY a JSON object "
+            "subjects. Senders tagged [YOUR ORGANISATION] are the user's own "
+            "address or company (same domain) — their mail is internal/outbound, "
+            "so NEVER classify them as Receipt, Newsletter, Marketing, Cold Email "
+            "or Notification (those are for mail RECEIVED from outside parties); "
+            "use Personal, Support, Calendar or Unknown instead. Respond with ONLY "
+            'a JSON object '
             '{"results": [{"index": <n>, "category": "<one category>"}]}.'
         )
         # JSON-forced (object wrapper required by json_object mode); a generous
@@ -847,13 +858,19 @@ async def _categorize_senders_job(account_id: str, limit: int) -> None:
                GROUP BY LOWER(from_address->>'email')
                ORDER BY COUNT(*) DESC LIMIT :limit"""
         ), {"aid": account_id, "limit": limit})).fetchall()
+        # The account's own address → sender_scope, so the categorizer never
+        # buckets the user's own / same-org senders into a RECEIVE category.
+        acc = (await db.execute(text(
+            "SELECT email_address FROM email_accounts WHERE id = :id"
+        ), {"id": account_id})).fetchone()
+        self_email = (acc.email_address if acc else "") or ""
         items = [
             {"email": r.email, "name": r.name or "",
-             "subjects": [s for s in (r.subjects or []) if s]}
+             "subjects": [s for s in (r.subjects or []) if s],
+             "scope": sender_scope(r.email, self_email)}
             for r in rows
         ]
-        from gateway.routes.email.automation.assistant import (  # noqa: PLC0415
-            _account_models)
+        from gateway.routes.email.automation.assistant import _account_models  # noqa: PLC0415
         rule_model = (await _account_models(db, account_id))["rule"]
         for i in range(0, len(items), 10):
             batch = items[i:i + 10]

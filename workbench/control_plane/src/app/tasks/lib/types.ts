@@ -95,6 +95,8 @@ export interface GtdItem {
   completedAt?: string;
   /** set when the item leaves the inbox (clarified) */
   clarifiedAt?: string;
+  /** GTD tickler — hidden from the active inbox until this date, then resurfaces */
+  deferUntil?: string;
 }
 
 /** The left-rail views. */

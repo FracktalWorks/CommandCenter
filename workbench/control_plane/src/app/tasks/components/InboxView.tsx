@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, KeyboardEvent } from "react";
 import {
   Inbox,
   Plus,
@@ -8,25 +8,31 @@ import {
   Sparkles,
   CheckCircle2,
   ArrowRight,
-  Clock,
   Wind,
   Undo2,
   AlertCircle,
   Search,
   ArrowDownUp,
   SearchX,
-  Pencil,
-  Trash2,
   Lightbulb,
   FileText,
-  Check,
-  type LucideIcon,
+  Trash2,
+  CalendarClock,
+  X,
+  RotateCcw,
+  Keyboard,
 } from "lucide-react";
 import FilterPills from "@/components/FilterPills";
 import { useTaskStore } from "../lib/taskStore";
-import { GtdItem } from "../lib/types";
-import { DateBucketKey, dateBucket, msSince, relativeTime } from "../lib/utils";
-import { SourceBadge } from "./SourceBadge";
+import { Disposition, GtdItem } from "../lib/types";
+import {
+  DateBucketKey,
+  dateBucket,
+  isTickled,
+  msSince,
+  relativeTime,
+} from "../lib/utils";
+import { InboxCard } from "./InboxCard";
 import { ClarifyModal } from "./ClarifyModal";
 
 const AGING_MS = 3 * 24 * 3600 * 1000; // GTD: empty regularly — flag stale items
@@ -34,9 +40,6 @@ const AGING_MS = 3 * 24 * 3600 * 1000; // GTD: empty regularly — flag stale it
 type DateFilter = "all" | DateBucketKey;
 type SortOrder = "newest" | "oldest";
 
-// A dedicated, capture-first Inbox surface (not the email-style list+detail).
-// One job: capture fast, and see everything captured-but-unprocessed. Clarifying
-// happens in a focused overlay (ClarifyModal), not a side column.
 export function InboxView() {
   const items = useTaskStore((s) => s.items);
   const capture = useTaskStore((s) => s.capture);
@@ -44,47 +47,59 @@ export function InboxView() {
   const openQuickCapture = useTaskStore((s) => s.openQuickCapture);
   const lastCaptureIds = useTaskStore((s) => s.lastCaptureIds);
   const undoLastCapture = useTaskStore((s) => s.undoLastCapture);
+  const quickDispose = useTaskStore((s) => s.quickDispose);
+  const bulkDispose = useTaskStore((s) => s.bulkDispose);
+  const undeferItem = useTaskStore((s) => s.undeferItem);
+  const processed = useTaskStore((s) => s.processedThisSession);
+  const clarifyModalOpen = useTaskStore((s) => s.clarifyModalOpen);
+  const quickCaptureOpen = useTaskStore((s) => s.quickCaptureOpen);
 
-  const inbox = useMemo(
-    () => items.filter((i) => i.disposition === "INBOX"),
+  // Active inbox = to-process (INBOX, not tickled). Tickler = deferred items.
+  const activeInbox = useMemo(
+    () => items.filter((i) => i.disposition === "INBOX" && !isTickled(i)),
+    [items],
+  );
+  const tickler = useMemo(
+    () =>
+      items
+        .filter((i) => i.disposition === "INBOX" && isTickled(i))
+        .sort((a, b) => (a.deferUntil ?? "").localeCompare(b.deferUntil ?? "")),
     [items],
   );
 
-  // Oldest unprocessed item — GTD "empty regularly" signal.
   const oldest = useMemo(() => {
-    if (!inbox.length) return null;
-    const o = inbox.reduce((a, b) =>
+    if (!activeInbox.length) return null;
+    return activeInbox.reduce((a, b) =>
       new Date(a.createdAt) < new Date(b.createdAt) ? a : b,
     );
-    return o;
-  }, [inbox]);
+  }, [activeInbox]);
   const isAging = !!oldest && msSince(oldest.createdAt) > AGING_MS;
 
-  // Undo bar: show while the last capture batch is still sitting in the inbox.
   const undoCount = useMemo(
-    () =>
-      lastCaptureIds.filter((id) =>
-        inbox.some((i) => i.id === id),
-      ).length,
-    [lastCaptureIds, inbox],
+    () => lastCaptureIds.filter((id) => activeInbox.some((i) => i.id === id)).length,
+    [lastCaptureIds, activeInbox],
   );
 
+  // ── local UI state ──
   const [value, setValue] = useState("");
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
+  const [showTickler, setShowTickler] = useState(false);
+  const [cursorId, setCursorId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showShortcuts, setShowShortcuts] = useState(false);
 
-  // Per-bucket counts for the date filter pills.
   const bucketCounts = useMemo(() => {
     const c = { today: 0, yesterday: 0, week: 0, older: 0 };
-    for (const i of inbox) c[dateBucket(i.createdAt).key]++;
+    for (const i of activeInbox) c[dateBucket(i.createdAt).key]++;
     return c;
-  }, [inbox]);
+  }, [activeInbox]);
 
-  // Filtered + sorted view of the inbox (scale + date filtering + search).
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const filtered = inbox.filter((i) => {
+    const filtered = activeInbox.filter((i) => {
       if (dateFilter !== "all" && dateBucket(i.createdAt).key !== dateFilter)
         return false;
       if (q && !i.title.toLowerCase().includes(q)) return false;
@@ -94,15 +109,113 @@ export function InboxView() {
       const d = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
       return sortOrder === "newest" ? -d : d;
     });
-  }, [inbox, search, dateFilter, sortOrder]);
+  }, [activeInbox, search, dateFilter, sortOrder]);
 
   const pills = [
-    { id: "all", label: "All", count: inbox.length },
+    { id: "all", label: "All", count: activeInbox.length },
     { id: "today", label: "Today", count: bucketCounts.today },
     { id: "yesterday", label: "Yesterday", count: bucketCounts.yesterday },
     { id: "week", label: "This week", count: bucketCounts.week },
     { id: "older", label: "Older", count: bucketCounts.older },
   ].filter((p) => p.id === "all" || p.count > 0);
+
+  const toggleSelect = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const clearSelection = () => setSelectedIds(new Set());
+  const bulk = (d: Disposition) => {
+    bulkDispose([...selectedIds], d);
+    clearSelection();
+  };
+
+  // ── keyboard navigation + triage over the visible list ──
+  useEffect(() => {
+    if (showTickler) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (clarifyModalOpen || quickCaptureOpen || editingId) return;
+      const el = e.target as HTMLElement | null;
+      if (
+        el &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.isContentEditable)
+      )
+        return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (!visible.length) return;
+
+      const idx = visible.findIndex((i) => i.id === cursorId);
+      const cur = idx >= 0 ? visible[idx] : visible[0];
+      const disposeAdvance = (d: Disposition) => {
+        const nextId =
+          visible[idx + 1]?.id ?? visible[idx - 1]?.id ?? null;
+        quickDispose(cur.id, d);
+        setCursorId(nextId);
+      };
+
+      switch (e.key) {
+        case "j":
+        case "ArrowDown":
+          e.preventDefault();
+          setCursorId(
+            idx < 0 ? visible[0].id : visible[Math.min(visible.length - 1, idx + 1)].id,
+          );
+          break;
+        case "k":
+        case "ArrowUp":
+          e.preventDefault();
+          setCursorId(idx < 0 ? visible[0].id : visible[Math.max(0, idx - 1)].id);
+          break;
+        case "Enter":
+          e.preventDefault();
+          openClarify(cur.id);
+          break;
+        case "e":
+          e.preventDefault();
+          setEditingId(cur.id);
+          break;
+        case "x":
+          e.preventDefault();
+          toggleSelect(cur.id);
+          break;
+        case "t":
+          e.preventDefault();
+          disposeAdvance("TRASH");
+          break;
+        case "s":
+          e.preventDefault();
+          disposeAdvance("SOMEDAY");
+          break;
+        case "r":
+          e.preventDefault();
+          disposeAdvance("REFERENCE");
+          break;
+        case "2":
+          e.preventDefault();
+          disposeAdvance("DONE");
+          break;
+        case "Escape":
+          clearSelection();
+          setCursorId(null);
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [
+    visible,
+    cursorId,
+    editingId,
+    showTickler,
+    clarifyModalOpen,
+    quickCaptureOpen,
+    openClarify,
+    quickDispose,
+  ]);
 
   const submit = () => {
     const t = value.trim();
@@ -116,8 +229,9 @@ export function InboxView() {
       submit();
     }
   };
-
   const startClarify = (id: string) => openClarify(id);
+
+  const selectionActive = selectedIds.size > 0;
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -137,7 +251,6 @@ export function InboxView() {
               value={value}
               onChange={(e) => setValue(e.target.value)}
               onKeyDown={onKeyDown}
-              autoFocus
               placeholder="What's on your mind?"
               aria-label="Capture a task"
               className="flex-1 bg-transparent text-base text-foreground placeholder:text-muted-foreground focus:outline-none"
@@ -157,7 +270,7 @@ export function InboxView() {
             )}
           </div>
 
-          <div className="mt-2 flex items-center gap-3 px-1 text-[11px] text-muted-foreground">
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-muted-foreground">
             <button
               type="button"
               onClick={() => openQuickCapture("sweep")}
@@ -174,7 +287,29 @@ export function InboxView() {
               </kbd>{" "}
               to capture from anywhere
             </span>
+            <button
+              type="button"
+              onClick={() => setShowShortcuts((v) => !v)}
+              className="tech-transition ml-auto inline-flex items-center gap-1 hover:text-foreground"
+            >
+              <Keyboard className="h-3.5 w-3.5" />
+              Shortcuts
+            </button>
           </div>
+
+          {showShortcuts && (
+            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 rounded-lg border border-border bg-secondary/30 px-3 py-2 text-[10px] text-muted-foreground">
+              <Sc k="j / k">move</Sc>
+              <Sc k="↵">clarify</Sc>
+              <Sc k="e">edit</Sc>
+              <Sc k="x">select</Sc>
+              <Sc k="t">trash</Sc>
+              <Sc k="s">someday</Sc>
+              <Sc k="r">reference</Sc>
+              <Sc k="2">do now</Sc>
+              <Sc k="esc">clear</Sc>
+            </div>
+          )}
 
           {undoCount > 0 && (
             <div className="mt-3 flex items-center justify-between rounded-lg border border-border bg-secondary/40 px-3 py-2">
@@ -194,78 +329,138 @@ export function InboxView() {
         </div>
       </div>
 
-      {/* Sticky controls: count + aging + clarify-next, then search/sort, then date pills */}
-      {inbox.length > 0 && (
+      {/* Controls */}
+      {(activeInbox.length > 0 || tickler.length > 0) && (
         <div className="shrink-0 border-b border-border bg-background/80 backdrop-blur">
           <div className="mx-auto w-full max-w-2xl px-6">
             <div className="flex items-center justify-between py-3">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-medium text-muted-foreground">
-                  {inbox.length} to process
+                  {activeInbox.length} to process
                 </span>
-                {isAging && oldest && (
+                {processed > 0 && (
+                  <span className="inline-flex items-center gap-1 text-[11px] text-success">
+                    <CheckCircle2 className="h-3 w-3" />
+                    {processed} processed
+                  </span>
+                )}
+                {isAging && oldest && !showTickler && (
                   <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
                     <AlertCircle className="h-3 w-3" />
                     oldest {relativeTime(oldest.createdAt)} — time to process
                   </span>
                 )}
               </div>
-              <button
-                type="button"
-                disabled={!oldest}
-                onClick={() => oldest && startClarify(oldest.id)}
-                title="Process the oldest item first (GTD FIFO)"
-                className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-40"
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                Clarify next
-                <ArrowRight className="h-3.5 w-3.5" />
-              </button>
-            </div>
-            <div className="flex items-center gap-2 pb-2">
-              <div className="tech-transition flex flex-1 items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 focus-within:border-primary/50">
-                <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search captured tasks…"
-                  aria-label="Search captured tasks"
-                  className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
-                />
+              <div className="flex items-center gap-2">
+                {tickler.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowTickler((v) => !v)}
+                    className={[
+                      "tech-transition inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium",
+                      showTickler
+                        ? "bg-primary/15 text-primary"
+                        : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+                    ].join(" ")}
+                  >
+                    <CalendarClock className="h-3.5 w-3.5" />
+                    Tickler {tickler.length}
+                  </button>
+                )}
+                {!showTickler && (
+                  <button
+                    type="button"
+                    disabled={!oldest}
+                    onClick={() => oldest && startClarify(oldest.id)}
+                    title="Process the oldest item first (GTD FIFO)"
+                    className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-40"
+                  >
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Clarify next
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
-              <button
-                type="button"
-                onClick={() =>
-                  setSortOrder((o) => (o === "newest" ? "oldest" : "newest"))
-                }
-                className="tech-transition inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-                title="Toggle sort order"
-              >
-                <ArrowDownUp className="h-3.5 w-3.5" />
-                {sortOrder === "newest" ? "Newest" : "Oldest"}
-              </button>
             </div>
+
+            {!showTickler &&
+              (selectionActive ? (
+                <div className="flex items-center gap-2 pb-2">
+                  <span className="text-xs font-medium text-primary">
+                    {selectedIds.size} selected
+                  </span>
+                  <div className="ml-auto flex items-center gap-1">
+                    <BulkBtn icon={Lightbulb} onClick={() => bulk("SOMEDAY")}>
+                      Someday
+                    </BulkBtn>
+                    <BulkBtn icon={FileText} onClick={() => bulk("REFERENCE")}>
+                      Reference
+                    </BulkBtn>
+                    <BulkBtn icon={Trash2} danger onClick={() => bulk("TRASH")}>
+                      Trash
+                    </BulkBtn>
+                    <button
+                      type="button"
+                      onClick={clearSelection}
+                      className="tech-transition rounded-md p-1 text-muted-foreground hover:text-foreground"
+                      aria-label="Clear selection"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 pb-2">
+                  <div className="tech-transition flex flex-1 items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 focus-within:border-primary/50">
+                    <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <input
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Search captured tasks…"
+                      aria-label="Search captured tasks"
+                      className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSortOrder((o) => (o === "newest" ? "oldest" : "newest"))
+                    }
+                    className="tech-transition inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+                    title="Toggle sort order"
+                  >
+                    <ArrowDownUp className="h-3.5 w-3.5" />
+                    {sortOrder === "newest" ? "Newest" : "Oldest"}
+                  </button>
+                </div>
+              ))}
           </div>
-          <FilterPills
-            items={pills}
-            activeId={dateFilter}
-            onChange={(id) => setDateFilter(id as DateFilter)}
-            className="mx-auto max-w-2xl !px-6"
-          />
+          {!showTickler && !selectionActive && (
+            <FilterPills
+              items={pills}
+              activeId={dateFilter}
+              onChange={(id) => setDateFilter(id as DateFilter)}
+              className="mx-auto max-w-2xl !px-6"
+            />
+          )}
         </div>
       )}
 
-      {/* Captured, unprocessed list */}
+      {/* List */}
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-2xl px-6 py-5">
-          {inbox.length === 0 ? (
+          {showTickler ? (
+            <TicklerList items={tickler} onUndefer={undeferItem} />
+          ) : activeInbox.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
               <CheckCircle2 className="h-9 w-9 text-success/70" />
               <p className="text-sm font-medium text-foreground">
                 Inbox zero. Mind like water.
               </p>
               <p className="text-xs text-muted-foreground">
-                Nothing left to process. Capture the next thing above.
+                {processed > 0
+                  ? `You processed ${processed} item${processed === 1 ? "" : "s"} this session. 🎉`
+                  : "Nothing left to process. Capture the next thing above."}
               </p>
             </div>
           ) : visible.length === 0 ? (
@@ -279,12 +474,22 @@ export function InboxView() {
             <>
               {(search || dateFilter !== "all") && (
                 <p className="mb-2 text-[11px] text-muted-foreground">
-                  Showing {visible.length} of {inbox.length}
+                  Showing {visible.length} of {activeInbox.length}
                 </p>
               )}
               <div className="flex flex-col gap-2">
                 {visible.map((item) => (
-                  <InboxCard key={item.id} item={item} />
+                  <InboxCard
+                    key={item.id}
+                    item={item}
+                    cursor={cursorId === item.id}
+                    selected={selectedIds.has(item.id)}
+                    selectionMode={selectionActive}
+                    editing={editingId === item.id}
+                    onSelectToggle={() => toggleSelect(item.id)}
+                    onEditStart={() => setEditingId(item.id)}
+                    onEditEnd={() => setEditingId(null)}
+                  />
                 ))}
               </div>
             </>
@@ -297,143 +502,88 @@ export function InboxView() {
   );
 }
 
-function InboxCard({ item }: { item: GtdItem }) {
-  const openClarify = useTaskStore((s) => s.openClarify);
-  const quickDispose = useTaskStore((s) => s.quickDispose);
-  const renameItem = useTaskStore((s) => s.renameItem);
-
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(item.title);
-
-  const startEdit = () => {
-    setDraft(item.title);
-    setEditing(true);
-  };
-  const saveEdit = () => {
-    renameItem(item.id, draft);
-    setEditing(false);
-  };
-
-  if (editing) {
+function TicklerList({
+  items,
+  onUndefer,
+}: {
+  items: GtdItem[];
+  onUndefer: (id: string) => void;
+}) {
+  if (!items.length) {
     return (
-      <div className="flex items-center gap-2 rounded-xl border border-primary/40 bg-card px-4 py-3">
-        <Pencil className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <input
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              saveEdit();
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              setEditing(false);
-            }
-          }}
-          onBlur={saveEdit}
-          className="flex-1 bg-transparent text-sm text-foreground focus:outline-none"
-        />
-        <button
-          type="button"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={saveEdit}
-          aria-label="Save"
-          className="tech-transition rounded-md p-1 text-primary hover:bg-primary/10"
-        >
-          <Check className="h-4 w-4" />
-        </button>
-      </div>
+      <p className="py-16 text-center text-sm text-muted-foreground">
+        Nothing tickled.
+      </p>
     );
   }
-
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={() => openClarify(item.id)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          openClarify(item.id);
-        }
-      }}
-      className="group tech-transition flex items-start gap-3 rounded-xl border border-border bg-card px-4 py-3.5 hover:border-primary/40 hover:bg-secondary/30"
-    >
-      <div className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-primary/60" />
-      <div className="min-w-0 flex-1 cursor-pointer">
-        <p className="text-sm leading-snug text-foreground">{item.title}</p>
-        <div className="mt-1.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-          <span className="inline-flex items-center gap-1">
-            <Clock className="h-3 w-3" />
-            captured {relativeTime(item.createdAt)}
-          </span>
-          <SourceBadge source={item.source} provider={item.provider} size="xs" />
-        </div>
+    <>
+      <p className="mb-3 text-[11px] text-muted-foreground">
+        Deferred items — hidden from the inbox until they resurface.
+      </p>
+      <div className="flex flex-col gap-2">
+        {items.map((item) => (
+          <div
+            key={item.id}
+            className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3"
+          >
+            <CalendarClock className="h-4 w-4 shrink-0 text-primary/70" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm text-foreground">{item.title}</p>
+              <p className="text-[11px] text-muted-foreground">
+                resurfaces {relativeTime(item.deferUntil)}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onUndefer(item.id)}
+              className="tech-transition inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              <RotateCcw className="h-3 w-3" />
+              Un-snooze
+            </button>
+          </div>
+        ))}
       </div>
-
-      {/* Hover quick-actions — dispose obvious items without opening the tree */}
-      <div className="flex shrink-0 items-center gap-0.5 opacity-0 tech-transition focus-within:opacity-100 group-hover:opacity-100">
-        <CardAction label="Edit" icon={Pencil} onClick={startEdit} />
-        <CardAction
-          label="Someday"
-          icon={Lightbulb}
-          onClick={() => quickDispose(item.id, "SOMEDAY")}
-        />
-        <CardAction
-          label="Reference"
-          icon={FileText}
-          onClick={() => quickDispose(item.id, "REFERENCE")}
-        />
-        <CardAction
-          label="Trash"
-          icon={Trash2}
-          danger
-          onClick={() => quickDispose(item.id, "TRASH")}
-        />
-        <CardAction
-          label="Clarify"
-          icon={Sparkles}
-          primary
-          onClick={() => openClarify(item.id)}
-        />
-      </div>
-    </div>
+    </>
   );
 }
 
-function CardAction({
-  label,
+function BulkBtn({
   icon: Icon,
   onClick,
-  primary,
   danger,
+  children,
 }: {
-  label: string;
-  icon: LucideIcon;
+  icon: typeof Lightbulb;
   onClick: () => void;
-  primary?: boolean;
   danger?: boolean;
+  children: React.ReactNode;
 }) {
   return (
     <button
       type="button"
-      title={label}
-      aria-label={label}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
+      onClick={onClick}
       className={[
-        "tech-transition rounded-md p-1.5",
-        primary
-          ? "text-muted-foreground hover:bg-primary/10 hover:text-primary"
-          : danger
-            ? "text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-            : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+        "tech-transition inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium",
+        danger
+          ? "border-destructive/30 text-destructive hover:bg-destructive/10"
+          : "border-border text-muted-foreground hover:bg-secondary hover:text-foreground",
       ].join(" ")}
     >
       <Icon className="h-3.5 w-3.5" />
+      {children}
     </button>
+  );
+}
+
+function Sc({ k, children }: { k: string; children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <kbd className="rounded border border-border px-1 py-0.5 font-mono text-[9px] text-foreground">
+        {k}
+      </kbd>
+      {children}
+    </span>
   );
 }

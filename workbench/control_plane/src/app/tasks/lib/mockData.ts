@@ -106,6 +106,9 @@ export const MOCK_ITEMS: GtdItem[] = [
   { id: "i13", source: "LOCAL", provider: "local", title: "Water-cooling loop is leaking on rig 2 — investigate", disposition: "INBOX", isMine: true, createdAt: iso(-24 * 9), updatedAt: iso(-24 * 9) },
   { id: "i14", source: "LOCAL", provider: "local", title: "Research CE marking for the EU launch", disposition: "INBOX", isMine: true, createdAt: iso(-24 * 12), updatedAt: iso(-24 * 12) },
   { id: "i15", source: "LOCAL", provider: "local", title: "Someday: write up the lab safety handbook", disposition: "INBOX", isMine: true, createdAt: iso(-24 * 18), updatedAt: iso(-24 * 18) },
+  // Tickled (deferred) — hidden from the active inbox until they resurface.
+  { id: "t1", source: "LOCAL", provider: "local", title: "Re-check the trademark filing status", disposition: "INBOX", isMine: true, createdAt: iso(-24 * 4), updatedAt: iso(-24 * 4), deferUntil: iso(24 * 4) },
+  { id: "t2", source: "LOCAL", provider: "local", title: "Follow up with the accountant after month-end", disposition: "INBOX", isMine: true, createdAt: iso(-24 * 2), updatedAt: iso(-24 * 2), deferUntil: iso(24 * 10) },
 
   // ── NEXT ACTIONS (by @context) ───────────────────────────────────────────
   {

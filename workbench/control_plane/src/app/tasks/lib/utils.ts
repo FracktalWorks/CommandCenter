@@ -101,6 +101,52 @@ export function durationLabel(mins?: number): string {
   return m ? `${h}h ${m}m` : `${h}h`;
 }
 
+/** Quick snooze/defer targets for the tickler, relative to now. */
+export function snoozeOptions(nowMs = Date.now()): { label: string; iso: string }[] {
+  const at = (d: Date, h = 9) => {
+    d.setHours(h, 0, 0, 0);
+    return d.toISOString();
+  };
+  const tomorrow = new Date(nowMs);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const weekend = new Date(nowMs);
+  weekend.setDate(weekend.getDate() + ((6 - weekend.getDay() + 7) % 7 || 7)); // next Saturday
+  const nextWeek = new Date(nowMs);
+  nextWeek.setDate(nextWeek.getDate() + 7);
+  return [
+    { label: "Tomorrow", iso: at(tomorrow) },
+    { label: "This weekend", iso: at(weekend) },
+    { label: "Next week", iso: at(nextWeek) },
+  ];
+}
+
+/** True if a deferred item is still tickled (resurface date in the future). */
+export function isTickled(item: { deferUntil?: string }, nowMs = Date.now()): boolean {
+  return !!item.deferUntil && new Date(item.deferUntil).getTime() > nowMs;
+}
+
+/** A lightweight, local date-phrase detector — the seam where an AI capture
+ *  parser will later suggest a defer/due date. Suggestion only; never acts. */
+export function detectDateHint(title: string): string | null {
+  const t = title.toLowerCase();
+  const words = [
+    "today",
+    "tomorrow",
+    "tonight",
+    "this weekend",
+    "next week",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+  ];
+  const hit = words.find((w) => t.includes(w));
+  return hit ?? null;
+}
+
 /** Initials for an avatar chip. */
 export function initials(name: string): string {
   return name

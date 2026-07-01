@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { Disposition, Energy, GtdContext, GtdItem, GtdProject, Person, ViewKey } from "./types";
 import { MOCK_CONTEXTS, MOCK_ITEMS, MOCK_PEOPLE, MOCK_PROJECTS } from "./mockData";
-import { isCalendarItem } from "./utils";
+import { isCalendarItem, isTickled } from "./utils";
 
 /** The outcome of clarifying an inbox item — the GTD decision tree (F2). */
 export type ClarifyDecision =
@@ -131,6 +131,18 @@ function makeCaptureItem(title: string): GtdItem {
   };
 }
 
+/** Apply a one-tap disposition (shared by quick + bulk dispose). */
+function disposeOne(item: GtdItem, disposition: Disposition): GtdItem {
+  const now = new Date().toISOString();
+  return {
+    ...item,
+    disposition,
+    updatedAt: now,
+    clarifiedAt: now,
+    ...(disposition === "DONE" ? { completedAt: now, isTwoMinute: true } : {}),
+  };
+}
+
 interface TaskState {
   items: GtdItem[];
   projects: GtdProject[];
@@ -150,6 +162,8 @@ interface TaskState {
   quickCaptureMode: "single" | "sweep";
   /** the focused clarify overlay (keyboard-driven inbox processing). */
   clarifyModalOpen: boolean;
+  /** count of items processed out of the inbox this session (momentum). */
+  processedThisSession: number;
 
   // actions
   selectView: (view: ViewKey) => void;
@@ -166,6 +180,14 @@ interface TaskState {
   clarify: (id: string, decision: ClarifyDecision) => void;
   /** One-tap disposition (hover / keyboard triage) — no full decision tree. */
   quickDispose: (id: string, disposition: Disposition) => void;
+  /** Apply the same disposition to many items at once (multi-select). */
+  bulkDispose: (ids: string[], disposition: Disposition) => void;
+  /** Defer (tickler): hide from the active inbox until a date, then resurface. */
+  deferItem: (id: string, dateIso: string) => void;
+  /** Bring a deferred item back into the active inbox now. */
+  undeferItem: (id: string) => void;
+  /** Edit a captured item's title and/or note. */
+  updateItem: (id: string, patch: { title?: string; notes?: string }) => void;
   /** Inline-rename a captured item (fix a typo without clarifying). */
   renameItem: (id: string, title: string) => void;
   openQuickCapture: (mode: "single" | "sweep") => void;
@@ -189,6 +211,7 @@ export const useTaskStore = create<TaskState>((set) => ({
   quickCaptureOpen: false,
   quickCaptureMode: "single",
   clarifyModalOpen: false,
+  processedThisSession: 0,
 
   selectView: (view) =>
     set({ selectedView: view, selectedContext: null, selectedItemId: null, selectedProjectId: null }),
@@ -250,28 +273,65 @@ export const useTaskStore = create<TaskState>((set) => ({
             new Date(b.createdAt) < new Date(a.createdAt) ? b : a,
           )
         : undefined;
-      return { items, selectedItemId: nextInbox?.id ?? null };
+      return {
+        items,
+        selectedItemId: nextInbox?.id ?? null,
+        processedThisSession: s.processedThisSession + 1,
+      };
     }),
 
   quickDispose: (id, disposition) =>
+    set((s) => ({
+      items: s.items.map((i) => (i.id === id ? disposeOne(i, disposition) : i)),
+      processedThisSession: s.processedThisSession + 1,
+    })),
+
+  bulkDispose: (ids, disposition) =>
     set((s) => {
-      const now = new Date().toISOString();
+      const set_ = new Set(ids);
+      const affected = s.items.filter(
+        (i) => set_.has(i.id) && i.disposition === "INBOX",
+      ).length;
       return {
         items: s.items.map((i) =>
-          i.id === id
-            ? {
-                ...i,
-                disposition,
-                updatedAt: now,
-                clarifiedAt: now,
-                ...(disposition === "DONE"
-                  ? { completedAt: now, isTwoMinute: true }
-                  : {}),
-              }
-            : i,
+          set_.has(i.id) ? disposeOne(i, disposition) : i,
         ),
+        processedThisSession: s.processedThisSession + affected,
       };
     }),
+
+  deferItem: (id, dateIso) =>
+    set((s) => ({
+      items: s.items.map((i) =>
+        i.id === id
+          ? { ...i, deferUntil: dateIso, updatedAt: new Date().toISOString() }
+          : i,
+      ),
+    })),
+
+  undeferItem: (id) =>
+    set((s) => ({
+      items: s.items.map((i) =>
+        i.id === id
+          ? { ...i, deferUntil: undefined, updatedAt: new Date().toISOString() }
+          : i,
+      ),
+    })),
+
+  updateItem: (id, patch) =>
+    set((s) => ({
+      items: s.items.map((i) => {
+        if (i.id !== id) return i;
+        const title = patch.title !== undefined ? patch.title.trim() : i.title;
+        if (!title) return i; // never allow an empty title
+        return {
+          ...i,
+          title,
+          notes: patch.notes !== undefined ? patch.notes : i.notes,
+          updatedAt: new Date().toISOString(),
+        };
+      }),
+    })),
 
   renameItem: (id, title) =>
     set((s) => {
@@ -322,7 +382,7 @@ export function viewCounts(items: GtdItem[]): Record<ViewKey, number> {
     someday: 0, reference: 0, engage: 0, horizons: 0,
   } as Record<ViewKey, number>;
   for (const i of items) {
-    if (i.disposition === "INBOX") c.inbox++;
+    if (i.disposition === "INBOX" && !isTickled(i)) c.inbox++;
     else if (i.disposition === "NEXT") c.next++;
     else if (i.disposition === "WAITING") c.waiting++;
     else if (i.disposition === "SOMEDAY") c.someday++;

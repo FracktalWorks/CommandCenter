@@ -18,9 +18,20 @@ export type ClarifyDecision =
       timeEstimateMins?: number;
       projectId?: string;
     }
-  | { kind: "calendar"; nextAction: string; dueAt: string; context?: string; projectId?: string };
+  | { kind: "calendar"; nextAction: string; dueAt: string; context?: string; projectId?: string }
+  | {
+      // turn the item into a new project's first next action (GTD: outcome + next action)
+      kind: "project";
+      outcome: string;
+      nextAction: string;
+      context?: string;
+      energy?: Energy;
+    };
 
-function applyDecision(item: GtdItem, d: ClarifyDecision): GtdItem {
+function applyDecision(
+  item: GtdItem,
+  d: Exclude<ClarifyDecision, { kind: "project" }>,
+): GtdItem {
   const now = new Date().toISOString();
   const base: GtdItem = { ...item, updatedAt: now, clarifiedAt: now };
   switch (d.kind) {
@@ -65,50 +76,7 @@ function applyDecision(item: GtdItem, d: ClarifyDecision): GtdItem {
   }
 }
 
-/** A mocked clarify suggestion. Stands in for the `task-manager` agent until
- *  the gateway `/tasks/items/{id}/clarify` endpoint is wired (§3.1). Pure
- *  keyword heuristics — deterministic, no network. */
-export interface ClarifySuggestion {
-  disposition: "NEXT" | "SOMEDAY" | "REFERENCE";
-  nextAction: string;
-  context?: string;
-  energy?: Energy;
-  rationale: string;
-}
-
-export function suggestClarification(item: GtdItem): ClarifySuggestion {
-  const t = item.title.toLowerCase();
-  const has = (...words: string[]) => words.some((w) => t.includes(w));
-
-  if (has("idea", "maybe", "someday", "learn", "evaluate", "explore")) {
-    return {
-      disposition: "SOMEDAY",
-      nextAction: item.title,
-      rationale: "Sounds like an idea to incubate, not a commitment yet.",
-    };
-  }
-  if (has("receipt", "file", "fyi", "reference", "invoice", "statement")) {
-    return {
-      disposition: "REFERENCE",
-      nextAction: item.title,
-      rationale: "Looks like information to keep, not an action.",
-    };
-  }
-
-  let context = "@computer";
-  if (has("call", "phone", "ring", "dial")) context = "@calls";
-  else if (has("buy", "pick up", "store", "errand", "drop off", "collect")) context = "@errands";
-  else if (has("ask", "discuss", "agenda", "1:1", "meet")) context = "@agenda";
-
-  const verb = context === "@calls" ? "Call about" : context === "@errands" ? "Pick up" : "Action";
-  return {
-    disposition: "NEXT",
-    nextAction: `${verb}: ${item.title}`,
-    context,
-    energy: "low",
-    rationale: `Actionable now — fits ${context}.`,
-  };
-}
+// The clarify AI proposal lives in lib/clarify.ts (proposeClarification).
 
 // UI-first build: the store is seeded from bundled mock data (see mockData.ts).
 // Capture writes to local state only. When the gateway `/tasks` API lands, these
@@ -265,7 +233,38 @@ export const useTaskStore = create<TaskState>((set) => ({
 
   clarify: (id, decision) =>
     set((s) => {
-      const items = s.items.map((i) => (i.id === id ? applyDecision(i, decision) : i));
+      let projects = s.projects;
+      let items: GtdItem[];
+      if (decision.kind === "project") {
+        // Create a project and make this item its first next action.
+        const now = new Date().toISOString();
+        const pid = nextId();
+        const project: GtdProject = {
+          id: pid,
+          source: "LOCAL",
+          provider: "local",
+          outcome: decision.outcome,
+          status: "ACTIVE",
+          hasNextAction: true,
+        };
+        projects = [project, ...s.projects];
+        items = s.items.map((i) =>
+          i.id === id
+            ? {
+                ...i,
+                disposition: "NEXT",
+                nextAction: decision.nextAction,
+                context: decision.context,
+                energy: decision.energy,
+                projectId: pid,
+                updatedAt: now,
+                clarifiedAt: now,
+              }
+            : i,
+        );
+      } else {
+        items = s.items.map((i) => (i.id === id ? applyDecision(i, decision) : i));
+      }
       // advance to the OLDEST remaining inbox item — GTD processes FIFO
       const remaining = items.filter((i) => i.disposition === "INBOX");
       const nextInbox = remaining.length
@@ -275,6 +274,7 @@ export const useTaskStore = create<TaskState>((set) => ({
         : undefined;
       return {
         items,
+        projects,
         selectedItemId: nextInbox?.id ?? null,
         processedThisSession: s.processedThisSession + 1,
       };

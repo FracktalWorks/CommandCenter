@@ -158,6 +158,39 @@ brain-dump text ─▶ [ATOMIZE] ─▶ candidate items ─▶ [REVIEW] ─▶ i
 | **Dedup / merge** | flag semantically-duplicate captures | **[plumbing]** embeddings |
 | **Staleness nudges** | prompt a sweep when the inbox ages past a threshold | **[plumbing]** scheduler |
 
+### 2.2 The Clarify (Process) stage — deep design
+
+> Added 2026-07-01 after a GTD Clarify-stage study ([Process best practices](https://flow-e.com/gtd/process/), [Asana GTD workflow](https://asana.com/resources/getting-things-done-gtd)). Clarify is the cognitive core — turning raw captures into clear outcomes + next actions. `[plumbing]` marks what needs the agent/gateway.
+
+**GTD principles the Clarify flow must honor**
+1. Process **one item at a time, top-down (FIFO)**; never skip, never put an item *back* in the inbox; finish with the inbox **empty**.
+2. Run the decision tree per item: **What is it? → Is it actionable?** → **No:** Trash / Incubate (Someday-Maybe · Tickler) / Reference · **Yes:** define the **very next physical action** + the **desired outcome** → **<2 min? do it now** · **someone else's? delegate → Waiting For** · **yours? defer → Calendar** (day/time-specific) or **Next Actions** (by @context). Outcome needs **>1 action → Project** (record the outcome, define its next action).
+3. Clarify is **deciding, not doing** (except the 2-minute rule).
+4. A **specific, physical next action** is the key output — the #1 GTD failure is a vague or missing next action.
+
+**Feature set (built)**
+
+| # | Feature | What it does | Status | Needs |
+|---|---|---|---|---|
+| P1 | Guided one-at-a-time clarify | modal walks the inbox FIFO with a **progress bar** (`N of M`) and closes at zero | ✅ built | — |
+| P2 | **AI full proposal** | one structured recommendation per item — disposition + specific next action + context/energy/time + **project & delegate detection** + rationale — that you **Accept in one tap** | ✅ built (heuristic `proposeClarification`) | real agent → **[plumbing]** |
+| P3 | Adjust / override tree | disposition chips (Next · Project · Delegate · Schedule · Do-now · Someday · Reference · Trash) with **adaptive fields** (project outcome, delegate person, context, energy, schedule date) | ✅ built | — |
+| P4 | Project creation | clarifying to **Project** creates the project *and* makes the item its first next action (GTD outcome + next action) | ✅ built | — |
+| P5 | Keyboard-blitz | `↵` accept · `t`/`s`/`r`/`2` quick-dispose · `esc` | ✅ built | — |
+
+**AI in Clarify — the boundary + opportunities**
+
+> **Boundary:** AI *proposes* the full disposition; the human *confirms/edits* before anything is applied. Deciding stays the person's — AI removes the blank-page cost, not the judgment.
+
+| AI capability | Value | Needs |
+|---|---|---|
+| **Real proposal** | replace the local heuristic with the `task-manager` agent — better next-action phrasing, project detection, context/energy/time | **[plumbing]** `POST /tasks/items/{id}/clarify` |
+| **Batch clarify** | agent pre-clarifies the *whole* inbox → a review list; bulk-accept or adjust rows → apply all. Turns 30 decisions into one scan | **[plumbing]** agent + a batch endpoint |
+| **Specific next actions** | rewrite a vague capture ("Slack from Priya") into a physical action ("Reply to Priya proposing 3 times for the vendor call") | **[plumbing]** agent |
+| **Project breakdown** | natural-planning: propose the outcome + first action (and later, the whole action list) | **[plumbing]** agent |
+| **Conversational clarify** | for ambiguous items the assistant asks one question ("Q3 launch or lab fit-out?") before proposing | **[plumbing]** agent |
+| **Learned patterns** | improve proposals from your accept/edit corrections over time | **[plumbing]** agent + memory |
+
 ---
 
 ## 3. Architecture

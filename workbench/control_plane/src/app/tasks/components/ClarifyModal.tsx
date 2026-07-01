@@ -20,10 +20,13 @@ export function ClarifyModal() {
   const selectedItemId = useTaskStore((s) => s.selectedItemId);
   const items = useTaskStore((s) => s.items);
 
+  const processed = useTaskStore((s) => s.processedThisSession);
   const item = selectedItemId
     ? items.find((i) => i.id === selectedItemId)
     : undefined;
   const inboxLeft = items.filter((i) => i.disposition === "INBOX").length;
+  const total = processed + inboxLeft;
+  const pct = total ? Math.round((processed / total) * 100) : 0;
   const active = open && !!item && item.disposition === "INBOX";
 
   // Close once there's nothing left to clarify.
@@ -80,18 +83,26 @@ export function ClarifyModal() {
         className="flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border-t border-border bg-card shadow-2xl pb-safe sm:max-h-[84vh] sm:rounded-2xl sm:border sm:pb-0"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2">
-          <span className="text-xs font-medium text-muted-foreground">
-            Processing inbox · {inboxLeft} left
-          </span>
-          <button
-            type="button"
-            onClick={close}
-            aria-label="Close"
-            className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
+        <div className="shrink-0 border-b border-border">
+          <div className="flex items-center justify-between px-4 py-2">
+            <span className="text-xs font-medium text-muted-foreground">
+              Processing inbox · {inboxLeft} left
+            </span>
+            <button
+              type="button"
+              onClick={close}
+              aria-label="Close"
+              className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="h-0.5 w-full bg-secondary" aria-hidden>
+            <div
+              className="tech-transition h-full bg-primary"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           {/* keyed by id → the wizard resets as the modal advances to the next item */}
@@ -99,6 +110,7 @@ export function ClarifyModal() {
         </div>
         <div className="hidden shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-4 py-2 text-[10px] text-muted-foreground sm:flex">
           <span className="font-semibold uppercase tracking-wide">Shortcuts</span>
+          <Kbd>↵</Kbd> accept
           <Kbd>t</Kbd> trash
           <Kbd>s</Kbd> someday
           <Kbd>r</Kbd> reference

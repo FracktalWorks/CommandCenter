@@ -1,81 +1,130 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Sparkles,
   Check,
-  Trash2,
+  ArrowRight,
+  ListChecks,
+  FolderKanban,
+  UserPlus,
+  CalendarClock,
+  Zap,
   Lightbulb,
   FileText,
-  Zap,
-  UserPlus,
-  ListChecks,
-  CalendarClock,
-  ArrowRight,
+  Trash2,
+  SlidersHorizontal,
+  type LucideIcon,
 } from "lucide-react";
+import { useTaskStore, type ClarifyDecision } from "../lib/taskStore";
 import {
-  useTaskStore,
-  suggestClarification,
-  type ClarifyDecision,
-} from "../lib/taskStore";
+  proposeClarification,
+  type ClarifyDisposition,
+} from "../lib/clarify";
 import { Energy, GtdItem, Person } from "../lib/types";
-import { initials } from "../lib/utils";
+import { durationLabel, initials, snoozeOptions } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
 
-// F2 — Clarify. The GTD decision tree applied to an inbox item: actionable? →
-// next action → do-now / delegate / defer / schedule, or non-actionable →
-// trash / someday / reference. The "assistant suggestion" is mocked here
-// (suggestClarification); the real agent gets wired with the gateway later.
+// F2 — Clarify. AI proposes a full disposition (what it is + the next action);
+// you confirm in one tap or adjust any part. The proposal is a local heuristic
+// today (proposeClarification); the agent replaces it later (spec §2.2).
 
-type ActionPath = "next" | "delegate" | "calendar" | "do-now";
+const DISP: Record<
+  ClarifyDisposition,
+  { label: string; icon: LucideIcon; danger?: boolean }
+> = {
+  NEXT: { label: "Next action", icon: ListChecks },
+  PROJECT: { label: "Project", icon: FolderKanban },
+  WAITING: { label: "Delegate", icon: UserPlus },
+  CALENDAR: { label: "Schedule", icon: CalendarClock },
+  DO_NOW: { label: "Do now · 2 min", icon: Zap },
+  SOMEDAY: { label: "Someday", icon: Lightbulb },
+  REFERENCE: { label: "Reference", icon: FileText },
+  TRASH: { label: "Trash", icon: Trash2, danger: true },
+};
+const DISP_ORDER: ClarifyDisposition[] = [
+  "NEXT", "PROJECT", "WAITING", "CALENDAR", "DO_NOW", "SOMEDAY", "REFERENCE", "TRASH",
+];
+const ACTIONABLE = new Set<ClarifyDisposition>(["NEXT", "PROJECT", "WAITING", "CALENDAR"]);
 
 export function ClarifyPanel({ item }: { item: GtdItem }) {
   const clarify = useTaskStore((s) => s.clarify);
   const contexts = useTaskStore((s) => s.contexts);
   const people = useTaskStore((s) => s.people);
 
-  const suggestion = useMemo(() => suggestClarification(item), [item]);
+  const proposal = useMemo(
+    () => proposeClarification(item, people),
+    [item, people],
+  );
 
-  // wizard state
-  const [actionable, setActionable] = useState<boolean | null>(null);
-  const [path, setPath] = useState<ActionPath | null>(null);
-  const [nextAction, setNextAction] = useState(suggestion.nextAction);
-  const [context, setContext] = useState(suggestion.context ?? "@computer");
-  const [energy, setEnergy] = useState<Energy>(suggestion.energy ?? "low");
-  const [person, setPerson] = useState<Person | null>(null);
+  // Editable state, seeded from the proposal.
+  const [disposition, setDisposition] = useState<ClarifyDisposition>(proposal.disposition);
+  const [nextAction, setNextAction] = useState(proposal.nextAction);
+  const [outcome, setOutcome] = useState(proposal.outcome ?? `${item.title} — done`);
+  const [context, setContext] = useState(proposal.context ?? "@computer");
+  const [energy, setEnergy] = useState<Energy>(proposal.energy ?? "medium");
+  const [assignee, setAssignee] = useState<Person | null>(proposal.suggestedAssignee ?? null);
   const [dueAt, setDueAt] = useState("");
+  const [adjust, setAdjust] = useState(false);
 
-  // Wizard state resets when the parent remounts this with a new key (item.id).
+  const buildDecision = useCallback(
+    (d: ClarifyDisposition): ClarifyDecision | null => {
+      const na = nextAction.trim();
+      switch (d) {
+        case "NEXT":
+          return na ? { kind: "next", nextAction: na, context, energy } : null;
+        case "PROJECT":
+          return na && outcome.trim()
+            ? { kind: "project", outcome: outcome.trim(), nextAction: na, context, energy }
+            : null;
+        case "WAITING":
+          return na && assignee ? { kind: "delegate", person: assignee, nextAction: na } : null;
+        case "CALENDAR":
+          return na
+            ? {
+                kind: "calendar",
+                nextAction: na,
+                dueAt: dueAt ? new Date(dueAt).toISOString() : snoozeOptions()[0].iso,
+                context,
+              }
+            : null;
+        case "DO_NOW":
+          return { kind: "do-now" };
+        case "SOMEDAY":
+          return { kind: "someday" };
+        case "REFERENCE":
+          return { kind: "reference" };
+        case "TRASH":
+          return { kind: "trash" };
+      }
+    },
+    [nextAction, outcome, context, energy, assignee, dueAt],
+  );
 
-  const acceptSuggestion = () => {
-    if (suggestion.disposition === "SOMEDAY") clarify(item.id, { kind: "someday" });
-    else if (suggestion.disposition === "REFERENCE") clarify(item.id, { kind: "reference" });
-    else
-      clarify(item.id, {
-        kind: "next",
-        nextAction: suggestion.nextAction,
-        context: suggestion.context ?? "@computer",
-        energy: suggestion.energy,
-      });
-  };
-
-  const applyPath = () => {
-    let decision: ClarifyDecision | null = null;
-    if (path === "do-now") decision = { kind: "do-now" };
-    else if (path === "delegate" && person)
-      decision = { kind: "delegate", person, nextAction };
-    else if (path === "next")
-      decision = { kind: "next", nextAction, context, energy };
-    else if (path === "calendar" && dueAt)
-      decision = { kind: "calendar", nextAction, dueAt: new Date(dueAt).toISOString(), context };
+  const apply = useCallback(() => {
+    const decision = buildDecision(disposition);
     if (decision) clarify(item.id, decision);
-  };
+  }, [buildDecision, disposition, clarify, item.id]);
 
-  const canApply =
-    (path === "do-now") ||
-    (path === "next" && nextAction.trim().length > 0) ||
-    (path === "delegate" && !!person && nextAction.trim().length > 0) ||
-    (path === "calendar" && !!dueAt && nextAction.trim().length > 0);
+  const canApply = !!buildDecision(disposition);
+
+  // Enter accepts (when not typing in a field). t/s/r/2 handled by the modal.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable))
+        return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "Enter" && canApply) {
+        e.preventDefault();
+        apply();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [apply, canApply]);
+
+  const Meta = DISP[proposal.disposition];
 
   return (
     <div className="flex h-full flex-col overflow-y-auto">
@@ -88,97 +137,138 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
         </div>
         <h1 className="text-lg font-bold leading-snug text-foreground">{item.title}</h1>
         <p className="mt-1 text-[11px] text-muted-foreground">
-          What is it, and what&apos;s the next action? Process it out of the inbox.
+          What is it, and what&apos;s the next action?
         </p>
       </header>
 
-      <div className="flex flex-col gap-5 px-5 py-4">
-        {/* Mocked assistant proposal — the one-click fast path (F2) */}
+      <div className="flex flex-col gap-4 px-5 py-4">
+        {/* AI proposal — review & confirm */}
         <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
           <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-primary">
             <Sparkles className="h-3.5 w-3.5" />
-            Assistant suggestion
+            Assistant recommends
           </div>
-          <p className="text-sm text-foreground">{suggestion.nextAction}</p>
-          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-            <span className="rounded bg-secondary px-1.5 py-0.5 font-medium uppercase">
-              {suggestion.disposition === "NEXT" ? "Next action" : suggestion.disposition}
-            </span>
-            {suggestion.context && (
-              <span className="font-mono text-primary/80">{suggestion.context}</span>
+          <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Meta.icon className="h-4 w-4 text-primary" />
+            {DISP[proposal.disposition].label}
+            {proposal.suggestedAssignee && (
+              <span className="text-muted-foreground">→ {proposal.suggestedAssignee.name}</span>
             )}
-            <span className="italic">{suggestion.rationale}</span>
           </div>
-          <button
-            type="button"
-            onClick={acceptSuggestion}
-            className="tech-transition mt-2.5 inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90"
-          >
-            <Check className="h-3.5 w-3.5" />
-            Accept suggestion
-          </button>
+          {proposal.disposition === "PROJECT" && proposal.outcome && (
+            <p className="mt-1.5 text-[13px] text-muted-foreground">
+              Outcome: <span className="text-foreground">{proposal.outcome}</span>
+            </p>
+          )}
+          {ACTIONABLE.has(proposal.disposition) && (
+            <p className="mt-1.5 text-sm text-foreground">
+              <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                {proposal.disposition === "PROJECT" ? "First action" : "Next action"}
+              </span>
+              <br />
+              {proposal.nextAction}
+            </p>
+          )}
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+            {proposal.context && (
+              <span className="font-mono text-primary/80">{proposal.context}</span>
+            )}
+            {proposal.energy && <span>{proposal.energy} energy</span>}
+            {proposal.timeEstimateMins ? (
+              <span>{durationLabel(proposal.timeEstimateMins)}</span>
+            ) : null}
+            <span className="italic">{proposal.rationale}</span>
+          </div>
+          <div className="mt-2.5 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={apply}
+              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90"
+            >
+              <Check className="h-3.5 w-3.5" />
+              Accept &amp; next
+            </button>
+            <button
+              type="button"
+              onClick={() => setAdjust((v) => !v)}
+              className={[
+                "tech-transition inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] font-medium",
+                adjust
+                  ? "bg-secondary text-foreground"
+                  : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+              ].join(" ")}
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              Adjust
+            </button>
+          </div>
         </div>
 
-        <div className="text-center text-[11px] uppercase tracking-wide text-muted-foreground">
-          — or clarify it yourself —
-        </div>
-
-        {/* Step 1 — actionable? */}
-        <Step n={1} label="Is it actionable?">
-          <div className="flex gap-2">
-            <Choice active={actionable === true} onClick={() => { setActionable(true); setPath(null); }}>
-              Yes
-            </Choice>
-            <Choice active={actionable === false} onClick={() => { setActionable(false); setPath(null); }}>
-              No
-            </Choice>
-          </div>
-        </Step>
-
-        {/* Non-actionable branch */}
-        {actionable === false && (
-          <Step n={2} label="Then file it as">
-            <div className="grid grid-cols-3 gap-2">
-              <BigChoice icon={Trash2} label="Trash" onClick={() => clarify(item.id, { kind: "trash" })} />
-              <BigChoice icon={Lightbulb} label="Someday" onClick={() => clarify(item.id, { kind: "someday" })} />
-              <BigChoice icon={FileText} label="Reference" onClick={() => clarify(item.id, { kind: "reference" })} />
-            </div>
-          </Step>
-        )}
-
-        {/* Actionable branch */}
-        {actionable === true && (
-          <>
-            <Step n={2} label="What's the very next action?">
-              <input
-                value={nextAction}
-                onChange={(e) => setNextAction(e.target.value)}
-                className="w-full rounded-md border border-border bg-background/60 px-3 py-2 text-sm text-foreground focus:border-primary/50 focus:outline-none"
-                placeholder="The next physical, visible step…"
-              />
-            </Step>
-
-            <Step n={3} label="What happens to it?">
-              <div className="grid grid-cols-2 gap-2">
-                <BigChoice icon={Zap} label="Do now (<2 min)" active={path === "do-now"} onClick={() => setPath("do-now")} />
-                <BigChoice icon={UserPlus} label="Delegate" active={path === "delegate"} onClick={() => setPath("delegate")} />
-                <BigChoice icon={ListChecks} label="Next action" active={path === "next"} onClick={() => setPath("next")} />
-                <BigChoice icon={CalendarClock} label="Schedule" active={path === "calendar"} onClick={() => setPath("calendar")} />
+        {/* Adjust — override the disposition and fields */}
+        {adjust && (
+          <div className="flex flex-col gap-3">
+            <Field label="What is it?">
+              <div className="flex flex-wrap gap-1.5">
+                {DISP_ORDER.map((d) => {
+                  const M = DISP[d];
+                  const active = disposition === d;
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => setDisposition(d)}
+                      className={[
+                        "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                        active
+                          ? M.danger
+                            ? "border-destructive bg-destructive/10 text-destructive"
+                            : "border-primary bg-primary/10 text-primary"
+                          : "border-border text-muted-foreground hover:bg-secondary",
+                      ].join(" ")}
+                    >
+                      <M.icon className="h-3.5 w-3.5" />
+                      {M.label}
+                    </button>
+                  );
+                })}
               </div>
-            </Step>
+            </Field>
 
-            {/* Path-specific fields */}
-            {path === "delegate" && (
-              <Step n={4} label="Delegate to">
+            {disposition === "PROJECT" && (
+              <Field label="Successful outcome">
+                <input
+                  value={outcome}
+                  onChange={(e) => setOutcome(e.target.value)}
+                  className="w-full rounded-md border border-border bg-background/60 px-3 py-2 text-sm text-foreground focus:border-primary/50 focus:outline-none"
+                  placeholder="What does 'done' look like?"
+                />
+              </Field>
+            )}
+
+            {ACTIONABLE.has(disposition) && (
+              <Field
+                label={disposition === "PROJECT" ? "First next action" : "Next action"}
+              >
+                <input
+                  value={nextAction}
+                  onChange={(e) => setNextAction(e.target.value)}
+                  className="w-full rounded-md border border-border bg-background/60 px-3 py-2 text-sm text-foreground focus:border-primary/50 focus:outline-none"
+                  placeholder="The next physical, visible step…"
+                />
+              </Field>
+            )}
+
+            {disposition === "WAITING" && (
+              <Field label="Delegate to">
                 <div className="flex flex-wrap gap-2">
                   {people.map((p) => (
                     <button
                       key={p.name}
                       type="button"
-                      onClick={() => setPerson(p)}
+                      onClick={() => setAssignee(p)}
                       className={[
                         "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
-                        person?.name === p.name
+                        assignee?.name === p.name
                           ? "border-primary bg-primary/10 text-primary"
                           : "border-border text-muted-foreground hover:bg-secondary",
                       ].join(" ")}
@@ -190,117 +280,77 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
                     </button>
                   ))}
                 </div>
-              </Step>
+              </Field>
             )}
 
-            {path === "next" && (
-              <Step n={4} label="Context & energy">
+            {(disposition === "NEXT" ||
+              disposition === "PROJECT" ||
+              disposition === "CALENDAR") && (
+              <Field label="Context">
                 <div className="flex flex-wrap gap-1.5">
                   {contexts.map((c) => (
-                    <Pill key={c.name} active={context === c.name} mono onClick={() => setContext(c.name)}>
+                    <Pill
+                      key={c.name}
+                      mono
+                      active={context === c.name}
+                      onClick={() => setContext(c.name)}
+                    >
                       {c.name}
                     </Pill>
                   ))}
                 </div>
-                <div className="mt-2 flex gap-1.5">
+              </Field>
+            )}
+
+            {(disposition === "NEXT" || disposition === "PROJECT") && (
+              <Field label="Energy">
+                <div className="flex gap-1.5">
                   {(["low", "medium", "high"] as Energy[]).map((e) => (
                     <Pill key={e} active={energy === e} onClick={() => setEnergy(e)}>
-                      {e} energy
+                      {e}
                     </Pill>
                   ))}
                 </div>
-              </Step>
+              </Field>
             )}
 
-            {path === "calendar" && (
-              <Step n={4} label="On which day? (hard landscape)">
+            {disposition === "CALENDAR" && (
+              <Field label="On which day?">
                 <input
                   type="date"
                   value={dueAt}
                   onChange={(e) => setDueAt(e.target.value)}
                   className="rounded-md border border-border bg-background/60 px-3 py-2 text-sm text-foreground focus:border-primary/50 focus:outline-none"
                 />
-              </Step>
+              </Field>
             )}
 
-            {path && (
-              <button
-                type="button"
-                disabled={!canApply}
-                onClick={applyPath}
-                className={[
-                  "tech-transition inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2.5 text-sm font-medium",
-                  canApply
-                    ? "bg-primary text-primary-foreground hover:opacity-90"
-                    : "cursor-not-allowed bg-secondary text-muted-foreground",
-                ].join(" ")}
-              >
-                Organize it <ArrowRight className="h-4 w-4" />
-              </button>
-            )}
-          </>
+            <button
+              type="button"
+              disabled={!canApply}
+              onClick={apply}
+              className={[
+                "tech-transition inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2.5 text-sm font-medium",
+                canApply
+                  ? "bg-primary text-primary-foreground hover:opacity-90"
+                  : "cursor-not-allowed bg-secondary text-muted-foreground",
+              ].join(" ")}
+            >
+              Organize it <ArrowRight className="h-4 w-4" />
+            </button>
+          </div>
         )}
       </div>
     </div>
   );
 }
 
-function Step({ n, label, children }: { n: number; label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold text-foreground">
-        <span className="flex h-4 w-4 items-center justify-center rounded-full bg-secondary text-[10px] text-muted-foreground">
-          {n}
-        </span>
-        {label}
-      </h3>
+      <h3 className="mb-1.5 text-xs font-semibold text-foreground">{label}</h3>
       {children}
     </div>
-  );
-}
-
-function Choice({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "tech-transition flex-1 rounded-lg border px-3 py-2 text-sm font-medium",
-        active
-          ? "border-primary bg-primary/10 text-primary"
-          : "border-border text-muted-foreground hover:bg-secondary hover:text-foreground",
-      ].join(" ")}
-    >
-      {children}
-    </button>
-  );
-}
-
-function BigChoice({
-  icon: Icon,
-  label,
-  active,
-  onClick,
-}: {
-  icon: typeof Zap;
-  label: string;
-  active?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "tech-transition flex flex-col items-center gap-1.5 rounded-lg border px-2 py-3 text-[12px] font-medium",
-        active
-          ? "border-primary bg-primary/10 text-primary"
-          : "border-border text-muted-foreground hover:bg-secondary hover:text-foreground",
-      ].join(" ")}
-    >
-      <Icon className="h-4 w-4" />
-      {label}
-    </button>
   );
 }
 
@@ -321,7 +371,7 @@ function Pill({
       onClick={onClick}
       className={[
         "tech-transition rounded-full border px-2.5 py-1 text-[12px]",
-        mono ? "font-mono" : "",
+        mono ? "font-mono" : "capitalize",
         active
           ? "border-primary bg-primary/10 text-primary"
           : "border-border text-muted-foreground hover:bg-secondary",

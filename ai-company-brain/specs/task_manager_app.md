@@ -192,7 +192,7 @@ To set tasks up properly during Clarify, the app must know the connected tool's 
 | Schema | Used in Clarify for | Source (real) |
 |---|---|---|
 | **Projects / lists** | the "file under" picker (scoped to the chosen tool) | provider API `list_projects` → `gtd_projects` |
-| **Members** | delegate / assignee picker | provider API `list_members` → cached |
+| **Members** | delegate / assignee picker (capability-aware later — see §6.1) | provider API `list_members` → cached |
 | **Statuses / stages** | the "Stage" picker + GTD→stage default map | provider API (per-list custom statuses) → `task_accounts.capabilities`/`field_map` |
 | **Custom fields, priorities** (later) | extra optional fields | provider API |
 
@@ -542,6 +542,31 @@ This is the explicitly-requested capability: not just *my* tasks, but **delegati
 **Waiting-For Zero** is the goal state: every delegated item is either progressing, nudged, or escalated — nothing silently rotting.
 
 > **What lands when (sequencing).** *Monitoring* others' tasks, *Waiting-For tracking*, blocker/overdue detection, and follow-up **drafting** are read-only/local and ship in **Phase 3**. The *delegation write* — actually assigning the task to a teammate in a connected PM tool — is a write to a source system, so it is **suggest-only until the Action Broker is live (Phase 4)**: until then we stage the assignment for one-click apply and record the Waiting-For locally. Delegating inherently makes work collaborative, so a delegated **LOCAL** item promotes to **SYNCED** — and that promotion write is gated the same way.
+
+---
+
+### 6.1 People & capabilities intelligence — the org-knowledge layer (FUTURE)
+
+> Added 2026-07-01 as a forward design note (per a product decision to build this later). **Not built.** This documents the intelligence to bring in so the AI can understand the whole company — its HR structure and every person's capabilities — and use that to process the inbox far better.
+
+**The idea.** Today the agent only recognizes a teammate when their *name appears in the capture text* (a plain string match). The larger opportunity — inspired by our internal **`agent-project-manager`** (which already holds the company's **HR list, everyone's résumé, roles, and capabilities**) — is to give the Task Manager agent a first-class model of **who's who and who can do what**, so Clarify and delegation run with real organizational context. This is the Task-Manager equivalent of how the email assistant knows a mailbox: here the agent "knows the org."
+
+**What the agent should know (the knowledge base).** A company knowledge layer, ideally **ported/synced from `agent-project-manager`** and cached alongside `gtd_people` / the provider's `list_members()`:
+- **Org structure** — departments, teams, reporting lines (who reports to whom, who owns what area / GTD Horizon H2).
+- **Per-person profile** — role/title, seniority, **skills & capabilities distilled from résumés**, domains they own (e.g. *embedded firmware*, *lab ops*, *supply chain*), languages/tools.
+- **Live state** — current **workload / capacity** (open-task count and load from the connected PM tool), availability / time-off.
+- Matchable representation — a short capability summary + embeddings so a capture can be matched to the best-fit person semantically, not by keyword.
+
+**Data-model sketch (future — reconcile with `agent-project-manager`'s actual schema).** Extend the bare `person` table (currently just name/aliases/ids/email/role) with a capabilities layer, e.g. `person_capabilities(person_id, department, reports_to, seniority, skills TEXT[], domains TEXT[], resume_summary TEXT, capacity JSONB, embedding VECTOR)`. HR/capability data is **sensitive** → access-controlled and executive-scoped; sync source-of-truth stays in the HR system / `agent-project-manager`, not re-authored here.
+
+**How it makes inbox processing better (three ways):**
+1. **Capability-aware delegation.** For "*bed-leveling firmware regression*", propose the **best-fit owner by matching the task to skills + current load** (e.g. Arjun — embedded firmware, lightly loaded), even when no name is in the text — and **warn on overload** ("this is Priya's 6th open task this week").
+2. **PM-context grounding.** Combined with the live schema fetched beforehand (§2.2.1 — projects, members, statuses, workload), the agent's *who · which project · which stage* proposal reflects what ClickUp/Jira actually contains and who is actually free.
+3. **Inbox-level insights.** Whole-inbox reasoning, not just per-item: cluster captures by project ("5 belong to the EU launch — batch them"), recommend a processing order (aging/high-leverage first), surface stale Waiting-For items, and flag capacity risks before you assign.
+
+**Boundary & posture (unchanged).** The AI **proposes**; the human **decides**. Any assignment write to a PM tool stays **Action-Broker-gated (C-04)**. This layer is purely additive to the Clarify/Delegate flows already specced (§2.2, §6).
+
+**Status:** 🔲 future / **[plumbing]**. Depends on: a port/sync from `agent-project-manager`, the richer provider fetch (§2.2.1), and the gateway `/tasks` API. Until then, delegation stays name/heuristic-based with a manual assignee pick (as built in the Clarify UI).
 
 ---
 

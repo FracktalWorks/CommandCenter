@@ -35,6 +35,28 @@ export function msSince(iso: string, nowMs = Date.now()): number {
   return nowMs - new Date(iso).getTime();
 }
 
+function startOfDay(ms: number): number {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+export type DateBucketKey = "today" | "yesterday" | "week" | "older";
+
+/** Which capture-date bucket an item falls into (for date filtering/grouping). */
+export function dateBucket(
+  iso: string,
+  nowMs = Date.now(),
+): { key: DateBucketKey; label: string } {
+  const days = Math.round(
+    (startOfDay(nowMs) - startOfDay(new Date(iso).getTime())) / 86_400_000,
+  );
+  if (days <= 0) return { key: "today", label: "Today" };
+  if (days === 1) return { key: "yesterday", label: "Yesterday" };
+  if (days < 7) return { key: "week", label: "Earlier this week" };
+  return { key: "older", label: "Older" };
+}
+
 /** True if an item belongs in the Calendar view (date-specific actions). */
 export function isCalendarItem(item: GtdItem): boolean {
   return !!item.isHardDate && !!item.dueAt;

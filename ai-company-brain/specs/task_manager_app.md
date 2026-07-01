@@ -118,10 +118,23 @@ Each GTD step becomes a first-class surface in the app. This is the product's fe
 |---|---|---|---|---|
 | C1 | Quick capture | frictionless single-line add, Enter to file | ✅ built | — |
 | C2 | Ubiquitous capture (hotkey / palette) | open a capture box from any view via keyboard (`C`, `⌘/Ctrl-K`) | ✅ built *within Tasks* | app-wide across Command Center → **[plumbing]** persisted store + AppShell-level listener |
-| C3 | Brain-dump / Mind Sweep | multi-line box → one inbox item per non-empty line | ✅ built (UI, mock) | — |
+| C3 | Brain-dump / Mind Sweep | multi-line box → parsed into candidate items | ✅ built (UI, mock) | AI atomization → **[plumbing]** (see pipeline below) |
+| C3b | **Sweep review gate** | write → **review** (edit/remove each parsed item) → add; nothing is filed until confirmed | ✅ built | — |
 | C4 | Trigger-list guided sweep | show the Incompletion Trigger List as memory-joggers during a sweep | ✅ built (static prompts) | conversational AI sweep → **[plumbing]** agent |
 | C5 | Empty-regularly signals | "N to process" + oldest-item age + aging nudge | ✅ built | — |
 | C6 | Undo capture | remove the last capture batch (protects trust) | ✅ built | — |
+| C9 | **Scale + filtering** | search box, date filter pills (All/Today/Yesterday/This week/Older) + counts, newest/oldest sort — holds tens+ of captures | ✅ built | virtualized list if it grows to thousands → **[plumbing]** perf |
+
+**Mind-dump → inbox pipeline (how it feeds in, and the review gate)**
+
+```
+brain-dump text ─▶ [ATOMIZE] ─▶ candidate items ─▶ [REVIEW] ─▶ inbox
+                   split into        (editable list,   user edits/
+                   discrete items    dedupe flags)     removes, confirms
+```
+
+- **Today (no backend):** ATOMIZE = naive **line split** (one non-empty line → one candidate). The **review gate is real** — parsed items appear in an editable list (edit / remove / add-another); nothing lands in the inbox until "Add N to inbox". This is the correctness check the user asked for.
+- **With AI [plumbing]:** ATOMIZE becomes an **agent call** — split run-on prose into atomic actions, normalize, and **flag near-duplicates** against existing captures (embeddings). Output populates the *same* review list, so the human still confirms before anything is filed. This respects the GTD boundary (**AI prepares; the user decides**) and keeps capture ≠ clarify. Endpoint: `POST /tasks/capture/atomize` → `{items: [...], duplicates: [...]}`.
 | C7 | Multi-source capture | email / chat / Slack / meeting line → inbox item with a **source chip** (the "few buckets → one inbox" rule) | 🔲 | **[plumbing]** email/chat→task ingestion (`source` already in the model) |
 | C8 | Voice capture | dictate → item | 🔲 | **[plumbing]** speech-to-text |
 

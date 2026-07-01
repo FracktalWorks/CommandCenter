@@ -93,6 +93,19 @@ export const MOCK_ITEMS: GtdItem[] = [
     disposition: "INBOX", isMine: true,
     createdAt: iso(-26), updatedAt: iso(-26),
   },
+  // A fuller inbox — spans date buckets so filtering/scale is demonstrable.
+  { id: "i4", source: "LOCAL", provider: "local", title: "Order replacement nozzles (0.4mm ×10)", disposition: "INBOX", isMine: true, createdAt: iso(-3), updatedAt: iso(-3) },
+  { id: "i5", source: "LOCAL", provider: "local", title: "Ravi's LinkedIn message about a bulk order", disposition: "INBOX", isMine: true, createdAt: iso(-7), updatedAt: iso(-7) },
+  { id: "i6", source: "LOCAL", provider: "local", title: "Book the annual GST filing appointment", disposition: "INBOX", isMine: true, createdAt: iso(-30), updatedAt: iso(-30) },
+  { id: "i7", source: "LOCAL", provider: "local", title: "Note from standup: bed-leveling firmware regression", disposition: "INBOX", isMine: true, createdAt: iso(-30), updatedAt: iso(-30) },
+  { id: "i8", source: "LOCAL", provider: "local", title: "Renew the AWS reserved instance before it lapses", disposition: "INBOX", isMine: true, createdAt: iso(-24 * 2), updatedAt: iso(-24 * 2) },
+  { id: "i9", source: "LOCAL", provider: "local", title: "Idea: a 'someday' triage shortcut in the inbox", disposition: "INBOX", isMine: true, createdAt: iso(-24 * 2 - 5), updatedAt: iso(-24 * 2 - 5) },
+  { id: "i10", source: "LOCAL", provider: "local", title: "Reply to the intern's onboarding questions", disposition: "INBOX", isMine: true, createdAt: iso(-24 * 3), updatedAt: iso(-24 * 3) },
+  { id: "i11", source: "LOCAL", provider: "local", title: "Chase the courier about the delayed spindle", disposition: "INBOX", isMine: true, createdAt: iso(-24 * 4), updatedAt: iso(-24 * 4) },
+  { id: "i12", source: "LOCAL", provider: "local", title: "Draft the Q3 OKRs for the firmware team", disposition: "INBOX", isMine: true, createdAt: iso(-24 * 5), updatedAt: iso(-24 * 5) },
+  { id: "i13", source: "LOCAL", provider: "local", title: "Water-cooling loop is leaking on rig 2 — investigate", disposition: "INBOX", isMine: true, createdAt: iso(-24 * 9), updatedAt: iso(-24 * 9) },
+  { id: "i14", source: "LOCAL", provider: "local", title: "Research CE marking for the EU launch", disposition: "INBOX", isMine: true, createdAt: iso(-24 * 12), updatedAt: iso(-24 * 12) },
+  { id: "i15", source: "LOCAL", provider: "local", title: "Someday: write up the lab safety handbook", disposition: "INBOX", isMine: true, createdAt: iso(-24 * 18), updatedAt: iso(-24 * 18) },
 
   // ── NEXT ACTIONS (by @context) ───────────────────────────────────────────
   {

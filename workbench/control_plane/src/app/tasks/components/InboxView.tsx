@@ -12,14 +12,21 @@ import {
   Wind,
   Undo2,
   AlertCircle,
+  Search,
+  ArrowDownUp,
+  SearchX,
 } from "lucide-react";
+import FilterPills from "@/components/FilterPills";
 import { useTaskStore } from "../lib/taskStore";
 import { GtdItem } from "../lib/types";
-import { msSince, relativeTime } from "../lib/utils";
+import { DateBucketKey, dateBucket, msSince, relativeTime } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
 import { ClarifyModal } from "./ClarifyModal";
 
 const AGING_MS = 3 * 24 * 3600 * 1000; // GTD: empty regularly — flag stale items
+
+type DateFilter = "all" | DateBucketKey;
+type SortOrder = "newest" | "oldest";
 
 // A dedicated, capture-first Inbox surface (not the email-style list+detail).
 // One job: capture fast, and see everything captured-but-unprocessed. Clarifying
@@ -58,6 +65,39 @@ export function InboxView() {
 
   const [value, setValue] = useState("");
   const [clarifyOpen, setClarifyOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
+
+  // Per-bucket counts for the date filter pills.
+  const bucketCounts = useMemo(() => {
+    const c = { today: 0, yesterday: 0, week: 0, older: 0 };
+    for (const i of inbox) c[dateBucket(i.createdAt).key]++;
+    return c;
+  }, [inbox]);
+
+  // Filtered + sorted view of the inbox (scale + date filtering + search).
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const filtered = inbox.filter((i) => {
+      if (dateFilter !== "all" && dateBucket(i.createdAt).key !== dateFilter)
+        return false;
+      if (q && !i.title.toLowerCase().includes(q)) return false;
+      return true;
+    });
+    return filtered.sort((a, b) => {
+      const d = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      return sortOrder === "newest" ? -d : d;
+    });
+  }, [inbox, search, dateFilter, sortOrder]);
+
+  const pills = [
+    { id: "all", label: "All", count: inbox.length },
+    { id: "today", label: "Today", count: bucketCounts.today },
+    { id: "yesterday", label: "Yesterday", count: bucketCounts.yesterday },
+    { id: "week", label: "This week", count: bucketCounts.week },
+    { id: "older", label: "Older", count: bucketCounts.older },
+  ].filter((p) => p.id === "all" || p.count > 0);
 
   const submit = () => {
     const t = value.trim();
@@ -152,6 +192,66 @@ export function InboxView() {
         </div>
       </div>
 
+      {/* Sticky controls: count + aging + clarify-next, then search/sort, then date pills */}
+      {inbox.length > 0 && (
+        <div className="shrink-0 border-b border-border bg-background/80 backdrop-blur">
+          <div className="mx-auto w-full max-w-2xl px-6">
+            <div className="flex items-center justify-between py-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-muted-foreground">
+                  {inbox.length} to process
+                </span>
+                {isAging && oldest && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
+                    <AlertCircle className="h-3 w-3" />
+                    oldest {relativeTime(oldest.createdAt)} — time to process
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                disabled={!visible.length}
+                onClick={() => visible[0] && startClarify(visible[0].id)}
+                className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-40"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Clarify next
+                <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="flex items-center gap-2 pb-2">
+              <div className="tech-transition flex flex-1 items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 focus-within:border-primary/50">
+                <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search captured tasks…"
+                  aria-label="Search captured tasks"
+                  className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setSortOrder((o) => (o === "newest" ? "oldest" : "newest"))
+                }
+                className="tech-transition inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+                title="Toggle sort order"
+              >
+                <ArrowDownUp className="h-3.5 w-3.5" />
+                {sortOrder === "newest" ? "Newest" : "Oldest"}
+              </button>
+            </div>
+          </div>
+          <FilterPills
+            items={pills}
+            activeId={dateFilter}
+            onChange={(id) => setDateFilter(id as DateFilter)}
+            className="mx-auto max-w-2xl !px-6"
+          />
+        </div>
+      )}
+
       {/* Captured, unprocessed list */}
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-2xl px-6 py-5">
@@ -165,32 +265,22 @@ export function InboxView() {
                 Nothing left to process. Capture the next thing above.
               </p>
             </div>
+          ) : visible.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+              <SearchX className="h-8 w-8 text-muted-foreground/50" />
+              <p className="text-sm text-muted-foreground">
+                No captures match this filter.
+              </p>
+            </div>
           ) : (
             <>
-              <div className="mb-3 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    {inbox.length} to process
-                  </span>
-                  {isAging && oldest && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
-                      <AlertCircle className="h-3 w-3" />
-                      oldest {relativeTime(oldest.createdAt)} — time to process
-                    </span>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => startClarify(inbox[0].id)}
-                  className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/20"
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Clarify next
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </button>
-              </div>
+              {(search || dateFilter !== "all") && (
+                <p className="mb-2 text-[11px] text-muted-foreground">
+                  Showing {visible.length} of {inbox.length}
+                </p>
+              )}
               <div className="flex flex-col gap-2">
-                {inbox.map((item) => (
+                {visible.map((item) => (
                   <InboxCard
                     key={item.id}
                     item={item}

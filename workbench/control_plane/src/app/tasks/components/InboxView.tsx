@@ -333,38 +333,33 @@ export function InboxView() {
       {(activeInbox.length > 0 || tickler.length > 0) && (
         <div className="shrink-0 border-b border-border bg-background/80 backdrop-blur">
           <div className="mx-auto w-full max-w-2xl px-4 sm:px-6">
-            <div className="flex items-center justify-between py-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-medium text-muted-foreground">
+            <div className="flex items-center justify-between gap-2 py-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
                   {activeInbox.length} to process
                 </span>
                 {processed > 0 && (
-                  <span className="inline-flex items-center gap-1 text-[11px] text-success">
+                  <span className="hidden items-center gap-1 whitespace-nowrap text-[11px] text-success sm:inline-flex">
                     <CheckCircle2 className="h-3 w-3" />
                     {processed} processed
                   </span>
                 )}
-                {isAging && oldest && !showTickler && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
-                    <AlertCircle className="h-3 w-3" />
-                    oldest {relativeTime(oldest.createdAt)} — time to process
-                  </span>
-                )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex shrink-0 items-center gap-1.5">
                 {tickler.length > 0 && (
                   <button
                     type="button"
                     onClick={() => setShowTickler((v) => !v)}
                     className={[
-                      "tech-transition inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium",
+                      "tech-transition inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium",
                       showTickler
                         ? "bg-primary/15 text-primary"
                         : "text-muted-foreground hover:bg-secondary hover:text-foreground",
                     ].join(" ")}
                   >
                     <CalendarClock className="h-3.5 w-3.5" />
-                    Tickler {tickler.length}
+                    <span className="hidden sm:inline">Tickler&nbsp;</span>
+                    {tickler.length}
                   </button>
                 )}
                 {!showTickler && (
@@ -373,7 +368,7 @@ export function InboxView() {
                     disabled={!oldest}
                     onClick={() => oldest && startClarify(oldest.id)}
                     title="Process the oldest item first (GTD FIFO)"
-                    className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-40"
+                    className="tech-transition inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-40"
                   >
                     <Sparkles className="h-3.5 w-3.5" />
                     Clarify next
@@ -382,6 +377,14 @@ export function InboxView() {
                 )}
               </div>
             </div>
+            {isAging && oldest && !showTickler && (
+              <div className="pb-2">
+                <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
+                  <AlertCircle className="h-3 w-3" />
+                  oldest {relativeTime(oldest.createdAt)} — time to process
+                </span>
+              </div>
+            )}
 
             {!showTickler &&
               (selectionActive ? (
@@ -426,7 +429,7 @@ export function InboxView() {
                     onClick={() =>
                       setSortOrder((o) => (o === "newest" ? "oldest" : "newest"))
                     }
-                    className="tech-transition inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+                    className="tech-transition inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
                     title="Toggle sort order"
                   >
                     <ArrowDownUp className="h-3.5 w-3.5" />
@@ -565,7 +568,7 @@ function BulkBtn({
       type="button"
       onClick={onClick}
       className={[
-        "tech-transition inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium",
+        "tech-transition inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 py-1 text-xs font-medium",
         danger
           ? "border-destructive/30 text-destructive hover:bg-destructive/10"
           : "border-border text-muted-foreground hover:bg-secondary hover:text-foreground",

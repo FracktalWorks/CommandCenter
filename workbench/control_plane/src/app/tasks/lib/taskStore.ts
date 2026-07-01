@@ -157,6 +157,40 @@ function makeCaptureItem(title: string): GtdItem {
   };
 }
 
+/** A restorable snapshot taken *before* a dispose/clarify, for one-level undo. */
+interface UndoSnapshot {
+  items: GtdItem[];
+  projects: GtdProject[];
+  processed: number;
+  selectedItemId: string | null;
+  /** human label for the toast, e.g. "Trashed" / "Filed under Someday". */
+  label: string;
+}
+
+/** Friendly past-tense label for a one-tap disposition (undo toast). */
+const DISPOSE_LABEL: Partial<Record<Disposition, string>> = {
+  TRASH: "Trashed",
+  SOMEDAY: "Moved to Someday",
+  REFERENCE: "Filed as Reference",
+  DONE: "Marked done",
+  NEXT: "Filed as Next action",
+  WAITING: "Moved to Waiting",
+};
+
+/** Friendly label for a clarify decision (undo toast). */
+function clarifyLabel(d: ClarifyDecision): string {
+  switch (d.kind) {
+    case "trash": return "Trashed";
+    case "reference": return "Filed as Reference";
+    case "someday": return "Moved to Someday";
+    case "do-now": return "Marked done";
+    case "delegate": return `Delegated to ${d.person.name}`;
+    case "next": return "Filed as Next action";
+    case "calendar": return "Scheduled";
+    case "project": return "Made a Project";
+  }
+}
+
 /** Apply a one-tap disposition (shared by quick + bulk dispose). */
 function disposeOne(item: GtdItem, disposition: Disposition): GtdItem {
   const now = new Date().toISOString();
@@ -190,6 +224,9 @@ interface TaskState {
   clarifyModalOpen: boolean;
   /** count of items processed out of the inbox this session (momentum). */
   processedThisSession: number;
+  /** one-level undo for the most recent dispose/clarify — the safety net that
+   *  makes rapid triage feel safe (GTD: the system must be trusted). */
+  undoSnapshot: UndoSnapshot | null;
 
   // actions
   selectView: (view: ViewKey) => void;
@@ -218,6 +255,10 @@ interface TaskState {
   updateItem: (id: string, patch: { title?: string; notes?: string }) => void;
   /** Inline-rename a captured item (fix a typo without clarifying). */
   renameItem: (id: string, title: string) => void;
+  /** Undo the most recent dispose/clarify — restores the item(s) to the inbox. */
+  undoLastChange: () => void;
+  /** Dismiss the undo affordance without undoing (e.g. after a timeout). */
+  dismissUndo: () => void;
   openQuickCapture: (mode: "single" | "sweep") => void;
   closeQuickCapture: () => void;
   /** Open/close the clarify overlay for an item. */
@@ -240,6 +281,7 @@ export const useTaskStore = create<TaskState>((set) => ({
   quickCaptureMode: "single",
   clarifyModalOpen: false,
   processedThisSession: 0,
+  undoSnapshot: null,
 
   selectView: (view) =>
     set({ selectedView: view, selectedContext: null, selectedItemId: null, selectedProjectId: null }),
@@ -293,6 +335,13 @@ export const useTaskStore = create<TaskState>((set) => ({
 
   clarify: (id, decision) =>
     set((s) => {
+      const snapshot: UndoSnapshot = {
+        items: s.items,
+        projects: s.projects,
+        processed: s.processedThisSession,
+        selectedItemId: s.selectedItemId,
+        label: clarifyLabel(decision),
+      };
       let projects = s.projects;
       let items: GtdItem[];
       if (decision.kind === "project") {
@@ -346,6 +395,7 @@ export const useTaskStore = create<TaskState>((set) => ({
         projects,
         selectedItemId: nextInbox?.id ?? null,
         processedThisSession: s.processedThisSession + 1,
+        undoSnapshot: snapshot,
       };
     }),
 
@@ -364,6 +414,13 @@ export const useTaskStore = create<TaskState>((set) => ({
     set((s) => ({
       items: s.items.map((i) => (i.id === id ? disposeOne(i, disposition) : i)),
       processedThisSession: s.processedThisSession + 1,
+      undoSnapshot: {
+        items: s.items,
+        projects: s.projects,
+        processed: s.processedThisSession,
+        selectedItemId: s.selectedItemId,
+        label: DISPOSE_LABEL[disposition] ?? "Filed",
+      },
     })),
 
   bulkDispose: (ids, disposition) =>
@@ -377,6 +434,13 @@ export const useTaskStore = create<TaskState>((set) => ({
           set_.has(i.id) ? disposeOne(i, disposition) : i,
         ),
         processedThisSession: s.processedThisSession + affected,
+        undoSnapshot: {
+          items: s.items,
+          projects: s.projects,
+          processed: s.processedThisSession,
+          selectedItemId: s.selectedItemId,
+          label: `${DISPOSE_LABEL[disposition] ?? "Filed"} ${affected} item${affected === 1 ? "" : "s"}`,
+        },
       };
     }),
 
@@ -423,6 +487,21 @@ export const useTaskStore = create<TaskState>((set) => ({
         ),
       };
     }),
+
+  undoLastChange: () =>
+    set((s) => {
+      if (!s.undoSnapshot) return s;
+      const { items, projects, processed, selectedItemId } = s.undoSnapshot;
+      return {
+        items,
+        projects,
+        processedThisSession: processed,
+        selectedItemId,
+        undoSnapshot: null,
+      };
+    }),
+
+  dismissUndo: () => set({ undoSnapshot: null }),
 }));
 
 // ── Derived selectors (pure; keep view logic in one place) ──────────────────

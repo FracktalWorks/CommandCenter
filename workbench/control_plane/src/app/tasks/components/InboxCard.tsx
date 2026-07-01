@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Clock,
   Pencil,
@@ -13,12 +13,34 @@ import {
   Square,
   CheckSquare,
   StickyNote,
+  ListChecks,
+  FolderKanban,
+  UserPlus,
+  Zap,
+  Cloud,
   type LucideIcon,
 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
-import { GtdItem } from "../lib/types";
+import { proposeClarification, type ClarifyDisposition } from "../lib/clarify";
+import { GtdItem, GtdProject, Person } from "../lib/types";
+import { CONNECTED_PROVIDERS } from "../lib/mockData";
 import { detectDateHint, relativeTime, snoozeOptions } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
+
+// The assistant's at-a-glance read of a capture — shown on the card so you see
+// the *shape* of your inbox (what's yours, what to delegate, what's a project,
+// where it goes) before opening anything. It's a hint; Clarify still decides.
+const DISP_HINT: Record<ClarifyDisposition, { label: string; Icon: LucideIcon }> = {
+  NEXT: { label: "Next", Icon: ListChecks },
+  PROJECT: { label: "Project", Icon: FolderKanban },
+  WAITING: { label: "Delegate", Icon: UserPlus },
+  CALENDAR: { label: "Schedule", Icon: CalendarClock },
+  DO_NOW: { label: "Do now", Icon: Zap },
+  SOMEDAY: { label: "Someday", Icon: Lightbulb },
+  REFERENCE: { label: "Reference", Icon: FileText },
+  TRASH: { label: "Trash", Icon: Trash2 },
+};
+const shortText = (s: string, n = 22) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
 export interface InboxCardProps {
   item: GtdItem;
@@ -45,6 +67,13 @@ export function InboxCard({
   const quickDispose = useTaskStore((s) => s.quickDispose);
   const deferItem = useTaskStore((s) => s.deferItem);
   const updateItem = useTaskStore((s) => s.updateItem);
+  const people = useTaskStore((s) => s.people);
+  const projects = useTaskStore((s) => s.projects);
+
+  const hint = useMemo(
+    () => buildHint(item, people, projects),
+    [item, people, projects],
+  );
 
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [draftTitle, setDraftTitle] = useState(item.title);
@@ -152,6 +181,7 @@ export function InboxCard({
 
       <div className="min-w-0 flex-1 cursor-pointer">
         <p className="text-sm leading-snug text-foreground">{item.title}</p>
+        <HintRow hint={hint} />
         {item.notes && (
           <p className="mt-1 flex items-start gap-1 text-[12px] leading-snug text-muted-foreground">
             <StickyNote className="mt-0.5 h-3 w-3 shrink-0" />
@@ -223,6 +253,51 @@ export function InboxCard({
           onClick={() => openClarify(item.id)}
         />
       </div>
+    </div>
+  );
+}
+
+/** Build the compact "what this will become" hint for a capture. */
+function buildHint(item: GtdItem, people: Person[], projects: GtdProject[]) {
+  const p = proposeClarification(item, people, projects);
+  const base = DISP_HINT[p.disposition];
+  const parts: string[] = [];
+  if (p.disposition === "WAITING" && p.suggestedAssignee) {
+    parts.push(p.suggestedAssignee.name);
+  }
+  const proj = p.projectId ? projects.find((x) => x.id === p.projectId) : undefined;
+  if (proj) parts.push(shortText(proj.outcome));
+  else if ((p.disposition === "NEXT" || p.disposition === "CALENDAR") && p.context) {
+    parts.push(p.context);
+  }
+  const provider =
+    p.target && p.target.source === "SYNCED"
+      ? CONNECTED_PROVIDERS.find((cp) => cp.provider === p.target!.provider)?.label
+      : undefined;
+  return { ...base, detail: parts.join(" · "), provider };
+}
+
+function HintRow({
+  hint,
+}: {
+  hint: { label: string; Icon: LucideIcon; detail: string; provider?: string };
+}) {
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px]">
+      <span className="inline-flex items-center gap-1">
+        <Sparkles className="h-3 w-3 text-primary/60" />
+        <hint.Icon className="h-3 w-3 text-muted-foreground" />
+        <span className="font-medium text-foreground/75">{hint.label}</span>
+      </span>
+      {hint.detail && (
+        <span className="truncate text-muted-foreground/70">· {hint.detail}</span>
+      )}
+      {hint.provider && (
+        <span className="inline-flex items-center gap-0.5 rounded-full bg-secondary px-1.5 py-px text-[10px] text-muted-foreground">
+          <Cloud className="h-2.5 w-2.5" />
+          {hint.provider}
+        </span>
+      )}
     </div>
   );
 }

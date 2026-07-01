@@ -169,7 +169,7 @@ function QuickCapturePanel() {
               autoFocus
               rows={7}
               placeholder={"Call the lab about calibration\nBook flights for Bangalore\nAsk Priya about the vendor review\n…"}
-              className="w-full resize-none rounded-xl border border-border bg-background/60 px-3 py-2.5 text-sm leading-relaxed text-foreground placeholder:text-muted-foreground focus:border-primary/50 focus:outline-none"
+              className="w-full resize-none rounded-xl border border-border bg-background/60 px-3 py-2.5 text-base leading-relaxed text-foreground placeholder:text-muted-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
             />
             <div className="mt-2.5">
               <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -231,7 +231,7 @@ function QuickCapturePanel() {
                         ls.map((l, idx) => (idx === i ? e.target.value : l)),
                       )
                     }
-                    className="tech-transition flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-sm text-foreground focus:border-primary/50 focus:outline-none"
+                    className="tech-transition flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
                   />
                   <button
                     type="button"

@@ -321,7 +321,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
                 <input
                   value={outcome}
                   onChange={(e) => setOutcome(e.target.value)}
-                  className="w-full rounded-md border border-border bg-background/60 px-3 py-2 text-sm text-foreground focus:border-primary/50 focus:outline-none"
+                  className="w-full rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
                   placeholder="What does 'done' look like?"
                 />
               </Field>
@@ -332,7 +332,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
                 <input
                   value={nextAction}
                   onChange={(e) => setNextAction(e.target.value)}
-                  className="w-full rounded-md border border-border bg-background/60 px-3 py-2 text-sm text-foreground focus:border-primary/50 focus:outline-none"
+                  className="w-full rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
                   placeholder="The next physical, visible step…"
                 />
               </Field>
@@ -374,7 +374,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
                   type="date"
                   value={dueAt}
                   onChange={(e) => setDueAt(e.target.value)}
-                  className="rounded-md border border-border bg-background/60 px-3 py-2 text-sm text-foreground focus:border-primary/50 focus:outline-none"
+                  className="rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
                 />
               </Field>
             )}
@@ -484,7 +484,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
                           type="date"
                           value={dueAt}
                           onChange={(e) => setDueAt(e.target.value)}
-                          className="rounded-md border border-border bg-background/60 px-3 py-1.5 text-sm text-foreground focus:border-primary/50 focus:outline-none"
+                          className="rounded-md border border-border bg-background/60 px-3 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
                         />
                       </SubField>
                     )}
@@ -603,7 +603,7 @@ function ProjectPicker({
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search projects…"
-            className="w-full rounded-md border border-border bg-background/60 py-1.5 pl-8 pr-3 text-[13px] text-foreground focus:border-primary/50 focus:outline-none"
+            className="w-full rounded-md border border-border bg-background/60 py-1.5 pl-8 pr-3 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
           />
         </div>
       )}

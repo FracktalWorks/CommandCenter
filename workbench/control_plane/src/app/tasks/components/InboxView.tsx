@@ -253,6 +253,13 @@ export function InboxView() {
 
   return (
     <div className="flex h-full flex-col bg-background">
+      {/* Mobile heading — the hero is hidden on mobile, so orient the user. */}
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2.5 sm:hidden">
+        <Inbox className="h-4 w-4 shrink-0 text-primary" />
+        <h1 className="text-sm font-bold text-foreground">Inbox</h1>
+        <span className="text-[11px] text-muted-foreground">Getting Things Done</span>
+      </div>
+
       {/* Capture hero — desktop only. On mobile the dedicated Capture button
           (bottom nav / `C`) handles capture, so we give the list the space. */}
       <div className="hidden shrink-0 border-b border-border sm:block">
@@ -445,7 +452,7 @@ export function InboxView() {
                       onChange={(e) => setSearch(e.target.value)}
                       placeholder="Search captured tasks…"
                       aria-label="Search captured tasks"
-                      className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                      className="flex-1 bg-transparent text-base text-foreground placeholder:text-muted-foreground focus:outline-none sm:text-sm"
                     />
                   </div>
                   <button

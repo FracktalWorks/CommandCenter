@@ -253,8 +253,9 @@ export function InboxView() {
 
   return (
     <div className="flex h-full flex-col bg-background">
-      {/* Capture hero */}
-      <div className="shrink-0 border-b border-border">
+      {/* Capture hero — desktop only. On mobile the dedicated Capture button
+          (bottom nav / `C`) handles capture, so we give the list the space. */}
+      <div className="hidden shrink-0 border-b border-border sm:block">
         <div className="mx-auto w-full max-w-2xl px-4 py-6 sm:px-6 sm:py-8">
           <div className="mb-1 flex items-center gap-2">
             <Inbox className="h-5 w-5 text-primary" />
@@ -330,23 +331,27 @@ export function InboxView() {
             </div>
           )}
 
-          {undoCount > 0 && (
-            <div className="mt-3 flex items-center justify-between rounded-lg border border-border bg-secondary/40 px-3 py-2">
-              <span className="text-[11px] text-muted-foreground">
-                Captured {undoCount} item{undoCount === 1 ? "" : "s"}
-              </span>
-              <button
-                type="button"
-                onClick={undoLastCapture}
-                className="tech-transition inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
-              >
-                <Undo2 className="h-3.5 w-3.5" />
-                Undo
-              </button>
-            </div>
-          )}
         </div>
       </div>
+
+      {/* Capture undo — kept out of the hero so it shows on mobile too */}
+      {undoCount > 0 && (
+        <div className="shrink-0 border-b border-border bg-secondary/40">
+          <div className="mx-auto flex w-full max-w-2xl items-center justify-between px-4 py-2 sm:px-6">
+            <span className="text-[11px] text-muted-foreground">
+              Captured {undoCount} item{undoCount === 1 ? "" : "s"}
+            </span>
+            <button
+              type="button"
+              onClick={undoLastCapture}
+              className="tech-transition inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+            >
+              <Undo2 className="h-3.5 w-3.5" />
+              Undo
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Controls */}
       {(activeInbox.length > 0 || tickler.length > 0) && (

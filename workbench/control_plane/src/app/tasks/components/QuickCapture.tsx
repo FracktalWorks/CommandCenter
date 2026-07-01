@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Plus, X, ListPlus, Wind, Check, Sparkles, ArrowLeft, ArrowRight, Trash2 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { GTD_TRIGGERS } from "../lib/mockData";
+import { useVisualViewport } from "../lib/useVisualViewport";
 
 // Ubiquitous capture (C2) + Mind Sweep (C3/C4). A global palette openable from
 // any Tasks view via a hotkey (C / ⌘K) or a button. Single mode = rapid-fire
@@ -24,6 +25,7 @@ function QuickCapturePanel() {
   const capture = useTaskStore((s) => s.capture);
   const captureMany = useTaskStore((s) => s.captureMany);
 
+  const vp = useVisualViewport();
   const [mode, setMode] = useState<"single" | "sweep">(storeMode);
   const [value, setValue] = useState("");
   const [added, setAdded] = useState(0);
@@ -91,11 +93,12 @@ function QuickCapturePanel() {
 
   return (
     <div
-      className="chat-fade-in fixed inset-0 z-[80] flex items-end justify-center bg-black/50 p-0 pt-0 sm:items-start sm:p-4 sm:pt-[10vh]"
+      className="chat-fade-in fixed inset-x-0 bottom-0 top-0 z-[80] flex items-end justify-center bg-black/50 p-0 pt-0 sm:items-start sm:p-4 sm:pt-[10vh]"
+      style={vp ? { top: vp.top, height: vp.height, bottom: "auto" } : undefined}
       onClick={close}
     >
       <div
-        className="flex max-h-[92vh] w-full max-w-xl flex-col overflow-hidden rounded-t-2xl border-t border-border bg-card shadow-2xl pb-safe sm:max-h-[85vh] sm:rounded-2xl sm:border sm:pb-0"
+        className="flex max-h-full w-full max-w-xl flex-col overflow-hidden rounded-t-2xl border-t border-border bg-card shadow-2xl pb-safe sm:max-h-[85vh] sm:rounded-2xl sm:border sm:pb-0"
         onClick={(e) => e.stopPropagation()}
       >
         {/* header: mode toggle + close */}

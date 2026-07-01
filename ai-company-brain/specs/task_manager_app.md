@@ -603,7 +603,9 @@ The desktop 4-panel layout collapses to a **single-pane** flow on ≤767px (`use
 - **Context-aware bottom nav** — the AppShell mobile bottom bar gains a tasks tab set (**Inbox · Lists · Capture · Assistant**) that reflects the current GTD process: the page emits a `cc-tasks-section` event on view change, the bar highlights **Inbox** vs **Lists** accordingly, and **Capture** is emphasized (capture-on-the-go is the core mobile GTD action). Tabs dispatch `cc-mobile-nav` events the page consumes (mirrors the email/chat pattern).
 - **Lists & Assistant** open as **bottom-sheet drawers** (`useMobileDrawer`); picking a list closes the sheet (`ListsSidebar onNavigate`).
 - **Inbox** renders full-width; other lists render full-width and **tap-through to a full-screen detail** with a Back affordance (no side panels).
-- **Clarify + Quick-capture modals become bottom sheets** (`items-end`, rounded-top, `pb-safe`, `z-[80]` above the nav); keyboard-only affordances (shortcut legends, "press C", hover quick-actions) are hidden on touch — tapping a card opens the Clarify sheet, which carries every disposition.
+- **No capture hero on mobile** — the desktop inbox's capture input/mind-sweep header is `hidden sm:block`; on mobile the dedicated **Capture** button (bottom nav / `C`) owns capture, so the small screen goes to the *task list*, not a redundant capture box. (Capture-undo moves out of the hero to an always-visible strip.)
+- **Keyboard-safe bottom sheets** — Clarify + Quick-capture sheets track the **visual viewport** (`useVisualViewport`): when the on-screen keyboard opens it shrinks the visual viewport, and the overlay is sized to that height so its `items-end` content (the capture/next-action input) stays **above the keyboard** instead of being hidden behind it.
+- **Clarify + Quick-capture modals are bottom sheets** (`items-end`, rounded-top, `pb-safe`, `z-[80]` above the nav); keyboard-only affordances (shortcut legends, "press C", hover quick-actions) are hidden on touch — tapping a card opens the Clarify sheet, which carries every disposition.
 
 ---
 

@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { X, SkipForward } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
+import { useVisualViewport } from "../lib/useVisualViewport";
 import { ClarifyPanel } from "./ClarifyPanel";
 
 // Focused overlay for processing an inbox item. Bound to the store's selected
@@ -22,6 +23,7 @@ export function ClarifyModal() {
   const items = useTaskStore((s) => s.items);
 
   const processed = useTaskStore((s) => s.processedThisSession);
+  const vp = useVisualViewport();
   const item = selectedItemId
     ? items.find((i) => i.id === selectedItemId)
     : undefined;
@@ -82,11 +84,12 @@ export function ClarifyModal() {
 
   return (
     <div
-      className="chat-fade-in fixed inset-0 z-[80] flex items-end justify-center bg-black/50 p-0 pt-0 sm:items-start sm:p-4 sm:pt-[8vh]"
+      className="chat-fade-in fixed inset-x-0 bottom-0 top-0 z-[80] flex items-end justify-center bg-black/50 p-0 pt-0 sm:items-start sm:p-4 sm:pt-[8vh]"
+      style={vp ? { top: vp.top, height: vp.height, bottom: "auto" } : undefined}
       onClick={close}
     >
       <div
-        className="flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border-t border-border bg-card shadow-2xl pb-safe sm:max-h-[84vh] sm:rounded-2xl sm:border sm:pb-0"
+        className="flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border-t border-border bg-card shadow-2xl pb-safe sm:max-h-[84vh] sm:rounded-2xl sm:border sm:pb-0"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="shrink-0 border-b border-border">

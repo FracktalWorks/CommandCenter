@@ -100,6 +100,44 @@ Each GTD step becomes a first-class surface in the app. This is the product's fe
 | **F8** | **Natural Planning** — "define a project" flow (purpose → outcome → brainstorm → organize → next action), agent-assisted. | (project planning) | Composer AI |
 | **F9** | **Assistant chat + quick actions** — right-rail agent chat with GTD quick actions: *Process my inbox*, *What's my next action?*, *Run weekly review*, *What am I waiting on?*, *Plan this project*, *What's overdue across the team?* | all | AI Chat panel + quick actions |
 
+### 2.1 The Capture stage — deep design (GTD-aligned)
+
+> Added 2026-07-01 after a GTD Capture-stage study ([Collect best practices](https://gettingthingsdone.com/2011/10/gtd-best-practices-collect-part-1-of-5/), [Mind Sweep](https://facilethings.com/blog/en/the-mind-sweep), [Incompletion Trigger List](https://gettingthingsdone.com/wp-content/uploads/2014/10/Mind_Sweep_Trigger_List.pdf)). The **Inbox** is where Capture happens; GTD is opinionated about this stage. Items below marked **[plumbing]** are frontend elements that will need backend functionality we bundle later.
+
+**GTD principles the Inbox must honor**
+1. **Capture without thinking; never clarify while capturing.** Capture and Clarify are separate stages — combining them is explicitly discouraged.
+2. **Ubiquitous capture** — reachable from anywhere, not just the inbox screen.
+3. **As few in-baskets as you can get away with** — unify all sources into one trusted inbox.
+4. **Empty regularly** — "empty" = clarify+organize to zero, *not* "finish the work". A stale, un-emptied inbox loses trust and becomes mere storage.
+5. **Hard rules:** the inbox is not a to-do list; never put clarified items *back* into the inbox.
+6. **Mind Sweep + Incompletion Trigger List** — periodic full brain-dump into the one in-basket, prompted by trigger categories (projects started/not-finished, promises to others, calls/emails to make, decisions pending, waiting-fors, home, finances, health…).
+
+**Capture features (F1, expanded)**
+
+| # | Feature | What it does | Status | Needs |
+|---|---|---|---|---|
+| C1 | Quick capture | frictionless single-line add, Enter to file | ✅ built | — |
+| C2 | Ubiquitous capture (hotkey / palette) | open a capture box from any view via keyboard (`C`, `⌘/Ctrl-K`) | ✅ built *within Tasks* | app-wide across Command Center → **[plumbing]** persisted store + AppShell-level listener |
+| C3 | Brain-dump / Mind Sweep | multi-line box → one inbox item per non-empty line | ✅ built (UI, mock) | — |
+| C4 | Trigger-list guided sweep | show the Incompletion Trigger List as memory-joggers during a sweep | ✅ built (static prompts) | conversational AI sweep → **[plumbing]** agent |
+| C5 | Empty-regularly signals | "N to process" + oldest-item age + aging nudge | ✅ built | — |
+| C6 | Undo capture | remove the last capture batch (protects trust) | ✅ built | — |
+| C7 | Multi-source capture | email / chat / Slack / meeting line → inbox item with a **source chip** (the "few buckets → one inbox" rule) | 🔲 | **[plumbing]** email/chat→task ingestion (`source` already in the model) |
+| C8 | Voice capture | dictate → item | 🔲 | **[plumbing]** speech-to-text |
+
+**AI in the Capture stage — the boundary, then the opportunities**
+
+> **Boundary:** AI **assists capture and completeness; it must NOT auto-clarify.** Preparing is fine (it lowers friction and helps reach 100% collection); *deciding* stays a deliberate human step at the Clarify stage (with AI proposing there).
+
+| AI capability | Value | Needs |
+|---|---|---|
+| **AI-guided mind sweep** | assistant walks the Incompletion Trigger List conversationally and files answers as inbox items — the practice people almost never complete alone | **[plumbing]** agent + `/tasks` capture API |
+| **Brain-dump atomization** | paste/dictate a paragraph → split into discrete items; flag near-duplicates of existing captures | **[plumbing]** agent (UI already atomizes by line) |
+| **Silent clarify-prep** | precompute each item's clarify suggestion while it sits, so processing is one-click — respects capture≠clarify (only *prepares*) | **[plumbing]** agent, background job |
+| **Multi-source + ambient capture** | turn flagged emails / Slack mentions / meeting lines into captures, with consent | **[plumbing]** ingestion + Action-Broker gating |
+| **Dedup / merge** | flag semantically-duplicate captures | **[plumbing]** embeddings |
+| **Staleness nudges** | prompt a sweep when the inbox ages past a threshold | **[plumbing]** scheduler |
+
 ---
 
 ## 3. Architecture
@@ -496,6 +534,7 @@ UI must follow `workbench/control_plane/DESIGN_SYSTEM.md` and reuse shared compo
 | 0 — Shell | 4-panel layout | ✅ done | `page.tsx`, `ListsSidebar`, `AssistantRail` (framed) |
 | 1 — Browse | F1 capture · F3 lists/contexts | ✅ done | `CaptureBar`, `ItemList`/`ItemRow`, `ProjectsList`, `ItemDetail`, `SourceBadge` |
 | 2 — Clarify | F2 decision tree | ✅ done | `ClarifyPanel` + `taskStore.clarify` + mocked `suggestClarification` |
+| 2.5 — Inbox depth (Capture stage) | C1–C6 (§2.1) | ✅ done | dedicated capture-first `InboxView` + `ClarifyModal` (de-email-ified); ubiquitous hotkey capture (`QuickCapture`, `C`/`⌘K`), brain-dump/mind-sweep + trigger list, oldest-item aging signal, undo. AI sweep / multi-source / voice = **[plumbing]** later |
 | 3 — Engage "Now" | F4 | 🔲 **NEXT** | filter Next Actions by context + time + energy; unlocks the `Engage · Now` nav (currently "soon") |
 | 4 — Weekly Review | F5 | 🔲 | get-clear / get-current / get-creative wizard; surface no-next-action projects + stale waiting-fors |
 | 5 — Waiting-For / Delegate | F6 | 🔲 | dedicated monitoring view (delegation already partly in Clarify) |

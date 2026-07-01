@@ -30,6 +30,11 @@ export function isOverdue(item: GtdItem, nowMs = Date.now()): boolean {
   return new Date(item.dueAt).getTime() < nowMs;
 }
 
+/** Milliseconds elapsed since an ISO timestamp (wall-clock now). */
+export function msSince(iso: string, nowMs = Date.now()): number {
+  return nowMs - new Date(iso).getTime();
+}
+
 /** True if an item belongs in the Calendar view (date-specific actions). */
 export function isCalendarItem(item: GtdItem): boolean {
   return !!item.isHardDate && !!item.dueAt;

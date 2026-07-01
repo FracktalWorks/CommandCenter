@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { PanelLeft, PanelRight } from "lucide-react";
+import { useEffect, useState } from "react";
+import { PanelLeft, PanelRight, Plus } from "lucide-react";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useTaskStore } from "./lib/taskStore";
 import { ListsSidebar } from "./components/ListsSidebar";
@@ -10,6 +10,7 @@ import { ItemList } from "./components/ItemList";
 import { ItemDetail } from "./components/ItemDetail";
 import { AssistantRail } from "./components/AssistantRail";
 import { InboxView } from "./components/InboxView";
+import { QuickCapture } from "./components/QuickCapture";
 
 // Task Manager (GTD) — 4-panel shell, mirroring the email app's layout
 // philosophy: Lists/Contexts · Item list (+ capture) · Item detail · Assistant.
@@ -18,9 +19,41 @@ import { InboxView } from "./components/InboxView";
 export default function TasksPage() {
   const { isMobile } = useViewMode();
   const selectedView = useTaskStore((s) => s.selectedView);
+  const openQuickCapture = useTaskStore((s) => s.openQuickCapture);
   const [leftOpen, setLeftOpen] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
   const isInbox = selectedView === "inbox";
+
+  // Ubiquitous capture — a hotkey opens the capture palette from any Tasks view.
+  // (App-wide capture from other Command Center apps needs a persisted store +
+  // AppShell-level listener — see spec §2.1 C2 [plumbing].)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      const typing =
+        !!el &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.isContentEditable);
+      if ((e.key === "k" || e.key === "K") && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        openQuickCapture("single");
+        return;
+      }
+      if (
+        !typing &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        (e.key === "c" || e.key === "C")
+      ) {
+        e.preventDefault();
+        openQuickCapture("single");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openQuickCapture]);
 
   if (isMobile) {
     // Simplified single-pane stack for narrow screens; full mobile flows land
@@ -49,6 +82,7 @@ export default function TasksPage() {
             </div>
           </>
         )}
+        <QuickCapture />
       </div>
     );
   }
@@ -66,6 +100,15 @@ export default function TasksPage() {
         <span className="text-xs font-medium text-muted-foreground">
           Task Manager
         </span>
+        <button
+          type="button"
+          onClick={() => openQuickCapture("single")}
+          className="tech-transition ml-2 inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:border-primary/40 hover:text-foreground"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Capture
+          <kbd className="rounded border border-border px-1 text-[9px]">C</kbd>
+        </button>
         <PanelToggle
           active={railOpen}
           onClick={() => setRailOpen((v) => !v)}
@@ -111,6 +154,8 @@ export default function TasksPage() {
           </aside>
         )}
       </div>
+
+      <QuickCapture />
     </div>
   );
 }

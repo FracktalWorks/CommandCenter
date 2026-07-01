@@ -70,6 +70,12 @@ const iso = (offsetHours: number) => new Date(now + offsetHours * 3600_000).toIS
 export const MOCK_ITEMS: GtdItem[] = [
   // ── INBOX (unclarified captures) ─────────────────────────────────────────
   {
+    id: "i0", source: "LOCAL", provider: "local",
+    title: "Follow up on the anodizing vendor samples",
+    disposition: "INBOX", isMine: true,
+    createdAt: iso(-24 * 6), updatedAt: iso(-24 * 6), // ~a week old → aging signal
+  },
+  {
     id: "i1", source: "LOCAL", provider: "local",
     title: "Slack from Priya — reschedule the vendor review?",
     disposition: "INBOX", isMine: true,
@@ -191,6 +197,21 @@ export const MOCK_ITEMS: GtdItem[] = [
     disposition: "SOMEDAY", isMine: true,
     createdAt: iso(-400), updatedAt: iso(-400),
   },
+];
+
+/** A curated subset of David Allen's Incompletion Trigger List — memory-joggers
+ *  shown during a mind sweep to help pull open loops out of your head. */
+export const GTD_TRIGGERS: string[] = [
+  "Projects started, not finished",
+  "Projects to start",
+  "Promises to others",
+  "Calls to make",
+  "Emails to send",
+  "Decisions to make",
+  "Waiting-for / follow-ups",
+  "Errands & home",
+  "Finances",
+  "Health",
 ];
 
 /** Quick-action pills for the assistant rail (wired in a later slice). */

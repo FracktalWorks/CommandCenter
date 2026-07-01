@@ -117,6 +117,20 @@ export function suggestClarification(item: GtdItem): ClarifySuggestion {
 let idCounter = 1000;
 const nextId = () => `local-${idCounter++}`;
 
+function makeCaptureItem(title: string): GtdItem {
+  const ts = new Date().toISOString();
+  return {
+    id: nextId(),
+    source: "LOCAL",
+    provider: "local",
+    title,
+    disposition: "INBOX",
+    isMine: true,
+    createdAt: ts,
+    updatedAt: ts,
+  };
+}
+
 interface TaskState {
   items: GtdItem[];
   projects: GtdProject[];
@@ -129,6 +143,12 @@ interface TaskState {
   selectedItemId: string | null;
   selectedProjectId: string | null;
 
+  /** ids of the most recent capture batch (for undo). */
+  lastCaptureIds: string[];
+  /** global quick-capture palette (ubiquitous capture). */
+  quickCaptureOpen: boolean;
+  quickCaptureMode: "single" | "sweep";
+
   // actions
   selectView: (view: ViewKey) => void;
   selectContext: (context: string | null) => void;
@@ -136,8 +156,14 @@ interface TaskState {
   selectProject: (id: string | null) => void;
   /** Capture a new inbox item (frictionless quick-add). */
   capture: (title: string) => void;
+  /** Capture many items at once (mind sweep) — one per non-empty line. */
+  captureMany: (text: string) => void;
+  /** Undo the most recent capture batch (only items still in the inbox). */
+  undoLastCapture: () => void;
   /** Clarify an inbox item — apply the GTD decision and advance to the next. */
   clarify: (id: string, decision: ClarifyDecision) => void;
+  openQuickCapture: (mode: "single" | "sweep") => void;
+  closeQuickCapture: () => void;
 }
 
 export const useTaskStore = create<TaskState>((set) => ({
@@ -150,6 +176,9 @@ export const useTaskStore = create<TaskState>((set) => ({
   selectedContext: null,
   selectedItemId: null,
   selectedProjectId: null,
+  lastCaptureIds: [],
+  quickCaptureOpen: false,
+  quickCaptureMode: "single",
 
   selectView: (view) =>
     set({ selectedView: view, selectedContext: null, selectedItemId: null, selectedProjectId: null }),
@@ -166,20 +195,38 @@ export const useTaskStore = create<TaskState>((set) => ({
     set((s) => {
       const t = title.trim();
       if (!t) return s;
-      const ts = new Date().toISOString();
-      const item: GtdItem = {
-        id: nextId(),
-        source: "LOCAL",
-        provider: "local",
-        title: t,
-        disposition: "INBOX",
-        isMine: true,
-        createdAt: ts,
-        updatedAt: ts,
-      };
-      // newest first
-      return { items: [item, ...s.items] };
+      const item = makeCaptureItem(t);
+      return { items: [item, ...s.items], lastCaptureIds: [item.id] };
     }),
+
+  captureMany: (text) =>
+    set((s) => {
+      const lines = text
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+      if (!lines.length) return s;
+      const newItems = lines.map(makeCaptureItem);
+      return {
+        items: [...newItems, ...s.items],
+        lastCaptureIds: newItems.map((i) => i.id),
+      };
+    }),
+
+  undoLastCapture: () =>
+    set((s) => {
+      if (!s.lastCaptureIds.length) return s;
+      const remove = new Set(s.lastCaptureIds);
+      return {
+        items: s.items.filter(
+          (i) => !(remove.has(i.id) && i.disposition === "INBOX"),
+        ),
+        lastCaptureIds: [],
+      };
+    }),
+
+  openQuickCapture: (mode) => set({ quickCaptureOpen: true, quickCaptureMode: mode }),
+  closeQuickCapture: () => set({ quickCaptureOpen: false }),
 
   clarify: (id, decision) =>
     set((s) => {

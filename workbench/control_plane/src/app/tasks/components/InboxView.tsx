@@ -9,12 +9,17 @@ import {
   CheckCircle2,
   ArrowRight,
   Clock,
+  Wind,
+  Undo2,
+  AlertCircle,
 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { GtdItem } from "../lib/types";
-import { relativeTime } from "../lib/utils";
+import { msSince, relativeTime } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
 import { ClarifyModal } from "./ClarifyModal";
+
+const AGING_MS = 3 * 24 * 3600 * 1000; // GTD: empty regularly — flag stale items
 
 // A dedicated, capture-first Inbox surface (not the email-style list+detail).
 // One job: capture fast, and see everything captured-but-unprocessed. Clarifying
@@ -23,10 +28,32 @@ export function InboxView() {
   const items = useTaskStore((s) => s.items);
   const capture = useTaskStore((s) => s.capture);
   const selectItem = useTaskStore((s) => s.selectItem);
+  const openQuickCapture = useTaskStore((s) => s.openQuickCapture);
+  const lastCaptureIds = useTaskStore((s) => s.lastCaptureIds);
+  const undoLastCapture = useTaskStore((s) => s.undoLastCapture);
 
   const inbox = useMemo(
     () => items.filter((i) => i.disposition === "INBOX"),
     [items],
+  );
+
+  // Oldest unprocessed item — GTD "empty regularly" signal.
+  const oldest = useMemo(() => {
+    if (!inbox.length) return null;
+    const o = inbox.reduce((a, b) =>
+      new Date(a.createdAt) < new Date(b.createdAt) ? a : b,
+    );
+    return o;
+  }, [inbox]);
+  const isAging = !!oldest && msSince(oldest.createdAt) > AGING_MS;
+
+  // Undo bar: show while the last capture batch is still sitting in the inbox.
+  const undoCount = useMemo(
+    () =>
+      lastCaptureIds.filter((id) =>
+        inbox.some((i) => i.id === id),
+      ).length,
+    [lastCaptureIds, inbox],
   );
 
   const [value, setValue] = useState("");
@@ -87,6 +114,41 @@ export function InboxView() {
               </kbd>
             )}
           </div>
+
+          <div className="mt-2 flex items-center gap-3 px-1 text-[11px] text-muted-foreground">
+            <button
+              type="button"
+              onClick={() => openQuickCapture("sweep")}
+              className="tech-transition inline-flex items-center gap-1 hover:text-primary"
+            >
+              <Wind className="h-3.5 w-3.5" />
+              Mind sweep
+            </button>
+            <span className="text-muted-foreground/50">·</span>
+            <span>
+              Press{" "}
+              <kbd className="rounded border border-border px-1 py-0.5 text-[10px]">
+                C
+              </kbd>{" "}
+              to capture from anywhere
+            </span>
+          </div>
+
+          {undoCount > 0 && (
+            <div className="mt-3 flex items-center justify-between rounded-lg border border-border bg-secondary/40 px-3 py-2">
+              <span className="text-[11px] text-muted-foreground">
+                Captured {undoCount} item{undoCount === 1 ? "" : "s"}
+              </span>
+              <button
+                type="button"
+                onClick={undoLastCapture}
+                className="tech-transition inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+              >
+                <Undo2 className="h-3.5 w-3.5" />
+                Undo
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -106,9 +168,17 @@ export function InboxView() {
           ) : (
             <>
               <div className="mb-3 flex items-center justify-between">
-                <span className="text-xs font-medium text-muted-foreground">
-                  {inbox.length} to process
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    {inbox.length} to process
+                  </span>
+                  {isAging && oldest && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
+                      <AlertCircle className="h-3 w-3" />
+                      oldest {relativeTime(oldest.createdAt)} — time to process
+                    </span>
+                  )}
+                </div>
                 <button
                   type="button"
                   onClick={() => startClarify(inbox[0].id)}

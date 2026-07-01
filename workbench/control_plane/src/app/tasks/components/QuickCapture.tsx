@@ -91,11 +91,11 @@ function QuickCapturePanel() {
 
   return (
     <div
-      className="chat-fade-in fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 pt-[10vh]"
+      className="chat-fade-in fixed inset-0 z-[80] flex items-end justify-center bg-black/50 p-0 pt-0 sm:items-start sm:p-4 sm:pt-[10vh]"
       onClick={close}
     >
       <div
-        className="flex w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
+        className="flex max-h-[92vh] w-full max-w-xl flex-col overflow-hidden rounded-t-2xl border-t border-border bg-card shadow-2xl pb-safe sm:max-h-[85vh] sm:rounded-2xl sm:border sm:pb-0"
         onClick={(e) => e.stopPropagation()}
       >
         {/* header: mode toggle + close */}

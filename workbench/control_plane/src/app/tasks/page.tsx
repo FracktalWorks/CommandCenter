@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { PanelLeft, PanelRight, Plus } from "lucide-react";
+import { PanelLeft, PanelRight, Plus, ArrowLeft } from "lucide-react";
 import { useViewMode } from "@/components/ViewModeProvider";
+import { useMobileDrawer } from "@/components/AppShell";
 import { useTaskStore } from "./lib/taskStore";
 import { ListsSidebar } from "./components/ListsSidebar";
 import { CaptureBar } from "./components/CaptureBar";
@@ -18,13 +19,43 @@ import { QuickCapture } from "./components/QuickCapture";
 // API is wired later. See ai-company-brain/specs/task_manager_app.md.
 export default function TasksPage() {
   const { isMobile } = useViewMode();
+  const { open: openDrawer, close: closeDrawer } = useMobileDrawer();
   const selectedView = useTaskStore((s) => s.selectedView);
+  const selectedItemId = useTaskStore((s) => s.selectedItemId);
+  const selectItem = useTaskStore((s) => s.selectItem);
+  const selectView = useTaskStore((s) => s.selectView);
   const openQuickCapture = useTaskStore((s) => s.openQuickCapture);
   const quickCaptureOpen = useTaskStore((s) => s.quickCaptureOpen);
   const clarifyModalOpen = useTaskStore((s) => s.clarifyModalOpen);
   const [leftOpen, setLeftOpen] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
   const isInbox = selectedView === "inbox";
+
+  // Tell the mobile bottom bar which GTD section is active (for its highlight).
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent("cc-tasks-section", { detail: selectedView }),
+    );
+  }, [selectedView]);
+
+  // Mobile bottom-nav tabs (from AppShell) → drive the tasks app.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const tab = (e as CustomEvent<string>).detail;
+      if (tab === "tasks-inbox") {
+        selectView("inbox");
+        closeDrawer();
+      } else if (tab === "tasks-lists") {
+        openDrawer(<ListsSidebar onNavigate={closeDrawer} />);
+      } else if (tab === "tasks-capture") {
+        openQuickCapture("single");
+      } else if (tab === "tasks-assistant") {
+        openDrawer(<AssistantRail />);
+      }
+    };
+    window.addEventListener("cc-mobile-nav", handler);
+    return () => window.removeEventListener("cc-mobile-nav", handler);
+  }, [openDrawer, closeDrawer, openQuickCapture, selectView]);
 
   // Ubiquitous capture — a hotkey opens the capture palette from any Tasks view.
   // (App-wide capture from other Command Center apps needs a persisted store +
@@ -59,31 +90,29 @@ export default function TasksPage() {
   }, [openQuickCapture, quickCaptureOpen, clarifyModalOpen]);
 
   if (isMobile) {
-    // Simplified single-pane stack for narrow screens; full mobile flows land
-    // in a later slice.
+    // Single-pane mobile flow. Section switching + capture live in the AppShell
+    // bottom bar; here we render just the current surface full-width.
     return (
       <div className="flex h-full w-full flex-col overflow-hidden bg-background">
         {isInbox ? (
-          <div className="flex min-h-0 flex-1">
-            <aside className="w-44 shrink-0 border-r border-border bg-card">
-              <ListsSidebar />
-            </aside>
-            <div className="min-w-0 flex-1">
-              <InboxView />
+          <InboxView />
+        ) : selectedItemId ? (
+          // list → detail (full-screen with a back affordance)
+          <div className="flex h-full flex-col">
+            <button
+              type="button"
+              onClick={() => selectItem(null)}
+              className="tech-transition flex shrink-0 items-center gap-1.5 border-b border-border bg-card px-4 py-2.5 text-sm text-muted-foreground hover:text-foreground"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back
+            </button>
+            <div className="min-h-0 flex-1">
+              <ItemDetail />
             </div>
           </div>
         ) : (
-          <>
-            <CaptureBar />
-            <div className="flex min-h-0 flex-1">
-              <aside className="w-44 shrink-0 border-r border-border bg-card">
-                <ListsSidebar />
-              </aside>
-              <div className="min-w-0 flex-1">
-                <ItemList />
-              </div>
-            </div>
-          </>
+          <ItemList />
         )}
         <QuickCapture />
       </div>

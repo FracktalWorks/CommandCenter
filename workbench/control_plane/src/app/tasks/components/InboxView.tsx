@@ -237,7 +237,7 @@ export function InboxView() {
     <div className="flex h-full flex-col bg-background">
       {/* Capture hero */}
       <div className="shrink-0 border-b border-border">
-        <div className="mx-auto w-full max-w-2xl px-6 py-8">
+        <div className="mx-auto w-full max-w-2xl px-4 py-6 sm:px-6 sm:py-8">
           <div className="mb-1 flex items-center gap-2">
             <Inbox className="h-5 w-5 text-primary" />
             <h1 className="text-xl font-bold text-foreground">Inbox</h1>
@@ -279,8 +279,8 @@ export function InboxView() {
               <Wind className="h-3.5 w-3.5" />
               Mind sweep
             </button>
-            <span className="text-muted-foreground/50">·</span>
-            <span>
+            <span className="hidden text-muted-foreground/50 sm:inline">·</span>
+            <span className="hidden sm:inline">
               Press{" "}
               <kbd className="rounded border border-border px-1 py-0.5 text-[10px]">
                 C
@@ -290,7 +290,7 @@ export function InboxView() {
             <button
               type="button"
               onClick={() => setShowShortcuts((v) => !v)}
-              className="tech-transition ml-auto inline-flex items-center gap-1 hover:text-foreground"
+              className="tech-transition ml-auto hidden items-center gap-1 hover:text-foreground sm:inline-flex"
             >
               <Keyboard className="h-3.5 w-3.5" />
               Shortcuts
@@ -332,7 +332,7 @@ export function InboxView() {
       {/* Controls */}
       {(activeInbox.length > 0 || tickler.length > 0) && (
         <div className="shrink-0 border-b border-border bg-background/80 backdrop-blur">
-          <div className="mx-auto w-full max-w-2xl px-6">
+          <div className="mx-auto w-full max-w-2xl px-4 sm:px-6">
             <div className="flex items-center justify-between py-3">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-medium text-muted-foreground">
@@ -440,7 +440,7 @@ export function InboxView() {
               items={pills}
               activeId={dateFilter}
               onChange={(id) => setDateFilter(id as DateFilter)}
-              className="mx-auto max-w-2xl !px-6"
+              className="mx-auto max-w-2xl !px-4 sm:!px-6"
             />
           )}
         </div>
@@ -448,7 +448,7 @@ export function InboxView() {
 
       {/* List */}
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-2xl px-6 py-5">
+        <div className="mx-auto w-full max-w-2xl px-4 py-4 sm:px-6 sm:py-5">
           {showTickler ? (
             <TicklerList items={tickler} onUndefer={undeferItem} />
           ) : activeInbox.length === 0 ? (

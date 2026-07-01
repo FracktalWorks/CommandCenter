@@ -181,8 +181,8 @@ export function InboxCard({
         </div>
       </div>
 
-      {/* hover quick-actions */}
-      <div className="flex shrink-0 items-center gap-0.5 opacity-0 tech-transition focus-within:opacity-100 group-hover:opacity-100">
+      {/* hover quick-actions (desktop; on touch, tap the card → Clarify sheet) */}
+      <div className="hidden shrink-0 items-center gap-0.5 opacity-0 tech-transition focus-within:opacity-100 group-hover:opacity-100 sm:flex">
         <CardAction label="Edit" icon={Pencil} onClick={onEditStart} />
         <div className="relative">
           <CardAction

@@ -518,6 +518,15 @@ src/app/tasks/
 
 UI must follow `workbench/control_plane/DESIGN_SYSTEM.md` and reuse shared components (`Tabs`, `FilterPills`, page headers) — no ad-hoc bars (AGENTS.md global convention).
 
+### 7.1 Mobile
+
+The desktop 4-panel layout collapses to a **single-pane** flow on ≤767px (`useViewMode().isMobile`):
+
+- **Context-aware bottom nav** — the AppShell mobile bottom bar gains a tasks tab set (**Inbox · Lists · Capture · Assistant**) that reflects the current GTD process: the page emits a `cc-tasks-section` event on view change, the bar highlights **Inbox** vs **Lists** accordingly, and **Capture** is emphasized (capture-on-the-go is the core mobile GTD action). Tabs dispatch `cc-mobile-nav` events the page consumes (mirrors the email/chat pattern).
+- **Lists & Assistant** open as **bottom-sheet drawers** (`useMobileDrawer`); picking a list closes the sheet (`ListsSidebar onNavigate`).
+- **Inbox** renders full-width; other lists render full-width and **tap-through to a full-screen detail** with a Back affordance (no side panels).
+- **Clarify + Quick-capture modals become bottom sheets** (`items-end`, rounded-top, `pb-safe`, `z-[80]` above the nav); keyboard-only affordances (shortcut legends, "press C", hover quick-actions) are hidden on touch — tapping a card opens the Clarify sheet, which carries every disposition.
+
 ---
 
 ## 8. API endpoints (gateway `routes/tasks/` package)

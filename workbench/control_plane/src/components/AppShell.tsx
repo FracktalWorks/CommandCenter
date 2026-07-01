@@ -19,11 +19,12 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useState,
   type ReactNode,
 } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { X, Monitor, Smartphone, MoreHorizontal, LogOut, Command, Mail, Zap } from "lucide-react";
+import { X, Monitor, Smartphone, MoreHorizontal, LogOut, Command, Mail, Zap, Inbox, ListChecks, Plus, Sparkles } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useActiveSessions } from "@/hooks/useActiveSessions";
@@ -247,6 +248,17 @@ function MobileBottomNavInner({
 
   const isChatPage = pathname?.startsWith("/chat") ?? false;
   const isEmailPage = pathname?.startsWith("/email") ?? false;
+  const isTasksPage = pathname?.startsWith("/tasks") ?? false;
+
+  // Tasks: the bottom bar reflects which GTD section you're in. The page emits
+  // `cc-tasks-section` whenever the active view changes.
+  const [tasksSection, setTasksSection] = useState("inbox");
+  useEffect(() => {
+    const h = (e: Event) =>
+      setTasksSection((e as CustomEvent<string>).detail || "inbox");
+    window.addEventListener("cc-tasks-section", h);
+    return () => window.removeEventListener("cc-tasks-section", h);
+  }, []);
 
   const dispatchNav = (detail: string) => {
     window.dispatchEvent(new CustomEvent("cc-mobile-nav", { detail }));
@@ -311,7 +323,64 @@ function MobileBottomNavInner({
             </button>
           </>
         )}
+        {isTasksPage && (
+          <>
+            <TaskTab
+              active={tasksSection === "inbox"}
+              onClick={() => dispatchNav("tasks-inbox")}
+              icon={Inbox}
+              label="Inbox"
+            />
+            <TaskTab
+              active={tasksSection !== "inbox"}
+              onClick={() => dispatchNav("tasks-lists")}
+              icon={ListChecks}
+              label="Lists"
+            />
+            <TaskTab
+              onClick={() => dispatchNav("tasks-capture")}
+              icon={Plus}
+              label="Capture"
+              accent
+            />
+            <TaskTab
+              onClick={() => dispatchNav("tasks-assistant")}
+              icon={Sparkles}
+              label="Assistant"
+            />
+          </>
+        )}
     </nav>
+  );
+}
+
+function TaskTab({
+  active,
+  onClick,
+  icon: Icon,
+  label,
+  accent,
+}: {
+  active?: boolean;
+  onClick: () => void;
+  icon: typeof Inbox;
+  label: string;
+  accent?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex min-w-[48px] flex-col items-center gap-0.5 rounded-lg px-2 py-1.5 transition-colors ${
+        accent
+          ? "text-primary"
+          : active
+            ? "text-primary"
+            : "text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      <Icon size={accent ? 22 : 20} strokeWidth={active || accent ? 2.4 : 2} />
+      <span className="text-[10px] font-medium leading-none">{label}</span>
+    </button>
   );
 }
 

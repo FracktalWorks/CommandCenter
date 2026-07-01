@@ -51,14 +51,22 @@ const SECONDARY: NavRow[] = [
   { view: "horizons", label: "Horizons of Focus", icon: Mountain, soon: true },
 ];
 
-export function ListsSidebar() {
+export function ListsSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const items = useTaskStore((s) => s.items);
   const contexts = useTaskStore((s) => s.contexts);
   const projects = useTaskStore((s) => s.projects);
   const selectedView = useTaskStore((s) => s.selectedView);
   const selectedContext = useTaskStore((s) => s.selectedContext);
-  const selectView = useTaskStore((s) => s.selectView);
-  const selectContext = useTaskStore((s) => s.selectContext);
+  const selectViewRaw = useTaskStore((s) => s.selectView);
+  const selectContextRaw = useTaskStore((s) => s.selectContext);
+  const selectView: typeof selectViewRaw = (v) => {
+    selectViewRaw(v);
+    onNavigate?.();
+  };
+  const selectContext: typeof selectContextRaw = (c) => {
+    selectContextRaw(c);
+    onNavigate?.();
+  };
 
   const counts = useMemo(() => viewCounts(items), [items]);
   const ctxCounts = useMemo(() => contextCounts(items), [items]);

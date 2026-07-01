@@ -38,6 +38,21 @@ export interface ClarifyProposal {
   rationale: string;
 }
 
+/** Map a GTD disposition to a sensible provider stage/status.
+ *  e.g. a project item that's really "someday" → Backlog; an actioned/delegated
+ *  item → To-do. Falls back gracefully to whatever statuses the tool has. */
+export function defaultStatus(
+  disposition: ClarifyDisposition,
+  statuses: string[],
+): string | undefined {
+  if (!statuses.length) return undefined;
+  const find = (re: RegExp) => statuses.find((s) => re.test(s));
+  if (disposition === "SOMEDAY") return find(/backlog|someday|icebox/i) ?? statuses[0];
+  if (disposition === "PROJECT") return find(/backlog|to.?do|selected/i) ?? statuses[0];
+  // actionable (next / delegate / calendar) → the "to-do" column
+  return find(/to.?do|selected|to do/i) ?? statuses[1] ?? statuses[0];
+}
+
 const has = (t: string, ...words: string[]) => words.some((w) => t.includes(w));
 const CAP = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 

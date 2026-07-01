@@ -21,6 +21,7 @@ import {
 import { useTaskStore, type ClarifyDecision } from "../lib/taskStore";
 import {
   proposeClarification,
+  defaultStatus,
   type ClarifyDisposition,
 } from "../lib/clarify";
 import { CONNECTED_PROVIDERS } from "../lib/mockData";
@@ -28,8 +29,8 @@ import { Energy, GtdItem, Person, Target } from "../lib/types";
 import { durationLabel, initials, snoozeOptions } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
 
-// F2 — Clarify. AI proposes a full disposition (what it is + the next action +
-// where to store it + who to delegate to); you confirm in one tap or adjust any
+// F2 — Clarify. AI proposes a full disposition (what it is · next action · where
+// it's stored · who owns it · which stage); you confirm in one tap or adjust any
 // part. Proposal is a local heuristic today; the agent replaces it later (§2.2).
 
 const DISP: Record<
@@ -51,6 +52,8 @@ const DISP_ORDER: ClarifyDisposition[] = [
 const ACTIONABLE = new Set<ClarifyDisposition>(["NEXT", "PROJECT", "WAITING", "CALENDAR"]);
 const short = (s: string, n = 26) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 const destProviderId = (t: Target) => (t.source === "LOCAL" ? "local" : t.provider);
+const providerStatuses = (t: Target): string[] =>
+  CONNECTED_PROVIDERS.find((p) => p.provider === destProviderId(t))?.statuses ?? [];
 
 export function ClarifyPanel({ item }: { item: GtdItem }) {
   const clarify = useTaskStore((s) => s.clarify);
@@ -58,10 +61,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
   const people = useTaskStore((s) => s.people);
   const projects = useTaskStore((s) => s.projects);
 
-  const proposal = useMemo(
-    () => proposeClarification(item, people),
-    [item, people],
-  );
+  const proposal = useMemo(() => proposeClarification(item, people), [item, people]);
 
   const [disposition, setDisposition] = useState<ClarifyDisposition>(proposal.disposition);
   const [nextAction, setNextAction] = useState(proposal.nextAction);
@@ -72,8 +72,12 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
   const [dueAt, setDueAt] = useState("");
   const [dest, setDest] = useState<Target>(proposal.target ?? { source: "LOCAL", provider: "local" });
   const [projectId, setProjectId] = useState<string | undefined>(proposal.projectId);
+  const [status, setStatus] = useState<string | undefined>(
+    defaultStatus(proposal.disposition, providerStatuses(proposal.target ?? { source: "LOCAL" })),
+  );
   const [adjust, setAdjust] = useState(false);
 
+  const statusesForDest = useMemo(() => providerStatuses(dest), [dest]);
   const projectsForDest = useMemo(
     () =>
       projects.filter(
@@ -86,53 +90,55 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
 
   const chooseDest = (t: Target) => {
     setDest(t);
-    setProjectId(undefined); // projects are scoped to a destination
+    setProjectId(undefined);
+    setStatus(defaultStatus(disposition, providerStatuses(t)));
   };
   const chooseDisposition = (d: ClarifyDisposition) => {
     setDisposition(d);
-    // Delegation is collaborative — nudge storage to the team tool.
+    let t = dest;
     if (d === "WAITING" && dest.source === "LOCAL") {
       const cu = CONNECTED_PROVIDERS.find((p) => p.source === "SYNCED");
-      if (cu) chooseDest({ source: cu.source, provider: cu.provider });
+      if (cu) {
+        t = { source: cu.source, provider: cu.provider };
+        setDest(t);
+        setProjectId(undefined);
+      }
     }
+    setStatus(defaultStatus(d, providerStatuses(t)));
   };
 
   const buildDecision = useCallback(
     (d: ClarifyDisposition): ClarifyDecision | null => {
       const na = nextAction.trim();
+      const dueIso = dueAt ? new Date(dueAt).toISOString() : undefined;
       switch (d) {
         case "NEXT":
-          return na ? { kind: "next", nextAction: na, context, energy, dest, projectId } : null;
+          return na
+            ? { kind: "next", nextAction: na, context, energy, dest, projectId, status, dueAt: dueIso, assignee: assignee ?? undefined }
+            : null;
         case "PROJECT":
           return na && outcome.trim()
-            ? { kind: "project", outcome: outcome.trim(), nextAction: na, context, energy, dest }
+            ? { kind: "project", outcome: outcome.trim(), nextAction: na, context, energy, dest, status, dueAt: dueIso, assignee: assignee ?? undefined }
             : null;
         case "WAITING":
           return na && assignee
-            ? { kind: "delegate", person: assignee, nextAction: na, dest, projectId }
+            ? { kind: "delegate", person: assignee, nextAction: na, dest, projectId, status, dueAt: dueIso }
             : null;
         case "CALENDAR":
           return na
-            ? {
-                kind: "calendar",
-                nextAction: na,
-                dueAt: dueAt ? new Date(dueAt).toISOString() : snoozeOptions()[0].iso,
-                context,
-                dest,
-                projectId,
-              }
+            ? { kind: "calendar", nextAction: na, dueAt: dueIso ?? snoozeOptions()[0].iso, context, dest, status, assignee: assignee ?? undefined }
             : null;
+        case "SOMEDAY":
+          return { kind: "someday", dest, projectId, status };
         case "DO_NOW":
           return { kind: "do-now" };
-        case "SOMEDAY":
-          return { kind: "someday" };
         case "REFERENCE":
           return { kind: "reference" };
         case "TRASH":
           return { kind: "trash" };
       }
     },
-    [nextAction, outcome, context, energy, assignee, dueAt, dest, projectId],
+    [nextAction, outcome, context, energy, assignee, dueAt, dest, projectId, status],
   );
 
   const apply = useCallback(() => {
@@ -161,10 +167,13 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
   const proposedDestLabel = proposal.target
     ? CONNECTED_PROVIDERS.find((p) => p.provider === destProviderId(proposal.target!))?.label
     : undefined;
-  const proposedProject = proposal.projectId
-    ? projects.find((p) => p.id === proposal.projectId)
-    : undefined;
-  const showWhere = ACTIONABLE.has(disposition);
+  const proposedProject = proposal.projectId ? projects.find((p) => p.id === proposal.projectId) : undefined;
+  const proposedStatus =
+    proposal.target && proposal.target.source === "SYNCED"
+      ? defaultStatus(proposal.disposition, providerStatuses(proposal.target))
+      : undefined;
+  const isSynced = dest.source === "SYNCED";
+  const showWhere = ACTIONABLE.has(disposition) || disposition === "SOMEDAY";
 
   return (
     <div className="flex h-full flex-col overflow-y-auto">
@@ -210,13 +219,9 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
             </p>
           )}
           <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-            {proposal.context && (
-              <span className="font-mono text-primary/80">{proposal.context}</span>
-            )}
+            {proposal.context && <span className="font-mono text-primary/80">{proposal.context}</span>}
             {proposal.energy && <span>{proposal.energy} energy</span>}
-            {proposal.timeEstimateMins ? (
-              <span>{durationLabel(proposal.timeEstimateMins)}</span>
-            ) : null}
+            {proposal.timeEstimateMins ? <span>{durationLabel(proposal.timeEstimateMins)}</span> : null}
             {ACTIONABLE.has(proposal.disposition) && proposedDestLabel && (
               <span className="inline-flex items-center gap-1 rounded bg-secondary px-1.5 py-0.5 font-medium">
                 {proposal.target?.source === "LOCAL" ? (
@@ -225,7 +230,8 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
                   <Cloud className="h-3 w-3" />
                 )}
                 {proposedDestLabel}
-                {proposedProject ? ` · ${short(proposedProject.outcome, 18)}` : ""}
+                {proposedProject ? ` · ${short(proposedProject.outcome, 16)}` : ""}
+                {proposedStatus ? ` · ${proposedStatus}` : ""}
               </span>
             )}
           </div>
@@ -244,9 +250,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
               onClick={() => setAdjust((v) => !v)}
               className={[
                 "tech-transition inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] font-medium",
-                adjust
-                  ? "bg-secondary text-foreground"
-                  : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+                adjust ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
               ].join(" ")}
             >
               <SlidersHorizontal className="h-3.5 w-3.5" />
@@ -255,7 +259,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
           </div>
         </div>
 
-        {/* Adjust — override disposition, fields, and destination */}
+        {/* Adjust */}
         {adjust && (
           <div className="flex flex-col gap-3">
             <Field label="What is it?">
@@ -309,26 +313,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
 
             {disposition === "WAITING" && (
               <Field label="Delegate to">
-                <div className="flex flex-wrap gap-2">
-                  {people.map((p) => (
-                    <button
-                      key={p.name}
-                      type="button"
-                      onClick={() => setAssignee(p)}
-                      className={[
-                        "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
-                        assignee?.name === p.name
-                          ? "border-primary bg-primary/10 text-primary"
-                          : "border-border text-muted-foreground hover:bg-secondary",
-                      ].join(" ")}
-                    >
-                      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary/15 text-[8px] font-bold text-primary">
-                        {initials(p.name)}
-                      </span>
-                      {p.name}
-                    </button>
-                  ))}
-                </div>
+                <PeoplePicker people={people} value={assignee} onChange={setAssignee} />
               </Field>
             )}
 
@@ -367,7 +352,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
               </Field>
             )}
 
-            {/* Where it goes — dual-source destination + project (§5.1) */}
+            {/* Where it goes — dual-source + the connected tool's project/stage/owner/due (§5.1) */}
             {showWhere && (
               <Field label="Where it goes">
                 <div className="flex flex-wrap gap-1.5">
@@ -380,47 +365,65 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
                         onClick={() => chooseDest({ source: cp.source, provider: cp.provider })}
                         className={[
                           "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
-                          active
-                            ? "border-primary bg-primary/10 text-primary"
-                            : "border-border text-muted-foreground hover:bg-secondary",
+                          active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
                         ].join(" ")}
                       >
-                        {cp.source === "LOCAL" ? (
-                          <HardDrive className="h-3.5 w-3.5" />
-                        ) : (
-                          <Cloud className="h-3.5 w-3.5" />
-                        )}
+                        {cp.source === "LOCAL" ? <HardDrive className="h-3.5 w-3.5" /> : <Cloud className="h-3.5 w-3.5" />}
                         {cp.label}
                       </button>
                     );
                   })}
                 </div>
-                {dest.source === "LOCAL" && (
+
+                {!isSynced ? (
                   <p className="mt-1.5 text-[10px] text-muted-foreground">
                     Private to you. Delegated or collaborative work belongs on a connected tool.
                   </p>
-                )}
-                {/* Project — scoped to the destination */}
-                {disposition !== "PROJECT" && (
-                  <div className="mt-2">
-                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      Project
-                    </p>
-                    <div className="flex flex-wrap gap-1.5">
-                      <Pill plain active={!projectId} onClick={() => setProjectId(undefined)}>
-                        No project
-                      </Pill>
-                      {projectsForDest.map((p) => (
-                        <Pill
-                          key={p.id}
-                          plain
-                          active={projectId === p.id}
-                          onClick={() => setProjectId(p.id)}
-                        >
-                          {short(p.outcome)}
-                        </Pill>
-                      ))}
-                    </div>
+                ) : (
+                  <div className="mt-2.5 flex flex-col gap-2.5">
+                    {disposition !== "PROJECT" && (
+                      <SubField label="Project">
+                        <div className="flex flex-wrap gap-1.5">
+                          <Pill plain active={!projectId} onClick={() => setProjectId(undefined)}>
+                            No project
+                          </Pill>
+                          {projectsForDest.map((p) => (
+                            <Pill key={p.id} plain active={projectId === p.id} onClick={() => setProjectId(p.id)}>
+                              {short(p.outcome)}
+                            </Pill>
+                          ))}
+                        </div>
+                      </SubField>
+                    )}
+
+                    {statusesForDest.length > 0 && (
+                      <SubField label="Stage">
+                        <div className="flex flex-wrap gap-1.5">
+                          {statusesForDest.map((s) => (
+                            <Pill key={s} plain active={status === s} onClick={() => setStatus(s)}>
+                              {s}
+                            </Pill>
+                          ))}
+                        </div>
+                      </SubField>
+                    )}
+
+                    {disposition !== "WAITING" && (
+                      <SubField label="Assignee (optional)">
+                        <PeoplePicker people={people} value={assignee} onChange={setAssignee} allowNone />
+                      </SubField>
+                    )}
+
+                    {disposition !== "CALENDAR" && (
+                      <SubField label="Due · timeline (optional)">
+                        <input
+                          type="date"
+                          value={dueAt}
+                          onChange={(e) => setDueAt(e.target.value)}
+                          className="rounded-md border border-border bg-background/60 px-3 py-1.5 text-sm text-foreground focus:border-primary/50 focus:outline-none"
+                        />
+                      </SubField>
+                    )}
                   </div>
                 )}
               </Field>
@@ -432,9 +435,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
               onClick={apply}
               className={[
                 "tech-transition inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2.5 text-sm font-medium",
-                canApply
-                  ? "bg-primary text-primary-foreground hover:opacity-90"
-                  : "cursor-not-allowed bg-secondary text-muted-foreground",
+                canApply ? "bg-primary text-primary-foreground hover:opacity-90" : "cursor-not-allowed bg-secondary text-muted-foreground",
               ].join(" ")}
             >
               Organize it <ArrowRight className="h-4 w-4" />
@@ -446,10 +447,59 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
   );
 }
 
+function PeoplePicker({
+  people,
+  value,
+  onChange,
+  allowNone,
+}: {
+  people: Person[];
+  value: Person | null;
+  onChange: (p: Person | null) => void;
+  allowNone?: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {allowNone && (
+        <Pill plain active={!value} onClick={() => onChange(null)}>
+          Unassigned
+        </Pill>
+      )}
+      {people.map((p) => (
+        <button
+          key={p.name}
+          type="button"
+          onClick={() => onChange(p)}
+          className={[
+            "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+            value?.name === p.name ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
+          ].join(" ")}
+        >
+          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary/15 text-[8px] font-bold text-primary">
+            {initials(p.name)}
+          </span>
+          {p.name}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
       <h3 className="mb-1.5 text-xs font-semibold text-foreground">{label}</h3>
+      {children}
+    </div>
+  );
+}
+
+function SubField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
       {children}
     </div>
   );
@@ -475,9 +525,7 @@ function Pill({
       className={[
         "tech-transition rounded-full border px-2.5 py-1 text-[12px]",
         mono ? "font-mono" : plain ? "" : "capitalize",
-        active
-          ? "border-primary bg-primary/10 text-primary"
-          : "border-border text-muted-foreground hover:bg-secondary",
+        active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
       ].join(" ")}
     >
       {children}

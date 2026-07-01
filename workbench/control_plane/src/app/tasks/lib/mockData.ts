@@ -12,11 +12,25 @@ export interface ConnectedProvider {
   label: string;
   provider: ProviderKind;
   source: Source;
+  /** the tool's workflow stages/statuses (empty for Local). */
+  statuses: string[];
 }
 export const CONNECTED_PROVIDERS: ConnectedProvider[] = [
-  { id: "local", label: "Local", provider: "local", source: "LOCAL" },
-  { id: "clickup", label: "ClickUp", provider: "clickup", source: "SYNCED" },
-  { id: "jira", label: "Jira", provider: "jira", source: "SYNCED" },
+  { id: "local", label: "Local", provider: "local", source: "LOCAL", statuses: [] },
+  {
+    id: "clickup",
+    label: "ClickUp",
+    provider: "clickup",
+    source: "SYNCED",
+    statuses: ["Backlog", "To-do", "In Process", "Review", "Done"],
+  },
+  {
+    id: "jira",
+    label: "Jira",
+    provider: "jira",
+    source: "SYNCED",
+    statuses: ["Backlog", "Selected", "In Progress", "In Review", "Done"],
+  },
 ];
 
 /** Teammates available for delegation (the Waiting-For directory). */

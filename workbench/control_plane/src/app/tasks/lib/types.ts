@@ -82,6 +82,14 @@ export interface GtdItem {
   /** who I'm waiting on (WAITING disposition) */
   waitingOn?: Person;
   delegatedAt?: string;
+  /** assignee/owner in the connected PM tool */
+  assignee?: Person;
+  /** the item's stage/status in the connected PM tool (e.g. "Backlog", "To-do") */
+  providerStatus?: string;
+  /** sync lifecycle: 'local' (ours) · 'pending' (queued to push to the PM tool,
+   *  Action-Broker-gated) · 'synced' (written back). Lets you clarify now and
+   *  finish/push to ClickUp/Jira later. */
+  syncState?: "local" | "pending" | "synced";
 
   // hard landscape
   /** ISO date string */

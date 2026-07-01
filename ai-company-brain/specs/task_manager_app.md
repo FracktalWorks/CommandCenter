@@ -178,6 +178,21 @@ brain-dump text ─▶ [ATOMIZE] ─▶ candidate items ─▶ [REVIEW] ─▶ i
 | P4 | Project creation | clarifying to **Project** creates the project *and* makes the item its first next action (GTD outcome + next action) | ✅ built | — |
 | P5 | Keyboard-blitz | `↵` accept · `t`/`s`/`r`/`2` quick-dispose · `esc` | ✅ built | — |
 | P6 | **Destination + delegation frame** | clarifying also decides *where it's stored* — **Local vs a connected PM tool (ClickUp / Jira)** — and the **project** to file it under; **Delegate** auto-targets the team tool (collaborative → SYNCED, §5.1) and picks the assignee. The proposal suggests the destination (delegated/already-synced → team tool; solo → Local) | ✅ built (mock providers) | live create/assign in ClickUp/Jira → **[plumbing]** Action Broker (C-03/C-04) |
+| P7 | **PM-tool setup during processing** | for a SYNCED destination, set the tool's real fields inline: **project · stage/status · assignee · due/timeline**. Statuses are the tool's own workflow (ClickUp: Backlog / To-do / In Process / …), and the GTD disposition maps to a sensible default stage — **Someday under a project → Backlog**, **actioned/delegated + timeline → To-do**. Someday items can be parked in the tool's Backlog under a project | ✅ built (mock schema) | fetch live schema (§2.2.1) → **[plumbing]** |
+| P8 | **Flexibility to finish later** | all PM fields are optional — set what you can. **Skip** (`]`) leaves an item in the inbox to process later; anything sent to a tool is marked **`pending`** (queued to push, Action-Broker-gated) so you can clarify now and complete/push to ClickUp/Jira later | ✅ built | real push → **[plumbing]** Action Broker |
+
+### 2.2.1 Adapting to the connected PM tool (schema, fetched beforehand)
+
+To set tasks up properly during Clarify, the app must know the connected tool's **schema ahead of time** — synced on connect and refreshed periodically, cached in `task_accounts` / the canonical store, so it's instantly available while processing:
+
+| Schema | Used in Clarify for | Source (real) |
+|---|---|---|
+| **Projects / lists** | the "file under" picker (scoped to the chosen tool) | provider API `list_projects` → `gtd_projects` |
+| **Members** | delegate / assignee picker | provider API `list_members` → cached |
+| **Statuses / stages** | the "Stage" picker + GTD→stage default map | provider API (per-list custom statuses) → `task_accounts.capabilities`/`field_map` |
+| **Custom fields, priorities** (later) | extra optional fields | provider API |
+
+Today `CONNECTED_PROVIDERS` (Local / ClickUp / Jira with their statuses) + `gtd_projects` + `gtd_people` stand in for this fetched schema. **[plumbing]:** a `provider.get_schema()` sync via the interface layer (§5.2) that populates it for real. If the schema (or a matching project/assignee/stage) isn't available or a field can't be set, the item stays fully processable — clarify locally now, complete the PM setup later (P8).
 
 **AI in Clarify — the boundary + opportunities**
 

@@ -14,38 +14,59 @@ import { MOCK_CONTEXTS, MOCK_ITEMS, MOCK_PEOPLE, MOCK_PROJECTS } from "./mockDat
 import { isCalendarItem, isTickled } from "./utils";
 
 /** The outcome of clarifying an inbox item — the GTD decision tree (F2). */
+/** Fields shared by clarified items that can be stored on a PM tool. */
+interface SyncFields {
+  /** Local vs a connected PM tool (§5.1). */
+  dest?: Target;
+  projectId?: string;
+  /** the tool's stage/status, e.g. "Backlog" | "To-do". */
+  status?: string;
+  /** due date / timeline (ISO). */
+  dueAt?: string;
+  /** the tool's assignee/owner. */
+  assignee?: Person;
+}
+
 export type ClarifyDecision =
   | { kind: "trash" }
-  | { kind: "someday" }
   | { kind: "reference" }
   | { kind: "do-now" } // 2-minute rule → done
-  | { kind: "delegate"; person: Person; nextAction: string; projectId?: string; dest?: Target }
-  | {
+  | ({ kind: "someday" } & Pick<SyncFields, "dest" | "projectId" | "status">)
+  | ({ kind: "delegate"; person: Person; nextAction: string } & Pick<
+      SyncFields,
+      "dest" | "projectId" | "status" | "dueAt"
+    >)
+  | ({
       kind: "next";
       nextAction: string;
       context: string;
       energy?: Energy;
       timeEstimateMins?: number;
-      projectId?: string;
-      dest?: Target;
-    }
-  | { kind: "calendar"; nextAction: string; dueAt: string; context?: string; projectId?: string; dest?: Target }
-  | {
+    } & SyncFields)
+  | ({ kind: "calendar"; nextAction: string; dueAt: string; context?: string } & Omit<
+      SyncFields,
+      "dueAt"
+    >)
+  | ({
       // turn the item into a new project's first next action (GTD: outcome + next action)
       kind: "project";
       outcome: string;
       nextAction: string;
       context?: string;
       energy?: Energy;
-      dest?: Target;
-    };
+    } & SyncFields);
 
-/** Resolve a storage target into item source/provider fields. */
-function targetFields(t?: Target): { source: "LOCAL" | "SYNCED"; provider: ProviderKind } | null {
+/** Resolve a storage target into item source/provider/syncState fields.
+ *  SYNCED items start 'pending' — the actual write to ClickUp/Jira is
+ *  Action-Broker-gated, so they queue until pushed (or finished later). */
+function targetFields(
+  t?: Target,
+): { source: "LOCAL" | "SYNCED"; provider: ProviderKind; syncState: "local" | "pending" } | null {
   if (!t) return null;
   return {
     source: t.source,
     provider: t.source === "LOCAL" ? "local" : t.provider ?? "clickup",
+    syncState: t.source === "SYNCED" ? "pending" : "local",
   };
 }
 
@@ -61,7 +82,13 @@ function applyDecision(
     case "reference":
       return { ...base, disposition: "REFERENCE" };
     case "someday":
-      return { ...base, disposition: "SOMEDAY" };
+      return {
+        ...base,
+        disposition: "SOMEDAY",
+        projectId: d.projectId ?? base.projectId,
+        providerStatus: d.status ?? base.providerStatus,
+        ...(targetFields(d.dest) ?? {}),
+      };
     case "do-now":
       return { ...base, disposition: "DONE", isTwoMinute: true, completedAt: now };
     case "delegate":
@@ -73,6 +100,8 @@ function applyDecision(
         waitingOn: d.person,
         delegatedAt: now,
         projectId: d.projectId ?? base.projectId,
+        providerStatus: d.status ?? base.providerStatus,
+        dueAt: d.dueAt ?? base.dueAt,
         ...(targetFields(d.dest) ?? {}),
       };
     case "next":
@@ -84,6 +113,9 @@ function applyDecision(
         energy: d.energy,
         timeEstimateMins: d.timeEstimateMins,
         projectId: d.projectId ?? base.projectId,
+        providerStatus: d.status ?? base.providerStatus,
+        dueAt: d.dueAt ?? base.dueAt,
+        assignee: d.assignee ?? base.assignee,
         ...(targetFields(d.dest) ?? {}),
       };
     case "calendar":
@@ -95,6 +127,8 @@ function applyDecision(
         dueAt: d.dueAt,
         isHardDate: true,
         projectId: d.projectId ?? base.projectId,
+        providerStatus: d.status ?? base.providerStatus,
+        assignee: d.assignee ?? base.assignee,
         ...(targetFields(d.dest) ?? {}),
       };
   }
@@ -170,6 +204,8 @@ interface TaskState {
   undoLastCapture: () => void;
   /** Clarify an inbox item — apply the GTD decision and advance to the next. */
   clarify: (id: string, decision: ClarifyDecision) => void;
+  /** Skip the current item (leave it in the inbox to process later) and move on. */
+  skipToNextInbox: () => void;
   /** One-tap disposition (hover / keyboard triage) — no full decision tree. */
   quickDispose: (id: string, disposition: Disposition) => void;
   /** Apply the same disposition to many items at once (multi-select). */
@@ -263,7 +299,9 @@ export const useTaskStore = create<TaskState>((set) => ({
         // Create a project and make this item its first next action.
         const now = new Date().toISOString();
         const pid = nextId();
-        const tf = targetFields(decision.dest) ?? { source: "LOCAL" as const, provider: "local" as ProviderKind };
+        const tf =
+          targetFields(decision.dest) ??
+          { source: "LOCAL" as const, provider: "local" as ProviderKind, syncState: "local" as const };
         const project: GtdProject = {
           id: pid,
           source: tf.source,
@@ -284,6 +322,10 @@ export const useTaskStore = create<TaskState>((set) => ({
                 projectId: pid,
                 source: tf.source,
                 provider: tf.provider,
+                syncState: tf.syncState,
+                providerStatus: decision.status,
+                dueAt: decision.dueAt ?? i.dueAt,
+                assignee: decision.assignee ?? i.assignee,
                 updatedAt: now,
                 clarifiedAt: now,
               }
@@ -305,6 +347,17 @@ export const useTaskStore = create<TaskState>((set) => ({
         selectedItemId: nextInbox?.id ?? null,
         processedThisSession: s.processedThisSession + 1,
       };
+    }),
+
+  skipToNextInbox: () =>
+    set((s) => {
+      const inbox = s.items
+        .filter((i) => i.disposition === "INBOX")
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      if (inbox.length <= 1) return s; // nothing else to move to
+      const idx = inbox.findIndex((i) => i.id === s.selectedItemId);
+      const next = inbox[(idx + 1) % inbox.length];
+      return { selectedItemId: next.id };
     }),
 
   quickDispose: (id, disposition) =>

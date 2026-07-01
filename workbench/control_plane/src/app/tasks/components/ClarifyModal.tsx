@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { X } from "lucide-react";
+import { X, SkipForward } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { ClarifyPanel } from "./ClarifyPanel";
 
@@ -17,6 +17,7 @@ export function ClarifyModal() {
   const open = useTaskStore((s) => s.clarifyModalOpen);
   const close = useTaskStore((s) => s.closeClarify);
   const clarify = useTaskStore((s) => s.clarify);
+  const skip = useTaskStore((s) => s.skipToNextInbox);
   const selectedItemId = useTaskStore((s) => s.selectedItemId);
   const items = useTaskStore((s) => s.items);
 
@@ -49,6 +50,11 @@ export function ClarifyModal() {
           el.tagName === "TEXTAREA" ||
           el.isContentEditable);
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "]" || e.key === "ArrowRight") {
+        e.preventDefault();
+        skip();
+        return;
+      }
       switch (e.key.toLowerCase()) {
         case "t":
           e.preventDefault();
@@ -70,7 +76,7 @@ export function ClarifyModal() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, item, clarify, close]);
+  }, [active, item, clarify, close, skip]);
 
   if (!active || !item) return null;
 
@@ -88,14 +94,27 @@ export function ClarifyModal() {
             <span className="text-xs font-medium text-muted-foreground">
               Processing inbox · {inboxLeft} left
             </span>
-            <button
-              type="button"
-              onClick={close}
-              aria-label="Close"
-              className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              {inboxLeft > 1 && (
+                <button
+                  type="button"
+                  onClick={skip}
+                  title="Leave it in the inbox to decide later"
+                  className="tech-transition inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
+                >
+                  <SkipForward className="h-3.5 w-3.5" />
+                  Skip
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={close}
+                aria-label="Close"
+                className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
           <div className="h-0.5 w-full bg-secondary" aria-hidden>
             <div
@@ -115,6 +134,7 @@ export function ClarifyModal() {
           <Kbd>s</Kbd> someday
           <Kbd>r</Kbd> reference
           <Kbd>2</Kbd> do now
+          <Kbd>]</Kbd> skip
           <Kbd>esc</Kbd> close
         </div>
       </div>

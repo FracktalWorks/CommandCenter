@@ -100,6 +100,25 @@ export function ItemDetail() {
                 </span>
               </Meta>
             )}
+            {item.providerStatus && <Meta label="Stage">{item.providerStatus}</Meta>}
+            {item.assignee && (
+              <Meta label="Assignee">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary/15 text-[8px] font-bold text-primary">
+                    {initials(item.assignee.name)}
+                  </span>
+                  {item.assignee.name}
+                </span>
+              </Meta>
+            )}
+            {item.syncState === "pending" && (
+              <Meta label="Sync">
+                <span className="inline-flex items-center gap-1 text-warning">
+                  <Clock className="h-3 w-3" />
+                  Pending push
+                </span>
+              </Meta>
+            )}
           </div>
 
           {item.waitingOn && (

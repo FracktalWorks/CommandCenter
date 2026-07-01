@@ -3,11 +3,13 @@
 import { useState } from "react";
 import { PanelLeft, PanelRight } from "lucide-react";
 import { useViewMode } from "@/components/ViewModeProvider";
+import { useTaskStore } from "./lib/taskStore";
 import { ListsSidebar } from "./components/ListsSidebar";
 import { CaptureBar } from "./components/CaptureBar";
 import { ItemList } from "./components/ItemList";
 import { ItemDetail } from "./components/ItemDetail";
 import { AssistantRail } from "./components/AssistantRail";
+import { InboxView } from "./components/InboxView";
 
 // Task Manager (GTD) — 4-panel shell, mirroring the email app's layout
 // philosophy: Lists/Contexts · Item list (+ capture) · Item detail · Assistant.
@@ -15,23 +17,38 @@ import { AssistantRail } from "./components/AssistantRail";
 // API is wired later. See ai-company-brain/specs/task_manager_app.md.
 export default function TasksPage() {
   const { isMobile } = useViewMode();
+  const selectedView = useTaskStore((s) => s.selectedView);
   const [leftOpen, setLeftOpen] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
+  const isInbox = selectedView === "inbox";
 
   if (isMobile) {
     // Simplified single-pane stack for narrow screens; full mobile flows land
     // in a later slice.
     return (
       <div className="flex h-full w-full flex-col overflow-hidden bg-background">
-        <CaptureBar />
-        <div className="flex min-h-0 flex-1">
-          <aside className="w-44 shrink-0 border-r border-border bg-card">
-            <ListsSidebar />
-          </aside>
-          <div className="min-w-0 flex-1">
-            <ItemList />
+        {isInbox ? (
+          <div className="flex min-h-0 flex-1">
+            <aside className="w-44 shrink-0 border-r border-border bg-card">
+              <ListsSidebar />
+            </aside>
+            <div className="min-w-0 flex-1">
+              <InboxView />
+            </div>
           </div>
-        </div>
+        ) : (
+          <>
+            <CaptureBar />
+            <div className="flex min-h-0 flex-1">
+              <aside className="w-44 shrink-0 border-r border-border bg-card">
+                <ListsSidebar />
+              </aside>
+              <div className="min-w-0 flex-1">
+                <ItemList />
+              </div>
+            </div>
+          </>
+        )}
       </div>
     );
   }
@@ -65,18 +82,27 @@ export default function TasksPage() {
           </aside>
         )}
 
-        {/* Middle: capture bar + item list */}
-        <div className="flex w-[380px] shrink-0 flex-col overflow-hidden border-r border-border">
-          <CaptureBar />
-          <div className="min-h-0 flex-1">
-            <ItemList />
+        {isInbox ? (
+          /* Inbox: a single capture-first surface — no list/detail split */
+          <div className="min-w-0 flex-1 overflow-hidden border-r border-border">
+            <InboxView />
           </div>
-        </div>
+        ) : (
+          <>
+            {/* Middle: capture bar + item list */}
+            <div className="flex w-[380px] shrink-0 flex-col overflow-hidden border-r border-border">
+              <CaptureBar />
+              <div className="min-h-0 flex-1">
+                <ItemList />
+              </div>
+            </div>
 
-        {/* Detail */}
-        <div className="min-w-0 flex-1 overflow-hidden border-r border-border">
-          <ItemDetail />
-        </div>
+            {/* Detail */}
+            <div className="min-w-0 flex-1 overflow-hidden border-r border-border">
+              <ItemDetail />
+            </div>
+          </>
+        )}
 
         {/* Assistant rail */}
         {railOpen && (

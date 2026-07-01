@@ -23,7 +23,7 @@ import {
 import { useTaskStore } from "../lib/taskStore";
 import { proposeClarification, type ClarifyDisposition } from "../lib/clarify";
 import { GtdItem, GtdProject, Person } from "../lib/types";
-import { CONNECTED_PROVIDERS } from "../lib/mockData";
+import type { ConnectedProvider } from "../lib/mockData";
 import { detectDateHint, relativeTime, snoozeOptions } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
 
@@ -69,10 +69,11 @@ export function InboxCard({
   const updateItem = useTaskStore((s) => s.updateItem);
   const people = useTaskStore((s) => s.people);
   const projects = useTaskStore((s) => s.projects);
+  const providers = useTaskStore((s) => s.providers);
 
   const hint = useMemo(
-    () => buildHint(item, people, projects),
-    [item, people, projects],
+    () => buildHint(item, people, projects, providers),
+    [item, people, projects, providers],
   );
 
   const [snoozeOpen, setSnoozeOpen] = useState(false);
@@ -258,7 +259,12 @@ export function InboxCard({
 }
 
 /** Build the compact "what this will become" hint for a capture. */
-function buildHint(item: GtdItem, people: Person[], projects: GtdProject[]) {
+function buildHint(
+  item: GtdItem,
+  people: Person[],
+  projects: GtdProject[],
+  providers: ConnectedProvider[],
+) {
   const p = proposeClarification(item, people, projects);
   const base = DISP_HINT[p.disposition];
   const parts: string[] = [];
@@ -272,7 +278,11 @@ function buildHint(item: GtdItem, people: Person[], projects: GtdProject[]) {
   }
   const provider =
     p.target && p.target.source === "SYNCED"
-      ? CONNECTED_PROVIDERS.find((cp) => cp.provider === p.target!.provider)?.label
+      ? providers.find((cp) =>
+          p.target!.accountId
+            ? cp.id === p.target!.accountId
+            : cp.provider === p.target!.provider,
+        )?.label
       : undefined;
   return { ...base, detail: parts.join(" · "), provider };
 }

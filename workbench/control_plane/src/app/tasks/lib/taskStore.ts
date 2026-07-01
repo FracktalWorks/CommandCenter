@@ -10,8 +10,38 @@ import {
   Target,
   ViewKey,
 } from "./types";
-import { MOCK_CONTEXTS, MOCK_ITEMS, MOCK_PEOPLE, MOCK_PROJECTS } from "./mockData";
+import {
+  CONNECTED_PROVIDERS,
+  MOCK_CONTEXTS,
+  MOCK_ITEMS,
+  MOCK_PEOPLE,
+  MOCK_PROJECTS,
+  type ConnectedProvider,
+} from "./mockData";
 import { isCalendarItem, isTickled } from "./utils";
+import {
+  accountToProviderEntry,
+  apiBulkDispose,
+  apiCapture,
+  apiCaptureBatch,
+  apiDeleteAccount,
+  apiDeleteItem,
+  apiOrganize,
+  apiPatchItem,
+  apiPushItem,
+  apiRefreshSchema,
+  fetchAccounts,
+  fetchItems,
+  fetchProjects,
+  type OrganizeBody,
+  type TaskAccount,
+} from "./api";
+
+/** Fire-and-forget a live-backend sync; the optimistic local update already
+ *  happened, so a transient failure only means the next hydrate reconciles. */
+function sync(promise: Promise<unknown>): void {
+  void promise.catch(() => {});
+}
 
 /** The outcome of clarifying an inbox item — the GTD decision tree (F2). */
 /** Fields shared by clarified items that can be stored on a PM tool. */
@@ -61,13 +91,48 @@ export type ClarifyDecision =
  *  Action-Broker-gated, so they queue until pushed (or finished later). */
 function targetFields(
   t?: Target,
-): { source: "LOCAL" | "SYNCED"; provider: ProviderKind; syncState: "local" | "pending" } | null {
+): {
+  source: "LOCAL" | "SYNCED";
+  provider: ProviderKind;
+  syncState: "local" | "pending";
+  accountId?: string;
+} | null {
   if (!t) return null;
   return {
     source: t.source,
     provider: t.source === "LOCAL" ? "local" : t.provider ?? "clickup",
     syncState: t.source === "SYNCED" ? "pending" : "local",
+    accountId: t.source === "SYNCED" ? t.accountId : undefined,
   };
+}
+
+/** Map a UI ClarifyDecision to the gateway's organize body (live mode). */
+function decisionToOrganizeBody(d: ClarifyDecision): OrganizeBody {
+  const body: OrganizeBody = { kind: d.kind };
+  const dest = "dest" in d ? d.dest : undefined;
+  if (dest?.source === "SYNCED" && dest.accountId) body.account_id = dest.accountId;
+  if ("projectId" in d && d.projectId) body.project_id = d.projectId;
+  if ("status" in d && d.status) body.status = d.status;
+  if ("dueAt" in d && d.dueAt) body.due_at = d.dueAt;
+  if ("nextAction" in d && d.nextAction) body.next_action = d.nextAction;
+  if ("context" in d && d.context) body.context = d.context;
+  if ("energy" in d && d.energy) body.energy = d.energy;
+  if ("timeEstimateMins" in d && d.timeEstimateMins)
+    body.time_estimate_mins = d.timeEstimateMins;
+  if (d.kind === "project") body.outcome = d.outcome;
+  if (d.kind === "delegate")
+    body.assignee = {
+      name: d.person.name,
+      email: d.person.email,
+      provider_user_id: d.person.providerUserId,
+    };
+  else if ("assignee" in d && d.assignee)
+    body.assignee = {
+      name: d.assignee.name,
+      email: d.assignee.email,
+      provider_user_id: d.assignee.providerUserId,
+    };
+  return body;
 }
 
 function applyDecision(
@@ -165,6 +230,8 @@ interface UndoSnapshot {
   selectedItemId: string | null;
   /** human label for the toast, e.g. "Trashed" / "Filed under Someday". */
   label: string;
+  /** which item ids the change touched (live mode reverts these server-side). */
+  changedIds?: string[];
 }
 
 /** Friendly past-tense label for a one-tap disposition (undo toast). */
@@ -208,6 +275,13 @@ interface TaskState {
   projects: GtdProject[];
   contexts: GtdContext[];
   people: Person[];
+  /** 'demo' = bundled mock data (no gateway); 'live' = the /tasks API. */
+  backend: "demo" | "live";
+  /** Destination entries for Clarify — Local + each connected workspace.
+   *  In live mode entry ids are task_account UUIDs. */
+  providers: ConnectedProvider[];
+  /** Connected PM-tool workspaces (live mode). */
+  accounts: TaskAccount[];
 
   selectedView: ViewKey;
   /** when drilled into a single @context under Next Actions */
@@ -222,6 +296,8 @@ interface TaskState {
   quickCaptureMode: "single" | "sweep";
   /** the focused clarify overlay (keyboard-driven inbox processing). */
   clarifyModalOpen: boolean;
+  /** the PM-tool workspaces connect/manage modal. */
+  workspacesModalOpen: boolean;
   /** count of items processed out of the inbox this session (momentum). */
   processedThisSession: number;
   /** one-level undo for the most recent dispose/clarify — the safety net that
@@ -259,18 +335,33 @@ interface TaskState {
   undoLastChange: () => void;
   /** Dismiss the undo affordance without undoing (e.g. after a timeout). */
   dismissUndo: () => void;
+  /** Load live data from the gateway; silently stays on mock data if absent. */
+  hydrate: () => Promise<void>;
+  /** Re-fetch connected workspaces (after connect/refresh in the modal). */
+  refreshAccounts: () => Promise<void>;
+  /** Disconnect a workspace account. */
+  disconnectAccount: (id: string) => Promise<void>;
+  /** Refresh one account's provider schema (projects/members/statuses). */
+  refreshAccountSchema: (id: string) => Promise<void>;
+  /** Explicit user-approved push of a pending item to its workspace. */
+  pushItem: (id: string) => Promise<void>;
   openQuickCapture: (mode: "single" | "sweep") => void;
   closeQuickCapture: () => void;
   /** Open/close the clarify overlay for an item. */
   openClarify: (id: string) => void;
   closeClarify: () => void;
+  openWorkspaces: () => void;
+  closeWorkspaces: () => void;
 }
 
-export const useTaskStore = create<TaskState>((set) => ({
+export const useTaskStore = create<TaskState>((set, get) => ({
   items: MOCK_ITEMS,
   projects: MOCK_PROJECTS,
   contexts: MOCK_CONTEXTS,
   people: MOCK_PEOPLE,
+  backend: "demo",
+  providers: CONNECTED_PROVIDERS,
+  accounts: [],
 
   selectedView: "inbox",
   selectedContext: null,
@@ -280,6 +371,7 @@ export const useTaskStore = create<TaskState>((set) => ({
   quickCaptureOpen: false,
   quickCaptureMode: "single",
   clarifyModalOpen: false,
+  workspacesModalOpen: false,
   processedThisSession: 0,
   undoSnapshot: null,
 
@@ -294,46 +386,81 @@ export const useTaskStore = create<TaskState>((set) => ({
   selectProject: (id) =>
     set({ selectedView: "projects", selectedProjectId: id, selectedItemId: null }),
 
-  capture: (title) =>
-    set((s) => {
-      const t = title.trim();
-      if (!t) return s;
-      const item = makeCaptureItem(t);
-      return { items: [item, ...s.items], lastCaptureIds: [item.id] };
-    }),
-
-  captureMany: (text) =>
-    set((s) => {
-      const lines = text
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter(Boolean);
-      if (!lines.length) return s;
-      const newItems = lines.map(makeCaptureItem);
-      return {
-        items: [...newItems, ...s.items],
-        lastCaptureIds: newItems.map((i) => i.id),
-      };
-    }),
-
-  undoLastCapture: () =>
-    set((s) => {
-      if (!s.lastCaptureIds.length) return s;
-      const remove = new Set(s.lastCaptureIds);
-      return {
-        items: s.items.filter(
-          (i) => !(remove.has(i.id) && i.disposition === "INBOX"),
+  capture: (title) => {
+    const t = title.trim();
+    if (!t) return;
+    const item = makeCaptureItem(t);
+    set((s) => ({ items: [item, ...s.items], lastCaptureIds: [item.id] }));
+    if (get().backend === "live") {
+      // Optimistic row already shown; swap in the server row (real id) when it lands.
+      sync(
+        apiCapture(t).then((server) =>
+          set((s) => ({
+            items: s.items.map((i) => (i.id === item.id ? server : i)),
+            lastCaptureIds: s.lastCaptureIds.map((x) =>
+              x === item.id ? server.id : x,
+            ),
+            selectedItemId:
+              s.selectedItemId === item.id ? server.id : s.selectedItemId,
+          })),
         ),
-        lastCaptureIds: [],
-      };
-    }),
+      );
+    }
+  },
+
+  captureMany: (text) => {
+    const lines = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (!lines.length) return;
+    const newItems = lines.map(makeCaptureItem);
+    set((s) => ({
+      items: [...newItems, ...s.items],
+      lastCaptureIds: newItems.map((i) => i.id),
+    }));
+    if (get().backend === "live") {
+      sync(
+        apiCaptureBatch(lines).then((serverItems) =>
+          set((s) => {
+            const byIndex = new Map(
+              newItems.map((tmp, idx) => [tmp.id, serverItems[idx]]),
+            );
+            return {
+              items: s.items.map((i) => byIndex.get(i.id) ?? i),
+              lastCaptureIds: s.lastCaptureIds.map(
+                (x) => byIndex.get(x)?.id ?? x,
+              ),
+            };
+          }),
+        ),
+      );
+    }
+  },
+
+  undoLastCapture: () => {
+    const ids = get().lastCaptureIds;
+    if (!ids.length) return;
+    const remove = new Set(ids);
+    set((s) => ({
+      items: s.items.filter(
+        (i) => !(remove.has(i.id) && i.disposition === "INBOX"),
+      ),
+      lastCaptureIds: [],
+    }));
+    if (get().backend === "live") {
+      sync(Promise.all(ids.map((id) => apiDeleteItem(id).catch(() => {}))));
+    }
+  },
 
   openQuickCapture: (mode) => set({ quickCaptureOpen: true, quickCaptureMode: mode }),
   closeQuickCapture: () => set({ quickCaptureOpen: false }),
   openClarify: (id) => set({ selectedItemId: id, clarifyModalOpen: true }),
   closeClarify: () => set({ clarifyModalOpen: false }),
+  openWorkspaces: () => set({ workspacesModalOpen: true }),
+  closeWorkspaces: () => set({ workspacesModalOpen: false }),
 
-  clarify: (id, decision) =>
+  clarify: (id, decision) => {
     set((s) => {
       const snapshot: UndoSnapshot = {
         items: s.items,
@@ -341,6 +468,7 @@ export const useTaskStore = create<TaskState>((set) => ({
         processed: s.processedThisSession,
         selectedItemId: s.selectedItemId,
         label: clarifyLabel(decision),
+        changedIds: [id],
       };
       let projects = s.projects;
       let items: GtdItem[];
@@ -355,6 +483,7 @@ export const useTaskStore = create<TaskState>((set) => ({
           id: pid,
           source: tf.source,
           provider: tf.provider,
+          accountId: tf.accountId,
           outcome: decision.outcome,
           status: "ACTIVE",
           hasNextAction: true,
@@ -371,6 +500,7 @@ export const useTaskStore = create<TaskState>((set) => ({
                 projectId: pid,
                 source: tf.source,
                 provider: tf.provider,
+                accountId: tf.accountId,
                 syncState: tf.syncState,
                 providerStatus: decision.status,
                 dueAt: decision.dueAt ?? i.dueAt,
@@ -397,7 +527,32 @@ export const useTaskStore = create<TaskState>((set) => ({
         processedThisSession: s.processedThisSession + 1,
         undoSnapshot: snapshot,
       };
-    }),
+    });
+    if (get().backend === "live") {
+      const apply = apiOrganize(id, decisionToOrganizeBody(decision));
+      if (decision.kind === "project") {
+        // The server mints its own project id — reconcile both lists so the
+        // optimistic local project/id drift doesn't linger.
+        sync(
+          apply.then(async () => {
+            const [items, projects] = await Promise.all([
+              fetchItems("all"),
+              fetchProjects(),
+            ]);
+            set({ items, projects });
+          }),
+        );
+      } else {
+        sync(
+          apply.then((server) =>
+            set((s) => ({
+              items: s.items.map((i) => (i.id === id ? server : i)),
+            })),
+          ),
+        );
+      }
+    }
+  },
 
   skipToNextInbox: () =>
     set((s) => {
@@ -410,7 +565,7 @@ export const useTaskStore = create<TaskState>((set) => ({
       return { selectedItemId: next.id };
     }),
 
-  quickDispose: (id, disposition) =>
+  quickDispose: (id, disposition) => {
     set((s) => ({
       items: s.items.map((i) => (i.id === id ? disposeOne(i, disposition) : i)),
       processedThisSession: s.processedThisSession + 1,
@@ -420,10 +575,13 @@ export const useTaskStore = create<TaskState>((set) => ({
         processed: s.processedThisSession,
         selectedItemId: s.selectedItemId,
         label: DISPOSE_LABEL[disposition] ?? "Filed",
+        changedIds: [id],
       },
-    })),
+    }));
+    if (get().backend === "live") sync(apiBulkDispose([id], disposition));
+  },
 
-  bulkDispose: (ids, disposition) =>
+  bulkDispose: (ids, disposition) => {
     set((s) => {
       const set_ = new Set(ids);
       const affected = s.items.filter(
@@ -440,29 +598,36 @@ export const useTaskStore = create<TaskState>((set) => ({
           processed: s.processedThisSession,
           selectedItemId: s.selectedItemId,
           label: `${DISPOSE_LABEL[disposition] ?? "Filed"} ${affected} item${affected === 1 ? "" : "s"}`,
+          changedIds: ids,
         },
       };
-    }),
+    });
+    if (get().backend === "live") sync(apiBulkDispose(ids, disposition));
+  },
 
-  deferItem: (id, dateIso) =>
+  deferItem: (id, dateIso) => {
     set((s) => ({
       items: s.items.map((i) =>
         i.id === id
           ? { ...i, deferUntil: dateIso, updatedAt: new Date().toISOString() }
           : i,
       ),
-    })),
+    }));
+    if (get().backend === "live") sync(apiPatchItem(id, { defer_until: dateIso }));
+  },
 
-  undeferItem: (id) =>
+  undeferItem: (id) => {
     set((s) => ({
       items: s.items.map((i) =>
         i.id === id
           ? { ...i, deferUntil: undefined, updatedAt: new Date().toISOString() }
           : i,
       ),
-    })),
+    }));
+    if (get().backend === "live") sync(apiPatchItem(id, { defer_until: "" }));
+  },
 
-  updateItem: (id, patch) =>
+  updateItem: (id, patch) => {
     set((s) => ({
       items: s.items.map((i) => {
         if (i.id !== id) return i;
@@ -475,33 +640,124 @@ export const useTaskStore = create<TaskState>((set) => ({
           updatedAt: new Date().toISOString(),
         };
       }),
-    })),
+    }));
+    if (get().backend === "live") {
+      const body: { title?: string; notes?: string } = {};
+      if (patch.title !== undefined && patch.title.trim())
+        body.title = patch.title.trim();
+      if (patch.notes !== undefined) body.notes = patch.notes;
+      if (Object.keys(body).length) sync(apiPatchItem(id, body));
+    }
+  },
 
-  renameItem: (id, title) =>
-    set((s) => {
-      const t = title.trim();
-      if (!t) return s;
-      return {
-        items: s.items.map((i) =>
-          i.id === id ? { ...i, title: t, updatedAt: new Date().toISOString() } : i,
+  renameItem: (id, title) => {
+    const t = title.trim();
+    if (!t) return;
+    set((s) => ({
+      items: s.items.map((i) =>
+        i.id === id ? { ...i, title: t, updatedAt: new Date().toISOString() } : i,
+      ),
+    }));
+    if (get().backend === "live") sync(apiPatchItem(id, { title: t }));
+  },
+
+  undoLastChange: () => {
+    const snap = get().undoSnapshot;
+    if (!snap) return;
+    const { items, projects, processed, selectedItemId, changedIds } = snap;
+    set({
+      items,
+      projects,
+      processedThisSession: processed,
+      selectedItemId,
+      undoSnapshot: null,
+    });
+    if (get().backend === "live" && changedIds?.length) {
+      // Revert the server rows to their pre-change disposition (the local
+      // state is already fully restored from the snapshot).
+      const prev = new Map(items.map((i) => [i.id, i]));
+      sync(
+        Promise.all(
+          changedIds.map((id) => {
+            const p = prev.get(id);
+            return p
+              ? apiPatchItem(id, { disposition: p.disposition }).catch(() => {})
+              : Promise.resolve();
+          }),
         ),
-      };
-    }),
-
-  undoLastChange: () =>
-    set((s) => {
-      if (!s.undoSnapshot) return s;
-      const { items, projects, processed, selectedItemId } = s.undoSnapshot;
-      return {
-        items,
-        projects,
-        processedThisSession: processed,
-        selectedItemId,
-        undoSnapshot: null,
-      };
-    }),
+      );
+    }
+  },
 
   dismissUndo: () => set({ undoSnapshot: null }),
+
+  hydrate: async () => {
+    try {
+      const [items, projects, accounts] = await Promise.all([
+        fetchItems("all"),
+        fetchProjects(),
+        fetchAccounts(),
+      ]);
+      const providers: ConnectedProvider[] = [
+        { id: "local", label: "Local", provider: "local", source: "LOCAL", statuses: [] },
+        ...accounts.map(accountToProviderEntry),
+      ];
+      const members = accounts.flatMap((a) => a.members);
+      set({
+        backend: "live",
+        items,
+        projects,
+        accounts,
+        providers,
+        people: members.length ? members : MOCK_PEOPLE,
+      });
+    } catch {
+      // Gateway absent/unreachable → stay in demo mode on the bundled mocks.
+      set({ backend: "demo" });
+    }
+  },
+
+  refreshAccounts: async () => {
+    if (get().backend !== "live") return;
+    try {
+      const accounts = await fetchAccounts();
+      const providers: ConnectedProvider[] = [
+        { id: "local", label: "Local", provider: "local", source: "LOCAL", statuses: [] },
+        ...accounts.map(accountToProviderEntry),
+      ];
+      const members = accounts.flatMap((a) => a.members);
+      const projects = await fetchProjects();
+      set({
+        accounts,
+        providers,
+        projects,
+        people: members.length ? members : MOCK_PEOPLE,
+      });
+    } catch {
+      /* keep current state */
+    }
+  },
+
+  disconnectAccount: async (id) => {
+    await apiDeleteAccount(id);
+    await get().refreshAccounts();
+    // Mirrored items cascade server-side; re-pull the item list too.
+    try {
+      set({ items: await fetchItems("all") });
+    } catch {
+      /* next hydrate reconciles */
+    }
+  },
+
+  refreshAccountSchema: async (id) => {
+    await apiRefreshSchema(id);
+    await get().refreshAccounts();
+  },
+
+  pushItem: async (id) => {
+    const pushed = await apiPushItem(id);
+    set((s) => ({ items: s.items.map((i) => (i.id === id ? pushed : i)) }));
+  },
 }));
 
 // ── Derived selectors (pure; keep view logic in one place) ──────────────────

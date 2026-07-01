@@ -32,6 +32,7 @@ members = [
     "orchestrator",
     "reconciler",
     "skill-clickup-sync",
+    "skill-task-gtd",
 ]
 
 [[package]]
@@ -3055,6 +3056,30 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
+]
+provides-extras = ["dev"]
+
+[[package]]
+name = "skill-task-gtd"
+version = "0.1.0"
+source = { editable = "apps/skill-task-gtd" }
+dependencies = [
+    { name = "acb-common" },
+    { name = "httpx" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "acb-common", editable = "packages/acb_common" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },

@@ -12,6 +12,7 @@ import { ItemDetail } from "./components/ItemDetail";
 import { AssistantRail } from "./components/AssistantRail";
 import { InboxView } from "./components/InboxView";
 import { QuickCapture } from "./components/QuickCapture";
+import { WorkspacesModal } from "./components/WorkspacesModal";
 
 // Task Manager (GTD) — 4-panel shell, mirroring the email app's layout
 // philosophy: Lists/Contexts · Item list (+ capture) · Item detail · Assistant.
@@ -27,9 +28,16 @@ export default function TasksPage() {
   const openQuickCapture = useTaskStore((s) => s.openQuickCapture);
   const quickCaptureOpen = useTaskStore((s) => s.quickCaptureOpen);
   const clarifyModalOpen = useTaskStore((s) => s.clarifyModalOpen);
+  const hydrate = useTaskStore((s) => s.hydrate);
   const [leftOpen, setLeftOpen] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
   const isInbox = selectedView === "inbox";
+
+  // Load live data from the gateway once; stays on the bundled mock data when
+  // the backend isn't reachable (UI-first demo mode).
+  useEffect(() => {
+    void hydrate();
+  }, [hydrate]);
 
   // Tell the mobile bottom bar which GTD section is active (for its highlight).
   useEffect(() => {
@@ -115,6 +123,7 @@ export default function TasksPage() {
           <ItemList />
         )}
         <QuickCapture />
+        <WorkspacesModal />
       </div>
     );
   }
@@ -188,6 +197,7 @@ export default function TasksPage() {
       </div>
 
       <QuickCapture />
+      <WorkspacesModal />
     </div>
   );
 }

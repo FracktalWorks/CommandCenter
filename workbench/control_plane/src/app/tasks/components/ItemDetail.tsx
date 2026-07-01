@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   MousePointerClick,
   ArrowRight,
@@ -8,6 +9,8 @@ import {
   FolderKanban,
   Zap,
   CalendarClock,
+  UploadCloud,
+  ExternalLink,
 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import {
@@ -26,6 +29,9 @@ const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
 export function ItemDetail() {
   const items = useTaskStore((s) => s.items);
   const projects = useTaskStore((s) => s.projects);
+  const backend = useTaskStore((s) => s.backend);
+  const pushItem = useTaskStore((s) => s.pushItem);
+  const [pushState, setPushState] = useState<"idle" | "busy" | string>("idle");
   const selectedItemId = useTaskStore((s) => s.selectedItemId);
   const view = useTaskStore((s) => s.selectedView);
   const selectedProjectId = useTaskStore((s) => s.selectedProjectId);
@@ -117,6 +123,41 @@ export function ItemDetail() {
                   <Clock className="h-3 w-3" />
                   Pending push
                 </span>
+                {backend === "live" && (
+                  <button
+                    type="button"
+                    disabled={pushState === "busy"}
+                    onClick={async () => {
+                      setPushState("busy");
+                      try {
+                        await pushItem(item.id);
+                        setPushState("idle");
+                      } catch (e) {
+                        setPushState(e instanceof Error ? e.message : "Push failed");
+                      }
+                    }}
+                    className="tech-transition mt-1 inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/20 disabled:opacity-50"
+                  >
+                    <UploadCloud className="h-3 w-3" />
+                    {pushState === "busy" ? "Pushing…" : `Push to ${item.provider ?? "tool"}`}
+                  </button>
+                )}
+                {pushState !== "idle" && pushState !== "busy" && (
+                  <p className="mt-1 text-[10px] text-destructive">{pushState}</p>
+                )}
+              </Meta>
+            )}
+            {item.syncState === "synced" && item.providerUrl && (
+              <Meta label="Sync">
+                <a
+                  href={item.providerUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-primary hover:underline"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  Open in {item.provider}
+                </a>
               </Meta>
             )}
           </div>

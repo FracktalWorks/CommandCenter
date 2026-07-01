@@ -25,7 +25,7 @@ import {
   defaultStatus,
   type ClarifyDisposition,
 } from "../lib/clarify";
-import { CONNECTED_PROVIDERS } from "../lib/mockData";
+import type { ConnectedProvider } from "../lib/mockData";
 import { Energy, GtdItem, GtdProject, Person, Target } from "../lib/types";
 import { durationLabel, initials, snoozeOptions } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
@@ -52,15 +52,21 @@ const DISP_ORDER: ClarifyDisposition[] = [
 ];
 const ACTIONABLE = new Set<ClarifyDisposition>(["NEXT", "PROJECT", "WAITING", "CALENDAR"]);
 const short = (s: string, n = 26) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
-const destProviderId = (t: Target) => (t.source === "LOCAL" ? "local" : t.provider);
-const providerStatuses = (t: Target): string[] =>
-  CONNECTED_PROVIDERS.find((p) => p.provider === destProviderId(t))?.statuses ?? [];
+const destEntry = (t: Target, providers: ConnectedProvider[]) =>
+  t.source === "LOCAL"
+    ? providers.find((p) => p.source === "LOCAL")
+    : providers.find((p) =>
+        t.accountId ? p.id === t.accountId : p.provider === t.provider,
+      );
+const providerStatuses = (t: Target, providers: ConnectedProvider[]): string[] =>
+  destEntry(t, providers)?.statuses ?? [];
 
 export function ClarifyPanel({ item }: { item: GtdItem }) {
   const clarify = useTaskStore((s) => s.clarify);
   const contexts = useTaskStore((s) => s.contexts);
   const people = useTaskStore((s) => s.people);
   const projects = useTaskStore((s) => s.projects);
+  const providers = useTaskStore((s) => s.providers);
 
   const proposal = useMemo(
     () => proposeClarification(item, people, projects),
@@ -77,7 +83,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
   const [dest, setDest] = useState<Target>(proposal.target ?? { source: "LOCAL", provider: "local" });
   const [projectId, setProjectId] = useState<string | undefined>(proposal.projectId);
   const [status, setStatus] = useState<string | undefined>(
-    defaultStatus(proposal.disposition, providerStatuses(proposal.target ?? { source: "LOCAL" })),
+    defaultStatus(proposal.disposition, providerStatuses(proposal.target ?? { source: "LOCAL" }, providers)),
   );
   const [adjust, setAdjust] = useState(false);
   // "Where it goes" details stay collapsed by default — the assistant already
@@ -87,13 +93,17 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
   const selectedProject = projectId
     ? projects.find((p) => p.id === projectId)
     : undefined;
-  const statusesForDest = useMemo(() => providerStatuses(dest), [dest]);
+  const statusesForDest = useMemo(() => providerStatuses(dest, providers), [dest, providers]);
   const projectsForDest = useMemo(
     () =>
       projects.filter(
         (p) =>
           p.status === "ACTIVE" &&
-          (dest.source === "LOCAL" ? p.source === "LOCAL" : p.provider === dest.provider),
+          (dest.source === "LOCAL"
+            ? p.source === "LOCAL"
+            : dest.accountId
+              ? p.accountId === dest.accountId
+              : p.provider === dest.provider),
       ),
     [projects, dest],
   );
@@ -101,20 +111,20 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
   const chooseDest = (t: Target) => {
     setDest(t);
     setProjectId(undefined);
-    setStatus(defaultStatus(disposition, providerStatuses(t)));
+    setStatus(defaultStatus(disposition, providerStatuses(t, providers)));
   };
   const chooseDisposition = (d: ClarifyDisposition) => {
     setDisposition(d);
     let t = dest;
     if (d === "WAITING" && dest.source === "LOCAL") {
-      const cu = CONNECTED_PROVIDERS.find((p) => p.source === "SYNCED");
+      const cu = providers.find((p) => p.source === "SYNCED");
       if (cu) {
-        t = { source: cu.source, provider: cu.provider };
+        t = { source: cu.source, provider: cu.provider, accountId: cu.id };
         setDest(t);
         setProjectId(undefined);
       }
     }
-    setStatus(defaultStatus(d, providerStatuses(t)));
+    setStatus(defaultStatus(d, providerStatuses(t, providers)));
   };
 
   const buildDecision = useCallback(
@@ -175,12 +185,12 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
 
   const Meta = DISP[proposal.disposition];
   const proposedDestLabel = proposal.target
-    ? CONNECTED_PROVIDERS.find((p) => p.provider === destProviderId(proposal.target!))?.label
+    ? destEntry(proposal.target!, providers)?.label
     : undefined;
   const proposedProject = proposal.projectId ? projects.find((p) => p.id === proposal.projectId) : undefined;
   const proposedStatus =
     proposal.target && proposal.target.source === "SYNCED"
-      ? defaultStatus(proposal.disposition, providerStatuses(proposal.target))
+      ? defaultStatus(proposal.disposition, providerStatuses(proposal.target, providers))
       : undefined;
   const isSynced = dest.source === "SYNCED";
   const showWhere = ACTIONABLE.has(disposition) || disposition === "SOMEDAY";
@@ -383,13 +393,19 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
             {showWhere && (
               <Field label="Where it goes">
                 <div className="flex flex-wrap gap-1.5">
-                  {CONNECTED_PROVIDERS.map((cp) => {
-                    const active = cp.provider === destProviderId(dest);
+                  {providers.map((cp) => {
+                    const active = destEntry(dest, providers)?.id === cp.id;
                     return (
                       <button
                         key={cp.id}
                         type="button"
-                        onClick={() => chooseDest({ source: cp.source, provider: cp.provider })}
+                        onClick={() =>
+                          chooseDest({
+                            source: cp.source,
+                            provider: cp.provider,
+                            accountId: cp.source === "SYNCED" ? cp.id : undefined,
+                          })
+                        }
                         className={[
                           "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
                           active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",

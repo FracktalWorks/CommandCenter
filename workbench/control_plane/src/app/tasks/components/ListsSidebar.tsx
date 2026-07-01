@@ -18,6 +18,8 @@ import {
   Home,
   Users,
   Circle,
+  Cloud,
+  Plug,
   type LucideIcon,
 } from "lucide-react";
 import { useTaskStore, viewCounts, contextCounts } from "../lib/taskStore";
@@ -59,6 +61,8 @@ export function ListsSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const selectedContext = useTaskStore((s) => s.selectedContext);
   const selectViewRaw = useTaskStore((s) => s.selectView);
   const selectContextRaw = useTaskStore((s) => s.selectContext);
+  const accounts = useTaskStore((s) => s.accounts);
+  const openWorkspaces = useTaskStore((s) => s.openWorkspaces);
   const selectView: typeof selectViewRaw = (v) => {
     selectViewRaw(v);
     onNavigate?.();
@@ -119,6 +123,33 @@ export function ListsSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
         {SECONDARY.map((row) => (
           <NavButton key={row.view} row={row} active={false} onClick={() => {}} />
         ))}
+      </div>
+
+      <div className="mt-3 border-t border-border pt-3">
+        <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Workspaces
+        </p>
+        {accounts.map((a) => (
+          <div
+            key={a.id}
+            className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] text-muted-foreground"
+          >
+            <Cloud className="h-3.5 w-3.5 shrink-0 text-primary/70" />
+            <span className="flex-1 truncate">{a.label}</span>
+            <span className="text-[10px]">{a.projectCount}</span>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() => {
+            openWorkspaces();
+            onNavigate?.();
+          }}
+          className="tech-transition flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-muted-foreground hover:bg-secondary hover:text-foreground"
+        >
+          <Plug className="h-3.5 w-3.5 shrink-0" />
+          <span className="flex-1">Connect workspace…</span>
+        </button>
       </div>
     </nav>
   );

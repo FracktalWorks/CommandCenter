@@ -1,12 +1,12 @@
 {
   "name": "task-manager",
-  "description": "ClickUp task management — answers status, progress, and workload questions with citations.",
-  "version": "0.1.0",
+  "description": "GTD task manager — captures thoughts, clarifies the inbox, organizes to Local or a connected PM workspace (ClickUp), and answers status/progress/workload questions with citations.",
+  "version": "0.2.0",
   "runtime": "maf",
-  "skill_repos": ["skill-clickup-sync"],
+  "skill_repos": ["skill-task-gtd", "skill-clickup-sync"],
   "mcp_servers": {},
   "max_mutation_attempts": 1,
-  "tags": ["tasks", "clickup", "project-management"],
+  "tags": ["tasks", "gtd", "clickup", "project-management"],
   "integrations": ["clickup"],
   "optional_integrations": []
 }

@@ -1,7 +1,7 @@
 # Task Manager App — Project Plan (GTD philosophy)
 
 > **Product:** CommandCenter · **Feature:** Task Manager App (Getting Things Done) · **Updated:** 2026-06-30 · **Version:** 0.2 (planning — reviewed)
-> **Status:** 🔄 UI-first build in progress on `main` — frontend slices 1–2 (Shell + Browse, Clarify) shipped against mock data; **backend not started.** Builds on the existing `agent-task-manager` + `skill-clickup-sync` scaffolding. **Resume point: Slice 3 — Engage "Now" (F4).** See §9.1.
+> **Status:** 🔄 build in progress on `main` — frontend slices 1–2.5 (Shell/Browse, Clarify, Inbox depth) **plus the capture/clarify backend**: migration `48_task_manager_gtd.sql`, the provider interface layer with the **ClickUp connector** (multi-workspace `task_accounts`), the **gateway `/tasks` API**, **`skill-task-gtd` + the rewritten `task-manager` agent**, and the frontend wired live (mock fallback when the gateway is absent). **Resume point: Slice 3 — Engage "Now" (F4) · sync-pull of existing provider tasks.** See §9.1/§9.2.
 > **v0.2 review pass:** reconciled the GTD "lightweight project" vs "first-class project" framing (§5.1); clarified the delegation-write vs Action-Broker sequencing (§6, Phase 3); pinned the migration (`48_*`, idempotent, FK-dependency apply order — §4); placed the new GTD tools in `skill-task-gtd` over the canonical store and demoted `skill-clickup-sync` to the reference connector (§3.1); matched the gateway route to the `routes/<app>/` package precedent (§8); de-duplicated horizon levels vs projects/items (§4); aligned F1 capture channels with the phasing (Q3); added a build-order summary (§9).
 > **Sibling spec:** [`email_ai_assistant.md`](email_ai_assistant.md) — the Task Manager app deliberately mirrors its architecture (multi-panel client + AI assistant + provider abstraction + Postgres sync + automation engine + follow-up tracking). Read it first; this doc reuses its patterns by reference.
 
@@ -303,7 +303,9 @@ All writes (create/assign/move/close in the connected PM tool) flow through the 
 
 The core decision (same as email): **sync provider tasks into a canonical Postgres store with a GTD-semantic overlay**, rather than proxying the PM API on every render. GTD semantics (disposition, context, energy, horizon link) live in *our* columns; for synced items the provider task is the source of truth for title/status/assignee/dates. **The schema is provider-agnostic** — `provider` is a free string registered at connect time, not an enum.
 
-> **Implementation note (per `infra/postgres/README.md`).** This ships as **one** numbered migration — **`48_task_manager_gtd.sql`** (next free number; verify before writing) — and **must be idempotent**: every statement uses `CREATE TABLE/INDEX IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS` because `apply_migrations.sh` re-runs all `02+` migrations on every deploy. After writing it, run `scripts/dump_schema.sh` and commit the refreshed `schema.generated.sql`. The DDL below is **grouped by concern for readability, not apply order** — the real migration must create tables in **FK-dependency order**: `gtd_contexts` → `gtd_horizons` → `gtd_projects` (FK→horizons) → `gtd_items` (FK→projects, horizons) → `gtd_waiting` (FK→items) → `task_accounts` (independent) → `gtd_reviews` (independent). (`IF NOT EXISTS` is shown only on the first table below to keep the listing readable; apply it to every object.)
+> **✅ Shipped as `infra/postgres/48_task_manager_gtd.sql`** (applied + idempotency-verified on Postgres 16). Deltas vs the listing below, per the migration header: `gtd_items`/`gtd_projects` gained **`user_id`** (LOCAL rows have no account to scope through; every route is user-scoped), `gtd_items` gained **`defer_until`** (tickler, §2.1 C13) and **`sync_state`** (`local|pending|synced`, §2.2 P8), and `task_accounts` gained **`schema_cache`** (the fetched-beforehand provider schema, §2.2.1) + `sync_status`/`sync_error`. `schema.generated.sql` must be refreshed on a machine with pgvector (deploy box) — the dev container can't replay `01_schema.sql`.
+>
+> **Original implementation note (per `infra/postgres/README.md`).** This ships as **one** numbered migration — **`48_task_manager_gtd.sql`** — and **must be idempotent**: every statement uses `CREATE TABLE/INDEX IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS` because `apply_migrations.sh` re-runs all `02+` migrations on every deploy. After writing it, run `scripts/dump_schema.sh` and commit the refreshed `schema.generated.sql`. The DDL below is **grouped by concern for readability, not apply order** — the real migration must create tables in **FK-dependency order**: `gtd_contexts` → `gtd_horizons` → `gtd_projects` (FK→horizons) → `gtd_items` (FK→projects, horizons) → `gtd_waiting` (FK→items) → `task_accounts` (independent) → `gtd_reviews` (independent). (`IF NOT EXISTS` is shown only on the first table below to keep the listing readable; apply it to every object.)
 
 ```sql
 -- A connected PM-tool workspace (multi-account, multi-provider, like email_accounts)
@@ -614,22 +616,26 @@ The desktop 4-panel layout collapses to a **single-pane** flow on ≤767px (`use
 
 > Follows the email precedent — `routes/email/` is a package (`core.py`, `automation/`, `digest.py`, `transport/`), not a single file. `routes/tasks/` should likewise be a package (e.g. `core.py` for items/lists, `accounts.py`, `review.py`, `ai.py`).
 
-| Method | Path | Description |
-|---|---|---|
-| `GET/POST/DELETE/PATCH` | `/tasks/accounts[/{id}]` | CRUD PM-tool connections (multi-account, multi-provider; connector_kind `api`\|`mcp`) |
-| `GET` | `/tasks/providers` | Registered connector types + capability probe for a candidate connection |
-| `GET` | `/tasks/items` | List/search items (disposition, context, account, page) |
-| `POST` | `/tasks/items` | Capture a new inbox item |
-| `GET/PATCH` | `/tasks/items/{id}` | Detail / organize (set disposition, context, next_action…) |
-| `POST` | `/tasks/items/{id}/clarify` | Run agent clarify → proposal |
-| `POST` | `/tasks/items/{id}/delegate` | Delegate + create Waiting-For |
-| `GET` | `/tasks/contexts` · `/tasks/projects` · `/tasks/waiting` | List surfaces |
-| `POST` | `/tasks/projects/plan` | Natural-planning for a project |
-| `POST` | `/tasks/review` | Run weekly review → summary |
-| `POST` | `/tasks/sync` | Manual sync trigger |
-| `POST` | `/tasks/ai/chat` | Assistant chat (SSE) |
-| `POST` | `/tasks/ai/quick-action` | clarify-inbox / next-action / review / monitor |
-| `GET` | `/tasks/oauth/{provider}/authorize` · `/callback` | OAuth connect for API connectors (provider is dynamic) |
+| Method | Path | Description | Status |
+|---|---|---|---|
+| `GET/POST/DELETE/PATCH` | `/tasks/accounts[/{id}]` | CRUD PM-tool workspace connections (multi-account/multi-workspace; credentials encrypted) | ✅ shipped |
+| `POST` | `/tasks/providers/{provider}/workspaces` | Connect step 1: verify a token → the workspaces it reaches (ClickUp needs token **and** workspace) | ✅ shipped |
+| `POST` | `/tasks/accounts/{id}/schema/refresh` | Fetch-beforehand schema (§2.2.1): projects/members/statuses → `schema_cache` + mirror provider lists into `gtd_projects` | ✅ shipped |
+| `GET` | `/tasks/providers` | Registered connector types | ✅ shipped |
+| `GET` | `/tasks/items` | List/search items (`view`, `q`, `context`, `project_id`) | ✅ shipped |
+| `POST` | `/tasks/items` · `/items/batch` | Capture one / a mind-sweep batch | ✅ shipped |
+| `GET/PATCH/DELETE` | `/tasks/items/{id}` | Detail / small edits (rename, note, tickler, quick-dispose) / undo-capture delete | ✅ shipped |
+| `POST` | `/tasks/items/{id}/organize` | Apply one clarify decision atomically (disposition + destination + project/stage/assignee/due + waiting-for; **delegate is a kind here**, not a separate route) | ✅ shipped |
+| `POST` | `/tasks/items/{id}/clarify` | Clarify proposal (server-side heuristic today; the agent replaces the body, same contract) | ✅ shipped |
+| `POST` | `/tasks/items/{id}/push` | Explicit user-approved push of a staged (`pending`) item to its workspace (C-04) | ✅ shipped |
+| `POST` | `/tasks/items/bulk` | Bulk dispose (multi-select) | ✅ shipped |
+| `GET` | `/tasks/contexts` · `/tasks/projects` | List surfaces (contexts seed GTD defaults per user) | ✅ shipped |
+| `GET` | `/tasks/insights` | Whole-inbox signals: bucket counts, oldest capture, stale waiting-fors, projects w/o next action | ✅ shipped |
+| `POST` | `/tasks/projects/plan` | Natural-planning for a project | 🔲 |
+| `POST` | `/tasks/review` | Run weekly review → summary | 🔲 |
+| `POST` | `/tasks/sync` | Pull existing provider tasks into `gtd_items` | 🔲 next |
+| `POST` | `/tasks/ai/chat` · `/ai/quick-action` | Assistant chat / quick actions | 🔲 (agent chat runs via the generic `/agent` route today) |
+| `GET` | `/tasks/oauth/{provider}/authorize` · `/callback` | OAuth connect (token-based connect shipped; OAuth later) | 🔲 |
 
 ---
 
@@ -651,8 +657,10 @@ The desktop 4-panel layout collapses to a **single-pane** flow on ≤767px (`use
 | 6 — Plan / Horizons | F8 · F7 | 🔲 | natural-planning project flow + Horizons (currently "soon") |
 | 7 — Assistant wired | F9 | 🔲 | replace the mocked suggestion + rail with the live `task-manager` agent (stream + quick actions) |
 
-**Commits on `main`:** shell+browse `9dfa571` · clarify `c26890f`.
-**Resume here →** Slice 3 (Engage "Now"). After the UI slices feel right, start the backend at §9.2 Phase 1 (migration `48_*` + interface layer + gateway), then wire the mock store to the live API.
+| B1 — Backend: capture/clarify/organize | §9.2 Ph. 1–2 core | ✅ done | migration `48_*` · `routes/tasks/` package (20 endpoints, §8) · `providers.py` interface layer + **ClickUp connector** (multi-workspace, encrypted per-account tokens) · `skill-task-gtd` + rewritten `agent-task-manager` · `/api/tasks` proxy + live store hydration with **mock fallback** · `WorkspacesModal` connect flow · e2e-verified (capture→persist→clarify→organize vs real Postgres) |
+
+**Commits on `main`:** shell+browse `9dfa571` · clarify `c26890f` · backend wiring (this change).
+**Resume here →** Slice 3 (Engage "Now") on the frontend · `/tasks/sync` (pull existing provider tasks into the inbox views) on the backend.
 
 ### 9.2 Backend phases (after the UI slices)
 

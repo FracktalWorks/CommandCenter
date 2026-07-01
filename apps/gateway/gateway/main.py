@@ -469,6 +469,13 @@ except Exception:  # pragma: no cover
     pass
 
 try:
+    from gateway.routes.tasks import router as _tasks_router
+
+    app.include_router(_tasks_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
     from gateway.routes.settings import router as _settings_router
 
     app.include_router(_settings_router)

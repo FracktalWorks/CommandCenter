@@ -1,0 +1,275 @@
+"""Tasks · accounts — connected PM-tool workspace CRUD + schema cache.
+
+Connect flow (ClickUp needs more than a bare token — it needs the workspace):
+  1. POST /tasks/providers/{provider}/workspaces  {api_token}
+       → verifies the token and returns the workspaces it can reach.
+  2. POST /tasks/accounts  {provider, api_token, workspace_id, label}
+       → stores ONE account row for that workspace (credentials encrypted).
+     Repeat with another workspace_id (or another token) to connect several
+     ClickUp workspaces/companies side by side — multi-account, like email.
+  3. POST /tasks/accounts/{id}/schema/refresh
+       → fetch-beforehand schema (§2.2.1): projects/members/statuses into
+         task_accounts.schema_cache, provider lists mirrored into
+         gtd_projects (source='SYNCED') so Clarify pickers are instant.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+from uuid import uuid4
+
+from acb_auth import UserContext, get_current_user
+from fastapi import Depends, HTTPException, status
+from gateway.routes.tasks.core import (
+    PersonModel,
+    TaskAccountModel,
+    _assert_account_owner,
+    _get_db,
+    _key_store,
+    _parse_jsonb,
+    _uid,
+    router,
+)
+from gateway.routes.tasks.providers import build_provider, connector_names
+from pydantic import BaseModel
+from sqlalchemy import text
+
+
+class WorkspacesRequest(BaseModel):
+    api_token: str
+
+
+class CreateAccountRequest(BaseModel):
+    provider: str                     # 'clickup' | … (see /tasks/providers)
+    api_token: str
+    workspace_id: str
+    label: str = ""
+
+
+class AccountUpdateRequest(BaseModel):
+    label: str | None = None
+    sync_enabled: bool | None = None
+
+
+def _row_to_account(row: Any) -> TaskAccountModel:
+    cache = _parse_jsonb(row.schema_cache) or {}
+    members = [
+        PersonModel(
+            name=str(m.get("name") or ""),
+            email=m.get("email"),
+            provider_user_id=m.get("provider_user_id"),
+        )
+        for m in cache.get("members") or []
+        if isinstance(m, dict) and m.get("name")
+    ]
+    return TaskAccountModel(
+        id=str(row.id),
+        provider=row.provider,
+        connector_kind=row.connector_kind,
+        workspace_id=row.workspace_id,
+        label=row.label or "",
+        sync_enabled=bool(row.sync_enabled),
+        sync_status=row.sync_status or "idle",
+        sync_error=row.sync_error,
+        last_synced_at=row.last_synced_at.isoformat() if row.last_synced_at else None,
+        statuses=[s for s in cache.get("statuses") or [] if isinstance(s, str)],
+        members=members,
+        project_count=len(cache.get("projects") or []),
+    )
+
+
+@router.get("/providers")
+async def list_providers() -> dict[str, Any]:
+    """Registered connector types (the interface layer's registry)."""
+    return {"providers": connector_names()}
+
+
+@router.post("/providers/{provider}/workspaces")
+async def list_provider_workspaces(
+    provider: str,
+    req: WorkspacesRequest,
+    _user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Step 1 of connect: verify the token, return its reachable workspaces."""
+    p = build_provider(provider, {"api_token": req.api_token})
+    identity = await p.verify()
+    workspaces = await p.list_workspaces()
+    return {"user": identity.get("user"), "workspaces": workspaces}
+
+
+@router.get("/accounts", response_model=list[TaskAccountModel])
+async def list_accounts(user: UserContext = Depends(get_current_user)):
+    db = await _get_db()
+    try:
+        rows = (await db.execute(
+            text("""SELECT * FROM task_accounts WHERE user_id = :uid
+                    ORDER BY created_at"""),
+            {"uid": _uid(user)},
+        )).fetchall()
+        return [_row_to_account(r) for r in rows]
+    finally:
+        await db.close()
+
+
+@router.post("/accounts", response_model=TaskAccountModel, status_code=201)
+async def create_account(
+    req: CreateAccountRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Step 2 of connect: store one workspace as an account (encrypted creds),
+    then do the first schema fetch so Clarify pickers work immediately."""
+    provider = build_provider(req.provider, {"api_token": req.api_token},
+                              req.workspace_id)
+    # Validate before storing: the token must actually reach this workspace.
+    workspaces = {w["id"]: w for w in await provider.list_workspaces()}
+    if req.workspace_id not in workspaces:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Workspace {req.workspace_id} is not reachable with this token",
+        )
+
+    encrypted = _key_store().encrypt(json.dumps({"api_token": req.api_token}))
+    label = req.label or workspaces[req.workspace_id].get("name") or req.provider
+
+    db = await _get_db()
+    try:
+        dup = (await db.execute(
+            text("""SELECT 1 FROM task_accounts
+                    WHERE user_id = :uid AND provider = :p AND workspace_id = :w"""),
+            {"uid": _uid(user), "p": req.provider, "w": req.workspace_id},
+        )).fetchone()
+        if dup:
+            raise HTTPException(status_code=409,
+                                detail="This workspace is already connected")
+
+        account_id = str(uuid4())
+        await db.execute(
+            text("""INSERT INTO task_accounts
+                    (id, user_id, provider, connector_kind, workspace_id, label,
+                     credentials_encrypted)
+                    VALUES (:id, :uid, :p, 'api', :w, :label, :creds)"""),
+            {"id": account_id, "uid": _uid(user), "p": req.provider,
+             "w": req.workspace_id, "label": label, "creds": encrypted},
+        )
+        await db.commit()
+        try:
+            await _refresh_schema(db, account_id, _uid(user))
+        except Exception as exc:
+            await db.execute(
+                text("""UPDATE task_accounts SET sync_status='error',
+                        sync_error=:e, updated_at=now() WHERE id=:id"""),
+                {"id": account_id, "e": str(exc)[:500]},
+            )
+            await db.commit()
+        row = (await db.execute(
+            text("SELECT * FROM task_accounts WHERE id = :id"), {"id": account_id},
+        )).fetchone()
+        return _row_to_account(row)
+    finally:
+        await db.close()
+
+
+@router.patch("/accounts/{account_id}", response_model=TaskAccountModel)
+async def update_account(
+    account_id: str,
+    req: AccountUpdateRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, _uid(user))
+        sets, params = [], {"id": account_id}
+        if req.label is not None:
+            sets.append("label = :label")
+            params["label"] = req.label
+        if req.sync_enabled is not None:
+            sets.append("sync_enabled = :se")
+            params["se"] = req.sync_enabled
+        if not sets:
+            raise HTTPException(status_code=400, detail="No fields to update")
+        sets.append("updated_at = now()")
+        row = (await db.execute(
+            text(f"UPDATE task_accounts SET {', '.join(sets)} "
+                 "WHERE id = :id RETURNING *"),
+            params,
+        )).fetchone()
+        await db.commit()
+        return _row_to_account(row)
+    finally:
+        await db.close()
+
+
+@router.delete("/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_account(
+    account_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Disconnect a workspace. Its mirrored rows cascade away (FK ON DELETE)."""
+    db = await _get_db()
+    try:
+        res = (await db.execute(
+            text("""DELETE FROM task_accounts
+                    WHERE id = :id AND user_id = :uid RETURNING id"""),
+            {"id": account_id, "uid": _uid(user)},
+        )).fetchone()
+        if res is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        await db.commit()
+    finally:
+        await db.close()
+
+
+@router.post("/accounts/{account_id}/schema/refresh", response_model=TaskAccountModel)
+async def refresh_account_schema(
+    account_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """Re-fetch the provider schema (projects/members/statuses) on demand."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, _uid(user))
+        await _refresh_schema(db, account_id, _uid(user))
+        row = (await db.execute(
+            text("SELECT * FROM task_accounts WHERE id = :id"), {"id": account_id},
+        )).fetchone()
+        return _row_to_account(row)
+    finally:
+        await db.close()
+
+
+async def _refresh_schema(db: Any, account_id: str, user_id: str) -> None:
+    """Fetch the schema through the connector; cache it + mirror projects.
+
+    Mirrored provider lists become SYNCED ``gtd_projects`` rows (upsert on
+    (account_id, provider_ref)) so projects from every source render in the
+    one unified picker (§5.1).
+    """
+    row = (await db.execute(
+        text("SELECT * FROM task_accounts WHERE id = :id"), {"id": account_id},
+    )).fetchone()
+    creds = json.loads(_key_store().decrypt(row.credentials_encrypted))
+    provider = build_provider(row.provider, creds, row.workspace_id)
+    schema = await provider.get_schema(row.workspace_id)
+
+    await db.execute(
+        text("""UPDATE task_accounts
+                SET schema_cache = :cache, sync_status = 'idle', sync_error = NULL,
+                    last_synced_at = now(), updated_at = now()
+                WHERE id = :id"""),
+        {"id": account_id, "cache": json.dumps(schema)},
+    )
+    for proj in schema.get("projects") or []:
+        name = (proj.get("name") or "").strip()
+        if not name:
+            continue
+        await db.execute(
+            text("""INSERT INTO gtd_projects
+                    (id, user_id, source, account_id, provider_ref, outcome, status)
+                    VALUES (:id, :uid, 'SYNCED', :aid, :ref, :outcome, 'ACTIVE')
+                    ON CONFLICT (account_id, provider_ref) WHERE source <> 'LOCAL'
+                    DO UPDATE SET outcome = EXCLUDED.outcome, updated_at = now()"""),
+            {"id": str(uuid4()), "uid": user_id, "aid": account_id,
+             "ref": str(proj.get("id")), "outcome": name},
+        )
+    await db.commit()

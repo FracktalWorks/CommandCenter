@@ -257,12 +257,13 @@ export function proposeClarification(
   // collaborative so it lands on a synced tool regardless.
   const baseTarget: Target =
     item.source === "SYNCED"
-      ? { source: "SYNCED", provider: item.provider ?? "clickup" }
+      ? { source: "SYNCED", provider: item.provider ?? "clickup", accountId: item.accountId }
       : { source: "LOCAL", provider: "local" };
   let target: Target = project
     ? {
         source: project.source,
         provider: project.provider ?? (project.source === "LOCAL" ? "local" : "clickup"),
+        accountId: project.accountId,
       }
     : baseTarget;
   if (core.disposition === "WAITING") {
@@ -274,6 +275,8 @@ export function proposeClarification(
           : item.provider && item.provider !== "local"
             ? item.provider
             : "clickup",
+      accountId:
+        project?.source === "SYNCED" ? project.accountId : item.accountId,
     };
   }
 

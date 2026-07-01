@@ -40,6 +40,8 @@ export interface Person {
   email?: string;
   /** a stable tailwind-ish accent for the avatar chip, e.g. "primary" */
   accent?: string;
+  /** the person's id in the connected PM tool (for real assignment) */
+  providerUserId?: string;
 }
 
 /** A GTD project — a first-class outcome needing >1 action (§5.1). */
@@ -47,6 +49,8 @@ export interface GtdProject {
   id: string;
   source: Source;
   provider?: ProviderKind;
+  /** which connected workspace account a SYNCED project mirrors */
+  accountId?: string;
   /** the desired outcome / "wild success" statement (the title) */
   outcome: string;
   /** natural-planning: why this matters */
@@ -63,6 +67,10 @@ export interface GtdItem {
   id: string;
   source: Source;
   provider?: ProviderKind;
+  /** which connected workspace account a SYNCED item targets/mirrors */
+  accountId?: string;
+  /** deep link to the task in the connected PM tool (once pushed) */
+  providerUrl?: string;
   title: string;
   notes?: string;
 
@@ -112,6 +120,9 @@ export interface Target {
   source: Source;
   /** which connected PM tool for a SYNCED target; 'local' for LOCAL */
   provider?: ProviderKind;
+  /** the specific workspace account (live mode: several workspaces of the
+   *  same provider can be connected side by side) */
+  accountId?: string;
 }
 
 /** The left-rail views. */

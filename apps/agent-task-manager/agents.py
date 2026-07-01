@@ -1,7 +1,13 @@
-"""agent-task-manager — MAF agent for ClickUp task management.
+"""agent-task-manager — the GTD Task Manager agent.
 
-Answers questions about task status, project progress, and team workload.
-Uses skill-clickup-sync for ClickUp data retrieval.
+The agent behind the /tasks app (spec: ai-company-brain/specs/
+task_manager_app.md §3.1): captures thoughts, clarifies the inbox through
+the GTD decision tree, organizes items toward LOCAL or a connected PM
+workspace (ClickUp first), and answers status/progress/workload questions.
+
+Tool surface:
+  skill-task-gtd     — the GTD engine over the gateway /tasks API
+  skill-clickup-sync — legacy direct ClickUp status Q&A (transition-era)
 
 Exports:
     build_agents() -> list[GitHubCopilotAgent]   (Dynamic Agent Loader entry point)
@@ -24,15 +30,42 @@ INSTRUCTIONS = _INSTRUCTIONS_FILE.read_text(encoding="utf-8") if _INSTRUCTIONS_F
 
 
 # ---------------------------------------------------------------------------
-# Tools (imported from skill-clickup-sync installed as a package)
+# Tools
+#   skill-task-gtd     — capture/clarify/organize over the gateway /tasks API
+#                        (provider-agnostic; the interface layer resolves the
+#                        connector)
+#   skill-clickup-sync — legacy direct ClickUp status Q&A, kept during the
+#                        transition (spec §3.1)
 # ---------------------------------------------------------------------------
+
+_TOOLS: list = []
+
+try:
+    from skill_task_gtd import (
+        gtd_accounts,
+        gtd_capture,
+        gtd_capture_many,
+        gtd_clarify,
+        gtd_inbox_insights,
+        gtd_list,
+        gtd_list_projects,
+        gtd_organize,
+        gtd_update,
+    )
+    _TOOLS += [
+        gtd_capture, gtd_capture_many, gtd_list, gtd_list_projects,
+        gtd_accounts, gtd_inbox_insights, gtd_clarify, gtd_organize, gtd_update,
+    ]
+except ImportError:
+    # skill-task-gtd not installed yet — agent still boots.
+    pass
 
 try:
     from skill_clickup_sync import get_task_status, list_project_tasks
-    _TOOLS = [get_task_status, list_project_tasks]
+    _TOOLS += [get_task_status, list_project_tasks]
 except ImportError:
-    # skill-clickup-sync not installed yet — agent still boots, tools are unavailable.
-    _TOOLS = []
+    # skill-clickup-sync not installed yet — agent still boots.
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -67,4 +100,4 @@ def build_agents() -> list[GitHubCopilotAgent]:
     return [build_agent()]
 
 
-__all__ = ["build_agents", "build_agent", "INSTRUCTIONS"]
+__all__ = ["INSTRUCTIONS", "build_agent", "build_agents"]

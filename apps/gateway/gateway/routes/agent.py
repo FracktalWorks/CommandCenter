@@ -92,7 +92,7 @@ _KNOWN_AGENTS: frozenset[str] = frozenset(
 _AGENT_REGISTRY: list[dict] = [
     {
         "name": "task-manager",
-        "description": "ClickUp task management — status, progress, and workload questions with citations.",
+        "description": "GTD task manager — capture, clarify, organize (Local or a connected PM workspace), and status/workload Q&A with citations.",
         "tags": ["tasks", "clickup", "project-management"],
         "status": "live",
         # Runs through MAF (CommandCenterCopilotAgent wrapper) with BYOK model support.

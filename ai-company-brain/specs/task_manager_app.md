@@ -177,6 +177,7 @@ brain-dump text ─▶ [ATOMIZE] ─▶ candidate items ─▶ [REVIEW] ─▶ i
 | P3 | Adjust / override tree | disposition chips (Next · Project · Delegate · Schedule · Do-now · Someday · Reference · Trash) with **adaptive fields** (project outcome, delegate person, context, energy, schedule date) | ✅ built | — |
 | P4 | Project creation | clarifying to **Project** creates the project *and* makes the item its first next action (GTD outcome + next action) | ✅ built | — |
 | P5 | Keyboard-blitz | `↵` accept · `t`/`s`/`r`/`2` quick-dispose · `esc` | ✅ built | — |
+| P6 | **Destination + delegation frame** | clarifying also decides *where it's stored* — **Local vs a connected PM tool (ClickUp / Jira)** — and the **project** to file it under; **Delegate** auto-targets the team tool (collaborative → SYNCED, §5.1) and picks the assignee. The proposal suggests the destination (delegated/already-synced → team tool; solo → Local) | ✅ built (mock providers) | live create/assign in ClickUp/Jira → **[plumbing]** Action Broker (C-03/C-04) |
 
 **AI in Clarify — the boundary + opportunities**
 

@@ -1,5 +1,15 @@
 import { create } from "zustand";
-import { Disposition, Energy, GtdContext, GtdItem, GtdProject, Person, ViewKey } from "./types";
+import {
+  Disposition,
+  Energy,
+  GtdContext,
+  GtdItem,
+  GtdProject,
+  Person,
+  ProviderKind,
+  Target,
+  ViewKey,
+} from "./types";
 import { MOCK_CONTEXTS, MOCK_ITEMS, MOCK_PEOPLE, MOCK_PROJECTS } from "./mockData";
 import { isCalendarItem, isTickled } from "./utils";
 
@@ -9,7 +19,7 @@ export type ClarifyDecision =
   | { kind: "someday" }
   | { kind: "reference" }
   | { kind: "do-now" } // 2-minute rule → done
-  | { kind: "delegate"; person: Person; nextAction: string; projectId?: string }
+  | { kind: "delegate"; person: Person; nextAction: string; projectId?: string; dest?: Target }
   | {
       kind: "next";
       nextAction: string;
@@ -17,8 +27,9 @@ export type ClarifyDecision =
       energy?: Energy;
       timeEstimateMins?: number;
       projectId?: string;
+      dest?: Target;
     }
-  | { kind: "calendar"; nextAction: string; dueAt: string; context?: string; projectId?: string }
+  | { kind: "calendar"; nextAction: string; dueAt: string; context?: string; projectId?: string; dest?: Target }
   | {
       // turn the item into a new project's first next action (GTD: outcome + next action)
       kind: "project";
@@ -26,7 +37,17 @@ export type ClarifyDecision =
       nextAction: string;
       context?: string;
       energy?: Energy;
+      dest?: Target;
     };
+
+/** Resolve a storage target into item source/provider fields. */
+function targetFields(t?: Target): { source: "LOCAL" | "SYNCED"; provider: ProviderKind } | null {
+  if (!t) return null;
+  return {
+    source: t.source,
+    provider: t.source === "LOCAL" ? "local" : t.provider ?? "clickup",
+  };
+}
 
 function applyDecision(
   item: GtdItem,
@@ -52,6 +73,7 @@ function applyDecision(
         waitingOn: d.person,
         delegatedAt: now,
         projectId: d.projectId ?? base.projectId,
+        ...(targetFields(d.dest) ?? {}),
       };
     case "next":
       return {
@@ -62,6 +84,7 @@ function applyDecision(
         energy: d.energy,
         timeEstimateMins: d.timeEstimateMins,
         projectId: d.projectId ?? base.projectId,
+        ...(targetFields(d.dest) ?? {}),
       };
     case "calendar":
       return {
@@ -72,6 +95,7 @@ function applyDecision(
         dueAt: d.dueAt,
         isHardDate: true,
         projectId: d.projectId ?? base.projectId,
+        ...(targetFields(d.dest) ?? {}),
       };
   }
 }
@@ -239,10 +263,11 @@ export const useTaskStore = create<TaskState>((set) => ({
         // Create a project and make this item its first next action.
         const now = new Date().toISOString();
         const pid = nextId();
+        const tf = targetFields(decision.dest) ?? { source: "LOCAL" as const, provider: "local" as ProviderKind };
         const project: GtdProject = {
           id: pid,
-          source: "LOCAL",
-          provider: "local",
+          source: tf.source,
+          provider: tf.provider,
           outcome: decision.outcome,
           status: "ACTIVE",
           hasNextAction: true,
@@ -257,6 +282,8 @@ export const useTaskStore = create<TaskState>((set) => ({
                 context: decision.context,
                 energy: decision.energy,
                 projectId: pid,
+                source: tf.source,
+                provider: tf.provider,
                 updatedAt: now,
                 clarifiedAt: now,
               }

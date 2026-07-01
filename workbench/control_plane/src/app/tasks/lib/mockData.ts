@@ -3,7 +3,21 @@
 // fully explorable with no backend. When the gateway `/tasks` API lands, the
 // store swaps these for live data; nothing else changes.
 
-import { GtdContext, GtdItem, GtdProject, Person } from "./types";
+import { GtdContext, GtdItem, GtdProject, Person, ProviderKind, Source } from "./types";
+
+/** Where a clarified task can be stored — Local, or a connected PM tool.
+ *  Stands in for the connected `task_accounts` (§4) until integrations land. */
+export interface ConnectedProvider {
+  id: string;
+  label: string;
+  provider: ProviderKind;
+  source: Source;
+}
+export const CONNECTED_PROVIDERS: ConnectedProvider[] = [
+  { id: "local", label: "Local", provider: "local", source: "LOCAL" },
+  { id: "clickup", label: "ClickUp", provider: "clickup", source: "SYNCED" },
+  { id: "jira", label: "Jira", provider: "jira", source: "SYNCED" },
+];
 
 /** Teammates available for delegation (the Waiting-For directory). */
 export const MOCK_PEOPLE: Person[] = [

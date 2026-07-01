@@ -4,7 +4,7 @@
 // returns the same shape from the `task-manager` agent. The human always
 // reviews/edits before it's applied (GTD: AI proposes, you decide).
 
-import { Energy, GtdItem, Person } from "./types";
+import { Energy, GtdItem, Person, Target } from "./types";
 
 /** The disposition the assistant recommends (superset of the GTD outcomes). */
 export type ClarifyDisposition =
@@ -30,6 +30,10 @@ export interface ClarifyProposal {
   isTwoMinute?: boolean;
   /** who to hand off to, for a delegation */
   suggestedAssignee?: Person;
+  /** where it should be stored — Local vs a connected PM tool (§5.1) */
+  target?: Target;
+  /** an existing project to file it under, if any */
+  projectId?: string;
   /** short why, shown under the proposal */
   rationale: string;
 }
@@ -73,11 +77,7 @@ const REFERENCE_HINTS = ["receipt", "invoice", "statement", "fyi", "file", "for 
 const SOMEDAY_HINTS = ["idea:", "someday", "maybe", "one day", "learn ", "explore", "evaluate", "wish", "consider "];
 const CALENDAR_HINTS = ["today", "tomorrow", "tonight", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "deadline", "due ", " at ", "o'clock", "appointment", "meeting on", "next week"];
 
-/** Local heuristic proposal — a stand-in for the AI clarify call. */
-export function proposeClarification(
-  item: GtdItem,
-  people: Person[] = [],
-): ClarifyProposal {
+function coreProposal(item: GtdItem, people: Person[]): ClarifyProposal {
   const t = item.title.toLowerCase();
 
   // Non-actionable first.
@@ -162,4 +162,28 @@ export function proposeClarification(
     timeEstimateMins: ctx === "@calls" ? 10 : ctx === "@errands" ? 20 : 25,
     rationale: `Actionable now — a next action for ${ctx}.`,
   };
+}
+
+/** Local heuristic proposal — a stand-in for the AI clarify call. Adds a
+ *  suggested storage **target** (Local vs a connected PM tool) and project:
+ *  delegated/already-synced work → the team tool; solo work → Local (§5.1). */
+export function proposeClarification(
+  item: GtdItem,
+  people: Person[] = [],
+): ClarifyProposal {
+  const core = coreProposal(item, people);
+  const baseTarget: Target =
+    item.source === "SYNCED"
+      ? { source: "SYNCED", provider: item.provider ?? "clickup" }
+      : { source: "LOCAL", provider: "local" };
+  // Delegation is inherently collaborative → default it to the team tool.
+  const target: Target =
+    core.disposition === "WAITING"
+      ? {
+          source: "SYNCED",
+          provider:
+            item.provider && item.provider !== "local" ? item.provider : "clickup",
+        }
+      : baseTarget;
+  return { ...core, target, projectId: item.projectId };
 }

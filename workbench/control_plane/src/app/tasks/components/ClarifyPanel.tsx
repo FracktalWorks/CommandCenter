@@ -14,6 +14,8 @@ import {
   FileText,
   Trash2,
   SlidersHorizontal,
+  HardDrive,
+  Cloud,
   type LucideIcon,
 } from "lucide-react";
 import { useTaskStore, type ClarifyDecision } from "../lib/taskStore";
@@ -21,13 +23,14 @@ import {
   proposeClarification,
   type ClarifyDisposition,
 } from "../lib/clarify";
-import { Energy, GtdItem, Person } from "../lib/types";
+import { CONNECTED_PROVIDERS } from "../lib/mockData";
+import { Energy, GtdItem, Person, Target } from "../lib/types";
 import { durationLabel, initials, snoozeOptions } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
 
-// F2 — Clarify. AI proposes a full disposition (what it is + the next action);
-// you confirm in one tap or adjust any part. The proposal is a local heuristic
-// today (proposeClarification); the agent replaces it later (spec §2.2).
+// F2 — Clarify. AI proposes a full disposition (what it is + the next action +
+// where to store it + who to delegate to); you confirm in one tap or adjust any
+// part. Proposal is a local heuristic today; the agent replaces it later (§2.2).
 
 const DISP: Record<
   ClarifyDisposition,
@@ -46,18 +49,20 @@ const DISP_ORDER: ClarifyDisposition[] = [
   "NEXT", "PROJECT", "WAITING", "CALENDAR", "DO_NOW", "SOMEDAY", "REFERENCE", "TRASH",
 ];
 const ACTIONABLE = new Set<ClarifyDisposition>(["NEXT", "PROJECT", "WAITING", "CALENDAR"]);
+const short = (s: string, n = 26) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+const destProviderId = (t: Target) => (t.source === "LOCAL" ? "local" : t.provider);
 
 export function ClarifyPanel({ item }: { item: GtdItem }) {
   const clarify = useTaskStore((s) => s.clarify);
   const contexts = useTaskStore((s) => s.contexts);
   const people = useTaskStore((s) => s.people);
+  const projects = useTaskStore((s) => s.projects);
 
   const proposal = useMemo(
     () => proposeClarification(item, people),
     [item, people],
   );
 
-  // Editable state, seeded from the proposal.
   const [disposition, setDisposition] = useState<ClarifyDisposition>(proposal.disposition);
   const [nextAction, setNextAction] = useState(proposal.nextAction);
   const [outcome, setOutcome] = useState(proposal.outcome ?? `${item.title} — done`);
@@ -65,20 +70,47 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
   const [energy, setEnergy] = useState<Energy>(proposal.energy ?? "medium");
   const [assignee, setAssignee] = useState<Person | null>(proposal.suggestedAssignee ?? null);
   const [dueAt, setDueAt] = useState("");
+  const [dest, setDest] = useState<Target>(proposal.target ?? { source: "LOCAL", provider: "local" });
+  const [projectId, setProjectId] = useState<string | undefined>(proposal.projectId);
   const [adjust, setAdjust] = useState(false);
+
+  const projectsForDest = useMemo(
+    () =>
+      projects.filter(
+        (p) =>
+          p.status === "ACTIVE" &&
+          (dest.source === "LOCAL" ? p.source === "LOCAL" : p.provider === dest.provider),
+      ),
+    [projects, dest],
+  );
+
+  const chooseDest = (t: Target) => {
+    setDest(t);
+    setProjectId(undefined); // projects are scoped to a destination
+  };
+  const chooseDisposition = (d: ClarifyDisposition) => {
+    setDisposition(d);
+    // Delegation is collaborative — nudge storage to the team tool.
+    if (d === "WAITING" && dest.source === "LOCAL") {
+      const cu = CONNECTED_PROVIDERS.find((p) => p.source === "SYNCED");
+      if (cu) chooseDest({ source: cu.source, provider: cu.provider });
+    }
+  };
 
   const buildDecision = useCallback(
     (d: ClarifyDisposition): ClarifyDecision | null => {
       const na = nextAction.trim();
       switch (d) {
         case "NEXT":
-          return na ? { kind: "next", nextAction: na, context, energy } : null;
+          return na ? { kind: "next", nextAction: na, context, energy, dest, projectId } : null;
         case "PROJECT":
           return na && outcome.trim()
-            ? { kind: "project", outcome: outcome.trim(), nextAction: na, context, energy }
+            ? { kind: "project", outcome: outcome.trim(), nextAction: na, context, energy, dest }
             : null;
         case "WAITING":
-          return na && assignee ? { kind: "delegate", person: assignee, nextAction: na } : null;
+          return na && assignee
+            ? { kind: "delegate", person: assignee, nextAction: na, dest, projectId }
+            : null;
         case "CALENDAR":
           return na
             ? {
@@ -86,6 +118,8 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
                 nextAction: na,
                 dueAt: dueAt ? new Date(dueAt).toISOString() : snoozeOptions()[0].iso,
                 context,
+                dest,
+                projectId,
               }
             : null;
         case "DO_NOW":
@@ -98,7 +132,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
           return { kind: "trash" };
       }
     },
-    [nextAction, outcome, context, energy, assignee, dueAt],
+    [nextAction, outcome, context, energy, assignee, dueAt, dest, projectId],
   );
 
   const apply = useCallback(() => {
@@ -108,7 +142,6 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
 
   const canApply = !!buildDecision(disposition);
 
-  // Enter accepts (when not typing in a field). t/s/r/2 handled by the modal.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
@@ -125,6 +158,13 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
   }, [apply, canApply]);
 
   const Meta = DISP[proposal.disposition];
+  const proposedDestLabel = proposal.target
+    ? CONNECTED_PROVIDERS.find((p) => p.provider === destProviderId(proposal.target!))?.label
+    : undefined;
+  const proposedProject = proposal.projectId
+    ? projects.find((p) => p.id === proposal.projectId)
+    : undefined;
+  const showWhere = ACTIONABLE.has(disposition);
 
   return (
     <div className="flex h-full flex-col overflow-y-auto">
@@ -137,7 +177,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
         </div>
         <h1 className="text-lg font-bold leading-snug text-foreground">{item.title}</h1>
         <p className="mt-1 text-[11px] text-muted-foreground">
-          What is it, and what&apos;s the next action?
+          What is it, what&apos;s the next action, and where does it go?
         </p>
       </header>
 
@@ -169,7 +209,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
               {proposal.nextAction}
             </p>
           )}
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
             {proposal.context && (
               <span className="font-mono text-primary/80">{proposal.context}</span>
             )}
@@ -177,8 +217,19 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
             {proposal.timeEstimateMins ? (
               <span>{durationLabel(proposal.timeEstimateMins)}</span>
             ) : null}
-            <span className="italic">{proposal.rationale}</span>
+            {ACTIONABLE.has(proposal.disposition) && proposedDestLabel && (
+              <span className="inline-flex items-center gap-1 rounded bg-secondary px-1.5 py-0.5 font-medium">
+                {proposal.target?.source === "LOCAL" ? (
+                  <HardDrive className="h-3 w-3" />
+                ) : (
+                  <Cloud className="h-3 w-3" />
+                )}
+                {proposedDestLabel}
+                {proposedProject ? ` · ${short(proposedProject.outcome, 18)}` : ""}
+              </span>
+            )}
           </div>
+          <p className="mt-1.5 text-[11px] italic text-muted-foreground">{proposal.rationale}</p>
           <div className="mt-2.5 flex items-center gap-2">
             <button
               type="button"
@@ -204,7 +255,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
           </div>
         </div>
 
-        {/* Adjust — override the disposition and fields */}
+        {/* Adjust — override disposition, fields, and destination */}
         {adjust && (
           <div className="flex flex-col gap-3">
             <Field label="What is it?">
@@ -216,7 +267,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
                     <button
                       key={d}
                       type="button"
-                      onClick={() => setDisposition(d)}
+                      onClick={() => chooseDisposition(d)}
                       className={[
                         "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
                         active
@@ -246,9 +297,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
             )}
 
             {ACTIONABLE.has(disposition) && (
-              <Field
-                label={disposition === "PROJECT" ? "First next action" : "Next action"}
-              >
+              <Field label={disposition === "PROJECT" ? "First next action" : "Next action"}>
                 <input
                   value={nextAction}
                   onChange={(e) => setNextAction(e.target.value)}
@@ -283,18 +332,11 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
               </Field>
             )}
 
-            {(disposition === "NEXT" ||
-              disposition === "PROJECT" ||
-              disposition === "CALENDAR") && (
+            {(disposition === "NEXT" || disposition === "PROJECT" || disposition === "CALENDAR") && (
               <Field label="Context">
                 <div className="flex flex-wrap gap-1.5">
                   {contexts.map((c) => (
-                    <Pill
-                      key={c.name}
-                      mono
-                      active={context === c.name}
-                      onClick={() => setContext(c.name)}
-                    >
+                    <Pill key={c.name} mono active={context === c.name} onClick={() => setContext(c.name)}>
                       {c.name}
                     </Pill>
                   ))}
@@ -322,6 +364,65 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
                   onChange={(e) => setDueAt(e.target.value)}
                   className="rounded-md border border-border bg-background/60 px-3 py-2 text-sm text-foreground focus:border-primary/50 focus:outline-none"
                 />
+              </Field>
+            )}
+
+            {/* Where it goes — dual-source destination + project (§5.1) */}
+            {showWhere && (
+              <Field label="Where it goes">
+                <div className="flex flex-wrap gap-1.5">
+                  {CONNECTED_PROVIDERS.map((cp) => {
+                    const active = cp.provider === destProviderId(dest);
+                    return (
+                      <button
+                        key={cp.id}
+                        type="button"
+                        onClick={() => chooseDest({ source: cp.source, provider: cp.provider })}
+                        className={[
+                          "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                          active
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border text-muted-foreground hover:bg-secondary",
+                        ].join(" ")}
+                      >
+                        {cp.source === "LOCAL" ? (
+                          <HardDrive className="h-3.5 w-3.5" />
+                        ) : (
+                          <Cloud className="h-3.5 w-3.5" />
+                        )}
+                        {cp.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                {dest.source === "LOCAL" && (
+                  <p className="mt-1.5 text-[10px] text-muted-foreground">
+                    Private to you. Delegated or collaborative work belongs on a connected tool.
+                  </p>
+                )}
+                {/* Project — scoped to the destination */}
+                {disposition !== "PROJECT" && (
+                  <div className="mt-2">
+                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      Project
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      <Pill plain active={!projectId} onClick={() => setProjectId(undefined)}>
+                        No project
+                      </Pill>
+                      {projectsForDest.map((p) => (
+                        <Pill
+                          key={p.id}
+                          plain
+                          active={projectId === p.id}
+                          onClick={() => setProjectId(p.id)}
+                        >
+                          {short(p.outcome)}
+                        </Pill>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </Field>
             )}
 
@@ -357,11 +458,13 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function Pill({
   active,
   mono,
+  plain,
   onClick,
   children,
 }: {
   active: boolean;
   mono?: boolean;
+  plain?: boolean;
   onClick: () => void;
   children: React.ReactNode;
 }) {
@@ -371,7 +474,7 @@ function Pill({
       onClick={onClick}
       className={[
         "tech-transition rounded-full border px-2.5 py-1 text-[12px]",
-        mono ? "font-mono" : "capitalize",
+        mono ? "font-mono" : plain ? "" : "capitalize",
         active
           ? "border-primary bg-primary/10 text-primary"
           : "border-border text-muted-foreground hover:bg-secondary",

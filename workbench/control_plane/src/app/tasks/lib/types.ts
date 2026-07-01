@@ -99,6 +99,13 @@ export interface GtdItem {
   deferUntil?: string;
 }
 
+/** Where a clarified item should be stored (dual-source model, §5.1). */
+export interface Target {
+  source: Source;
+  /** which connected PM tool for a SYNCED target; 'local' for LOCAL */
+  provider?: ProviderKind;
+}
+
 /** The left-rail views. */
 export type ViewKey =
   | "inbox"

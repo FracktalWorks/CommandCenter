@@ -124,6 +124,7 @@ Each GTD step becomes a first-class surface in the app. This is the product's fe
 | C5 | Empty-regularly signals | "N to process" + oldest-item age + aging nudge | ✅ built | — |
 | C6 | Undo capture | remove the last capture batch (protects trust) | ✅ built | — |
 | C9 | **Scale + filtering** | search box, date filter pills (All/Today/Yesterday/This week/Older) + counts, newest/oldest sort — holds tens+ of captures | ✅ built | virtualized list if it grows to thousands → **[plumbing]** perf |
+| C10 | **Rapid processing** | hover quick-actions on every card (Someday / Reference / Trash / Edit / Clarify) + in-modal keyboard shortcuts (`t` trash · `s` someday · `r` reference · `2` do-now · `esc`) to blitz obvious items to inbox-zero; inline rename to fix a typo without clarifying | ✅ built | — |
 
 **Mind-dump → inbox pipeline (how it feeds in, and the review gate)**
 

@@ -15,6 +15,12 @@ import {
   Search,
   ArrowDownUp,
   SearchX,
+  Pencil,
+  Trash2,
+  Lightbulb,
+  FileText,
+  Check,
+  type LucideIcon,
 } from "lucide-react";
 import FilterPills from "@/components/FilterPills";
 import { useTaskStore } from "../lib/taskStore";
@@ -34,7 +40,7 @@ type SortOrder = "newest" | "oldest";
 export function InboxView() {
   const items = useTaskStore((s) => s.items);
   const capture = useTaskStore((s) => s.capture);
-  const selectItem = useTaskStore((s) => s.selectItem);
+  const openClarify = useTaskStore((s) => s.openClarify);
   const openQuickCapture = useTaskStore((s) => s.openQuickCapture);
   const lastCaptureIds = useTaskStore((s) => s.lastCaptureIds);
   const undoLastCapture = useTaskStore((s) => s.undoLastCapture);
@@ -64,7 +70,6 @@ export function InboxView() {
   );
 
   const [value, setValue] = useState("");
-  const [clarifyOpen, setClarifyOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
@@ -112,10 +117,7 @@ export function InboxView() {
     }
   };
 
-  const startClarify = (id: string) => {
-    selectItem(id);
-    setClarifyOpen(true);
-  };
+  const startClarify = (id: string) => openClarify(id);
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -210,8 +212,9 @@ export function InboxView() {
               </div>
               <button
                 type="button"
-                disabled={!visible.length}
-                onClick={() => visible[0] && startClarify(visible[0].id)}
+                disabled={!oldest}
+                onClick={() => oldest && startClarify(oldest.id)}
+                title="Process the oldest item first (GTD FIFO)"
                 className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-40"
               >
                 <Sparkles className="h-3.5 w-3.5" />
@@ -281,11 +284,7 @@ export function InboxView() {
               )}
               <div className="flex flex-col gap-2">
                 {visible.map((item) => (
-                  <InboxCard
-                    key={item.id}
-                    item={item}
-                    onClarify={() => startClarify(item.id)}
-                  />
+                  <InboxCard key={item.id} item={item} />
                 ))}
               </div>
             </>
@@ -293,27 +292,76 @@ export function InboxView() {
         </div>
       </div>
 
-      <ClarifyModal open={clarifyOpen} onClose={() => setClarifyOpen(false)} />
+      <ClarifyModal />
     </div>
   );
 }
 
-function InboxCard({ item, onClarify }: { item: GtdItem; onClarify: () => void }) {
+function InboxCard({ item }: { item: GtdItem }) {
+  const openClarify = useTaskStore((s) => s.openClarify);
+  const quickDispose = useTaskStore((s) => s.quickDispose);
+  const renameItem = useTaskStore((s) => s.renameItem);
+
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.title);
+
+  const startEdit = () => {
+    setDraft(item.title);
+    setEditing(true);
+  };
+  const saveEdit = () => {
+    renameItem(item.id, draft);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-primary/40 bg-card px-4 py-3">
+        <Pencil className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              saveEdit();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              setEditing(false);
+            }
+          }}
+          onBlur={saveEdit}
+          className="flex-1 bg-transparent text-sm text-foreground focus:outline-none"
+        />
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={saveEdit}
+          aria-label="Save"
+          className="tech-transition rounded-md p-1 text-primary hover:bg-primary/10"
+        >
+          <Check className="h-4 w-4" />
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={onClarify}
+      onClick={() => openClarify(item.id)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onClarify();
+          openClarify(item.id);
         }
       }}
-      className="group tech-transition flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-card px-4 py-3.5 hover:border-primary/40 hover:bg-secondary/30"
+      className="group tech-transition flex items-start gap-3 rounded-xl border border-border bg-card px-4 py-3.5 hover:border-primary/40 hover:bg-secondary/30"
     >
       <div className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-primary/60" />
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 cursor-pointer">
         <p className="text-sm leading-snug text-foreground">{item.title}</p>
         <div className="mt-1.5 flex items-center gap-2 text-[11px] text-muted-foreground">
           <span className="inline-flex items-center gap-1">
@@ -323,10 +371,69 @@ function InboxCard({ item, onClarify }: { item: GtdItem; onClarify: () => void }
           <SourceBadge source={item.source} provider={item.provider} size="xs" />
         </div>
       </div>
-      <span className="tech-transition inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground opacity-0 group-hover:bg-primary/10 group-hover:text-primary group-hover:opacity-100">
-        <Sparkles className="h-3.5 w-3.5" />
-        Clarify
-      </span>
+
+      {/* Hover quick-actions — dispose obvious items without opening the tree */}
+      <div className="flex shrink-0 items-center gap-0.5 opacity-0 tech-transition focus-within:opacity-100 group-hover:opacity-100">
+        <CardAction label="Edit" icon={Pencil} onClick={startEdit} />
+        <CardAction
+          label="Someday"
+          icon={Lightbulb}
+          onClick={() => quickDispose(item.id, "SOMEDAY")}
+        />
+        <CardAction
+          label="Reference"
+          icon={FileText}
+          onClick={() => quickDispose(item.id, "REFERENCE")}
+        />
+        <CardAction
+          label="Trash"
+          icon={Trash2}
+          danger
+          onClick={() => quickDispose(item.id, "TRASH")}
+        />
+        <CardAction
+          label="Clarify"
+          icon={Sparkles}
+          primary
+          onClick={() => openClarify(item.id)}
+        />
+      </div>
     </div>
+  );
+}
+
+function CardAction({
+  label,
+  icon: Icon,
+  onClick,
+  primary,
+  danger,
+}: {
+  label: string;
+  icon: LucideIcon;
+  onClick: () => void;
+  primary?: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={[
+        "tech-transition rounded-md p-1.5",
+        primary
+          ? "text-muted-foreground hover:bg-primary/10 hover:text-primary"
+          : danger
+            ? "text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+            : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+      ].join(" ")}
+    >
+      <Icon className="h-3.5 w-3.5" />
+    </button>
   );
 }

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { Energy, GtdContext, GtdItem, GtdProject, Person, ViewKey } from "./types";
+import { Disposition, Energy, GtdContext, GtdItem, GtdProject, Person, ViewKey } from "./types";
 import { MOCK_CONTEXTS, MOCK_ITEMS, MOCK_PEOPLE, MOCK_PROJECTS } from "./mockData";
 import { isCalendarItem } from "./utils";
 
@@ -148,6 +148,8 @@ interface TaskState {
   /** global quick-capture palette (ubiquitous capture). */
   quickCaptureOpen: boolean;
   quickCaptureMode: "single" | "sweep";
+  /** the focused clarify overlay (keyboard-driven inbox processing). */
+  clarifyModalOpen: boolean;
 
   // actions
   selectView: (view: ViewKey) => void;
@@ -162,8 +164,15 @@ interface TaskState {
   undoLastCapture: () => void;
   /** Clarify an inbox item — apply the GTD decision and advance to the next. */
   clarify: (id: string, decision: ClarifyDecision) => void;
+  /** One-tap disposition (hover / keyboard triage) — no full decision tree. */
+  quickDispose: (id: string, disposition: Disposition) => void;
+  /** Inline-rename a captured item (fix a typo without clarifying). */
+  renameItem: (id: string, title: string) => void;
   openQuickCapture: (mode: "single" | "sweep") => void;
   closeQuickCapture: () => void;
+  /** Open/close the clarify overlay for an item. */
+  openClarify: (id: string) => void;
+  closeClarify: () => void;
 }
 
 export const useTaskStore = create<TaskState>((set) => ({
@@ -179,6 +188,7 @@ export const useTaskStore = create<TaskState>((set) => ({
   lastCaptureIds: [],
   quickCaptureOpen: false,
   quickCaptureMode: "single",
+  clarifyModalOpen: false,
 
   selectView: (view) =>
     set({ selectedView: view, selectedContext: null, selectedItemId: null, selectedProjectId: null }),
@@ -227,13 +237,51 @@ export const useTaskStore = create<TaskState>((set) => ({
 
   openQuickCapture: (mode) => set({ quickCaptureOpen: true, quickCaptureMode: mode }),
   closeQuickCapture: () => set({ quickCaptureOpen: false }),
+  openClarify: (id) => set({ selectedItemId: id, clarifyModalOpen: true }),
+  closeClarify: () => set({ clarifyModalOpen: false }),
 
   clarify: (id, decision) =>
     set((s) => {
       const items = s.items.map((i) => (i.id === id ? applyDecision(i, decision) : i));
-      // advance to the next inbox item so you can churn to inbox-zero
-      const nextInbox = items.find((i) => i.disposition === "INBOX");
+      // advance to the OLDEST remaining inbox item — GTD processes FIFO
+      const remaining = items.filter((i) => i.disposition === "INBOX");
+      const nextInbox = remaining.length
+        ? remaining.reduce((a, b) =>
+            new Date(b.createdAt) < new Date(a.createdAt) ? b : a,
+          )
+        : undefined;
       return { items, selectedItemId: nextInbox?.id ?? null };
+    }),
+
+  quickDispose: (id, disposition) =>
+    set((s) => {
+      const now = new Date().toISOString();
+      return {
+        items: s.items.map((i) =>
+          i.id === id
+            ? {
+                ...i,
+                disposition,
+                updatedAt: now,
+                clarifiedAt: now,
+                ...(disposition === "DONE"
+                  ? { completedAt: now, isTwoMinute: true }
+                  : {}),
+              }
+            : i,
+        ),
+      };
+    }),
+
+  renameItem: (id, title) =>
+    set((s) => {
+      const t = title.trim();
+      if (!t) return s;
+      return {
+        items: s.items.map((i) =>
+          i.id === id ? { ...i, title: t, updatedAt: new Date().toISOString() } : i,
+        ),
+      };
     }),
 }));
 

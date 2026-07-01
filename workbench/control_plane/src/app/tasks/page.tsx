@@ -20,6 +20,8 @@ export default function TasksPage() {
   const { isMobile } = useViewMode();
   const selectedView = useTaskStore((s) => s.selectedView);
   const openQuickCapture = useTaskStore((s) => s.openQuickCapture);
+  const quickCaptureOpen = useTaskStore((s) => s.quickCaptureOpen);
+  const clarifyModalOpen = useTaskStore((s) => s.clarifyModalOpen);
   const [leftOpen, setLeftOpen] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
   const isInbox = selectedView === "inbox";
@@ -29,6 +31,7 @@ export default function TasksPage() {
   // AppShell-level listener — see spec §2.1 C2 [plumbing].)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (quickCaptureOpen || clarifyModalOpen) return; // a modal owns the keyboard
       const el = e.target as HTMLElement | null;
       const typing =
         !!el &&
@@ -53,7 +56,7 @@ export default function TasksPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openQuickCapture]);
+  }, [openQuickCapture, quickCaptureOpen, clarifyModalOpen]);
 
   if (isMobile) {
     // Simplified single-pane stack for narrow screens; full mobile flows land

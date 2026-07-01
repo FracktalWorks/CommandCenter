@@ -16,6 +16,7 @@ import {
   SlidersHorizontal,
   HardDrive,
   Cloud,
+  Search,
   type LucideIcon,
 } from "lucide-react";
 import { useTaskStore, type ClarifyDecision } from "../lib/taskStore";
@@ -25,7 +26,7 @@ import {
   type ClarifyDisposition,
 } from "../lib/clarify";
 import { CONNECTED_PROVIDERS } from "../lib/mockData";
-import { Energy, GtdItem, Person, Target } from "../lib/types";
+import { Energy, GtdItem, GtdProject, Person, Target } from "../lib/types";
 import { durationLabel, initials, snoozeOptions } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
 
@@ -61,7 +62,10 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
   const people = useTaskStore((s) => s.people);
   const projects = useTaskStore((s) => s.projects);
 
-  const proposal = useMemo(() => proposeClarification(item, people), [item, people]);
+  const proposal = useMemo(
+    () => proposeClarification(item, people, projects),
+    [item, people, projects],
+  );
 
   const [disposition, setDisposition] = useState<ClarifyDisposition>(proposal.disposition);
   const [nextAction, setNextAction] = useState(proposal.nextAction);
@@ -76,7 +80,13 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
     defaultStatus(proposal.disposition, providerStatuses(proposal.target ?? { source: "LOCAL" })),
   );
   const [adjust, setAdjust] = useState(false);
+  // "Where it goes" details stay collapsed by default — the assistant already
+  // filled them in, so most items are a single tap. Expand only to fine-tune.
+  const [showDetails, setShowDetails] = useState(false);
 
+  const selectedProject = projectId
+    ? projects.find((p) => p.id === projectId)
+    : undefined;
   const statusesForDest = useMemo(() => providerStatuses(dest), [dest]);
   const projectsForDest = useMemo(
     () =>
@@ -193,9 +203,26 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
       <div className="flex flex-col gap-4 px-5 py-4">
         {/* AI proposal — review & confirm */}
         <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
-          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-primary">
-            <Sparkles className="h-3.5 w-3.5" />
-            Assistant recommends
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-primary">
+              <Sparkles className="h-3.5 w-3.5" />
+              Assistant recommends
+            </div>
+            <span
+              className={[
+                "rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide",
+                proposal.confidence === "high"
+                  ? "bg-primary/15 text-primary"
+                  : "bg-secondary text-muted-foreground",
+              ].join(" ")}
+              title={
+                proposal.confidence === "high"
+                  ? "The assistant is confident — accept in one tap."
+                  : "A best guess — glance and confirm, or adjust."
+              }
+            >
+              {proposal.confidence === "high" ? "Confident" : "Best guess"}
+            </span>
           </div>
           <div className="flex items-center gap-2 text-sm font-medium text-foreground">
             <Meta.icon className="h-4 w-4 text-primary" />
@@ -379,20 +406,57 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
                   <p className="mt-1.5 text-[10px] text-muted-foreground">
                     Private to you. Delegated or collaborative work belongs on a connected tool.
                   </p>
+                ) : !showDetails ? (
+                  // Collapsed: one compact line of what the assistant already set.
+                  // Keeps processing calm — expand only when you want to fine-tune.
+                  <button
+                    type="button"
+                    onClick={() => setShowDetails(true)}
+                    className="tech-transition mt-2.5 flex w-full items-center justify-between gap-2 rounded-md border border-border bg-background/40 px-3 py-2 text-left hover:border-primary/40"
+                  >
+                    <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-muted-foreground">
+                      {disposition !== "PROJECT" && (
+                        <span className="inline-flex items-center gap-1 text-foreground">
+                          <FolderKanban className="h-3 w-3 text-primary/70" />
+                          {selectedProject ? short(selectedProject.outcome, 20) : "No project"}
+                          {proposal.projectInferred && projectId === proposal.projectId && (
+                            <Sparkles className="h-2.5 w-2.5 text-primary" />
+                          )}
+                        </span>
+                      )}
+                      {status && (
+                        <>
+                          <span className="text-border">·</span>
+                          <span>{status}</span>
+                        </>
+                      )}
+                      {assignee && disposition !== "PROJECT" && (
+                        <>
+                          <span className="text-border">·</span>
+                          <span>{assignee.name}</span>
+                        </>
+                      )}
+                      {dueAt && (
+                        <>
+                          <span className="text-border">·</span>
+                          <span>{dueAt}</span>
+                        </>
+                      )}
+                    </span>
+                    <span className="shrink-0 text-[11px] font-medium text-primary">Edit</span>
+                  </button>
                 ) : (
                   <div className="mt-2.5 flex flex-col gap-2.5">
                     {disposition !== "PROJECT" && (
                       <SubField label="Project">
-                        <div className="flex flex-wrap gap-1.5">
-                          <Pill plain active={!projectId} onClick={() => setProjectId(undefined)}>
-                            No project
-                          </Pill>
-                          {projectsForDest.map((p) => (
-                            <Pill key={p.id} plain active={projectId === p.id} onClick={() => setProjectId(p.id)}>
-                              {short(p.outcome)}
-                            </Pill>
-                          ))}
-                        </div>
+                        <ProjectPicker
+                          projects={projectsForDest}
+                          suggestedId={
+                            proposal.projectInferred ? proposal.projectId : undefined
+                          }
+                          value={projectId}
+                          onChange={setProjectId}
+                        />
                       </SubField>
                     )}
 
@@ -481,6 +545,76 @@ function PeoplePicker({
           {p.name}
         </button>
       ))}
+    </div>
+  );
+}
+
+// Scales to many projects: shows the assistant's match first, then a filter box
+// so you never scan a wall of pills. Type to search; tap to file.
+function ProjectPicker({
+  projects,
+  suggestedId,
+  value,
+  onChange,
+}: {
+  projects: GtdProject[];
+  suggestedId?: string;
+  value?: string;
+  onChange: (id: string | undefined) => void;
+}) {
+  const [q, setQ] = useState("");
+  const suggested = suggestedId ? projects.find((p) => p.id === suggestedId) : undefined;
+  const ql = q.trim().toLowerCase();
+  const matches = projects
+    .filter((p) => p.id !== suggestedId && (!ql || p.outcome.toLowerCase().includes(ql)))
+    .slice(0, ql ? 8 : 4);
+
+  const renderRow = (p: GtdProject | undefined, hint: boolean) => {
+    const active = (p?.id ?? undefined) === value;
+    return (
+      <button
+        key={p?.id ?? "__none"}
+        type="button"
+        onClick={() => onChange(p?.id)}
+        className={[
+          "tech-transition flex w-full items-center gap-2 rounded-md border px-3 py-2 text-left text-[13px]",
+          active
+            ? "border-primary bg-primary/10 text-primary"
+            : "border-border text-foreground hover:bg-secondary",
+        ].join(" ")}
+      >
+        {hint ? (
+          <Sparkles className="h-3.5 w-3.5 shrink-0 text-primary" />
+        ) : (
+          <FolderKanban className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        )}
+        <span className="min-w-0 flex-1 truncate">{p ? p.outcome : "No project"}</span>
+        {active && <Check className="h-3.5 w-3.5 shrink-0" />}
+      </button>
+    );
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {projects.length > 4 && (
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search projects…"
+            className="w-full rounded-md border border-border bg-background/60 py-1.5 pl-8 pr-3 text-[13px] text-foreground focus:border-primary/50 focus:outline-none"
+          />
+        </div>
+      )}
+      {suggested &&
+        (!ql || suggested.outcome.toLowerCase().includes(ql)) &&
+        renderRow(suggested, true)}
+      {renderRow(undefined, false)}
+      {matches.map((p) => renderRow(p, false))}
+      {ql && !matches.length && !suggested && (
+        <p className="px-1 py-1 text-[11px] text-muted-foreground">No matching projects.</p>
+      )}
     </div>
   );
 }

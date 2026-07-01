@@ -4,7 +4,7 @@
 // returns the same shape from the `task-manager` agent. The human always
 // reviews/edits before it's applied (GTD: AI proposes, you decide).
 
-import { Energy, GtdItem, Person, Target } from "./types";
+import { Energy, GtdItem, GtdProject, Person, Target } from "./types";
 
 /** The disposition the assistant recommends (superset of the GTD outcomes). */
 export type ClarifyDisposition =
@@ -16,6 +16,9 @@ export type ClarifyDisposition =
   | "SOMEDAY" // incubate
   | "REFERENCE" // file, non-actionable
   | "TRASH"; // no longer needed
+
+/** How sure the assistant is — drives how loudly the UI nudges a one-tap accept. */
+export type Confidence = "high" | "medium" | "low";
 
 export interface ClarifyProposal {
   actionable: boolean;
@@ -32,8 +35,12 @@ export interface ClarifyProposal {
   suggestedAssignee?: Person;
   /** where it should be stored — Local vs a connected PM tool (§5.1) */
   target?: Target;
-  /** an existing project to file it under, if any */
+  /** an existing project to file it under, if any (auto-matched) */
   projectId?: string;
+  /** true when the project was inferred by the assistant (vs already set on the item) */
+  projectInferred?: boolean;
+  /** how sure the assistant is about this disposition */
+  confidence: Confidence;
   /** short why, shown under the proposal */
   rationale: string;
 }
@@ -55,6 +62,42 @@ export function defaultStatus(
 
 const has = (t: string, ...words: string[]) => words.some((w) => t.includes(w));
 const CAP = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+
+// Words too common to carry a project signal.
+const STOP = new Set([
+  "the", "and", "for", "with", "our", "out", "get", "set", "new", "you", "your",
+  "this", "that", "from", "into", "about", "need", "want", "make", "have", "has",
+  "ask", "put", "add", "let", "off", "day", "week", "next", "soon", "some", "any",
+]);
+
+function tokenize(s: string): string[] {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !STOP.has(w));
+}
+
+/** Match an inbox item to the best-fit existing project by keyword overlap.
+ *  Lets the assistant file captures under the right project automatically —
+ *  even across many projects — instead of forcing you to hunt a long list.
+ *  Only suggests when at least two meaningful words overlap. */
+export function suggestProject(
+  item: GtdItem,
+  projects: GtdProject[],
+): { projectId?: string; score: number } {
+  const words = new Set([...tokenize(item.title), ...tokenize(item.notes ?? "")]);
+  if (!words.size) return { score: 0 };
+  let best: { projectId?: string; score: number } = { score: 0 };
+  for (const p of projects) {
+    if (p.status !== "ACTIVE") continue;
+    const pt = new Set([...tokenize(p.outcome), ...tokenize(p.purpose ?? "")]);
+    let score = 0;
+    for (const w of words) if (pt.has(w)) score++;
+    if (score > best.score) best = { projectId: p.id, score };
+  }
+  return best.score >= 2 ? best : { score: best.score };
+}
 
 /** Infer the GTD context from the wording. */
 function inferContext(t: string): string {
@@ -101,6 +144,7 @@ function coreProposal(item: GtdItem, people: Person[]): ClarifyProposal {
       actionable: false,
       disposition: "SOMEDAY",
       nextAction: item.title,
+      confidence: "high",
       rationale: "Reads like an idea to incubate, not a commitment yet.",
     };
   }
@@ -109,6 +153,7 @@ function coreProposal(item: GtdItem, people: Person[]): ClarifyProposal {
       actionable: false,
       disposition: "REFERENCE",
       nextAction: item.title,
+      confidence: "high",
       rationale: "Looks like information to keep, not an action.",
     };
   }
@@ -125,6 +170,7 @@ function coreProposal(item: GtdItem, people: Person[]): ClarifyProposal {
       suggestedAssignee: assignee,
       timeEstimateMins: 5,
       energy: "low",
+      confidence: "high",
       rationale: `Someone else's to do — delegate to ${assignee.name} and track it.`,
     };
   }
@@ -138,6 +184,7 @@ function coreProposal(item: GtdItem, people: Person[]): ClarifyProposal {
       nextAction: `Outline the first step for: ${item.title}`,
       context: "@computer",
       energy: "medium",
+      confidence: "medium",
       rationale: "Needs more than one action — track it as a project with a next action.",
     };
   }
@@ -150,6 +197,7 @@ function coreProposal(item: GtdItem, people: Person[]): ClarifyProposal {
       nextAction: draftNextAction(item.title, ctx),
       context: ctx,
       energy: "low",
+      confidence: "high",
       rationale: "Time-specific — put it on the calendar (hard landscape).",
     };
   }
@@ -163,6 +211,7 @@ function coreProposal(item: GtdItem, people: Person[]): ClarifyProposal {
       isTwoMinute: true,
       timeEstimateMins: 2,
       energy: "low",
+      confidence: "high",
       rationale: "Quick — under two minutes, so just do it now.",
     };
   }
@@ -175,30 +224,63 @@ function coreProposal(item: GtdItem, people: Person[]): ClarifyProposal {
     context: ctx,
     energy: ctx === "@errands" ? "low" : "medium",
     timeEstimateMins: ctx === "@calls" ? 10 : ctx === "@errands" ? 20 : 25,
+    confidence: "medium",
     rationale: `Actionable now — a next action for ${ctx}.`,
   };
 }
 
-/** Local heuristic proposal — a stand-in for the AI clarify call. Adds a
- *  suggested storage **target** (Local vs a connected PM tool) and project:
- *  delegated/already-synced work → the team tool; solo work → Local (§5.1). */
+/** Local heuristic proposal — a stand-in for the AI clarify call. Fills in as
+ *  much as it can so the common case is a single tap: it auto-matches an
+ *  existing **project** by keyword, then picks the storage **target** to follow
+ *  that project (delegated/collaborative → the team tool; solo → Local, §5.1). */
 export function proposeClarification(
   item: GtdItem,
   people: Person[] = [],
+  projects: GtdProject[] = [],
 ): ClarifyProposal {
   const core = coreProposal(item, people);
+
+  // Match an existing project (skip for PROJECT — that creates a *new* one).
+  const existing = item.projectId
+    ? projects.find((p) => p.id === item.projectId)
+    : undefined;
+  const match =
+    !existing && core.disposition !== "PROJECT"
+      ? suggestProject(item, projects)
+      : { score: 0 };
+  const matched = match.projectId
+    ? projects.find((p) => p.id === match.projectId)
+    : undefined;
+  const project = existing ?? matched;
+
+  // Where it goes: follow the matched project's home; delegation is always
+  // collaborative so it lands on a synced tool regardless.
   const baseTarget: Target =
     item.source === "SYNCED"
       ? { source: "SYNCED", provider: item.provider ?? "clickup" }
       : { source: "LOCAL", provider: "local" };
-  // Delegation is inherently collaborative → default it to the team tool.
-  const target: Target =
-    core.disposition === "WAITING"
-      ? {
-          source: "SYNCED",
-          provider:
-            item.provider && item.provider !== "local" ? item.provider : "clickup",
-        }
-      : baseTarget;
-  return { ...core, target, projectId: item.projectId };
+  let target: Target = project
+    ? {
+        source: project.source,
+        provider: project.provider ?? (project.source === "LOCAL" ? "local" : "clickup"),
+      }
+    : baseTarget;
+  if (core.disposition === "WAITING") {
+    target = {
+      source: "SYNCED",
+      provider:
+        project?.source === "SYNCED" && project.provider
+          ? project.provider
+          : item.provider && item.provider !== "local"
+            ? item.provider
+            : "clickup",
+    };
+  }
+
+  const projectInferred = !!matched;
+  const rationale = matched
+    ? `${core.rationale} Looks like it belongs to “${matched.outcome}”.`
+    : core.rationale;
+
+  return { ...core, target, projectId: project?.id, projectInferred, rationale };
 }

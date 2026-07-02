@@ -98,6 +98,33 @@ failure via isolated Copilot SDK sandboxes.
   all other workspace files are hidden from the frontend user.  The workspace
   API exposes these directories but hides other paths.
 
+## Harness Engineering Practices (binding for harness-touching work)
+
+CommandCenter's orchestrator IS an agent harness. Any change touching the
+agent loop, tool surface, context assembly, memory, HITL, streaming,
+sub-agents, permissions, or evals must be informed by current harness
+best practice:
+
+- Reference index: github.com/ai-boost/awesome-harness-engineering
+  (curated practices: context compaction, tool design, risk annotations,
+  eval harnesses, observability, sandboxing). Consult it when designing or
+  reviewing harness features; cite the practice you're applying or
+  deliberately rejecting in the spec/PR.
+- Our gap analysis + work queue: ai-company-brain/specs/harness_hardening_2026-07.md
+  (HH-1..8). Check it before starting harness work — the gap may already be
+  queued, in-progress, or explicitly deferred with rationale.
+- Standing rules derived from it:
+  1. New platform/agent tools declare risk annotations
+     (acb_skills.tool_annotations: read_only/destructive/idempotent/open_world).
+  2. Destructive or outward-facing actions FAIL CLOSED without a human
+     (request_confirmation default; never auto-approve non-interactively).
+  3. Harness behaviour changes ship with a golden trajectory eval in
+     evals/trajectories/ (offline, CI-blocking) — not just unit tests.
+  4. Keep per-agent tool surfaces small: use tool_scope (platform tools)
+     and own_tool_scope (repo-baked tools) in config.json.
+  5. Keep the system-prompt prefix byte-stable (cache-friendly); don't
+     inject volatile content before the stable blocks.
+
 ## Package Versions (as of 2026-06-10)
 
 - agent-framework-core: 1.8.0

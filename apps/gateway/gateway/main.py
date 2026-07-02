@@ -199,6 +199,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         _log.warning("gateway.email_sync_skipped", error=str(exc))
 
+    # Anthropic prompt-cache warming (specs/llm_caching_memory.md Phase 6).
+    # Fire the orchestrator's stable prefix at any Anthropic-backed tier with
+    # max_tokens=0 so the first real user request is a cache HIT, not a cold
+    # miss. Fire-and-forget + gated on PROMPT_CACHE_PREWARM=1 (off by default:
+    # our default tier is DeepSeek, where this is a no-op cost).
+    _asyncio.ensure_future(_prewarm_prompt_cache())
+
     yield
 
     # Stop background email sync scheduler
@@ -209,6 +216,74 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         pass
 
     _log.info("gateway.shutdown")
+
+
+async def _prewarm_prompt_cache() -> None:
+    """Pre-warm the Anthropic KV cache for the orchestrator's stable prefix.
+
+    Gated on ``PROMPT_CACHE_PREWARM=1``. For each configured tier that resolves
+    to an Anthropic model, fire the stable prefix once with ``max_tokens`` tiny
+    and ``cache_control`` on the system block so the first real user request is
+    a cache read (0.10× cost) instead of a cold miss + write (1.25×). Purely a
+    latency/first-hit optimisation — never blocks startup and swallows all
+    errors. No-op for DeepSeek/OpenAI tiers (OpenAI warms automatically).
+    """
+    if os.environ.get("PROMPT_CACHE_PREWARM", "0") != "1":
+        return
+    try:
+        from acb_llm.client import _TIER_MODEL, ensure_model_registered
+        from acb_llm.prompt_cache import is_anthropic_model
+        from litellm import acompletion  # noqa: PLC0415
+        from orchestrator.agents import build_orchestrator_agent  # noqa: PLC0415
+
+        agent = build_orchestrator_agent(with_history=False)
+        opts = agent.default_options
+        stable_prefix = (
+            (opts.get("instructions") if isinstance(opts, dict) else None) or ""
+        )
+        if len(stable_prefix) < 400:  # nothing worth caching
+            return
+
+        # Build a system message with the cache_control breakpoint at the seam.
+        # No sentinel needed — with no dynamic suffix the whole prefix is the
+        # cached block; mark it explicitly here.
+        system_msg = {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": stable_prefix,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+        warmed: set[str] = set()
+        for tier_id, model in _TIER_MODEL.items():
+            if model in warmed or not is_anthropic_model(model):
+                continue
+            warmed.add(model)
+            ensure_model_registered(model)
+            try:
+                await acompletion(
+                    model=model,
+                    messages=[
+                        system_msg,
+                        {"role": "user", "content": "warm"},
+                    ],
+                    max_tokens=1,
+                    temperature=0.0,
+                )
+                _log.info(
+                    "gateway.cache_prewarm_complete", tier=tier_id, model=model
+                )
+            except Exception as exc:  # noqa: BLE001
+                _log.warning(
+                    "gateway.cache_prewarm_failed",
+                    model=model,
+                    error=str(exc)[:150],
+                )
+    except Exception as exc:  # noqa: BLE001 — never block startup on warming
+        _log.debug("gateway.cache_prewarm_skipped", error=str(exc)[:150])
 
 
 app = FastAPI(
@@ -315,9 +390,19 @@ if _HAS_MAF:
             # Build per-request agent (cheap — tools are closures, no network I/O)
             agent = build_orchestrator_agent(with_history=False)
 
+            # thread_id (also derived below for the Redis relay) — pass it into
+            # memory enrichment so the memory block is session-cached and stays
+            # byte-stable across turns (specs/llm_caching_memory.md Phase 4).
+            _thread_id_for_mem: str = (
+                input_data.get("thread_id") or input_data.get("threadId") or ""
+            ) or None  # type: ignore[assignment]
+
             # Inject Mem0 + Graphiti context into default_options (no-op if disabled)
             if last_user_msg:
-                enriched = await enrich_instructions_with_memory(agent, user_id, last_user_msg)
+                enriched = await enrich_instructions_with_memory(
+                    agent, user_id, last_user_msg,
+                    thread_id=_thread_id_for_mem,
+                )
                 opts = agent.default_options
                 if isinstance(opts, dict) and enriched:
                     opts["instructions"] = enriched

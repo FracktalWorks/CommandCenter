@@ -16,8 +16,10 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from acb_common import get_logger, get_settings
+from acb_common import get_logger
 from litellm import acompletion  # type: ignore[import-untyped]
+
+from acb_llm.prompt_cache import apply_prompt_caching
 
 _log = get_logger("acb_llm")
 
@@ -365,6 +367,48 @@ def _init_telemetry() -> None:
         _log.warning("acb_llm.otel_init_failed", error=str(exc))
 
 
+# ── LiteLLM Redis response cache (specs Phase 5) ─────────────────────────────
+
+_litellm_cache_initialised = False
+
+
+def _init_litellm_cache() -> None:
+    """Enable the LiteLLM exact-match Redis response cache (opt-in per call).
+
+    We use the litellm SDK directly (no proxy), so the proxy's ``cache: True``
+    config doesn't apply — the cache is installed here via ``litellm.cache``.
+    Gated on ``LITELLM_REDIS_CACHE=1`` so it's inert unless explicitly turned on.
+    Even when installed, only requests that pass ``cache={"no-cache": False,
+    "no-store": False}`` (i.e. ``enable_litellm_cache=True`` on complete*) are
+    stored/served — every other call bypasses it. Good for deterministic
+    classify/triage/extraction paths that repeat with identical inputs.
+    """
+    global _litellm_cache_initialised
+    if _litellm_cache_initialised:
+        return
+    _litellm_cache_initialised = True
+
+    if os.environ.get("LITELLM_REDIS_CACHE", "0") != "1":
+        return
+    try:
+        import litellm  # noqa: PLC0415
+        from litellm.caching.caching import Cache  # noqa: PLC0415
+
+        ttl = int(os.environ.get("LITELLM_REDIS_CACHE_TTL", "300"))
+        litellm.cache = Cache(
+            type="redis",
+            host=os.environ.get("REDIS_HOST", "redis"),
+            port=int(os.environ.get("REDIS_PORT", "6379")),
+            ttl=ttl,
+            # mode default_off equivalent for the SDK: nothing is cached unless
+            # the per-request cache flag opts in (see complete*).
+            mode="default_off",
+        )
+        _log.info("acb_llm.litellm_redis_cache_enabled", ttl=ttl)
+    except Exception as exc:  # noqa: BLE001 — cache must never block calls
+        _log.warning("acb_llm.litellm_cache_init_failed", error=str(exc))
+
+
 def _usage_stats(response: Any) -> dict[str, int]:
     """Extract token + cache counters from a LiteLLM response, best-effort.
 
@@ -443,6 +487,7 @@ def _emit_usage(model: str, tier: str, response: Any) -> None:
 # defaults above are the fallback if config files are absent).
 _init_tier_models()
 _init_telemetry()
+_init_litellm_cache()
 
 
 async def complete(
@@ -451,12 +496,20 @@ async def complete(
     messages: list[dict[str, str]],
     temperature: float = 0.2,
     max_tokens: int = 1024,
+    cache_key: str | None = None,
+    enable_litellm_cache: bool = False,
     **extra: Any,
 ) -> str:
     """Send a chat completion directly to the provider via litellm SDK.
 
     Returns the assistant message content as a plain string. Caller is responsible
     for any downstream parsing / guardrail validation (see acb_llm.guardrails).
+
+    ``cache_key`` routes same-prefix requests to the same OpenAI server pool
+    (``prompt_cache_key``) and is a no-op for other providers.  Set
+    ``enable_litellm_cache=True`` to opt this call into the LiteLLM Redis
+    exact-match response cache (Phase 5) — good for deterministic classify /
+    triage / extraction calls that repeat with identical inputs.
     """
     await _ensure_keys_loaded()
 
@@ -464,6 +517,14 @@ async def complete(
 
     # Dynamically register model so new provider models work immediately.
     ensure_model_registered(model)
+
+    # Provider-aware prompt caching (specs/llm_caching_memory.md Phase 2/3):
+    # Anthropic cache_control blocks + OpenAI prompt_cache_key; sentinel stripped.
+    messages, _tools, extra = apply_prompt_caching(  # type: ignore[assignment]
+        model=model, messages=messages, tools=None, cache_key=cache_key, extra=extra
+    )
+    if enable_litellm_cache:
+        extra.setdefault("cache", {"no-cache": False, "no-store": False})
 
     last_exc: Exception | None = None
     for attempt in range(3):
@@ -506,6 +567,8 @@ async def complete_with_tools(
     tool_choice: str = "auto",
     temperature: float = 0.2,
     max_tokens: int = 4096,
+    cache_key: str | None = None,
+    enable_litellm_cache: bool = False,
     **extra: Any,
 ) -> dict[str, Any]:
     """Like complete() but with tool-calling support.
@@ -515,10 +578,24 @@ async def complete_with_tools(
 
     The returned dict is always JSON-serializable (plain Python dicts/lists, no
     Pydantic objects) so it can be stored in LangGraph state without issue.
+
+    See ``complete`` for ``cache_key`` / ``enable_litellm_cache`` semantics.
+    For Anthropic tiers the ``tools`` array's last entry is marked
+    ``cache_control`` so the whole (byte-stable) schema block is cached.
     """
     await _ensure_keys_loaded()
 
     model = _TIER_MODEL[tier.value]
+    ensure_model_registered(model)
+
+    # Provider-aware prompt caching: Anthropic cache_control on the stable
+    # system block AND the tool array; OpenAI prompt_cache_key; sentinel stripped.
+    messages, tools, extra = apply_prompt_caching(  # type: ignore[assignment]
+        model=model, messages=messages, tools=tools,
+        cache_key=cache_key, extra=extra,
+    )
+    if enable_litellm_cache:
+        extra.setdefault("cache", {"no-cache": False, "no-store": False})
 
     last_exc: Exception | None = None
     for attempt in range(3):

@@ -478,38 +478,71 @@ async def enrich_instructions_with_memory(
     base_agent: Agent,
     user_id: str,
     user_query: str,
+    thread_id: str | None = None,
 ) -> str:
-    """Return an instructions string with Mem0 + Graphiti context prepended.
+    """Return an instructions string with Mem0 + Graphiti context appended.
 
     Called by the chat route BEFORE running the agent so per-request memory
     context is injected without rebuilding the agent on every request.
 
     Returns the base instructions unchanged when memory is disabled / empty.
+
+    When ``thread_id`` is given, the assembled memory block is cached per
+    session in Redis (specs/llm_caching_memory.md Phase 4) so it stays
+    byte-stable across turns — otherwise Mem0's per-query semantic search
+    returns a different block each turn and defeats cross-turn prompt caching.
+
+    A CACHE BREAK sentinel is inserted between the stable base instructions and
+    the dynamic memory block so the acb_llm.prompt_cache transform can put an
+    Anthropic cache_control breakpoint exactly at that seam. It is consumed
+    (Anthropic) or stripped (others) before the request leaves the gateway.
     """
-    parts: list[str] = []
 
-    # Mem0: relevant past facts for this user
-    mem_ctx = await get_memory_context(user_id, user_query)
-    if mem_ctx:
-        parts.append("## Memory from past conversations\n" + mem_ctx)
+    async def _build_memory_block() -> str:
+        parts: list[str] = []
+        # Mem0: relevant past facts for this user
+        mem_ctx = await get_memory_context(user_id, user_query)
+        if mem_ctx:
+            parts.append("## Memory from past conversations\n" + mem_ctx)
+        # Graphiti: time-aware facts about entities mentioned in the query
+        entity_hint = user_query[:80] if user_query else ""
+        if entity_hint:
+            graph_ctx = await search_entity_timeline(entity_hint, user_query)
+            if graph_ctx:
+                parts.append(
+                    "## Timeline facts from knowledge graph\n" + graph_ctx
+                )
+        return "\n\n".join(parts)
 
-    # Graphiti: time-aware facts about entities mentioned in the query
-    entity_hint = user_query[:80] if user_query else ""
-    if entity_hint:
-        graph_ctx = await search_entity_timeline(entity_hint, user_query)
-        if graph_ctx:
-            parts.append("## Timeline facts from knowledge graph\n" + graph_ctx)
+    # Session-scoped fetch (once per thread) → byte-stable memory across turns.
+    memory_block = ""
+    try:
+        from acb_memory import get_session_memory  # noqa: PLC0415
 
-    if not parts:
-        # MAF Agent stores instructions in default_options dict, not as a plain attr.
-        opts = base_agent.default_options
-        return (opts.get("instructions") if isinstance(opts, dict) else None) or ""  # type: ignore[return-value]
+        _redis = None
+        try:
+            from orchestrator.stream_relay import _get_client  # noqa: PLC0415
+            _redis = await _get_client()
+        except Exception:  # noqa: BLE001 — no Redis → fetch fresh each turn
+            _redis = None
 
-    memory_block = "\n\n".join(parts)
+        memory_block = await get_session_memory(
+            redis=_redis, thread_id=thread_id, build=_build_memory_block
+        )
+    except ImportError:
+        memory_block = await _build_memory_block()
+
     # MAF Agent stores instructions in default_options["instructions"] (a dict).
     opts = base_agent.default_options
-    base_instructions = (opts.get("instructions") if isinstance(opts, dict) else None) or ""
-    return f"{base_instructions}\n\n{memory_block}"
+    base_instructions = (
+        opts.get("instructions") if isinstance(opts, dict) else None
+    ) or ""
+
+    if not memory_block:
+        return base_instructions  # type: ignore[return-value]
+
+    from acb_llm.prompt_cache import CACHE_BREAK  # noqa: PLC0415
+    return f"{base_instructions}\n{CACHE_BREAK}\n{memory_block}"
 
 
 def build_agents() -> list[Agent]:

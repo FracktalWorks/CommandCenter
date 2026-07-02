@@ -1,12 +1,55 @@
 # LLM Prompt Caching + Memory System — Development Plan
 
-> **Status:** Planned — not yet implemented
+> **Status:** **Core implemented (2026-07-03)** — Phases 1–6 shipped; Phase 7 (email tool-surface reduction) is app-scoped and pending. See the "Implementation Status" section below.
 > **Owner:** CommandCenter Core
 > **Created:** 2026-06-17
-> **ADR references:** ADR-008 (approved, unimplemented), ADR-012 (Phase 2 deferred)
+> **ADR references:** ADR-008 (**implemented** 2026-07-03), ADR-012 (Phase 2 deferred)
 > **WBS reference:** WBS 2.6 (semantic cache + token compression)
-> **Related files:** `packages/acb_llm/acb_llm/client.py`, `apps/orchestrator/orchestrator/executor.py`, `packages/acb_memory/`, `infra/litellm/config.yaml`, `apps/gateway/gateway/routes/agent.py`, `apps/agent-email-assistant/agents.py`
+> **Related files:** `packages/acb_llm/acb_llm/prompt_cache.py` (NEW — the transform), `packages/acb_llm/acb_llm/client.py`, `apps/gateway/gateway/routes/v1_compat.py` (agent-traffic choke point), `apps/orchestrator/orchestrator/executor.py`, `apps/orchestrator/orchestrator/agents.py`, `packages/acb_memory/acb_memory/session_cache.py` (NEW), `apps/gateway/gateway/main.py` (prewarm), `apps/agent-email-assistant/agents.py`
 > **Companion plan:** [`specs/email_tool_consolidation.md`](email_tool_consolidation.md) — shrinking the tool surface (Phase 7 here depends on it)
+
+---
+
+## Implementation Status (2026-07-03)
+
+> **Key architecture correction vs the original plan:** CommandCenter talks to
+> providers through the **litellm SDK directly — there is NO LiteLLM proxy
+> process** (`v1_compat.py` and `client.py` both call `litellm.acompletion`).
+> So the plan's "LiteLLM proxy pre-call hook" (Phase 3.2) doesn't apply. The
+> equivalent, and cleaner, design is a **single request-transform**
+> (`acb_llm/prompt_cache.py::apply_prompt_caching`) called by BOTH completion
+> paths right before `acompletion`. litellm 1.86.0 carries `cache_control` on
+> OpenAI-format message content blocks + tool defs through to Anthropic
+> (verified), so the transform stays provider-agnostic and lets litellm do the
+> Anthropic translation. It is our own code → unit-testable, and covers 100% of
+> paths (native-MAF `OpenAIChatCompletionClient`, Copilot SDK, orchestrator).
+
+| Phase | Status | Where |
+|---|---|---|
+| 1 — Cache token observability | ✅ pre-existing (HH-3) | `client.py::_usage_stats`/`_emit_usage` already extract+log+audit `cache_read/creation_input_tokens` + OpenAI `cached_tokens` |
+| 2 — OpenAI `prompt_cache_key` routing | ✅ done | `apply_prompt_caching` sets `prompt_cache_key` for OpenAI tiers; `complete*` accept `cache_key`; `v1_compat` derives it from `prompt_cache_key`/`user` |
+| 3.1 — CACHE BREAK sentinel | ✅ done | `executor.py` memory-merge (MAF `instructions` + Copilot `system_message`); `agents.py::enrich_instructions_with_memory` |
+| 3.2 — sentinel → cached system blocks | ✅ done (as the transform, not a proxy hook) | `apply_prompt_caching` splits the system message at the sentinel; stable block → `cache_control: ephemeral`, dynamic memory → uncached |
+| 3.3 — tool-array `cache_control` | ✅ done | `apply_prompt_caching` marks the LAST tool for Anthropic tiers (caches the whole tools prefix — the first, highest-value block) |
+| 4 — session-scoped memory | ✅ done | `acb_memory/session_cache.py` (injected-redis, layering-safe); wired into `agent.py` + `enrich_instructions_with_memory`; keyed on `thread_id`, 10-min TTL, `SESSION_MEMORY_CACHE=1` |
+| 4.2 — Graphiti episode worthiness gate | ✅ done | `graphiti_client.py::_is_episode_worthy` (tier1, opt-in `GRAPHITI_EPISODE_FILTER=1`, conservative) |
+| 5 — LiteLLM Redis exact-match cache | ✅ done (SDK-side) | `client.py::_init_litellm_cache` installs `litellm.cache` gated on `LITELLM_REDIS_CACHE=1`; per-call opt-in via `enable_litellm_cache=True` |
+| 6 — cache warming at startup | ✅ done | `main.py::_prewarm_prompt_cache` (fire-and-forget, gated `PROMPT_CACHE_PREWARM=1`, warms only Anthropic-resolved tiers) |
+| 7 — email tool-surface reduction | ⏳ pending | app-scoped (email-assistant), independent of the caching core — see `email_tool_consolidation.md` |
+
+**Env flags (all default OFF except session-memory, which is ON):**
+`SESSION_MEMORY_CACHE` (default 1), `SESSION_MEMORY_CACHE_TTL` (600),
+`LITELLM_REDIS_CACHE` (0), `LITELLM_REDIS_CACHE_TTL` (300),
+`GRAPHITI_EPISODE_FILTER` (0), `PROMPT_CACHE_PREWARM` (0).
+
+**Provider reality:** the default tier is **DeepSeek**, where explicit
+`cache_control` is a no-op (DeepSeek does automatic context caching) — the
+sentinel is simply stripped. The Anthropic explicit-cache path activates the
+moment any tier is pointed at a `claude-…` model (e.g. via the Settings tier
+picker or a per-agent model). The transform is correct for all three provider
+classes today; the win materialises when Anthropic/OpenAI is in the tier.
+
+**Tests:** `tests/unit/test_prompt_cache.py` (11), `tests/unit/test_session_memory_cache.py` (7), `evals/trajectories/test_prompt_cache_trajectory.py` (5, CI-blocking). Full suite: 566 unit + all trajectory evals green, no regressions.
 
 ---
 

@@ -174,6 +174,23 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
     # Sanitize messages for providers with strict validation (e.g. DeepSeek).
     messages = _sanitize_messages_for_provider(messages, provider or model)
 
+    # Provider-aware prompt caching (specs/llm_caching_memory.md Phase 2/3).
+    # This is THE choke point every agent runtime (native-MAF
+    # OpenAIChatCompletionClient, Copilot SDK) POSTs through, so marking the
+    # cache breakpoints here covers all agent traffic in one place:
+    #   • Anthropic tiers → cache_control on the stable system block (split at
+    #     the CACHE BREAK sentinel the executor injects) + the last tool schema.
+    #   • OpenAI tiers → prompt_cache_key routing (agent name if present).
+    #   • DeepSeek/others → sentinel stripped (automatic/no-op caching).
+    # The sentinel never reaches the model in any case.
+    from acb_llm.prompt_cache import apply_prompt_caching
+
+    _cache_key = body.get("prompt_cache_key") or body.get("user") or None
+    messages, tools, _cache_extra = apply_prompt_caching(
+        model=model, messages=messages, tools=tools,
+        cache_key=_cache_key, extra={},
+    )
+
     common: dict[str, Any] = {
         "model": model,
         "messages": messages,
@@ -181,6 +198,7 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
         "tool_choice": tool_choice if tools else None,
         "temperature": temperature,
         "max_tokens": max_tokens,
+        **_cache_extra,
     }
     if api_base:
         common["api_base"] = api_base

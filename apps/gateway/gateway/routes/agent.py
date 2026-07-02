@@ -1074,35 +1074,54 @@ async def run_agent_stream_endpoint(
         pass
 
     # ── Memory enrichment: inject relevant past facts into the agent's context ──
+    # Phase 4 (specs/llm_caching_memory.md): the assembled memory block is
+    # cached per session (thread) in Redis so it stays byte-stable across turns
+    # — otherwise Mem0's per-query semantic search returns a different block
+    # every turn and defeats cross-turn prompt caching on the memory portion.
+    _mem_thread_id = req.thread_id or f"{agent_name}:{run_id}"
     try:
-        from acb_memory import get_memory_context  # noqa: PLC0415
-        from acb_memory import search_entity_timeline  # noqa: PLC0415
+        from acb_memory import (  # noqa: PLC0415
+            get_memory_context,
+            get_session_memory,
+            search_entity_timeline,
+        )
         user_msg = (
             req.payload.get("message")
             or req.payload.get("user_query")
             or ""
         )
-        memory_parts: list[str] = []
         if user_msg and user_id != "anonymous":
-            # Mem0: episodic facts from past conversations
-            mem_ctx = await get_memory_context(user_id, user_msg)
-            if mem_ctx:
-                memory_parts.append(
-                    "## Memory from past conversations\n" + mem_ctx
-                )
 
-            # Graphiti: time-aware facts about entities in the query
-            entity_hint = user_msg[:80]
-            graph_ctx = await search_entity_timeline(
-                entity_hint, user_msg
+            async def _build_memory_block() -> str:
+                parts: list[str] = []
+                # Mem0: episodic facts from past conversations
+                mem_ctx = await get_memory_context(user_id, user_msg)
+                if mem_ctx:
+                    parts.append("## Memory from past conversations\n" + mem_ctx)
+                # Graphiti: time-aware facts about entities in the query
+                graph_ctx = await search_entity_timeline(user_msg[:80], user_msg)
+                if graph_ctx:
+                    parts.append(
+                        "## Timeline facts from knowledge graph\n" + graph_ctx
+                    )
+                return "\n\n".join(parts)
+
+            _redis = None
+            try:
+                from orchestrator.stream_relay import (  # noqa: PLC0415
+                    _get_client,
+                )
+                _redis = await _get_client()
+            except Exception:  # noqa: BLE001 — no Redis → fetch fresh each turn
+                _redis = None
+
+            memory_context = await get_session_memory(
+                redis=_redis,
+                thread_id=_mem_thread_id,
+                build=_build_memory_block,
             )
-            if graph_ctx:
-                memory_parts.append(
-                    "## Timeline facts from knowledge graph\n" + graph_ctx
-                )
-
-            if memory_parts:
-                req.payload["memory_context"] = "\n\n".join(memory_parts)
+            if memory_context:
+                req.payload["memory_context"] = memory_context
                 _log.debug(
                     "agent.memory_enriched",
                     agent=agent_name,

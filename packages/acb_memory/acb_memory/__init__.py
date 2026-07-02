@@ -22,6 +22,10 @@ from acb_memory.graphiti_client import (
     search_entity_timeline,
     add_episode,
 )
+from acb_memory.session_cache import (
+    get_session_memory,
+    invalidate_session_memory,
+)
 
 __all__ = [
     "MemoryClient",
@@ -32,4 +36,6 @@ __all__ = [
     "get_graphiti_client",
     "search_entity_timeline",
     "add_episode",
+    "get_session_memory",
+    "invalidate_session_memory",
 ]

@@ -2993,6 +2993,16 @@ async def run_agent_stream(
                 _memory_context = event_payload.get("memory_context") or ""
                 if _memory_context:
                     try:
+                        # Prompt-cache boundary marker (specs Phase 3.1): the
+                        # sentinel separates the stable prefix (instructions +
+                        # tool addendum) from the dynamic memory block so the
+                        # acb_llm.prompt_cache transform can put a cache_control
+                        # breakpoint at exactly this point for Anthropic tiers.
+                        # It is consumed (Anthropic) or stripped (others) before
+                        # the request leaves the gateway — never seen by the LLM.
+                        from acb_llm.prompt_cache import (  # noqa: PLC0415
+                            CACHE_BREAK as _CACHE_BREAK,
+                        )
                         _opts = agent.default_options
                         if isinstance(_opts, dict):
                             _existing = (
@@ -3001,7 +3011,7 @@ async def run_agent_stream(
                                 or ""
                             )
                             _merged = (
-                                f"{_existing}\n\n{_memory_context}"
+                                f"{_existing}\n{_CACHE_BREAK}\n{_memory_context}"
                             )
                             # MAF Agent base class uses "instructions"
                             _opts["instructions"] = _merged
@@ -3021,7 +3031,10 @@ async def run_agent_stream(
                                     "system_message"
                                 )
                                 if isinstance(_existing_copilot, dict):
-                                    # Preserve mode:'append'; extend content
+                                    # Preserve mode:'append'; extend content.
+                                    # Sentinel marks the stable/dynamic boundary
+                                    # (base instructions + addendum stay stable;
+                                    # memory is the dynamic suffix).
                                     _prev = (
                                         _existing_copilot.get("content")
                                         or ""
@@ -3029,12 +3042,13 @@ async def run_agent_stream(
                                     _copilot_opts["system_message"] = {
                                         "mode": "append",
                                         "content": (
-                                            f"{_prev}\n\n{_memory_context}"
+                                            f"{_prev}\n{_CACHE_BREAK}"
+                                            f"\n{_memory_context}"
                                         ),
                                     }
                                 elif isinstance(_existing_copilot, str):
                                     _copilot_opts["system_message"] = (
-                                        f"{_existing_copilot}\n\n"
+                                        f"{_existing_copilot}\n{_CACHE_BREAK}\n"
                                         f"{_memory_context}"
                                     )
                                 else:

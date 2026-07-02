@@ -63,6 +63,19 @@ and streams chat responses as AG-UI events.
 2. agent.run(stream=True) returns AgentResponseUpdate objects via _run_copilot_attempt()
 3. Each update is translated to AG-UI SSE events (TEXT_MESSAGE_CONTENT, TOOL_CALL_*, etc.)
 
+### Prompt-cache sentinel convention (specs/llm_caching_memory.md)
+When the executor appends memory context to an agent's instructions /
+`system_message`, it inserts a `<!-- CACHE BREAK -->` sentinel
+(`acb_llm.prompt_cache.CACHE_BREAK`) at the stable/dynamic boundary — stable
+prefix (instructions + tool addendum) BEFORE the sentinel, dynamic memory
+AFTER. The single `apply_prompt_caching` transform (called at both completion
+choke points — `acb_llm.complete*` and gateway `/v1`) consumes it: Anthropic
+tiers get an explicit `cache_control` breakpoint at the seam + the tool array
+cached; every other provider has the sentinel stripped. **Keep the stable
+prefix first and never put per-request/per-turn content before the sentinel** —
+anything before it is treated as cacheable and byte-stability is required for a
+cache hit.
+
 ### Injected tools (auto-available to all agents)
 The executor's _inject_agent_tools() patches every loaded agent with cross-cutting
 tools so no agent repo needs to declare them:

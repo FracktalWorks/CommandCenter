@@ -453,8 +453,9 @@ flowchart TD
 ### ADR-007: WhatsApp via Meta Cloud API + dedicated agent number
 - **Decision:** Provision new business number; MAF skill (`skill-whatsapp-send`) handles webhook processing.
 
-### ADR-008: LiteLLM gateway + RouteLLM + Anthropic/OpenAI prompt caching
+### ADR-008: LiteLLM gateway + RouteLLM + Anthropic/OpenAI prompt caching — **implemented (2026-07-03)**
 - **Decision:** litellm SDK for unified routing; Anthropic `cache_control` + OpenAI automatic caching on stable prefixes (50–90% cost reduction); RouteLLM in Phase 5.
+- **Implementation (2026-07-03):** Prompt caching shipped as a single provider-aware transform `packages/acb_llm/acb_llm/prompt_cache.py::apply_prompt_caching`, called by both completion choke points (`acb_llm.complete*` and the agent-traffic `/v1` endpoint `v1_compat._handle_chat_completions`). Because the platform is litellm-SDK-direct (no proxy), the plan's proxy pre-call hook was replaced by this shared transform: it splits the system prompt at a `<!-- CACHE BREAK -->` sentinel (injected by the executor + `agents.py` at the stable/dynamic memory seam) → Anthropic `cache_control` on the stable block, marks the last tool schema (tools-first caching), adds OpenAI `prompt_cache_key`, and strips the sentinel for DeepSeek/others. Plus session-scoped memory (`acb_memory/session_cache.py`), a LiteLLM Redis exact-match cache (opt-in), and Anthropic startup prewarm. See `specs/llm_caching_memory.md` Implementation-Status. RouteLLM (cost/complexity-aware routing) remains deferred to Phase 5.
 
 ### ADR-009: ~~Langfuse (MIT, self-hosted) for LLM observability~~ **Superseded** (2026-06-05)
 - **Original decision:** Langfuse via docker-compose on Postgres + ClickHouse as the OTLP backend.

@@ -1,9 +1,11 @@
-"""Regression tests — chat-stack hardening batch 1 (review P0-1/2/4/5, P1-8).
+"""Regression tests — chat-stack hardening batches 1-2.
 
+Batch 1: review P0-1/2/4/5, P1-8.  Batch 2: P0-7/8, P1-4.
 See ai-company-brain/specs/chat_implementation_review_2026-07.md.
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -60,3 +62,111 @@ def test_translator_persists_real_tool_status_and_stable_stream_id():
     assert "const persistId =" in route
     # the collapsing per-thread constant must not be the effective fallback
     assert "id: messageId || `assistant-${threadId}`," not in route
+
+
+# ── Batch 2: delegation guards, sub-agent HITL, cancel cascade ──────────────
+
+
+def test_delegation_guard_refuses_cycles_and_depth():
+    """P0-7: A→B→A cycles and chains beyond SUB_AGENT_MAX_DEPTH are refused
+    with an instructive message instead of recursing."""
+    from acb_skills import agent_tools as at
+
+    assert at._delegation_refusal("agent-a") is None  # root: allowed
+
+    tok = at._delegation_chain.set(("agent-a",))
+    try:
+        cycle = at._delegation_refusal("agent-a")
+        assert cycle is not None and "cycle" in cycle
+        assert at._delegation_refusal("agent-b") is None  # depth 1 < 2: allowed
+    finally:
+        at._delegation_chain.reset(tok)
+
+    tok = at._delegation_chain.set(("agent-a", "agent-b"))
+    try:
+        depth = at._delegation_refusal("agent-c")
+        assert depth is not None and "depth" in depth
+    finally:
+        at._delegation_chain.reset(tok)
+
+    assert at._delegation_refusal("agent-a") is None  # context restored
+
+
+@pytest.mark.asyncio
+async def test_call_agent_refuses_before_spawning():
+    """P0-7: the refusal happens before any sub-agent work starts."""
+    from acb_skills import agent_tools as at
+
+    tok = at._delegation_chain.set(("looper",))
+    try:
+        out = await at.call_agent("looper", "again")
+    finally:
+        at._delegation_chain.reset(tok)
+    assert "Delegation refused" in out
+
+
+def test_delegation_paths_have_wallclock_timeouts():
+    """P1-4: every awaited delegation path is bounded by wait_for so a
+    slow-but-not-idle sub-agent can't hold the parent open forever."""
+    from acb_skills import agent_tools as at
+
+    assert at._SUB_AGENT_TIMEOUT > 0
+    for fn in (at.call_agent, at.call_agents_parallel):
+        src = inspect.getsource(fn)
+        assert "wait_for" in src, f"{fn.__name__} lacks a delegation timeout"
+        assert "_SUB_AGENT_TIMEOUT" in src
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_cascades_to_background_children():
+    """P1-4: Stop on the parent thread cancels registered background
+    sub-agent tasks instead of leaving them burning tokens."""
+    from orchestrator import stream_relay
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def _child() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    task = asyncio.create_task(_child())
+    stream_relay.register_background_child("t-cascade", task)
+    await started.wait()
+
+    with patch.object(stream_relay, "mark_inactive", AsyncMock()), \
+         patch.object(stream_relay, "push_event", AsyncMock()):
+        await stream_relay.cancel_run("t-cascade")
+
+    assert cancelled.is_set(), "background child must be cancelled with the run"
+    assert "t-cascade" not in stream_relay._BACKGROUND_CHILDREN
+
+
+@pytest.mark.asyncio
+async def test_background_child_registry_self_cleans():
+    """Completed children deregister themselves — no leak between runs."""
+    from orchestrator import stream_relay
+
+    async def _quick() -> None:
+        return None
+
+    task = asyncio.create_task(_quick())
+    stream_relay.register_background_child("t-clean", task)
+    await task
+    await asyncio.sleep(0)  # let done-callbacks run
+    assert "t-clean" not in stream_relay._BACKGROUND_CHILDREN
+
+
+def test_sub_agent_streaming_binds_hitl_handler():
+    """P0-8: delegated Copilot SDK agents get on_user_input_request bound to
+    the parent thread's handler, so their ask_user renders a card instead of
+    parking the SDK on an unanswered Future."""
+    from orchestrator import executor
+
+    src = inspect.getsource(executor._run_sub_agent_streaming)
+    assert 'on_user_input_request' in src
+    assert "_make_user_input_handler(_relay_tid)" in src

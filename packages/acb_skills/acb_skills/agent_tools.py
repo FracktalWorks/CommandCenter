@@ -27,8 +27,44 @@ call_agent_background(agent_name, message) -> str
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json as _json
+import os as _os
 import uuid as _uuid
+
+# ── Delegation guard (review P0-7) ──────────────────────────────────────────
+# Sub-agents receive the call_agent family too, so without a guard an
+# A→B→A chain recurses and call_agents_parallel fans out 5^depth runs.
+# The chain of agent names propagates via ContextVar (create_task/gather
+# copy the context, so nested sub-agents inherit their ancestry).
+_delegation_chain: contextvars.ContextVar[tuple[str, ...]] = (
+    contextvars.ContextVar("_delegation_chain", default=())
+)
+_MAX_DELEGATION_DEPTH = int(_os.environ.get("SUB_AGENT_MAX_DEPTH", "2"))
+
+# Wall-clock budget for one awaited delegation (review P1-4): a sub-agent
+# that streams slowly-but-not-idle otherwise holds the parent open forever.
+_SUB_AGENT_TIMEOUT = float(_os.environ.get("SUB_AGENT_TIMEOUT_SECONDS", "900"))
+
+
+def _delegation_refusal(agent_name: str) -> str | None:
+    """Reason this delegation must be refused, or None if allowed."""
+    chain = _delegation_chain.get()
+    if agent_name in chain:
+        loop = " → ".join((*chain, agent_name))
+        return (
+            f"Delegation refused: cycle detected ({loop}). "
+            f"{agent_name!r} is already an ancestor of this run — answer "
+            "with the information you already have instead of delegating."
+        )
+    if len(chain) >= _MAX_DELEGATION_DEPTH:
+        return (
+            f"Delegation refused: max delegation depth "
+            f"{_MAX_DELEGATION_DEPTH} reached "
+            f"(chain: {' → '.join(chain) or 'root'}). Complete this "
+            "sub-task yourself with your own tools."
+        )
+    return None
 
 
 def _parent_run_model() -> str | None:
@@ -85,59 +121,96 @@ async def call_agent(agent_name: str, message: str) -> str:
     """
     run_id = str(_uuid.uuid4())
 
+    refusal = _delegation_refusal(agent_name)
+    if refusal:
+        return refusal
+
     # Inherit the parent run's resolved tier so the sub-agent runs on the same
     # model the user chose for the parent, not its own config default.
     _parent_model = _parent_run_model()
 
-    # If there is an active parent SSE queue (set by run_agent_stream via ContextVar),
-    # stream sub-agent events through it so the UI shows progress in real time.
-    event_queue = None
+    # Extend the ancestry chain for everything the sub-agent does (its own
+    # delegations see this chain via context inheritance); reset on exit.
+    _chain_token = _delegation_chain.set(
+        (*_delegation_chain.get(), agent_name)
+    )
     try:
-        from orchestrator.executor import _active_run_queue  # noqa: PLC0415
-        event_queue = _active_run_queue.get(None)
-    except (ImportError, Exception):  # noqa: BLE001
-        pass
-
-    if event_queue is not None:
+        # If there is an active parent SSE queue (set by run_agent_stream via
+        # ContextVar), stream sub-agent events through it live.
+        event_queue = None
         try:
-            from orchestrator.executor import _run_sub_agent_streaming  # noqa: PLC0415
-            return await _run_sub_agent_streaming(
-                agent_name, message, run_id, event_queue, model=_parent_model,
+            from orchestrator.executor import _active_run_queue  # noqa: PLC0415
+            event_queue = _active_run_queue.get(None)
+        except (ImportError, Exception):  # noqa: BLE001
+            pass
+
+        if event_queue is not None:
+            try:
+                from orchestrator.executor import _run_sub_agent_streaming  # noqa: PLC0415
+                return await asyncio.wait_for(
+                    _run_sub_agent_streaming(
+                        agent_name, message, run_id, event_queue,
+                        model=_parent_model,
+                    ),
+                    timeout=_SUB_AGENT_TIMEOUT,
+                )
+            except TimeoutError:
+                return (
+                    f"Sub-task to {agent_name!r} timed out after "
+                    f"{int(_SUB_AGENT_TIMEOUT)}s and was stopped."
+                )
+            except Exception as exc:  # noqa: BLE001
+                return f"Sub-task to {agent_name!r} failed: {exc}"
+
+        # No active queue — try Redis relay (Tier 1 / Tier 1.5 / Copilot SDK).
+        try:
+            from orchestrator.executor import (  # noqa: PLC0415
+                _stream_relay_thread_id,
+                _run_sub_agent_streaming,
+            )
+            _relay_tid = _stream_relay_thread_id.get(None)
+            if _relay_tid:
+                try:
+                    return await asyncio.wait_for(
+                        _run_sub_agent_streaming(
+                            agent_name, message, run_id, None,
+                            model=_parent_model,
+                        ),
+                        timeout=_SUB_AGENT_TIMEOUT,
+                    )
+                except TimeoutError:
+                    return (
+                        f"Sub-task to {agent_name!r} timed out after "
+                        f"{int(_SUB_AGENT_TIMEOUT)}s and was stopped."
+                    )
+        except (ImportError, Exception):  # noqa: BLE001
+            pass
+
+        # Fallback: no active stream — batch path (background runs, webhooks).
+        try:
+            from orchestrator.executor import run_agent  # noqa: PLC0415
+            result = await asyncio.wait_for(
+                run_agent(
+                    agent_name,
+                    {"message": message, "mode": "sub_task"},
+                    run_id=run_id,
+                    model=_parent_model,
+                ),
+                timeout=_SUB_AGENT_TIMEOUT,
+            )
+            text = result.get("result") or result.get("answer") or ""
+            if isinstance(text, dict):
+                text = text.get("content", str(text))
+            return str(text) if text else f"({agent_name!r} returned an empty response)"
+        except TimeoutError:
+            return (
+                f"Sub-task to {agent_name!r} timed out after "
+                f"{int(_SUB_AGENT_TIMEOUT)}s and was stopped."
             )
         except Exception as exc:  # noqa: BLE001
             return f"Sub-task to {agent_name!r} failed: {exc}"
-
-    # No active queue — try Redis relay (Tier 1 / Tier 1.5 / Copilot SDK).
-    # Push SUB_AGENT_* events directly to the Redis stream so the frontend
-    # subscriber receives them in real time (same pattern as ask_questions Path C).
-    try:
-        from orchestrator.executor import (  # noqa: PLC0415
-            _stream_relay_thread_id,
-            _run_sub_agent_streaming,
-        )
-        _relay_tid = _stream_relay_thread_id.get(None)
-        if _relay_tid:
-            return await _run_sub_agent_streaming(
-                agent_name, message, run_id, None, model=_parent_model,
-            )
-    except (ImportError, Exception):  # noqa: BLE001
-        pass
-
-    # Fallback: no active stream — batch path (background runs, webhooks, etc.)
-    try:
-        from orchestrator.executor import run_agent  # noqa: PLC0415
-        result = await run_agent(
-            agent_name,
-            {"message": message, "mode": "sub_task"},
-            run_id=run_id,
-            model=_parent_model,
-        )
-        text = result.get("result") or result.get("answer") or ""
-        if isinstance(text, dict):
-            text = text.get("content", str(text))
-        return str(text) if text else f"({agent_name!r} returned an empty response)"
-    except Exception as exc:  # noqa: BLE001
-        return f"Sub-task to {agent_name!r} failed: {exc}"
+    finally:
+        _delegation_chain.reset(_chain_token)
 
 
 async def call_agents_parallel(tasks: str) -> str:
@@ -211,33 +284,58 @@ async def call_agents_parallel(tasks: str) -> str:
 
     async def _run_one(agent_name: str, message: str) -> tuple[str, str]:
         run_id = str(_uuid.uuid4())
-        # Use streaming path if we have either a queue (Tier 2) or
-        # Redis relay (Tier 1 / Tier 1.5).  Pass event_queue=None
-        # for the relay path — _run_sub_agent_streaming will push
-        # events directly to Redis.
-        if _run_sub_agent_streaming is not None:
+        # Delegation guard (P0-7): refuse cycles/over-depth per fanned task,
+        # and extend the ancestry chain for this branch only (gather copies
+        # the context per coroutine, so branches don't see each other).
+        refusal = _delegation_refusal(agent_name)
+        if refusal:
+            return agent_name, refusal
+        _tok = _delegation_chain.set((*_delegation_chain.get(), agent_name))
+        try:
+            # Use streaming path if we have either a queue (Tier 2) or
+            # Redis relay (Tier 1 / Tier 1.5).  Pass event_queue=None
+            # for the relay path — _run_sub_agent_streaming will push
+            # events directly to Redis.
+            if _run_sub_agent_streaming is not None:
+                try:
+                    _q = event_queue if event_queue is not None else None
+                    result = await asyncio.wait_for(
+                        _run_sub_agent_streaming(
+                            agent_name, message, run_id, _q,
+                            model=_parent_model),
+                        timeout=_SUB_AGENT_TIMEOUT,
+                    )
+                    return agent_name, result
+                except TimeoutError:
+                    return agent_name, (
+                        f"Sub-task timed out after {int(_SUB_AGENT_TIMEOUT)}s "
+                        "and was stopped.")
+                except Exception as exc:  # noqa: BLE001
+                    return agent_name, f"Sub-task failed: {exc}"
+            # Fallback: no parent stream
             try:
-                _q = event_queue if event_queue is not None else None
-                result = await _run_sub_agent_streaming(
-                    agent_name, message, run_id, _q, model=_parent_model)
-                return agent_name, result
+                from orchestrator.executor import run_agent  # noqa: PLC0415
+                result = await asyncio.wait_for(
+                    run_agent(
+                        agent_name,
+                        {"message": message, "mode": "sub_task"},
+                        run_id=run_id,
+                        model=_parent_model,
+                    ),
+                    timeout=_SUB_AGENT_TIMEOUT,
+                )
+                text = result.get("result") or result.get("answer") or ""
+                if isinstance(text, dict):
+                    text = text.get("content", str(text))
+                return agent_name, str(text) if text else f"({agent_name!r} returned empty)"
+            except TimeoutError:
+                return agent_name, (
+                    f"Sub-task timed out after {int(_SUB_AGENT_TIMEOUT)}s "
+                    "and was stopped.")
             except Exception as exc:  # noqa: BLE001
                 return agent_name, f"Sub-task failed: {exc}"
-        # Fallback: no parent stream
-        try:
-            from orchestrator.executor import run_agent  # noqa: PLC0415
-            result = await run_agent(
-                agent_name,
-                {"message": message, "mode": "sub_task"},
-                run_id=run_id,
-                model=_parent_model,
-            )
-            text = result.get("result") or result.get("answer") or ""
-            if isinstance(text, dict):
-                text = text.get("content", str(text))
-            return agent_name, str(text) if text else f"({agent_name!r} returned empty)"
-        except Exception as exc:  # noqa: BLE001
-            return agent_name, f"Sub-task failed: {exc}"
+        finally:
+            _delegation_chain.reset(_tok)
 
     coros = [
         _run_one(str(t.get("agent", "")), str(t.get("message", "")))
@@ -247,7 +345,11 @@ async def call_agents_parallel(tasks: str) -> str:
     if not coros:
         return "Error: each task must have 'agent' and 'message' fields"
 
-    results = await asyncio.gather(*coros, return_exceptions=False)
+    # create_task per branch → each gets its own context copy, so one
+    # branch's chain extension never leaks into a sibling.
+    results = await asyncio.gather(
+        *(asyncio.create_task(c) for c in coros), return_exceptions=False
+    )
 
     parts = []
     for agent_name, response in results:
@@ -278,18 +380,41 @@ async def call_agent_background(agent_name: str, message: str) -> str:
         )
     """
     run_id = str(_uuid.uuid4())
+
+    refusal = _delegation_refusal(agent_name)
+    if refusal:
+        return refusal
+
     # Capture the parent tier now (the detached task runs after we return).
     _parent_model = _parent_run_model()
     try:
         from orchestrator.executor import run_agent  # noqa: PLC0415
-        asyncio.create_task(
-            run_agent(
-                agent_name,
-                {"message": message, "mode": "background_sub_task"},
-                run_id=run_id,
-                model=_parent_model,
+        # Extend the chain BEFORE create_task (the task copies this context),
+        # then reset — the parent's own context is unchanged.
+        _tok = _delegation_chain.set((*_delegation_chain.get(), agent_name))
+        try:
+            _task = asyncio.create_task(
+                run_agent(
+                    agent_name,
+                    {"message": message, "mode": "background_sub_task"},
+                    run_id=run_id,
+                    model=_parent_model,
+                )
             )
-        )
+        finally:
+            _delegation_chain.reset(_tok)
+        # Register under the parent thread so Stop cancels background
+        # children too (review P1-4) — previously they kept burning tokens
+        # after the user cancelled the parent run.
+        try:
+            from orchestrator.executor import _stream_relay_thread_id
+            from orchestrator.stream_relay import register_background_child
+
+            _ptid = _stream_relay_thread_id.get(None)
+            if _ptid:
+                register_background_child(_ptid, _task)
+        except Exception:
+            pass  # registration is best-effort; the task still runs
         return (
             f"Dispatched sub-task to {agent_name!r} in the background "
             f"(run_id: {run_id}). It is running independently — check "

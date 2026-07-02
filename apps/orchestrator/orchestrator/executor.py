@@ -1064,6 +1064,19 @@ async def _run_sub_agent_streaming(
                 and agent._default_options is not None
             ):
                 agent._default_options["working_directory"] = _sub_agent_dir
+                # ── HITL for sub-agents (P0-8) ─────────────────────────
+                # Without this, a delegated Copilot SDK agent that calls
+                # its native ask_user has no on_user_input_request handler
+                # bound: the SDK blocks forever with no card in the UI.
+                # Bind the same handler the top-level run uses, keyed by
+                # the PARENT thread so /agent/respond-input resolves it.
+                if (
+                    _relay_tid
+                    and not agent._default_options.get("on_user_input_request")
+                ):
+                    agent._default_options["on_user_input_request"] = (
+                        _make_user_input_handler(_relay_tid)
+                    )
 
             # ── Point write_artifact at sub-agent's own workspace ────────
             # Save orchestrator's context, switch to sub-agent workspace so

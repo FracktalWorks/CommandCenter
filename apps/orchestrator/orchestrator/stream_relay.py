@@ -38,6 +38,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from typing import Any, AsyncIterator
 
@@ -332,6 +333,30 @@ async def push_sse_event(thread_id: str, sse_line: str) -> str:
 # Prevents garbage collection and enforces one run per thread.
 _DETACHED_TASKS: dict[str, asyncio.Task[None]] = {}
 
+# Background sub-agent tasks spawned during a run (call_agent_background),
+# keyed by the PARENT thread_id.  Cancelling the run cascades to these so a
+# stopped parent doesn't leave orphaned sub-agents burning tokens.
+_BACKGROUND_CHILDREN: dict[str, set[asyncio.Task]] = {}
+
+
+def register_background_child(thread_id: str, task: asyncio.Task) -> None:
+    """Register a background sub-agent task against its parent thread.
+
+    ``cancel_run(thread_id)`` cancels every registered child alongside the
+    main detached run.  Tasks deregister themselves on completion.
+    """
+    children = _BACKGROUND_CHILDREN.setdefault(thread_id, set())
+    children.add(task)
+
+    def _discard(t: asyncio.Task) -> None:
+        kids = _BACKGROUND_CHILDREN.get(thread_id)
+        if kids is not None:
+            kids.discard(t)
+            if not kids:
+                _BACKGROUND_CHILDREN.pop(thread_id, None)
+
+    task.add_done_callback(_discard)
+
 
 def get_detached_task(thread_id: str) -> asyncio.Task[None] | None:
     """Return the in-flight detached run task for *thread_id*, if any."""
@@ -449,6 +474,25 @@ async def cancel_run(thread_id: str) -> bool:
         except BaseException:  # noqa: BLE001
             pass
         _DETACHED_TASKS.pop(thread_id, None)
+
+    # Cancel-cascade: stop any background sub-agents spawned by this run
+    # (call_agent_background) so they don't keep executing after a Stop.
+    children = _BACKGROUND_CHILDREN.pop(thread_id, None)
+    if children:
+        live = [t for t in children if not t.done()]
+        for t in live:
+            t.cancel()
+        if live:
+            with contextlib.suppress(BaseException):
+                await asyncio.wait_for(
+                    asyncio.shield(asyncio.gather(*live, return_exceptions=True)),
+                    timeout=3,
+                )
+            _log.info(
+                "stream_relay.cancel_run.children_cancelled",
+                thread_id=thread_id[:12],
+                count=len(live),
+            )
 
     # Mark inactive and emit a terminal event so subscribers stop blocking.
     try:

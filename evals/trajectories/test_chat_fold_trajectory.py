@@ -253,8 +253,16 @@ async def test_detached_run_persists_final_message(monkeypatch):
         yield 'data: {"type": "TEXT_MESSAGE_CONTENT", "delta": "world."}\n\n'
         yield 'data: {"type": "RUN_FINISHED"}\n\n'
 
+    returned: list = []
+
     async def _on_complete() -> None:
-        await persist_final_assistant_message("traj-persist", "assistant-msg-1")
+        # Returns the folded dict so run-boundary consumers (memory
+        # extraction, P1-9) can chain off the persisted content.
+        returned.append(
+            await persist_final_assistant_message(
+                "traj-persist", "assistant-msg-1",
+            )
+        )
 
     # Consume as the HTTP subscriber would (client stays connected here; the
     # disconnect case exercises the same finally via task cancellation below).
@@ -278,6 +286,9 @@ async def test_detached_run_persists_final_message(monkeypatch):
     assert record.id == "assistant-msg-1"
     assert record.role == "assistant"
     assert record.content == "Hello world."
+    # The folded dict is returned for run-boundary chaining (P1-9).
+    assert returned[0] is not None
+    assert returned[0]["content"] == "Hello world."
 
 
 async def test_cancelled_run_still_persists_partial_turn(monkeypatch):

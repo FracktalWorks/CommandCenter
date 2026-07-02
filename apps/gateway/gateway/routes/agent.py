@@ -1156,9 +1156,45 @@ async def run_agent_stream_endpoint(
     _persist_message_id = (
         req.assistant_message_id or f"assistant-{thread_id}-{run_id}"
     )
+    _mem_user = (user.email or "").strip()
+    _mem_message = str(req.payload.get("message") or "")
+    _mem_history = [
+        {"role": str(m.get("role") or "user"), "content": str(m.get("content") or "")}
+        for m in (req.payload.get("messages") or [])
+        if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+        and m.get("content")
+    ]
 
     async def _persist_on_complete() -> None:
-        await persist_final_assistant_message(thread_id, _persist_message_id)
+        folded = await persist_final_assistant_message(
+            thread_id, _persist_message_id,
+        )
+        # Memory extraction at the SAME run boundary (review P1-9): the Next
+        # translator only extracted while its reader was alive, so turns
+        # completed after a browser-gone/reconnect contributed nothing to
+        # Mem0. The gateway is now the single extraction owner for this path
+        # (route.ts no longer extracts for named agents). Best-effort.
+        if not (_mem_user and folded):
+            return
+        try:
+            from acb_memory import add_memories_background  # noqa: PLC0415
+
+            conv = list(_mem_history)
+            if _mem_message and not any(
+                m["role"] == "user" and m["content"] == _mem_message
+                for m in conv
+            ):
+                conv.append({"role": "user", "content": _mem_message})
+            answer = str(folded.get("content") or "")
+            if answer.strip():
+                conv.append({"role": "assistant", "content": answer})
+            if any(m["role"] == "user" for m in conv):
+                await add_memories_background(
+                    _mem_user, conv, agent_id=agent_name,
+                )
+        except Exception:  # noqa: BLE001 — extraction must never kill the relay
+            _log.warning("agent.run_end_memory_extraction_failed",
+                         thread_id=thread_id[:12])
 
     agent_gen = run_agent_stream(
         agent_name,

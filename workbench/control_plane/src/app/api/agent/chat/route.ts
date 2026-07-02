@@ -803,14 +803,14 @@ export async function POST(req: NextRequest): Promise<Response> {
     }
     // Translate AG-UI → frontend SSE, persisting to Postgres so messages
     // survive client disconnect (tab close, browser quit, network drop).
+    // Memory extraction for this path is OWNED BY THE GATEWAY at the run
+    // boundary (P1-9): it fires even when this reader is gone, and firing
+    // here too would double-extract every turn.
     const translated2 = new ReadableStream<Uint8Array>({
       async start(controller) {
-        const assistantContent2 = await translateAndPersistStream(
+        await translateAndPersistStream(
           streamRes.body!, controller, threadId ?? "", assistantMessageId,
         );
-        // Post-stream memory extraction — fires after the full response is
-        // known, so Mem0 sees both sides of the conversation.
-        extractMemories(userId, message, assistantContent2, messages ?? [], agentName);
       },
     });
     return new Response(translated2, { headers: sseHeaders() });

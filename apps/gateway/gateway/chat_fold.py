@@ -307,13 +307,15 @@ def fold_run_events(events: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 async def persist_final_assistant_message(
     thread_id: str, message_id: str,
-) -> bool:
+) -> dict[str, Any] | None:
     """Replay the run's event log and upsert the authoritative message row.
 
     Called from the detached task's ``finally`` — the run is over (finished,
     errored, or cancelled) and every event it emitted is in Redis. Idempotent
     with the Next translator's live-path checkpoints: same row id, upsert.
-    Best-effort: returns False (never raises) on any failure.
+    Best-effort: never raises. Returns the folded message dict on success
+    (callers chain run-boundary work like memory extraction off it), else
+    ``None``.
     """
     try:
         from orchestrator.stream_relay import replay_events  # noqa: PLC0415
@@ -321,7 +323,7 @@ async def persist_final_assistant_message(
         events = await replay_events(thread_id, since_id="0-0", count=10_000)
         folded = fold_run_events(events)
         if folded is None:
-            return False
+            return None
 
         from gateway.routes.chat import (  # noqa: PLC0415
             MessageRecord,
@@ -342,11 +344,11 @@ async def persist_final_assistant_message(
             tools=len(folded["tool_events"]),
             chars=len(folded["content"]),
         )
-        return True
+        return folded
     except Exception as exc:  # noqa: BLE001 — persistence must never kill the relay
         _log.warning(
             "chat_fold.persist_failed",
             thread_id=thread_id[:12],
             error=str(exc),
         )
-        return False
+        return None

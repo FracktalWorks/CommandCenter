@@ -13,6 +13,24 @@
 > docs: [`chat_ux.md`](chat_ux.md) (UX spec + AG-UI backlog),
 > [`../system_architecture.md`](../system_architecture.md) (ADRs — see §6
 > drift corrections).
+>
+> **Status (2026-07-02, same day):** three hardening batches landed on `main`
+> with regression coverage in `tests/unit/test_chat_hardening.py`:
+> - **Batch 1** `3b9d3c8` — ✅ P0-1 (reconnect owner check) · ✅ P0-2 (active-key
+>   refresh, `xx=True`) · ✅ P0-4 (per-stream persist id) · ✅ P0-5 (real tool
+>   status) · ✅ P1-8 (session upsert attributes acting user).
+> - **Batch 2** `d2de4d2` — ✅ P0-7 (delegation depth/cycle guard,
+>   `SUB_AGENT_MAX_DEPTH`) · ✅ P0-8 (sub-agent `on_user_input_request`
+>   binding) · ✅ P1-4 (`SUB_AGENT_TIMEOUT_SECONDS` wall-clock budget +
+>   background-child cancel cascade via `register_background_child`).
+> - **Batch 3** `20a7112` — ✅ P0-6 (sub-agent timeline persisted +
+>   `applySubAgentEvent` shared by live/reconnect loops) · ✅ P1-1 (current
+>   turn excluded from history + `withoutCurrentTurn` server-side) · ✅ P1-3
+>   (HITL cards reset on session switch; respond-input failures restore the
+>   card).
+>
+> Still open: P0-3 (server-side persistence — strategic refactor 2), P1-2,
+> P1-5, P1-6, P1-7, P1-9, the P2 list, §5 refactors, §6 doc drift.
 
 ---
 

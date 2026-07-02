@@ -443,6 +443,7 @@ call_agent(name,msg), call_agents_parallel(tasks), call_agent_background(name,ms
 web_search(query), fetch_page(url)
 write_artifact(path,content) — files go to outputs/
 share_artifact(path) — show a file you already wrote as a download/preview card
+emit_generative_ui(ui) — render a rich UI element inline (JSON component tree: card/table/keyValue/badge/callout/buttons); use for structured visual answers
 remember(query), recall_timeline(entity,query), save_memory(fact), save_episode(name,content)
 manage_todo_list(todoList) — structured task tracking panel (JSON array)
 ask_user(question,choices?) — HITL: pause and ask the user one question (blocking; the run resumes with their answer)
@@ -655,9 +656,11 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
     # as a download/preview card so it never hand-builds links.
     try:
         from acb_skills.write_artifact import (  # noqa: PLC0415
-            share_artifact, write_artifact,
+            emit_generative_ui, share_artifact, write_artifact,
         )
-        _all_tools = _all_tools + [write_artifact, share_artifact]
+        _all_tools = _all_tools + [
+            write_artifact, share_artifact, emit_generative_ui,
+        ]
     except ImportError:
         pass
 

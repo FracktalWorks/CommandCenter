@@ -1181,6 +1181,138 @@ export default function AgentChat({
     { mode: "max", label: "Max", title: "Maximum effort / deeper reasoning" },
   ];
 
+  // HITL cards (confirmation / elicitation / ask_user) — rendered INLINE,
+  // anchored to the assistant turn that raised the prompt (VS Code / AG-UI
+  // reference behaviour), not detached at the bottom of the message list. The
+  // agent is parked mid-turn, so the card belongs with that turn's bubble.
+  // Returns null when nothing is pending.
+  const renderHitlCards = (): React.ReactNode => {
+    if (!confirmation && !elicitation && !userInput) return null;
+    return (
+      <>
+        {confirmation && (
+          <ConfirmationCard title={confirmation.title} detail={confirmation.detail} context={confirmation.context}
+            onApprove={() => {
+              const card = confirmation;
+              const reqId = card.requestId;
+              setConfirmation(null);
+              if (reqId) {
+                postRespondInput(
+                  { request_id: reqId, answer: "APPROVE", was_freeform: false },
+                  () => setConfirmation(card),
+                );
+              } else {
+                submitText(`APPROVE: ${card.id}`);
+              }
+            }}
+            onReject={() => {
+              const card = confirmation;
+              const reqId = card.requestId;
+              setConfirmation(null);
+              if (reqId) {
+                postRespondInput(
+                  { request_id: reqId, answer: "REJECT", was_freeform: false },
+                  () => setConfirmation(card),
+                );
+              } else {
+                submitText(`REJECT: ${card.id}`);
+              }
+            }} />
+        )}
+
+        {elicitation && (
+          <ElicitationCard
+            questions={elicitation.questions}
+            onSubmit={(answers: ElicitationAnswers) => {
+              if (elicitation.requestId) {
+                const formatted = Object.entries(answers)
+                  .map(([header, ans]) => {
+                    const parts: string[] = [`[${header}]`];
+                    if (ans.selected && ans.selected.length > 0) {
+                      parts.push(`Selected: ${ans.selected.join(", ")}`);
+                    }
+                    if (ans.freeform) {
+                      parts.push(`Answer: ${ans.freeform}`);
+                    }
+                    return parts.join("\n");
+                  })
+                  .join("\n\n");
+                const single = elicitation.questions.length === 1;
+                const firstHeader = elicitation.questions[0]?.header ?? "Question";
+                const a = answers[firstHeader] ?? {};
+                const freeform = a.freeform?.trim();
+                const selectedJoined = (a.selected ?? []).join(", ");
+                const answer = single
+                  ? (freeform || selectedJoined || formatted)
+                  : formatted;
+                const wasFreeform = single && !!freeform && !selectedJoined;
+                const card = elicitation;
+                const reqId = card.requestId!;
+                setElicitation(null);
+                postRespondInput(
+                  { request_id: reqId, answer, was_freeform: wasFreeform },
+                  () => setElicitation(card),
+                );
+              } else {
+                const formatted = Object.entries(answers)
+                  .map(([header, ans]) => {
+                    const parts: string[] = [`[${header}]`];
+                    if (ans.selected && ans.selected.length > 0) {
+                      parts.push(`Selected: ${ans.selected.join(", ")}`);
+                    }
+                    if (ans.freeform) {
+                      parts.push(`Answer: ${ans.freeform}`);
+                    }
+                    return parts.join("\n");
+                  })
+                  .join("\n\n");
+                submitText(formatted);
+                setElicitation(null);
+              }
+            }}
+          />
+        )}
+
+        {userInput && (
+          <ElicitationCard
+            questions={[{
+              header: "Question",
+              question: userInput.question,
+              multiSelect: false,
+              allowFreeformInput: userInput.allowFreeform,
+              options: userInput.choices.length > 0
+                ? userInput.choices.map((c) => ({ label: c }))
+                : null,
+            }]}
+            onSubmit={(answers: ElicitationAnswers) => {
+              const a = answers["Question"] ?? {};
+              const selected = a.selected?.[0];
+              const freeform = a.freeform?.trim();
+              const answer = freeform || selected || "";
+              const wasFreeform = !!freeform && !selected;
+              const card = userInput;
+              setUserInput(null);
+              postRespondInput(
+                { request_id: card.requestId, answer, was_freeform: wasFreeform },
+                () => setUserInput(card),
+              );
+            }}
+          />
+        )}
+      </>
+    );
+  };
+
+  // The assistant turn the HITL card anchors to = the last assistant message
+  // (the parked run streams into it). Used to render the card inline there.
+  const hitlAnchorId = (() => {
+    if (!confirmation && !elicitation && !userInput) return null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant") return messages[i].id;
+    }
+    return null;
+  })();
+
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Agent header — VS Code-style minimal bar (hidden in compact embeds,
@@ -1332,138 +1464,16 @@ export default function AgentChat({
                   onFileOpen={handleFileOpen}
                   onResend={handleResend}
                   onRetryMessage={prevUserMsg ? handleRetryMessage : undefined} />
+                {/* Inline HITL card — anchored to the asking assistant turn. */}
+                {msg.id === hitlAnchorId && renderHitlCards()}
               </div>
             );
           })}
 
-          {confirmation && (
-            <ConfirmationCard title={confirmation.title} detail={confirmation.detail} context={confirmation.context}
-              onApprove={() => {
-                const card = confirmation;
-                const reqId = card.requestId;
-                setConfirmation(null);
-                if (reqId) {
-                  // Blocking path — unblock the parked agent in the SAME stream.
-                  postRespondInput(
-                    { request_id: reqId, answer: "APPROVE", was_freeform: false },
-                    () => setConfirmation(card),
-                  );
-                } else {
-                  submitText(`APPROVE: ${card.id}`);
-                }
-              }}
-              onReject={() => {
-                const card = confirmation;
-                const reqId = card.requestId;
-                setConfirmation(null);
-                if (reqId) {
-                  postRespondInput(
-                    { request_id: reqId, answer: "REJECT", was_freeform: false },
-                    () => setConfirmation(card),
-                  );
-                } else {
-                  submitText(`REJECT: ${card.id}`);
-                }
-              }} />
-          )}
-
-          {elicitation && (
-            <ElicitationCard
-              questions={elicitation.questions}
-              onSubmit={(answers: ElicitationAnswers) => {
-                if (elicitation.requestId) {
-                  // ── Blocking path (MAF Tier 2) ───────────────────
-                  // The agent is parked on a Future — POST the answer
-                  // to /api/agent/respond-input to unblock it.  The
-                  // agent receives the answer as the tool return value
-                  // and continues in the SAME stream.
-                  //
-                  // For multi-question cards, concatenate all answers
-                  // into one string (same format as the non-blocking
-                  // path) so the LLM can parse structured responses.
-                  const formatted = Object.entries(answers)
-                    .map(([header, ans]) => {
-                      const parts: string[] = [`[${header}]`];
-                      if (ans.selected && ans.selected.length > 0) {
-                        parts.push(`Selected: ${ans.selected.join(", ")}`);
-                      }
-                      if (ans.freeform) {
-                        parts.push(`Answer: ${ans.freeform}`);
-                      }
-                      return parts.join("\n");
-                    })
-                    .join("\n\n");
-                  // Single question → send the bare answer (freeform text, else
-                  // the selected option(s)). MULTIPLE questions → send the
-                  // structured block for EVERY answer; the old code took only the
-                  // first question's answer and dropped the rest.
-                  const single = elicitation.questions.length === 1;
-                  const firstHeader = elicitation.questions[0]?.header ?? "Question";
-                  const a = answers[firstHeader] ?? {};
-                  const freeform = a.freeform?.trim();
-                  const selectedJoined = (a.selected ?? []).join(", ");
-                  const answer = single
-                    ? (freeform || selectedJoined || formatted)
-                    : formatted;
-                  const wasFreeform = single && !!freeform && !selectedJoined;
-                  const card = elicitation;
-                  const reqId = card.requestId!;
-                  setElicitation(null);
-                  postRespondInput(
-                    { request_id: reqId, answer, was_freeform: wasFreeform },
-                    () => setElicitation(card),
-                  );
-                } else {
-                  // ── Non-blocking path (Copilot SDK / standalone) ──
-                  // Send the answer as a new chat message for the
-                  // agent to process in its next turn.
-                  const formatted = Object.entries(answers)
-                    .map(([header, ans]) => {
-                      const parts: string[] = [`[${header}]`];
-                      if (ans.selected && ans.selected.length > 0) {
-                        parts.push(`Selected: ${ans.selected.join(", ")}`);
-                      }
-                      if (ans.freeform) {
-                        parts.push(`Answer: ${ans.freeform}`);
-                      }
-                      return parts.join("\n");
-                    })
-                    .join("\n\n");
-                  submitText(formatted);
-                  setElicitation(null);
-                }
-              }}
-            />
-          )}
-
-          {userInput && (
-            <ElicitationCard
-              questions={[{
-                header: "Question",
-                question: userInput.question,
-                multiSelect: false,
-                allowFreeformInput: userInput.allowFreeform,
-                options: userInput.choices.length > 0
-                  ? userInput.choices.map((c) => ({ label: c }))
-                  : null,
-              }]}
-              onSubmit={(answers: ElicitationAnswers) => {
-                const a = answers["Question"] ?? {};
-                const selected = a.selected?.[0];
-                const freeform = a.freeform?.trim();
-                const answer = freeform || selected || "";
-                const wasFreeform = !!freeform && !selected;
-                const card = userInput;
-                setUserInput(null);
-                // Unblock the parked agent run — it resumes in the SAME
-                // stream (no new chat message, no queuing).
-                postRespondInput(
-                  { request_id: card.requestId, answer, was_freeform: wasFreeform },
-                  () => setUserInput(card),
-                );
-              }}
-            />
-          )}
+          {/* Fallback: a HITL prompt arrived before any assistant bubble exists
+              (rare — e.g. a tool asks before any text streamed). Render at the
+              list tail so the card is never lost. */}
+          {hitlAnchorId === null && renderHitlCards()}
 
           {!isLoading && messages.length > 0 && (() => {
             const last = messages[messages.length - 1];

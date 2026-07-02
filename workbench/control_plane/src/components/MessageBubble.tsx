@@ -10,6 +10,7 @@ import MessageActionBar from "@/components/MessageActionBar";
 import GenerativeUIPanel from "@/components/GenerativeUIPanel";
 import ArtifactCard, { type ArtifactMeta } from "@/components/ArtifactCard";
 import EmailToolCards from "@/components/email/EmailToolCards";
+import GenerativeUINode from "@/components/GenerativeUINode";
 import ErrorCard from "@/components/ChatErrorCard";
 import { DismissableCard } from "@/components/ToolCardShell";
 import { useDismissedToolCards, dismissToolCard } from "@/lib/dismissedTools";
@@ -89,6 +90,16 @@ function MessageBubble({
     }
     return [...byPath.values()];
   })();
+
+  // ── Generative-UI events → inline declarative component trees ───────────
+  // Agents push `generative_ui` CUSTOM events carrying a safe component tree
+  // (data, not code — GenerativeUINode whitelists the node types). Rendered
+  // inline as a first-class element (not buried in the "Interactive view"
+  // fold) so on-the-fly UI is prominent. Button actions route through onChoice
+  // — the same follow-up contract as the ```choices``` MCQ block.
+  const genUiEvents = (message.customEvents ?? [])
+    .filter((e) => e.name === "generative_ui" && e.value != null)
+    .map((e) => e.value);
 
   if (isSystem) {
     const content = message.content;
@@ -275,6 +286,14 @@ function MessageBubble({
           </div>
         );
       })()}
+      {/* Inline generative-UI trees — agent-pushed declarative components. */}
+      {genUiEvents.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {genUiEvents.map((spec, i) => (
+            <GenerativeUINode key={i} spec={spec} onAction={onChoice} />
+          ))}
+        </div>
+      )}
       {/* Inline email-assistant cards (editable draft, rule disable/delete).
           Inert unless the message contains email-assistant tool calls, so this
           renders in both the chat app and the email app. */}

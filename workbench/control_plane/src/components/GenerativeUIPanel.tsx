@@ -11,6 +11,7 @@
  */
 
 import { useState } from "react";
+import GenerativeUINode from "@/components/GenerativeUINode";
 
 type Json = unknown;
 
@@ -105,7 +106,32 @@ export type CustomEventRenderer = (value: unknown) => React.ReactNode;
  * and it renders automatically — no change to this panel.  This is the "renderer
  * registry keyed by name" the module docstring referred to.
  */
-export const CUSTOM_EVENT_RENDERERS: Record<string, CustomEventRenderer> = {};
+export const CUSTOM_EVENT_RENDERERS: Record<string, CustomEventRenderer> = {
+  // Generative-UI trees also render here (read-only) if they land in the
+  // panel; the interactive copy is inline in MessageBubble (with onAction).
+  generative_ui: (value) => <GenerativeUINode spec={value} />,
+  // Typed approval card — a richer, self-describing confirmation surface than
+  // the generic JSON view. Interactive approval still flows through the
+  // blocking ConfirmationCard/HITL path; this renders an informational record.
+  approval_request: (value) => {
+    const v = (value ?? {}) as Record<string, unknown>;
+    return (
+      <div className="space-y-1">
+        <div className="text-[12px] font-semibold text-foreground">
+          {String(v.title ?? "Approval request")}
+        </div>
+        {v.detail != null && (
+          <div className="text-[12px] text-muted-foreground">{String(v.detail)}</div>
+        )}
+        {v.status != null && (
+          <span className="inline-block text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground">
+            {String(v.status)}
+          </span>
+        )}
+      </div>
+    );
+  },
+};
 
 export default function GenerativeUIPanel({
   agentState,

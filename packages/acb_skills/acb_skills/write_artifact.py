@@ -352,3 +352,75 @@ async def _notify(
             )
     except Exception:  # noqa: BLE001
         pass  # Non-fatal — the sidebar can always refresh manually
+
+
+# ── Generative UI ───────────────────────────────────────────────────────────
+
+# The component types the frontend GenerativeUINode renderer whitelists. Kept in
+# sync with GenerativeUINode.tsx KNOWN_TYPES so the tool's docstring can steer
+# the model toward valid trees (and we can reject obviously-wrong ones early).
+_GEN_UI_TYPES = {
+    "card", "stack", "row", "heading", "text", "markdown", "badge",
+    "divider", "keyValue", "table", "list", "code", "link", "button", "callout",
+}
+
+
+async def emit_generative_ui(ui: str) -> dict:
+    """Render a rich, interactive UI element inline in the chat, on the fly.
+
+    Pass a JSON component TREE (data, not code) and the chat renders it as real
+    UI — cards, tables, key/value blocks, badges, callouts, and clickable
+    buttons — instead of plain text. Use this when a structured visual answer
+    beats prose: a summary card, a comparison table, a status dashboard, a set
+    of action buttons.
+
+    ``ui`` is a JSON object (or ``{"root": <node>}``). Each node is
+    ``{"type": <kind>, "props": {...}, "children": [...]}``. Allowed ``type``
+    kinds (nothing else renders):
+      card{title?} · stack · row · heading{text} · text{text,muted?} ·
+      markdown{text} · badge{text,tone?} · divider · callout{title?,text?,tone?}
+      keyValue{pairs:[{key,value}]} · table{columns:[..],rows:[[..]]} ·
+      list{items:[..],ordered?} · code{text} · link{href,text?} ·
+      button{label,action,tone?}
+    ``tone`` ∈ success|error|warning|info|neutral (badges/callouts) or
+    primary|danger|default (buttons).
+
+    A ``button``'s ``action`` string is sent back as the user's next message
+    when clicked — use it for follow-up choices ("Approve", "Show details").
+
+    There is NO raw-HTML/script node by design — you compose from the typed
+    primitives above; anything else is ignored. Returns ``{"ok": true}`` on
+    emit. This is additive: also say what you're showing in your text reply.
+
+    Example::
+
+        await emit_generative_ui('{"type":"card","props":{"title":"Deploy"},'
+          '"children":[{"type":"keyValue","props":{"pairs":['
+          '{"key":"Status","value":"green"},{"key":"Version","value":"1.4.2"}]}},'
+          '{"type":"row","children":[{"type":"button","props":'
+          '{"label":"Roll back","action":"roll back the deploy","tone":"danger"}}]}]}')
+    """
+    import json  # noqa: PLC0415
+
+    try:
+        spec = json.loads(ui) if isinstance(ui, str) else ui
+    except (json.JSONDecodeError, TypeError) as exc:
+        return {"ok": False, "error": f"ui must be valid JSON: {exc}"}
+    if not isinstance(spec, dict):
+        return {"ok": False, "error": "ui must be a JSON object (a component node)"}
+
+    # Push the CUSTOM event into the active run's SSE queue — same mechanism as
+    # artifact_created (the executor sets _active_run_queue per run).
+    try:
+        from orchestrator.executor import _active_run_queue  # noqa: PLC0415
+        queue = _active_run_queue.get(None)
+        if queue is not None:
+            await queue.put({
+                "type": "CUSTOM",
+                "name": "generative_ui",
+                "value": spec,
+            })
+            return {"ok": True}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+    return {"ok": False, "error": "no active run stream to render into"}

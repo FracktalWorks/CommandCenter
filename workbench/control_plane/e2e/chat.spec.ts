@@ -380,6 +380,111 @@ test.describe("Unified chat interface", () => {
     ).toHaveCount(0);
   });
 
+  test("renders an agent-pushed generative-UI tree inline, and a button action sends a follow-up", async ({ page }) => {
+    // The agent emits a `generative_ui` CUSTOM event carrying a safe component
+    // tree (card + keyValue + a button). The chat renders it as real UI inline,
+    // and clicking the button submits its `action` as the next message.
+    const requests: ChatRequest[] = [];
+    await installChatMocks(
+      page,
+      (body, callIndex) => {
+        if (callIndex === 0) {
+          return {
+            events: [
+              { type: "delta", content: "Here's the deploy status:" },
+              {
+                type: "custom",
+                name: "generative_ui",
+                value: {
+                  type: "card",
+                  props: { title: "Deploy status" },
+                  children: [
+                    { type: "keyValue", props: { pairs: [
+                      { key: "Environment", value: "production" },
+                      { key: "Version", value: "1.4.2" },
+                    ] } },
+                    { type: "row", children: [
+                      { type: "button", props: { label: "Roll back", action: "roll back the deploy", tone: "danger" } },
+                    ] },
+                  ],
+                },
+              },
+              { type: "done" },
+            ],
+          };
+        }
+        return { events: [{ type: "delta", content: `Acked: ${body.message}` }, { type: "done" }] };
+      },
+      requests,
+    );
+
+    await gotoChat(page);
+    await page.getByPlaceholder(/Message orchestrator/i).fill("What's the deploy status?");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+
+    // The generative-UI tree rendered inline — card title, a key/value pair,
+    // and the action button (none of this is plain markdown text). The title
+    // also appears in the sidebar preview / panel, so assert ≥1 and check the
+    // structural bits (key/value, button) that only the rendered tree has.
+    await expect(page.getByText("Deploy status").first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText("Environment").first()).toBeVisible();
+    await expect(page.getByText("1.4.2").first()).toBeVisible();
+
+    // Clicking the button submits its action string as a follow-up message.
+    await page.getByRole("button", { name: "Roll back" }).click();
+    await expect(
+      page.getByRole("paragraph").filter({ hasText: "Acked: roll back the deploy" }),
+    ).toBeVisible({ timeout: 5_000 });
+    expect(requests.at(-1)?.message).toBe("roll back the deploy");
+  });
+
+  test("renders an ask_user HITL card inline, anchored to the asking turn, and resumes on answer", async ({ page }) => {
+    // A blocking ask_user prompt arrives mid-turn as a user_input_requested
+    // CUSTOM event with a request_id. The card must render INLINE (not detached
+    // at the list bottom); answering POSTs to /respond-input.
+    const requests: ChatRequest[] = [];
+    const respondBodies: Array<Record<string, unknown>> = [];
+    await page.route("**/api/agent/respond-input", async (route) => {
+      respondBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
+    });
+    await installChatMocks(
+      page,
+      () => ({
+        events: [
+          { type: "delta", content: "I need one detail before I proceed." },
+          {
+            type: "custom",
+            name: "user_input_requested",
+            value: {
+              request_id: "req-42",
+              question: "Which environment should I target?",
+              choices: ["staging", "production"],
+              allowFreeform: false,
+            },
+          },
+          // No `done` — the run is parked on the human answer (blocking HITL).
+        ],
+      }),
+      requests,
+    );
+
+    await gotoChat(page);
+    await page.getByPlaceholder(/Message orchestrator/i).fill("Deploy the app");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+
+    // The HITL question renders inline as a card with its choices.
+    await expect(page.getByText("Which environment should I target?")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole("button", { name: "production" })).toBeVisible();
+
+    // Select a choice, then Submit — answering routes to /respond-input with
+    // the request_id (blocking resume in the same run).
+    await page.getByRole("button", { name: "production" }).click();
+    await page.getByRole("button", { name: "Submit" }).click();
+    await expect.poll(() => respondBodies.at(-1)?.request_id).toBe("req-42");
+    expect(respondBodies.at(-1)?.answer).toBe("production");
+  });
+
   test("renders tool blocks, markdown code, and MCQ choices that send the selected answer back", async ({ page }) => {
     const requests: ChatRequest[] = [];
     await installChatMocks(

@@ -35,9 +35,17 @@
 >   route.ts/chatStream.ts, locked by trajectory evals). `/copilot/chat`
 >   orchestrator path lands with unification Phase 2.
 >
-> Still open: P0-3 orchestrator-path remainder, P1-2, P1-5, P1-6, P1-7, P1-9,
-> the P2 list, §5 refactors (design + phasing now in
-> [`core_loop_unification.md`](core_loop_unification.md)), §6 doc drift.
+> - **Batch 5** (2026-07-02, unification Phases 2–3a) — ✅ P0-3 remainder
+>   (`/copilot/chat` fold-and-persist via query-param message id) · ✅ §5
+>   refactor 1 (one event translator, `orchestrator/event_translator.py`) ·
+>   ✅ tier asymmetries (TODO_LIST/elicitation/PARTIAL/message-id framing) ·
+>   ✅ P1-9 (memory extraction moved to the gateway run boundary for the
+>   named-agent path) · real message-segment boundaries emitted end-to-end
+>   (Phase 3a; segment-native rendering = 3b, pending).
+>
+> Still open: P1-2, P1-5, P1-6, P1-7, the P2 list, §5 refactor 3's client
+> half (3b in [`core_loop_unification.md`](core_loop_unification.md)),
+> unified watchdog policy, §6 doc drift.
 
 ---
 

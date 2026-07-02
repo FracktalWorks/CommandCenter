@@ -61,6 +61,22 @@ from orchestrator.watchdog import (  # noqa: E402
 )
 
 _WATCHDOG = default_watchdog()
+
+
+def _missing_module_name(exc: BaseException) -> str | None:
+    """Best-effort top-level module name from an ImportError/ModuleNotFoundError.
+
+    Prefers ``exc.name`` (set by ModuleNotFoundError); falls back to parsing
+    "No module named 'pkg.sub'" → "pkg". Returns None if it can't tell — the
+    caller then surfaces a clear error instead of installing a guess.
+    """
+    name = getattr(exc, "name", None)
+    if not name:
+        import re as _re  # noqa: PLC0415
+        m = _re.search(r"No module named ['\"]([^'\"]+)['\"]", str(exc))
+        name = m.group(1) if m else None
+    # Install the TOP-LEVEL distribution name (submodule installs never work).
+    return name.split(".")[0] if name else None
 _TOOL_EXECUTION_TIMEOUT: float = _WATCHDOG.tool_execution
 
 # ── Elicitation bridge: track which tool_call_id maps to a pending
@@ -3480,6 +3496,67 @@ async def run_agent_stream(
                                 original_fn(*args, **kwargs),
                                 timeout=_TOOL_EXECUTION_TIMEOUT,
                             )
+                    except (ModuleNotFoundError, ImportError) as _imp_exc:
+                        # Missing-dependency self-heal: an agent's requirements
+                        # may have failed to install (network, apt-only lib) or a
+                        # tool imports a package lazily. Rather than fail the tool
+                        # with an obscure ModuleNotFoundError, install the missing
+                        # module once and retry — the shared venv makes it
+                        # importable immediately. One attempt only (no loop).
+                        _mod = _missing_module_name(_imp_exc)
+                        _healed = False
+                        if _mod:
+                            _log.info(
+                                "executor.tool_dep_selfheal",
+                                agent=agent_name, tool=tool_name, module=_mod,
+                            )
+                            try:
+                                from acb_skills.dep_tools import (  # noqa: PLC0415
+                                    install_dependency,
+                                )
+                                _msg = await install_dependency(_mod)
+                                _healed = _msg.startswith("Installed")
+                            except Exception:  # noqa: BLE001
+                                _healed = False
+                        if _healed:
+                            try:
+                                result = await asyncio.wait_for(
+                                    original_fn(*args, **kwargs),
+                                    timeout=_TOOL_EXECUTION_TIMEOUT,
+                                )
+                            except Exception as _retry_exc:  # noqa: BLE001
+                                await queue.put({
+                                    "type": "TOOL_CALL_RESULT",
+                                    "toolCallId": tool_call_id,
+                                    "content": (
+                                        f"Error after installing '{_mod}': "
+                                        f"{_retry_exc}"
+                                    ),
+                                    "success": False,
+                                })
+                                raise
+                            else:
+                                result_str = str(result) if result is not None else ""
+                                await queue.put({
+                                    "type": "TOOL_CALL_RESULT",
+                                    "toolCallId": tool_call_id,
+                                    "content": result_str[:2000],
+                                    "success": True,
+                                })
+                                return result
+                        # Couldn't heal — surface a clear, actionable error.
+                        await queue.put({
+                            "type": "TOOL_CALL_RESULT",
+                            "toolCallId": tool_call_id,
+                            "content": (
+                                f"Error: tool '{tool_name}' needs a package that "
+                                f"isn't installed ({_imp_exc}). Auto-install "
+                                f"{'failed' if _mod else 'could not identify the module'}"
+                                f"; call install_dependency('<package>') and retry."
+                            ),
+                            "success": False,
+                        })
+                        raise
                     except asyncio.TimeoutError:
                         await queue.put({
                             "type": "TOOL_CALL_RESULT",

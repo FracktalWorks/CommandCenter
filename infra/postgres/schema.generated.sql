@@ -6,7 +6,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict yJTlFZHkFKBoddWD4KG5vuexbcdicPHikagZRdXQkNxFsVTZTlGabq3RcvPhli4
+\restrict DdhLsq2xES0Dwl5etJsoxKXzuI4jhHGgM2fs7OmDgyFzflhLffPW8AuFYNwmwO0
 
 -- Dumped from database version 16.14 (Debian 16.14-1.pgdg12+1)
 -- Dumped by pg_dump version 16.14 (Debian 16.14-1.pgdg12+1)
@@ -220,6 +220,154 @@ CREATE TABLE public."Account" (
 
 
 --
+-- Name: LiteLLM_SpendLogs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public."LiteLLM_SpendLogs" (
+    request_id text NOT NULL,
+    call_type text NOT NULL,
+    api_key text DEFAULT ''::text NOT NULL,
+    spend double precision DEFAULT 0.0 NOT NULL,
+    total_tokens integer DEFAULT 0 NOT NULL,
+    prompt_tokens integer DEFAULT 0 NOT NULL,
+    completion_tokens integer DEFAULT 0 NOT NULL,
+    "startTime" timestamp(3) without time zone NOT NULL,
+    "endTime" timestamp(3) without time zone NOT NULL,
+    request_duration_ms integer,
+    "completionStartTime" timestamp(3) without time zone,
+    model text DEFAULT ''::text NOT NULL,
+    model_id text DEFAULT ''::text,
+    model_group text DEFAULT ''::text,
+    custom_llm_provider text DEFAULT ''::text,
+    api_base text DEFAULT ''::text,
+    "user" text DEFAULT ''::text,
+    metadata jsonb DEFAULT '{}'::jsonb,
+    cache_hit text DEFAULT ''::text,
+    cache_key text DEFAULT ''::text,
+    request_tags jsonb DEFAULT '[]'::jsonb,
+    team_id text,
+    organization_id text,
+    end_user text,
+    requester_ip_address text,
+    messages jsonb DEFAULT '{}'::jsonb,
+    response jsonb DEFAULT '{}'::jsonb,
+    session_id text,
+    status text,
+    mcp_namespaced_tool_name text,
+    agent_id text,
+    proxy_server_request jsonb DEFAULT '{}'::jsonb
+);
+
+
+--
+-- Name: DailyTagSpend; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public."DailyTagSpend" AS
+ SELECT jsonb_array_elements_text(request_tags) AS individual_request_tag,
+    date("startTime") AS spend_date,
+    count(*) AS log_count,
+    sum(spend) AS total_spend
+   FROM public."LiteLLM_SpendLogs" s
+  GROUP BY (jsonb_array_elements_text(request_tags)), (date("startTime"));
+
+
+--
+-- Name: LiteLLM_VerificationToken; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public."LiteLLM_VerificationToken" (
+    token text NOT NULL,
+    key_name text,
+    key_alias text,
+    soft_budget_cooldown boolean DEFAULT false NOT NULL,
+    spend double precision DEFAULT 0.0 NOT NULL,
+    expires timestamp(3) without time zone,
+    models text[],
+    aliases jsonb DEFAULT '{}'::jsonb NOT NULL,
+    config jsonb DEFAULT '{}'::jsonb NOT NULL,
+    router_settings jsonb DEFAULT '{}'::jsonb,
+    user_id text,
+    team_id text,
+    agent_id text,
+    project_id text,
+    permissions jsonb DEFAULT '{}'::jsonb NOT NULL,
+    max_parallel_requests integer,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    blocked boolean,
+    tpm_limit bigint,
+    rpm_limit bigint,
+    max_budget double precision,
+    budget_duration text,
+    budget_reset_at timestamp(3) without time zone,
+    allowed_cache_controls text[] DEFAULT ARRAY[]::text[],
+    allowed_routes text[] DEFAULT ARRAY[]::text[],
+    policies text[] DEFAULT ARRAY[]::text[],
+    access_group_ids text[] DEFAULT ARRAY[]::text[],
+    model_spend jsonb DEFAULT '{}'::jsonb NOT NULL,
+    model_max_budget jsonb DEFAULT '{}'::jsonb NOT NULL,
+    budget_id text,
+    organization_id text,
+    object_permission_id text,
+    created_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP,
+    created_by text,
+    updated_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP,
+    updated_by text,
+    last_active timestamp(3) without time zone,
+    rotation_count integer DEFAULT 0,
+    auto_rotate boolean DEFAULT false,
+    rotation_interval text,
+    last_rotation_at timestamp(3) without time zone,
+    key_rotation_at timestamp(3) without time zone,
+    budget_limits jsonb
+);
+
+
+--
+-- Name: Last30dKeysBySpend; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public."Last30dKeysBySpend" AS
+ SELECT l.api_key,
+    v.key_alias,
+    v.key_name,
+    sum(l.spend) AS total_spend
+   FROM (public."LiteLLM_SpendLogs" l
+     LEFT JOIN public."LiteLLM_VerificationToken" v ON ((l.api_key = v.token)))
+  WHERE (l."startTime" >= (CURRENT_DATE - '30 days'::interval))
+  GROUP BY l.api_key, v.key_alias, v.key_name
+  ORDER BY (sum(l.spend)) DESC;
+
+
+--
+-- Name: Last30dModelsBySpend; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public."Last30dModelsBySpend" AS
+ SELECT model,
+    sum(spend) AS total_spend
+   FROM public."LiteLLM_SpendLogs"
+  WHERE (("startTime" >= (CURRENT_DATE - '30 days'::interval)) AND (model <> ''::text))
+  GROUP BY model
+  ORDER BY (sum(spend)) DESC;
+
+
+--
+-- Name: Last30dTopEndUsersSpend; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public."Last30dTopEndUsersSpend" AS
+ SELECT end_user,
+    count(*) AS total_events,
+    sum(spend) AS total_spend
+   FROM public."LiteLLM_SpendLogs"
+  WHERE ((end_user <> ''::text) AND (end_user <> USER) AND ("startTime" >= (CURRENT_DATE - '30 days'::interval)))
+  GROUP BY end_user
+  ORDER BY (sum(spend)) DESC
+ LIMIT 100;
+
+
+--
 -- Name: LiteLLM_AccessGroupTable; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -236,6 +384,49 @@ CREATE TABLE public."LiteLLM_AccessGroupTable" (
     created_by text,
     updated_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_by text
+);
+
+
+--
+-- Name: LiteLLM_AdaptiveRouterSession; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public."LiteLLM_AdaptiveRouterSession" (
+    session_id text NOT NULL,
+    router_name text NOT NULL,
+    model_name text NOT NULL,
+    classified_type text NOT NULL,
+    misalignment_count integer DEFAULT 0 NOT NULL,
+    stagnation_count integer DEFAULT 0 NOT NULL,
+    disengagement_count integer DEFAULT 0 NOT NULL,
+    satisfaction_count integer DEFAULT 0 NOT NULL,
+    failure_count integer DEFAULT 0 NOT NULL,
+    loop_count integer DEFAULT 0 NOT NULL,
+    exhaustion_count integer DEFAULT 0 NOT NULL,
+    last_user_content text,
+    last_assistant_content text,
+    tool_call_history jsonb DEFAULT '[]'::jsonb NOT NULL,
+    pending_tool_calls jsonb DEFAULT '{}'::jsonb NOT NULL,
+    turn_count integer DEFAULT 0 NOT NULL,
+    last_processed_turn integer DEFAULT '-1'::integer NOT NULL,
+    clean_credit_awarded boolean DEFAULT false NOT NULL,
+    terminal_status integer,
+    last_activity_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+
+--
+-- Name: LiteLLM_AdaptiveRouterState; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public."LiteLLM_AdaptiveRouterState" (
+    router_name text NOT NULL,
+    request_type text NOT NULL,
+    model_name text NOT NULL,
+    alpha double precision NOT NULL,
+    beta double precision NOT NULL,
+    total_samples integer DEFAULT 0 NOT NULL,
+    last_updated_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
 
@@ -298,7 +489,8 @@ CREATE TABLE public."LiteLLM_BudgetTable" (
     created_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     created_by text NOT NULL,
     updated_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_by text NOT NULL
+    updated_by text NOT NULL,
+    allowed_models text[] DEFAULT ARRAY[]::text[]
 );
 
 
@@ -838,7 +1030,31 @@ CREATE TABLE public."LiteLLM_MCPServerTable" (
     available_on_public_internet boolean DEFAULT true NOT NULL,
     is_byok boolean DEFAULT false NOT NULL,
     byok_description text[] DEFAULT ARRAY[]::text[],
-    byok_api_key_help_url text
+    byok_api_key_help_url text,
+    source_url text,
+    approval_status text DEFAULT 'active'::text,
+    submitted_by text,
+    submitted_at timestamp(3) without time zone,
+    reviewed_at timestamp(3) without time zone,
+    review_notes text,
+    instructions text,
+    delegate_auth_to_upstream boolean DEFAULT false NOT NULL
+);
+
+
+--
+-- Name: LiteLLM_MCPToolsetTable; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public."LiteLLM_MCPToolsetTable" (
+    toolset_id text NOT NULL,
+    toolset_name text NOT NULL,
+    description text,
+    tools jsonb DEFAULT '[]'::jsonb NOT NULL,
+    created_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    created_by text,
+    updated_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_by text
 );
 
 
@@ -871,7 +1087,8 @@ CREATE TABLE public."LiteLLM_ManagedFileTable" (
     created_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     created_by text,
     updated_at timestamp(3) without time zone NOT NULL,
-    updated_by text
+    updated_by text,
+    team_id text
 );
 
 
@@ -890,7 +1107,8 @@ CREATE TABLE public."LiteLLM_ManagedObjectTable" (
     created_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     created_by text,
     updated_at timestamp(3) without time zone NOT NULL,
-    updated_by text
+    updated_by text,
+    team_id text
 );
 
 
@@ -925,7 +1143,8 @@ CREATE TABLE public."LiteLLM_ManagedVectorStoreTable" (
     created_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     created_by text,
     updated_at timestamp(3) without time zone NOT NULL,
-    updated_by text
+    updated_by text,
+    team_id text
 );
 
 
@@ -945,6 +1164,24 @@ CREATE TABLE public."LiteLLM_ManagedVectorStoresTable" (
     litellm_params jsonb,
     team_id text,
     user_id text
+);
+
+
+--
+-- Name: LiteLLM_MemoryTable; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public."LiteLLM_MemoryTable" (
+    memory_id text NOT NULL,
+    key text NOT NULL,
+    value text NOT NULL,
+    metadata jsonb,
+    user_id text,
+    team_id text,
+    created_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    created_by text,
+    updated_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_by text
 );
 
 
@@ -995,7 +1232,9 @@ CREATE TABLE public."LiteLLM_ObjectPermissionTable" (
     agents text[] DEFAULT ARRAY[]::text[],
     agent_access_groups text[] DEFAULT ARRAY[]::text[],
     models text[] DEFAULT ARRAY[]::text[],
-    blocked_tools text[] DEFAULT ARRAY[]::text[]
+    blocked_tools text[] DEFAULT ARRAY[]::text[],
+    mcp_toolsets text[] DEFAULT ARRAY[]::text[],
+    search_tools text[] DEFAULT ARRAY[]::text[]
 );
 
 
@@ -1115,7 +1354,9 @@ CREATE TABLE public."LiteLLM_PromptTable" (
     litellm_params jsonb NOT NULL,
     prompt_info jsonb,
     created_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_at timestamp(3) without time zone NOT NULL
+    updated_at timestamp(3) without time zone NOT NULL,
+    environment text DEFAULT 'development'::text NOT NULL,
+    created_by text
 );
 
 
@@ -1207,46 +1448,6 @@ CREATE TABLE public."LiteLLM_SpendLogToolIndex" (
 
 
 --
--- Name: LiteLLM_SpendLogs; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public."LiteLLM_SpendLogs" (
-    request_id text NOT NULL,
-    call_type text NOT NULL,
-    api_key text DEFAULT ''::text NOT NULL,
-    spend double precision DEFAULT 0.0 NOT NULL,
-    total_tokens integer DEFAULT 0 NOT NULL,
-    prompt_tokens integer DEFAULT 0 NOT NULL,
-    completion_tokens integer DEFAULT 0 NOT NULL,
-    "startTime" timestamp(3) without time zone NOT NULL,
-    "endTime" timestamp(3) without time zone NOT NULL,
-    request_duration_ms integer,
-    "completionStartTime" timestamp(3) without time zone,
-    model text DEFAULT ''::text NOT NULL,
-    model_id text DEFAULT ''::text,
-    model_group text DEFAULT ''::text,
-    custom_llm_provider text DEFAULT ''::text,
-    api_base text DEFAULT ''::text,
-    "user" text DEFAULT ''::text,
-    metadata jsonb DEFAULT '{}'::jsonb,
-    cache_hit text DEFAULT ''::text,
-    cache_key text DEFAULT ''::text,
-    request_tags jsonb DEFAULT '[]'::jsonb,
-    team_id text,
-    organization_id text,
-    end_user text,
-    requester_ip_address text,
-    messages jsonb DEFAULT '{}'::jsonb,
-    response jsonb DEFAULT '{}'::jsonb,
-    session_id text,
-    status text,
-    mcp_namespaced_tool_name text,
-    agent_id text,
-    proxy_server_request jsonb DEFAULT '{}'::jsonb
-);
-
-
---
 -- Name: LiteLLM_TagTable; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1271,7 +1472,8 @@ CREATE TABLE public."LiteLLM_TeamMembership" (
     user_id text NOT NULL,
     team_id text NOT NULL,
     spend double precision DEFAULT 0.0 NOT NULL,
-    budget_id text
+    budget_id text,
+    total_spend double precision DEFAULT 0.0 NOT NULL
 );
 
 
@@ -1307,7 +1509,9 @@ CREATE TABLE public."LiteLLM_TeamTable" (
     access_group_ids text[] DEFAULT ARRAY[]::text[],
     policies text[] DEFAULT ARRAY[]::text[],
     model_id integer,
-    allow_team_guardrail_config boolean DEFAULT false NOT NULL
+    allow_team_guardrail_config boolean DEFAULT false NOT NULL,
+    budget_limits jsonb,
+    default_team_member_models text[] DEFAULT ARRAY[]::text[]
 );
 
 
@@ -1394,53 +1598,148 @@ CREATE TABLE public."LiteLLM_UserTable" (
 
 
 --
--- Name: LiteLLM_VerificationToken; Type: TABLE; Schema: public; Owner: -
+-- Name: LiteLLM_VerificationTokenView; Type: VIEW; Schema: public; Owner: -
 --
 
-CREATE TABLE public."LiteLLM_VerificationToken" (
-    token text NOT NULL,
-    key_name text,
-    key_alias text,
-    soft_budget_cooldown boolean DEFAULT false NOT NULL,
-    spend double precision DEFAULT 0.0 NOT NULL,
-    expires timestamp(3) without time zone,
-    models text[],
-    aliases jsonb DEFAULT '{}'::jsonb NOT NULL,
-    config jsonb DEFAULT '{}'::jsonb NOT NULL,
-    router_settings jsonb DEFAULT '{}'::jsonb,
-    user_id text,
-    team_id text,
-    agent_id text,
-    project_id text,
-    permissions jsonb DEFAULT '{}'::jsonb NOT NULL,
-    max_parallel_requests integer,
-    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
-    blocked boolean,
-    tpm_limit bigint,
-    rpm_limit bigint,
-    max_budget double precision,
-    budget_duration text,
-    budget_reset_at timestamp(3) without time zone,
-    allowed_cache_controls text[] DEFAULT ARRAY[]::text[],
-    allowed_routes text[] DEFAULT ARRAY[]::text[],
-    policies text[] DEFAULT ARRAY[]::text[],
-    access_group_ids text[] DEFAULT ARRAY[]::text[],
-    model_spend jsonb DEFAULT '{}'::jsonb NOT NULL,
-    model_max_budget jsonb DEFAULT '{}'::jsonb NOT NULL,
-    budget_id text,
-    organization_id text,
-    object_permission_id text,
-    created_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP,
-    created_by text,
-    updated_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP,
-    updated_by text,
-    last_active timestamp(3) without time zone,
-    rotation_count integer DEFAULT 0,
-    auto_rotate boolean DEFAULT false,
-    rotation_interval text,
-    last_rotation_at timestamp(3) without time zone,
-    key_rotation_at timestamp(3) without time zone
+CREATE VIEW public."LiteLLM_VerificationTokenView" AS
+ SELECT v.token,
+    v.key_name,
+    v.key_alias,
+    v.soft_budget_cooldown,
+    v.spend,
+    v.expires,
+    v.models,
+    v.aliases,
+    v.config,
+    v.router_settings,
+    v.user_id,
+    v.team_id,
+    v.agent_id,
+    v.project_id,
+    v.permissions,
+    v.max_parallel_requests,
+    v.metadata,
+    v.blocked,
+    v.tpm_limit,
+    v.rpm_limit,
+    v.max_budget,
+    v.budget_duration,
+    v.budget_reset_at,
+    v.allowed_cache_controls,
+    v.allowed_routes,
+    v.policies,
+    v.access_group_ids,
+    v.model_spend,
+    v.model_max_budget,
+    v.budget_id,
+    v.organization_id,
+    v.object_permission_id,
+    v.created_at,
+    v.created_by,
+    v.updated_at,
+    v.updated_by,
+    v.last_active,
+    v.rotation_count,
+    v.auto_rotate,
+    v.rotation_interval,
+    v.last_rotation_at,
+    v.key_rotation_at,
+    v.budget_limits,
+    t.spend AS team_spend,
+    t.max_budget AS team_max_budget,
+    t.tpm_limit AS team_tpm_limit,
+    t.rpm_limit AS team_rpm_limit,
+    p.project_alias
+   FROM ((public."LiteLLM_VerificationToken" v
+     LEFT JOIN public."LiteLLM_TeamTable" t ON ((v.team_id = t.team_id)))
+     LEFT JOIN public."LiteLLM_ProjectTable" p ON ((v.project_id = p.project_id)));
+
+
+--
+-- Name: LiteLLM_WorkflowEvent; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public."LiteLLM_WorkflowEvent" (
+    event_id text NOT NULL,
+    run_id text NOT NULL,
+    event_type text NOT NULL,
+    step_name text NOT NULL,
+    sequence_number integer NOT NULL,
+    data jsonb,
+    created_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+
+
+--
+-- Name: LiteLLM_WorkflowMessage; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public."LiteLLM_WorkflowMessage" (
+    message_id text NOT NULL,
+    run_id text NOT NULL,
+    role text NOT NULL,
+    content text NOT NULL,
+    sequence_number integer NOT NULL,
+    session_id text,
+    created_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+
+--
+-- Name: LiteLLM_WorkflowRun; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public."LiteLLM_WorkflowRun" (
+    run_id text NOT NULL,
+    session_id text NOT NULL,
+    workflow_type text NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    created_by text,
+    created_at timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at timestamp(3) without time zone NOT NULL,
+    input jsonb,
+    output jsonb,
+    metadata jsonb
+);
+
+
+--
+-- Name: MonthlyGlobalSpend; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public."MonthlyGlobalSpend" AS
+ SELECT date("startTime") AS date,
+    sum(spend) AS spend
+   FROM public."LiteLLM_SpendLogs"
+  WHERE ("startTime" >= (CURRENT_DATE - '30 days'::interval))
+  GROUP BY (date("startTime"));
+
+
+--
+-- Name: MonthlyGlobalSpendPerKey; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public."MonthlyGlobalSpendPerKey" AS
+ SELECT date("startTime") AS date,
+    sum(spend) AS spend,
+    api_key
+   FROM public."LiteLLM_SpendLogs"
+  WHERE ("startTime" >= (CURRENT_DATE - '30 days'::interval))
+  GROUP BY (date("startTime")), api_key;
+
+
+--
+-- Name: MonthlyGlobalSpendPerUserPerKey; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public."MonthlyGlobalSpendPerUserPerKey" AS
+ SELECT date("startTime") AS date,
+    sum(spend) AS spend,
+    api_key,
+    "user"
+   FROM public."LiteLLM_SpendLogs"
+  WHERE ("startTime" >= (CURRENT_DATE - '30 days'::interval))
+  GROUP BY (date("startTime")), "user", api_key;
 
 
 --
@@ -1708,13 +2007,13 @@ CREATE TABLE public.custom_api_definitions (
     label text NOT NULL,
     category text DEFAULT 'custom'::text NOT NULL,
     description text DEFAULT ''::text NOT NULL,
-    domain text DEFAULT ''::text NOT NULL,
     setup_url text DEFAULT ''::text NOT NULL,
     docs_url text DEFAULT ''::text NOT NULL,
     instructions text DEFAULT ''::text NOT NULL,
     env_vars jsonb DEFAULT '[]'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    domain text DEFAULT ''::text NOT NULL
 );
 
 
@@ -1862,7 +2161,8 @@ CREATE TABLE public.email_accounts (
     webhook_subscription_id text,
     webhook_client_state text,
     webhook_expires_at timestamp with time zone,
-    initial_sync_done boolean DEFAULT false NOT NULL
+    initial_sync_done boolean DEFAULT false NOT NULL,
+    is_default boolean DEFAULT false NOT NULL
 );
 
 
@@ -1933,7 +2233,8 @@ CREATE TABLE public.email_assistant_settings (
     learned_writing_style text,
     learned_style_evidence_count integer DEFAULT 0 NOT NULL,
     chat_model text DEFAULT 'tier-balanced'::text NOT NULL,
-    draft_model text DEFAULT 'tier-powerful'::text NOT NULL
+    draft_model text DEFAULT 'tier-powerful'::text NOT NULL,
+    org_domains text[] DEFAULT '{}'::text[] NOT NULL
 );
 
 
@@ -2064,12 +2365,12 @@ CREATE TABLE public.email_messages (
     is_read boolean DEFAULT false,
     is_starred boolean DEFAULT false,
     is_flagged boolean DEFAULT false,
-    importance text DEFAULT 'normal'::text NOT NULL,
-    categories text[] DEFAULT '{}'::text[] NOT NULL,
     received_at timestamp with time zone,
     synced_at timestamp with time zone DEFAULT now(),
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
+    importance text DEFAULT 'normal'::text NOT NULL,
+    categories text[] DEFAULT '{}'::text[] NOT NULL,
     unsubscribe_link text,
     rules_processed_at timestamp with time zone
 );
@@ -2222,6 +2523,146 @@ CREATE TABLE public.events (
 
 
 --
+-- Name: gtd_contexts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gtd_contexts (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id text NOT NULL,
+    name text NOT NULL,
+    icon text,
+    sort_order integer DEFAULT 0
+);
+
+
+--
+-- Name: gtd_horizons; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gtd_horizons (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id text NOT NULL,
+    level integer NOT NULL,
+    title text NOT NULL,
+    notes text,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: gtd_items; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gtd_items (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id text NOT NULL,
+    source text DEFAULT 'LOCAL'::text NOT NULL,
+    account_id uuid,
+    provider_task_id text,
+    provider_url text,
+    title text NOT NULL,
+    description text,
+    disposition text DEFAULT 'INBOX'::text,
+    next_action text,
+    context text,
+    energy text,
+    time_estimate_mins integer,
+    is_two_minute boolean DEFAULT false,
+    project_id uuid,
+    horizon_id uuid,
+    defer_until timestamp with time zone,
+    sync_state text DEFAULT 'local'::text,
+    provider_status text,
+    assignee jsonb,
+    is_mine boolean DEFAULT true,
+    due_at timestamp with time zone,
+    is_hard_date boolean DEFAULT false,
+    completed_at timestamp with time zone,
+    clarified_at timestamp with time zone,
+    synced_at timestamp with time zone DEFAULT now(),
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: gtd_people; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gtd_people (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    name text NOT NULL,
+    email text,
+    role text,
+    department text,
+    team text,
+    reports_to text,
+    status text DEFAULT 'active'::text,
+    skills text[] DEFAULT '{}'::text[],
+    resume_summary text,
+    years_experience integer,
+    domain text,
+    capacity_hours_per_week integer,
+    current_load_hours_per_week integer,
+    available_hours_per_week integer,
+    clickup_user_id text,
+    source text DEFAULT 'agent-project-manager'::text,
+    synced_at timestamp with time zone DEFAULT now(),
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: gtd_projects; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gtd_projects (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id text NOT NULL,
+    source text DEFAULT 'LOCAL'::text NOT NULL,
+    account_id uuid,
+    provider_ref text,
+    outcome text NOT NULL,
+    purpose text,
+    status text DEFAULT 'ACTIVE'::text,
+    horizon_id uuid,
+    has_next_action boolean DEFAULT false,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: gtd_reviews; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gtd_reviews (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id text NOT NULL,
+    ran_at timestamp with time zone DEFAULT now(),
+    summary jsonb,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: gtd_waiting; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gtd_waiting (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    item_id uuid NOT NULL,
+    waiting_on jsonb NOT NULL,
+    delegated_at timestamp with time zone NOT NULL,
+    expected_by timestamp with time zone,
+    last_nudged_at timestamp with time zone,
+    resolved boolean DEFAULT false,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+
+--
 -- Name: job_configurations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2346,14 +2787,9 @@ CREATE TABLE public.meeting (
 --
 
 CREATE TABLE public.mem0_memories (
-    id uuid DEFAULT public.uuid_generate_v4() NOT NULL,
-    memory text NOT NULL,
-    user_id text NOT NULL,
-    agent_id text,
-    metadata jsonb,
-    embedding public.vector(1536),
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    id uuid NOT NULL,
+    vector public.vector(1536),
+    payload jsonb
 );
 
 
@@ -2863,6 +3299,32 @@ CREATE TABLE public.task (
 
 
 --
+-- Name: task_accounts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.task_accounts (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id text NOT NULL,
+    provider text NOT NULL,
+    connector_kind text DEFAULT 'api'::text NOT NULL,
+    workspace_id text NOT NULL,
+    label text,
+    credentials_encrypted text NOT NULL,
+    capabilities jsonb DEFAULT '{}'::jsonb,
+    field_map jsonb DEFAULT '{}'::jsonb,
+    schema_cache jsonb DEFAULT '{}'::jsonb,
+    sync_enabled boolean DEFAULT true,
+    sync_interval_secs integer DEFAULT 300,
+    sync_status text DEFAULT 'idle'::text,
+    sync_error text,
+    last_synced_at timestamp with time zone,
+    last_delta_token text,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+
+--
 -- Name: trace_media; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3000,6 +3462,22 @@ ALTER TABLE ONLY public."Account"
 
 ALTER TABLE ONLY public."LiteLLM_AccessGroupTable"
     ADD CONSTRAINT "LiteLLM_AccessGroupTable_pkey" PRIMARY KEY (access_group_id);
+
+
+--
+-- Name: LiteLLM_AdaptiveRouterSession LiteLLM_AdaptiveRouterSession_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public."LiteLLM_AdaptiveRouterSession"
+    ADD CONSTRAINT "LiteLLM_AdaptiveRouterSession_pkey" PRIMARY KEY (session_id, router_name, model_name);
+
+
+--
+-- Name: LiteLLM_AdaptiveRouterState LiteLLM_AdaptiveRouterState_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public."LiteLLM_AdaptiveRouterState"
+    ADD CONSTRAINT "LiteLLM_AdaptiveRouterState_pkey" PRIMARY KEY (router_name, request_type, model_name);
 
 
 --
@@ -3219,6 +3697,14 @@ ALTER TABLE ONLY public."LiteLLM_MCPServerTable"
 
 
 --
+-- Name: LiteLLM_MCPToolsetTable LiteLLM_MCPToolsetTable_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public."LiteLLM_MCPToolsetTable"
+    ADD CONSTRAINT "LiteLLM_MCPToolsetTable_pkey" PRIMARY KEY (toolset_id);
+
+
+--
 -- Name: LiteLLM_MCPUserCredentials LiteLLM_MCPUserCredentials_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3264,6 +3750,14 @@ ALTER TABLE ONLY public."LiteLLM_ManagedVectorStoreTable"
 
 ALTER TABLE ONLY public."LiteLLM_ManagedVectorStoresTable"
     ADD CONSTRAINT "LiteLLM_ManagedVectorStoresTable_pkey" PRIMARY KEY (vector_store_id);
+
+
+--
+-- Name: LiteLLM_MemoryTable LiteLLM_MemoryTable_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public."LiteLLM_MemoryTable"
+    ADD CONSTRAINT "LiteLLM_MemoryTable_pkey" PRIMARY KEY (memory_id);
 
 
 --
@@ -3448,6 +3942,30 @@ ALTER TABLE ONLY public."LiteLLM_UserTable"
 
 ALTER TABLE ONLY public."LiteLLM_VerificationToken"
     ADD CONSTRAINT "LiteLLM_VerificationToken_pkey" PRIMARY KEY (token);
+
+
+--
+-- Name: LiteLLM_WorkflowEvent LiteLLM_WorkflowEvent_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public."LiteLLM_WorkflowEvent"
+    ADD CONSTRAINT "LiteLLM_WorkflowEvent_pkey" PRIMARY KEY (event_id);
+
+
+--
+-- Name: LiteLLM_WorkflowMessage LiteLLM_WorkflowMessage_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public."LiteLLM_WorkflowMessage"
+    ADD CONSTRAINT "LiteLLM_WorkflowMessage_pkey" PRIMARY KEY (message_id);
+
+
+--
+-- Name: LiteLLM_WorkflowRun LiteLLM_WorkflowRun_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public."LiteLLM_WorkflowRun"
+    ADD CONSTRAINT "LiteLLM_WorkflowRun_pkey" PRIMARY KEY (run_id);
 
 
 --
@@ -3899,6 +4417,78 @@ ALTER TABLE ONLY public.events
 
 
 --
+-- Name: gtd_contexts gtd_contexts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gtd_contexts
+    ADD CONSTRAINT gtd_contexts_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: gtd_contexts gtd_contexts_user_id_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gtd_contexts
+    ADD CONSTRAINT gtd_contexts_user_id_name_key UNIQUE (user_id, name);
+
+
+--
+-- Name: gtd_horizons gtd_horizons_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gtd_horizons
+    ADD CONSTRAINT gtd_horizons_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: gtd_items gtd_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gtd_items
+    ADD CONSTRAINT gtd_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: gtd_people gtd_people_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gtd_people
+    ADD CONSTRAINT gtd_people_name_key UNIQUE (name);
+
+
+--
+-- Name: gtd_people gtd_people_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gtd_people
+    ADD CONSTRAINT gtd_people_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: gtd_projects gtd_projects_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gtd_projects
+    ADD CONSTRAINT gtd_projects_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: gtd_reviews gtd_reviews_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gtd_reviews
+    ADD CONSTRAINT gtd_reviews_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: gtd_waiting gtd_waiting_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gtd_waiting
+    ADD CONSTRAINT gtd_waiting_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: job_configurations job_configurations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4176,6 +4766,22 @@ ALTER TABLE ONLY public.scores
 
 ALTER TABLE ONLY public.sso_configs
     ADD CONSTRAINT sso_configs_pkey PRIMARY KEY (domain);
+
+
+--
+-- Name: task_accounts task_accounts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.task_accounts
+    ADD CONSTRAINT task_accounts_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: task_accounts task_accounts_user_id_provider_workspace_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.task_accounts
+    ADD CONSTRAINT task_accounts_user_id_provider_workspace_id_key UNIQUE (user_id, provider, workspace_id);
 
 
 --
@@ -4717,6 +5323,13 @@ CREATE INDEX "LiteLLM_HealthCheckTable_checked_at_idx" ON public."LiteLLM_Health
 
 
 --
+-- Name: LiteLLM_HealthCheckTable_model_id_model_name_checked_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "LiteLLM_HealthCheckTable_model_id_model_name_checked_at_idx" ON public."LiteLLM_HealthCheckTable" USING btree (model_id, model_name, checked_at DESC);
+
+
+--
 -- Name: LiteLLM_HealthCheckTable_model_name_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4745,10 +5358,31 @@ CREATE UNIQUE INDEX "LiteLLM_JWTKeyMapping_jwt_claim_name_jwt_claim_value_key" O
 
 
 --
+-- Name: LiteLLM_MCPServerTable_approval_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "LiteLLM_MCPServerTable_approval_status_idx" ON public."LiteLLM_MCPServerTable" USING btree (approval_status);
+
+
+--
+-- Name: LiteLLM_MCPToolsetTable_toolset_name_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "LiteLLM_MCPToolsetTable_toolset_name_key" ON public."LiteLLM_MCPToolsetTable" USING btree (toolset_name);
+
+
+--
 -- Name: LiteLLM_MCPUserCredentials_user_id_server_id_key; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE UNIQUE INDEX "LiteLLM_MCPUserCredentials_user_id_server_id_key" ON public."LiteLLM_MCPUserCredentials" USING btree (user_id, server_id);
+
+
+--
+-- Name: LiteLLM_ManagedFileTable_team_id_created_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "LiteLLM_ManagedFileTable_team_id_created_at_idx" ON public."LiteLLM_ManagedFileTable" USING btree (team_id, created_at DESC);
 
 
 --
@@ -4780,6 +5414,13 @@ CREATE UNIQUE INDEX "LiteLLM_ManagedObjectTable_model_object_id_key" ON public."
 
 
 --
+-- Name: LiteLLM_ManagedObjectTable_team_id_created_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "LiteLLM_ManagedObjectTable_team_id_created_at_idx" ON public."LiteLLM_ManagedObjectTable" USING btree (team_id, created_at DESC);
+
+
+--
 -- Name: LiteLLM_ManagedObjectTable_unified_object_id_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4798,6 +5439,13 @@ CREATE UNIQUE INDEX "LiteLLM_ManagedObjectTable_unified_object_id_key" ON public
 --
 
 CREATE UNIQUE INDEX "LiteLLM_ManagedVectorStoreIndexTable_index_name_key" ON public."LiteLLM_ManagedVectorStoreIndexTable" USING btree (index_name);
+
+
+--
+-- Name: LiteLLM_ManagedVectorStoreTable_team_id_created_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "LiteLLM_ManagedVectorStoreTable_team_id_created_at_idx" ON public."LiteLLM_ManagedVectorStoreTable" USING btree (team_id, created_at DESC);
 
 
 --
@@ -4829,6 +5477,27 @@ CREATE INDEX "LiteLLM_ManagedVectorStoresTable_user_id_idx" ON public."LiteLLM_M
 
 
 --
+-- Name: LiteLLM_MemoryTable_key_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "LiteLLM_MemoryTable_key_key" ON public."LiteLLM_MemoryTable" USING btree (key);
+
+
+--
+-- Name: LiteLLM_MemoryTable_team_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "LiteLLM_MemoryTable_team_id_idx" ON public."LiteLLM_MemoryTable" USING btree (team_id);
+
+
+--
+-- Name: LiteLLM_MemoryTable_user_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "LiteLLM_MemoryTable_user_id_idx" ON public."LiteLLM_MemoryTable" USING btree (user_id);
+
+
+--
 -- Name: LiteLLM_OrganizationMembership_user_id_organization_id_key; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4850,6 +5519,13 @@ CREATE INDEX "LiteLLM_PolicyTable_policy_name_version_status_idx" ON public."Lit
 
 
 --
+-- Name: LiteLLM_PromptTable_prompt_id_environment_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "LiteLLM_PromptTable_prompt_id_environment_idx" ON public."LiteLLM_PromptTable" USING btree (prompt_id, environment);
+
+
+--
 -- Name: LiteLLM_PromptTable_prompt_id_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4864,10 +5540,10 @@ CREATE UNIQUE INDEX "LiteLLM_PromptTable_prompt_id_key" ON public."LiteLLM_Promp
 
 
 --
--- Name: LiteLLM_PromptTable_prompt_id_version_key; Type: INDEX; Schema: public; Owner: -
+-- Name: LiteLLM_PromptTable_prompt_id_version_environment_key; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX "LiteLLM_PromptTable_prompt_id_version_key" ON public."LiteLLM_PromptTable" USING btree (prompt_id, version);
+CREATE UNIQUE INDEX "LiteLLM_PromptTable_prompt_id_version_environment_key" ON public."LiteLLM_PromptTable" USING btree (prompt_id, version, environment);
 
 
 --
@@ -5015,6 +5691,69 @@ CREATE INDEX "LiteLLM_VerificationToken_team_id_idx" ON public."LiteLLM_Verifica
 --
 
 CREATE INDEX "LiteLLM_VerificationToken_user_id_team_id_idx" ON public."LiteLLM_VerificationToken" USING btree (user_id, team_id);
+
+
+--
+-- Name: LiteLLM_WorkflowEvent_run_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "LiteLLM_WorkflowEvent_run_id_idx" ON public."LiteLLM_WorkflowEvent" USING btree (run_id);
+
+
+--
+-- Name: LiteLLM_WorkflowEvent_run_id_sequence_number_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "LiteLLM_WorkflowEvent_run_id_sequence_number_key" ON public."LiteLLM_WorkflowEvent" USING btree (run_id, sequence_number);
+
+
+--
+-- Name: LiteLLM_WorkflowMessage_run_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "LiteLLM_WorkflowMessage_run_id_idx" ON public."LiteLLM_WorkflowMessage" USING btree (run_id);
+
+
+--
+-- Name: LiteLLM_WorkflowMessage_run_id_sequence_number_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "LiteLLM_WorkflowMessage_run_id_sequence_number_key" ON public."LiteLLM_WorkflowMessage" USING btree (run_id, sequence_number);
+
+
+--
+-- Name: LiteLLM_WorkflowRun_created_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "LiteLLM_WorkflowRun_created_at_idx" ON public."LiteLLM_WorkflowRun" USING btree (created_at);
+
+
+--
+-- Name: LiteLLM_WorkflowRun_created_by_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "LiteLLM_WorkflowRun_created_by_idx" ON public."LiteLLM_WorkflowRun" USING btree (created_by);
+
+
+--
+-- Name: LiteLLM_WorkflowRun_session_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "LiteLLM_WorkflowRun_session_id_idx" ON public."LiteLLM_WorkflowRun" USING btree (session_id);
+
+
+--
+-- Name: LiteLLM_WorkflowRun_session_id_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "LiteLLM_WorkflowRun_session_id_key" ON public."LiteLLM_WorkflowRun" USING btree (session_id);
+
+
+--
+-- Name: LiteLLM_WorkflowRun_workflow_type_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "LiteLLM_WorkflowRun_workflow_type_status_idx" ON public."LiteLLM_WorkflowRun" USING btree (workflow_type, status);
 
 
 --
@@ -5382,6 +6121,13 @@ CREATE INDEX events_project_id_idx ON public.events USING btree (project_id);
 
 
 --
+-- Name: idx_adaptive_router_session_activity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_adaptive_router_session_activity ON public."LiteLLM_AdaptiveRouterSession" USING btree (last_activity_at);
+
+
+--
 -- Name: idx_custom_api_category; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5407,6 +6153,13 @@ CREATE INDEX idx_dynamic_agents_runtime ON public.dynamic_agents USING btree (ag
 --
 
 CREATE INDEX idx_dynamic_agents_status ON public.dynamic_agents USING btree (status);
+
+
+--
+-- Name: idx_email_accounts_one_default; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_email_accounts_one_default ON public.email_accounts USING btree (user_id) WHERE is_default;
 
 
 --
@@ -5585,6 +6338,83 @@ CREATE INDEX idx_email_sync_log_account ON public.email_sync_log USING btree (ac
 
 
 --
+-- Name: idx_gtd_horizons_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_gtd_horizons_user ON public.gtd_horizons USING btree (user_id, level);
+
+
+--
+-- Name: idx_gtd_items_context; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_gtd_items_context ON public.gtd_items USING btree (context, disposition) WHERE (disposition = 'NEXT'::text);
+
+
+--
+-- Name: idx_gtd_items_project; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_gtd_items_project ON public.gtd_items USING btree (project_id);
+
+
+--
+-- Name: idx_gtd_items_search; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_gtd_items_search ON public.gtd_items USING gin (to_tsvector('english'::regconfig, ((COALESCE(title, ''::text) || ' '::text) || COALESCE(description, ''::text))));
+
+
+--
+-- Name: idx_gtd_items_user_disposition; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_gtd_items_user_disposition ON public.gtd_items USING btree (user_id, disposition, created_at);
+
+
+--
+-- Name: idx_gtd_people_skills; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_gtd_people_skills ON public.gtd_people USING gin (skills);
+
+
+--
+-- Name: idx_gtd_people_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_gtd_people_status ON public.gtd_people USING btree (status);
+
+
+--
+-- Name: idx_gtd_projects_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_gtd_projects_user ON public.gtd_projects USING btree (user_id, status);
+
+
+--
+-- Name: idx_gtd_reviews_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_gtd_reviews_user ON public.gtd_reviews USING btree (user_id, ran_at DESC);
+
+
+--
+-- Name: idx_gtd_waiting_item; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_gtd_waiting_item ON public.gtd_waiting USING btree (item_id);
+
+
+--
+-- Name: idx_gtd_waiting_open; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_gtd_waiting_open ON public.gtd_waiting USING btree (resolved, expected_by) WHERE (resolved = false);
+
+
+--
 -- Name: idx_mcp_servers_enabled; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5631,6 +6461,13 @@ CREATE INDEX idx_provider_keys_credential_type ON public.provider_keys USING btr
 --
 
 CREATE INDEX idx_provider_keys_service ON public.provider_keys USING btree (service);
+
+
+--
+-- Name: idx_task_accounts_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_task_accounts_user ON public.task_accounts USING btree (user_id);
 
 
 --
@@ -5725,17 +6562,17 @@ CREATE UNIQUE INDEX media_project_id_sha_256_hash_key ON public.media USING btre
 
 
 --
--- Name: mem0_memories_embedding_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: mem0_memories_hnsw_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX mem0_memories_embedding_idx ON public.mem0_memories USING ivfflat (embedding public.vector_cosine_ops) WITH (lists='100') WHERE (embedding IS NOT NULL);
+CREATE INDEX mem0_memories_hnsw_idx ON public.mem0_memories USING hnsw (vector public.vector_cosine_ops);
 
 
 --
--- Name: mem0_memories_user_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: mem0_memories_text_lemmatized_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX mem0_memories_user_idx ON public.mem0_memories USING btree (user_id, created_at DESC);
+CREATE INDEX mem0_memories_text_lemmatized_idx ON public.mem0_memories USING gin (to_tsvector('simple'::regconfig, (payload ->> 'text_lemmatized'::text)));
 
 
 --
@@ -6236,6 +7073,20 @@ CREATE UNIQUE INDEX uq_email_rule_patterns ON public.email_rule_patterns USING b
 
 
 --
+-- Name: uq_gtd_items_provider; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_gtd_items_provider ON public.gtd_items USING btree (account_id, provider_task_id) WHERE (source <> 'LOCAL'::text);
+
+
+--
+-- Name: uq_gtd_projects_provider; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_gtd_projects_provider ON public.gtd_projects USING btree (account_id, provider_ref) WHERE (source <> 'LOCAL'::text);
+
+
+--
 -- Name: users_email_key; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6470,6 +7321,22 @@ ALTER TABLE ONLY public."LiteLLM_VerificationToken"
 
 ALTER TABLE ONLY public."LiteLLM_VerificationToken"
     ADD CONSTRAINT "LiteLLM_VerificationToken_project_id_fkey" FOREIGN KEY (project_id) REFERENCES public."LiteLLM_ProjectTable"(project_id) ON UPDATE CASCADE ON DELETE SET NULL;
+
+
+--
+-- Name: LiteLLM_WorkflowEvent LiteLLM_WorkflowEvent_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public."LiteLLM_WorkflowEvent"
+    ADD CONSTRAINT "LiteLLM_WorkflowEvent_run_id_fkey" FOREIGN KEY (run_id) REFERENCES public."LiteLLM_WorkflowRun"(run_id) ON UPDATE CASCADE ON DELETE RESTRICT;
+
+
+--
+-- Name: LiteLLM_WorkflowMessage LiteLLM_WorkflowMessage_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public."LiteLLM_WorkflowMessage"
+    ADD CONSTRAINT "LiteLLM_WorkflowMessage_run_id_fkey" FOREIGN KEY (run_id) REFERENCES public."LiteLLM_WorkflowRun"(run_id) ON UPDATE CASCADE ON DELETE RESTRICT;
 
 
 --
@@ -6801,6 +7668,54 @@ ALTER TABLE ONLY public.events
 
 
 --
+-- Name: gtd_items gtd_items_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gtd_items
+    ADD CONSTRAINT gtd_items_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.task_accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: gtd_items gtd_items_horizon_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gtd_items
+    ADD CONSTRAINT gtd_items_horizon_id_fkey FOREIGN KEY (horizon_id) REFERENCES public.gtd_horizons(id) ON DELETE SET NULL;
+
+
+--
+-- Name: gtd_items gtd_items_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gtd_items
+    ADD CONSTRAINT gtd_items_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.gtd_projects(id) ON DELETE SET NULL;
+
+
+--
+-- Name: gtd_projects gtd_projects_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gtd_projects
+    ADD CONSTRAINT gtd_projects_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.task_accounts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: gtd_projects gtd_projects_horizon_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gtd_projects
+    ADD CONSTRAINT gtd_projects_horizon_id_fkey FOREIGN KEY (horizon_id) REFERENCES public.gtd_horizons(id) ON DELETE SET NULL;
+
+
+--
+-- Name: gtd_waiting gtd_waiting_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gtd_waiting
+    ADD CONSTRAINT gtd_waiting_item_id_fkey FOREIGN KEY (item_id) REFERENCES public.gtd_items(id) ON DELETE CASCADE;
+
+
+--
 -- Name: job_configurations job_configurations_eval_template_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7084,5 +7999,5 @@ ALTER TABLE ONLY public.traces
 -- PostgreSQL database dump complete
 --
 
-\unrestrict yJTlFZHkFKBoddWD4KG5vuexbcdicPHikagZRdXQkNxFsVTZTlGabq3RcvPhli4
+\unrestrict DdhLsq2xES0Dwl5etJsoxKXzuI4jhHGgM2fs7OmDgyFzflhLffPW8AuFYNwmwO0
 

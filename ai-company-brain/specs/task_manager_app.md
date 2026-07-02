@@ -735,6 +735,21 @@ runs parked on `ask_user`/`ask_questions` after 300s — now HITL-aware; knobs:
 `HITL_IDLE_TIMEOUT_SECONDS` (3600), `COPILOT_STREAM_STALL_TIMEOUT` (300),
 `COPILOT_TOOL_TIMEOUT_SECONDS` (300).
 
+**Chat-stack state (same session, 2026-07-02)** — a full audit of the chat
+implementation (SSE · HITL · resume · multi-agent handoffs, both runtimes)
+lives in
+[`chat_implementation_review_2026-07.md`](chat_implementation_review_2026-07.md);
+its status block records the three hardening batches already landed
+(`3b9d3c8` · `d2de4d2` · `20a7112` — P0-1/2/4/5/6/7/8, P1-1/3/4/8; regression
+suite `tests/unit/test_chat_hardening.py`, 19 tests) and what remains (P0-3
+server-side persistence, P1-2 multi-worker control state, P1-5/6/7/9, P2 list,
+§5 refactors, §6 doc drift). **Treat that doc as the work queue for chat.**
+New env knobs from the batches: `SUB_AGENT_MAX_DEPTH` (2, delegation
+depth/cycle guard) and `SUB_AGENT_TIMEOUT_SECONDS` (900, per-delegation
+wall-clock budget). Also this session: `web_search` is now SerpAPI-first
+(set `SERPAPI_API_KEY`; free ddgs engine rotation is the fallback) — see
+`packages/acb_skills/acb_skills/web_tools.py`.
+
 ### Phase 1 — Foundation (interface layer + read-only GTD lens)
 - [ ] This plan (done) + DOX index updates.
 - [ ] `task_accounts` + `gtd_items` + `gtd_projects` + `gtd_waiting` + `gtd_contexts`/`gtd_horizons`/`gtd_reviews` schema (numbered migration), incl. the `source` (LOCAL/SYNCED) discriminator, nullable provider linkage, and the per-connection `capabilities`/`field_map` descriptor.

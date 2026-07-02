@@ -60,13 +60,36 @@ async def web_search(query: str, max_results: int = 5) -> str:
     max_results = max(1, min(10, int(max_results)))
 
     def _sync_search() -> list[dict]:
+        # backend="auto" rotates across ddgs' engines (duckduckgo, bing,
+        # brave, google, …) so one engine blocking the server's egress IP
+        # doesn't take the tool down.
         with DDGS() as ddgs:
-            return list(ddgs.text(query, max_results=max_results))
+            return list(ddgs.text(query, max_results=max_results, backend="auto"))
 
+    ddgs_error: str | None = None
+    results: list[dict] = []
     try:
         results = await asyncio.to_thread(_sync_search)
     except Exception as exc:  # noqa: BLE001
-        return f"web_search failed: {exc}"
+        ddgs_error = f"{type(exc).__name__}: {exc}"
+
+    if ddgs_error is not None or not results:
+        # Fallback: SerpAPI (Google results), when a key is configured via
+        # settings / the integrations key store. Keeps search alive when the
+        # free engines block/ratelimit the deployment's egress IP.
+        serp = await _serpapi_search(query, max_results)
+        if isinstance(serp, list) and serp:
+            results = serp
+        elif ddgs_error is not None:
+            hint = (
+                " (both engine rotation and the SerpAPI fallback failed — "
+                f"SerpAPI: {serp})" if isinstance(serp, str) and serp
+                else " (no SERPAPI_API_KEY configured for the Google "
+                     "fallback; the free engines may be blocking this "
+                     "server's egress IP or an outbound proxy is denying "
+                     "the request)"
+            )
+            return f"web_search failed: {ddgs_error}{hint}"
 
     if not results:
         return f"No results found for: {query!r}"
@@ -83,6 +106,45 @@ async def web_search(query: str, max_results: int = 5) -> str:
         lines.append("")
 
     return "\n".join(lines).strip()
+
+
+async def _serpapi_search(query: str, max_results: int) -> "list[dict] | str":
+    """Google results via SerpAPI when a key is configured; else "".
+
+    Returns a ddgs-shaped list of {title, href, body} dicts on success, or an
+    error string ("" = no key configured, so nothing to report).
+    """
+    import os  # noqa: PLC0415
+
+    key = os.environ.get("SERPAPI_API_KEY", "")
+    if not key:
+        try:
+            from acb_common import get_settings  # noqa: PLC0415
+            key = getattr(get_settings(), "serpapi_api_key", "") or ""
+        except Exception:  # noqa: BLE001
+            key = ""
+    if not key:
+        return ""
+    try:
+        import httpx  # noqa: PLC0415
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                "https://serpapi.com/search.json",
+                params={"q": query, "num": max_results,
+                        "engine": "google", "api_key": key},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        return f"{type(exc).__name__}: {exc}"
+    return [
+        {
+            "title": r.get("title", "(no title)"),
+            "href": r.get("link", ""),
+            "body": r.get("snippet", "") or "",
+        }
+        for r in (data.get("organic_results") or [])[:max_results]
+    ]
 
 
 async def fetch_page(url: str, max_chars: int = 8000) -> str:
@@ -120,6 +182,8 @@ async def fetch_page(url: str, max_chars: int = 8000) -> str:
         return f"fetch_page: invalid URL {url!r} — must start with http:// or https://"
 
     jina_url = f"https://r.jina.ai/{url}"
+    text = ""
+    jina_error = ""
     try:
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
             resp = await client.get(
@@ -131,12 +195,32 @@ async def fetch_page(url: str, max_chars: int = 8000) -> str:
             )
             resp.raise_for_status()
             text = resp.text.strip()
-    except httpx.TimeoutException:
-        return f"fetch_page timed out fetching: {url}"
-    except httpx.HTTPStatusError as exc:
-        return f"fetch_page HTTP {exc.response.status_code} for: {url}"
     except Exception as exc:  # noqa: BLE001
-        return f"fetch_page failed: {exc}"
+        jina_error = f"{type(exc).__name__}: {exc}"
+
+    if not text:
+        # Fallback: fetch the URL directly and strip HTML naively. Jina is
+        # nicer output, but it must not be a single point of failure (it can
+        # be blocked by an egress proxy or ratelimited).
+        try:
+            import re as _re  # noqa: PLC0415
+            async with httpx.AsyncClient(
+                timeout=20.0, follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (CommandCenter fetch_page)"},
+            ) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                raw = resp.text
+            raw = _re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", raw)
+            raw = _re.sub(r"(?s)<[^>]+>", " ", raw)
+            text = _re.sub(r"[ \t]+", " ", raw)
+            text = _re.sub(r"\n\s*\n+", "\n\n", text).strip()
+        except Exception as exc:  # noqa: BLE001
+            detail = f"{type(exc).__name__}: {exc}"
+            return (
+                f"fetch_page failed for {url} — Jina Reader: "
+                f"{jina_error or 'empty response'}; direct fetch: {detail}"
+            )
 
     if not text:
         return f"fetch_page: empty response for {url}"

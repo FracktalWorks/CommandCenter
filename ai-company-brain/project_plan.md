@@ -1,6 +1,6 @@
 # Project Plan — CommandCenter v2
 
-> **Org:** Fracktal Works · **Updated:** 2026-06-20 · **Version:** 3.0
+> **Org:** Fracktal Works · **Updated:** 2026-07-02 · **Version:** 3.1
 > Single source of truth for **what** we build (requirements), **when** (milestones), and **how much** (phased WBS). Absorbs the former `product_requirements.md` and `wbs.md`.
 > **Read first:** [`AGENTS.md`](AGENTS.md) — current build status, file index, glossary.
 > **Companions:** [`system_architecture.md`](system_architecture.md) (design + ADRs) · [`reference.md`](reference.md) (MAF / Copilot SDK / memory library notes) · [`agent_repo_compatibility.md`](agent_repo_compatibility.md) (how to build an agent) · [`specs/`](specs/) (per-feature specs).
@@ -154,6 +154,16 @@ Action Broker full build; Suggest+Apply for ClickUp (from triage) and Zoho (from
 
 ### Phase 5 — Intelligence Layer + Hardening 🔲 (~10.5 ew · M6)
 `agent-strategy` (digest + LightRAG); Odoo RPC ingestor; RouteLLM training pass; self-mutation quality review (seed golden evals); **hardening pass** (cost, latency, retry/idempotency, security audit — includes the infra lockdown below); v2.0 release review.
+
+### Phase 2.5 — Harness Hardening 🔄 (~3 ew · started 2026-07-02)
+Gap-closure workstream from the best-practices audit against [awesome-harness-engineering](https://github.com/ai-boost/awesome-harness-engineering). Full analysis + work queue: [`specs/harness_hardening_2026-07.md`](specs/harness_hardening_2026-07.md).
+- 🔄 **HH-1** Real eval harness: create `evals/` (Promptfoo golden cases + Inspect scenarios + offline trajectory tests for HITL/sub-agent/reconnect/tool-failure), un-scaffold `skill-eval.yml`. Supersedes the scaffold half of L2-01..06's "eval CI gate".
+- 🔄 **HH-2** Fail-closed `request_confirmation` for destructive actions + risk annotations (`read_only`/`destructive`/`idempotent`/`open_world`) on platform tools.
+- 🔄 **HH-3** Telemetry export path: LiteLLM OTEL callbacks (gated on `OTEL_EXPORTER_OTLP_ENDPOINT`), per-call cache/token usage into `audit_event`; backend selection stays in Phase 5.
+- ✅ **HH-4** Automatic compaction — verified already shipped: `AgentChat.tsx` auto-compacts at 80% of the model's real context window (75/80 hysteresis, checkpoint model). Full token budgeting stays with [`specs/llm_caching_memory.md`](specs/llm_caching_memory.md).
+- ✅ **HH-5** `own_tool_scope` config key filters agent-baked tools (executor `_apply_own_tool_scope`, all three build sites); the email-assistant subset itself lands with [`specs/email_tool_consolidation.md`](specs/email_tool_consolidation.md).
+- 🔲 **HH-6** Sandbox normal agent runs (allowlist permission handler now; container isolation with Phase 5 hardening).
+- 🔲 **HH-7** Typed sub-agent handoffs + namespaced sub-agent events (after chat-review strategic refactors).
 
 ### Cross-Phase Continuous Work
 VS Code + Git authoring (ongoing); mutation PR review (~2 h/wk when active); prompt/instruction tuning (~15%/phase); docs (~10%/phase); **security review + secrets hygiene** (quarterly); cost monitoring + LiteLLM tier tuning (~2 h/wk).

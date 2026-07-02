@@ -242,10 +242,19 @@ async def test_detached_run_persists_final_message(monkeypatch):
     fake = _FakeRedis()
     monkeypatch.setattr(stream_relay, "_client", fake)
 
+    # Track call ORDER: the parent session must be ensured before the message
+    # FK insert (P0-3 self-sufficiency — a first-turn client-death must not
+    # lose the message to the chat_message → chat_session foreign key).
+    calls: list[str] = []
     persisted: list[tuple[str, list]] = []
     monkeypatch.setattr(
+        chat_routes, "_ensure_session",
+        lambda sid, uid, agent="orchestrator": calls.append(f"ensure:{sid}:{uid}"),
+    )
+    monkeypatch.setattr(
         chat_routes, "_upsert_messages",
-        lambda sid, msgs: persisted.append((sid, msgs)),
+        lambda sid, msgs: (calls.append(f"upsert:{sid}"),
+                           persisted.append((sid, msgs)))[-1],
     )
 
     async def _agent_gen():
@@ -260,7 +269,7 @@ async def test_detached_run_persists_final_message(monkeypatch):
         # extraction, P1-9) can chain off the persisted content.
         returned.append(
             await persist_final_assistant_message(
-                "traj-persist", "assistant-msg-1",
+                "traj-persist", "assistant-msg-1", user_id="u@x.io",
             )
         )
 
@@ -286,6 +295,8 @@ async def test_detached_run_persists_final_message(monkeypatch):
     assert record.id == "assistant-msg-1"
     assert record.role == "assistant"
     assert record.content == "Hello world."
+    # Session ensured (owned by the acting user) BEFORE the message insert.
+    assert calls == ["ensure:traj-persist:u@x.io", "upsert:traj-persist"]
     # The folded dict is returned for run-boundary chaining (P1-9).
     assert returned[0] is not None
     assert returned[0]["content"] == "Hello world."
@@ -300,6 +311,10 @@ async def test_cancelled_run_still_persists_partial_turn(monkeypatch):
     monkeypatch.setattr(stream_relay, "_client", fake)
 
     persisted: list[list] = []
+    monkeypatch.setattr(
+        chat_routes, "_ensure_session",
+        lambda sid, uid, agent="orchestrator": None,
+    )
     monkeypatch.setattr(
         chat_routes, "_upsert_messages",
         lambda sid, msgs: persisted.append(msgs),

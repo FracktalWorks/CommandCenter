@@ -393,6 +393,7 @@ if _HAS_MAF:
                 async def _persist_cb() -> None:  # type: ignore[misc]
                     await persist_final_assistant_message(
                         _thread_id, assistant_message_id,
+                        user_id=user_id, agent_name="orchestrator",
                     )
 
             async def relayed_generator():

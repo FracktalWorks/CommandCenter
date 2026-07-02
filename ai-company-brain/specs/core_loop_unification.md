@@ -70,6 +70,23 @@ Render each segment as its own timeline entry; delete `foldForToolStart` /
 `route.ts` stops folding entirely. Do NOT attempt blind — this changes the
 chat surface's core rendering; drive it with /run + Playwright.
 
+## Verification (live-app drive, 2026-07-02)
+
+Drove real orchestrator turns through a locally-run gateway + Postgres/Redis
+to confirm Phases 1–3a end-to-end (not just via unit evals):
+- **3a confirmed on a live model**: a search-then-answer turn produced two
+  genuinely distinct `message_id`s with a clean `TEXT_MESSAGE_END`/`START`
+  around the tool call — narration segment then answer segment, no inference.
+- **Found + fixed a P0-3 completion bug**: the run-end fold hit a
+  `chat_message → chat_session` FK violation and silently dropped the message
+  when the parent session row didn't exist yet. The frontend normally upserts
+  the session first, but the persistence owner must be self-sufficient (its
+  whole point is surviving a gone client — including a first-turn client death
+  before the session upsert lands). Fix: `persist_final_assistant_message` now
+  calls a new `_ensure_session` (INSERT … ON CONFLICT DO NOTHING, owned by the
+  acting user) before the message insert. Re-drove a fresh-session turn:
+  `chat_fold.persisted` succeeded, message + auto-created session both landed.
+
 ## Invariants (locked by evals)
 - The Redis stream remains the single source of truth; anything derived (persisted rows, UI state) must be reproducible by replaying it.
 - Persisted tool status honors `success` (never hardcode `done`).

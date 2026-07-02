@@ -306,13 +306,23 @@ def fold_run_events(events: list[dict[str, Any]]) -> dict[str, Any] | None:
 # ── Persistence entry point (run_detached on_complete hook) ─────────────────
 
 async def persist_final_assistant_message(
-    thread_id: str, message_id: str,
+    thread_id: str,
+    message_id: str,
+    *,
+    user_id: str = "",
+    agent_name: str = "orchestrator",
 ) -> dict[str, Any] | None:
     """Replay the run's event log and upsert the authoritative message row.
 
     Called from the detached task's ``finally`` — the run is over (finished,
     errored, or cancelled) and every event it emitted is in Redis. Idempotent
     with the Next translator's live-path checkpoints: same row id, upsert.
+
+    Self-sufficient: ensures the parent ``chat_session`` row exists first
+    (owned by ``user_id``) so a first-turn client-death can't lose the message
+    to the chat_message → chat_session foreign key — the exact failure P0-3
+    persistence exists to prevent.
+
     Best-effort: never raises. Returns the folded message dict on success
     (callers chain run-boundary work like memory extraction off it), else
     ``None``.
@@ -327,9 +337,15 @@ async def persist_final_assistant_message(
 
         from gateway.routes.chat import (  # noqa: PLC0415
             MessageRecord,
+            _ensure_session,
             _upsert_messages,
         )
         import asyncio  # noqa: PLC0415
+
+        # Parent session must exist before the message FK insert.
+        await asyncio.to_thread(
+            _ensure_session, thread_id, user_id, agent_name,
+        )
 
         record = MessageRecord(
             id=message_id,

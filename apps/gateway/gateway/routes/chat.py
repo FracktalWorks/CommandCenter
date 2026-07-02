@@ -117,6 +117,37 @@ def _upsert_session(user_id: str, req: SessionUpsertRequest) -> None:
         )
 
 
+def _ensure_session(
+    session_id: str,
+    user_id: str,
+    agent_name: str = "orchestrator",
+) -> None:
+    """Insert a minimal chat_session row IF one doesn't already exist.
+
+    The authoritative run-end persistence (chat_fold) must be self-sufficient:
+    a brand-new session whose first turn's client dies before the frontend's
+    own session upsert lands would otherwise hit the chat_message → chat_session
+    foreign key and silently lose the message (defeating P0-3). This creates
+    the parent row on demand, owned by the acting user, and never clobbers an
+    existing session's metadata (DO NOTHING on conflict).
+    """
+    from acb_graph import get_session  # noqa: PLC0415
+    from sqlalchemy import text  # noqa: PLC0415
+
+    with get_session() as s:
+        s.execute(
+            text(
+                """
+                INSERT INTO chat_session (id, user_id, agent_name)
+                VALUES (:id, :uid, :agent_name)
+                ON CONFLICT (id) DO NOTHING
+                """
+            ),
+            {"id": session_id, "uid": user_id or "default",
+             "agent_name": agent_name or "orchestrator"},
+        )
+
+
 def _patch_session(session_id: str, user_id: str, req: SessionPatchRequest) -> bool:
     """Apply partial update; returns False if session not found."""
     from acb_graph import get_session  # noqa: PLC0415

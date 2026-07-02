@@ -144,6 +144,36 @@ path-conditioned AND verified against the running UI (prove refresh-recovery
 still works) — the same discipline 3b required. Tracked, not forced into this
 milestone.
 
+## Phase 3c — segments must close on TOOL boundaries, not just message-id changes (2026-07-02)
+
+**Symptom (reported live):** the ThinkingContainer's consume-vs-display split
+looks wrong on Copilot-SDK agent turns — narration text leaks into the answer
+body, or the split is off.
+
+**Root cause (traced in code, not guessed).** The renderer's contract is
+"the LAST segment is the answer; earlier segments are narration." That is only
+correct if segment boundaries align with **tool rounds**. But `translate_update`
+only opened a new segment on a **`message_id` change** (Phase 3a) — the
+`function_call` branch never closed the open text message. So a
+narration→tool→answer turn where the runtime reuses (or omits) the message_id
+produces **ONE segment gluing narration+answer**, shown wholesale as the body.
+A harness harness harness (verified with a translator harness):
+- distinct id per segment → 2 clean segments ✅
+- message_id always `None` (minted once) → **1 segment, narration+answer glued** ✗
+- new id every delta → N tiny segments, "answer" = last token ✗
+The Copilot SDK stamps `d.message_id` per ASSISTANT_MESSAGE_DELTA, but whether
+it changes per segment is version-dependent — so the fix must NOT rely on it.
+
+**Fix (translator layer — the correct owner; AG-UI: boundaries are the
+runtime's job, don't infer them).** Close the open text message when a tool
+call starts, and open a fresh segment (new message-id) for post-tool text.
+Then every `TEXT_MESSAGE_START…END` bracket is exactly one semantic segment:
+pre-tool text = narration (timeline), post-last-tool text = answer (body) —
+tool-round-aligned by construction, independent of what the SDK does with
+message_id. AG-UI confirms "events with the same messageId belong to the same
+logical stream", so the post-tool answer legitimately gets a NEW id. The
+message-id-change close (Phase 3a) stays as a complementary trigger.
+
 ## Invariants (locked by evals)
 - The Redis stream remains the single source of truth; anything derived (persisted rows, UI state) must be reproducible by replaying it.
 - Persisted tool status honors `success` (never hardcode `done`).
@@ -153,6 +183,7 @@ milestone.
 - 2026-07-02 — Spec created; Phase 1 implementation started.
 - 2026-07-02 — **Phase 1 shipped**: `gateway/chat_fold.py` (fold port + `persist_final_assistant_message`), `run_detached(on_complete=)` lifecycle hook (shielded, runs on finish/error/cancel), `AgentRunRequest.assistant_message_id` + route.ts forwarding on `/agent/run/stream`. 9 fold/persistence trajectory evals in `evals/trajectories/test_chat_fold_trajectory.py` (incl. cancelled-run partial-turn persistence). P0-3 closed for the named-agent path; `/copilot/chat` orchestrator path follows in Phase 2.
 - 2026-07-02 — **Phase 3a shipped**: the translator closes/reopens text messages on real `message_id` changes (every tier now emits true segment boundaries; id-less runtimes degrade to one segment); `route.ts` forwards `messageId` on deltas + `message_start`/`message_end` frames; `chatStream.ts` captures `segments: [{id, text}]` on the message additively (renderer untouched); `chat_fold.py` records segments, persists them in `agent_state.segments`, and uses last-segment ground truth to rescue answers stranded by the fold heuristic — the reproducible case being CANCELLED runs (no RUN_FINISHED → un-fold never ran → Phase 1's cancel-persistence wrote an empty bubble). 4 new trajectory evals. Remaining (3b): segment-native rendering + delete the three folds — drive against the running UI, not blind.
+- 2026-07-02 — **Phase 3c shipped** (segments close on tool boundaries). Root-caused a live report that the ThinkingContainer's consume-vs-display split was wrong on Copilot-SDK turns: `translate_update` only closed a text segment on a `message_id` CHANGE, never on a tool call, so a narration→tool→answer turn where the runtime reused/omitted the message id collapsed into ONE segment that glued narration into the answer body (verified with a translator harness across 3 message-id hypotheses; the Copilot SDK's per-segment id behaviour is version-dependent, so the fix can't rely on it). Fix (translator layer — AG-UI: boundaries are the runtime's job): the `function_call` branch now closes the open text message before the tool events, and the reopen mints a FRESH id if the runtime reuses one (distinct segments need distinct ids — AG-UI + client dedups by id). Every `TEXT_MESSAGE_START..END` is now exactly one tool-round-aligned segment (narration before a tool, answer after the last), independent of the SDK. Verified end-to-end: translator harness (all 3 hypotheses → clean split), `chat_fold` (answer=last segment, segmentCutoff correct, no double-fold), Playwright multi-segment UI test green. Updated the 3a segment-boundary evals to assert END-before-tool ordering + added id-less / reused-id / pure-text cases.
 - 2026-07-02 — **Phase 3b shipped** (segment-native rendering, driven against the real UI). The renderer now PREFERS real message segments over the fold heuristic, with the fold demoted to the documented fallback for id-less runtimes (litellm/langgraph emit no message ids — deleting the fold outright, as the original spec line said, would have broken them). What changed:
   - **Capture (all three folds):** each `tool_start` records `segmentCutoff` = segment count at its start, mirroring `reasoningCutoff`, so segments interleave with tools chronologically. When real segment ids are present, narration is NO LONGER double-folded into `reasoningBlocks` (it lives only in the segment) — `reasoningBlocks` then holds only genuine chain-of-thought. `chatStream.ts`, `route.ts`, and `chat_fold.py` all apply this conditional identically.
   - **Renderer:** `MarkdownMessage` uses the **last segment as the answer body** and passes earlier segments to `ThinkingContainer` as `narrationSegments`; `buildTimeline` three-way-interleaves narration ⊕ reasoning ⊕ tools (each channel advances by its own cutoff). Id-less messages fall back to `content` + folded `reasoningBlocks` unchanged. The `done` reducer backfills `content` from the last segment so copy/action-bar/memory consumers still see the answer.

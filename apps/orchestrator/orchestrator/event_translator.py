@@ -73,10 +73,18 @@ class TranslationState:
     fc: ToolCallStreamState = None  # type: ignore[assignment]
     text_started: bool = False
     message_id: str | None = None
+    # Segments the runtime has already used for a CLOSED text message on this
+    # run.  A tool call closes the open segment (Phase 3c); if the runtime then
+    # reuses the SAME message_id for the post-tool answer (or omits it, so we'd
+    # mint the same one), we must force a FRESH id — AG-UI requires distinct
+    # message ids for distinct logical streams, and the client dedups by id.
+    used_message_ids: set[str] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.fc is None:
             self.fc = ToolCallStreamState(self.run_id)
+        if self.used_message_ids is None:
+            self.used_message_ids = set()
 
 
 @dataclass
@@ -226,7 +234,16 @@ def translate_update(
                 events.extend(close_text_message(state))
             if not state.text_started:
                 state.text_started = True
-                state.message_id = update_msg_id or str(uuid4())
+                # Pick the segment id: prefer the runtime's, but if it's absent
+                # OR already belongs to a CLOSED segment (runtime reused an id
+                # across a tool boundary — Phase 3c), mint a fresh one so each
+                # logical segment has a distinct id (AG-UI requirement + the
+                # client dedups by id).
+                _mid = update_msg_id or str(uuid4())
+                if _mid in state.used_message_ids:
+                    _mid = str(uuid4())
+                state.message_id = _mid
+                state.used_message_ids.add(_mid)
                 events.append({
                     "type": "TEXT_MESSAGE_START",
                     "messageId": state.message_id,
@@ -247,6 +264,14 @@ def translate_update(
                 })
 
         elif ctype == "function_call":
+            # Phase 3c: a tool call closes the open text segment. Text emitted
+            # BEFORE a tool is narration/plan (thinking timeline); text AFTER
+            # the last tool is the answer (message body). Closing here makes
+            # every TEXT_MESSAGE_START..END bracket one tool-round-aligned
+            # segment — the renderer's "last segment = answer" contract — no
+            # matter what the runtime does with message_id. Only closes a
+            # genuinely open segment (idempotent when text hasn't started).
+            events.extend(close_text_message(state))
             tc_events = function_call_events(content, state.fc)
             if tc_events and hooks and hooks.extra_function_call_events:
                 start = next(

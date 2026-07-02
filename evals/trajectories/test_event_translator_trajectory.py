@@ -58,20 +58,25 @@ def test_full_turn_canonical_stream():
     events, state = _drive(updates)
     events.extend(close_text_message(state))
 
+    # Phase 3c: the tool call closes the pre-tool segment; the post-tool text
+    # opens a fresh one (the runtime reused m-1, so a new id is minted). Two
+    # tool-round-aligned segments: narration "Let me check." then answer
+    # " Found 3.".
     assert [e["type"] for e in events] == [
         "THINKING_TEXT_MESSAGE_CONTENT",
         "TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT",
+        "TEXT_MESSAGE_END",       # closed by the tool boundary (3c)
         "TOOL_CALL_START", "TOOL_CALL_ARGS", "TOOL_CALL_ARGS",
         "TOOL_CALL_RESULT",
-        "TEXT_MESSAGE_CONTENT",
+        "TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT",  # answer segment
         "TEXT_MESSAGE_END",
     ]
-    # Real message id from the runtime, stable across the turn.
-    text_events = [
-        e for e in events
-        if e["type"].startswith("TEXT_MESSAGE")
+    # First segment keeps the runtime's id; the reused id is forced fresh for
+    # the second so the two segments never collide.
+    seg_ids = [
+        e["messageId"] for e in events if e["type"] == "TEXT_MESSAGE_START"
     ]
-    assert {e["messageId"] for e in text_events} == {"m-1"}
+    assert len(seg_ids) == 2 and seg_ids[0] == "m-1" and seg_ids[1] != "m-1"
     # Streamed args concatenate onto ONE tool row.
     args = "".join(
         e["delta"] for e in events if e["type"] == "TOOL_CALL_ARGS"
@@ -181,11 +186,12 @@ def test_hooks_are_the_only_tier_divergence():
     assert events2 == []
 
 
-# ── Message-id-native segmentation (Phase 3a) ────────────────────────────────
+# ── Tool-round-aligned segmentation (Phase 3a id change + Phase 3c tool close) ─
 
-def test_message_id_change_is_a_segment_boundary():
-    """A new runtime message id closes the open text message and starts the
-    next — real boundaries on the wire, no narration/answer inference."""
+def test_tool_call_closes_the_open_text_segment():
+    """Phase 3c: a tool call closes the open text message BEFORE the tool
+    events, so pre-tool narration and post-tool answer are distinct segments —
+    tool-round-aligned regardless of what the runtime does with message_id."""
     events, state = _drive([
         _update(_content("text", text="Let me check."), message_id="m-1"),
         _update(_content("function_call", call_id="c1", name="t",
@@ -198,10 +204,10 @@ def test_message_id_change_is_a_segment_boundary():
 
     assert [e["type"] for e in events] == [
         "TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT",
+        "TEXT_MESSAGE_END",       # m-1 closed BY THE TOOL BOUNDARY (3c)
         "TOOL_CALL_START",
         "TOOL_CALL_RESULT",
-        "TEXT_MESSAGE_END",       # m-1 closed by the id change
-        "TEXT_MESSAGE_START",     # m-2 opens
+        "TEXT_MESSAGE_START",     # m-2 opens after the tool
         "TEXT_MESSAGE_CONTENT",
         "TEXT_MESSAGE_END",
     ]
@@ -209,8 +215,45 @@ def test_message_id_change_is_a_segment_boundary():
     assert ends == ["m-1", "m-2"]
 
 
-def test_missing_message_id_keeps_one_segment():
-    """Id-less runtimes degrade gracefully: one message for the whole run."""
+def test_tool_close_forces_fresh_id_when_runtime_reuses_it():
+    """Phase 3c: if the runtime reuses the SAME message_id for post-tool text,
+    the reopen mints a FRESH id — distinct segments need distinct ids (AG-UI;
+    the client dedups by id). Otherwise narration+answer would collide."""
+    events, state = _drive([
+        _update(_content("text", text="Let me check."), message_id="m-1"),
+        _update(_content("function_call", call_id="c1", name="t",
+                         arguments="")),
+        _update(_content("function_result", call_id="c1", result="ok",
+                         exception=None)),
+        _update(_content("text", text="All done."), message_id="m-1"),  # REUSED
+    ])
+    events.extend(close_text_message(state))
+    starts = [e["messageId"] for e in events if e["type"] == "TEXT_MESSAGE_START"]
+    assert len(starts) == 2
+    assert starts[0] == "m-1"
+    assert starts[1] != "m-1"  # forced fresh — no id collision across segments
+
+
+def test_id_less_run_still_splits_on_the_tool_boundary():
+    """Id-less runtimes (Copilot may omit message_id) STILL segment correctly:
+    the tool boundary splits narration from answer even with no ids at all —
+    the exact bug behind the 'improper thinking container' report."""
+    events, state = _drive([
+        _update(_content("text", text="Let me check.")),          # no id
+        _update(_content("function_call", call_id="c1", name="t",
+                         arguments="")),
+        _update(_content("function_result", call_id="c1", result="ok",
+                         exception=None)),
+        _update(_content("text", text="All done.")),              # no id
+    ])
+    events.extend(close_text_message(state))
+    starts = [e for e in events if e["type"] == "TEXT_MESSAGE_START"]
+    # Two tool-round-aligned segments even though the runtime sent NO ids.
+    assert len(starts) == 2
+
+
+def test_pure_text_run_stays_one_segment():
+    """No tool call → no split: a plain text answer is one segment."""
     events, state = _drive([
         _update(_content("text", text="a")),
         _update(_content("text", text="b")),

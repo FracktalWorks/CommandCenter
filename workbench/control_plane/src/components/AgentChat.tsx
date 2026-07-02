@@ -720,7 +720,9 @@ export default function AgentChat({
       void fetch("/api/agent/respond-input", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        // thread_id lets the gateway route a HITL answer to whichever worker
+        // owns the parked run (P1-2 cross-worker control bus).
+        body: JSON.stringify({ ...payload, thread_id: forSession }),
       })
         .then(async (r) => {
           if (!r.ok) {

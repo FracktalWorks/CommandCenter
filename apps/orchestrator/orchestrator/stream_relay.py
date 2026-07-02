@@ -326,6 +326,190 @@ async def push_sse_event(thread_id: str, sse_line: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Cross-worker control bus (P1-2) — deliver cancel / HITL-answer commands to
+# the worker that actually owns a run
+# ---------------------------------------------------------------------------
+#
+# A run's asyncio task and its ask_user Future live in ONE worker's process.
+# Control commands (Stop → cancel_run, respond-input → resolve_user_input)
+# arrive over HTTP and may land on a DIFFERENT worker.  The in-process lookup
+# then misses and the command silently no-ops: the run keeps burning tokens, or
+# the user's HITL answer is dropped and the agent times out.
+#
+# Fix: a thin Redis pub/sub bus.  The owning worker registers a LOCAL handler
+# (which resolves its own Future / cancels its own task) and subscribes to a
+# per-thread control channel.  A command tries the local handler first (same
+# worker → no round-trip); on a miss it is PUBLISHED, and the owning worker's
+# subscriber applies it.  Best-effort and idempotent: a command for a
+# finished/unknown run is a harmless no-op on every worker.
+
+CONTROL_PREFIX = "cc:control"
+
+
+def _control_channel(thread_id: str) -> str:
+    return f"{CONTROL_PREFIX}:{thread_id}"
+
+
+# thread_id → {cmd → applier}.  Present only on the worker that owns the run.
+# Each applier takes the command dict and returns True if it acted on it.
+# Keyed by command so independent subsystems (run cancel in stream_relay, HITL
+# answer in executor) each register their own without clobbering the other.
+_LOCAL_CONTROL_HANDLERS: dict[str, dict[str, "Any"]] = {}
+# thread_id → the pub/sub listener task for that owned run.
+_CONTROL_LISTENERS: dict[str, asyncio.Task[None]] = {}
+
+
+def register_control_command(thread_id: str, cmd: str, applier: "Any") -> None:
+    """Register a LOCAL *applier* for control command *cmd* on *thread_id*.
+
+    Called on the worker that owns the run.  ``applier(command: dict) -> bool``
+    is invoked both for commands issued on THIS worker (direct, via
+    :func:`dispatch_control`) and for commands relayed from another worker (via
+    the pub/sub listener).  It must be idempotent.  Multiple subsystems can
+    register different ``cmd`` keys for the same thread.
+    """
+    _LOCAL_CONTROL_HANDLERS.setdefault(thread_id, {})[cmd] = applier
+
+
+def unregister_control_command(thread_id: str, cmd: str) -> None:
+    """Drop one command applier; clean up the thread entry when empty."""
+    handlers = _LOCAL_CONTROL_HANDLERS.get(thread_id)
+    if handlers is None:
+        return
+    handlers.pop(cmd, None)
+    if not handlers:
+        _LOCAL_CONTROL_HANDLERS.pop(thread_id, None)
+
+
+def unregister_control_handler(thread_id: str) -> None:
+    """Drop ALL local control appliers for *thread_id* (run boundary)."""
+    _LOCAL_CONTROL_HANDLERS.pop(thread_id, None)
+
+
+def _apply_control_local(thread_id: str, command: dict[str, Any]) -> bool:
+    """Apply *command* via the matching local applier if this worker owns it."""
+    handlers = _LOCAL_CONTROL_HANDLERS.get(thread_id)
+    if not handlers:
+        return False
+    applier = handlers.get(str(command.get("cmd")))
+    if applier is None:
+        return False
+    try:
+        return bool(applier(command))
+    except Exception:  # noqa: BLE001 — a control applier must never crash a caller
+        _log.exception(
+            "stream_relay.control_apply_failed",
+            thread_id=thread_id[:12],
+            cmd=str(command.get("cmd")),
+        )
+        return False
+
+
+async def publish_control(thread_id: str, command: dict[str, Any]) -> int:
+    """Publish a control *command* to the per-thread channel.
+
+    Returns the number of Redis subscribers that received it (0 when no worker
+    is currently listening for this thread).
+    """
+    r = await _get_client()
+    try:
+        return int(
+            await r.publish(_control_channel(thread_id), json.dumps(command))
+        )
+    except Exception:  # noqa: BLE001
+        _log.warning(
+            "stream_relay.control_publish_failed", thread_id=thread_id[:12],
+        )
+        return 0
+
+
+async def dispatch_control(thread_id: str, command: dict[str, Any]) -> bool:
+    """Deliver a control *command* to whichever worker owns the run.
+
+    Tries the local handler first (owning run on THIS worker → applied inline,
+    no Redis round-trip).  On a local miss, publishes to the control channel so
+    the owning worker's listener applies it, and reports success when the run is
+    still active anywhere (so a cross-worker command isn't mistaken for a stale
+    request).  Returns False only when no run is active for this thread.
+    """
+    if _apply_control_local(thread_id, command):
+        return True
+    # Not ours — relay to the owner and confirm the run is live somewhere.
+    delivered = await publish_control(thread_id, command)
+    if delivered > 0:
+        return True
+    # No live subscriber received it.  It may still be a valid run whose owner
+    # hasn't wired a listener (defensive); fall back to the ACTIVE flag.
+    return await is_active(thread_id)
+
+
+async def _control_listener(thread_id: str) -> None:
+    """Subscribe to the thread's control channel and apply relayed commands.
+
+    Runs for the lifetime of an owned run.  Applies each inbound command via
+    the local handler; commands for a thread this worker doesn't own (handler
+    already gone) are ignored.
+    """
+    r = await _get_client()
+    pubsub = r.pubsub()
+    try:
+        await pubsub.subscribe(_control_channel(thread_id))
+        async for msg in pubsub.listen():
+            if msg.get("type") != "message":
+                continue
+            raw = msg.get("data")
+            if not raw:
+                continue
+            try:
+                command = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(command, dict):
+                _apply_control_local(thread_id, command)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — never let the bus kill anything
+        _log.warning(
+            "stream_relay.control_listener_error", thread_id=thread_id[:12],
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            await pubsub.unsubscribe(_control_channel(thread_id))
+        with contextlib.suppress(Exception):
+            await pubsub.aclose()
+
+
+def _start_control_listener(thread_id: str) -> None:
+    """Start (or restart) the pub/sub control listener for an owned run."""
+    prev = _CONTROL_LISTENERS.get(thread_id)
+    if prev is not None and not prev.done():
+        prev.cancel()
+    task = asyncio.create_task(
+        _control_listener(thread_id), name=f"cc-ctl-{thread_id[:24]}",
+    )
+    _CONTROL_LISTENERS[thread_id] = task
+
+
+def _stop_control_listener(thread_id: str) -> None:
+    """Stop the pub/sub control listener for *thread_id* (fire-and-forget)."""
+    task = _CONTROL_LISTENERS.pop(thread_id, None)
+    if task is not None and not task.done():
+        task.cancel()
+
+
+async def _stop_control_listener_wait(thread_id: str) -> None:
+    """Stop the listener AND await its teardown so the pub/sub connection is
+    closed before the caller (a run boundary) returns — avoids a dangling
+    connection cleaning up after the event loop is gone."""
+    task = _CONTROL_LISTENERS.pop(thread_id, None)
+    if task is None or task.done():
+        return
+    task.cancel()
+    with contextlib.suppress(BaseException):
+        await asyncio.wait_for(asyncio.shield(task), timeout=2)
+
+
+# ---------------------------------------------------------------------------
 # Detached execution — decouple agent runs from the HTTP response lifecycle
 # ---------------------------------------------------------------------------
 
@@ -448,6 +632,12 @@ async def run_detached(
                 await mark_inactive(thread_id)
             except Exception:  # noqa: BLE001
                 pass
+            # Tear down the cross-worker control bus for this run (P1-2).
+            # Await the listener's shutdown so its pub/sub connection closes
+            # before this run boundary returns (no post-loop cleanup dangle).
+            with contextlib.suppress(BaseException):
+                await _stop_control_listener_wait(thread_id)
+            unregister_control_handler(thread_id)
             if on_complete is not None:
                 # Shield: this finally also runs on task cancellation (Stop /
                 # steer), where the first await would otherwise re-raise
@@ -459,6 +649,20 @@ async def run_detached(
 
     task = asyncio.create_task(_drain(), name=f"cc-run-{thread_id[:24]}")
     _DETACHED_TASKS[thread_id] = task
+
+    # Register the cross-worker control bus for this owned run (P1-2): a local
+    # applier for the "cancel" command that cancels THIS task (Stop from any
+    # worker reaches it), plus a pub/sub listener so a command issued on another
+    # worker is relayed here.  HITL answers register their own "respond_input"
+    # applier from the executor (executor owns the ask_user Futures).
+    def _cancel_apply(_command: dict[str, Any]) -> bool:
+        live = _DETACHED_TASKS.get(thread_id)
+        if live is not None and not live.done():
+            live.cancel()
+        return True
+
+    register_control_command(thread_id, "cancel", _cancel_apply)
+    _start_control_listener(thread_id)
 
     # Serve events from Redis — the SAME path a reconnecting client uses.
     async for evt in subscribe_events(thread_id, since_id="0"):
@@ -473,9 +677,10 @@ async def cancel_run(thread_id: str) -> bool:
     generator, marks the thread inactive, and pushes a terminal RUN_FINISHED
     event so any live subscribers (and reconnecting clients) close cleanly.
 
-    Returns True if a running task was found and cancelled, False otherwise.
-    Safe to call when no run is active (idempotent) — it still marks the
-    thread inactive and emits the terminal event so a stuck UI recovers.
+    Returns True if a running task was found (locally or on another worker) and
+    cancellation was dispatched, False otherwise.  Safe to call when no run is
+    active (idempotent) — it still marks the thread inactive and emits the
+    terminal event so a stuck UI recovers.
     """
     task = _DETACHED_TASKS.get(thread_id)
     found = task is not None and not task.done()
@@ -487,6 +692,14 @@ async def cancel_run(thread_id: str) -> bool:
         except BaseException:  # noqa: BLE001
             pass
         _DETACHED_TASKS.pop(thread_id, None)
+    else:
+        # Not ours: the run may be owned by another worker (P1-2).  Relay the
+        # cancel over the control bus so the owning worker stops its task; the
+        # terminal-event teardown below (idempotent, via the shared stream)
+        # still unblocks every subscriber regardless of which worker owns it.
+        relayed = await publish_control(thread_id, {"cmd": "cancel"})
+        if relayed > 0:
+            found = True
 
     # Cancel-cascade: stop any background sub-agents spawned by this run
     # (call_agent_background) so they don't keep executing after a Stop.

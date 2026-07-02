@@ -35,6 +35,20 @@ requires_redis = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def _fresh_redis_client_per_test():
+    """pytest-asyncio gives each test its own event loop, but stream_relay
+    caches a module-level ``_client`` (and, since P1-2, per-run pub/sub
+    connections) bound to the loop that created it.  Reusing that client on a
+    later test's loop raises "Event loop is closed".  Drop the cached client
+    before and after each test so every test builds one on its own loop."""
+    from orchestrator import stream_relay
+
+    stream_relay._client = None
+    yield
+    stream_relay._client = None
+
+
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 

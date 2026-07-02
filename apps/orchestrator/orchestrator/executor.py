@@ -2320,6 +2320,27 @@ async def run_agent_stream(
     except Exception:  # noqa: BLE001
         pass
 
+    # Cross-worker HITL delivery (P1-2): register a "respond_input" applier so a
+    # user's ask_user answer that arrives on a DIFFERENT worker is relayed here
+    # (this worker owns the parked Future) and resolves it.  resolve_user_input
+    # is keyed by request_id, so the applier just forwards.  Unregistered in the
+    # finally alongside the relay tokens.
+    try:
+        from orchestrator.stream_relay import (  # noqa: PLC0415
+            register_control_command as _register_ctl,
+        )
+
+        def _respond_input_apply(command: dict[str, Any]) -> bool:
+            return resolve_user_input(
+                str(command.get("request_id", "")),
+                str(command.get("answer", "")),
+                bool(command.get("was_freeform", True)),
+            )
+
+        _register_ctl(thread_id, "respond_input", _respond_input_apply)
+    except Exception:  # noqa: BLE001
+        pass
+
     # ── Resolve agent metadata ──────────────────────────────────────────────
     _registry_repo_name: str | None = None
     _registry_local_path: str | None = None
@@ -3668,6 +3689,16 @@ async def run_agent_stream(
                 pass
         _stream_relay_thread_id.reset(_relay_token)
         _active_run_model.reset(_model_token)
+        # Drop the cross-worker HITL applier for this run (P1-2).  run_detached's
+        # finally also clears ALL handlers for the thread, but this generator can
+        # outlive/precede that path (batch tiers), so unregister defensively.
+        try:
+            from orchestrator.stream_relay import (  # noqa: PLC0415
+                unregister_control_command as _unreg_ctl,
+            )
+            _unreg_ctl(thread_id, "respond_input")
+        except Exception:  # noqa: BLE001
+            pass
         if _relay_mark_inactive is not None:
             try:
                 await _relay_mark_inactive(thread_id)

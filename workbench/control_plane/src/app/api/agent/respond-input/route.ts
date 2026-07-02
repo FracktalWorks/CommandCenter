@@ -26,6 +26,9 @@ interface RespondInputRequest {
   request_id: string;
   answer: string;
   was_freeform?: boolean;
+  /** Thread the parked run belongs to — lets the gateway relay the answer to
+   *  whichever worker owns the run (P1-2 cross-worker control bus). */
+  thread_id?: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -65,6 +68,7 @@ export async function POST(req: NextRequest) {
         request_id: body.request_id,
         answer: body.answer,
         was_freeform: body.was_freeform ?? true,
+        thread_id: body.thread_id ?? null,
       }),
     });
 

@@ -72,6 +72,9 @@ class UserInputResponseRequest(BaseModel):
     request_id: str
     answer: str
     was_freeform: bool = True
+    # Thread the parked run belongs to — used to relay the answer to whichever
+    # worker owns the run when it's not parked on THIS worker (P1-2).
+    thread_id: str | None = None
 
 
 class WebhookEvent(BaseModel):
@@ -1257,9 +1260,24 @@ async def respond_user_input(
     """
     from orchestrator.executor import resolve_user_input  # noqa: PLC0415
 
+    # Fast path: the run is parked on THIS worker — resolve its Future inline.
     delivered = resolve_user_input(
         req.request_id, req.answer, req.was_freeform
     )
+    # Cross-worker (P1-2): the run may be parked on another worker.  Relay the
+    # answer over the control bus so the owning worker resolves its own Future.
+    if not delivered and req.thread_id:
+        from orchestrator.stream_relay import dispatch_control  # noqa: PLC0415
+
+        delivered = await dispatch_control(
+            req.thread_id,
+            {
+                "cmd": "respond_input",
+                "request_id": req.request_id,
+                "answer": req.answer,
+                "was_freeform": req.was_freeform,
+            },
+        )
     if not delivered:
         # The run may have ended or the request id is stale.
         raise HTTPException(

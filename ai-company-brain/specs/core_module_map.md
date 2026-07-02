@@ -71,3 +71,4 @@ Impact = (how much every run touches it) × (distance from best practice). Apps 
 
 ## Status log
 - 2026-07-02 — Map created from the harness-engineering audit + chat implementation review.
+- 2026-07-02 — Review #1 (A1+A2+D1) design fleshed out in [`core_loop_unification.md`](core_loop_unification.md); Phase 1 (one persistence owner, P0-3) shipped for the named-agent path. D1 grade C+ → B− (persistence no longer client-only).

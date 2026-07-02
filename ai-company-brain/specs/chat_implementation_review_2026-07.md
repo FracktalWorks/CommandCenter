@@ -29,8 +29,15 @@
 >   (HITL cards reset on session switch; respond-input failures restore the
 >   card).
 >
-> Still open: P0-3 (server-side persistence — strategic refactor 2), P1-2,
-> P1-5, P1-6, P1-7, P1-9, the P2 list, §5 refactors, §6 doc drift.
+> - **Batch 4** (2026-07-02, core_loop_unification Phase 1) — ✅ P0-3 for the
+>   `/agent/run/stream` path: gateway-side fold-and-persist at run end via
+>   `run_detached(on_complete=)` + `gateway/chat_fold.py` (fold port of
+>   route.ts/chatStream.ts, locked by trajectory evals). `/copilot/chat`
+>   orchestrator path lands with unification Phase 2.
+>
+> Still open: P0-3 orchestrator-path remainder, P1-2, P1-5, P1-6, P1-7, P1-9,
+> the P2 list, §5 refactors (design + phasing now in
+> [`core_loop_unification.md`](core_loop_unification.md)), §6 doc drift.
 
 ---
 

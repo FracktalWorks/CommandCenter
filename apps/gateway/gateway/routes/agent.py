@@ -50,6 +50,11 @@ class AgentRunRequest(BaseModel):
     """Optional model override.  If it is a LiteLLM model (contains '/' or starts
     with 'tier'), the executor injects a BYOK provider block so the Copilot SDK
     routes completions through the gateway /v1 (litellm SDK) instead of github.com."""
+    assistant_message_id: str | None = None
+    """Frontend-minted id of this turn's assistant message row.  The gateway's
+    fold-and-persist at run end (core_loop_unification Phase 1, P0-3) upserts
+    the SAME row the live translator checkpoints, keeping the two writers
+    idempotent.  Falls back to ``assistant-{thread}-{run_id}`` when absent."""
 
 
 class AgentRunResponse(BaseModel):
@@ -1139,7 +1144,21 @@ async def run_agent_stream_endpoint(
     # reconnecting client replays from its cursor via GET .../reconnect.
     from orchestrator.stream_relay import run_detached  # noqa: PLC0415
 
+    from gateway.chat_fold import \
+        persist_final_assistant_message  # noqa: PLC0415
+
     thread_id = req.thread_id or f"{agent_name}:{run_id}"
+
+    # Authoritative persistence at run end (core_loop_unification Phase 1):
+    # the detached task folds the run's Redis event log into the chat_message
+    # row this turn renders as — the tail survives even when the browser and
+    # the Next translator are long gone (P0-3).
+    _persist_message_id = (
+        req.assistant_message_id or f"assistant-{thread_id}-{run_id}"
+    )
+
+    async def _persist_on_complete() -> None:
+        await persist_final_assistant_message(thread_id, _persist_message_id)
 
     agent_gen = run_agent_stream(
         agent_name,
@@ -1151,7 +1170,10 @@ async def run_agent_stream_endpoint(
 
     async def _serve():
         try:
-            async for evt in run_detached(thread_id, agent_gen, tee=False):
+            async for evt in run_detached(
+                thread_id, agent_gen, tee=False,
+                on_complete=_persist_on_complete,
+            ):
                 yield f"data: {json.dumps(evt)}\n\n"
         except Exception:  # noqa: BLE001
             from orchestrator.stream_relay import \

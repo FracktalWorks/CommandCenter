@@ -766,6 +766,10 @@ export async function POST(req: NextRequest): Promise<Response> {
           },
           thread_id: threadId ?? undefined,
           model: model ?? undefined,
+          // Same row id the translator below checkpoints: the gateway's
+          // authoritative fold-and-persist at run end (P0-3) upserts it, so
+          // the tail survives even if this reader is gone.
+          assistant_message_id: assistantMessageId ?? undefined,
         }),
         signal: AbortSignal.timeout(310_000),
       });

@@ -371,6 +371,7 @@ async def run_detached(
     gen: AsyncIterator[str],
     *,
     tee: bool = False,
+    on_complete: Any = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run *gen* (an SSE-line async generator) in a DETACHED background task
     and yield its events from the Redis stream.
@@ -387,6 +388,12 @@ async def run_detached(
                    (use for generators that don't self-tee, e.g. AG-UI
                    ``/copilot/chat``).  When False the generator is expected
                    to tee its own events (executor ``_sse`` contextvar path).
+        on_complete: Optional zero-arg async callback invoked in the drain
+                   task's ``finally`` — after ``mark_inactive``, on every
+                   exit path (finished, errored, cancelled).  This is the
+                   run-boundary lifecycle hook; the gateway attaches the
+                   authoritative fold-and-persist here (core_loop_unification
+                   Phase 1).  Best-effort: exceptions are swallowed.
 
     Yields:
         Parsed event dicts with ``_stream_id`` (Redis entry ID) attached.
@@ -441,6 +448,12 @@ async def run_detached(
                 await mark_inactive(thread_id)
             except Exception:  # noqa: BLE001
                 pass
+            if on_complete is not None:
+                # Shield: this finally also runs on task cancellation (Stop /
+                # steer), where the first await would otherwise re-raise
+                # CancelledError before persistence gets to run.
+                with contextlib.suppress(BaseException):
+                    await asyncio.shield(on_complete())
             if _DETACHED_TASKS.get(thread_id) is task:
                 _DETACHED_TASKS.pop(thread_id, None)
 

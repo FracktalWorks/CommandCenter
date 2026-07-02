@@ -1,0 +1,101 @@
+# CommandCenter skill golden cases — top-level CI gate (ADR-017, HH-1).
+#
+# Aggregated, curated set spanning the skill domains. Per-skill suites live in
+# skills/<domain>/<skill>/evals/cases.yaml and share the same provider.
+# Requires a reachable OpenAI-compatible endpoint (LITELLM_BASE_URL +
+# LITELLM_API_KEY); entity data comes from evals/fixtures/entities.json,
+# so no live graph DB is needed.
+#
+# Run locally:  npx promptfoo@latest eval --config evals/promptfoo.yaml
+
+description: CommandCenter harness golden cases
+
+providers:
+  - id: file://_runner.py
+    label: acb-tier1
+
+prompts:
+  - "{{_case}}"
+
+tests:
+  # ── triage/email_classify ────────────────────────────────────────────────
+  - description: clear sales lead classifies as sales_lead with cite
+    vars:
+      _case: classify-sales-lead
+      _skill: triage/email_classify
+      _json: true
+      email_id: "00000000-0000-0000-0000-000000000050"
+    assert:
+      - type: contains-json
+      - type: javascript
+        value: "JSON.parse(output).label === 'sales_lead'"
+      - type: contains
+        value: "[message:00000000-0000-0000-0000-000000000050]"
+
+  - description: ambiguous email yields bounded confidence + cite
+    vars:
+      _case: classify-ambiguous
+      _skill: triage/email_classify
+      _json: true
+      email_id: "00000000-0000-0000-0000-000000000051"
+    assert:
+      - type: contains-json
+      - type: javascript
+        value: |
+          const r = JSON.parse(output);
+          const VALID = ['sales_lead','sales_followup','delivery_issue','hr_query','finance','internal','spam','unknown'];
+          return VALID.includes(r.label) && r.confidence >= 0 && r.confidence <= 1;
+      - type: contains
+        value: "[message:"
+
+  # ── triage/entity_link ───────────────────────────────────────────────────
+  - description: PO-confirmation email links customer + deal entities
+    vars:
+      _case: entity-link-sales
+      _skill: triage/entity_link
+      _json: true
+      email_id: "00000000-0000-0000-0000-000000000060"
+      label: sales_followup
+    assert:
+      - type: contains-json
+      - type: javascript
+        value: "Array.isArray(JSON.parse(output).linked_entities) && JSON.parse(output).linked_entities.length >= 1"
+      - type: contains
+        value: "[message:"
+
+  # ── reconciler/stale_task_escalation ─────────────────────────────────────
+  - description: mildly stale task escalates low
+    vars:
+      _case: stale-task-low
+      _skill: reconciler/stale_task_escalation
+      task_id: "00000000-0000-0000-0000-000000000070"
+      days_in_stage: 14
+    assert:
+      - type: contains
+        value: "[task:"
+      - type: contains
+        value: "low"
+
+  - description: very stale task escalates high
+    vars:
+      _case: stale-task-high
+      _skill: reconciler/stale_task_escalation
+      task_id: "00000000-0000-0000-0000-000000000071"
+      days_in_stage: 60
+    assert:
+      - type: contains
+        value: "[task:"
+      - type: contains
+        value: "high"
+
+  # ── sales/customer_360_summary ───────────────────────────────────────────
+  - description: customer 360 stays concise and cited
+    vars:
+      _case: customer-360
+      _skill: sales/customer_360_summary
+      customer_id: "00000000-0000-0000-0000-000000000030"
+    assert:
+      - type: contains
+        value: "[customer:"
+      - type: javascript
+        value: "output.length <= 600"

@@ -1,7 +1,8 @@
-﻿description: quiet_deal_escalation golden cases
+description: quiet_deal_escalation golden cases
 providers:
   - id: file://../../../../evals/_runner.py
     label: acb-tier1
+    config: { skill: reconciler/quiet_deal_escalation }
 prompts:
   - "{{deal_id}} {{days_quiet}}"
 tests:

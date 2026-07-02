@@ -1,7 +1,8 @@
-﻿description: stale_task_escalation golden cases
+description: stale_task_escalation golden cases
 providers:
   - id: file://../../../../evals/_runner.py
     label: acb-tier1
+    config: { skill: reconciler/stale_task_escalation }
 prompts:
   - "{{task_id}} {{days_in_stage}}"
 tests:

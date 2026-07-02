@@ -1,7 +1,8 @@
-﻿description: customer_360_summary golden cases
+description: customer_360_summary golden cases
 providers:
-  - id: file://../../../evals/_runner.py
+  - id: file://../../../../evals/_runner.py
     label: acb-tier1
+    config: { skill: sales/customer_360_summary }
 prompts:
   - "{{customer_id}}"
 tests:

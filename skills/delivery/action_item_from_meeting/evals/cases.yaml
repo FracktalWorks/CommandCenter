@@ -1,7 +1,8 @@
-﻿description: action_item_from_meeting golden cases
+description: action_item_from_meeting golden cases
 providers:
-  - id: file://../../../evals/_runner.py
+  - id: file://../../../../evals/_runner.py
     label: acb-tier2
+    config: { skill: delivery/action_item_from_meeting }
 prompts:
   - "{{transcript_id}}"
 tests:

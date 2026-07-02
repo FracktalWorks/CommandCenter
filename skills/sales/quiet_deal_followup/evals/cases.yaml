@@ -1,7 +1,9 @@
 # promptfoo cases for quiet_deal_followup
 description: quiet_deal_followup regression
 providers:
-  - id: file://./_runner.py
+  - id: file://../../../../evals/_runner.py
+    label: acb-tier1
+    config: { skill: sales/quiet_deal_followup }
 prompts:
   - "{{deal_id}} {{channel}}"
 tests:

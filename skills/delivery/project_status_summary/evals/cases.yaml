@@ -1,7 +1,8 @@
-﻿description: project_status_summary golden cases
+description: project_status_summary golden cases
 providers:
-  - id: file://../../../evals/_runner.py
+  - id: file://../../../../evals/_runner.py
     label: acb-tier1
+    config: { skill: delivery/project_status_summary }
 prompts:
   - "{{project_id}}"
 tests:

@@ -1,6 +1,8 @@
 description: stale_task_nudge regression
 providers:
-  - id: file://./_runner.py
+  - id: file://../../../../evals/_runner.py
+    label: acb-tier1
+    config: { skill: delivery/stale_task_nudge }
 prompts:
   - "{{task_id}}"
 tests:

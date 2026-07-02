@@ -1,6 +1,8 @@
-﻿# AI Company Brain -- Skill Eval CI Gate (WBS 1.9.1 + 1.9.2)
-# Runs on every PR that touches skills/ or evals/.
-# Fails the PR if any golden case regresses.
+# AI Company Brain -- Skill Eval CI Gate (WBS 1.9.1 + 1.9.2, HH-1)
+# Runs on every PR that touches skills/, evals/, or the harness code the
+# trajectory evals lock. Blocking jobs: trajectories + inspect smoke.
+# The promptfoo job needs a live LLM endpoint and only hard-blocks once the
+# LITELLM_* secrets are configured for CI.
 
 name: skill-eval
 
@@ -9,6 +11,9 @@ on:
     paths:
       - "skills/**"
       - "evals/**"
+      - "apps/orchestrator/**"
+      - "packages/acb_skills/**"
+      - "packages/acb_llm/**"
       - ".github/workflows/skill-eval.yml"
   workflow_dispatch:
 
@@ -17,10 +22,61 @@ permissions:
   pull-requests: write   # needed to post PR comment
 
 jobs:
-  promptfoo:
-    name: "Promptfoo golden cases"
+  trajectories:
+    name: "Harness trajectory evals (offline)"
     runs-on: ubuntu-latest
-    continue-on-error: true   # scaffold: do not hard-block until runner is wired
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Sync deps
+        run: uv sync
+
+      - name: Run trajectory evals
+        run: uv run python -m pytest evals/trajectories/ -x -v
+
+  inspect:
+    name: "Inspect AI scenario harness (smoke)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install inspect-ai
+        run: pip install inspect-ai
+
+      - name: Run inspect eval (smoke, mock model)
+        run: |
+          inspect eval evals/inspect/scenarios.py \
+            --model mockllm/model \
+            --limit 1 \
+            --log-dir evals/inspect_logs/ \
+            2>&1 | tee inspect_output.txt
+
+      - name: Upload inspect logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inspect-logs
+          path: evals/inspect_logs/
+          if-no-files-found: ignore
+
+  promptfoo:
+    name: "Promptfoo golden cases (live LLM)"
+    runs-on: ubuntu-latest
+    continue-on-error: true   # un-scaffold once LITELLM_* CI secrets exist
 
     env:
       LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL || 'http://127.0.0.1:8080' }}
@@ -29,8 +85,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check for live endpoint secret
+        id: gate
+        run: |
+          if [ -n "${{ secrets.LITELLM_BASE_URL }}" ]; then
+            echo "live=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "live=false" >> "$GITHUB_OUTPUT"
+            echo "LITELLM_BASE_URL secret not set -- skipping live golden cases."
+          fi
+
       - name: Run promptfoo eval
         id: eval
+        if: steps.gate.outputs.live == 'true'
         run: |
           npx --yes promptfoo@latest eval \
             --config evals/promptfoo.yaml \
@@ -41,7 +108,7 @@ jobs:
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
 
       - name: Post results as PR comment
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && steps.gate.outputs.live == 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -69,35 +136,4 @@ jobs:
         with:
           name: promptfoo-results
           path: evals/results.json
-          if-no-files-found: ignore
-
-  inspect:
-    name: "Inspect AI scenario harness"
-    runs-on: ubuntu-latest
-    continue-on-error: true   # scaffold: enable once live endpoint is reachable from CI
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install inspect-ai
-        run: pip install inspect-ai
-
-      - name: Run inspect eval (dry-run, mock model)
-        run: |
-          inspect eval evals/inspect/scenarios.py \
-            --model mockllm/model \
-            --limit 1 \
-            --log-dir evals/inspect_logs/ \
-            2>&1 | tee inspect_output.txt || true
-
-      - name: Upload inspect logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: inspect-logs
-          path: evals/inspect_logs/
           if-no-files-found: ignore

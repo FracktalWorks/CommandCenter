@@ -1,7 +1,8 @@
-﻿description: deal_followup_draft golden cases
+description: deal_followup_draft golden cases
 providers:
-  - id: file://../../../evals/_runner.py
+  - id: file://../../../../evals/_runner.py
     label: acb-tier2
+    config: { skill: sales/deal_followup_draft }
 prompts:
   - "{{deal_id}}"
 tests:

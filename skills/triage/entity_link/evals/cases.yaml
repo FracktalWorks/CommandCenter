@@ -1,7 +1,8 @@
-﻿description: entity_link golden cases
+description: entity_link golden cases
 providers:
-  - id: file://../../../evals/_runner.py
+  - id: file://../../../../evals/_runner.py
     label: acb-tier1
+    config: { skill: triage/entity_link, json: true }
 prompts:
   - "{{email_id}} {{label}}"
 tests:

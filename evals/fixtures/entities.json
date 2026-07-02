@@ -1,0 +1,172 @@
+{
+  "message": {
+    "00000000-0000-0000-0000-000000000050": {
+      "cite": "[message:00000000-0000-0000-0000-000000000050]",
+      "from": "priya.nair@apexlabs.in",
+      "to": "sales@fracktal.in",
+      "subject": "Quote request - 4x Julia Pro printers for our Pune lab",
+      "body": "Hi team, we are setting up a rapid prototyping lab in Pune and would like a quotation for four Julia Pro 3D printers with the annual maintenance plan. Could you also share lead times? Regards, Priya Nair, Procurement, Apex Labs."
+    },
+    "00000000-0000-0000-0000-000000000051": {
+      "cite": "[message:00000000-0000-0000-0000-000000000051]",
+      "from": "no-reply@notifications.example.com",
+      "to": "info@fracktal.in",
+      "subject": "Re: fwd: catching up",
+      "body": "hey - saw this and thought of you. also we should sync on the thing from last week when you get a chance. cheers"
+    },
+    "00000000-0000-0000-0000-000000000060": {
+      "cite": "[message:00000000-0000-0000-0000-000000000060]",
+      "from": "priya.nair@apexlabs.in",
+      "to": "rahul@fracktal.in",
+      "subject": "Re: Julia Pro quotation - PO confirmation",
+      "body": "Rahul, thanks for the revised quote. We are raising the PO for the Apex Labs Pune lab deal this week. Copying our finance head Suresh Menon.",
+      "known_entities": [
+        {"kind": "customer", "name": "Apex Labs", "id": "00000000-0000-0000-0000-000000000030"},
+        {"kind": "deal", "name": "Apex Labs - Pune lab printers", "id": "00000000-0000-0000-0000-000000000040"},
+        {"kind": "person", "name": "Priya Nair", "id": "00000000-0000-0000-0000-000000000090"}
+      ]
+    },
+    "00000000-0000-0000-0000-000000000061": {
+      "cite": "[message:00000000-0000-0000-0000-000000000061]",
+      "from": "workshop@nitk.ac.in",
+      "to": "support@fracktal.in",
+      "subject": "Julia Extended - nozzle jam recurring on unit FW-1182",
+      "body": "The Julia Extended in our workshop (serial FW-1182, under AMC) has had three nozzle jams this month. Project: NITK innovation centre rollout. Please schedule a service visit.",
+      "known_entities": [
+        {"kind": "customer", "name": "NITK", "id": "00000000-0000-0000-0000-000000000031"},
+        {"kind": "project", "name": "NITK innovation centre rollout", "id": "00000000-0000-0000-0000-000000000010"}
+      ]
+    }
+  },
+  "meeting": {
+    "00000000-0000-0000-0000-000000000020": {
+      "cite": "[meeting:00000000-0000-0000-0000-000000000020]",
+      "title": "Weekly delivery sync - 2026-06-29",
+      "transcript": "Rahul: The Apex Labs shipment slipped because the extruder batch failed QA. Vijay: OK, re-run QA on the spare batch and update the customer by Thursday. Rahul: I'll own that. Meera: We also need the NITK service visit scheduled before Friday. Vijay: Meera, you coordinate with the field engineer and confirm the slot today."
+    },
+    "00000000-0000-0000-0000-000000000021": {
+      "cite": "[meeting:00000000-0000-0000-0000-000000000021]",
+      "title": "Sales standup - 2026-06-30",
+      "transcript": "Anita: The Hyderabad reseller wants updated pricing sheets before their expo. Vijay: Anita, send the July price list by tomorrow. Anita: Will do. Vijay: Also someone needs to draft the follow-up for the quiet BITS Pilani deal. Anita: I'll draft it and share for review by Wednesday."
+    }
+  },
+  "project": {
+    "00000000-0000-0000-0000-000000000010": {
+      "cite": "[project:00000000-0000-0000-0000-000000000010]",
+      "name": "NITK innovation centre rollout",
+      "status": "in_progress",
+      "open_tasks": 4,
+      "done_tasks": 11,
+      "blockers": ["recurring nozzle jams on unit FW-1182"],
+      "next_milestone": "handover sign-off 2026-07-15"
+    },
+    "00000000-0000-0000-0000-000000000011": {
+      "cite": "[project:00000000-0000-0000-0000-000000000011]",
+      "name": "Apex Labs Pune lab setup",
+      "status": "on_track",
+      "open_tasks": 2,
+      "done_tasks": 6,
+      "blockers": [],
+      "next_milestone": "installation week of 2026-07-07"
+    }
+  },
+  "customer": {
+    "00000000-0000-0000-0000-000000000030": {
+      "cite": "[customer:00000000-0000-0000-0000-000000000030]",
+      "name": "Apex Labs",
+      "segment": "industrial R&D",
+      "open_deals": 1,
+      "lifetime_value_inr": 5400000,
+      "last_contact": "2026-06-28",
+      "notes": "Setting up Pune prototyping lab; procurement led by Priya Nair."
+    },
+    "00000000-0000-0000-0000-000000000031": {
+      "cite": "[customer:00000000-0000-0000-0000-000000000031]",
+      "name": "NITK",
+      "segment": "education",
+      "open_deals": 0,
+      "lifetime_value_inr": 2100000,
+      "last_contact": "2026-06-25",
+      "notes": "Innovation centre rollout under AMC; recurring service issue on FW-1182."
+    }
+  },
+  "deal": {
+    "00000000-0000-0000-0000-000000000001": {
+      "cite": "[deal:00000000-0000-0000-0000-000000000001]",
+      "name": "BITS Pilani fab lab expansion",
+      "stage": "proposal_sent",
+      "value_inr": 1800000,
+      "owner": "Anita",
+      "days_since_last_activity": 12,
+      "contact": {"name": "Prof. Karthik Rao", "email": "karthik.rao@bits.ac.in"}
+    },
+    "00000000-0000-0000-0000-000000000002": {
+      "cite": "[deal:00000000-0000-0000-0000-000000000002]",
+      "name": "Hyderabad reseller partnership",
+      "stage": "negotiation",
+      "value_inr": 3200000,
+      "owner": "Anita",
+      "days_since_last_activity": 9,
+      "contact": {"name": "Sameer Ali", "phone": "+91-98xxxxxx01"}
+    },
+    "00000000-0000-0000-0000-000000000040": {
+      "cite": "[deal:00000000-0000-0000-0000-000000000040]",
+      "name": "Apex Labs - Pune lab printers",
+      "stage": "verbal_commit",
+      "value_inr": 2600000,
+      "pipeline_inr": 2600000,
+      "owner": "Rahul",
+      "days_since_last_activity": 3,
+      "contact": {"name": "Priya Nair", "email": "priya.nair@apexlabs.in"}
+    },
+    "00000000-0000-0000-0000-000000000041": {
+      "cite": "[deal:00000000-0000-0000-0000-000000000041]",
+      "name": "Manipal MedTech pilot",
+      "stage": "qualified",
+      "value_inr": 900000,
+      "owner": "Anita",
+      "days_since_last_activity": 6,
+      "contact": {"name": "Dr. Shreya Pai", "email": "shreya.pai@manipalmed.example"}
+    },
+    "00000000-0000-0000-0000-000000000080": {
+      "cite": "[deal:00000000-0000-0000-0000-000000000080]",
+      "name": "Coimbatore tooling upgrade",
+      "stage": "proposal_sent",
+      "value_inr": 700000,
+      "owner": "Rahul",
+      "contact": {"name": "S. Murugan", "email": "murugan@cbetooling.example"}
+    },
+    "00000000-0000-0000-0000-000000000081": {
+      "cite": "[deal:00000000-0000-0000-0000-000000000081]",
+      "name": "Defence lab additive cell",
+      "stage": "negotiation",
+      "value_inr": 8800000,
+      "owner": "Vijay",
+      "contact": {"name": "Cdr. A. Singh", "email": "asingh@deflab.example"}
+    }
+  },
+  "task": {
+    "00000000-0000-0000-0000-000000000001": {
+      "cite": "[task:00000000-0000-0000-0000-000000000001]",
+      "title": "Re-run QA on spare extruder batch",
+      "assignee": "Rahul",
+      "status": "in_progress",
+      "days_in_stage": 8,
+      "project": "Apex Labs Pune lab setup"
+    },
+    "00000000-0000-0000-0000-000000000070": {
+      "cite": "[task:00000000-0000-0000-0000-000000000070]",
+      "title": "Schedule NITK field service visit",
+      "assignee": "Meera",
+      "status": "todo",
+      "project": "NITK innovation centre rollout"
+    },
+    "00000000-0000-0000-0000-000000000071": {
+      "cite": "[task:00000000-0000-0000-0000-000000000071]",
+      "title": "Send July price list to Hyderabad reseller",
+      "assignee": "Anita",
+      "status": "in_progress",
+      "project": "Reseller enablement"
+    }
+  }
+}

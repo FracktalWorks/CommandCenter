@@ -52,7 +52,23 @@ Kills: P0-3 (tail loss), the persisted half of steer-resurrection, and persisted
 Extract the content→AG-UI mapping (function_call/result, text, reasoning, todo, elicitation, partial, intent) into `orchestrator/event_translator.py`, consumed by all four backend paths; one watchdog policy parameterized per tier. Acceptance: a golden trajectory eval feeding identical synthetic runtime updates through each tier adapter yields byte-identical AG-UI streams; tier asymmetries (TODO_LIST, elicitation bridge, TOOL_CALL_PARTIAL on Tier 1/2) close as a side effect. Also: extend `assistant_message_id` to `/copilot/chat` (query param).
 
 ### Phase 3 — Message-id-native protocol (rides on Phase 2)
-Emit `TEXT_MESSAGE_START/CONTENT/END` with real message ids on all tiers; client renders each assistant message as its own timeline entry; delete the fold/un-fold heuristic in all three folds (py, route.ts, chatStream.ts) and the `reasoningCutoff` bookkeeping. Persistence folds by message id. This is the point where `route.ts` stops folding entirely.
+
+**3a — true boundaries on the wire (backend + additive client capture).**
+The translator currently attributes ALL of a run's text to the first
+message id; runtimes actually mint a new id per assistant segment (text
+between tool rounds). 3a: the translator closes/opens text messages on
+`message_id` change, so every tier emits real segment boundaries;
+`route.ts` forwards `messageId` + a `message_end` frame instead of
+discarding them; `chatStream.ts` records `segments: [{id, text}]` on the
+message additively (renderer untouched); `chat_fold.py` derives
+narration-vs-answer from segments when present (last segment = answer —
+ground truth) with the heuristic as fallback for id-less runs.
+
+**3b — segment-native rendering (frontend, verified against the running UI).**
+Render each segment as its own timeline entry; delete `foldForToolStart` /
+`unfoldTrailingAnswer` / `reasoningCutoff` bookkeeping in all three folds;
+`route.ts` stops folding entirely. Do NOT attempt blind — this changes the
+chat surface's core rendering; drive it with /run + Playwright.
 
 ## Invariants (locked by evals)
 - The Redis stream remains the single source of truth; anything derived (persisted rows, UI state) must be reproducible by replaying it.
@@ -62,4 +78,5 @@ Emit `TEXT_MESSAGE_START/CONTENT/END` with real message ids on all tiers; client
 ## Status log
 - 2026-07-02 — Spec created; Phase 1 implementation started.
 - 2026-07-02 — **Phase 1 shipped**: `gateway/chat_fold.py` (fold port + `persist_final_assistant_message`), `run_detached(on_complete=)` lifecycle hook (shielded, runs on finish/error/cancel), `AgentRunRequest.assistant_message_id` + route.ts forwarding on `/agent/run/stream`. 9 fold/persistence trajectory evals in `evals/trajectories/test_chat_fold_trajectory.py` (incl. cancelled-run partial-turn persistence). P0-3 closed for the named-agent path; `/copilot/chat` orchestrator path follows in Phase 2.
+- 2026-07-02 — **Phase 3a shipped**: the translator closes/reopens text messages on real `message_id` changes (every tier now emits true segment boundaries; id-less runtimes degrade to one segment); `route.ts` forwards `messageId` on deltas + `message_start`/`message_end` frames; `chatStream.ts` captures `segments: [{id, text}]` on the message additively (renderer untouched); `chat_fold.py` records segments, persists them in `agent_state.segments`, and uses last-segment ground truth to rescue answers stranded by the fold heuristic — the reproducible case being CANCELLED runs (no RUN_FINISHED → un-fold never ran → Phase 1's cancel-persistence wrote an empty bubble). 4 new trajectory evals. Remaining (3b): segment-native rendering + delete the three folds — drive against the running UI, not blind.
 - 2026-07-02 — **Phase 2 shipped**: `orchestrator/event_translator.py` is the ONE canonical runtime-update → AG-UI mapping; all four executor paths consume it (native MAF loop, Copilot loop, Tier 2 batch text via `text_message_events`, sub-agent via `wrap_sub_agent_events`). Copilot-only behaviour (TODO_LIST interception, elicitation bridge + cleanup) moved into `TranslatorHooks` wired only on that path — the native path's tools emit those events themselves via the queue, so hooks there would double-emit. ~240 lines of duplicated mapping deleted from the executor. Side effects: Copilot gains streamed-tool-call id dedup; Tier 2 batch now speaks TEXT_MESSAGE_START/END with message ids (Phase 3 groundwork); dead `copilot_premature_end` branch removed. `/copilot/chat` now takes `assistant_message_id` as a query param (its AG-UI body model drops unknown keys) and runs the Phase-1 fold-and-persist `on_complete` — P0-3 fully closed. Parity contract locked by `evals/trajectories/test_event_translator_trajectory.py` (8 trajectories incl. identical-input cross-path parity). Remaining Phase 2 item: unified watchdog policy (still per-tier) — deferred to Phase 3 alongside message-id-native rendering.

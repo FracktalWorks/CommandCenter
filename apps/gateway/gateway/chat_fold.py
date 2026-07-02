@@ -127,9 +127,19 @@ def fold_run_events(events: list[dict[str, Any]]) -> dict[str, Any] | None:
     custom_events: list[dict[str, Any]] = []
     latest_todos: list[dict[str, Any]] = []
     sub_agent: dict[str, Any] = {"name": "", "text": "", "tools": []}
+    # Real message segments (Phase 3a) — ground truth for narration-vs-answer
+    # when the runtime emitted per-segment ids; [] on legacy id-less streams.
+    segments: list[dict[str, str]] = []
     content = ""
     folded_answer_idx = -1
     last_ms: int | None = None
+
+    def _segment_append(msg_id: str, delta: str) -> None:
+        for seg in segments:
+            if seg["id"] == msg_id:
+                seg["text"] += delta
+                return
+        segments.append({"id": msg_id, "text": delta})
 
     for ev in events:
         t = str(ev.get("type") or "")
@@ -137,11 +147,19 @@ def fold_run_events(events: list[dict[str, Any]]) -> dict[str, Any] | None:
         if ms is not None:
             last_ms = ms
 
-        if t == "TEXT_MESSAGE_CONTENT":
+        if t == "TEXT_MESSAGE_START":
+            msg_id = str(ev.get("messageId") or "")
+            if msg_id and not any(s["id"] == msg_id for s in segments):
+                segments.append({"id": msg_id, "text": ""})
+
+        elif t == "TEXT_MESSAGE_CONTENT":
             delta = str(ev.get("delta") or "")
             content += delta
             if delta.strip():
                 folded_answer_idx = -1
+            msg_id = str(ev.get("messageId") or "")
+            if msg_id:
+                _segment_append(msg_id, delta)
 
         elif t in ("REASONING_MESSAGE_CONTENT", "THINKING_TEXT_MESSAGE_CONTENT"):
             chunk = str(ev.get("delta") or "")
@@ -245,11 +263,33 @@ def fold_run_events(events: list[dict[str, Any]]) -> dict[str, Any] | None:
                 content, reasoning_blocks, folded_answer_idx,
             )
 
+    # ── Segment ground truth (Phase 3a) ─────────────────────────────────────
+    # When the runtime emitted real message segments, the LAST segment's text
+    # IS the answer — no inference. If the fold heuristic left the answer
+    # stranded in the timeline (its known failure class: runs ending on a
+    # tool call with a cursor miss), promote it back, blanking the matching
+    # folded block so every tool's reasoningCutoff index stays aligned.
+    if segments and not content.strip():
+        last_text = segments[-1]["text"]
+        if last_text.strip():
+            for i in range(len(reasoning_blocks) - 1, -1, -1):
+                if reasoning_blocks[i].strip() == last_text.strip():
+                    reasoning_blocks[i] = ""
+                    break
+            content = last_text
+
     if not (
         content.strip() or tool_events or reasoning_blocks
         or latest_todos or custom_events
     ):
         return None
+
+    agent_state: dict[str, Any] = {}
+    if latest_todos:
+        agent_state["todos"] = latest_todos
+    if segments:
+        # Persisted for 3b's segment-native rendering on reload.
+        agent_state["segments"] = segments
 
     return {
         "content": content,
@@ -258,7 +298,7 @@ def fold_run_events(events: list[dict[str, Any]]) -> dict[str, Any] | None:
         "progress_lines": progress_lines,
         # JSON serialization matches serializeReasoning (never "---"-joined).
         "reasoning": json.dumps(reasoning_blocks) if reasoning_blocks else None,
-        "agent_state": {"todos": latest_todos} if latest_todos else None,
+        "agent_state": agent_state or None,
         "custom_events": custom_events,
     }
 

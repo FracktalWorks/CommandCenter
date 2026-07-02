@@ -58,6 +58,11 @@ export interface ChatMessage {
   isThinkingActive?: boolean;
   /** Sequential reasoning blocks — each displayed as a separate timeline entry. */
   reasoningBlocks?: string[];
+  /** Real assistant-message segments (Phase 3a, message-id-native): one entry
+   *  per TEXT_MESSAGE_START/END pair the runtime emitted, in order. Captured
+   *  additively — the renderer still uses content/reasoningBlocks until 3b
+   *  switches to segment-native rendering and the fold heuristic is deleted. */
+  segments?: { id: string; text: string }[];
   /** Agent's structured todo list (VS Code Todos panel parity). */
   todos?: { id: string; title: string; status: string }[];
   agentState?: Record<string, unknown>;

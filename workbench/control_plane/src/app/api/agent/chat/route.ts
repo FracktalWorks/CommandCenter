@@ -238,7 +238,14 @@ async function translateAndPersistStream(
           // deltas around tool boundaries must not cancel the trailing un-fold,
           // or the persisted answer ends up inside the reasoning timeline.
           if (delta.trim()) foldedAnswerIdx = -1;
-          out = { type: "delta", content: delta };
+          // messageId rides along (Phase 3a): the backend now emits REAL
+          // per-segment message ids, so the client can track segment
+          // boundaries instead of inferring them from tool positions.
+          out = { type: "delta", content: delta, messageId: ev.messageId };
+        } else if (t === "TEXT_MESSAGE_START") {
+          out = { type: "message_start", messageId: ev.messageId };
+        } else if (t === "TEXT_MESSAGE_END") {
+          out = { type: "message_end", messageId: ev.messageId };
         } else if (t === "REASONING_MESSAGE_CONTENT" || t === "THINKING_TEXT_MESSAGE_CONTENT") {
           const chunk = String(ev.delta ?? "");
           if (chunk) {

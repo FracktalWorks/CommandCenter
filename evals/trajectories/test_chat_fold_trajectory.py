@@ -110,6 +110,47 @@ def test_todos_and_custom_events_persist():
     ]
 
 
+def test_segment_ground_truth_rescues_cancelled_run_answer():
+    """Phase 3a: the un-fold heuristic only runs at RUN_FINISHED — a run
+    cancelled mid-tool (Stop/steer, then persisted by the on_complete hook)
+    has no terminal event, so its answer stayed stranded in the timeline and
+    the row persisted an empty bubble. With real segment ids the LAST
+    segment is the answer by ground truth, terminal event or not."""
+    events = [
+        _ev("TEXT_MESSAGE_START", 900, messageId="m-1"),
+        _ev("TEXT_MESSAGE_CONTENT", 1000, delta="Here is the summary.",
+            messageId="m-1"),
+        _ev("TOOL_CALL_START", 1100, toolCallId="t1", toolCallName="save_memory"),
+        # Cancelled here: no TOOL_CALL_RESULT, no RUN_FINISHED.
+    ]
+    folded = fold_run_events(events)
+    assert folded is not None
+    # Without segments this persisted content="" (answer folded, never
+    # un-folded); ground truth wins.
+    assert folded["content"] == "Here is the summary."
+    assert folded["agent_state"]["segments"] == [
+        {"id": "m-1", "text": "Here is the summary."},
+    ]
+    # The folded duplicate is blanked so reasoningCutoff indices stay aligned.
+    assert json.loads(folded["reasoning"])[0] == ""
+
+
+def test_segments_persist_alongside_todos():
+    todos = [{"id": "1", "title": "Plan", "status": "completed"}]
+    events = [
+        _ev("TODO_LIST", 900, todos=todos),
+        _ev("TEXT_MESSAGE_START", 950, messageId="m-1"),
+        _ev("TEXT_MESSAGE_CONTENT", 1000, delta="Done.", messageId="m-1"),
+        _ev("RUN_FINISHED", 1100),
+    ]
+    folded = fold_run_events(events)
+    assert folded is not None
+    assert folded["agent_state"] == {
+        "todos": todos,
+        "segments": [{"id": "m-1", "text": "Done."}],
+    }
+
+
 def test_empty_run_folds_to_none():
     assert fold_run_events([]) is None
     assert fold_run_events([_ev("RUN_FINISHED", 1000)]) is None

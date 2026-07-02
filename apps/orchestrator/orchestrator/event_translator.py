@@ -212,11 +212,21 @@ def translate_update(
                         "message": msg[:PROGRESS_CAP],
                     })
                 continue
+            update_msg_id = getattr(update, "message_id", None)
+            # Message-id-native segmentation (Phase 3a): runtimes mint a new
+            # message id per assistant segment (text between tool rounds).
+            # A changed id is a REAL message boundary — close the open
+            # segment and start the next, so downstream never has to infer
+            # narration-vs-answer from tool positions.
+            if (
+                state.text_started
+                and update_msg_id
+                and update_msg_id != state.message_id
+            ):
+                events.extend(close_text_message(state))
             if not state.text_started:
                 state.text_started = True
-                state.message_id = (
-                    getattr(update, "message_id", None) or str(uuid4())
-                )
+                state.message_id = update_msg_id or str(uuid4())
                 events.append({
                     "type": "TEXT_MESSAGE_START",
                     "messageId": state.message_id,

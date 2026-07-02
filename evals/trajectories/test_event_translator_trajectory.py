@@ -181,6 +181,45 @@ def test_hooks_are_the_only_tier_divergence():
     assert events2 == []
 
 
+# ── Message-id-native segmentation (Phase 3a) ────────────────────────────────
+
+def test_message_id_change_is_a_segment_boundary():
+    """A new runtime message id closes the open text message and starts the
+    next — real boundaries on the wire, no narration/answer inference."""
+    events, state = _drive([
+        _update(_content("text", text="Let me check."), message_id="m-1"),
+        _update(_content("function_call", call_id="c1", name="t",
+                         arguments="")),
+        _update(_content("function_result", call_id="c1", result="ok",
+                         exception=None)),
+        _update(_content("text", text="All done."), message_id="m-2"),
+    ])
+    events.extend(close_text_message(state))
+
+    assert [e["type"] for e in events] == [
+        "TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT",
+        "TOOL_CALL_START",
+        "TOOL_CALL_RESULT",
+        "TEXT_MESSAGE_END",       # m-1 closed by the id change
+        "TEXT_MESSAGE_START",     # m-2 opens
+        "TEXT_MESSAGE_CONTENT",
+        "TEXT_MESSAGE_END",
+    ]
+    ends = [e["messageId"] for e in events if e["type"] == "TEXT_MESSAGE_END"]
+    assert ends == ["m-1", "m-2"]
+
+
+def test_missing_message_id_keeps_one_segment():
+    """Id-less runtimes degrade gracefully: one message for the whole run."""
+    events, state = _drive([
+        _update(_content("text", text="a")),
+        _update(_content("text", text="b")),
+    ])
+    events.extend(close_text_message(state))
+    starts = [e for e in events if e["type"] == "TEXT_MESSAGE_START"]
+    assert len(starts) == 1
+
+
 # ── Sub-agent envelope ───────────────────────────────────────────────────────
 
 def test_sub_agent_wrap_maps_and_drops_correctly():

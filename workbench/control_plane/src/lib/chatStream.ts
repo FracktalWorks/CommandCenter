@@ -173,9 +173,22 @@ export function applyStreamEvent(
       // boundaries, and letting those reset the cursor left the actual answer
       // stranded in the folded thinking timeline at run end.
       if (deltaText.trim()) fold.foldedAnswerIdx = -1;
+      // Segment capture (Phase 3a): accumulate onto the real message segment
+      // when the backend sent its id — ground truth for 3b's segment-native
+      // rendering; content/fold behaviour is unchanged.
+      const segId = typeof evt.messageId === "string" ? evt.messageId : "";
+      let segments = m.segments;
+      if (segId) {
+        const cur = [...(m.segments ?? [])];
+        const idx = cur.findIndex((s) => s.id === segId);
+        if (idx >= 0) cur[idx] = { ...cur[idx], text: cur[idx].text + deltaText };
+        else cur.push({ id: segId, text: deltaText });
+        segments = cur;
+      }
       return {
         ...m,
         content: m.content + deltaText,
+        segments,
         streaming: true,
         // Brief live snippet in the ThinkingContainer header (activity hint);
         // NOT dumped into reasoning (reserved for real chain-of-thought).
@@ -185,6 +198,17 @@ export function applyStreamEvent(
         ].slice(-3),
       };
     }
+    case "message_start": {
+      // Real per-segment message boundary from the runtime (Phase 3a).
+      // Idempotent on replays: never duplicate a segment id.
+      const segId = typeof evt.messageId === "string" ? evt.messageId : "";
+      if (!segId || (m.segments ?? []).some((s) => s.id === segId)) return m;
+      return { ...m, segments: [...(m.segments ?? []), { id: segId, text: "" }] };
+    }
+    case "message_end":
+      // Boundary close — segment content is complete. No state change needed
+      // until 3b renders segments; kept explicit so the event is "owned" here.
+      return m;
     case "reasoning": {
       const chunk = String(evt.content ?? "");
       if (!chunk) return m;

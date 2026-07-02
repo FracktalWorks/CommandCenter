@@ -42,6 +42,10 @@ interface ThinkingContainerProps {
   progressLines: string[];
   /** Sequential reasoning blocks — each rendered as its own timeline entry. */
   reasoningBlocks?: string[];
+  /** Narration message segments (Phase 3b) — real assistant text emitted before
+   *  the final answer segment, interleaved with tools via each tool's
+   *  segmentCutoff. Empty for id-less runtimes (which use the reasoning fold). */
+  narrationSegments?: string[];
   isActive: boolean;
 }
 
@@ -89,6 +93,57 @@ function TimelineIcon({ iconKey, className }: { iconKey: IconKey; className?: st
   return <Icon className={className} size={14} strokeWidth={1.5} />;
 }
 
+// ─── Timeline prose (reasoning + narration) ────────────────────────────────
+// Reasoning blocks (chain-of-thought) and narration segments (Phase 3b real
+// assistant text before the answer) render as the same compact markdown; only
+// the axis icon differs (Brain vs BookOpen).
+
+const PROSE_MD_COMPONENTS = {
+  p: ({ children }: { children?: React.ReactNode }) => <p className="my-1">{children}</p>,
+  code: ({ className, children, ...props }: { className?: string; children?: React.ReactNode }) => {
+    const inline = !className;
+    return inline ? (
+      <code className="bg-secondary/80 text-foreground text-[10.5px] px-1 py-0.5 rounded" {...props}>{children}</code>
+    ) : (
+      <code className={`block bg-secondary/80 text-foreground text-[10.5px] p-2 rounded overflow-x-auto ${className || ""}`} {...props}>{children}</code>
+    );
+  },
+  pre: ({ children }: { children?: React.ReactNode }) => <pre className="bg-card/80 rounded-md overflow-x-auto my-1.5">{children}</pre>,
+  ul: ({ children }: { children?: React.ReactNode }) => <ul className="list-disc list-inside my-1 space-y-0.5">{children}</ul>,
+  ol: ({ children }: { children?: React.ReactNode }) => <ol className="list-decimal list-inside my-1 space-y-0.5">{children}</ol>,
+  li: ({ children }: { children?: React.ReactNode }) => <li className="text-[11px]">{children}</li>,
+  strong: ({ children }: { children?: React.ReactNode }) => <strong className="text-foreground font-semibold">{children}</strong>,
+  em: ({ children }: { children?: React.ReactNode }) => <em className="italic">{children}</em>,
+  blockquote: ({ children }: { children?: React.ReactNode }) => <blockquote className="border-l-2 border-border pl-2 my-1 text-muted-foreground">{children}</blockquote>,
+  a: ({ href, children }: { href?: string; children?: React.ReactNode }) => <a href={href} className="text-sky-400 underline" target="_blank" rel="noopener">{children}</a>,
+  h1: ({ children }: { children?: React.ReactNode }) => <h1 className="text-[13px] font-bold text-foreground mt-2 mb-1">{children}</h1>,
+  h2: ({ children }: { children?: React.ReactNode }) => <h2 className="text-[12px] font-semibold text-foreground mt-1.5 mb-1">{children}</h2>,
+};
+
+/** One prose entry (reasoning or narration) on the timeline axis. */
+function ProseTimelineEntry({
+  text, live, icon: Icon, iconClass,
+}: {
+  text: string;
+  live: boolean;
+  icon: LucideIcon;
+  iconClass: string;
+}) {
+  return (
+    <div className="relative">
+      <div className="absolute left-[6px] top-[5px] z-10">
+        <Icon className={iconClass} size={13} strokeWidth={1.5} />
+      </div>
+      <div className="ml-8 mr-3 text-[11.5px] text-muted-foreground leading-relaxed">
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={PROSE_MD_COMPONENTS}>
+          {text}
+        </ReactMarkdown>
+        {live && <span className="inline-block w-[2px] h-[1em] bg-muted-foreground/50 animate-pulse ml-0.5 align-middle rounded-full" />}
+      </div>
+    </div>
+  );
+}
+
 function formatToolName(name: string): string {
   return name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -125,28 +180,49 @@ function toolHeadline(event: ToolEvent, kind: ActionKind): string {
 
 type TimelineItem =
   | { kind: "reasoning"; text: string; blockIndex: number }
+  | { kind: "narration"; text: string; blockIndex: number }
   | { kind: "tool"; event: ToolEvent; toolIndex: number };
 
 /**
- * Merge reasoning blocks and tool events into one chronological list using
- * each tool's reasoningCutoff (blocks below the cutoff precede the tool).
- * Legacy events without a cutoff sort after all reasoning — the previous
- * rendering order — so old persisted messages still display correctly.
+ * Merge narration segments, reasoning blocks and tool events into one
+ * chronological list.  Each tool carries two independent anchors:
+ *   • reasoningCutoff — # of reasoning blocks that existed when it started
+ *   • segmentCutoff   — # of narration segments that existed when it started
+ * Blocks/segments below the respective cutoff precede the tool.  The two
+ * channels advance independently so reasoning and narration keep their own
+ * chronology relative to the tools.
+ *
+ * Narration segments (Phase 3b) are the real assistant text before the answer;
+ * reasoning blocks are chain-of-thought.  For id-less runtimes narrationSegments
+ * is empty and this degrades to the original reasoning-only interleave (legacy
+ * events without a cutoff sort after everything — the previous rendering order —
+ * so old persisted messages still display correctly).
  */
 function buildTimeline(
   reasoningBlocks: string[],
   toolEvents: ToolEvent[],
+  narrationSegments: string[] = [],
 ): TimelineItem[] {
   const items: TimelineItem[] = [];
   let r = 0;
+  let s = 0;
   toolEvents.forEach((event, toolIndex) => {
-    const cutoff = event.reasoningCutoff ?? Number.POSITIVE_INFINITY;
-    while (r < reasoningBlocks.length && r < cutoff) {
+    const rCut = event.reasoningCutoff ?? Number.POSITIVE_INFINITY;
+    const sCut = event.segmentCutoff ?? Number.POSITIVE_INFINITY;
+    while (s < narrationSegments.length && s < sCut) {
+      items.push({ kind: "narration", text: narrationSegments[s], blockIndex: s });
+      s++;
+    }
+    while (r < reasoningBlocks.length && r < rCut) {
       items.push({ kind: "reasoning", text: reasoningBlocks[r], blockIndex: r });
       r++;
     }
     items.push({ kind: "tool", event, toolIndex });
   });
+  while (s < narrationSegments.length) {
+    items.push({ kind: "narration", text: narrationSegments[s], blockIndex: s });
+    s++;
+  }
   while (r < reasoningBlocks.length) {
     items.push({ kind: "reasoning", text: reasoningBlocks[r], blockIndex: r });
     r++;
@@ -256,6 +332,7 @@ export default function ThinkingContainer({
   toolEvents,
   progressLines,
   reasoningBlocks,
+  narrationSegments,
   isActive,
 }: ThinkingContainerProps) {
   const [expanded, setExpanded] = useState(false);
@@ -268,23 +345,26 @@ export default function ThinkingContainer({
   const [toolOverrides, setToolOverrides] = useState<Record<string, boolean>>({});
 
   const hasReasoning = !!(reasoningBlocks && reasoningBlocks.length > 0);
+  const hasNarration = !!(narrationSegments && narrationSegments.length > 0);
   const hasTools = toolEvents.length > 0;
-  const hasContent = hasTools || hasReasoning;
+  const hasContent = hasTools || hasReasoning || hasNarration;
 
-  // Chronologically interleaved reasoning + tool timeline (VS Code style).
+  // Chronologically interleaved narration + reasoning + tool timeline
+  // (VS Code style; narration segments are Phase 3b message-id ground truth).
   const timeline = useMemo(
-    () => buildTimeline(reasoningBlocks ?? [], toolEvents),
-    [reasoningBlocks, toolEvents],
+    () => buildTimeline(reasoningBlocks ?? [], toolEvents, narrationSegments ?? []),
+    [reasoningBlocks, toolEvents, narrationSegments],
   );
 
   // Auto-follow: while the agent streams verbose reasoning, keep the
   // timeline scrolled to the newest content (VS Code thinking-pane style).
   const reasoningLen = reasoningBlocks?.reduce((n, b) => n + b.length, 0) ?? 0;
+  const narrationLen = narrationSegments?.reduce((n, b) => n + b.length, 0) ?? 0;
   useEffect(() => {
     if (!isActive || !expanded) return;
     const el = bodyRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [isActive, expanded, reasoningLen, toolEvents.length, progressLines.length]);
+  }, [isActive, expanded, reasoningLen, narrationLen, toolEvents.length, progressLines.length]);
 
   // Auto-expand while the agent is actively working so the user sees the
   // thought process in real time (VS Code Copilot Chat style). Expands on:
@@ -333,7 +413,9 @@ export default function ThinkingContainer({
   // ("Ran 3 commands, read 2 files").
   const summaryTitle = useMemo(() => {
     if (toolEvents.length === 0) {
-      return hasReasoning ? "Thought through the approach" : "Finished thinking";
+      return (hasReasoning || hasNarration)
+        ? "Thought through the approach"
+        : "Finished thinking";
     }
     const counts = new Map<ActionKind, number>();
     for (const t of toolEvents) {
@@ -364,12 +446,15 @@ export default function ThinkingContainer({
   // active so the user sees the "stream of consciousness" even collapsed
   // (mirrors VS Code Copilot's live thinking snippet).
   const liveReasoningTail = useMemo(() => {
-    if (!isActive || !hasReasoning) return null;
-    // Skip trailing empty sentinel blocks (sealed at tool starts).
-    const last = [...reasoningBlocks!].reverse().find((b) => b.trim())?.trim();
+    if (!isActive) return null;
+    // Prefer the newest reasoning block; fall back to the newest narration
+    // segment (Phase 3b) so id-carrying runs still show a live snippet even
+    // when reasoningBlocks holds only genuine chain-of-thought (often empty).
+    const pool = [...(reasoningBlocks ?? []), ...(narrationSegments ?? [])];
+    const last = [...pool].reverse().find((b) => b.trim())?.trim();
     if (!last) return null;
     return last.length > 90 ? `…${last.slice(-90)}` : last;
-  }, [isActive, hasReasoning, reasoningBlocks]);
+  }, [isActive, reasoningBlocks, narrationSegments]);
 
   // Title shown in the header.  A currently-running tool takes priority;
   // otherwise show the live reasoning tail, then the last known label.
@@ -450,46 +535,38 @@ export default function ThinkingContainer({
                   (VS Code chatThinkingContentPart parity). */}
               {timeline.map((item) => {
                 if (item.kind === "reasoning") {
-                  if (!item.text.trim() ) return null; // skip empty sentinels
+                  if (!item.text.trim()) return null; // skip empty sentinels
                   const isLastReasoning =
                     item.blockIndex === (reasoningBlocks?.length ?? 0) - 1;
                   const live = isActive && isLastReasoning;
                   return (
-                    <div key={`r-${item.blockIndex}`} className="relative">
-                      {/* Brain icon on the timeline axis for reasoning */}
-                      <div className="absolute left-[6px] top-[5px] z-10">
-                        <Brain className={live ? "text-purple-400" : "text-muted-foreground/50"} size={13} strokeWidth={1.5} />
-                      </div>
-                    <div className="ml-8 mr-3 text-[11.5px] text-muted-foreground leading-relaxed">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          p: ({ children }) => <p className="my-1">{children}</p>,
-                          code: ({ className, children, ...props }) => {
-                            const inline = !className;
-                            return inline ? (
-                              <code className="bg-secondary/80 text-foreground text-[10.5px] px-1 py-0.5 rounded" {...props}>{children}</code>
-                            ) : (
-                              <code className={`block bg-secondary/80 text-foreground text-[10.5px] p-2 rounded overflow-x-auto ${className || ""}`} {...props}>{children}</code>
-                            );
-                          },
-                          pre: ({ children }) => <pre className="bg-card/80 rounded-md overflow-x-auto my-1.5">{children}</pre>,
-                          ul: ({ children }) => <ul className="list-disc list-inside my-1 space-y-0.5">{children}</ul>,
-                          ol: ({ children }) => <ol className="list-decimal list-inside my-1 space-y-0.5">{children}</ol>,
-                          li: ({ children }) => <li className="text-[11px]">{children}</li>,
-                          strong: ({ children }) => <strong className="text-foreground font-semibold">{children}</strong>,
-                          em: ({ children }) => <em className="italic">{children}</em>,
-                          blockquote: ({ children }) => <blockquote className="border-l-2 border-border pl-2 my-1 text-muted-foreground">{children}</blockquote>,
-                          a: ({ href, children }) => <a href={href} className="text-sky-400 underline" target="_blank" rel="noopener">{children}</a>,
-                          h1: ({ children }) => <h1 className="text-[13px] font-bold text-foreground mt-2 mb-1">{children}</h1>,
-                          h2: ({ children }) => <h2 className="text-[12px] font-semibold text-foreground mt-1.5 mb-1">{children}</h2>,
-                        }}
-                      >
-                        {item.text}
-                      </ReactMarkdown>
-                        {live && <span className="inline-block w-[2px] h-[1em] bg-muted-foreground/50 animate-pulse ml-0.5 align-middle rounded-full" />}
-                      </div>
-                    </div>
+                    <ProseTimelineEntry
+                      key={`r-${item.blockIndex}`}
+                      text={item.text}
+                      live={live}
+                      icon={Brain}
+                      iconClass={live ? "text-purple-400" : "text-muted-foreground/50"}
+                    />
+                  );
+                }
+
+                if (item.kind === "narration") {
+                  if (!item.text.trim()) return null;
+                  // Narration segments are the model's real prose before the
+                  // answer — a distinct book icon separates them from the
+                  // purple-brain chain-of-thought.  The last narration segment
+                  // is live only while streaming.
+                  const isLastNarration =
+                    item.blockIndex === (narrationSegments?.length ?? 0) - 1;
+                  const live = isActive && isLastNarration;
+                  return (
+                    <ProseTimelineEntry
+                      key={`n-${item.blockIndex}`}
+                      text={item.text}
+                      live={live}
+                      icon={BookOpen}
+                      iconClass={live ? "text-sky-400" : "text-muted-foreground/50"}
+                    />
                   );
                 }
 

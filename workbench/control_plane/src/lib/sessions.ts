@@ -248,6 +248,9 @@ export interface PersistedMessage {
   customEvents?: { name: string; value: unknown }[];
   /** Agent's structured todo list (VS Code Todos panel parity). */
   todos?: { id: string; title: string; status: string }[];
+  /** Real assistant-message segments (Phase 3b) — restored from
+   *  agent_state.segments so segment-native rendering survives a reload. */
+  segments?: { id: string; text: string }[];
 }
 
 const MESSAGES_PREFIX = "cc-msgs-";
@@ -350,11 +353,15 @@ export function saveMessages(sessionId: string, messages: PersistedMessage[]): v
     // Stored as JSON (serializeReasoning) so a block containing a "---" line
     // can't be torn apart on restore — see chatStream.parseReasoning.
     reasoning: serializeReasoning(m.reasoningBlocks),
-    // Persist the structured todo list inside agent_state so the Todos
-    // panel survives a refresh (no dedicated DB column needed).
-    agent_state: m.todos && m.todos.length > 0
-      ? { ...(m.agentState ?? {}), todos: m.todos }
-      : (m.agentState ?? null),
+    // Persist the structured todo list + real message segments (Phase 3b)
+    // inside agent_state so the Todos panel and segment-native rendering
+    // survive a refresh (no dedicated DB columns needed).
+    agent_state: ((): Record<string, unknown> | null => {
+      const st: Record<string, unknown> = { ...(m.agentState ?? {}) };
+      if (m.todos && m.todos.length > 0) st.todos = m.todos;
+      if (m.segments && m.segments.length > 0) st.segments = m.segments;
+      return Object.keys(st).length > 0 ? st : null;
+    })(),
     custom_events: m.customEvents ?? [],
   }));
   fetch(`/api/chat/sessions/${sessionId}/messages`, {
@@ -416,6 +423,12 @@ export async function fetchMessagesFromDb(
         ?? (r.agentState?.todos as
           | { id: string; title: string; status: string }[]
           | undefined),
+      // Restore real message segments (Phase 3b) so segment-native rendering
+      // survives a full reload — the renderer prefers these over the folded
+      // content when present.
+      segments: r.agentState?.segments as
+        | { id: string; text: string }[]
+        | undefined,
     }));
     // Update localStorage cache with authoritative Postgres data — only on a
     // full (unpaginated) fetch.  A windowed/paginated fetch must not shrink or

@@ -222,16 +222,29 @@ export function applyStreamEvent(
       // already have — keeps the consciousness timeline from duplicating.
       if ((m.toolEvents ?? []).some((t) => t.id === toolId)) return m;
       const isDelegate = String(evt.name ?? "").toLowerCase().includes("call_agent");
+      const hasSegments = (m.segments?.length ?? 0) > 0;
       // VS Code-style narration fold: text emitted BEFORE a tool call is the
       // model narrating its plan ("Let me check…"), not the final answer.  Move
       // it into the thinking timeline; only text after the LAST tool call
       // remains as the visible answer.
+      //
+      // Phase 3b: when the runtime supplied real segment ids, the SEGMENTS
+      // already hold every piece of assistant text (narration + answer) — so we
+      // must NOT also fold `content` into reasoningBlocks (that would duplicate
+      // the narration: once as a segment, once as a reasoning block). We still
+      // clear the live `content` so a stale pre-tool narration doesn't linger as
+      // the answer body; the renderer rebuilds the body from the last segment.
+      // reasoningBlocks then holds ONLY genuine chain-of-thought
+      // (THINKING_TEXT_MESSAGE_CONTENT), which segments never capture.
       const narration = m.content.trim();
-      const { blocks, cutoff } = foldForToolStart(m.reasoningBlocks, narration);
+      const { blocks, cutoff } = hasSegments
+        ? { blocks: m.reasoningBlocks ?? [], cutoff: m.reasoningBlocks?.length ?? 0 }
+        : foldForToolStart(m.reasoningBlocks, narration);
       // The just-folded answer text sits at cutoff-1 (foldForToolStart appends
       // narration then an empty sentinel).  Remember it so the run-end handler
-      // can restore it if no further answer follows.
-      if (narration) fold.foldedAnswerIdx = cutoff - 1;
+      // can restore it if no further answer follows.  Not needed with segments
+      // (last-segment rescue at `done` handles that case).
+      if (narration && !hasSegments) fold.foldedAnswerIdx = cutoff - 1;
       const newEvent: ToolEvent = {
         id: toolId,
         name: String(evt.name ?? "tool"),
@@ -239,6 +252,12 @@ export function applyStreamEvent(
         status: "running",
         startedAt: Date.now(),
         reasoningCutoff: cutoff,
+        // Segment-native anchor (Phase 3b): how many real segments existed when
+        // this tool started, so the renderer can interleave segments ⊕ tools
+        // chronologically — the same trick reasoningCutoff uses. Only meaningful
+        // when the runtime sent segment ids; id-less streams leave it undefined
+        // and fall back to the reasoning fold.
+        ...(hasSegments ? { segmentCutoff: m.segments!.length } : {}),
         ...(isDelegate ? { subAgentActive: true } : {}),
       };
       return {
@@ -294,9 +313,21 @@ export function applyStreamEvent(
       };
     case "done": {
       const u = unfoldTrailingAnswer(m.content, m.reasoningBlocks, fold.foldedAnswerIdx);
+      let content = u.content;
+      // Segment ground truth (Phase 3b): when the runtime emitted real segments
+      // the LAST segment IS the answer. Keep `content` in sync with it so
+      // downstream consumers that read `content` (copy/action bar, memory
+      // extraction, non-segment clients) get the answer even when the turn
+      // ended on a tool call (no trailing text → content cleared at tool_start).
+      // The renderer itself reads segments directly; this only backfills content.
+      const segs = m.segments ?? [];
+      if (segs.length > 0 && !content.trim()) {
+        const lastText = segs[segs.length - 1].text;
+        if (lastText.trim()) content = lastText;
+      }
       return {
         ...m,
-        content: u.content,
+        content,
         reasoningBlocks: u.reasoningBlocks,
         streaming: false,
         isThinkingActive: false,

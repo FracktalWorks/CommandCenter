@@ -248,6 +248,7 @@ function MessageBubble({
         progressLines={message.progressLines}
         isThinkingActive={message.isThinkingActive}
         reasoningBlocks={message.reasoningBlocks}
+        segments={message.segments}
         onChoice={onChoice}
         sessionId={sessionId}
       />

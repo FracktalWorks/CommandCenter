@@ -593,6 +593,10 @@ export function useAgentChat({
                   content: "",
                   toolEvents: [],
                   reasoningBlocks: [],
+                  // Reset segments too (Phase 3b): the replay re-streams from
+                  // 0-0, and the delta reducer APPENDS to an existing segment by
+                  // id — leaving stale segments here would double their text.
+                  segments: [],
                   progressLines: [],
                   isThinkingActive: true,
                   streaming: true,
@@ -871,6 +875,13 @@ export function useAgentChat({
           todos: (
             (r.agent_state as Record<string, unknown> | null)
               ?.todos as { id: string; title: string; status: string }[] | undefined
+          ),
+          // Restore real message segments (Phase 3b) so segment-native
+          // rendering survives a reload/poll — the renderer prefers these over
+          // the folded content when present.
+          segments: (
+            (r.agent_state as Record<string, unknown> | null)
+              ?.segments as { id: string; text: string }[] | undefined
           ),
           customEvents: (r.custom_events as Array<{ name: string; value: unknown }>) ?? [],
         }));

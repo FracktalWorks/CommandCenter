@@ -120,6 +120,9 @@ def fold_run_events(events: list[dict[str, Any]]) -> dict[str, Any] | None:
     tool_names: dict[str, str] = {}
     tool_args: dict[str, str] = {}
     tool_cutoffs: dict[str, int] = {}
+    # Segment count when each tool started (Phase 3b) — mirrors tool_cutoffs so
+    # a reloaded message can interleave real segments with tools chronologically.
+    tool_seg_cutoffs: dict[str, int] = {}
     tool_starts: dict[str, int | None] = {}
     tool_events: list[dict[str, Any]] = []
     reasoning_blocks: list[str] = []
@@ -182,13 +185,26 @@ def fold_run_events(events: list[dict[str, Any]]) -> dict[str, Any] | None:
             name = str(ev.get("toolCallName") or ev.get("tool_call_name") or "tool")
             tool_names[tc_id] = name
             tool_args[tc_id] = ""
+            # Phase 3b: mirror chatStream.ts / route.ts — when the runtime
+            # supplied real segment ids, segments already own every piece of
+            # assistant text, so do NOT fold narration into reasoning_blocks
+            # (that would duplicate it: once as a segment, once as reasoning).
+            # Still clear `content` so stale pre-tool narration doesn't linger;
+            # reasoning_blocks then holds only genuine chain-of-thought.
+            has_segments = bool(segments)
             narration = content.strip()
-            reasoning_blocks, cutoff = fold_for_tool_start(
-                reasoning_blocks, narration,
-            )
+            if has_segments:
+                cutoff = len(reasoning_blocks)
+            else:
+                reasoning_blocks, cutoff = fold_for_tool_start(
+                    reasoning_blocks, narration,
+                )
             tool_cutoffs[tc_id] = cutoff
+            if has_segments:
+                tool_seg_cutoffs[tc_id] = len(segments)
             if narration:
-                folded_answer_idx = cutoff - 1
+                if not has_segments:
+                    folded_answer_idx = cutoff - 1
                 content = ""
             tool_starts[tc_id] = ms
             progress_lines.append(name)
@@ -221,6 +237,12 @@ def fold_run_events(events: list[dict[str, Any]]) -> dict[str, Any] | None:
                 # Honour the real outcome — never hardcode "done" (P0-5).
                 "status": "done" if ev.get("success") is not False else "error",
                 "reasoningCutoff": tool_cutoffs.get(tc_id, 0),
+                # Only present for id-carrying runs (Phase 3b); omitted otherwise
+                # so id-less rows stay byte-identical to the pre-3b shape.
+                **(
+                    {"segmentCutoff": tool_seg_cutoffs[tc_id]}
+                    if tc_id in tool_seg_cutoffs else {}
+                ),
                 "startedAt": tool_starts.get(tc_id),
                 "endedAt": ms,
                 **sub_fields,

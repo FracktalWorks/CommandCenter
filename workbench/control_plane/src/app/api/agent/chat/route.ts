@@ -104,9 +104,14 @@ async function persistAssistantMessage(
   messageId?: string,
   todos: Array<{ id: string; title: string; status: string }> = [],
   customEvents: Array<{ name: string; value: unknown }> = [],
+  segments: Array<{ id: string; text: string }> = [],
 ): Promise<void> {
   if (!content.trim() && toolEvents.length === 0 && reasoningBlocks.length === 0 && todos.length === 0 && customEvents.length === 0) return;
   try {
+    // Pack todos + segments (Phase 3b) into agent_state — no dedicated columns.
+    const agentState: Record<string, unknown> = {};
+    if (todos.length > 0) agentState.todos = todos;
+    if (segments.length > 0) agentState.segments = segments;
     const payload = [{
       // The caller always supplies a message ID (frontend-provided, or a
       // per-stream fallback minted in translateAndPersistStream).  The old
@@ -119,9 +124,10 @@ async function persistAssistantMessage(
       tool_events: toolEvents,
       progress_lines: progressLines,
       reasoning: serializeReasoning(reasoningBlocks),
-      // Carry the structured todo list in agent_state so the Todos panel
-      // survives a page refresh (no dedicated DB column needed).
-      agent_state: todos.length > 0 ? { todos } : null,
+      // Carry the structured todo list + real message segments in agent_state
+      // so the Todos panel and 3b segment-native rendering survive a refresh
+      // (no dedicated DB columns needed).
+      agent_state: Object.keys(agentState).length > 0 ? agentState : null,
       custom_events: customEvents,
     }];
     // Write directly to the gateway's chat message store so messages survive
@@ -169,6 +175,19 @@ async function translateAndPersistStream(
    *  reasoningCutoff so the UI can interleave reasoning and tools
    *  chronologically (VS Code-style timeline). */
   const toolCutoffs: Record<string, number> = {};
+  /** Segment count at each tool's start — persisted as segmentCutoff (Phase 3b)
+   *  so a reloaded message interleaves real segments with tools chronologically.
+   *  Only recorded for id-carrying runs; absent for id-less streams. */
+  const toolSegCutoffs: Record<string, number> = {};
+  /** Real assistant-message segments (Phase 3a/3b), one per TEXT_MESSAGE_START/
+   *  END pair the runtime emitted, in order. Ground truth for narration-vs-
+   *  answer; persisted in agent_state.segments. Empty for id-less runtimes. */
+  const segments: Array<{ id: string; text: string }> = [];
+  const segmentAppend = (msgId: string, delta: string) => {
+    const seg = segments.find((s) => s.id === msgId);
+    if (seg) seg.text += delta;
+    else segments.push({ id: msgId, text: delta });
+  };
   const toolStarts: Record<string, number> = {};
   const toolEvents: Array<Record<string, unknown>> = [];
   /** Accumulated reasoning blocks (model chain-of-thought).  Each complete
@@ -241,8 +260,14 @@ async function translateAndPersistStream(
           // messageId rides along (Phase 3a): the backend now emits REAL
           // per-segment message ids, so the client can track segment
           // boundaries instead of inferring them from tool positions.
+          const segId = typeof ev.messageId === "string" ? ev.messageId : "";
+          if (segId) segmentAppend(segId, delta);
           out = { type: "delta", content: delta, messageId: ev.messageId };
         } else if (t === "TEXT_MESSAGE_START") {
+          const segId = typeof ev.messageId === "string" ? ev.messageId : "";
+          if (segId && !segments.some((s) => s.id === segId)) {
+            segments.push({ id: segId, text: "" });
+          }
           out = { type: "message_start", messageId: ev.messageId };
         } else if (t === "TEXT_MESSAGE_END") {
           out = { type: "message_end", messageId: ev.messageId };
@@ -280,14 +305,29 @@ async function translateAndPersistStream(
           // foldForToolStart): text accumulated before a tool call is plan
           // narration, not the answer — fold it into the reasoning timeline and
           // record where this tool sits so reasoning interleaves chronologically.
+          //
+          // Phase 3b: mirror chatStream.ts — when the runtime supplied real
+          // segment ids, segments already own every piece of assistant text, so
+          // do NOT fold narration into reasoningBlocks (that would duplicate it).
+          // Still clear assistantContent so a stale pre-tool narration doesn't
+          // linger; reasoningBlocks then holds only genuine chain-of-thought.
+          const hasSegments = segments.length > 0;
           const narration = assistantContent.trim();
-          const folded = foldForToolStart(reasoningBlocks, narration);
-          reasoningBlocks.splice(0, reasoningBlocks.length, ...folded.blocks);
+          const folded = hasSegments
+            ? { blocks: reasoningBlocks, cutoff: reasoningBlocks.length }
+            : foldForToolStart(reasoningBlocks, narration);
+          if (!hasSegments) {
+            reasoningBlocks.splice(0, reasoningBlocks.length, ...folded.blocks);
+          }
           toolCutoffs[String(ev.toolCallId ?? "")] = folded.cutoff;
+          if (hasSegments) {
+            toolSegCutoffs[String(ev.toolCallId ?? "")] = segments.length;
+          }
           if (narration) {
             // Remember where the folded answer landed so RUN_FINISHED can
             // restore it if the turn ends on a tool call (no answer follows).
-            foldedAnswerIdx = folded.cutoff - 1;
+            // With segments the last-segment rescue handles this instead.
+            if (!hasSegments) foldedAnswerIdx = folded.cutoff - 1;
             assistantContent = "";
           }
           toolStarts[String(ev.toolCallId ?? "")] = Date.now();
@@ -328,6 +368,9 @@ async function translateAndPersistStream(
             // below already honoured ev.success).
             status: ev.success !== false ? "done" : "error",
             reasoningCutoff: toolCutoffs[id] ?? 0,
+            // Only for id-carrying runs (Phase 3b) — omitted otherwise so
+            // id-less rows keep the pre-3b tool-event shape.
+            ...(id in toolSegCutoffs ? { segmentCutoff: toolSegCutoffs[id] } : {}),
             startedAt: toolStarts[id],
             endedAt: Date.now(),
             ...subAgentFields,
@@ -384,6 +427,24 @@ async function translateAndPersistStream(
           if (unfolded.reasoningBlocks && unfolded.reasoningBlocks !== reasoningBlocks) {
             reasoningBlocks.splice(0, reasoningBlocks.length, ...unfolded.reasoningBlocks);
           }
+          // Segment ground truth (Phase 3b): when the runtime emitted real
+          // segments the LAST segment IS the answer — no inference. If the fold
+          // heuristic still left content empty (its known miss: turn ended on a
+          // tool with a cursor miss), promote the last segment back, blanking the
+          // matching folded block so every reasoningCutoff index stays aligned.
+          // Mirror of chat_fold.py's segment-rescue so both persisters agree.
+          if (segments.length > 0 && !assistantContent.trim()) {
+            const lastText = segments[segments.length - 1].text;
+            if (lastText.trim()) {
+              for (let i = reasoningBlocks.length - 1; i >= 0; i--) {
+                if (reasoningBlocks[i].trim() === lastText.trim()) {
+                  reasoningBlocks[i] = "";
+                  break;
+                }
+              }
+              assistantContent = lastText;
+            }
+          }
           out = { type: "done", run_id: ev.runId || ev.run_id };
         } else if (t === "RUN_ERROR") {
           out = { type: "error", content: String(ev.message ?? "Agent run error") };
@@ -404,7 +465,7 @@ async function translateAndPersistStream(
         const now = Date.now();
         if ((assistantContent.trim() || reasoningBlocks.length > 0 || latestTodos.length > 0 || customEvents.length > 0) && now - lastPersistTime > 3000) {
           lastPersistTime = now;
-          persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, persistId, latestTodos, customEvents).catch(() => {});
+          persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, persistId, latestTodos, customEvents, segments).catch(() => {});
         }
       }
     }
@@ -414,7 +475,7 @@ async function translateAndPersistStream(
 
   // Final persist — ensure the complete message is saved with all stream metadata.
   if (assistantContent.trim() || toolEvents.length > 0 || reasoningBlocks.length > 0 || latestTodos.length > 0 || customEvents.length > 0) {
-    await persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, persistId, latestTodos, customEvents).catch(() => {});
+    await persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, persistId, latestTodos, customEvents, segments).catch(() => {});
   }
 
   if (clientConnected) {

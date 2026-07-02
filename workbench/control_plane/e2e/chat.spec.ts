@@ -74,20 +74,42 @@ async function installChatMocks(
     window.localStorage.clear();
   });
 
+  const MEMORY_BODY = JSON.stringify([
+    { id: "mem-1", memory: "Prefers concise pipeline summaries." },
+    { id: "mem-2", memory: "Cares about next action owners and due dates." },
+  ]);
+
   await page.route("**/api/chat/memories**", async (route) => {
     const method = route.request().method();
     if (method === "GET") {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify([
-          { id: "mem-1", memory: "Prefers concise pipeline summaries." },
-          { id: "mem-2", memory: "Cares about next action owners and due dates." },
-        ]),
+        body: MEMORY_BODY,
       });
       return;
     }
 
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true }),
+    });
+  });
+
+  // The chat page now reads memories via the /api/memory/<userId> proxy
+  // (useChatMemories) — GET returns the list, DELETE removes one. Mock both so
+  // the Memory panel populates in tests regardless of which endpoint is used.
+  await page.route("**/api/memory/**", async (route) => {
+    const method = route.request().method();
+    if (method === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: MEMORY_BODY,
+      });
+      return;
+    }
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -136,8 +158,17 @@ async function installChatMocks(
 
 async function gotoChat(page: Page) {
   await page.goto("/chat");
-  await expect(page.getByText("Conversations")).toBeVisible();
-  await expect(page.getByText("Unified chat · Copilot SDK + LiteLLM")).toBeVisible();
+  // The sidebar gained a "Chat" nav entry whose subtitle also contains the
+  // word; target the Conversations PANEL header exactly.
+  await expect(page.getByText("Conversations", { exact: true })).toBeVisible();
+  // A fresh visit now opens the "New session" agent picker; pick the default
+  // CommandCenter (orchestrator) agent to land in the chat with an input.
+  const picker = page.getByText("New session", { exact: true });
+  if (await picker.isVisible().catch(() => false)) {
+    await page
+      .getByRole("button", { name: /CommandCenter General-purpose AI company brain/i })
+      .click();
+  }
   await expect(page.getByPlaceholder(/Message orchestrator/i)).toBeVisible();
 }
 
@@ -185,7 +216,9 @@ test.describe("Unified chat interface", () => {
     await page.getByRole("button", { name: /Zoho CRM \+ set up/i }).click();
 
     await expect(page.getByText(/I need to configure the Zoho CRM integration/i).first()).toBeVisible();
-    await expect(page.getByText(/Guidance for I need to configure the Zoho CRM integration/i)).toBeVisible();
+    await expect(
+      page.getByRole("paragraph").filter({ hasText: /Guidance for I need to configure the Zoho CRM integration/i }),
+    ).toBeVisible();
     expect(requests.at(-1)?.agentName).toBe("sales-assistant");
   });
 
@@ -210,7 +243,11 @@ test.describe("Unified chat interface", () => {
     await page.getByPlaceholder(/Message orchestrator/i).fill("Summarize delivery risk");
     await page.getByRole("button", { name: "Send", exact: true }).click();
 
-    await expect(page.getByText("Runtime litellm / model tier3-opus")).toBeVisible();
+    // Scope to the message body paragraph — the sidebar session preview also
+    // echoes the last message text, which would otherwise be a 2nd match.
+    await expect(
+      page.getByRole("paragraph").filter({ hasText: "Runtime litellm / model tier3-opus" }),
+    ).toBeVisible();
     expect(requests).toHaveLength(1);
     expect(requests[0]?.mode).toBe("litellm");
     expect(requests[0]?.model).toBe("tier3-opus");
@@ -244,8 +281,13 @@ test.describe("Unified chat interface", () => {
     await page.getByRole("button", { name: "Queue", exact: true }).click();
 
     await expect(page.getByText(/1 message queued/i)).toBeVisible();
-    await expect(page.getByText("Answer 1: First request")).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText("Answer 2: Second request")).toBeVisible({ timeout: 5_000 });
+    // Scope to message-body paragraphs (sidebar preview echoes the latest too).
+    await expect(
+      page.getByRole("paragraph").filter({ hasText: "Answer 1: First request" }),
+    ).toBeVisible({ timeout: 5_000 });
+    await expect(
+      page.getByRole("paragraph").filter({ hasText: "Answer 2: Second request" }),
+    ).toBeVisible({ timeout: 5_000 });
 
     expect(requests).toHaveLength(2);
     expect(requests[0]?.message).toBe("First request");
@@ -278,11 +320,64 @@ test.describe("Unified chat interface", () => {
     await page.getByPlaceholder(/Steer a follow-up/i).fill("Use tighter language");
     await page.getByRole("button", { name: "Steer" }).click();
 
-    await expect(page.getByText("Response 2: Use tighter language")).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText("Response 1: Slow draft")).toHaveCount(0);
+    await expect(
+      page.getByRole("paragraph").filter({ hasText: "Response 2: Use tighter language" }),
+    ).toBeVisible({ timeout: 5_000 });
+    await expect(
+      page.getByRole("paragraph").filter({ hasText: "Response 1: Slow draft" }),
+    ).toHaveCount(0);
 
     expect(requests).toHaveLength(2);
     expect(requests[1]?.message).toBe("Use tighter language");
+  });
+
+  test("renders a multi-segment turn segment-native: narration in the timeline, last segment as the answer body (Phase 3b)", async ({ page }) => {
+    // A real message-id-native run: the model narrates ("Let me check…") in
+    // segment m-1, calls a tool, then answers in segment m-2. The renderer must
+    // put the LAST segment in the answer body and the earlier segment in the
+    // ThinkingContainer timeline — ground truth, no fold heuristic.
+    const requests: ChatRequest[] = [];
+    await installChatMocks(
+      page,
+      () => ({
+        events: [
+          { type: "message_start", messageId: "m-1" },
+          { type: "delta", content: "Let me check your inbox first.", messageId: "m-1" },
+          { type: "message_end", messageId: "m-1" },
+          { type: "tool_start", id: "tool-1", name: "query_inbox", args: { account_id: "a1" } },
+          { type: "tool_end", id: "tool-1", name: "query_inbox", success: true, result: "2 unread" },
+          { type: "message_start", messageId: "m-2" },
+          { type: "delta", content: "You have 2 unread emails.", messageId: "m-2" },
+          { type: "message_end", messageId: "m-2" },
+          { type: "done" },
+        ],
+      }),
+      requests,
+    );
+
+    await gotoChat(page);
+
+    await page.getByPlaceholder(/Message orchestrator/i).fill("Any new mail?");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+
+    // The final answer (last segment) renders as the message BODY paragraph —
+    // scope to the paragraph role so the sidebar session-preview snippet (which
+    // also shows the last message) doesn't count.
+    await expect(
+      page.getByRole("paragraph").filter({ hasText: "You have 2 unread emails." }),
+    ).toBeVisible({ timeout: 5_000 });
+
+    // The tool row is present in the thinking timeline ("Searched Query Inbox").
+    await expect(
+      page.getByRole("button", { name: /Searched\s+Query Inbox/i }),
+    ).toBeVisible();
+
+    // The narration SEGMENT ("Let me check…") renders in the timeline…
+    await expect(page.getByText("Let me check your inbox first.")).toBeVisible();
+    // …but must NOT leak into the answer body — it is never a message paragraph.
+    await expect(
+      page.getByRole("paragraph").filter({ hasText: "Let me check your inbox first." }),
+    ).toHaveCount(0);
   });
 
   test("renders tool blocks, markdown code, and MCQ choices that send the selected answer back", async ({ page }) => {
@@ -320,15 +415,26 @@ test.describe("Unified chat interface", () => {
     await page.getByPlaceholder(/Message orchestrator/i).fill("Which deal should I chase?");
     await page.getByRole("button", { name: "Send", exact: true }).click();
 
-    await expect(page.getByText("Search Deals")).toBeVisible();
+    await expect(page.getByRole("button", { name: /Search Deals/i })).toBeVisible();
     await page.getByRole("button", { name: /Search Deals/i }).click();
     await expect(page.getByText("Found 3 matching deals")).toBeVisible();
-    await expect(page.getByText("Which account should I prioritize?")).toBeVisible();
-    await expect(page.getByText("const nextOwner = 'Asha';")).toBeVisible();
+    // The MCQ question is a distinct block; use exact match to avoid the
+    // sidebar preview snippet (which is prefixed with the code fence).
+    await expect(
+      page.getByText("Which account should I prioritize?", { exact: true }),
+    ).toBeVisible();
+    // The code block appears in the rendered message; the sidebar preview also
+    // echoes it, so match the <code> element specifically (exact) to stay
+    // unambiguous.
+    await expect(
+      page.getByText("const nextOwner = 'Asha';", { exact: true }),
+    ).toBeVisible();
 
     await page.getByRole("button", { name: /Acme Renewal/i }).click();
 
-    await expect(page.getByText("Selected: Acme Renewal")).toBeVisible({ timeout: 5_000 });
+    await expect(
+      page.getByRole("paragraph").filter({ hasText: "Selected: Acme Renewal" }),
+    ).toBeVisible({ timeout: 5_000 });
     expect(requests).toHaveLength(2);
     expect(requests[1]?.message).toBe("Acme Renewal");
   });

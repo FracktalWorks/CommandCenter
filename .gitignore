@@ -55,3 +55,7 @@ infra/volumes/
 # Theia IDE (old PRD - ADR-014 removed)
 ide/
 .vps
+
+# Playwright transient artifacts
+/test-results/
+workbench/control_plane/test-results/

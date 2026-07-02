@@ -131,8 +131,12 @@ def test_segment_ground_truth_rescues_cancelled_run_answer():
     assert folded["agent_state"]["segments"] == [
         {"id": "m-1", "text": "Here is the summary."},
     ]
-    # The folded duplicate is blanked so reasoningCutoff indices stay aligned.
-    assert json.loads(folded["reasoning"])[0] == ""
+    # Phase 3b: with real segment ids the narration is NOT double-folded into
+    # reasoning_blocks (it lives only in the segment), so this run has no
+    # reasoning at all — the answer is rescued straight from the last segment.
+    # (The tool was cancelled before its RESULT, so no tool event persists.)
+    assert folded["reasoning"] is None
+    assert folded["tool_events"] == []
 
 
 def test_segments_persist_alongside_todos():
@@ -149,6 +153,68 @@ def test_segments_persist_alongside_todos():
         "todos": todos,
         "segments": [{"id": "m-1", "text": "Done."}],
     }
+
+
+def test_segment_native_does_not_double_fold_narration():
+    """Phase 3b: with real segment ids, the pre-tool narration lives ONLY in
+    segments — it must NOT also be folded into reasoning_blocks (that would
+    duplicate it). reasoning_blocks then holds only genuine chain-of-thought,
+    and each tool records segmentCutoff = segment count at its start."""
+    events = [
+        _ev("TEXT_MESSAGE_START", 900, messageId="m-1"),
+        _ev("TEXT_MESSAGE_CONTENT", 1000, delta="Let me check the inbox.",
+            messageId="m-1"),
+        _ev("TOOL_CALL_START", 1100, toolCallId="t1", toolCallName="query_inbox"),
+        _ev("REASONING_MESSAGE_CONTENT", 1150, delta="The provider was slow."),
+        _ev("TOOL_CALL_RESULT", 1200, toolCallId="t1", content="ok", success=True),
+        _ev("TEXT_MESSAGE_START", 1250, messageId="m-2"),
+        _ev("TEXT_MESSAGE_CONTENT", 1300, delta="You have 2 new emails.",
+            messageId="m-2"),
+        _ev("RUN_FINISHED", 1400),
+    ]
+    folded = fold_run_events(events)
+    assert folded is not None
+    # Last segment is the answer body.
+    assert folded["content"] == "You have 2 new emails."
+    # Both real segments preserved in order.
+    assert folded["agent_state"]["segments"] == [
+        {"id": "m-1", "text": "Let me check the inbox."},
+        {"id": "m-2", "text": "You have 2 new emails."},
+    ]
+    # reasoning_blocks holds ONLY the genuine chain-of-thought — the narration
+    # "Let me check the inbox." must NOT appear there (no double-fold).
+    blocks = json.loads(folded["reasoning"])
+    assert "The provider was slow." in blocks
+    assert not any("Let me check the inbox." in b for b in blocks)
+    # segmentCutoff records "1 segment existed when t1 started"; reasoningCutoff
+    # stays 0 because nothing was folded on the segment path.
+    [tool] = folded["tool_events"]
+    assert tool["segmentCutoff"] == 1
+    assert tool["reasoningCutoff"] == 0
+
+
+def test_id_less_run_still_folds_no_segment_cutoff():
+    """Fallback contract: an id-less stream (litellm/langgraph) has no segments,
+    so the fold heuristic still runs and NO segmentCutoff is emitted — id-less
+    persisted rows stay byte-identical to the pre-3b shape."""
+    events = [
+        _ev("TEXT_MESSAGE_CONTENT", 1000, delta="Let me look."),  # no messageId
+        _ev("TOOL_CALL_START", 1100, toolCallId="t1", toolCallName="search"),
+        _ev("TOOL_CALL_RESULT", 1200, toolCallId="t1", content="found", success=True),
+        _ev("TEXT_MESSAGE_CONTENT", 1300, delta="Here it is."),
+        _ev("RUN_FINISHED", 1400),
+    ]
+    folded = fold_run_events(events)
+    assert folded is not None
+    assert folded["content"] == "Here it is."
+    # No segments captured → none persisted.
+    assert folded["agent_state"] is None
+    # The narration folded into reasoning (heuristic path).
+    assert json.loads(folded["reasoning"])[0] == "Let me look."
+    # No segmentCutoff key on the tool (id-less shape unchanged).
+    [tool] = folded["tool_events"]
+    assert "segmentCutoff" not in tool
+    assert tool["reasoningCutoff"] == 1
 
 
 def test_empty_run_folds_to_none():

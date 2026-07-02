@@ -65,10 +65,31 @@ narration-vs-answer from segments when present (last segment = answer —
 ground truth) with the heuristic as fallback for id-less runs.
 
 **3b — segment-native rendering (frontend, verified against the running UI).**
-Render each segment as its own timeline entry; delete `foldForToolStart` /
-`unfoldTrailingAnswer` / `reasoningCutoff` bookkeeping in all three folds;
-`route.ts` stops folding entirely. Do NOT attempt blind — this changes the
-chat surface's core rendering; drive it with /run + Playwright.
+Render each segment as its own timeline entry with the last segment as the
+answer body. Do NOT attempt blind — this changes the chat surface's core
+rendering; drive it with /run + Playwright.
+
+**3b design correction (2026-07-02, after tracing all three folds + both
+loops).** The original line — "delete the fold family, `route.ts` stops
+folding entirely" — was written before confirming that **`litellm` mode emits
+no message ids at all** (`streamLiteLLM` sends bare `delta` frames), and the
+langgraph batch path emits one delta with no ids either. Deleting the fold
+would break every id-less runtime. So 3b **prefers segments when the runtime
+supplies real ids and keeps the fold as the documented fallback**, not a
+delete. Concretely:
+- The chronology problem (segments live in a separate array from `toolEvents`,
+  so a naive segment render loses narration↔tool interleaving) is solved the
+  same way reasoning already is: on `tool_start` record `segmentCutoff` = number
+  of segments captured so far, mirroring `reasoningCutoff`. The renderer then
+  interleaves segments ⊕ reasoning ⊕ tools chronologically.
+- **Last segment = answer body**; earlier segments render in the timeline as
+  narration. When no segment ids are present (litellm/langgraph/legacy rows),
+  the renderer falls back to today's `content` + folded `reasoningBlocks`.
+- The fold helpers stay (they still run for id-less streams and still produce
+  the persisted `content` for memory extraction + non-segment clients), but
+  they are no longer load-bearing for id-carrying runtimes. The parity eval
+  keeps them honest.
+This is a smaller, safer change than a delete, and it degrades cleanly.
 
 ## Verification (live-app drive, 2026-07-02)
 
@@ -96,4 +117,9 @@ to confirm Phases 1–3a end-to-end (not just via unit evals):
 - 2026-07-02 — Spec created; Phase 1 implementation started.
 - 2026-07-02 — **Phase 1 shipped**: `gateway/chat_fold.py` (fold port + `persist_final_assistant_message`), `run_detached(on_complete=)` lifecycle hook (shielded, runs on finish/error/cancel), `AgentRunRequest.assistant_message_id` + route.ts forwarding on `/agent/run/stream`. 9 fold/persistence trajectory evals in `evals/trajectories/test_chat_fold_trajectory.py` (incl. cancelled-run partial-turn persistence). P0-3 closed for the named-agent path; `/copilot/chat` orchestrator path follows in Phase 2.
 - 2026-07-02 — **Phase 3a shipped**: the translator closes/reopens text messages on real `message_id` changes (every tier now emits true segment boundaries; id-less runtimes degrade to one segment); `route.ts` forwards `messageId` on deltas + `message_start`/`message_end` frames; `chatStream.ts` captures `segments: [{id, text}]` on the message additively (renderer untouched); `chat_fold.py` records segments, persists them in `agent_state.segments`, and uses last-segment ground truth to rescue answers stranded by the fold heuristic — the reproducible case being CANCELLED runs (no RUN_FINISHED → un-fold never ran → Phase 1's cancel-persistence wrote an empty bubble). 4 new trajectory evals. Remaining (3b): segment-native rendering + delete the three folds — drive against the running UI, not blind.
+- 2026-07-02 — **Phase 3b shipped** (segment-native rendering, driven against the real UI). The renderer now PREFERS real message segments over the fold heuristic, with the fold demoted to the documented fallback for id-less runtimes (litellm/langgraph emit no message ids — deleting the fold outright, as the original spec line said, would have broken them). What changed:
+  - **Capture (all three folds):** each `tool_start` records `segmentCutoff` = segment count at its start, mirroring `reasoningCutoff`, so segments interleave with tools chronologically. When real segment ids are present, narration is NO LONGER double-folded into `reasoningBlocks` (it lives only in the segment) — `reasoningBlocks` then holds only genuine chain-of-thought. `chatStream.ts`, `route.ts`, and `chat_fold.py` all apply this conditional identically.
+  - **Renderer:** `MarkdownMessage` uses the **last segment as the answer body** and passes earlier segments to `ThinkingContainer` as `narrationSegments`; `buildTimeline` three-way-interleaves narration ⊕ reasoning ⊕ tools (each channel advances by its own cutoff). Id-less messages fall back to `content` + folded `reasoningBlocks` unchanged. The `done` reducer backfills `content` from the last segment so copy/action-bar/memory consumers still see the answer.
+  - **Round-trip:** segments persist in `agent_state.segments` (route.ts live-path, chat_fold.py authoritative, sessions.ts client cache) and are restored on poll + full DB load; the reconnect/replay reset clears `segments` (the delta reducer appends by id, so stale segments would double).
+  - **Verification (real running UI):** added `e2e/chat.spec.ts` "multi-segment turn segment-native" Playwright test — a narration→tool→answer SSE run renders the narration segment in the timeline and the last segment as the answer body, with the narration NEVER duplicated into the body. Green + screenshot-confirmed. Fixed the harness's pre-existing `gotoChat` drift (New-session modal now auto-opens; "Conversations"/subtitle selectors) and sidebar-preview strict-mode collisions on the tests adjacent to the rendering surface. Left 4 pre-existing e2e failures untouched (the send-mode control + model `<select>` were redesigned since the tests were written — out of Phase 3b scope; noted here so the drift is tracked). Python parity locked by 2 new fold trajectory evals (segment-native no-double-fold + id-less fallback shape).
 - 2026-07-02 — **Phase 2 shipped**: `orchestrator/event_translator.py` is the ONE canonical runtime-update → AG-UI mapping; all four executor paths consume it (native MAF loop, Copilot loop, Tier 2 batch text via `text_message_events`, sub-agent via `wrap_sub_agent_events`). Copilot-only behaviour (TODO_LIST interception, elicitation bridge + cleanup) moved into `TranslatorHooks` wired only on that path — the native path's tools emit those events themselves via the queue, so hooks there would double-emit. ~240 lines of duplicated mapping deleted from the executor. Side effects: Copilot gains streamed-tool-call id dedup; Tier 2 batch now speaks TEXT_MESSAGE_START/END with message ids (Phase 3 groundwork); dead `copilot_premature_end` branch removed. `/copilot/chat` now takes `assistant_message_id` as a query param (its AG-UI body model drops unknown keys) and runs the Phase-1 fold-and-persist `on_complete` — P0-3 fully closed. Parity contract locked by `evals/trajectories/test_event_translator_trajectory.py` (8 trajectories incl. identical-input cross-path parity). Remaining Phase 2 item: unified watchdog policy (still per-tier) — deferred to Phase 3 alongside message-id-native rendering.

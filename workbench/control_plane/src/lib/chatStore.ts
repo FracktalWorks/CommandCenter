@@ -36,6 +36,12 @@ export interface ToolEvent {
    *  (VS Code-style timeline) without a separate timeline structure —
    *  this field persists through the existing tool_events JSONB column. */
   reasoningCutoff?: number;
+  /** Number of message SEGMENTS captured when this tool started (Phase 3b,
+   *  segment-native rendering). Mirrors reasoningCutoff so the renderer can
+   *  interleave real assistant segments with tools chronologically. Only set
+   *  when the runtime supplied real message ids; absent for id-less streams
+   *  (litellm/langgraph), which fall back to the reasoningBlocks fold. */
+  segmentCutoff?: number;
   /** True while a delegated sub-agent is still running. */
   subAgentActive?: boolean;
   /** Name of the sub-agent being delegated to. */

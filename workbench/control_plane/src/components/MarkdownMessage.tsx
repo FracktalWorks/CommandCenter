@@ -33,6 +33,9 @@ export interface ToolEvent {
   /** Number of reasoning blocks that existed when this tool started —
    *  drives chronological interleaving in the ThinkingContainer timeline. */
   reasoningCutoff?: number;
+  /** Number of message segments that existed when this tool started (Phase 3b)
+   *  — drives segment↔tool interleaving when the runtime sent real ids. */
+  segmentCutoff?: number;
   /** Set when this tool is a call_agent delegation — the target agent name. */
   subAgentName?: string;
   /** Live streaming text from the sub-agent (appended as it streams). */
@@ -53,6 +56,11 @@ interface MarkdownMessageProps {
   isThinkingActive?: boolean;
   /** Sequential reasoning blocks — each its own timeline entry. */
   reasoningBlocks?: string[];
+  /** Real assistant-message segments (Phase 3b, message-id-native). When
+   *  present the LAST segment is the answer body and earlier segments render as
+   *  narration in the ThinkingContainer timeline. Absent for id-less runtimes
+   *  (litellm/langgraph), which fall back to `content` + folded reasoning. */
+  segments?: { id: string; text: string }[];
   /** Invoked when the user clicks an MCQ choice button (```choices block). */
   onChoice?: (choice: string) => void;
   /** Session ID for resolving relative image paths through the workspace file proxy. */
@@ -256,19 +264,40 @@ export default function MarkdownMessage({
   progressLines,
   isThinkingActive,
   reasoningBlocks,
+  segments,
   onChoice,
   sessionId,
   mdFilePath,
 }: MarkdownMessageProps) {
+  // ── Segment-native rendering (Phase 3b) ────────────────────────────────────
+  // When the runtime supplied real segment ids, the LAST segment is the answer
+  // and earlier segments are narration shown in the timeline — ground truth, no
+  // fold heuristic. Absent ids (litellm/langgraph/legacy rows) → fall back to
+  // `content` + folded reasoningBlocks exactly as before.
+  const hasSegments = !!(segments && segments.length > 0);
+  const answerBody = hasSegments
+    // Last segment is the answer; while it's still empty mid-stream (tool just
+    // opened a new segment, no text yet) fall back to `content` so nothing
+    // flickers away.
+    ? (segments![segments!.length - 1].text.trim()
+        ? segments![segments!.length - 1].text
+        : content)
+    : content;
+  // Narration segments = everything but the last, non-empty, in order.
+  const narrationSegments = hasSegments
+    ? segments!.slice(0, -1).map((s) => s.text).filter((t) => t.trim())
+    : [];
+
   const hasTools =
     (toolEvents && toolEvents.length > 0) ||
     (progressLines && progressLines.length > 0);
   const hasReasoning = !!(reasoningBlocks && reasoningBlocks.length > 0);
+  const hasNarration = narrationSegments.length > 0;
   // Show the ThinkingContainer for the ENTIRE active phase (not just until the
   // first token). The container disappears mid-stream if we gate on content===""
   // — the user sees "Thinking…" flash then nothing while text is still arriving.
-  // After completion: keep it only if there are tools or reasoning to show.
-  const showThinking = isThinkingActive || hasTools || hasReasoning;
+  // After completion: keep it only if there are tools, reasoning, or narration.
+  const showThinking = isThinkingActive || hasTools || hasReasoning || hasNarration;
 
   return (
     <div className="text-[12px] sm:text-[13px] text-foreground leading-relaxed min-w-0">
@@ -279,6 +308,7 @@ export default function MarkdownMessage({
             toolEvents={toolEvents ?? []}
             progressLines={progressLines ?? []}
             reasoningBlocks={reasoningBlocks}
+            narrationSegments={narrationSegments}
             isActive={!!isThinkingActive}
           />
         </div>
@@ -427,13 +457,13 @@ export default function MarkdownMessage({
           },
         }}
       >
-        {content}
+        {answerBody}
       </ReactMarkdown>
 
       {/* Streaming cursor — only once text is actually streaming, so it doesn't
           float with no text during a tool-only phase (the ThinkingContainer
           shows activity there instead). */}
-      {streaming && content.trim().length > 0 && (
+      {streaming && answerBody.trim().length > 0 && (
         <span className="inline-block w-[2px] h-[1em] bg-zinc-300 animate-pulse ml-0.5 align-middle rounded-full" />
       )}
     </div>

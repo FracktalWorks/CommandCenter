@@ -276,6 +276,7 @@ if _HAS_MAF:
             request_body: _AGUIRequest,
             background_tasks: BackgroundTasks,
             model: str | None = None,
+            assistant_message_id: str | None = None,
             user: UserContext = Depends(get_current_user),
         ) -> StreamingResponse:
             """MAF orchestrator: per-request agent with Mem0+Graphiti memory injection.
@@ -284,6 +285,11 @@ if _HAS_MAF:
             orchestrator is a native MAF agent, so it reads its model from
             ``default_options["model"]``; we set the resolved tier there and also
             expose it via ``_active_run_model`` so delegated specialists inherit it.
+
+            *assistant_message_id* (query param — the AG-UI ``_AGUIRequest``
+            body model drops unknown keys, so it can't ride in the body) is the
+            frontend's row id for this turn; the run-end fold-and-persist
+            (core_loop_unification Phase 1) upserts that same row.
             """
             from orchestrator.agents import (build_orchestrator_agent,
                                              enrich_instructions_with_memory)
@@ -374,6 +380,21 @@ if _HAS_MAF:
                 input_data.get("thread_id") or input_data.get("threadId") or ""
             )
 
+            # Authoritative persistence at run end (core_loop_unification
+            # Phase 1/2): fold the run's Redis event log into the same row
+            # the Next translator checkpoints. Only when the frontend sent
+            # its row id — a minted fallback here would duplicate rows
+            # against the translator's own time-based fallback id.
+            _persist_cb = None
+            if _thread_id and assistant_message_id:
+                from gateway.chat_fold import \
+                    persist_final_assistant_message  # noqa: PLC0415
+
+                async def _persist_cb() -> None:  # type: ignore[misc]
+                    await persist_final_assistant_message(
+                        _thread_id, assistant_message_id,
+                    )
+
             async def relayed_generator():
                 import json as _json  # noqa: PLC0415
 
@@ -381,7 +402,8 @@ if _HAS_MAF:
                     get_detached_task, run_detached)
                 try:
                     async for evt in run_detached(
-                        _thread_id, event_generator(), tee=True
+                        _thread_id, event_generator(), tee=True,
+                        on_complete=_persist_cb,
                     ):
                         yield f"data: {_json.dumps(evt)}\n\n"
                 except Exception:  # noqa: BLE001

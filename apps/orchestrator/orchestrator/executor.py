@@ -1227,47 +1227,17 @@ async def _run_sub_agent_streaming(
 
                 async with agent:
                     stream = agent.run(message_str, stream=True)
+                    # ONE canonical mapping, sub-agent envelope on top —
+                    # only the wrapper differs from the parent stream paths.
+                    _sub_t_state = _TranslationState(run_id)
                     async for update in stream:
-                        for content in (update.contents or []):
-                            ct = getattr(content, "type", "")
-                            if ct == "text":
-                                delta = content.text or ""
-                                if delta:
-                                    text_parts.append(delta)
-                                    await _emit_sub_event({
-                                        "type": "SUB_AGENT_TEXT_DELTA",
-                                        "agentName": agent_name,
-                                        "runId": run_id,
-                                        "delta": delta,
-                                    })
-                            elif ct == "function_call":
-                                call_id = getattr(content, "call_id", run_id)
-                                tname = getattr(content, "name", "tool")
-                                args_val = getattr(content, "arguments", None)
-                                args_str = ""
-                                if args_val is not None:
-                                    try:
-                                        args_str = json.dumps(args_val) if not isinstance(args_val, str) else args_val
-                                    except Exception:  # noqa: BLE001
-                                        args_str = str(args_val)
-                                await _emit_sub_event({
-                                    "type": "SUB_AGENT_TOOL_CALL_START",
-                                    "agentName": agent_name,
-                                    "toolCallId": call_id,
-                                    "toolCallName": tname,
-                                    "args": args_str,
-                                })
-                            elif ct == "function_result":
-                                call_id = getattr(content, "call_id", run_id)
-                                exc_val = getattr(content, "exception", None)
-                                result_val = getattr(content, "result", "") or ""
-                                await _emit_sub_event({
-                                    "type": "SUB_AGENT_TOOL_CALL_RESULT",
-                                    "agentName": agent_name,
-                                    "toolCallId": call_id,
-                                    "content": str(exc_val) if exc_val else str(result_val),
-                                    "success": exc_val is None,
-                                })
+                        for _sev in _wrap_sub_agent_events(
+                            _translate_update(update, _sub_t_state),
+                            agent_name=agent_name, run_id=run_id,
+                        ):
+                            if _sev["type"] == "SUB_AGENT_TEXT_DELTA":
+                                text_parts.append(_sev["delta"])
+                            await _emit_sub_event(_sev)
             else:
                 # MAF or unknown runtime: batch run, emit one result delta.
                 # Forward the parent's resolved tier so native MAF sub-agents
@@ -2263,68 +2233,21 @@ def _sse(payload: dict[str, Any]) -> str:
     return line
 
 
-class _FcStreamState:
-    """Per-run state for de-duplicating streamed tool-call ids.
-
-    See :func:`_native_fc_events`.  One instance per native-MAF run.
-    """
-
-    __slots__ = ("run_id", "seen", "last_id", "counter")
-
-    def __init__(self, run_id: str) -> None:
-        self.run_id = run_id
-        self.seen: set[str] = set()
-        self.last_id: str | None = None
-        self.counter = 0
-
-
-def _native_fc_events(
-    content: Any, state: "_FcStreamState"
-) -> list[dict[str, Any]]:
-    """Map one agent-framework ``function_call`` content to TOOL_CALL_* event
-    payloads, collapsing the OpenAI streaming quirk where a tool call's id is
-    sent only on its FIRST chunk — the argument-streaming chunks that follow
-    carry ``call_id=""``.
-
-    Without this, each empty-id continuation chunk minted a fresh synthetic id,
-    so one streamed tool call rendered as several rows in the consciousness
-    timeline.  Continuation chunks are now attributed to the in-flight call, so
-    one tool call → one row.  Returns 0+ event payload dicts (no ``_stream_id``;
-    the caller wraps them with ``_sse``).
-    """
-    cid = getattr(content, "call_id", None) or ""
-    targs = getattr(content, "arguments", None)
-    # Streamed args arrive in pieces and are concatenated downstream, so forward
-    # a partial fragment verbatim (never JSON-parse a fragment).
-    delta = (
-        targs if isinstance(targs, str)
-        else json.dumps(targs) if isinstance(targs, dict)
-        else str(targs or "")
-    )
-    if not cid:
-        # Continuation chunk for the in-flight call — stream its args, no new row.
-        if state.last_id is not None:
-            return (
-                [{"type": "TOOL_CALL_ARGS",
-                  "toolCallId": state.last_id, "delta": delta}]
-                if delta else []
-            )
-        # No call started yet (defensive) — mint a synthetic id.
-        state.counter += 1
-        cid = f"{state.run_id}:fc:{state.counter}"
-    # A re-sent id for an already-started call: the row exists, don't duplicate.
-    if cid in state.seen:
-        return []
-    state.seen.add(cid)
-    state.last_id = cid
-    name = getattr(content, "name", "") or "tool"
-    out: list[dict[str, Any]] = [{
-        "type": "TOOL_CALL_START",
-        "toolCallId": cid, "toolCallName": name, "args": delta,
-    }]
-    if delta:
-        out.append({"type": "TOOL_CALL_ARGS", "toolCallId": cid, "delta": delta})
-    return out
+# ── ONE event translator (core_loop_unification Phase 2) ────────────────────
+# The canonical runtime-update → AG-UI mapping lives in event_translator.py
+# and is shared by all four streaming paths (native MAF, Copilot, Tier 2
+# batch, sub-agent).  These aliases preserve the executor's historical API
+# (tests and older call sites import them from here).
+from orchestrator.event_translator import (  # noqa: E402
+    ToolCallStreamState as _FcStreamState,
+    TranslationState as _TranslationState,
+    TranslatorHooks as _TranslatorHooks,
+    close_text_message as _close_text_message,
+    function_call_events as _native_fc_events,
+    text_message_events as _text_message_events,
+    translate_update as _translate_update,
+    wrap_sub_agent_events as _wrap_sub_agent_events,
+)
 
 
 async def run_agent_stream(
@@ -2663,12 +2586,10 @@ async def run_agent_stream(
                 )
                 _nq: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
                 _nq_token = _active_run_queue.set(_nq)
-                _n_msg_id: str | None = None
-                _n_text_started = False
                 _n_emitted = False
-                # Tool-call id/dedup state (collapses OpenAI's streamed-id quirk
-                # where a call's id arrives only on its first chunk).
-                _fc_state = _FcStreamState(run_id)
+                # Canonical translation state (message lifecycle + tool-call
+                # id dedup) — shared mapping with every other stream path.
+                _t_state = _TranslationState(run_id)
                 # Idle watchdog: if the native stream yields no update for this
                 # many seconds, treat the agent as stalled and error out rather
                 # than hold the SSE open until the HTTP-level abort (~5 min).
@@ -2783,60 +2704,20 @@ async def run_agent_stream(
                             # Agent advanced (e.g. the HITL answer arrived) — no
                             # longer parked on a question.
                             _hitl_pending = False
-                            for _c in (getattr(_u, "contents", None) or []):
-                                _ct = getattr(_c, "type", None)
-                                if _ct == "text":
-                                    _d = getattr(_c, "text", "") or ""
-                                    if not _d:
-                                        continue
-                                    if not _n_text_started:
-                                        _n_text_started = True
-                                        _n_msg_id = (
-                                            getattr(_u, "message_id", None)
-                                            or str(uuid.uuid4())
-                                        )
-                                        yield _sse({
-                                            "type": "TEXT_MESSAGE_START",
-                                            "messageId": _n_msg_id,
-                                            "role": "assistant",
-                                        })
+                            for _ev in _translate_update(_u, _t_state):
+                                _et = _ev.get("type")
+                                # Watchdog bookkeeping: a new logical tool
+                                # call in flight parks the agent, so the idle
+                                # watchdog backs off (a long tool/sub-agent
+                                # isn't a stall); results re-tighten it.
+                                if _et == "TOOL_CALL_START":
+                                    _tools_open += 1
                                     _n_emitted = True
-                                    yield _sse({
-                                        "type": "TEXT_MESSAGE_CONTENT",
-                                        "messageId": _n_msg_id, "delta": _d,
-                                    })
-                                elif _ct == "text_reasoning":
-                                    _d = getattr(_c, "text", "") or ""
-                                    if _d:
-                                        _n_emitted = True
-                                        yield _sse({
-                                            "type":
-                                                "THINKING_TEXT_MESSAGE_CONTENT",
-                                            "delta": _d,
-                                        })
-                                elif _ct == "function_call":
-                                    for _ev in _native_fc_events(_c, _fc_state):
-                                        # A new logical tool call is now in
-                                        # flight — the agent will park awaiting
-                                        # it, so the idle watchdog backs off
-                                        # (a long tool/sub-agent isn't a stall).
-                                        if _ev.get("type") == "TOOL_CALL_START":
-                                            _tools_open += 1
-                                        _n_emitted = True
-                                        yield _sse(_ev)
-                                elif _ct == "function_result":
+                                elif _et == "TOOL_CALL_RESULT":
                                     _tools_open = max(0, _tools_open - 1)
-                                    _tcid = getattr(_c, "call_id", None) or ""
-                                    _exc = getattr(_c, "exception", None)
-                                    _res = getattr(_c, "result", "") or ""
-                                    yield _sse({
-                                        "type": "TOOL_CALL_RESULT",
-                                        "toolCallId": _tcid,
-                                        "content": (
-                                            str(_exc) if _exc else str(_res)
-                                        )[:2000],
-                                        "success": _exc is None,
-                                    })
+                                else:
+                                    _n_emitted = True
+                                yield _sse(_ev)
                             # Surface injected-tool events (write_artifact,
                             # manage_todo_list, …) emitted during this update.
                             while not _nq.empty():
@@ -2851,10 +2732,8 @@ async def run_agent_stream(
                         _qev = _nq.get_nowait()
                         if _qev:
                             yield _sse(_qev)
-                    if _n_text_started and _n_msg_id:
-                        yield _sse({
-                            "type": "TEXT_MESSAGE_END", "messageId": _n_msg_id,
-                        })
+                    for _ev in _close_text_message(_t_state):
+                        yield _sse(_ev)
                     if _native_idle:
                         _log.warning(
                             "executor.native_maf_stream_idle_timeout",
@@ -2885,11 +2764,8 @@ async def run_agent_stream(
                         )
                         # Close any open text message first so the UI bubble
                         # doesn't hang in "streaming" before the error lands.
-                        if _n_text_started and _n_msg_id:
-                            yield _sse({
-                                "type": "TEXT_MESSAGE_END",
-                                "messageId": _n_msg_id,
-                            })
+                        for _ev in _close_text_message(_t_state):
+                            yield _sse(_ev)
                         yield _sse({
                             "type": "RUN_ERROR", "runId": run_id,
                             "message": str(_nexc),
@@ -3078,9 +2954,150 @@ async def run_agent_stream(
                 except Exception:  # noqa: BLE001
                     pass
 
-                _msg_id: str | None = None
-                _text_started = False
+                # Canonical translation state — same mapping as every other
+                # stream path (core_loop_unification Phase 2).
+                _t15_state = _TranslationState(run_id)
                 _todo_tracker = _TodoTracker()
+
+                # ── Tier-1.5 translator hooks ─────────────────────────────
+                # The Copilot path's extras live here, NOT in divergent
+                # mapping copies: TODO_LIST interception + the blocking
+                # elicitation bridge on function_call, and elicitation
+                # cleanup on function_result.  The native path must NOT get
+                # these — its injected tools push TODO_LIST / elicitation
+                # events themselves via _active_run_queue, so hook-driven
+                # interception would double-emit.
+                def _t15_fc_extras(
+                    _tc_id: str, _tc_name: str, _tc_args: Any, _args_str: str,
+                ) -> list[dict[str, Any]]:
+                    _extra: list[dict[str, Any]] = []
+                    _emitted_todo = False
+                    # Structured todo-list tracking — two paths to the same
+                    # TODO_LIST event: manage_todo_list (primary) and the
+                    # legacy sql-on-todos fallback via _TodoTracker.
+                    if _tc_name == "manage_todo_list":
+                        _todos = _unwrap_json_param(
+                            _tc_args.get("todoList", "[]")
+                            if isinstance(_tc_args, dict) else "[]",
+                            "todoList",
+                        )
+                        if isinstance(_todos, list):
+                            _cleaned: list[dict] = []
+                            for _t in _todos:
+                                if isinstance(_t, dict):
+                                    _cleaned.append({
+                                        "id": str(_t.get("id", "")),
+                                        "title": str(_t.get("title", "")),
+                                        "status": str(
+                                            _t.get("status", "not-started")
+                                        ),
+                                    })
+                            _extra.append(
+                                {"type": "TODO_LIST", "todos": _cleaned}
+                            )
+                            _emitted_todo = True
+                    # HITL elicitation — validate before rendering, then park
+                    # a Future so the ask_questions tool blocks until the
+                    # user answers (without this the tool returns via Path B,
+                    # the LLM stops with no text, and the chat "dies").
+                    if _tc_name == "ask_questions":
+                        try:
+                            _qs = _unwrap_json_param(
+                                _tc_args.get("questions", "[]")
+                                if isinstance(_tc_args, dict) else "[]",
+                                "questions",
+                            )
+                            _valid: list[dict] = []
+                            if isinstance(_qs, list):
+                                for _qi, _q in enumerate(_qs):
+                                    if not isinstance(_q, dict):
+                                        continue
+                                    _qh = str(
+                                        _q.get("header", f"Q{_qi + 1}")
+                                    ).strip()[:50]
+                                    _qt = str(
+                                        _q.get("question", "")
+                                    ).strip()[:200]
+                                    if not _qt:
+                                        continue
+                                    _valid.append({
+                                        "header": _qh,
+                                        "question": _qt,
+                                        "multiSelect": bool(
+                                            _q.get("multiSelect", False)
+                                        ),
+                                        "allowFreeformInput": bool(
+                                            _q.get("allowFreeformInput", True)
+                                        ),
+                                        "options": (
+                                            _q.get("options")
+                                            if isinstance(
+                                                _q.get("options"), list
+                                            ) and len(_q["options"]) > 0
+                                            else None
+                                        ),
+                                    })
+                            if _valid:
+                                _req_id = uuid.uuid4().hex
+                                _active_elicitation_request_id.set(_req_id)
+                                _loop = asyncio.get_running_loop()
+                                _fut: "asyncio.Future[dict[str, Any]]" = (
+                                    _loop.create_future()
+                                )
+                                _pending_user_input[_req_id] = _fut
+                                # Map tool_call_id → elicitation so cleanup
+                                # only fires for the matching result.
+                                _elicitation_tc_ids[_req_id] = _tc_id
+                                _log.debug(
+                                    "executor.elicitation_parked",
+                                    request_id=_req_id[:12],
+                                    question_count=len(_valid),
+                                    tool_call_id=_tc_id[:12],
+                                )
+                                _extra.append({
+                                    "type": "CUSTOM",
+                                    "name": "elicitation_requested",
+                                    "value": {
+                                        "questions": _valid,
+                                        "request_id": _req_id,
+                                    },
+                                })
+                        except Exception:  # noqa: BLE001
+                            pass
+                    if not _emitted_todo and _todo_tracker.feed(
+                        _tc_name, _tc_args,
+                    ):
+                        _extra.append({
+                            "type": "TODO_LIST",
+                            "todos": _todo_tracker.snapshot(),
+                        })
+                    return _extra
+
+                def _t15_fr_cleanup(_tc_id: str) -> None:
+                    # Elicitation-bridge cleanup: only clear when this
+                    # function_result belongs to the pending ask_questions
+                    # call (matched by tool_call_id) — clearing on ANY result
+                    # raced a second tool's completion against the parked
+                    # Future.
+                    _elic_id = _active_elicitation_request_id.get(None)
+                    if not _elic_id:
+                        return
+                    _elic_tc_id = _elicitation_tc_ids.get(_elic_id)
+                    if _elic_tc_id is None or _elic_tc_id == _tc_id:
+                        _active_elicitation_request_id.set(None)
+                        _pending_user_input.pop(_elic_id, None)
+                        _elicitation_tc_ids.pop(_elic_id, None)
+                        _log.debug(
+                            "executor.elicitation_cleaned",
+                            request_id=_elic_id[:12],
+                            tool_call_id=_tc_id[:12],
+                        )
+
+                _t15_hooks = _TranslatorHooks(
+                    extra_function_call_events=_t15_fc_extras,
+                    on_function_result=_t15_fr_cleanup,
+                )
+
                 # Retry state — set to True after a stale-session recovery so
                 # the second attempt is never retried again (max 1 retry).
                 _session_retry_attempted = False
@@ -3094,7 +3111,6 @@ async def run_agent_stream(
                 async def _run_copilot_attempt(
                     _eff: str, _agent_sess: Any
                 ) -> AsyncIterator[str]:  # type: ignore[return]
-                    nonlocal _msg_id, _text_started, _todo_tracker
                     async with agent:
                         _run_opts_inner: dict[str, Any] = {}
                         if _is_byok and _byok_provider:
@@ -3113,244 +3129,15 @@ async def run_agent_stream(
                             session=_agent_sess,
                         )
                         async for _update in _stream:
-                            _upd_role = getattr(_update, "role", None)
-                            _upd_role = getattr(_upd_role, "value", _upd_role)
-                            for _c in (_update.contents or []):
-                                _ct = getattr(_c, "type", None)
-                                if _ct == "text":
-                                    _delta = _c.text or ""
-                                    if not _delta:
-                                        continue
-                                    # Tool-role text frames (progress lines,
-                                    # partial terminal output) belong in the
-                                    # thinking timeline — NOT the visible
-                                    # assistant message.
-                                    if _upd_role == "tool":
-                                        # Partial output / progress carrying a
-                                        # tool_call_id streams INTO that tool's
-                                        # row (live terminal output, VS Code
-                                        # style); anonymous frames fall back to
-                                        # the generic progress header line.
-                                        _raw_ev = _update.raw_representation
-                                        _ptc_id = ""
-                                        try:
-                                            _raw_t = str(getattr(_raw_ev, "type", ""))
-                                            if ("PARTIAL_RESULT" in _raw_t
-                                                    or "PROGRESS" in _raw_t):
-                                                _ptc_id = getattr(
-                                                    getattr(_raw_ev, "data", None),
-                                                    "tool_call_id", "",
-                                                ) or ""
-                                        except Exception:  # noqa: BLE001
-                                            pass
-                                        _pmsg = _delta
-                                        if _pmsg.startswith("[progress] "):
-                                            _pmsg = _pmsg[len("[progress] "):]
-                                        if _ptc_id:
-                                            yield _sse({"type": "TOOL_CALL_PARTIAL",
-                                                        "toolCallId": _ptc_id,
-                                                        "delta": _pmsg[:2000]})
-                                        else:
-                                            yield _sse({"type": "PROGRESS_UPDATE",
-                                                        "message": _pmsg[:200]})
-                                        continue
-                                    if not _text_started:
-                                        _text_started = True
-                                        _msg_id = _update.message_id or str(uuid.uuid4())
-                                        _log.debug(
-                                            "sse_text_start: msg_id=%s",
-                                            _msg_id[:12],
-                                        )
-                                        yield _sse({"type": "TEXT_MESSAGE_START",
-                                                    "messageId": _msg_id, "role": "assistant"})
-                                    _log.debug(
-                                        "sse_text_delta: len=%d msg_id=%s",
-                                        len(_delta), (_msg_id or "")[:12],
-                                    )
-                                    yield _sse({"type": "TEXT_MESSAGE_CONTENT",
-                                                "messageId": _msg_id, "delta": _delta})
-                                elif _ct == "text_reasoning":
-                                    _delta = _c.text or ""
-                                    if _delta:
-                                        yield _sse({"type": "THINKING_TEXT_MESSAGE_CONTENT",
-                                                    "delta": _delta})
-                                elif _ct == "function_call":
-                                    _tc_id = _c.call_id or ""
-                                    _tc_name = _c.name or ""
-                                    _tc_args = _c.arguments
-                                    # Copilot SDK may pass arguments as a
-                                    # JSON string (EXTERNAL_TOOL_REQUESTED
-                                    # events) — normalise to dict for the
-                                    # tool-name checks below.
-                                    if isinstance(_tc_args, str) and _tc_args.strip():
-                                        try:
-                                            _tc_args = json.loads(_tc_args)
-                                        except Exception:  # noqa: BLE001
-                                            pass
-                                    _args_str = (json.dumps(_tc_args) if isinstance(_tc_args, dict)
-                                                 else str(_tc_args or ""))
-                                    # ── Structured todo-list tracking ─────
-                                    # Two paths to the same TODO_LIST event:
-                                    # 1. manage_todo_list tool (direct call
-                                    #    from the agent — primary path for
-                                    #    all agent types).
-                                    # 2. sql tool on the todos table (Copilot
-                                    #    CLI legacy path — kept as fallback).
-                                    try:
-                                        _emitted = False
-                                        if _tc_name == "manage_todo_list":
-                                            _todos = _unwrap_json_param(
-                                                _tc_args.get("todoList", "[]")
-                                                if isinstance(_tc_args, dict)
-                                                else "[]",
-                                                "todoList",
-                                            )
-                                            if isinstance(_todos, list):
-                                                _cleaned: list[dict] = []
-                                                for _t in _todos:
-                                                    if isinstance(_t, dict):
-                                                        _cleaned.append({
-                                                            "id": str(_t.get("id", "")),
-                                                            "title": str(_t.get("title", "")),
-                                                            "status": str(_t.get("status", "not-started")),
-                                                        })
-                                                yield _sse({"type": "TODO_LIST",
-                                                            "todos": _cleaned})
-                                                _emitted = True
-                                        # HITL elicitation — validate before
-                                        # rendering so the ElicitationCard
-                                        # never shows broken/malformed data.
-                                        if _tc_name == "ask_questions":
-                                            try:
-                                                _qs = _unwrap_json_param(
-                                                    _tc_args.get("questions", "[]")
-                                                    if isinstance(_tc_args, dict)
-                                                    else "[]",
-                                                    "questions",
-                                                )
-                                                if isinstance(_qs, list):
-                                                    # Per-item validation
-                                                    # (mirrors ask_tools.py).
-                                                    _valid: list[dict] = []
-                                                    for _qi, _q in enumerate(_qs):
-                                                        if not isinstance(_q, dict):
-                                                            continue
-                                                        _qh = str(_q.get("header", f"Q{_qi + 1}")).strip()[:50]
-                                                        _qt = str(_q.get("question", "")).strip()[:200]
-                                                        if not _qt:
-                                                            continue
-                                                        _valid.append({
-                                                            "header": _qh,
-                                                            "question": _qt,
-                                                            "multiSelect": bool(_q.get("multiSelect", False)),
-                                                            "allowFreeformInput": bool(_q.get("allowFreeformInput", True)),
-                                                            "options": _q.get("options") if isinstance(_q.get("options"), list) and len(_q["options"]) > 0 else None,
-                                                        })
-                                                    if _valid:
-                                                        # ── Bridge to blocking HITL ──────────
-                                                        # Generate a request_id and park a
-                                                        # Future so the ask_questions tool
-                                                        # function can block until the user
-                                                        # answers.  Without this the tool
-                                                        # returns immediately via Path B, the
-                                                        # LLM stops without producing text,
-                                                        # and the chat "dies" with no output.
-                                                        import uuid as _uuid  # noqa: PLC0415
-                                                        _req_id = _uuid.uuid4().hex
-                                                        _active_elicitation_request_id.set(
-                                                            _req_id)
-                                                        _loop = asyncio.get_running_loop()
-                                                        _fut: "asyncio.Future[dict[str, Any]]" = (
-                                                            _loop.create_future())
-                                                        _pending_user_input[_req_id] = _fut
-                                                        # ── Track which tool_call_id maps to
-                                                        # this elicitation so cleanup only fires
-                                                        # for the matching function_result.
-                                                        _elicitation_tc_ids[
-                                                            _req_id] = _tc_id
-                                                        _log.debug(
-                                                            "executor.elicitation_parked",
-                                                            request_id=_req_id[:12],
-                                                            question_count=len(_valid),
-                                                            tool_call_id=_tc_id[:12],
-                                                        )
-                                                        yield _sse({
-                                                            "type": "CUSTOM",
-                                                            "name": "elicitation_requested",
-                                                            "value": {
-                                                                "questions": _valid,
-                                                                "request_id": _req_id,
-                                                            },
-                                                        })
-                                            except Exception:  # noqa: BLE001
-                                                pass
-                                        if not _emitted and _todo_tracker.feed(_tc_name, _tc_args):
-                                            yield _sse({"type": "TODO_LIST",
-                                                        "todos": _todo_tracker.snapshot()})
-                                    except Exception:  # noqa: BLE001
-                                        pass
-                                    yield _sse({"type": "TOOL_CALL_START",
-                                                "toolCallId": _tc_id,
-                                                "toolCallName": _tc_name,
-                                                "args": _args_str})
-                                    if _tc_args:
-                                        yield _sse({"type": "TOOL_CALL_ARGS",
-                                                    "toolCallId": _tc_id,
-                                                    "delta": _args_str})
-                                elif _ct == "function_result":
-                                    _tc_id = _c.call_id or ""
-                                    _tc_result = _c.result or ""
-                                    _tc_ok = not _c.exception
-                                    yield _sse({"type": "TOOL_CALL_RESULT",
-                                                "toolCallId": _tc_id,
-                                                "content": str(_tc_result)[:2000],
-                                                "success": _tc_ok})
-                                    # ── Clean up elicitation bridge ──────
-                                    # Only clear when this function_result
-                                    # belongs to a pending ask_questions
-                                    # call (matched by tool_call_id stored
-                                    # alongside the Future).  Previously
-                                    # ANY function_result would reset the
-                                    # ContextVar, causing a race where a
-                                    # second tool's completion cleared the
-                                    # bridge before ask_questions could
-                                    # park on the Future.
-                                    _elic_id = (
-                                        _active_elicitation_request_id.get(
-                                            None))
-                                    if _elic_id:
-                                        # Only clear if this result matches
-                                        # the elicitation's tool_call_id
-                                        # or if no tool_call_id was stored
-                                        # (defensive: clear anyway).
-                                        _elic_tc_id = _elicitation_tc_ids.get(
-                                            _elic_id)
-                                        if (_elic_tc_id is None
-                                                or _elic_tc_id == _tc_id):
-                                            _active_elicitation_request_id.set(
-                                                None)
-                                            _pending_user_input.pop(
-                                                _elic_id, None)
-                                            _elicitation_tc_ids.pop(
-                                                _elic_id, None)
-                                            _log.debug(
-                                                "executor.elicitation_cleaned",
-                                                request_id=_elic_id[:12],
-                                                tool_call_id=_tc_id[:12],
-                                            )
-                            # Agent intent from raw events
-                            _raw = _update.raw_representation
-                            if _raw is not None:
-                                try:
-                                    _raw_type = str(_raw.type)
-                                    if "INTENT" in _raw_type:
-                                        _intent = getattr(_raw.data, "intent", "") or ""
-                                        if _intent:
-                                            yield _sse({"type": "TOOL_CALL_START",
-                                                        "toolCallId": f"{run_id}:intent:{_intent[:20]}",
-                                                        "toolCallName": _intent})
-                                except Exception:  # noqa: BLE001
-                                    pass
+                            # ONE canonical mapping (event_translator);
+                            # Copilot extras (TODO_LIST interception,
+                            # elicitation bridge, cleanup) arrive via the
+                            # _t15_hooks defined above — not a divergent
+                            # copy of the translation.
+                            for _ev in _translate_update(
+                                _update, _t15_state, _t15_hooks,
+                            ):
+                                yield _sse(_ev)
 
                         # ── Save Copilot session ID before context exits ──
                         # The CopilotClient is closed when async with agent:
@@ -3476,8 +3263,7 @@ async def run_agent_stream(
                                     history_turns=len(_hist),
                                 )
                         # Reset streaming state for a clean second attempt.
-                        _msg_id = None
-                        _text_started = False
+                        _t15_state = _TranslationState(run_id)
                         _todo_tracker = _TodoTracker()
                         # continue → next iteration of retry loop
 
@@ -3493,22 +3279,10 @@ async def run_agent_stream(
                 # the model likely stopped mid-thought (token limit reached,
                 # content filter, provider error).  Log a warning so
                 # operators can diagnose and tune COPILOT_MAX_OUTPUT_TOKENS.
-                if _text_started and not _msg_id:
-                    _log.warning(
-                        "executor.copilot_premature_end",
-                        agent=agent_name,
-                        run_id=run_id,
-                        hint=(
-                            "Model emitted text but stream ended before "
-                            "completion.  Try increasing "
-                            "COPILOT_MAX_OUTPUT_TOKENS (current default "
-                            "16000) or check provider logs for content "
-                            "filter / rate-limit events."
-                        ),
-                    )
-                if _msg_id and _text_started:
-                    yield _sse({"type": "TEXT_MESSAGE_END", "messageId": _msg_id})
-                elif not _text_started:
+                _t15_had_text = _t15_state.text_started
+                for _ev in _close_text_message(_t15_state):
+                    yield _sse(_ev)
+                if not _t15_had_text:
                     # Stream ended without any assistant text — surface as
                     # a warning so the frontend doesn't show an empty bubble.
                     _log.warning(
@@ -3860,32 +3634,12 @@ async def run_agent_stream(
                         pass
 
             # Emit the final text as TOKEN-STREAMED TEXT_MESSAGE_CONTENT deltas
-            # (word-by-word so the UI renders progressively instead of all at once).
-            words = text.split(" ")
-            msg_id = str(uuid.uuid4())
-            yield _sse({
-                "type": "TEXT_MESSAGE_START",
-                "messageId": msg_id,
-                "role": "assistant",
-            })
-            chunk: list[str] = []
-            for word in words:
-                chunk.append(word)
-                if len(chunk) >= 3:
-                    yield _sse({
-                        "type": "TEXT_MESSAGE_CONTENT",
-                        "messageId": msg_id,
-                        "delta": " ".join(chunk) + " ",
-                    })
-                    chunk = []
+            # via the shared translator, so even the batch tier speaks the
+            # message-id-native START/CONTENT/END protocol.
+            for _t2_ev in _text_message_events(text):
+                yield _sse(_t2_ev)
+                if _t2_ev.get("type") == "TEXT_MESSAGE_CONTENT":
                     await asyncio.sleep(0)  # yield event loop so SSE flushes
-            if chunk:
-                yield _sse({
-                    "type": "TEXT_MESSAGE_CONTENT",
-                    "messageId": msg_id,
-                    "delta": " ".join(chunk),
-                })
-            yield _sse({"type": "TEXT_MESSAGE_END", "messageId": msg_id})
             # RUN_FINISHED must be emitted INSIDE the try block — the finally
             # below resets the relay contextvar and marks the thread inactive,
             # so a later yield would never reach Redis (reconnecting clients

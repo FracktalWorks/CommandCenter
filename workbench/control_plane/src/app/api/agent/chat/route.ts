@@ -696,8 +696,15 @@ export async function POST(req: NextRequest): Promise<Response> {
       // The orchestrator is a native MAF agent; forward the selected LiteLLM
       // tier as a query param so it (and any specialist it delegates to) runs on
       // the chosen model instead of the build-time tier-balanced default.
-      const copilotUrl = model
-        ? `${GATEWAY_URL}/copilot/chat?model=${encodeURIComponent(model)}`
+      // assistant_message_id rides as a query param too (the AG-UI body model
+      // drops unknown keys) so the gateway's run-end fold-and-persist (P0-3)
+      // writes the same row this translator checkpoints.
+      const copilotParams = new URLSearchParams();
+      if (model) copilotParams.set("model", model);
+      if (assistantMessageId) copilotParams.set("assistant_message_id", assistantMessageId);
+      const copilotQs = copilotParams.toString();
+      const copilotUrl = copilotQs
+        ? `${GATEWAY_URL}/copilot/chat?${copilotQs}`
         : `${GATEWAY_URL}/copilot/chat`;
       gatewayRes = await fetch(copilotUrl, {
         method: "POST",

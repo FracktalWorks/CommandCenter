@@ -314,6 +314,11 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
         # Reasoning blocks already streamed as deltas — used to skip the
         # duplicate full-content ASSISTANT_REASONING event at block end.
         _streamed_reasoning_ids: set[str] = set()
+        # Message ids whose text already streamed as deltas — the final
+        # ASSISTANT_MESSAGE dedup is PER MESSAGE (a turn carries several
+        # assistant messages: narration → tool → final answer), mirroring
+        # _streamed_reasoning_ids for reasoning blocks.
+        _streamed_message_ids: set[str] = set()
 
         # Accumulated assistant text from deltas — used to detect and skip
         # the duplicate full-content ASSISTANT_MESSAGE event at turn end.
@@ -343,6 +348,8 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                 if t == SessionEventType.ASSISTANT_MESSAGE_DELTA:
                     if d.delta_content:
                         _accumulated_text += (d.delta_content or "")
+                        if getattr(d, "message_id", None):
+                            _streamed_message_ids.add(str(d.message_id))
                         queue.put_nowait(AgentResponseUpdate(
                             role="assistant",
                             contents=[Content.from_text(d.delta_content)],
@@ -511,15 +518,28 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
 
                 elif t == SessionEventType.ASSISTANT_MESSAGE:
                     content = getattr(d, "content", "") or ""
-                    # In streaming mode, ASSISTANT_MESSAGE is always a
-                    # duplicate of the deltas already streamed above.
-                    # Skip it unconditionally when deltas were seen.
-                    # When no deltas fired (non-streaming fallback),
-                    # emit the full message as the sole content source.
-                    # Set _accumulated_text so a second ASSISTANT_MESSAGE
-                    # for the same turn is also blocked.
-                    if content and not _accumulated_text:
-                        _accumulated_text = content
+                    _mid = str(getattr(d, "message_id", "") or "")
+                    # ASSISTANT_MESSAGE duplicates deltas ONLY for the message
+                    # id that actually streamed — dedup must be PER MESSAGE,
+                    # not per turn.  The old turn-global guard
+                    # (`not _accumulated_text`) dropped any LATER full message
+                    # whose deltas never fired (common for the post-tool final
+                    # answer): the visible output then held only the pre-tool
+                    # narration, and the real final text survived nowhere but
+                    # the folded thinking timeline — "the answer got wrapped
+                    # inside the consciousness stream".
+                    if _mid:
+                        _already_streamed = _mid in _streamed_message_ids
+                    else:
+                        # No message id — fall back to exact-duplicate
+                        # detection against the turn's accumulated deltas.
+                        _already_streamed = bool(
+                            content and content in _accumulated_text
+                        )
+                    if content and not _already_streamed:
+                        _accumulated_text += content
+                        if _mid:
+                            _streamed_message_ids.add(_mid)
                         queue.put_nowait(AgentResponseUpdate(
                             role="assistant",
                             contents=[Content.from_text(content)],

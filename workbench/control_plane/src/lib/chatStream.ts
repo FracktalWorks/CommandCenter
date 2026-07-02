@@ -165,8 +165,11 @@ export function applyStreamEvent(
     case "delta": {
       const deltaText = String(evt.content ?? "");
       // New visible answer text → any earlier narration fold was genuine
-      // narration, not the answer.  Drop the un-fold candidate.
-      fold.foldedAnswerIdx = -1;
+      // narration, not the answer.  Drop the un-fold candidate.  Only REAL
+      // text counts: models emit stray whitespace/newline deltas around tool
+      // boundaries, and letting those reset the cursor left the actual answer
+      // stranded in the folded thinking timeline at run end.
+      if (deltaText.trim()) fold.foldedAnswerIdx = -1;
       return {
         ...m,
         content: m.content + deltaText,

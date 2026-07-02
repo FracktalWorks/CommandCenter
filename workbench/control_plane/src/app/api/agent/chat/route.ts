@@ -218,7 +218,10 @@ async function translateAndPersistStream(
           const delta = String(ev.delta ?? "");
           assistantContent += delta;
           // New visible answer text → any earlier fold was genuine narration.
-          foldedAnswerIdx = -1;
+          // Only REAL text counts (mirror of chatStream.ts): stray whitespace
+          // deltas around tool boundaries must not cancel the trailing un-fold,
+          // or the persisted answer ends up inside the reasoning timeline.
+          if (delta.trim()) foldedAnswerIdx = -1;
           out = { type: "delta", content: delta };
         } else if (t === "REASONING_MESSAGE_CONTENT" || t === "THINKING_TEXT_MESSAGE_CONTENT") {
           const chunk = String(ev.delta ?? "");

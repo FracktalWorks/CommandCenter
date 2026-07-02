@@ -417,8 +417,11 @@ export function useAgentChat({
             }
         }
 
-        // Ensure streaming flag is cleared even if "done" was missing.
-        upd((m) => ({ ...m, streaming: false, isThinkingActive: false }));
+        // Ensure streaming flag is cleared even if "done" was missing — via the
+        // shared done reducer so the trailing-answer un-fold still runs (a
+        // stream that ends without a done frame otherwise strands the final
+        // answer inside the folded thinking timeline).
+        upd((m) => applyStreamEvent(m, { type: "done" }, fold));
       } catch (err) {
         // Browser-disconnect errors: the user refreshed, navigated away, or
         // the network dropped.  Don't surface these as agent errors — the

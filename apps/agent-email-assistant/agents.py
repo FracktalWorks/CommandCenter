@@ -23,6 +23,14 @@ import httpx
 
 from acb_common import get_logger, get_settings
 
+try:
+    from acb_skills.tool_annotations import annotate as _annotate_risk
+except ImportError:  # older platform without the annotations registry
+    def _annotate_risk(**_hints):  # type: ignore[misc]
+        def _wrap(fn):
+            return fn
+        return _wrap
+
 _log = get_logger("agent.email_assistant")
 
 _INSTRUCTIONS_FILE = Path(__file__).parent / "instructions.md"
@@ -1055,6 +1063,7 @@ def _attachment_refs(attachments: list[str] | None) -> list[dict[str, Any]]:
     return refs
 
 
+@_annotate_risk(destructive=True, open_world=True)
 async def send_email(
     account_id: str,
     to: list[str],
@@ -1096,8 +1105,9 @@ async def send_email(
     if refs:
         payload["artifacts"] = refs
     # Confirm-before-send: park on a HITL card so the user approves the actual
-    # send (outward-facing + irreversible). Degrades to send when there's no
-    # interactive stream to deliver the card (automated callers).
+    # send (outward-facing + irreversible). Fails CLOSED when there's no
+    # interactive stream to deliver the card (HH-2) — automated callers get
+    # "Send cancelled" instead of a silent send.
     from acb_skills.ask_tools import request_confirmation  # noqa: PLC0415
     _cc_note = f", cc {', '.join(cc)}" if cc else ""
     if not await request_confirmation(
@@ -1111,6 +1121,7 @@ async def send_email(
     return f"Sent email to {', '.join(to)}{note} (id={res.get('id', '')})."
 
 
+@_annotate_risk(destructive=True, open_world=True)
 async def send_reply(
     account_id: str,
     email_id: str,
@@ -1201,6 +1212,7 @@ async def import_artifact(
     )
 
 
+@_annotate_risk(destructive=True, open_world=True)
 async def send_draft(account_id: str, draft_id: str) -> str:
     """Send an existing draft natively (Drafts → Sent, no duplicate). Shows a
     confirmation card before sending."""

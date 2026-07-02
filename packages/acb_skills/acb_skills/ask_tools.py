@@ -314,6 +314,7 @@ async def ask_questions(questions: str) -> str:
 
 async def request_confirmation(
     title: str, detail: str = "", context: str = "",
+    non_interactive_default: str = "deny",
 ) -> bool:
     """Emit a HITL confirmation card and BLOCK until the user approves/rejects.
 
@@ -327,11 +328,17 @@ async def request_confirmation(
         detail: one-line summary, e.g. ``"To a@b.com · Subject: Hi"``.
         context: longer preformatted body shown in a scrollable block
             (e.g. the email body the user is about to send).
+        non_interactive_default: what happens when there is NO channel to
+            deliver the card (a non-interactive/automated run).  The default
+            ``"deny"`` FAILS CLOSED — destructive actions never auto-approve
+            without a human (HH-2, OWASP LLM06 excessive agency).  Pass
+            ``"approve"`` ONLY for reversible actions where automation must
+            proceed unattended.
 
     Returns:
         ``True`` if the user approved, ``False`` if they rejected or did not
-        respond.  When there is no active stream to deliver the card (a
-        non-interactive run), returns ``True`` so automated callers proceed.
+        respond.  When no delivery channel exists, returns ``True`` only if
+        ``non_interactive_default="approve"`` was explicitly passed.
     """
     _title = str(title or "Confirm action").strip()[:120]
     _detail = str(detail or "").strip()[:500]
@@ -399,5 +406,6 @@ async def request_confirmation(
     except Exception:  # noqa: BLE001
         pass
 
-    # No delivery channel (non-interactive run) — don't block automation.
-    return True
+    # No delivery channel (non-interactive run) — fail CLOSED unless the
+    # caller explicitly opted a reversible action into auto-approval.
+    return str(non_interactive_default).strip().lower() == "approve"

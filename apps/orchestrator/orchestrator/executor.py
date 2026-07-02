@@ -418,6 +418,14 @@ def _build_injected_tools_addendum(*, is_sub_agent: bool = False) -> str:
     """
     registry_block = _build_registry_block()
 
+    # Byte-stable risk-annotation block (HH-2) — the registry is static, so
+    # this keeps the system-prompt prefix cache-friendly.
+    try:
+        from acb_skills.tool_annotations import risk_summary_block  # noqa: PLC0415
+        risk_block = risk_summary_block()
+    except ImportError:
+        risk_block = ""
+
     # ── Compact version for sub-agents ──────────────────────────────────────
     if is_sub_agent:
         return f"""
@@ -435,6 +443,8 @@ install_dependency(packages) — install Python package(s) into the agent venv a
 save_note(path,fact), recall_notes(path,query?) — repo-scoped working memory
 query_history(sql) — SELECT-only query against chat history DB
 github_search(q,scope?,max?), github_repo_search(repo,q?) — code search
+
+{risk_block}
 
 {registry_block}
 ---"""
@@ -506,6 +516,11 @@ Maintain **`agent-data/NOTES.md`** as your cross-session working memory.
 - After each significant discovery, decision, or milestone: append a dated bullet (e.g. `- 2026-06-16: Closed ABC Corp deal at ₹50L`).
 - Keep entries concise — one line per fact. This file survives context compaction and session resets.
 
+{risk_block}
+Tools marked DESTRUCTIVE are irreversible or outward-facing: never call one
+without an explicit user instruction, and let its built-in confirmation card
+do the confirming (do not also double-confirm in prose).
+
 ### Self-improvement & committing
 To persist changes to your own repo: `git add -A`, then `git commit -m "feat: ..."`, then print `COMMIT_SHA: <git rev-parse HEAD>`. Never amend; one commit per task.
 - **By default, do NOT push** — direct pushes are blocked and the commit queues for human approval in the Control Plane inbox.
@@ -541,6 +556,48 @@ def _build_registry_block() -> str:
         if agent_lines
         else "Registered agents: check with the orchestrator if unsure."
     )
+
+
+def _tool_name(tool: Any) -> str:
+    """Best-effort name of a tool in any of the shapes agents carry them
+    (plain callables, MAF AIFunction wrappers, dict specs)."""
+    name = getattr(tool, "__name__", None) or getattr(tool, "name", None)
+    if not name and isinstance(tool, dict):
+        name = (tool.get("function") or {}).get("name") or tool.get("name")
+    return str(name or "")
+
+
+def _apply_own_tool_scope(agents: list[Any], own_scope: list[str] | None) -> None:
+    """Filter an agent's OWN (repo-baked) tools to ``config.json: own_tool_scope``.
+
+    ``tool_scope`` governs which PLATFORM tools get injected; this is its
+    counterpart for tools the agent ships itself (HH-5).  A large baked tool
+    surface (email-assistant carries ~60) degrades accuracy exactly like an
+    over-injected one, and previously could not be narrowed per deployment.
+
+    Must run BEFORE ``_inject_agent_tools`` so platform-injected tools are
+    never subject to the agent's own scope.  With no matches the full set is
+    kept (fail open + warning), mirroring ``tool_scope`` semantics.
+    """
+    if not own_scope:
+        return
+    scope_set = set(own_scope)
+    for agent in agents:
+        for attr in ("tools", "_tools"):
+            lst = getattr(agent, attr, None)
+            if not isinstance(lst, list) or not lst:
+                continue
+            kept = [t for t in lst if _tool_name(t) in scope_set]
+            if kept:
+                lst[:] = kept
+            else:
+                _log.warning(
+                    "executor.own_tool_scope_no_match",
+                    agent=getattr(agent, "name", type(agent).__name__),
+                    attr=attr,
+                    requested=own_scope,
+                    available=[_tool_name(t) for t in lst],
+                )
 
 
 def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_scope: list[str] | None = None) -> None:
@@ -1033,6 +1090,11 @@ async def _run_sub_agent_streaming(
                 loaded.config.get("tool_scope") or None
                 if hasattr(loaded, "config")
                 else None
+            )
+            _apply_own_tool_scope(
+                agents,
+                loaded.config.get("own_tool_scope") or None
+                if hasattr(loaded, "config") else None,
             )
             _inject_agent_tools(
                 agents,
@@ -1974,6 +2036,9 @@ async def run_agent(
             agents = loaded.build_agents()
             # Honour .github/agents/<name>.agent.md (instructions override).
             _apply_agent_md_overrides(agents, loaded.agent_dir, agent_name)
+            _apply_own_tool_scope(
+                agents, loaded.config.get("own_tool_scope") or None,
+            )
             _inject_agent_tools(
                 agents,
                 tool_scope=loaded.config.get("tool_scope") or None,
@@ -2372,6 +2437,9 @@ async def run_agent_stream(
             # the platform-tools addendum appends on top of the authored body.
             _agent_md_spec = _apply_agent_md_overrides(
                 agents, loaded.agent_dir, agent_name,
+            )
+            _apply_own_tool_scope(
+                agents, loaded.config.get("own_tool_scope") or None,
             )
             _inject_agent_tools(
                 agents,

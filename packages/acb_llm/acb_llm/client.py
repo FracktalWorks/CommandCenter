@@ -336,9 +336,113 @@ def ensure_model_registered(model: str) -> str | None:
     return None  # unknown prefix — caller should warn
 
 
+# ── Telemetry (HH-3) ───────────────────────────────────────────────────────
+
+_telemetry_initialised = False
+
+
+def _init_telemetry() -> None:
+    """Register LiteLLM's OpenTelemetry callback when an OTLP endpoint exists.
+
+    Gated on ``OTEL_EXPORTER_OTLP_ENDPOINT`` so nothing is exported (or even
+    imported) until an actual trace backend is configured — the reason MAF's
+    own instrumentation had to be disabled was exporting into the void.
+    """
+    global _telemetry_initialised
+    if _telemetry_initialised:
+        return
+    _telemetry_initialised = True
+
+    if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        return
+    try:
+        import litellm  # noqa: PLC0415
+
+        if "otel" not in (litellm.callbacks or []):
+            litellm.callbacks = [*(litellm.callbacks or []), "otel"]
+        _log.info("acb_llm.otel_enabled")
+    except Exception as exc:  # noqa: BLE001 — telemetry must never block calls
+        _log.warning("acb_llm.otel_init_failed", error=str(exc))
+
+
+def _usage_stats(response: Any) -> dict[str, int]:
+    """Extract token + cache counters from a LiteLLM response, best-effort.
+
+    Cache counters are the groundwork for the prompt-caching rollout
+    (specs/llm_caching_memory.md Phase 1): once explicit breakpoints ship,
+    ``cache_read_tokens`` vs ``prompt_tokens`` is the hit-rate signal.
+    """
+    stats: dict[str, int] = {}
+    try:
+        usage = response.get("usage") if hasattr(response, "get") else None
+        if not usage:
+            return stats
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            val = usage.get(key) if hasattr(usage, "get") else getattr(usage, key, None)
+            if isinstance(val, int):
+                stats[key] = val
+        # Provider cache counters (Anthropic-style top-level and OpenAI-style
+        # nested prompt_tokens_details.cached_tokens — LiteLLM passes both).
+        for key in ("cache_creation_input_tokens", "cache_read_input_tokens"):
+            val = usage.get(key) if hasattr(usage, "get") else getattr(usage, key, None)
+            if isinstance(val, int):
+                stats[key] = val
+        details = (
+            usage.get("prompt_tokens_details") if hasattr(usage, "get")
+            else getattr(usage, "prompt_tokens_details", None)
+        )
+        if details is not None:
+            cached = (
+                details.get("cached_tokens") if hasattr(details, "get")
+                else getattr(details, "cached_tokens", None)
+            )
+            if isinstance(cached, int):
+                stats["cached_tokens"] = cached
+    except Exception:  # noqa: BLE001
+        pass
+    return stats
+
+
+def _emit_usage(model: str, tier: str, response: Any) -> None:
+    """Log per-call token/cache usage; optionally persist to audit_event.
+
+    Always emits a structured log line (the cost/cache dashboards read these).
+    Set ``LLM_USAGE_AUDIT=1`` to also append an ``audit_event`` row per call.
+    Never raises.
+    """
+    stats = _usage_stats(response)
+    if not stats:
+        return
+    _log.info("acb_llm.usage", model=model, tier=tier, **stats)
+    if os.environ.get("LLM_USAGE_AUDIT", "0") != "1":
+        return
+    try:
+        from acb_audit import AuditEvent, record  # noqa: PLC0415
+
+        def _persist() -> None:
+            record(AuditEvent(
+                actor="system:acb_llm",
+                action="llm_completion",
+                target=f"model:{model}",
+                payload={"tier": tier, **stats},
+            ))
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _persist()
+        else:
+            # record() opens a sync DB session — keep it off the event loop.
+            task = loop.run_in_executor(None, _persist)
+            task.add_done_callback(lambda t: t.exception())
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # Initialise from config at import time (best-effort; hardcoded
 # defaults above are the fallback if config files are absent).
 _init_tier_models()
+_init_telemetry()
 
 
 async def complete(
@@ -382,6 +486,7 @@ async def complete(
                     f"Response: {dict(response)}"
                 )
                 continue  # retry
+            _emit_usage(model, tier.value, response)
             content = choices[0]["message"]["content"]
             return content or ""  # type: ignore[no-any-return,index]
         except Exception as exc:
@@ -436,6 +541,7 @@ async def complete_with_tools(
                 )
                 continue
 
+            _emit_usage(model, tier.value, response)
             msg = choices[0]["message"]
 
             # Normalise to a plain serialisable dict — LiteLLM may return

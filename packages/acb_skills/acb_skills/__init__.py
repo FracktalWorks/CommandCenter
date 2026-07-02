@@ -16,6 +16,13 @@ from acb_skills.integrations import (
     build_integrations,
     list_registered,
 )
+from acb_skills.tool_annotations import (
+    TOOL_ANNOTATIONS,
+    annotate,
+    get_annotations,
+    is_destructive,
+    risk_summary_block,
+)
 from acb_skills.agent_md import AgentMd, find_agent_md, load_agent_md, parse_agent_md
 from acb_skills.loader import AgentLoadError, LoadedAgent, load_agent
 from acb_skills.registry import Skill, SkillFrontmatter, load_skill, load_skills
@@ -54,6 +61,12 @@ __all__ = [
     "manage_todo_list",
     # HITL elicitation tool (auto-injected)
     "ask_questions",
+    # Tool risk annotations (HH-2)
+    "TOOL_ANNOTATIONS",
+    "annotate",
+    "get_annotations",
+    "is_destructive",
+    "risk_summary_block",
     # Code error-checking tool (auto-injected)
     "get_errors",
     # Repo-scoped note tools (auto-injected)

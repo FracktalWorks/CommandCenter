@@ -108,10 +108,11 @@ async function persistAssistantMessage(
   if (!content.trim() && toolEvents.length === 0 && reasoningBlocks.length === 0 && todos.length === 0 && customEvents.length === 0) return;
   try {
     const payload = [{
-      // Use the frontend-supplied message ID so the row correlates with the
-      // message the browser renders (enables refresh recovery).  Fall back to
-      // a per-thread id only when the frontend didn't supply one.
-      id: messageId || `assistant-${threadId}`,
+      // The caller always supplies a message ID (frontend-provided, or a
+      // per-stream fallback minted in translateAndPersistStream).  The old
+      // shared `assistant-${threadId}` fallback upserted every assistant turn
+      // of the thread onto ONE row, silently overwriting prior turns.
+      id: messageId || `assistant-${threadId}-${Date.now().toString(36)}`,
       role: "assistant",
       content,
       timestamp: Date.now(),
@@ -155,6 +156,11 @@ async function translateAndPersistStream(
   threadId: string,
   assistantMessageId?: string,
 ): Promise<string> {
+  // Stable per-STREAM persistence id: when the frontend didn't supply one,
+  // mint it once here — per-call minting would write a new row on every 3s
+  // checkpoint, and the old per-thread constant collapsed all turns into one.
+  const persistId =
+    assistantMessageId || `assistant-${threadId}-${Date.now().toString(36)}`;
   const reader = agUiBody.getReader();
   const decoder = new TextDecoder();
   const toolNames: Record<string, string> = {};
@@ -292,7 +298,10 @@ async function translateAndPersistStream(
             id, name,
             args: parseToolArgs(toolArgs[id]),
             result,
-            status: "done",
+            // Persist the REAL outcome — hardcoding "done" made failed tools
+            // render as succeeded after a reload (the forwarded live event
+            // below already honoured ev.success).
+            status: ev.success !== false ? "done" : "error",
             reasoningCutoff: toolCutoffs[id] ?? 0,
             startedAt: toolStarts[id],
             endedAt: Date.now(),
@@ -357,7 +366,7 @@ async function translateAndPersistStream(
         const now = Date.now();
         if ((assistantContent.trim() || reasoningBlocks.length > 0 || latestTodos.length > 0 || customEvents.length > 0) && now - lastPersistTime > 3000) {
           lastPersistTime = now;
-          persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, assistantMessageId, latestTodos, customEvents).catch(() => {});
+          persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, persistId, latestTodos, customEvents).catch(() => {});
         }
       }
     }
@@ -367,7 +376,7 @@ async function translateAndPersistStream(
 
   // Final persist — ensure the complete message is saved with all stream metadata.
   if (assistantContent.trim() || toolEvents.length > 0 || reasoningBlocks.length > 0 || latestTodos.length > 0 || customEvents.length > 0) {
-    await persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, assistantMessageId, latestTodos, customEvents).catch(() => {});
+    await persistAssistantMessage(threadId, assistantContent, toolEvents, reasoningBlocks, progressLines, persistId, latestTodos, customEvents).catch(() => {});
   }
 
   if (clientConnected) {

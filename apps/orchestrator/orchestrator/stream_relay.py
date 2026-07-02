@@ -104,6 +104,13 @@ async def push_event(thread_id: str, event: dict[str, Any]) -> str:
         )
         # Refresh TTL on every write so an active stream doesn't expire.
         await r.expire(_stream_key(thread_id), STREAM_TTL_SECONDS)
+        # Refresh the ACTIVE flag too: it is set once with ex=STREAM_TTL and,
+        # without this, lapses mid-run on any run longer than the TTL (easy
+        # with tool/HITL budgets) — subscribers then terminate and reconnect
+        # reports a still-running agent as finished (synthetic RUN_FINISHED).
+        # Only refresh when the flag exists (xx=True): a cancelled/finished
+        # run must not be resurrected by a late in-flight push.
+        await r.set(_active_key(thread_id), "1", ex=STREAM_TTL_SECONDS, xx=True)
         return eid
     finally:
         pass  # shared pooled client — never closed per-call

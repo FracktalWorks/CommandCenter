@@ -4442,6 +4442,18 @@ def _store_session_id(thread_id: str, service_session_id: str) -> None:
         from acb_graph import get_session as _db_session  # noqa: PLC0415
         from sqlalchemy import text  # noqa: PLC0415
 
+        # Attribute the row to the ACTING user (the memory ContextVar is set
+        # from the request's user_email at run start).  The old hardcoded
+        # "system" owner made _thread_owner_ok fail for the real user until
+        # the frontend upsert overwrote it — a race where the owner could not
+        # cancel their own run (403).
+        try:
+            from acb_skills.memory_tools import \
+                _get_memory_user_id  # noqa: PLC0415
+            _uid = _get_memory_user_id() or "system"
+        except Exception:  # noqa: BLE001
+            _uid = "system"
+
         def _write():
             with _db_session() as s:
                 s.execute(
@@ -4451,18 +4463,29 @@ def _store_session_id(thread_id: str, service_session_id: str) -> None:
                         "VALUES (:id, :uid, :agent, :sid) "
                         "ON CONFLICT (id) DO UPDATE SET "
                         "service_session_id = EXCLUDED.service_session_id, "
+                        # Claim system-owned rows for the real user, but never
+                        # downgrade a real owner back to 'system'.
+                        "user_id = CASE WHEN chat_session.user_id = 'system' "
+                        "THEN EXCLUDED.user_id ELSE chat_session.user_id END, "
                         "updated_at = now()"
                     ),
                     {
                         "id": thread_id,
-                        "uid": "system",
+                        "uid": _uid,
                         "agent": "unknown",
                         "sid": service_session_id,
                     },
                 )
                 s.commit()
         import asyncio as _aio
-        _aio.get_event_loop().run_in_executor(None, _write)
+
+        def _log_write_failure(fut) -> None:
+            exc = fut.exception()
+            if exc is not None:
+                _log.warning("executor.session_store_write_failed",
+                             thread_id=thread_id[:12], error=str(exc)[:200])
+        _fut = _aio.get_running_loop().run_in_executor(None, _write)
+        _fut.add_done_callback(_log_write_failure)
     except Exception:  # noqa: BLE001
         pass
 

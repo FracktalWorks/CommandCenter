@@ -1236,17 +1236,26 @@ async def reconnect_agent_stream(
 
     Falls back to an empty ``"done"`` event if the stream has expired.
     """
+    import asyncio as _asyncio
     import json as _json
 
     from orchestrator.stream_relay import is_active  # noqa: PLC0415
     from orchestrator.stream_relay import (replay_events, stream_exists,
                                            subscribe_events)
 
+    # Ownership guard (same policy as cancel): the replayed stream contains the
+    # whole conversation — text, tool args, reasoning — so it must never be
+    # readable across users. Block only when the session exists AND belongs to
+    # a different user; ephemeral/legacy threads (no row) stay reachable.
+    actor = getattr(user, "email", None) or "default"
+    if not await _asyncio.to_thread(_thread_owner_ok, thread_id, actor):
+        raise HTTPException(status_code=403, detail="Not your conversation")
+
     _log.info(
         "agent.reconnect_request",
         thread_id=thread_id[:12],
         since=since[:20],
-        actor=(getattr(user, "email", None) or "anonymous")[:20],
+        actor=actor[:20],
     )
 
     async def _event_generator():

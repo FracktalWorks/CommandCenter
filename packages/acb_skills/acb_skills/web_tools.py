@@ -1,17 +1,17 @@
-"""Zero-credential web tools — auto-injected into every agent.
+"""Web tools — auto-injected into every agent.
 
-These tools require no API keys or integrations configuration.  They are
-injected alongside the agent-delegation tools (call_agent, etc.) by
-``orchestrator.executor._inject_agent_tools`` and are available to both
-MAF agents and GitHub Copilot SDK agents automatically.
+Injected alongside the agent-delegation tools (call_agent, etc.) by
+``orchestrator.executor._inject_agent_tools`` and available to both
+MAF agents and GitHub Copilot SDK agents identically.
 
 Tools
 -----
 web_search(query, max_results=5) -> str
-    Search the web via DuckDuckGo.  No API key required.
+    Provider chain, best-first: SerpAPI (Google results, when
+    SERPAPI_API_KEY / settings.serpapi_api_key is configured) → the free
+    ddgs engines (DuckDuckGo/Bing/Brave/…, zero-credential rotation).
     Returns up to *max_results* results as a plain-text block with title,
-    URL, and a snippet for each hit.  Falls back to a clear error message
-    if the duckduckgo-search package is not installed.
+    URL, and a snippet for each hit; failures name each provider tried.
 
 fetch_page(url, max_chars=8000) -> str
     Fetch any public web page and return it as clean, LLM-readable plain
@@ -25,11 +25,13 @@ import asyncio
 
 
 async def web_search(query: str, max_results: int = 5) -> str:
-    """Search the web using DuckDuckGo and return the top results.
+    """Search the web and return the top results.
 
-    Requires no API key.  Uses the ``duckduckgo-search`` Python library which
-    queries DuckDuckGo directly.  Each result includes the page title, URL,
-    and a short text snippet.
+    Provider chain, best-first: **SerpAPI** (Google results — used whenever a
+    SERPAPI_API_KEY is configured) → the free **ddgs** engines (DuckDuckGo,
+    Bing, Brave, … with backend="auto" rotation) when SerpAPI is unavailable
+    or unconfigured.  Each result includes the page title, URL, and a short
+    text snippet.
 
     Use this when you need current information, facts about a company or
     person, recent news, or anything that may not be in your training data.
@@ -46,6 +48,15 @@ async def web_search(query: str, max_results: int = 5) -> str:
         info = await web_search("Fracktal Works 3D printing latest products")
         news = await web_search("GeM portal tender updates June 2025", max_results=3)
     """
+    max_results = max(1, min(10, int(max_results)))
+
+    # ── 1. SerpAPI first (Google — the best result quality) ─────────────
+    serp = await _serpapi_search(query, max_results)
+    if isinstance(serp, list) and serp:
+        return _format_results(query, serp)
+    serp_error = serp if isinstance(serp, str) else ""  # "" = no key configured
+
+    # ── 2. Free engines (ddgs rotation) ─────────────────────────────────
     try:
         from ddgs import DDGS
     except ImportError:
@@ -53,11 +64,11 @@ async def web_search(query: str, max_results: int = 5) -> str:
             from duckduckgo_search import DDGS  # legacy name fallback
         except ImportError:
             return (
-                "web_search is unavailable: the 'ddgs' package is not installed. "
-                "Run: uv add ddgs"
+                "web_search is unavailable: the 'ddgs' package is not installed "
+                + ("and SerpAPI failed: " + serp_error if serp_error
+                   else "and no SERPAPI_API_KEY is configured")
+                + ". Run: uv add ddgs"
             )
-
-    max_results = max(1, min(10, int(max_results)))
 
     def _sync_search() -> list[dict]:
         # backend="auto" rotates across ddgs' engines (duckduckgo, bing,
@@ -73,32 +84,29 @@ async def web_search(query: str, max_results: int = 5) -> str:
     except Exception as exc:
         ddgs_error = f"{type(exc).__name__}: {exc}"
 
-    if ddgs_error is not None or not results:
-        # Fallback: SerpAPI (Google results), when a key is configured via
-        # settings / the integrations key store. Keeps search alive when the
-        # free engines block/ratelimit the deployment's egress IP.
-        serp = await _serpapi_search(query, max_results)
-        if isinstance(serp, list) and serp:
-            results = serp
-        elif ddgs_error is not None:
-            hint = (
-                " (both engine rotation and the SerpAPI fallback failed — "
-                f"SerpAPI: {serp})" if isinstance(serp, str) and serp
-                else " (no SERPAPI_API_KEY configured for the Google "
-                     "fallback; the free engines may be blocking this "
-                     "server's egress IP or an outbound proxy is denying "
-                     "the request)"
-            )
-            return f"web_search failed: {ddgs_error}{hint}"
+    if ddgs_error is not None and not results:
+        detail = (
+            f"SerpAPI: {serp_error}; free engines: {ddgs_error}"
+            if serp_error
+            else f"{ddgs_error} (no SERPAPI_API_KEY configured for the "
+                 "Google-quality primary; the free engines may be blocking "
+                 "this server's egress IP or an outbound proxy is denying "
+                 "the request)"
+        )
+        return f"web_search failed: {detail}"
 
     if not results:
         return f"No results found for: {query!r}"
 
+    return _format_results(query, results)
+
+
+def _format_results(query: str, results: list[dict]) -> str:
     lines: list[str] = [f"Web search results for: {query!r}\n"]
     for i, r in enumerate(results, 1):
         title = r.get("title", "(no title)")
         href = r.get("href", "")
-        body = r.get("body", "").strip()
+        body = (r.get("body") or "").strip()
         lines.append(f"[{i}] {title}")
         lines.append(f"    URL: {href}")
         if body:

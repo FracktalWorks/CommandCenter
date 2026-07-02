@@ -451,7 +451,7 @@ github_search(q,scope?,max?), github_repo_search(repo,q?) — code search
 {registry_block}
 
 ### Web access (no API key required)
-- **web_search(query, max_results=5)** — DuckDuckGo search. Use for current info, news, company research.
+- **web_search(query, max_results=5)** — Web search (SerpAPI/Google first when configured, free engines as fallback). Use for current info, news, company research.
 - **fetch_page(url, max_chars=8000)** — Fetch a public URL as clean text via Jina Reader.
 
 ### Memory & knowledge graph

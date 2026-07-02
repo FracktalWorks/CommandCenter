@@ -1,11 +1,10 @@
-"""Regression tests — web_search resilience (engine rotation + SerpAPI fallback).
+"""Regression tests — web_search provider chain (SerpAPI first, free fallback).
 
-The agent-reported "websearch is down": web_search is OUR injected ddgs tool
-(identical for MAF and Copilot SDK agents — not GitHub's built-in search, and
-previously not connected to SerpAPI at all). A single blocked egress path
-killed it with an opaque error. Now: ddgs rotates engines (backend="auto"),
-falls back to SerpAPI when SERPAPI_API_KEY is configured, and reports a
-diagnosable error naming both failures otherwise.
+web_search is OUR injected tool (identical for MAF and Copilot SDK agents —
+not GitHub Copilot's built-in search). Provider order, best-first:
+SerpAPI (Google) whenever a key is configured → the free ddgs engines
+(backend="auto" rotation) otherwise / on SerpAPI failure. Errors name each
+provider tried so "search is down" reports are diagnosable.
 """
 from __future__ import annotations
 
@@ -17,16 +16,14 @@ from acb_skills import web_tools
 
 
 @pytest.mark.asyncio
-async def test_serpapi_fallback_used_when_ddgs_fails(monkeypatch):
+async def test_serpapi_is_primary_when_key_configured(monkeypatch):
     monkeypatch.setenv("SERPAPI_API_KEY", "test-key")
 
-    class _BoomDDGS:
+    class _MustNotRun:
         def __enter__(self):
-            return self
+            raise AssertionError("free engines must not run when SerpAPI succeeds")
         def __exit__(self, *a):
             return False
-        def text(self, *a, **k):
-            raise RuntimeError("403 Forbidden (blocked egress)")
 
     fake_resp = SimpleNamespace(
         status_code=200,
@@ -36,12 +33,9 @@ async def test_serpapi_fallback_used_when_ddgs_fails(monkeypatch):
         ]},
         raise_for_status=lambda: None,
     )
-    with patch.object(web_tools, "DDGS", _BoomDDGS, create=True), \
-         patch("httpx.AsyncClient") as client_cls:
-        # web_search imports DDGS inside the function — patch the module it
-        # imports from instead.
-        import ddgs as ddgs_mod
-        monkeypatch.setattr(ddgs_mod, "DDGS", _BoomDDGS)
+    import ddgs as ddgs_mod
+    monkeypatch.setattr(ddgs_mod, "DDGS", _MustNotRun)
+    with patch("httpx.AsyncClient") as client_cls:
         http = client_cls.return_value.__aenter__.return_value
         http.get = AsyncMock(return_value=fake_resp)
         out = await web_tools.web_search("fracktal works", max_results=3)
@@ -49,6 +43,27 @@ async def test_serpapi_fallback_used_when_ddgs_fails(monkeypatch):
     assert "Fracktal Works" in out
     assert "https://fracktal.in" in out
     assert "failed" not in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_free_engines_used_when_no_serpapi_key(monkeypatch):
+    monkeypatch.delenv("SERPAPI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        web_tools, "_serpapi_search", AsyncMock(return_value=""))
+
+    class _OkDDGS:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def text(self, *a, **k):
+            return [{"title": "DDG hit", "href": "https://x.example",
+                     "body": "free engine result"}]
+
+    import ddgs as ddgs_mod
+    monkeypatch.setattr(ddgs_mod, "DDGS", _OkDDGS)
+    out = await web_tools.web_search("anything")
+    assert "DDG hit" in out and "https://x.example" in out
 
 
 @pytest.mark.asyncio

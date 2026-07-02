@@ -148,6 +148,18 @@ export async function fetchAccounts(): Promise<TaskAccount[]> {
   return rows.map(mapAccount);
 }
 
+/** The org's people (roles/skills/capacity — §6.1), mapped to picker Persons. */
+export async function fetchPeople(): Promise<Person[]> {
+  const rows = await gatewayFetch<Raw[]>(`/people`);
+  return rows
+    .map((r) => ({
+      name: String(r.name ?? ""),
+      email: r.email ? String(r.email) : undefined,
+      providerUserId: r.provider_user_id ? String(r.provider_user_id) : undefined,
+    }))
+    .filter((p) => p.name);
+}
+
 export async function apiCapture(title: string, notes?: string): Promise<GtdItem> {
   return mapItem(
     await gatewayFetch<Raw>(`/items`, {

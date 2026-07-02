@@ -1,0 +1,393 @@
+{
+ "profiles": [
+  {
+   "name": "Akash",
+   "email": "Akashghanekar98@gmail.com",
+   "education": [],
+   "skills": [
+    "3d printing",
+    "mechatronics",
+    "sales"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\Akash_CV.pdf"
+  },
+  {
+   "name": "Amruth S M",
+   "email": "amruth1312@gmail.com",
+   "education": [],
+   "skills": [
+    "python",
+    "sql",
+    "nlp",
+    "robotics",
+    "electronics",
+    "supply chain"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\Amruth S M_Resume.pdf"
+  },
+  {
+   "name": "Ayush Sarkar",
+   "email": "tintin123sarkar@gmail.com",
+   "education": [],
+   "skills": [
+    "python",
+    "go",
+    "cad",
+    "mechatronics",
+    "robotics",
+    "electronics",
+    "sales",
+    "dfm",
+    "quality control",
+    "supply chain"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\Ayush Sarkar_Resume.pdf"
+  },
+  {
+   "name": "Bhavith Aftersales",
+   "email": "kgbhavith1@gmail.com",
+   "education": [],
+   "skills": [
+    "python",
+    "javascript",
+    "react",
+    "html",
+    "css",
+    "robotics",
+    "embedded systems",
+    "arduino",
+    "raspberry pi",
+    "electronics"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\Bhavith_Aftersales_Resume.pdf"
+  },
+  {
+   "name": "Chandra shekhar",
+   "email": "Rangachandira1127@gmail.com",
+   "education": [],
+   "skills": [
+    "r",
+    "cad"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\Chandra shekhar Resume IC.pdf"
+  },
+  {
+   "name": "Hrithik",
+   "email": "hrithikhm04155@gmail.com",
+   "education": [],
+   "skills": [
+    "quality control",
+    "supply chain"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\Hrithik_Resume.pdf"
+  },
+  {
+   "name": "Kallesha",
+   "email": "Kallesha337@gmail.com",
+   "education": [],
+   "skills": [],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\Kallesha_Resume.pdf"
+  },
+  {
+   "name": "Kiran kumar s",
+   "email": "kirankumars2316@gmail.com",
+   "education": [],
+   "skills": [
+    "r",
+    "node.js",
+    "html",
+    "css",
+    "electronics",
+    "ui/ux",
+    "marketing",
+    "sales"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\Kiran kumar s.pdf"
+  },
+  {
+   "name": "Pavan S",
+   "email": "siddapurampavan9381@gmail.com",
+   "education": [],
+   "skills": [
+    "python",
+    "javascript",
+    "typescript",
+    "go",
+    "rust",
+    "sql",
+    "react",
+    "django",
+    "fastapi",
+    "express",
+    "css",
+    "llm",
+    "aws",
+    "docker",
+    "github actions",
+    "cad"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\PavanS_Resume.pdf"
+  },
+  {
+   "name": "Pooja Rajan",
+   "email": "poojarajan640@gmail.com",
+   "education": [],
+   "skills": [
+    "r"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\Pooja Rajan_Resume.pdf"
+  },
+  {
+   "name": "Rajesh Nayaka",
+   "email": null,
+   "education": [],
+   "skills": [
+    "r",
+    "electronics"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\Rajesh Nayaka_CV.pdf"
+  },
+  {
+   "name": "Sougata Maji",
+   "email": "maji.sougata2003@gmail.com",
+   "education": [],
+   "skills": [
+    "python",
+    "matlab",
+    "r",
+    "cad",
+    "solidworks",
+    "fusion 360",
+    "autocad",
+    "ansys",
+    "3d printing",
+    "fdm",
+    "sla",
+    "sales"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\Sougata Maji_Resume.pdf"
+  },
+  {
+   "name": "Sridhar",
+   "email": "sridhara1999sn@gmail.com",
+   "education": [],
+   "skills": [],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\Sridhar Resume .pdf"
+  },
+  {
+   "name": "Suresh Nagaraj",
+   "email": "sureshinspire1987@gmail.com",
+   "education": [],
+   "skills": [
+    "python",
+    "flask",
+    "3d printing",
+    "sales"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\SureshNagaraj_CV.pdf"
+  },
+  {
+   "name": "Suryansh Lal",
+   "email": "er.suryanshlal@gmail.com",
+   "education": [],
+   "skills": [
+    "python",
+    "matlab",
+    "r",
+    "cad",
+    "solidworks",
+    "fusion 360",
+    "autocad",
+    "ansys",
+    "catia",
+    "3d printing",
+    "fdm",
+    "sla",
+    "electronics",
+    "dfm"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\Suryansh Lal_CV.pdf"
+  },
+  {
+   "name": "Veena M",
+   "email": "veenanairm04@gmail.com",
+   "education": [],
+   "skills": [
+    "r",
+    "solidworks",
+    "fusion 360",
+    "autocad",
+    "catia"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\Veena_M_Resume.pdf"
+  },
+  {
+   "name": "Vinhu pprawin",
+   "email": "vinhupraveen@gmail.com",
+   "education": [],
+   "skills": [
+    "r",
+    "cad",
+    "fusion 360",
+    "ansys",
+    "catia",
+    "3d printing",
+    "robotics",
+    "electronics"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\FW_Employees\\Vinhu_pprawin_Resume.pdf"
+  },
+  {
+   "name": "Anirudh Mohta",
+   "email": "anirudhmohta7@gmail.com",
+   "education": [],
+   "skills": [
+    "python",
+    "matlab",
+    "cad",
+    "solidworks",
+    "fusion 360",
+    "mechatronics",
+    "robotics",
+    "arduino",
+    "fpga"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\Interns Resume\\Anirudh Mohta Resume.pdf"
+  },
+  {
+   "name": "Milind Kiran",
+   "email": "milindkiran04@gmail.com",
+   "education": [],
+   "skills": [
+    "python",
+    "matlab",
+    "machine learning",
+    "aws",
+    "cad",
+    "solidworks",
+    "mechatronics",
+    "robotics",
+    "arduino",
+    "raspberry pi"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\Interns Resume\\Milind Kiran_CV.pdf"
+  },
+  {
+   "name": "Piyush",
+   "email": "piyushganti@gmail.com",
+   "education": [],
+   "skills": [
+    "cad",
+    "fusion 360",
+    "ansys",
+    "catia",
+    "supply chain"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\Interns Resume\\Piyush_Resume.pdf"
+  },
+  {
+   "name": "Raja Sohal",
+   "email": "rajasohal4002@gmail.com",
+   "education": [],
+   "skills": [
+    "python",
+    "java",
+    "react",
+    "django",
+    "flask",
+    "spring",
+    "pytorch",
+    "data science",
+    "supply chain"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\Interns Resume\\Raja Sohal_Resume.pdf"
+  },
+  {
+   "name": "Swaminath",
+   "email": "abswaminath2004@gmail.com",
+   "education": [],
+   "skills": [
+    "python",
+    "react",
+    "flask",
+    "tensorflow",
+    "keras",
+    "llm",
+    "3d printing",
+    "fdm",
+    "sla",
+    "embedded systems",
+    "arduino",
+    "firmware",
+    "electronics"
+   ],
+   "experience_summary": "",
+   "years_experience": null,
+   "domain": "Unknown",
+   "source_file": "data\\Interns Resume\\Swaminath_Resume.pdf"
+  }
+ ]
+}

@@ -110,6 +110,29 @@ def _suggest_project(title: str, notes: str, projects: list[Any]) -> Any | None:
     return best if best_score >= 2 else None
 
 
+def _match_capability(text_: str, people: list[dict]) -> dict | None:
+    """Best-fit owner by skills (org-knowledge layer, §6.1): score each person
+    by how many of their skills appear in the task text (word-boundary match);
+    tie-break by available hours. Conservative — None when nothing matches."""
+    t = text_.lower()
+    best: dict | None = None
+    best_key: tuple[int, int] = (0, -1)
+    for p in people:
+        score = 0
+        for skill in p.get("skills") or []:
+            sk = (skill or "").strip().lower()
+            if len(sk) < 3:
+                continue
+            if re.search(rf"\b{re.escape(sk)}\b", t):
+                score += 1
+        if score == 0:
+            continue
+        key = (score, p.get("available_hours_per_week") or 0)
+        if key > best_key:
+            best, best_key = p, key
+    return best
+
+
 def default_status(disposition: str, statuses: list[str]) -> str | None:
     """GTD disposition → a sensible provider stage (§2.2 P7):
     someday-under-a-project → Backlog; actioned/delegated → To-do."""
@@ -203,6 +226,28 @@ def propose(item: Any, people: list[dict], projects: list[Any],
 
     if matched is not None:
         core["rationale"] += f" Looks like it belongs to “{matched.outcome}”."
+
+    # Capability-aware owner suggestion (people with skills → §6.1): only for
+    # actionable work with no name-matched assignee; the human still decides.
+    if (core.get("actionable") and not core.get("suggested_assignee")
+            and core["disposition"] in ("NEXT", "PROJECT", "CALENDAR")):
+        fit = _match_capability(
+            f"{item.title} {item.description or ''}", people)
+        if fit is not None:
+            hits = [sk for sk in fit.get("skills") or []
+                    if len((sk or "").strip()) >= 3 and re.search(
+                        rf"\b{re.escape(sk.strip().lower())}\b",
+                        f"{item.title} {item.description or ''}".lower())]
+            core["suggested_assignee"] = {
+                "name": fit["name"], "email": fit.get("email"),
+                "provider_user_id": fit.get("provider_user_id"),
+            }
+            avail = fit.get("available_hours_per_week")
+            core["rationale"] += (
+                f" {fit['name']} fits ({', '.join(hits[:3])}"
+                + (f"; {avail}h free this week" if avail is not None else "")
+                + ").")
+
     return {
         **core,
         "project_id": str(project.id) if project is not None else None,
@@ -229,15 +274,19 @@ async def clarify_item(
             text("SELECT id, schema_cache FROM task_accounts WHERE user_id = :uid"),
             {"uid": uid},
         )).fetchall()
-        people: list[dict] = []
         account_statuses: dict[str, list[str]] = {}
+        members: list[dict] = []
         for a in accounts:
             cache = _parse_jsonb(a.schema_cache) or {}
             account_statuses[str(a.id)] = [
                 s for s in cache.get("statuses") or [] if isinstance(s, str)]
             for m in cache.get("members") or []:
                 if isinstance(m, dict) and m.get("name"):
-                    people.append(m)
+                    members.append(m)
+        # Org-knowledge people (skills + availability, §6.1) power the
+        # heuristic; provider members are the fallback when none imported.
+        from gateway.routes.tasks.people import fetch_people_for_clarify
+        people = await fetch_people_for_clarify(db) or members
         return propose(item, people, projects, account_statuses)
     finally:
         await db.close()

@@ -1,0 +1,781 @@
+{
+ "company": "Fracktal Works",
+ "_note": "Edit roles, departments, skills, and capacity to match your actual org structure. ClickUp user IDs are pre-filled from your workspace.",
+ "departments": [
+  {
+   "name": "Leadership",
+   "head": "Vijay Raghav Varada",
+   "teams": [
+    {
+     "name": "Management",
+     "members": [
+      {
+       "name": "Vijay Raghav Varada",
+       "email": "vjvarada@fracktal.in",
+       "role": "Director",
+       "skills": [
+        "company strategy",
+        "product vision",
+        "business development",
+        "team leadership",
+        "investor relations"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 236494607
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Engineering",
+   "head": "TBD",
+   "teams": [
+    {
+     "name": "Engineering Team",
+     "members": [
+      {
+       "name": "Ayush Sarkar",
+       "email": "sarkar.ayush@fracktal.in",
+       "role": "Mechatronics Engineer",
+       "skills": [
+        "cad",
+        "dfm",
+        "electronics",
+        "fdm",
+        "firmware",
+        "go",
+        "mechanical design",
+        "mechatronics",
+        "product prototyping",
+        "python",
+        "quality control",
+        "r&d",
+        "robotics",
+        "sales",
+        "sla",
+        "supply chain"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 100842373,
+       "resume_profile": {
+        "source_file": "Ayush Sarkar_Resume.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      },
+      {
+       "name": "Suryansh Lal",
+       "email": "suryansh.lal@fracktal.in",
+       "role": "Mechanical Engineer",
+       "skills": [
+        "3d printing",
+        "ansys",
+        "autocad",
+        "cad",
+        "catia",
+        "dfm",
+        "electronics",
+        "fdm",
+        "fusion 360",
+        "hardware testing",
+        "matlab",
+        "product design",
+        "python",
+        "r",
+        "sla",
+        "solidworks"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 100842374,
+       "resume_profile": {
+        "source_file": "Suryansh Lal_CV.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      },
+      {
+       "name": "Pavan Siddapuram",
+       "email": "pavan.siddapuram@fracktal.in",
+       "role": "Software Engineer",
+       "skills": [
+        "api integrations",
+        "aws",
+        "cad",
+        "css",
+        "django",
+        "docker",
+        "embedded systems",
+        "express",
+        "fastapi",
+        "firmware",
+        "github actions",
+        "go",
+        "javascript",
+        "llm",
+        "python",
+        "react",
+        "rust",
+        "sql",
+        "typescript",
+        "web development"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 100862267,
+       "resume_profile": {
+        "source_file": "PavanS_Resume.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Design & Marketing",
+   "head": "Ishaan Pilar",
+   "teams": [
+    {
+     "name": "Design & Marketing Team",
+     "members": [
+      {
+       "name": "Ishaan Pilar",
+       "email": "ishaanpilar@fracktal.in",
+       "role": "Design & Marketing Executive",
+       "skills": [
+        "graphic design",
+        "social media marketing",
+        "content creation",
+        "brand identity",
+        "video editing",
+        "Adobe Creative Suite"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 236652627
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Sales",
+   "head": "TBD",
+   "teams": [
+    {
+     "name": "Sales Team",
+     "members": [
+      {
+       "name": "Veena M",
+       "email": "veena.nair@fracktal.in",
+       "role": "Sales Coordinator",
+       "skills": [
+        "autocad",
+        "catia",
+        "fusion 360",
+        "r",
+        "solidworks"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 101084651,
+       "resume_profile": {
+        "source_file": "Veena_M_Resume.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "After Sales",
+   "head": "TBD",
+   "teams": [
+    {
+     "name": "After Sales Team",
+     "members": [
+      {
+       "name": "Akash",
+       "email": "akash.n@fracktal.in",
+       "role": "After Sales Engineer",
+       "skills": [
+        "3d printing",
+        "mechatronics",
+        "sales"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 101084649,
+       "resume_profile": {
+        "source_file": "Akash_CV.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      },
+      {
+       "name": "BHAVITH K G",
+       "email": "kgbhavith1@gmail.com",
+       "role": "After Sales Engineer",
+       "skills": [
+        "arduino",
+        "css",
+        "electronics",
+        "embedded systems",
+        "html",
+        "javascript",
+        "python",
+        "raspberry pi",
+        "react",
+        "robotics"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 302514732,
+       "resume_profile": {
+        "source_file": "Bhavith_Aftersales_Resume.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      },
+      {
+       "name": "Vinhu pprawin",
+       "email": "vinhu.prawin@fracktal.in",
+       "role": "After Sales Engineer",
+       "skills": [
+        "3d printing",
+        "ansys",
+        "cad",
+        "catia",
+        "electronics",
+        "fusion 360",
+        "r",
+        "robotics"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 101084650,
+       "resume_profile": {
+        "source_file": "Vinhu_pprawin_Resume.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Interns",
+   "head": "TBD",
+   "teams": [
+    {
+     "name": "Intern Pool",
+     "members": [
+      {
+       "name": "Anirudh Mohta",
+       "email": "anirudhmohta7@gmail.com",
+       "role": "Intern",
+       "skills": [
+        "arduino",
+        "cad",
+        "fpga",
+        "fusion 360",
+        "matlab",
+        "mechatronics",
+        "python",
+        "robotics",
+        "solidworks"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 101084653,
+       "resume_profile": {
+        "source_file": "Anirudh Mohta Resume.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      },
+      {
+       "name": "Milind Kiran",
+       "email": "milindkiran04@gmail.com",
+       "role": "Intern",
+       "skills": [
+        "arduino",
+        "aws",
+        "cad",
+        "machine learning",
+        "matlab",
+        "mechatronics",
+        "python",
+        "raspberry pi",
+        "robotics",
+        "solidworks"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 272538421,
+       "resume_profile": {
+        "source_file": "Milind Kiran_CV.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      },
+      {
+       "name": "Piyush",
+       "email": "piyushganti@gmail.com",
+       "role": "Intern",
+       "skills": [
+        "ansys",
+        "cad",
+        "catia",
+        "fusion 360",
+        "supply chain"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 101084654,
+       "resume_profile": {
+        "source_file": "Piyush_Resume.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      },
+      {
+       "name": "Swaminath",
+       "email": "abswaminath2004@gmail.com",
+       "role": "Intern",
+       "skills": [
+        "3d printing",
+        "arduino",
+        "electronics",
+        "embedded systems",
+        "fdm",
+        "firmware",
+        "flask",
+        "keras",
+        "llm",
+        "python",
+        "react",
+        "sla",
+        "tensorflow"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 101084655,
+       "resume_profile": {
+        "source_file": "Swaminath_Resume.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      },
+      {
+       "name": "Raja Sohal",
+       "email": "rajasohal04@gmail.com",
+       "role": "Intern",
+       "skills": [
+        "data science",
+        "django",
+        "flask",
+        "java",
+        "python",
+        "pytorch",
+        "react",
+        "spring",
+        "supply chain"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 272439149,
+       "resume_profile": {
+        "source_file": "Raja Sohal_Resume.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Finance",
+   "head": "Suresh Nagaraj",
+   "teams": [
+    {
+     "name": "Finance Team",
+     "members": [
+      {
+       "name": "Suresh Nagaraj",
+       "email": "suresh@fracktal.in",
+       "role": "Head of Accounts",
+       "skills": [
+        "3d printing",
+        "accounts management",
+        "billing",
+        "bookkeeping",
+        "finance",
+        "financial reporting",
+        "flask",
+        "python",
+        "sales",
+        "vendor payments"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 100836404,
+       "resume_profile": {
+        "source_file": "SureshNagaraj_CV.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      },
+      {
+       "name": "Chandra shekhar",
+       "email": "chandrashekar@fracktal.in",
+       "role": "Finance Executive",
+       "skills": [
+        "cad",
+        "r"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 101085451,
+       "resume_profile": {
+        "source_file": "Chandra shekhar Resume IC.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "HR & Operations",
+   "head": "Pooja Rajan",
+   "teams": [
+    {
+     "name": "HR & Operations Team",
+     "members": [
+      {
+       "name": "Kiran Kumar S",
+       "email": "kirankumar@fracktal.in",
+       "_report_dept": "Founders Office",
+       "role": "Operations Head",
+       "skills": [
+        "css",
+        "electronics",
+        "html",
+        "marketing",
+        "node.js",
+        "operations management",
+        "production planning",
+        "quality control",
+        "r",
+        "sales",
+        "supply chain",
+        "team leadership",
+        "ui/ux",
+        "vendor management"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 100858676,
+       "resume_profile": {
+        "source_file": "Kiran kumar s.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      },
+      {
+       "name": "Pooja Rajan",
+       "email": "rajan.pooja@fracktal.in",
+       "role": "HR Lead",
+       "skills": [
+        "employee relations",
+        "hr management",
+        "onboarding",
+        "payroll",
+        "performance management",
+        "r",
+        "recruitment"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 100836403,
+       "resume_profile": {
+        "source_file": "Pooja Rajan_Resume.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      },
+      {
+       "name": "Divya JM",
+       "email": "operation@fracktal.in",
+       "_report_dept": "Admin",
+       "role": "Operations Executive",
+       "skills": [
+        "customer support",
+        "order management",
+        "sales operations",
+        "CRM",
+        "invoicing"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 100855863
+      },
+      {
+       "name": "Lakshmipathi",
+       "email": null,
+       "_report_dept": "Admin",
+       "role": "Office Boy",
+       "skills": [],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": null
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Fracktory",
+   "head": "SOUGATA MAJI",
+   "teams": [
+    {
+     "name": "Fracktory Team",
+     "members": [
+      {
+       "name": "SOUGATA MAJI",
+       "email": "sougata.maji@fracktal.in",
+       "role": "Head of Fracktory",
+       "skills": [
+        "3d printer operations",
+        "3d printing",
+        "ansys",
+        "autocad",
+        "cad",
+        "fdm",
+        "fusion 360",
+        "machine maintenance",
+        "matlab",
+        "mechanical design",
+        "post-processing",
+        "production management",
+        "production scheduling",
+        "python",
+        "r",
+        "sales",
+        "sla",
+        "solidworks"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 100932003,
+       "resume_profile": {
+        "source_file": "Sougata Maji_Resume.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      },
+      {
+       "name": "Kallesha",
+       "email": "Kallesha337@gmail.com",
+       "role": "Fracktory Operator",
+       "skills": [],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 101084647,
+       "resume_profile": {
+        "source_file": "Kallesha_Resume.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Manufacturing",
+   "head": "Sridhar",
+   "teams": [
+    {
+     "name": "Manufacturing Team",
+     "members": [
+      {
+       "name": "Sridhar",
+       "email": "sridhara1999sn@gmail.com",
+       "role": "Head of Manufacturing",
+       "skills": [],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 101085101,
+       "resume_profile": {
+        "source_file": "Sridhar Resume .pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      },
+      {
+       "name": "Hrithik",
+       "email": "hrithikhm04155@gmail.com",
+       "role": "Inventory & Procurement",
+       "skills": [
+        "quality control",
+        "supply chain"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 101084646,
+       "resume_profile": {
+        "source_file": "Hrithik_Resume.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      },
+      {
+       "name": "Rajesh Nayaka",
+       "email": "rajeshnayaka645@gmail.com",
+       "role": "Manufacturing Engineer",
+       "skills": [
+        "electronics",
+        "r"
+       ],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 101085488,
+       "resume_profile": {
+        "source_file": "Rajesh Nayaka_CV.pdf",
+        "education": [],
+        "experience_summary": "",
+        "years_experience": null,
+        "domain": "Unknown"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Unassigned",
+   "_note": "In contact list but dept/role not yet confirmed. Assign and move.",
+   "head": "TBD",
+   "teams": [
+    {
+     "name": "Pending Assignment",
+     "members": [
+      {
+       "name": "Guruprasad CD",
+       "email": "gg7306746@gmail.com",
+       "role": "TBD",
+       "skills": [],
+       "status": "active",
+       "capacity_hours_per_week": 48,
+       "current_load_hours_per_week": 0,
+       "available_hours_per_week": 48,
+       "clickup_user_id": 101085452
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

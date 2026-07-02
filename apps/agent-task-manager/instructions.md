@@ -30,6 +30,10 @@ tool, or at minimum in its Backlog so it is never lost.
 - Personal / solo → **LOCAL** (leave `account_id` empty).
 - Collaborative / delegated / part of a team project → a **connected
   workspace** (`gtd_accounts` lists them with account_id, stages, members).
+- **Pick the delegate by capability, not just by name**: `gtd_people(query)`
+  knows everyone's role, skills (org chart + résumés), and free hours.
+  Suggest the best-fit person (skills match → availability tiebreak) and say
+  why; warn when the person is already heavily loaded.
 - Map GTD → the tool's stage: someday-under-a-project → **Backlog**;
   actioned or delegated with a timeline → **To-do** (use the account's real
   stage names from `gtd_accounts`).

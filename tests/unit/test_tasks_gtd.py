@@ -183,3 +183,64 @@ def test_parse_ts_accepts_iso_and_z_suffix():
     assert _parse_ts(None) is None
     with pytest.raises(HTTPException):
         _parse_ts("not-a-date")
+
+
+# ---------------------------------------------------------------------------
+# People / capabilities (org-knowledge layer, §6.1)
+# ---------------------------------------------------------------------------
+
+def test_hr_import_mapper_merges_org_and_resume_skills():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "import_hr_people",
+        Path(__file__).resolve().parents[2] / "scripts" / "import_hr_people.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    hr = {"company": "X", "departments": [{
+        "name": "Engineering", "head": "Vijay",
+        "teams": [{"name": "Firmware", "members": [{
+            "name": "Rahul", "email": "r@x.in", "role": "Engineer",
+            "skills": ["Firmware", "c++"], "status": "active",
+            "capacity_hours_per_week": 40, "current_load_hours_per_week": 30,
+            "available_hours_per_week": 10, "clickup_user_id": 42,
+        }]}],
+    }]}
+    resumes = {"profiles": [{
+        "name": "rahul", "email": "r@x.in",
+        "skills": ["C++", "embedded systems"],
+        "experience_summary": "5y embedded", "years_experience": 5,
+        "domain": "Embedded",
+    }]}
+    rows = mod.build_rows(hr, resumes)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["department"] == "Engineering" and r["team"] == "Firmware"
+    assert r["reports_to"] == "Vijay"
+    # merged + case-insensitively deduped, org-chart order first
+    assert r["skills"] == ["Firmware", "c++", "embedded systems"]
+    assert r["resume_summary"] == "5y embedded"
+    assert r["clickup_user_id"] == "42"
+    assert r["available"] == 10
+
+
+def test_capability_match_picks_skill_fit_with_availability_tiebreak():
+    people = [
+        {"name": "A", "skills": ["firmware"], "available_hours_per_week": 5},
+        {"name": "B", "skills": ["firmware"], "available_hours_per_week": 20},
+        {"name": "C", "skills": ["sales"], "available_hours_per_week": 40},
+    ]
+    fit = tasks_ai._match_capability("fix the firmware regression", people)
+    assert fit["name"] == "B"  # same skill score; more hours free
+    assert tasks_ai._match_capability("water the plants", people) is None
+
+
+def test_propose_attaches_capability_owner_without_forcing_delegate():
+    people = [{"name": "Rahul", "skills": ["firmware"], "provider_user_id": "1",
+               "available_hours_per_week": 12}]
+    p = tasks_ai.propose(
+        _item("Fix the bed-leveling firmware regression"), people, [], {})
+    assert p["disposition"] == "NEXT"  # suggestion, not a forced WAITING
+    assert p["suggested_assignee"]["name"] == "Rahul"
+    assert "Rahul fits" in p["rationale"]

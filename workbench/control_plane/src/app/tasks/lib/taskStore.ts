@@ -32,6 +32,7 @@ import {
   apiRefreshSchema,
   fetchAccounts,
   fetchItems,
+  fetchPeople,
   fetchProjects,
   type OrganizeBody,
   type TaskAccount,
@@ -693,23 +694,31 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   hydrate: async () => {
     try {
-      const [items, projects, accounts] = await Promise.all([
+      const [items, projects, accounts, orgPeople] = await Promise.all([
         fetchItems("all"),
         fetchProjects(),
         fetchAccounts(),
+        fetchPeople().catch(() => [] as Person[]),
       ]);
       const providers: ConnectedProvider[] = [
         { id: "local", label: "Local", provider: "local", source: "LOCAL", statuses: [] },
         ...accounts.map(accountToProviderEntry),
       ];
+      // People priority: the org-knowledge layer (roles/skills, §6.1) →
+      // provider workspace members → bundled mocks.
       const members = accounts.flatMap((a) => a.members);
+      const people = orgPeople.length
+        ? orgPeople
+        : members.length
+          ? members
+          : MOCK_PEOPLE;
       set({
         backend: "live",
         items,
         projects,
         accounts,
         providers,
-        people: members.length ? members : MOCK_PEOPLE,
+        people,
       });
     } catch {
       // Gateway absent/unreachable → stay in demo mode on the bundled mocks.
@@ -726,12 +735,17 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         ...accounts.map(accountToProviderEntry),
       ];
       const members = accounts.flatMap((a) => a.members);
+      const orgPeople = await fetchPeople().catch(() => [] as Person[]);
       const projects = await fetchProjects();
       set({
         accounts,
         providers,
         projects,
-        people: members.length ? members : MOCK_PEOPLE,
+        people: orgPeople.length
+          ? orgPeople
+          : members.length
+            ? members
+            : MOCK_PEOPLE,
       });
     } catch {
       /* keep current state */

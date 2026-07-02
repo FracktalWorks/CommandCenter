@@ -195,6 +195,30 @@ async def gtd_inbox_insights() -> str:
     )
 
 
+async def gtd_people(query: str = "") -> str:
+    """Search the company's people — roles, skills, capacity, availability
+    (the org-knowledge layer). Use to pick WHO should own a delegated task.
+
+    Args:
+        query: Optional filter across name/role/department/skill
+            (e.g. "firmware", "design", "sales").
+    """
+    params = {"q": query} if query else None
+    people = await _request("GET", "/tasks/people", params=params)
+    if not people:
+        return ("No org people found" + (f" for {query!r}" if query else "")
+                + ". (Import HR data via scripts/import_hr_people.py.)")
+    out = []
+    for p in people[:25]:
+        skills = ", ".join((p.get("skills") or [])[:6])
+        avail = p.get("available_hours_per_week")
+        out.append(
+            f"{p['name']} — {p.get('role') or '?'} · {p.get('department') or '?'}"
+            + (f" · {avail}h free/wk" if avail is not None else "")
+            + (f"\n  skills: {skills}" if skills else ""))
+    return f"{len(people)} people:\n" + "\n".join(out)
+
+
 # ── Clarify / organize ───────────────────────────────────────────────────────
 
 async def gtd_clarify(item_id: str) -> str:

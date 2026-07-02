@@ -547,9 +547,9 @@ This is the explicitly-requested capability: not just *my* tasks, but **delegati
 
 ---
 
-### 6.1 People & capabilities intelligence — the org-knowledge layer (FUTURE)
+### 6.1 People & capabilities intelligence — the org-knowledge layer (✅ v1 shipped)
 
-> Added 2026-07-01 as a forward design note (per a product decision to build this later). **Not built.** This documents the intelligence to bring in so the AI can understand the whole company — its HR structure and every person's capabilities — and use that to process the inbox far better.
+> Added 2026-07-01 as a forward design note; **v1 shipped 2026-07-02** with the *actual* company data. `agent-project-manager`'s `agent-data/` (hr_structure.json + resume_profiles.json — 26 people, 11 departments, roles, org-chart + resume-extracted skills, capacity/load hours, ClickUp user ids) is snapshotted into **`infra/seed/hr/`** (phones stripped) and imported into **`gtd_people`** (migration `49_gtd_people.sql`) by **`scripts/import_hr_people.py`** (idempotent upsert by name; re-run to refresh — the source repo / HR system stays the source of truth). Served via **`GET /tasks/people`** (auth-gated, `q` searches name/role/department/skill); the clarify proposal is now **capability-aware** (skills word-boundary match + free-hours tiebreak → `suggested_assignee` with the person's real ClickUp id, so delegation pushes assign the actual user); the agent gained **`gtd_people(query)`**; the UI's delegation/assignee pickers hydrate from the org people. Remaining (below) = embeddings matching, live load sync from the PM tool, overload warnings, and richer org-structure reasoning.
 
 **The idea.** Today the agent only recognizes a teammate when their *name appears in the capture text* (a plain string match). The larger opportunity — inspired by our internal **`agent-project-manager`** (which already holds the company's **HR list, everyone's résumé, roles, and capabilities**) — is to give the Task Manager agent a first-class model of **who's who and who can do what**, so Clarify and delegation run with real organizational context. This is the Task-Manager equivalent of how the email assistant knows a mailbox: here the agent "knows the org."
 
@@ -568,7 +568,7 @@ This is the explicitly-requested capability: not just *my* tasks, but **delegati
 
 **Boundary & posture (unchanged).** The AI **proposes**; the human **decides**. Any assignment write to a PM tool stays **Action-Broker-gated (C-04)**. This layer is purely additive to the Clarify/Delegate flows already specced (§2.2, §6).
 
-**Status:** 🔲 future / **[plumbing]**. Depends on: a port/sync from `agent-project-manager`, the richer provider fetch (§2.2.1), and the gateway `/tasks` API. Until then, delegation stays name/heuristic-based with a manual assignee pick (as built in the Clarify UI).
+**Status:** ✅ v1 shipped (table + import + endpoint + capability-aware clarify + agent tool + UI hydration, on real company data). 🔲 Later: embeddings-based matching, live workload sync from the PM tool, overload warnings at assign time, reporting-line reasoning.
 
 ---
 

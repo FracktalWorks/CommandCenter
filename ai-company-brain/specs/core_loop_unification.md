@@ -108,6 +108,31 @@ to confirm Phases 1–3a end-to-end (not just via unit evals):
   acting user) before the message insert. Re-drove a fresh-session turn:
   `chat_fold.persisted` succeeded, message + auto-created session both landed.
 
+## D1 follow-ups (assessed 2026-07-02)
+
+**P1-9 — memory extraction at the run boundary (shipped).** Both orchestrator
+paths now extract via the gateway's `run_detached` `on_complete` hook, which
+fires on finish/error/**cancel/reconnect** — so a turn completed after the
+browser is gone still contributes to Mem0, WITH the folded answer included.
+Previously only the named-agent path did this; the copilot path used FastAPI
+`background_tasks` (reader-lifetime-bound) and saw only the *input* messages,
+never the assistant turn — and `route.ts` also extracted, so it double-wrote.
+Now: one owner (gateway, run boundary), one shared assembler
+(`chat_fold.build_extraction_conversation`), and `route.ts` no longer extracts
+for either orchestrator path (dead `extractMemories` removed). A degraded
+no-thread_id/no-message-id copilot request keeps a `background_tasks` fallback.
+
+**Live-fold demotion — deferred, NOT done blind.** The route's
+`translateAndPersistStream` still folds + persists on a 3s cadence. The *final*
+persist is now redundant with the gateway's authoritative `on_complete` fold
+(same row id, idempotent), but the *3s checkpoints* remain load-bearing for
+**mid-run refresh recovery** (polling reads the last checkpoint from Postgres
+before the run ends). And the same function serves the litellm/langgraph paths,
+which have no gateway `on_complete` at all. So a safe demotion must be
+path-conditioned AND verified against the running UI (prove refresh-recovery
+still works) — the same discipline 3b required. Tracked, not forced into this
+milestone.
+
 ## Invariants (locked by evals)
 - The Redis stream remains the single source of truth; anything derived (persisted rows, UI state) must be reproducible by replaying it.
 - Persisted tool status honors `success` (never hardcode `done`).

@@ -390,11 +390,60 @@ if _HAS_MAF:
                 from gateway.chat_fold import \
                     persist_final_assistant_message  # noqa: PLC0415
 
+                # Snapshot the input conversation for run-boundary memory
+                # extraction (P1-9) — captured here so the callback below has it
+                # even if the HTTP request scope is gone by run end.
+                _mem_conv_in = [
+                    {"role": m.get("role", "user"),
+                     "content": m.get("content", "")}
+                    for m in (messages or []) if m.get("content")
+                ]
+                _mem_last_user = last_user_msg
+
                 async def _persist_cb() -> None:  # type: ignore[misc]
-                    await persist_final_assistant_message(
+                    folded = await persist_final_assistant_message(
                         _thread_id, assistant_message_id,
                         user_id=user_id, agent_name="orchestrator",
                     )
+                    # Memory extraction at the SAME run boundary (P1-9): fires on
+                    # finish/error/cancel/reconnect via run_detached's finally,
+                    # so a turn completed after a browser-gone still contributes
+                    # to Mem0 — and it now includes the FOLDED ANSWER (the old
+                    # background_tasks path saw only the input messages and never
+                    # the assistant turn). route.ts no longer extracts for this
+                    # orchestrator path. Best-effort.
+                    if not (user_id and _mem_conv_in):
+                        return
+                    try:
+                        from acb_memory import (  # noqa: PLC0415
+                            add_episode, add_memories_background,
+                        )
+
+                        from gateway.chat_fold import (  # noqa: PLC0415
+                            build_extraction_conversation,
+                        )
+                        # _mem_conv_in already includes the current user turn
+                        # (it's the full messages array), so pass message="".
+                        conv = build_extraction_conversation(
+                            _mem_conv_in, "", folded,
+                        )
+                        if not conv:
+                            return
+                        await add_memories_background(user_id, conv)
+                        if _mem_last_user:
+                            await add_episode(
+                                name=f"chat:{user_id[:20]}",
+                                content=_mem_last_user[:500],
+                                source_description="copilot_chat",
+                                group_id=user_id,
+                            )
+                    except ImportError:
+                        pass
+                    except Exception:  # noqa: BLE001 — never kill the relay
+                        _log.warning(
+                            "copilot_chat.run_end_memory_extraction_failed",
+                            thread_id=_thread_id[:12],
+                        )
 
             async def relayed_generator():
                 import json as _json  # noqa: PLC0415
@@ -416,25 +465,31 @@ if _HAS_MAF:
                     async for line in event_generator():
                         yield line
 
-            # Post-run memory extraction (fires after response stream closes)
-            try:
-                from acb_memory import add_episode  # noqa: PLC0415
-                from acb_memory import add_memories_background
-                if last_user_msg and messages:
-                    conv = [
-                        {"role": m.get("role", "user"), "content": m.get("content", "")}
-                        for m in messages if m.get("content")
-                    ]
-                    background_tasks.add_task(add_memories_background, user_id, conv)
-                    # Also populate the bi-temporal knowledge graph (Graphiti)
-                    background_tasks.add_task(add_episode,
-                        name=f"chat:{user_id[:20]}",
-                        content=last_user_msg[:500],
-                        source_description="copilot_chat",
-                        group_id=user_id,
-                    )
-            except ImportError:
-                pass
+            # Fallback memory extraction ONLY for the degraded no-thread_id /
+            # no-message-id case (no run boundary to hook): fires on the
+            # response lifecycle and sees only the input messages. The normal
+            # path extracts at the run boundary inside _persist_cb above (P1-9),
+            # with the folded answer included — so skip here to avoid double
+            # extraction when that callback is wired.
+            if _persist_cb is None:
+                try:
+                    from acb_memory import add_episode  # noqa: PLC0415
+                    from acb_memory import add_memories_background
+                    if last_user_msg and messages:
+                        conv = [
+                            {"role": m.get("role", "user"), "content": m.get("content", "")}
+                            for m in messages if m.get("content")
+                        ]
+                        background_tasks.add_task(add_memories_background, user_id, conv)
+                        # Also populate the bi-temporal knowledge graph (Graphiti)
+                        background_tasks.add_task(add_episode,
+                            name=f"chat:{user_id[:20]}",
+                            content=last_user_msg[:500],
+                            source_description="copilot_chat",
+                            group_id=user_id,
+                        )
+                except ImportError:
+                    pass
 
             return StreamingResponse(
                 relayed_generator() if _thread_id else event_generator(),

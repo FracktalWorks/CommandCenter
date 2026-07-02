@@ -12,6 +12,7 @@ import asyncio
 import json
 
 from gateway.chat_fold import (
+    build_extraction_conversation,
     fold_run_events,
     group_reasoning_blocks,
     persist_final_assistant_message,
@@ -215,6 +216,60 @@ def test_id_less_run_still_folds_no_segment_cutoff():
     [tool] = folded["tool_events"]
     assert "segmentCutoff" not in tool
     assert tool["reasoningCutoff"] == 1
+
+
+def test_extraction_conv_appends_folded_answer_named_agent_shape():
+    """P1-9: the named-agent path passes prior turns + a SEPARATE current
+    message; the folded answer is appended so Mem0 sees the assistant turn
+    (which reader-lifetime-bound extraction could never guarantee)."""
+    history = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+    ]
+    conv = build_extraction_conversation(
+        history, "what time is it?", {"content": "It's 3pm."},
+    )
+    assert conv == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "what time is it?"},
+        {"role": "assistant", "content": "It's 3pm."},
+    ]
+
+
+def test_extraction_conv_copilot_shape_message_already_in_history():
+    """P1-9: the copilot path passes the FULL messages array (current user turn
+    already included) with message='' — no duplicate user turn, answer appended.
+    """
+    conv = build_extraction_conversation(
+        [{"role": "user", "content": "any mail?"}], "", {"content": "2 unread."},
+    )
+    assert conv == [
+        {"role": "user", "content": "any mail?"},
+        {"role": "assistant", "content": "2 unread."},
+    ]
+
+
+def test_extraction_conv_dedups_current_message_against_history_tail():
+    conv = build_extraction_conversation(
+        [{"role": "user", "content": "x"}], "x", {"content": "y"},
+    )
+    # 'x' not duplicated even though passed as both history tail and message.
+    assert conv == [
+        {"role": "user", "content": "x"},
+        {"role": "assistant", "content": "y"},
+    ]
+
+
+def test_extraction_conv_empty_without_user_anchor():
+    # No user turn anywhere → nothing to extract.
+    assert build_extraction_conversation(
+        [{"role": "assistant", "content": "z"}], "", None,
+    ) == []
+    # Answerless run (folded None / empty) still returns the user-anchored conv.
+    assert build_extraction_conversation(
+        [{"role": "user", "content": "q"}], "", None,
+    ) == [{"role": "user", "content": "q"}]
 
 
 def test_empty_run_folds_to_none():

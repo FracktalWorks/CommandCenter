@@ -487,85 +487,12 @@ async function translateAndPersistStream(
 
 // ─── Memory extraction (post-stream) ─────────────────────────────────────────
 
-/**
- * Fire-and-forget: send the full conversation to Mem0 for fact extraction
- * AFTER the agent stream completes.  This runs after translateAndPersistStream
- * has accumulated the complete assistant response, so Mem0 sees both sides
- * of the conversation.
- *
- * Extraction is skipped ONLY when there is genuinely nothing to save
- * (no userId AND no conversation content).  Tool-only agents that produce
- * minimal text are still captured — Mem0 can extract facts from tool
- * results embedded in the assistant message or from the conversation history.
- */
-async function extractMemories(
-  userId: string,
-  userMessage: string,
-  assistantContent: string,
-  history: ChatMessage[],
-  agentName: string,
-): Promise<void> {
-  if (!userId) {
-    console.warn("[memory] extractMemories skipped — no userId resolved (auth may be misconfigured)");
-    return;
-  }
-
-  // Build the conversation — include history + current user message + assistant.
-  const conv: Array<{ role: string; content: string }> = [];
-  for (const m of history) {
-    if (m.role === "user" || m.role === "assistant") {
-      conv.push({ role: m.role, content: m.content });
-    }
-  }
-  if (userMessage) {
-    // Avoid duplicating the current user message if it's already in history.
-    const alreadyInHistory = conv.some(
-      (m) => m.role === "user" && m.content === userMessage,
-    );
-    if (!alreadyInHistory) {
-      conv.push({ role: "user", content: userMessage });
-    }
-  }
-  if (assistantContent.trim()) {
-    conv.push({ role: "assistant", content: assistantContent });
-  }
-
-  // Guard: need at least one user→assistant exchange to extract facts.
-  const hasUser = conv.some((m) => m.role === "user");
-  const hasAssistant = conv.some((m) => m.role === "assistant");
-  if (!hasUser || conv.length === 0) {
-    console.warn("[memory] extractMemories skipped — no user messages in conversation");
-    return;
-  }
-  // Allow extraction even when assistantContent is empty (tool-only agents
-  // may have nothing to say but the conversation history is still valuable).
-  if (!hasAssistant && conv.length < 2) {
-    console.warn("[memory] extractMemories skipped — conversation too short for fact extraction");
-    return;
-  }
-
-  try {
-    const res = await fetch(
-      `${GATEWAY_URL}/memory/${encodeURIComponent(userId)}/add`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${INTERNAL_TOKEN}`,
-        },
-        body: JSON.stringify({ messages: conv, agent_id: agentName }),
-        signal: AbortSignal.timeout(15000),
-      },
-    );
-    if (!res.ok) {
-      console.warn(
-        `[memory] extractMemories gateway returned ${res.status} for agent=${agentName} user=${userId.slice(0, 20)}`,
-      );
-    }
-  } catch (err) {
-    console.warn("[memory] extractMemories fetch failed:", (err as Error).message);
-  }
-}
+// Memory extraction is no longer done here.  Both orchestrator paths
+// (/copilot/chat and /agent/run/stream) now extract at the gateway's RUN
+// BOUNDARY (core_loop_unification P1-9): it fires on finish/error/cancel/
+// reconnect even when this reader is gone, and folds in the assistant answer —
+// which a client-side, reader-lifetime-bound extraction could never guarantee.
+// The old client-side extractMemories() was removed to avoid double extraction.
 
 /** EXECUTIVE_EMAILS: comma-separated list of executive emails for role assignment. */
 const EXECUTIVE_EMAILS = new Set(
@@ -800,14 +727,15 @@ export async function POST(req: NextRequest): Promise<Response> {
     }
     // Translate AG-UI → frontend SSE, persisting to Postgres so messages
     // survive client disconnect (tab close, browser quit, network drop).
+    // Memory extraction for this orchestrator path is OWNED BY THE GATEWAY at
+    // the run boundary (P1-9): it fires on finish/error/cancel/reconnect even
+    // when this reader is gone AND includes the folded answer. Firing here too
+    // would double-extract every turn.
     const translated = new ReadableStream<Uint8Array>({
       async start(controller) {
-        const assistantContent = await translateAndPersistStream(
+        await translateAndPersistStream(
           gatewayRes.body!, controller, threadId ?? "", assistantMessageId,
         );
-        // Post-stream memory extraction — fires after the full response is
-        // known, so Mem0 sees both sides of the conversation.
-        extractMemories(userId, message, assistantContent, messages ?? [], agentName);
       },
     });
     return new Response(translated, { headers: sseHeaders() });

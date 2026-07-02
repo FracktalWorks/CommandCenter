@@ -325,6 +325,41 @@ def fold_run_events(events: list[dict[str, Any]]) -> dict[str, Any] | None:
     }
 
 
+# ── Run-boundary memory extraction (P1-9) ──────────────────────────────────
+
+def build_extraction_conversation(
+    history: list[dict[str, str]],
+    message: str,
+    folded: dict[str, Any] | None,
+) -> list[dict[str, str]]:
+    """Assemble the conversation to hand to Mem0 at the run boundary.
+
+    Shared by both orchestrator paths (``/agent/run/stream`` and
+    ``/copilot/chat``) so run-end memory extraction is identical: the prior
+    user/assistant turns, then the current user *message* (deduped against the
+    tail of history), then the FOLDED ANSWER (``folded["content"]``) — the piece
+    a client-side, reader-lifetime-bound extraction could never guarantee
+    (review P1-9).  Returns ``[]`` when there is no user turn to anchor on.
+    """
+    conv: list[dict[str, str]] = [
+        {"role": str(m.get("role") or "user"),
+         "content": str(m.get("content") or "")}
+        for m in history
+        if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+        and m.get("content")
+    ]
+    if message and not any(
+        m["role"] == "user" and m["content"] == message for m in conv
+    ):
+        conv.append({"role": "user", "content": message})
+    answer = str((folded or {}).get("content") or "")
+    if answer.strip():
+        conv.append({"role": "assistant", "content": answer})
+    if not any(m["role"] == "user" for m in conv):
+        return []
+    return conv
+
+
 # ── Persistence entry point (run_detached on_complete hook) ─────────────────
 
 async def persist_final_assistant_message(

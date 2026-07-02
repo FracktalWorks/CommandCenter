@@ -1183,16 +1183,13 @@ async def run_agent_stream_endpoint(
         try:
             from acb_memory import add_memories_background  # noqa: PLC0415
 
-            conv = list(_mem_history)
-            if _mem_message and not any(
-                m["role"] == "user" and m["content"] == _mem_message
-                for m in conv
-            ):
-                conv.append({"role": "user", "content": _mem_message})
-            answer = str(folded.get("content") or "")
-            if answer.strip():
-                conv.append({"role": "assistant", "content": answer})
-            if any(m["role"] == "user" for m in conv):
+            from gateway.chat_fold import (  # noqa: PLC0415
+                build_extraction_conversation,
+            )
+            conv = build_extraction_conversation(
+                _mem_history, _mem_message, folded,
+            )
+            if conv:
                 await add_memories_background(
                     _mem_user, conv, agent_id=agent_name,
                 )

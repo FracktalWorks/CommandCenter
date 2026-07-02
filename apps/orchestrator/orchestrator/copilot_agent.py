@@ -32,6 +32,28 @@ _STREAM_STALL_TIMEOUT: float = float(
     os.environ.get("COPILOT_STREAM_STALL_TIMEOUT", "300")
 )
 
+# While a blocking HITL question (ask_user / ask_questions) is parked waiting
+# for the human, the session legitimately emits nothing — that silence is NOT
+# a stall. Give the human this much time to answer (same knob the native-MAF
+# tiered watchdog uses) before the stall detector may fire.
+_HITL_STALL_TIMEOUT: float = float(
+    os.environ.get("HITL_IDLE_TIMEOUT_SECONDS", "3600")
+)
+
+
+def _hitl_pending() -> bool:
+    """True while any blocking ask_user / ask_questions Future awaits the user.
+
+    Reads the executor's pending-input registry. Global across runs — in the
+    rare case another thread's question is pending, this errs on the side of
+    not killing a possibly-waiting run.
+    """
+    try:
+        from orchestrator.executor import _pending_user_input
+        return bool(_pending_user_input)
+    except Exception:
+        return False
+
 
 class CommandCenterCopilotAgent(GitHubCopilotAgent):
     """GitHubCopilotAgent with BYOK provider forwarding and rich event streaming.
@@ -542,6 +564,22 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                         asyncio.get_running_loop().time()
                         - last_event_time
                     )
+                    # ── HITL-aware suppression ────────────────────────
+                    # A blocking ask_user / ask_questions parks the run on
+                    # a Future while the human answers; the session emits
+                    # no events during that wait. Without this check the
+                    # stall detector killed the run after 5 minutes, the
+                    # executor emitted RUN_FINISHED/RUN_ERROR, and the
+                    # frontend cleared the question card — questions
+                    # "disappeared" before the user could answer. Keep
+                    # waiting up to the HITL budget instead.
+                    if _hitl_pending() and elapsed < _HITL_STALL_TIMEOUT:
+                        logger.info(
+                            "copilot_stream_quiet_hitl_pending: waiting on "
+                            "user input for %.0fs (budget=%.0fs) — not a stall",
+                            elapsed, _HITL_STALL_TIMEOUT,
+                        )
+                        continue
                     logger.error(
                         "copilot_stream_stalled: no event for %.0fs "
                         "(stall_timeout=%.0fs)",

@@ -667,6 +667,74 @@ The desktop 4-panel layout collapses to a **single-pane** flow on ≤767px (`use
 **Build order at a glance** — strictly dependency-ordered, so each step is independently shippable:
 1. **Migration `48_task_manager_gtd.sql`** (the canonical store) → 2. **interface layer + ClickUp API connector** (read-only sync into `gtd_items`) → 3. **gateway `/tasks/` read endpoints** → 4. **`/tasks` UI shell** (ported from `/email`, read-only lens) → 5. **`skill-task-gtd` + extend `agent-task-manager`**. Everything in Phase 1 is **read-only**; no writes to source systems, so nothing is blocked on the Action Broker. Capture/LOCAL-CRUD/clarify (Phase 2) and delegation-write (Phase 4) come after.
 
+### 9.3 Dev runbook — continuing on a local machine (handoff)
+
+> Written 2026-07-02 for the cloud→PC handoff. Everything below is on `main`.
+
+**One-time setup**
+```bash
+uv sync                                             # workspace venv (.venv/)
+uv pip install -e apps/skill-task-gtd               # dev-import the agent skill
+scripts/apply_migrations.sh                         # applies 48 + 49 (idempotent)
+scripts/dump_schema.sh                              # refresh schema.generated.sql (needs pgvector box) — PENDING, do here
+.venv/bin/python scripts/import_hr_people.py        # seed gtd_people from infra/seed/hr/
+```
+
+**Run the stack**
+```bash
+# Gateway (FastAPI) — needs: DATABASE_URL, ACB_MASTER_KEY, LITELLM_MASTER_KEY
+.venv/bin/uvicorn gateway.main:app --port 8000
+# Control Plane (Next.js) — needs: GATEWAY_BASE_URL=http://127.0.0.1:8000 (+ LITELLM_MASTER_KEY for the proxy)
+cd workbench/control_plane && npm install && npm run dev
+```
+The `/tasks` UI hydrates from the gateway when reachable and silently falls back
+to bundled mock data when not — so the frontend is always runnable standalone.
+Connect ClickUp: Tasks → sidebar → *Connect workspace…* (API token → pick
+workspace; one account row per workspace, several companies fine).
+
+**Verify**
+```bash
+.venv/bin/python -m pytest tests/unit/test_tasks_gtd.py tests/unit/test_hitl_stall_suppression.py -q
+.venv/bin/python -m ruff check apps/gateway/gateway/routes/tasks apps/skill-task-gtd apps/agent-task-manager
+cd workbench/control_plane && npx eslint src/app/tasks && npm run build
+```
+
+**Where everything lives**
+| Layer | Path |
+|---|---|
+| Spec (this doc) | `ai-company-brain/specs/task_manager_app.md` |
+| DB migrations | `infra/postgres/48_task_manager_gtd.sql` · `49_gtd_people.sql` |
+| HR seed + import | `infra/seed/hr/` · `scripts/import_hr_people.py` |
+| Gateway API (21 endpoints, §8) | `apps/gateway/gateway/routes/tasks/` (`core` · `accounts` · `items` · `ai` · `people` · `providers`) |
+| Agent | `apps/agent-task-manager/` + `apps/skill-task-gtd/` (10 tools) |
+| Frontend | `workbench/control_plane/src/app/tasks/` (+ proxy `src/app/api/tasks/[...path]/`) |
+| Tests | `tests/unit/test_tasks_gtd.py` (18) · `test_hitl_stall_suppression.py` |
+
+**State at handoff (✅ done)** — UI slices 0–2.5 (shell/browse/clarify/inbox
+depth, mobile-optimized); capture/clarify/organize backend live end-to-end
+(browser-verified against real Postgres); ClickUp connector (multi-workspace,
+encrypted per-account tokens, fetch-beforehand schema §2.2.1); staged→push
+write model (C-04); org-knowledge people layer (§6.1 v1, real company data,
+capability-aware delegation); GTD agent tool surface.
+
+**Next in line (🔲)** — in rough priority order:
+1. `POST /tasks/sync` — pull *existing* provider tasks into `gtd_items` (today
+   sync is push-only for newly clarified items). Interface layer method +
+   scheduler, then the Waiting/Next views fill from ClickUp.
+2. Slice 3 — Engage "Now" view (F4, 4-criteria selection).
+3. Weekly Review wizard (F5) + Waiting-For monitoring surfaces (F6).
+4. Wire the task-manager agent into the Tasks assistant rail (F9; agent chat
+   currently runs via the generic `/agent` route).
+5. Live workload sync for `gtd_people` + overload warnings (§6.1 later-list).
+6. OAuth connect flow; more connectors (Asana/Jira/Linear); generic MCP connector.
+
+**Known gaps / footnotes** — `schema.generated.sql` not yet regenerated (needs
+pgvector; run `scripts/dump_schema.sh` on the PC). HITL question-card fix
+(2026-07-02): Copilot-SDK stall watchdog + Tier-2 per-tool timeout were killing
+runs parked on `ask_user`/`ask_questions` after 300s — now HITL-aware; knobs:
+`HITL_IDLE_TIMEOUT_SECONDS` (3600), `COPILOT_STREAM_STALL_TIMEOUT` (300),
+`COPILOT_TOOL_TIMEOUT_SECONDS` (300).
+
 ### Phase 1 — Foundation (interface layer + read-only GTD lens)
 - [ ] This plan (done) + DOX index updates.
 - [ ] `task_accounts` + `gtd_items` + `gtd_projects` + `gtd_waiting` + `gtd_contexts`/`gtd_horizons`/`gtd_reviews` schema (numbered migration), incl. the `source` (LOCAL/SYNCED) discriminator, nullable provider linkage, and the per-connection `capabilities`/`field_map` descriptor.

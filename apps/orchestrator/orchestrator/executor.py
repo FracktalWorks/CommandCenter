@@ -3509,10 +3509,19 @@ async def run_agent_stream(
                             # Sync tools run inline and can't be interrupted by
                             # wait_for — run them directly.
                             result = original_fn(*args, **kwargs)
-                        elif tool_name == "call_agent":
-                            # Sub-agent delegation can legitimately run for many
-                            # minutes (deep multi-step sub-tasks); do not bound it
-                            # by the per-tool timeout — it has its own watchdog.
+                        elif tool_name in (
+                            "call_agent",
+                            "ask_questions",
+                            "ask_user",
+                            "request_confirmation",
+                        ):
+                            # Long-running by design: sub-agent delegation has
+                            # its own watchdog, and the blocking HITL tools
+                            # park on a Future while the HUMAN answers (their
+                            # own budget is HITL_IDLE_TIMEOUT_SECONDS, default
+                            # 3600s). Bounding them by the 5-min per-tool
+                            # timeout cancelled the wait mid-question — the
+                            # question card vanished before the user replied.
                             result = await original_fn(*args, **kwargs)
                         else:
                             # Per-tool timeout: bound async tool execution so a

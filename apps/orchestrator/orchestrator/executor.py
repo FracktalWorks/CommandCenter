@@ -4215,15 +4215,25 @@ async def _run_with_maf_agent(
     prior_msgs: list[dict[str, str]] = event_payload.get("messages") or []
     current_msg: str = event_payload.get("message") or event_payload.get("user_query") or ""
 
-    if prior_msgs and current_msg:
+    _loader = event_payload.get("_history_loader")
+    if (prior_msgs or _loader) and current_msg:
         # Chat path: reconstruct proper Message sequence so the LLM sees the
-        # full conversation window, not just the latest turn.
+        # full conversation window, not just the latest turn.  C2: routes
+        # through the ONE server-side assembler (token-budgeted + current-turn
+        # dedup + DB-rebuild-when-empty) — identical to the streaming path's
+        # _compose_maf_run_input, replacing the old blind last-50 count cap.
         try:
+            from acb_llm import assemble_run_context  # noqa: PLC0415
             from agent_framework._types import \
                 Message as _Message  # noqa: PLC0415
 
-            # Build the preamble (integrations / warnings) as a system message.
+            # Fold the integrations preamble into the leading system context so
+            # the assembler carries it as one system message (it emits a single
+            # leading system block).
             system_parts: list[str] = []
+            system_context = event_payload.get("system_context") or ""
+            if system_context.strip():
+                system_parts.append(system_context.strip())
             integration_warnings: dict[str, str] = event_payload.get("integration_warnings", {})
             if integrations:
                 system_parts.append(
@@ -4237,30 +4247,17 @@ async def _run_with_maf_agent(
                     "When they do, output: <<<SETUP:service_name:ENV_VAR_NAME=value>>>"
                 )
 
-            messages_for_run: list[Any] = []
-            # Lead with the caller's system_context (persona / account_id /
-            # open-email / injected memories) so this batch fallback sees the
-            # SAME context the streaming path injects via _compose_maf_run_input.
-            # Without it, a multi-turn email chat that falls back to Tier 2
-            # silently loses its persona and account context.
-            system_context = event_payload.get("system_context") or ""
-            if system_context.strip():
-                messages_for_run.append(_Message("system", [system_context.strip()]))
-            if system_parts:
-                messages_for_run.append(_Message("system", ["\n".join(system_parts)]))
-
-            # Prior turns — cap at last 50 to stay within context windows.
-            for m in prior_msgs[-50:]:
-                role = m.get("role", "user")
-                content = m.get("content", "")
-                if content.strip() and role in ("user", "assistant", "system"):
-                    messages_for_run.append(_Message(role, [content]))
-
-            # Append current user message (may already be the last item in
-            # prior_msgs, but prior_msgs is sent BEFORE the new message is added).
-            messages_for_run.append(_Message("user", [current_msg]))
-
-            run_input = messages_for_run
+            assembled = assemble_run_context(
+                system_context="\n".join(system_parts),
+                history=prior_msgs,
+                current_message=current_msg,
+                model=(_active_run_model.get() or ""),
+                history_loader=_loader if callable(_loader) else None,
+            )
+            # MAF _types.Message takes content as a list of parts.
+            run_input = [
+                _Message(m["role"], [m["content"]]) for m in assembled
+            ]
         except Exception:  # noqa: BLE001
             # Fallback: MAF version mismatch — use plain string
             run_input = _build_event_message(agent_name, run_id, event_payload, integrations)
@@ -4304,6 +4301,13 @@ def _compose_maf_run_input(
       structure.
     * Otherwise → the composed prompt string from :func:`_build_event_message`
       (which already folds in memory_context + system_context + history).
+
+    C2: the structured-message branch now routes through the ONE server-side
+    assembler ``acb_llm.assemble_run_context`` — token-budgeted (fit to the
+    resolved model's window) + current-turn dedup + DB-rebuild-when-empty —
+    instead of the old blind ``[-20:]`` count cap.  The batch path
+    (:func:`run_agent`) calls the same assembler, so streaming and batch feed
+    the model identically (the drift the two duplicated slicers risked).
     """
     message = _build_event_message(agent_name, run_id, event_payload, integrations)
     history_msgs = event_payload.get("messages") or []
@@ -4311,28 +4315,26 @@ def _compose_maf_run_input(
         event_payload.get("message") or event_payload.get("user_query") or ""
     )
     system_context = event_payload.get("system_context") or ""
-    if is_byok and history_msgs:
+    # Rebuild history from the store when the caller sent none (API/webhook) —
+    # a loader is threaded in via the payload by the route layer when it has a
+    # thread_id; absent one, this is a no-op and behaviour is unchanged.
+    _loader = event_payload.get("_history_loader")
+    if is_byok and (history_msgs or _loader):
         try:
+            from acb_llm import assemble_run_context  # noqa: PLC0415
             from agent_framework import Message as _MAFMsg
-            maf_messages: list[Any] = []
-            if system_context.strip():
-                maf_messages.append(
-                    _MAFMsg(role="system", content=system_context.strip())
-                )
-            for _h in history_msgs[-20:]:
-                _h_role = _h.get("role", "user")
-                _h_content = (_h.get("content") or "").strip()
-                if not _h_content:
-                    continue
-                if _h_role == "user" and _h_content == current_msg_text.strip():
-                    continue
-                maf_messages.append(_MAFMsg(role=_h_role, content=_h_content))
-            if current_msg_text.strip():
-                maf_messages.append(
-                    _MAFMsg(role="user", content=current_msg_text.strip())
-                )
+            assembled = assemble_run_context(
+                system_context=system_context,
+                history=history_msgs,
+                current_message=current_msg_text,
+                model=(_active_run_model.get() or ""),
+                history_loader=_loader if callable(_loader) else None,
+            )
+            maf_messages = [
+                _MAFMsg(role=m["role"], content=m["content"]) for m in assembled
+            ]
             return maf_messages if maf_messages else message
-        except Exception:
+        except Exception:  # noqa: BLE001 — fall back to the string prompt
             return message
     return message
 

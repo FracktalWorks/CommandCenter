@@ -1171,6 +1171,29 @@ async def run_agent_stream_endpoint(
 
     thread_id = req.thread_id or f"{agent_name}:{run_id}"
 
+    # C2 — server-side history rebuild for non-chat callers. When the caller
+    # sent no `messages` (an API/webhook client that doesn't keep a browser
+    # store) but we have a thread_id, hand the executor's assembler a loader
+    # that rebuilds history from the authoritative chat_message store — so
+    # every caller gets the SAME context the browser client would. The browser
+    # chat path keeps sending `messages`, so the loader is only consulted on the
+    # empty-history case (see acb_llm.assemble_run_context).
+    if req.thread_id and not (req.payload.get("messages") or []):
+        _hist_uid = (user.email or "").strip() or "anonymous"
+
+        def _load_history_from_store() -> list[dict[str, str]]:
+            from gateway.routes.chat import _get_messages  # noqa: PLC0415
+            rows = _get_messages(thread_id, _hist_uid, limit=50)
+            return [
+                {"role": str(r.get("role") or "user"),
+                 "content": str(r.get("content") or "")}
+                for r in rows
+                if r.get("role") in ("user", "assistant")
+                and str(r.get("content") or "").strip()
+            ]
+
+        req.payload["_history_loader"] = _load_history_from_store
+
     # Authoritative persistence at run end (core_loop_unification Phase 1):
     # the detached task folds the run's Redis event log into the chat_message
     # row this turn renders as — the tail survives even when the browser and

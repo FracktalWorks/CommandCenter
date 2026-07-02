@@ -21,6 +21,7 @@ emails. The fitting + fallback logic lives here so every in-gateway LLM call
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from acb_common import get_logger
@@ -63,11 +64,11 @@ def resolve_underlying_model(model: str) -> str:
     if not m:
         return m
     try:
-        from acb_llm.client import _TIER_ALIAS_MAP, _TIER_MODEL  # noqa: PLC0415
+        from acb_llm.client import _TIER_ALIAS_MAP, _TIER_MODEL
         tier_id = _TIER_ALIAS_MAP.get(m)
         if tier_id:
             return _TIER_MODEL.get(tier_id, m)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return m
 
@@ -87,7 +88,7 @@ def context_window_for(model: str) -> int:
     if resolved in _TIER_CONTEXT_WINDOWS:
         return _TIER_CONTEXT_WINDOWS[resolved]
     try:
-        from litellm import model_cost  # noqa: PLC0415
+        from litellm import model_cost
         info = (model_cost.get(resolved)
                 or model_cost.get(resolved.split("/")[-1]))
         if info:
@@ -95,7 +96,7 @@ def context_window_for(model: str) -> int:
                       or info.get("max_tokens") or 0)
             if win > 0:
                 return win
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return _DEFAULT_CONTEXT_WINDOW
 
@@ -107,11 +108,11 @@ def count_message_tokens(messages: list[dict[str, Any]], model: str = "") -> int
     resolved = resolve_underlying_model(model) if model else ""
     if resolved:
         try:
-            from litellm import token_counter  # noqa: PLC0415
+            from litellm import token_counter
             n = token_counter(model=resolved, messages=messages)
             if n:
                 return int(n)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     total = 0
     for msg in messages:
@@ -203,10 +204,10 @@ async def acompletion_with_fallback(
     ``used_model`` is the concrete litellm id that produced the answer. Raises
     the last error if every attempt fails.
     """
-    import litellm as _litellm  # noqa: PLC0415
-    from litellm import acompletion  # noqa: PLC0415
+    import litellm as _litellm
+    from litellm import acompletion
 
-    from acb_llm.client import (  # noqa: PLC0415
+    from acb_llm.client import (
         _ensure_keys_loaded,
         ensure_model_registered,
     )
@@ -236,7 +237,7 @@ async def acompletion_with_fallback(
                 _log.info("acb_llm.fallback_succeeded",
                           model=resolved, truncated=was_truncated)
             return resp, resolved
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             last_exc = exc
             _log.warning(
                 "acb_llm.completion_failed",
@@ -249,3 +250,129 @@ async def acompletion_with_fallback(
             continue
 
     raise last_exc or RuntimeError("LLM completion failed (no attempts made)")
+
+
+# ── Server-side run-context assembler (C2) ──────────────────────────────────
+# The single INPUT-side context builder. Before this, each orchestrator path
+# re-sliced the client-sent history with its own COUNT cap (12/16/20/50 msgs)
+# and char-truncation, none token-aware, and non-chat callers (API/webhook) got
+# no history at all because nothing rebuilt it server-side. This routes them all
+# through one token-budgeted assembler. See specs/context_assembly_c2.md.
+
+
+def _dedupe_current_turn(
+    history: list[dict[str, Any]], current_message: str,
+) -> list[dict[str, Any]]:
+    """Drop a trailing history entry equal to the current user turn.
+
+    Server-side equivalent of route.ts's ``withoutCurrentTurn`` — so the model
+    never sees the prompt twice, regardless of whether the caller already
+    excluded it. Only strips a *trailing* user turn (the just-sent one).
+    """
+    if not history or not current_message.strip():
+        return history
+    last = history[-1]
+    if (
+        str(last.get("role")) == "user"
+        and str(last.get("content") or "").strip() == current_message.strip()
+    ):
+        return history[:-1]
+    return history
+
+
+def assemble_run_context(
+    *,
+    system_context: str = "",
+    history: list[dict[str, Any]] | None = None,
+    current_message: str = "",
+    model: str = "",
+    max_output_tokens: int = 1024,
+    history_loader: Callable[[], list[dict[str, Any]]] | None = None,
+    max_turns: int = 50,
+) -> list[dict[str, Any]]:
+    """Assemble a token-budgeted OpenAI-format ``messages`` list for a run.
+
+    One server-side assembler for every chat / agent-run path, replacing the
+    six divergent client-history slicers in the executor (C2). Steps:
+
+    1. **Source of history.** Use ``history`` when it has content. When empty
+       AND ``history_loader`` is supplied (the server holds a ``thread_id``),
+       rebuild it from the store via the loader — this is what gives non-chat
+       callers (API/webhook/external) the SAME history as the browser client,
+       which previously got none.
+    2. **Dedupe the current turn** (server-side ``withoutCurrentTurn``).
+    3. **Assemble** ``[system?] + history[-max_turns:] + current`` in OpenAI
+       shape; only ``user``/``assistant``/``system`` roles with content survive.
+    4. **Token-budget fit** via :func:`fit_messages_to_context` — token-aware
+       fitting REPLACES the old blind count caps (``max_turns`` remains only as
+       a cheap upper bound applied before the token pass).
+
+    Pure function: DB access is injected via ``history_loader`` so ``acb_llm``
+    keeps no dependency on the gateway. Never raises for empty inputs — returns
+    at least the current user turn (and system, if any).
+    """
+    src = list(history or [])
+    if not src and history_loader is not None:
+        try:
+            loaded = history_loader() or []
+            if isinstance(loaded, list):
+                src = loaded
+        except Exception as exc:
+            _log.warning("acb_llm.history_loader_failed", error=str(exc))
+
+    src = _dedupe_current_turn(src, current_message)
+
+    messages: list[dict[str, Any]] = []
+    if system_context.strip():
+        messages.append({"role": "system", "content": system_context.strip()})
+
+    hist_turns: list[dict[str, Any]] = []
+    for m in src[-max_turns:]:
+        role = str(m.get("role") or "user")
+        content = str(m.get("content") or "").strip()
+        if content and role in ("user", "assistant", "system"):
+            hist_turns.append({"role": role, "content": content})
+
+    current_turn = (
+        {"role": "user", "content": current_message.strip()}
+        if current_message.strip() else None
+    )
+
+    if not model:
+        # No window to fit to — return the full assembly (count cap only).
+        out = messages + hist_turns
+        if current_turn:
+            out.append(current_turn)
+        return out
+
+    # Token-budget windowing. Two-stage, because fit_messages_to_context only
+    # TRIMS the single longest message per pass — great for the email shape
+    # (one huge body) but it can't converge on a many-medium-turn chat
+    # transcript. So first DROP whole oldest history turns until the assembly
+    # fits, THEN let fit_messages_to_context handle any remaining oversized
+    # single message (e.g. one giant pasted block). System context + the
+    # current turn are never dropped — only historical turns.
+    budget = context_window_for(model) - max_output_tokens - 512
+    budget = max(1024, budget)
+    dropped = 0
+    while hist_turns:
+        trial = messages + hist_turns + ([current_turn] if current_turn else [])
+        if count_message_tokens(trial, model) <= budget:
+            break
+        hist_turns.pop(0)  # drop the oldest historical turn
+        dropped += 1
+
+    assembled = messages + hist_turns + ([current_turn] if current_turn else [])
+    fitted, truncated = fit_messages_to_context(
+        assembled, model, max_output_tokens=max_output_tokens,
+    )
+    if truncated or dropped:
+        _log.info(
+            "acb_llm.run_context_fitted",
+            model=model,
+            turns=len(assembled),
+            dropped_turns=dropped,
+            char_truncated=truncated,
+            from_loader=(not history and history_loader is not None),
+        )
+    return fitted

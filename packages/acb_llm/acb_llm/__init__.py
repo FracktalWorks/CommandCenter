@@ -5,7 +5,9 @@ All app code MUST go through this module — never call provider SDKs directly.
 from acb_llm.client import LLMTier, complete, complete_with_tools
 from acb_llm.context import (
     acompletion_with_fallback,
+    assemble_run_context,
     context_window_for,
+    count_message_tokens,
     fit_messages_to_context,
     resolve_underlying_model,
 )
@@ -13,9 +15,11 @@ from acb_llm.context import (
 __all__ = [
     "LLMTier",
     "acompletion_with_fallback",
+    "assemble_run_context",
     "complete",
     "complete_with_tools",
     "context_window_for",
+    "count_message_tokens",
     "fit_messages_to_context",
     "resolve_underlying_model",
 ]

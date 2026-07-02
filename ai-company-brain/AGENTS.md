@@ -101,6 +101,7 @@ Status: 🟢 live/shipped · 🔄 in progress · 🔲 planned/not started. *(Ind
 | [`drawio_integration.md`](specs/drawio_integration.md) | **draw.io** — architecture, components, tickets ST-DRW-01…13, roadmap (master) | 🔲 proposed |
 | [`drawio_diagram_svc_contract.md`](specs/drawio_diagram_svc_contract.md) | draw.io — wire contract for `diagram-svc` / `create_diagram` / `DrawioEditor` (freeze-gated) | 🔲 proposed |
 | [`chat_ux.md`](specs/chat_ux.md) | Chat thinking/progress/tool rendering UI | 🔄 Phase 1 ✅, Phase 2 |
+| [`chat_implementation_review_2026-07.md`](specs/chat_implementation_review_2026-07.md) | **Chat stack audit** (SSE · HITL · resume · handoffs, MAF + Copilot SDK) — prioritized P0/P1 fixes, 3 strategic refactors, doc-drift list | 📋 review — work queue for the chat hardening pass |
 | [`stream_reconnection.md`](specs/stream_reconnection.md) | Fire-and-forget chat + Redis stream replay/reconnect | 🟢 implemented |
 | [`vscode_tool_integration.md`](specs/vscode_tool_integration.md) | 6 VS Code Copilot-Chat tools (HITL, errors, memory, history, GitHub search) | 🔄 impl. done, verify |
 | [`artifact_viewer.md`](specs/artifact_viewer.md) | Right-sidebar file browser + inline document viewer | 🔲 M3 target |

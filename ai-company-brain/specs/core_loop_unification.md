@@ -122,6 +122,17 @@ Now: one owner (gateway, run boundary), one shared assembler
 for either orchestrator path (dead `extractMemories` removed). A degraded
 no-thread_id/no-message-id copilot request keeps a `background_tasks` fallback.
 
+**P1-5 reconnect cursoring — plumbing in place, skip deferred.** The
+executor now stamps a per-thread emit ordinal onto the local `_stream_id`
+(`local-<ms>-<seq>#<n>`); since a run resets its stream and pushes events in
+emission order, the client has already seen the first `<n>` Redis entries, so a
+reconnect *could* skip them instead of full-replaying from `0-0`. Not wired yet:
+the client currently CLEARS its partial message before replay (deltas have no
+id-dedup, so re-appending would double text), so a skip requires client-side
+delta de-duplication + a UI drive to prove no doubling — same gate as the
+live-fold demotion. Full replay stays the safe default; the ordinal is harmless
+and ready.
+
 **Live-fold demotion — deferred, NOT done blind.** The route's
 `translateAndPersistStream` still folds + persists on a 3s cadence. The *final*
 persist is now redundant with the gateway's authoritative `on_complete` fold

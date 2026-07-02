@@ -1334,12 +1334,20 @@ async def reconnect_agent_stream(
 
     async def _event_generator():
         # Phase 1: Replay missed events.
-        # Local _stream_id values (e.g. "local-1718123456789-5") are generated
+        # Local _stream_id values (e.g. "local-1718123456789-5#42") are minted
         # by the executor for the initial SSE stream (before the Redis entry ID
         # is known).  Redis XREAD doesn't understand them, so fall back to
         # "0-0".  Streams are reset per run (mark_active(reset=True)), so a
-        # full replay covers exactly the current run.  The frontend clears its
-        # partial message before replay, so duplication is harmless.
+        # full replay covers exactly the current run, and the frontend clears
+        # its partial message before replay (deltas have no id-dedup, so
+        # re-appending would double text) — full replay is the SAFE default.
+        #
+        # P1-5 note: the trailing "#<n>" ordinal on a local cursor is a real
+        # per-thread emit count (stream is reset per run; events push in
+        # emission order), so a future client that PRESERVES its partial could
+        # resume by skipping the first <n> entries. That optimisation is gated
+        # on client-side delta de-duplication + a UI drive to prove no doubling
+        # (see core_loop_unification §D1 follow-ups); the plumbing is in place.
         _since = since
         if _since.startswith("local-"):
             _since = "0-0"

@@ -50,10 +50,18 @@ _MAX_ANNEAL_ATTEMPTS = 2
 # until the HTTP-level abort.  This bounds individual ASYNC tool execution in
 # the Tier-2 batch shim (the native MAF path has its own per-tool idle
 # watchdog) so a hung tool is surfaced as an error instead of a silent hang.
-# Set via COPILOT_TOOL_TIMEOUT_SECONDS (default 300 = 5 min).
-_TOOL_EXECUTION_TIMEOUT: float = float(
-    os.environ.get("COPILOT_TOOL_TIMEOUT_SECONDS", "300")
+#
+# The watchdog VALUES + the native tier-selection rule now live in ONE place —
+# orchestrator/watchdog.py (core_module_map A1/A2 "unified watchdog policy") —
+# instead of being read via os.environ.get() at three call sites. Env knob
+# names are unchanged (COPILOT_TOOL_TIMEOUT_SECONDS etc.).
+from orchestrator.watchdog import (  # noqa: E402
+    LoopDetector as _LoopDetector,
+    default_watchdog,
 )
+
+_WATCHDOG = default_watchdog()
+_TOOL_EXECUTION_TIMEOUT: float = _WATCHDOG.tool_execution
 
 # ── Elicitation bridge: track which tool_call_id maps to a pending
 # ask_questions Future so cleanup only fires for the matching result.
@@ -2209,6 +2217,14 @@ async def run_agent(
 # entry ID isn't yet known).  Format: ``local-<ms>-<seq>``.
 _sse_seq: int = 0
 
+# Per-thread emit counter (P1-5 reconnect cursoring).  A run resets its Redis
+# stream (mark_active(reset=True)) and pushes events in EXACT emission order
+# (_push_chains), so the Nth event this thread emits IS the Nth Redis entry.
+# We stamp that ordinal into the local id as ``local-<ms>-<seq>#<threadSeq>`` so
+# a reconnect with a local cursor can skip the first <threadSeq> Redis entries
+# instead of blindly re-replaying the whole run from 0-0.
+_thread_emit_seq: dict[str, int] = {}
+
 
 def _sse(payload: dict[str, Any]) -> str:
     """Return a single SSE frame as a string.
@@ -2217,12 +2233,20 @@ def _sse(payload: dict[str, Any]) -> str:
     background push to the Redis Stream so reconnection can replay events.
 
     Includes a local ``_stream_id`` in every event so the frontend always
-    has a cursor to resume from, even before the Redis push completes.
+    has a cursor to resume from, even before the Redis push completes.  The
+    id embeds a per-thread emit ordinal (``#<n>``) so a reconnect can resume
+    by count (P1-5) — see the reconnect handler's local-cursor branch.
     """
     global _sse_seq
     import time as _time
     _sse_seq += 1
-    _local_id = f"local-{int(_time.time() * 1000)}-{_sse_seq}"
+    _tid = _stream_relay_thread_id.get(None)
+    _thread_seq = ""
+    if _tid is not None:
+        _n = _thread_emit_seq.get(_tid, 0) + 1
+        _thread_emit_seq[_tid] = _n
+        _thread_seq = f"#{_n}"
+    _local_id = f"local-{int(_time.time() * 1000)}-{_sse_seq}{_thread_seq}"
     payload["_stream_id"] = _local_id
 
     line = f"data: {json.dumps(payload)}\n\n"
@@ -2319,6 +2343,10 @@ async def run_agent_stream(
         await _relay_mark_active(thread_id)
     except Exception:  # noqa: BLE001
         pass
+
+    # Fresh per-thread emit ordinal for this run (P1-5): the stream was just
+    # reset, so the next event emitted is entry #1 in Redis.
+    _thread_emit_seq[thread_id] = 0
 
     # Cross-worker HITL delivery (P1-2): register a "respond_input" applier so a
     # user's ask_user answer that arrives on a DIFFERENT worker is relayed here
@@ -2616,9 +2644,6 @@ async def run_agent_stream(
                 # than hold the SSE open until the HTTP-level abort (~5 min).
                 _native_idle = False
                 _native_idle_after = 0.0
-                _idle_to = float(
-                    os.environ.get("NATIVE_STREAM_IDLE_TIMEOUT_SECONDS", "120")
-                )
                 try:
                     async with contextlib.AsyncExitStack() as _nstack:
                         if hasattr(type(agent), "__aenter__"):
@@ -2637,18 +2662,23 @@ async def run_agent_stream(
                             "confirmation_requested",
                             "user_input_requested",
                         )
-                        _hitl_idle_to = float(
-                            os.environ.get("HITL_IDLE_TIMEOUT_SECONDS", "3600")
-                        )
-                        # A tool/sub-agent legitimately running parks the stream
-                        # too — give in-flight tool calls a longer budget than
-                        # the bare idle timeout so they aren't killed as stalls.
-                        _tool_idle_to = float(
-                            os.environ.get(
-                                "NATIVE_TOOL_IDLE_TIMEOUT_SECONDS", "600"
-                            )
-                        )
+                        # Idle budgets + tier-selection now come from the shared
+                        # WatchdogPolicy (see idle-watchdog block below).
                         _tools_open = 0
+                        # Loop detection: a model can wedge itself calling the
+                        # SAME tool with the SAME args over and over (bad plan,
+                        # ignored error). Track a per-call signature (name+args)
+                        # and abort the run when one repeats too many times, so
+                        # a loop surfaces as an error instead of burning tokens
+                        # until the idle/HTTP timeout. Thresholds are generous —
+                        # legitimate retries with identical args are rare.
+                        _loop_max = int(
+                            os.environ.get("TOOL_LOOP_MAX_REPEATS", "5")
+                        )
+                        _tc_name: dict[str, str] = {}
+                        _tc_args: dict[str, str] = {}
+                        _loop_detector = _LoopDetector(max_repeats=_loop_max)
+                        _loop_tripped = False
                         _next_task: "asyncio.Task[Any] | None" = None
                         _hitl_pending = False
                         while True:
@@ -2657,14 +2687,15 @@ async def run_agent_stream(
                                     _agen.__anext__()
                                 )
                             _q_task = asyncio.ensure_future(_nq.get())
-                            # Tiered watchdog: 3600s while a HITL question is
-                            # pending, 600s while a tool is in flight, else 120s.
-                            if _hitl_pending:
-                                _wait_to = _hitl_idle_to
-                            elif _tools_open > 0:
-                                _wait_to = _tool_idle_to
-                            else:
-                                _wait_to = _idle_to
+                            # Tiered idle watchdog (unified policy): 3600s while
+                            # a HITL question is pending, 600s while a tool is in
+                            # flight, else 120s — selection owned by
+                            # WatchdogPolicy.idle_timeout so value + ordering
+                            # can't drift across paths.
+                            _wait_to = _WATCHDOG.idle_timeout(
+                                hitl_pending=_hitl_pending,
+                                tools_open=_tools_open,
+                            )
                             _done, _ = await asyncio.wait(
                                 {_next_task, _q_task},
                                 timeout=_wait_to,
@@ -2734,11 +2765,49 @@ async def run_agent_stream(
                                 if _et == "TOOL_CALL_START":
                                     _tools_open += 1
                                     _n_emitted = True
+                                    _cid = str(_ev.get("toolCallId") or "")
+                                    _tc_name[_cid] = str(
+                                        _ev.get("toolCallName") or "tool"
+                                    )
+                                    _tc_args[_cid] = str(_ev.get("args") or "")
+                                elif _et == "TOOL_CALL_ARGS":
+                                    _cid = str(_ev.get("toolCallId") or "")
+                                    _tc_args[_cid] = _tc_args.get(_cid, "") + str(
+                                        _ev.get("delta") or ""
+                                    )
                                 elif _et == "TOOL_CALL_RESULT":
                                     _tools_open = max(0, _tools_open - 1)
+                                    # Loop detection: bump this call's signature
+                                    # count; trip when the SAME name+args repeats
+                                    # past the threshold.
+                                    _cid = str(_ev.get("toolCallId") or "")
+                                    if _loop_detector.record(
+                                        _tc_name.get(_cid, "tool"),
+                                        _tc_args.get(_cid, ""),
+                                    ):
+                                        _loop_tripped = True
+                                    _tc_name.pop(_cid, None)
+                                    _tc_args.pop(_cid, None)
                                 else:
                                     _n_emitted = True
                                 yield _sse(_ev)
+                            if _loop_tripped:
+                                _log.warning(
+                                    "executor.native_maf_tool_loop_detected",
+                                    agent=agent_name, repeats=_loop_max,
+                                )
+                                yield _sse({
+                                    "type": "RUN_ERROR", "runId": run_id,
+                                    "message": (
+                                        "Agent stopped: the same tool was "
+                                        f"called with identical arguments "
+                                        f"{_loop_max} times (loop detected)."
+                                    ),
+                                })
+                                _next_task.cancel()
+                                with contextlib.suppress(Exception):
+                                    await _agen.aclose()
+                                break
                             # Surface injected-tool events (write_artifact,
                             # manage_todo_list, …) emitted during this update.
                             while not _nq.empty():
@@ -3689,6 +3758,7 @@ async def run_agent_stream(
                 pass
         _stream_relay_thread_id.reset(_relay_token)
         _active_run_model.reset(_model_token)
+        _thread_emit_seq.pop(thread_id, None)  # P1-5 counter cleanup
         # Drop the cross-worker HITL applier for this run (P1-2).  run_detached's
         # finally also clears ALL handlers for the thread, but this generator can
         # outlive/precede that path (batch tiers), so unregister defensively.

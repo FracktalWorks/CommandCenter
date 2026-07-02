@@ -161,6 +161,54 @@ async def test_background_child_registry_self_cleans():
     assert "t-clean" not in stream_relay._BACKGROUND_CHILDREN
 
 
+# ── Batch 3: sub-agent reconnect parity, dup user turn, HITL lifecycle ──────
+
+
+def test_sub_agent_events_persisted_and_replayed():
+    """P0-6: the translator persists the nested delegation timeline on the
+    parent call_agent tool event, and BOTH frontend SSE loops route
+    sub_agent_* events through the shared applySubAgentEvent reducer."""
+    route = (REPO / "workbench/control_plane/src/app/api/agent/chat/route.ts").read_text()
+    # Server-side accumulation + attachment to the persisted delegate tool.
+    assert "subAgent.text +=" in route
+    assert "subAgentTools: subAgent.tools" in route
+    assert "...subAgentFields," in route
+
+    hook = (REPO / "workbench/control_plane/src/hooks/useAgentChat.ts").read_text()
+    # Shared reducer used (no inline duplicated sub-agent state logic left) …
+    assert hook.count("applySubAgentEvent(m, evt)") >= 2, (
+        "both the live AND reconnect loops must route sub_agent_* events "
+        "through the shared reducer"
+    )
+    reducer = (REPO / "workbench/control_plane/src/lib/chatStream.ts").read_text()
+    assert "export function applySubAgentEvent" in reducer
+
+
+def test_current_turn_not_duplicated_in_history():
+    """P1-1: the frontend excludes the just-appended user turn (and the
+    assistant placeholder) from history, and the route drops a trailing
+    duplicate server-side on the copilot/executor paths."""
+    hook = (REPO / "workbench/control_plane/src/hooks/useAgentChat.ts").read_text()
+    assert ".messages.slice(0, -2)" in hook
+    route = (REPO / "workbench/control_plane/src/app/api/agent/chat/route.ts").read_text()
+    assert "function withoutCurrentTurn" in route
+    assert route.count("withoutCurrentTurn(") >= 3  # orchestrator + executor + legacy
+
+
+def test_hitl_cards_cleared_on_session_switch_and_failures_surfaced():
+    """P1-3: HITL card state resets when the user switches sessions, and a
+    failed respond-input POST restores the card instead of being swallowed
+    (fire-and-forget left a parked agent with no card and no error)."""
+    chat = (REPO / "workbench/control_plane/src/components/AgentChat.tsx").read_text()
+    # Session-switch reset (React reset-during-render pattern).
+    assert "setHitlSession(sessionId);" in chat
+    assert "setConfirmation(null);\n    setElicitation(null);\n    setUserInput(null);" in chat
+    # All blocking answers go through the restoring helper — the ONLY direct
+    # fetch to respond-input is the helper's own (which surfaces failures).
+    assert chat.count("postRespondInput(") >= 4
+    assert chat.count('fetch("/api/agent/respond-input"') == 1
+
+
 def test_sub_agent_streaming_binds_hitl_handler():
     """P0-8: delegated Copilot SDK agents get on_user_input_request bound to
     the parent thread's handler, so their ask_user renders a card instead of

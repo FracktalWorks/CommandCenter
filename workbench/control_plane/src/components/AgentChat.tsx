@@ -693,6 +693,49 @@ export default function AgentChat({
     sessionIdRef.current = sessionId;
   }, [sessionId]);
 
+  // HITL cards are per-session component state — clear them on a session
+  // switch so a question raised in session A never renders in (or gets its
+  // answer routed from) session B.  The event subscriber above already
+  // filters incoming events by threadId; this handles the card that was
+  // ALREADY showing when the user switched.  Reset-during-render (not an
+  // effect) — React's "adjusting state when a prop changes" pattern.
+  const [hitlSession, setHitlSession] = useState(sessionId);
+  if (hitlSession !== sessionId) {
+    setHitlSession(sessionId);
+    setConfirmation(null);
+    setElicitation(null);
+    setUserInput(null);
+  }
+
+  // POST a blocking-HITL answer to /api/agent/respond-input.  On failure the
+  // card is RESTORED so the user can retry — the agent is still parked on its
+  // Future server-side, and the old fire-and-forget `.catch(() => {})` left a
+  // blocked run with no card and no error (a dead conversation).
+  const postRespondInput = useCallback(
+    (
+      payload: { request_id: string; answer: string; was_freeform: boolean },
+      restoreCard: () => void,
+    ) => {
+      const forSession = sessionIdRef.current;
+      void fetch("/api/agent/respond-input", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+        .then(async (r) => {
+          if (!r.ok) {
+            throw new Error(await r.text().catch(() => `status ${r.status}`));
+          }
+        })
+        .catch((err: unknown) => {
+          console.error("respond-input failed — restoring HITL card", err);
+          // Only restore if the user is still on the session that asked.
+          if (sessionIdRef.current === forSession) restoreCard();
+        });
+    },
+    [],
+  );
+
   // Reload the persisted send-queue when switching sessions/agents so a message
   // queued on another session doesn't leak in and a queue left on THIS session
   // is restored.  queueRef + queuedCount are the live mirror of the stored queue.
@@ -1294,32 +1337,30 @@ export default function AgentChat({
           {confirmation && (
             <ConfirmationCard title={confirmation.title} detail={confirmation.detail} context={confirmation.context}
               onApprove={() => {
-                const reqId = confirmation.requestId;
-                const id = confirmation.id;
+                const card = confirmation;
+                const reqId = card.requestId;
                 setConfirmation(null);
                 if (reqId) {
                   // Blocking path — unblock the parked agent in the SAME stream.
-                  void fetch("/api/agent/respond-input", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ request_id: reqId, answer: "APPROVE", was_freeform: false }),
-                  }).catch(() => {});
+                  postRespondInput(
+                    { request_id: reqId, answer: "APPROVE", was_freeform: false },
+                    () => setConfirmation(card),
+                  );
                 } else {
-                  submitText(`APPROVE: ${id}`);
+                  submitText(`APPROVE: ${card.id}`);
                 }
               }}
               onReject={() => {
-                const reqId = confirmation.requestId;
-                const id = confirmation.id;
+                const card = confirmation;
+                const reqId = card.requestId;
                 setConfirmation(null);
                 if (reqId) {
-                  void fetch("/api/agent/respond-input", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ request_id: reqId, answer: "REJECT", was_freeform: false }),
-                  }).catch(() => {});
+                  postRespondInput(
+                    { request_id: reqId, answer: "REJECT", was_freeform: false },
+                    () => setConfirmation(card),
+                  );
                 } else {
-                  submitText(`REJECT: ${id}`);
+                  submitText(`REJECT: ${card.id}`);
                 }
               }} />
           )}
@@ -1363,17 +1404,13 @@ export default function AgentChat({
                     ? (freeform || selectedJoined || formatted)
                     : formatted;
                   const wasFreeform = single && !!freeform && !selectedJoined;
-                  const reqId = elicitation.requestId;
+                  const card = elicitation;
+                  const reqId = card.requestId!;
                   setElicitation(null);
-                  void fetch("/api/agent/respond-input", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      request_id: reqId,
-                      answer,
-                      was_freeform: wasFreeform,
-                    }),
-                  }).catch(() => {});
+                  postRespondInput(
+                    { request_id: reqId, answer, was_freeform: wasFreeform },
+                    () => setElicitation(card),
+                  );
                 } else {
                   // ── Non-blocking path (Copilot SDK / standalone) ──
                   // Send the answer as a new chat message for the
@@ -1414,19 +1451,14 @@ export default function AgentChat({
                 const freeform = a.freeform?.trim();
                 const answer = freeform || selected || "";
                 const wasFreeform = !!freeform && !selected;
-                const reqId = userInput.requestId;
+                const card = userInput;
                 setUserInput(null);
                 // Unblock the parked agent run — it resumes in the SAME
                 // stream (no new chat message, no queuing).
-                void fetch("/api/agent/respond-input", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    request_id: reqId,
-                    answer,
-                    was_freeform: wasFreeform,
-                  }),
-                }).catch(() => {});
+                postRespondInput(
+                  { request_id: card.requestId, answer, was_freeform: wasFreeform },
+                  () => setUserInput(card),
+                );
               }}
             />
           )}

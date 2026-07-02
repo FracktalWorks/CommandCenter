@@ -27,7 +27,7 @@ import { parseAgentError } from "@/lib/parseAgentError";
 import { activeContextSlice, isCompactionCheckpoint } from "@/lib/tokenCount";
 import { emitAgentEvent } from "@/lib/agentEvents";
 import { applyStateSnapshot, applyStateDelta } from "@/hooks/useAgentState";
-import { applyStreamEvent, nanoid, parseReasoning, type StreamFold } from "@/lib/chatStream";
+import { applyStreamEvent, applySubAgentEvent, nanoid, parseReasoning, type StreamFold } from "@/lib/chatStream";
 
 // Re-export types for backward compatibility with AgentChat.tsx imports.
 export type { ChatMessage, ToolEvent };
@@ -232,7 +232,11 @@ export function useAgentChat({
         // compacted conversation sends [summary + recent turns] instead of the
         // whole transcript — matching Claude Code / Copilot CLI.  The checkpoint
         // summary (a system message) is kept; other system messages are dropped.
-        const prior = getSessionState(threadId).messages.slice(0, -1);
+        // Slice off BOTH just-appended messages (userMsg + assistant placeholder):
+        // the current turn travels separately as `message`, and leaving it in the
+        // history sent the user's prompt to the model twice on the copilot and
+        // executor paths (only litellm deduped server-side).
+        const prior = getSessionState(threadId).messages.slice(0, -2);
         const active = activeContextSlice(prior);
         const history = active
           .filter((m, idx) => m.role !== "system" || (idx === 0 && isCompactionCheckpoint(m)))
@@ -298,84 +302,14 @@ export function useAgentChat({
               case "tool_partial":
                 upd((m) => applyStreamEvent(m, evt, fold));
                 break;
-              case "sub_agent_delta": {
-                const tgtAgent = String(evt.agentName ?? "");
-                setSessionState(threadId, (prev) => ({
-                  ...prev,
-                  messages: prev.messages.map((m) => {
-                    if (m.id !== assistantId) return m;
-                    const evts = m.toolEvents ?? [];
-                    const idx = [...evts].reverse().findIndex(
-                      (t) => t.subAgentActive && (t.name.toLowerCase().includes("call_agent") || t.subAgentName)
-                    );
-                    if (idx === -1) return m;
-                    const ri = evts.length - 1 - idx;
-                    return {
-                      ...m, toolEvents: evts.map((t, i) => i === ri
-                        ? { ...t, subAgentName: t.subAgentName ?? tgtAgent, subAgentText: (t.subAgentText ?? "") + String(evt.delta ?? "") }
-                        : t),
-                    };
-                  }),
-                }));
+              // Nested delegation timeline — shared reducer (also used by the
+              // reconnect loop, so a refresh mid-delegation replays it too).
+              case "sub_agent_delta":
+              case "sub_agent_tool_start":
+              case "sub_agent_tool_end":
+              case "sub_agent_error":
+                upd((m) => applySubAgentEvent(m, evt));
                 break;
-              }
-              case "sub_agent_tool_start": {
-                const tgtAgent2 = String(evt.agentName ?? "");
-                const stId = String(evt.id ?? nanoid());
-                setSessionState(threadId, (prev) => ({
-                  ...prev,
-                  messages: prev.messages.map((m) => {
-                    if (m.id !== assistantId) return m;
-                    const evts = m.toolEvents ?? [];
-                    const idx = [...evts].reverse().findIndex(
-                      (t) => t.subAgentActive && (t.name.toLowerCase().includes("call_agent") || t.subAgentName)
-                    );
-                    if (idx === -1) return m;
-                    const ri = evts.length - 1 - idx;
-                    return {
-                      ...m, toolEvents: evts.map((t, i) => i === ri
-                        ? { ...t, subAgentName: t.subAgentName ?? tgtAgent2, subAgentTools: [...(t.subAgentTools ?? []), { id: stId, name: String(evt.name ?? "tool"), status: "running" as const }] }
-                        : t),
-                    };
-                  }),
-                }));
-                break;
-              }
-              case "sub_agent_tool_end": {
-                const stId2 = String(evt.id ?? "");
-                setSessionState(threadId, (prev) => ({
-                  ...prev,
-                  messages: prev.messages.map((m) => {
-                    if (m.id !== assistantId) return m;
-                    return {
-                      ...m, toolEvents: (m.toolEvents ?? []).map((t) => !t.subAgentTools ? t : {
-                        ...t, subAgentTools: t.subAgentTools.map((st) =>
-                          st.id === stId2 ? { ...st, result: String(evt.result ?? ""), status: evt.success ? "done" as const : "error" as const } : st
-                        ),
-                      }),
-                    };
-                  }),
-                }));
-                break;
-              }
-              case "sub_agent_error": {
-                setSessionState(threadId, (prev) => ({
-                  ...prev,
-                  messages: prev.messages.map((m) => {
-                    if (m.id !== assistantId) return m;
-                    const evts = m.toolEvents ?? [];
-                    const idx = [...evts].reverse().findIndex((t) => t.subAgentActive);
-                    if (idx === -1) return m;
-                    const ri = evts.length - 1 - idx;
-                    return {
-                      ...m, toolEvents: evts.map((t, i) => i === ri
-                        ? { ...t, subAgentActive: false, status: "error" as const, result: String(evt.error ?? "Sub-agent error") }
-                        : t),
-                    };
-                  }),
-                }));
-                break;
-              }
               case "done":
                 upd((m) => applyStreamEvent(m, evt, fold));
                 emitAgentEvent("onRunFinalized", { runId: String(evt.run_id ?? ""), threadId });
@@ -701,6 +635,15 @@ export function useAgentChat({
               case "tool_end":
               case "tool_partial":
                 updLast((m) => applyStreamEvent(m, evt, fold));
+                break;
+              // Nested delegation timeline — same shared reducer as the live
+              // loop.  Without these cases a refresh mid-delegation dropped
+              // the sub-agent's text and tool rows from the replayed message.
+              case "sub_agent_delta":
+              case "sub_agent_tool_start":
+              case "sub_agent_tool_end":
+              case "sub_agent_error":
+                updLast((m) => applySubAgentEvent(m, evt));
                 break;
               case "custom": {
                 // Mirror the live loop so a HITL question pending when the page

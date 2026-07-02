@@ -13,8 +13,10 @@
  *     (app/api/agent/chat/route.ts) so all THREE call sites share one copy.
  *   • applyStreamEvent — the pure message-state reducer for the events whose
  *     handling is identical in both loops (delta, reasoning, tool_start,
- *     tool_end, tool_partial, progress, todos, done).  Side-effecting / loop-
- *     specific events (custom, state, sub_agent_*, error) stay in the hook.
+ *     tool_end, tool_partial, progress, todos, done).
+ *   • applySubAgentEvent — the nested-delegation reducer (sub_agent_*), shared
+ *     the same way.  Side-effecting / loop-specific events (custom, state,
+ *     error) stay in the hook.
  *
  * Pure: no React, no DOM — safe to import from both client and server.
  */
@@ -151,8 +153,9 @@ export interface StreamFold {
  * Apply ONE streamed event to the assistant message.  Returns a NEW message
  * (immutable) and mutates `fold` in place — the fold cursor is per-stream state,
  * not per-message.  Returns the message unchanged for events this reducer
- * doesn't own; the caller handles those (custom / state / sub_agent_* / error),
- * since they have side effects or differ between the live and reconnect loops.
+ * doesn't own; the caller handles those (custom / state / error), since they
+ * have side effects or differ between the live and reconnect loops.
+ * Sub-agent events go through {@link applySubAgentEvent}.
  *
  * This is the single source of truth shared by both SSE loops in useAgentChat.
  */
@@ -273,6 +276,81 @@ export function applyStreamEvent(
         reasoningBlocks: u.reasoningBlocks,
         streaming: false,
         isThinkingActive: false,
+      };
+    }
+    default:
+      return m;
+  }
+}
+
+/**
+ * Apply ONE sub-agent (delegation) event to the assistant message — the nested
+ * timeline shown inside the parent `call_agent` tool row.  Shared by the live
+ * and reconnect SSE loops (the reconnect loop historically lacked these cases,
+ * so a refresh mid-delegation silently dropped the whole nested timeline).
+ *
+ * Events target the most recent still-active delegate tool row, matching how
+ * the backend interleaves SUB_AGENT_* events between the parent tool's start
+ * and end.  Unknown event types return the message unchanged.
+ */
+export function applySubAgentEvent(
+  m: ChatMessage,
+  evt: Record<string, unknown>,
+): ChatMessage {
+  const evts = m.toolEvents ?? [];
+  /** Index of the last active delegate row, or -1. */
+  const lastDelegate = (): number => {
+    const idx = [...evts].reverse().findIndex(
+      (t) => t.subAgentActive && (t.name.toLowerCase().includes("call_agent") || t.subAgentName),
+    );
+    return idx === -1 ? -1 : evts.length - 1 - idx;
+  };
+
+  switch (evt.type) {
+    case "sub_agent_delta": {
+      const ri = lastDelegate();
+      if (ri === -1) return m;
+      const agent = String(evt.agentName ?? "");
+      return {
+        ...m,
+        toolEvents: evts.map((t, i) => i === ri
+          ? { ...t, subAgentName: t.subAgentName ?? agent, subAgentText: (t.subAgentText ?? "") + String(evt.delta ?? "") }
+          : t),
+      };
+    }
+    case "sub_agent_tool_start": {
+      const ri = lastDelegate();
+      if (ri === -1) return m;
+      const agent = String(evt.agentName ?? "");
+      const stId = String(evt.id ?? nanoid());
+      return {
+        ...m,
+        toolEvents: evts.map((t, i) => i === ri
+          ? { ...t, subAgentName: t.subAgentName ?? agent, subAgentTools: [...(t.subAgentTools ?? []), { id: stId, name: String(evt.name ?? "tool"), status: "running" as const }] }
+          : t),
+      };
+    }
+    case "sub_agent_tool_end": {
+      const stId = String(evt.id ?? "");
+      return {
+        ...m,
+        toolEvents: evts.map((t) => !t.subAgentTools ? t : {
+          ...t,
+          subAgentTools: t.subAgentTools.map((st) =>
+            st.id === stId ? { ...st, result: String(evt.result ?? ""), status: evt.success ? "done" as const : "error" as const } : st,
+          ),
+        }),
+      };
+    }
+    case "sub_agent_error": {
+      const idx = [...evts].reverse().findIndex((t) => t.subAgentActive);
+      if (idx === -1) return m;
+      const ri = evts.length - 1 - idx;
+      return {
+        ...m,
+        toolEvents: evts.map((t, i) => i === ri
+          ? { ...t, subAgentActive: false, status: "error" as const, result: String(evt.error ?? "Sub-agent error") }
+          : t),
       };
     }
     default:

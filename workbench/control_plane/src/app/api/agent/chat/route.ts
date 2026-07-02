@@ -181,6 +181,16 @@ async function translateAndPersistStream(
   const customEvents: Array<{ name: string; value: unknown }> = [];
   /** Latest structured todo-list snapshot (persisted via agent_state). */
   let latestTodos: Array<{ id: string; title: string; status: string }> = [];
+  /** Sub-agent (delegation) activity accumulated since the last delegate tool
+   *  ended — attached to that tool's persisted event at TOOL_CALL_END so the
+   *  nested timeline survives a page refresh (it previously existed only in
+   *  the frontend's live loop and was lost on reload).  Mirrors the ToolEvent
+   *  subAgent* fields the frontend renders. */
+  let subAgent: {
+    name: string;
+    text: string;
+    tools: Array<{ id: string; name: string; status: string; result?: string }>;
+  } = { name: "", text: "", tools: [] };
   let buf = "";
   let assistantContent = "";
   /** Index in reasoningBlocks of the most recently folded answer (visible text
@@ -294,6 +304,14 @@ async function translateAndPersistStream(
           const id = String(ev.toolCallId ?? "");
           const name = toolNames[id] ?? "tool";
           const result = String(ev.result ?? ev.content ?? "");
+          // Attach the nested delegation timeline accumulated since the last
+          // delegate ended (SUB_AGENT_* events stream BETWEEN the delegate
+          // tool's start and end).  Same shape the frontend live loop builds.
+          const isDelegate = name.toLowerCase().includes("call_agent");
+          const subAgentFields = isDelegate && (subAgent.name || subAgent.text || subAgent.tools.length > 0)
+            ? { subAgentName: subAgent.name, subAgentText: subAgent.text, subAgentTools: subAgent.tools }
+            : {};
+          if (isDelegate) subAgent = { name: "", text: "", tools: [] };
           toolEvents.push({
             id, name,
             args: parseToolArgs(toolArgs[id]),
@@ -305,6 +323,7 @@ async function translateAndPersistStream(
             reasoningCutoff: toolCutoffs[id] ?? 0,
             startedAt: toolStarts[id],
             endedAt: Date.now(),
+            ...subAgentFields,
           });
           out = {
             type: "tool_end", id: ev.toolCallId, name,
@@ -324,12 +343,24 @@ async function translateAndPersistStream(
           customEvents.push(cev);
           out = { type: "custom", name: cev.name, value: cev.value };
         } else if (t === "SUB_AGENT_TEXT_DELTA") {
-          out = { type: "sub_agent_delta", agentName: String(ev.agentName ?? ""), runId: String(ev.runId ?? ""), delta: String(ev.delta ?? "") };
+          const agent = String(ev.agentName ?? "");
+          subAgent.name = subAgent.name || agent;
+          subAgent.text += String(ev.delta ?? "");
+          out = { type: "sub_agent_delta", agentName: agent, runId: String(ev.runId ?? ""), delta: String(ev.delta ?? "") };
         } else if (t === "SUB_AGENT_TOOL_CALL_START") {
-          out = { type: "sub_agent_tool_start", agentName: String(ev.agentName ?? ""), id: String(ev.toolCallId ?? ""), name: String(ev.toolCallName ?? "") };
+          const agent = String(ev.agentName ?? "");
+          const stId = String(ev.toolCallId ?? "");
+          subAgent.name = subAgent.name || agent;
+          subAgent.tools.push({ id: stId, name: String(ev.toolCallName ?? "tool"), status: "running" });
+          out = { type: "sub_agent_tool_start", agentName: agent, id: stId, name: String(ev.toolCallName ?? "") };
         } else if (t === "SUB_AGENT_TOOL_CALL_RESULT") {
-          out = { type: "sub_agent_tool_end", agentName: String(ev.agentName ?? ""), id: String(ev.toolCallId ?? ""), result: String(ev.content ?? ""), success: ev.success !== false };
+          const stId = String(ev.toolCallId ?? "");
+          const ok = ev.success !== false;
+          const st = subAgent.tools.find((x) => x.id === stId);
+          if (st) { st.result = String(ev.content ?? ""); st.status = ok ? "done" : "error"; }
+          out = { type: "sub_agent_tool_end", agentName: String(ev.agentName ?? ""), id: stId, result: String(ev.content ?? ""), success: ok };
         } else if (t === "SUB_AGENT_ERROR") {
+          subAgent.text += subAgent.text ? `\n[error] ${String(ev.error ?? "Sub-agent error")}` : `[error] ${String(ev.error ?? "Sub-agent error")}`;
           out = { type: "sub_agent_error", agentName: String(ev.agentName ?? ""), error: String(ev.error ?? "Sub-agent error") };
         } else if (t === "RUN_FINISHED" || t === "done") {
           // RUN_FINISHED: standard AG-UI event from the agent executor.
@@ -534,6 +565,24 @@ function parseToolArgs(raw: string | undefined): Record<string, unknown> {
 
 // ─── Route handler ────────────────────────────────────────────────────────────
 
+/**
+ * Drop a trailing history entry that duplicates the current user turn.
+ *
+ * Current clients exclude the just-sent turn from `messages`, but older
+ * clients (and any external caller) may still include it AND send it as
+ * `message` — the model then sees the prompt twice.  The litellm path always
+ * deduped; this makes the copilot and executor paths equally safe.
+ */
+function withoutCurrentTurn(
+  history: Array<{ role: string; content: string }>,
+  message: string,
+): Array<{ role: string; content: string }> {
+  const last = history[history.length - 1];
+  return last && last.role === "user" && last.content === message
+    ? history.slice(0, -1)
+    : history;
+}
+
 export async function POST(req: NextRequest): Promise<Response> {
   let body: ChatRequest;
   try {
@@ -638,7 +687,10 @@ export async function POST(req: NextRequest): Promise<Response> {
       // would be stripped; a system message in `messages` survives.
       const agUiMessages = [
         ...(context ? [{ role: "system" as const, content: context }] : []),
-        ...(messages ?? []).map((m) => ({ role: m.role, content: m.content })),
+        ...withoutCurrentTurn(
+          (messages ?? []).map((m) => ({ role: m.role, content: m.content })),
+          message,
+        ),
         { role: "user" as const, content: message },
       ];
       // The orchestrator is a native MAF agent; forward the selected LiteLLM
@@ -700,7 +752,12 @@ export async function POST(req: NextRequest): Promise<Response> {
         body: JSON.stringify({
           agent: agentName,
           payload: {
-            mode: "chat", message, messages: messages ?? [], think_mode: thinkMode ?? "auto",
+            mode: "chat", message,
+            messages: withoutCurrentTurn(
+              (messages ?? []).map((m) => ({ role: m.role, content: m.content })),
+              message,
+            ),
+            think_mode: thinkMode ?? "auto",
             // Forward the caller's system context (persona / persistent memory /
             // app-specific context like the email app's selected account + open
             // email) so named agents — not just the orchestrator — receive it.
@@ -751,7 +808,13 @@ export async function POST(req: NextRequest): Promise<Response> {
           headers: await buildGatewayHeaders(),
           body: JSON.stringify({
             agent: agentName,
-            payload: { mode: "chat", message, messages: messages ?? [] },
+            payload: {
+              mode: "chat", message,
+              messages: withoutCurrentTurn(
+                (messages ?? []).map((m) => ({ role: m.role, content: m.content })),
+                message,
+              ),
+            },
             thread_id: threadId ?? undefined,
           }),
           signal: AbortSignal.timeout(310_000),

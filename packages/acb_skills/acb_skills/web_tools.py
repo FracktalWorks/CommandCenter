@@ -47,10 +47,10 @@ async def web_search(query: str, max_results: int = 5) -> str:
         news = await web_search("GeM portal tender updates June 2025", max_results=3)
     """
     try:
-        from ddgs import DDGS  # noqa: PLC0415
+        from ddgs import DDGS
     except ImportError:
         try:
-            from duckduckgo_search import DDGS  # noqa: PLC0415  # legacy name fallback
+            from duckduckgo_search import DDGS  # legacy name fallback
         except ImportError:
             return (
                 "web_search is unavailable: the 'ddgs' package is not installed. "
@@ -70,7 +70,7 @@ async def web_search(query: str, max_results: int = 5) -> str:
     results: list[dict] = []
     try:
         results = await asyncio.to_thread(_sync_search)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         ddgs_error = f"{type(exc).__name__}: {exc}"
 
     if ddgs_error is not None or not results:
@@ -108,25 +108,25 @@ async def web_search(query: str, max_results: int = 5) -> str:
     return "\n".join(lines).strip()
 
 
-async def _serpapi_search(query: str, max_results: int) -> "list[dict] | str":
+async def _serpapi_search(query: str, max_results: int) -> list[dict] | str:
     """Google results via SerpAPI when a key is configured; else "".
 
     Returns a ddgs-shaped list of {title, href, body} dicts on success, or an
     error string ("" = no key configured, so nothing to report).
     """
-    import os  # noqa: PLC0415
+    import os
 
     key = os.environ.get("SERPAPI_API_KEY", "")
     if not key:
         try:
-            from acb_common import get_settings  # noqa: PLC0415
+            from acb_common import get_settings
             key = getattr(get_settings(), "serpapi_api_key", "") or ""
-        except Exception:  # noqa: BLE001
+        except Exception:
             key = ""
     if not key:
         return ""
     try:
-        import httpx  # noqa: PLC0415
+        import httpx
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(
                 "https://serpapi.com/search.json",
@@ -135,7 +135,7 @@ async def _serpapi_search(query: str, max_results: int) -> "list[dict] | str":
             )
             resp.raise_for_status()
             data = resp.json()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return f"{type(exc).__name__}: {exc}"
     return [
         {
@@ -171,7 +171,7 @@ async def fetch_page(url: str, max_chars: int = 8000) -> str:
         tender  = await fetch_page("https://gem.gov.in/tender/12345", max_chars=4000)
     """
     try:
-        import httpx  # noqa: PLC0415
+        import httpx
     except ImportError:
         return (
             "fetch_page is unavailable: the 'httpx' package is not installed. "
@@ -195,7 +195,7 @@ async def fetch_page(url: str, max_chars: int = 8000) -> str:
             )
             resp.raise_for_status()
             text = resp.text.strip()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         jina_error = f"{type(exc).__name__}: {exc}"
 
     if not text:
@@ -203,7 +203,7 @@ async def fetch_page(url: str, max_chars: int = 8000) -> str:
         # nicer output, but it must not be a single point of failure (it can
         # be blocked by an egress proxy or ratelimited).
         try:
-            import re as _re  # noqa: PLC0415
+            import re as _re
             async with httpx.AsyncClient(
                 timeout=20.0, follow_redirects=True,
                 headers={"User-Agent": "Mozilla/5.0 (CommandCenter fetch_page)"},
@@ -215,7 +215,7 @@ async def fetch_page(url: str, max_chars: int = 8000) -> str:
             raw = _re.sub(r"(?s)<[^>]+>", " ", raw)
             text = _re.sub(r"[ \t]+", " ", raw)
             text = _re.sub(r"\n\s*\n+", "\n\n", text).strip()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             detail = f"{type(exc).__name__}: {exc}"
             return (
                 f"fetch_page failed for {url} — Jina Reader: "

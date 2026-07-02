@@ -13,7 +13,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from acb_skills import web_tools
 
 

@@ -5,7 +5,8 @@
 > **Created:** 2026-06-17
 > **ADR references:** ADR-008 (approved, unimplemented), ADR-012 (Phase 2 deferred)
 > **WBS reference:** WBS 2.6 (semantic cache + token compression)
-> **Related files:** `packages/acb_llm/acb_llm/client.py`, `apps/orchestrator/orchestrator/executor.py`, `packages/acb_memory/`, `infra/litellm/config.yaml`, `apps/gateway/gateway/routes/agent.py`
+> **Related files:** `packages/acb_llm/acb_llm/client.py`, `apps/orchestrator/orchestrator/executor.py`, `packages/acb_memory/`, `infra/litellm/config.yaml`, `apps/gateway/gateway/routes/agent.py`, `apps/agent-email-assistant/agents.py`
+> **Companion plan:** [`specs/email_tool_consolidation.md`](email_tool_consolidation.md) — shrinking the tool surface (Phase 7 here depends on it)
 
 ---
 
@@ -14,6 +15,7 @@
 Every agent request processes the full system prompt from scratch. For a typical CommandCenter agent call:
 
 - **System prefix** (agent instructions + tool addendum): ~3,000–4,000 tokens — static, identical across all turns
+- **Tool schemas** (function-calling agents): a **separate** static `tools` array sent every request, on top of the system prefix. Small for most agents, but the **email-assistant sends ~63 tool schemas ≈ 6,500 tokens** here. The original plan overlooked this (it assumed all tools are described inside the system prompt) — see the revised Phase 3.3 and the new Phase 7.
 - **Memory context** (Mem0 + Graphiti): ~200–600 tokens — dynamic per user/query
 - **Conversation history**: grows per turn
 
@@ -39,6 +41,8 @@ Beyond cost, cache hits also reduce time-to-first-token by 30–80% for long sys
 | Memory context from Graphiti | Fetched fresh every request, time-stamped | ❌ Changes as new facts arrive |
 | System prompt final assembly | Flat string concat — not structured blocks | ❌ Providers can't identify stable boundary |
 | `acb_llm/client.py` `acompletion()` calls | No `cache_control` params, no `prompt_cache_key` | ❌ No explicit caching |
+| Native-MAF function-tool schemas (email-assistant, 63 tools ≈ 6.5k tok) | Sent as a separate top-level `tools` array every request; static but uncached | ❌ Not cached (and not scoped) |
+| Per-agent tool scoping (`executor._inject_agent_tools` / `config.json: tool_scope`) | Filters tools for Copilot/orchestrator agents; **email-assistant bypasses it** (bakes tools into `Agent(tools=list(_TOOLS))`) | ⚠️ Partial — email agent injects all 63 |
 | LiteLLM proxy (infra) | No Redis cache configured | ❌ No proxy-level caching |
 | Token tracking (gateway + workbench) | No `cache_read_input_tokens` / `cache_creation_input_tokens` | ❌ No cache visibility |
 
@@ -202,9 +206,31 @@ litellm_settings:
 - The sentinel must not appear in user-facing output. The hook consumes it before it reaches the model.
 - Thinking blocks cannot be directly marked with `cache_control` — this hook only touches the `system` field, so thinking is unaffected.
 
-**3.3 — Tool definitions caching**
+**3.3 — Tool-definition caching (function-calling agents) — REVISED**
 
-Anthropic caches in the order: `tools` → `system` → `messages`. If tool definitions are large and stable, add `cache_control` on the last tool definition block. For CommandCenter-injected tools (call_agent, web_search, etc.), these are already stable and described in the system prompt addendum — no separate tool-level caching needed unless tool schemas are added separately in the future.
+> The original plan assumed all CommandCenter tools are *described in the system-prompt addendum* — true for the orchestrator / Copilot-SDK agents. It is **not** true for native-MAF agents that pass real function-tools: the **email-assistant sends ~63 tool schemas (~6,500 tokens) as a separate top-level `tools` array on every request**, entirely outside the system prompt. None of it is cached today, and it's the single largest static block for that agent.
+
+Anthropic caches in the order `tools` → `system` → `messages`, so the `tools` array is the FIRST cacheable block — caching it is the highest-value change for function-tool agents. Extend the Phase 3.2 LiteLLM hook to also mark the tool array:
+
+```python
+def pre_call_hook(data: dict, ...) -> dict:
+    ...  # existing system-block split above
+    tools = data.get("tools")
+    if _is_anthropic(model) and isinstance(tools, list) and tools:
+        # cache_control on the LAST tool caches the whole tools prefix
+        last = tools[-1]
+        (last.get("function") or last)["cache_control"] = {"type": "ephemeral"}
+    return data
+```
+
+For the tool cache to actually hit:
+- **Byte-stable, deterministically-ordered tool list.** The email agent's `tools=list(_TOOLS)` is static (good). If Phase 7's `tool_scope` is adopted, each scoped subset must be stable *per context* (same context → same ordered subset) or every context switch busts the cache.
+- **No per-request mutation** of tool descriptions (no timestamps/ids injected into docstrings).
+- **OpenAI** needs no code change — tools count toward its automatic prefix cache as long as they lead the request and are byte-stable.
+
+**Provider dependency:** this only helps when the agent's tier resolves to **Anthropic** (explicit `cache_control`) or **OpenAI** (automatic). For a DeepSeek-backed tier, rely on the provider's own context caching + the LiteLLM Redis response cache (Phase 5). **Confirm the tier→provider mapping for the email-assistant** (`EMAIL_AGENT_MODEL` / per-account `chat_model`) before assuming a win — it determines whether 3.3 does anything for that agent.
+
+Mind Anthropic's 4-breakpoint limit: tools + the split system prefix is already 2–3 breakpoints; leave headroom.
 
 ---
 
@@ -317,12 +343,33 @@ For agents that run less frequently than every 5 minutes: use `ttl: "1h"` (2× w
 
 ---
 
+### Phase 7 — Tool-surface efficiency: reduce before you cache (parallel track)
+
+**Goal:** shrink and stabilise the tool payload itself, so there is less to cache AND tool-selection accuracy improves. Caching makes a big prefix *cheap*; this makes it *small*. Do both — they compound.
+
+The email-assistant is the acute case: **63 tools, all injected every request, bypassing `tool_scope`** — a ~30× outlier vs every other agent (task-manager 2, apis-config 1, coding orchestrator ~16 + Copilot built-ins). Companion plan: [`specs/email_tool_consolidation.md`](email_tool_consolidation.md).
+
+**7.1 — Consolidate similar tools (email-assistant): 63 → ~40.** 13 merges behind `action=`/`preset=` params — no capability loss, endpoints unchanged (‑~23 tools ≈ ‑2–3k tokens off the tool array). Ship per that plan's 3-phase rollout; the AG-UI card router (`EmailToolCards.tsx`) must change in lockstep (it keys on tool names).
+
+**7.2 — Route the email agent through `tool_scope`.** The platform already filters tools per agent (`executor._inject_agent_tools` + `config.json: tool_scope`), added explicitly to fight the Berkeley Function-Calling "too many tools" degradation — but the email agent bakes tools into the native MAF `Agent(tools=list(_TOOLS))` and bypasses it. Define a small **core set** (read/label/archive/draft/send) and load specialist tools (rules, digest, knowledge, patterns) only when the conversation is about them. Keep each scoped subset **deterministically ordered** so it stays cache-eligible (see 3.3).
+
+**7.3 — Trim the mega-schemas.** `update_assistant_settings` (21 params, 1,687-char docstring) and `create_rule` (17 params) dominate the tool array. Move exhaustive per-param docs into the docstring body; keep the one-line description. Same capability, fewer tokens on every request.
+
+**7.4 — Move UI-triggerable actions out of the tool set.** `sync_account`, `get_unread_count`, `install_default_rules`, `reset_rules`, `process_past_emails` are usually button actions, not things a user asks the agent to do. If they already exist in the UI, they don't need to be LLM-callable — dropping them shrinks the surface with near-zero chat capability loss.
+
+**Ordering vs. caching:** run 7.1–7.4 to shrink/stabilise the payload FIRST, then 3.3 to cache what remains. Consolidation also *helps* the cache — fewer, stable tools = fewer prefix invalidations. These items are agent-side and independent of the LiteLLM hook, so they can land in parallel with Phases 1–5.
+
+---
+
 ## Risk Assessment
 
 | Risk | Severity | Mitigation |
 |---|---|---|
 | Sentinel marker leaking into LLM context | Medium | LiteLLM hook consumes it before the request leaves; add an assertion in hook tests |
 | Anthropic cache miss due to < 1,024 token prefix | Low | Current prefix is ~3,500 tokens; add a token count assertion in tests |
+| Email agent tier resolves to DeepSeek (not Anthropic/OpenAI) → Phase 3.3 is a no-op | Medium | Confirm `EMAIL_AGENT_MODEL` / per-account `chat_model` tier→provider first; if DeepSeek, rely on the provider's auto-cache + LiteLLM Redis (Phase 5) + the provider-independent Phase 7 payload reduction |
+| `tool_scope` subset change busts the tool cache | Low | Keep each scoped subset deterministically ordered; cache is per-context, not per-turn — a context switch legitimately re-warms |
+| Tool consolidation renames break the AG-UI card router / quick-action callers | Medium | Phase 7.1 must land card-router + `_register_agent_tools` changes in the same PR (see `email_tool_consolidation.md` compat section) |
 | Session memory stale mid-session | Low | Agents can call `recall_timeline()` explicitly; 10-min TTL is short enough for most sessions |
 | LiteLLM hook breaks non-Anthropic calls | Low | Hook is gated on `"anthropic" in model or "claude" in model` |
 | MAF internal format conflicts with structured system blocks | Medium | Option A (LiteLLM hook) avoids touching MAF at all; MAF sees a pre-transformed request |
@@ -337,6 +384,8 @@ For agents that run less frequently than every 5 minutes: use `ttl: "1h"` (2× w
 | Change | Tokens Saved Per Request | Cost Change |
 |---|---|---|
 | Anthropic explicit cache (stable prefix ~3,500 tokens) | 3,500 tokens @ 10% on hit | **~90% reduction on system prefix** |
+| Anthropic tool-array cache (email-assistant ~6,500 tokens) — Phase 3.3 | 6,500 tokens @ 10% on hit | **~90% reduction on the tool schemas** (only when tier→Anthropic/OpenAI) |
+| Tool consolidation 63→~40 + docstring trim — Phase 7 | ~2–3k tokens off the tool array *before* caching | Smaller payload + better tool-selection accuracy; provider-independent |
 | OpenAI `prompt_cache_key` routing | Higher hit rate on implicit cache | ~15–20% more cache hits |
 | Session memory (10-turn session) | 9/10 turns reuse same memory block | Memory portion also cache-eligible cross-turn |
 | Graphiti episode filter | Fewer writes → cleaner retrieval → stable memory | Indirect quality + retrieval cost reduction |
@@ -359,7 +408,12 @@ Week 1, Day 2   Phase 1.2   Audit layer cache stats propagation                ~
 Week 1, Day 3   Phase 2     OpenAI prompt_cache_key in acb_llm + executor      ~1h
 Week 2, Day 1   Phase 3.1   Sentinel marker in executor.py memory injection    ~30m
 Week 2, Day 1   Phase 3.2   LiteLLM pre-call hook + config registration        ~3h
-Week 2, Day 2   Phase 3.3   Verify token count >= 1,024 in tests               ~30m
+Week 2, Day 2   Phase 3.3   Tool-array cache_control in the hook (native-MAF)  ~1h
+Week 2, Day 2   Phase 3.3   Verify token count >= 1,024 + tools cached in tests ~30m
+(parallel)      Phase 7.1   Email tool consolidation 63→~40 (own 3-phase plan) — see email_tool_consolidation.md
+(parallel)      Phase 7.2   Route email agent through tool_scope (core + specialist sets)  ~3h
+(parallel)      Phase 7.3   Trim update_assistant_settings / create_rule docstrings ~1h
+(parallel)      Phase 7.4   Drop UI-only actions from the email tool set        ~1h
 Week 3, Day 1   Phase 4.1   Session-scoped memory in Redis (agent route)       ~2h
 Week 3, Day 2   Phase 4.1   Same change for orchestrator /copilot/chat path    ~1h
 Week 3, Day 3   Phase 4.2   Graphiti episode worthiness filter                 ~2h
@@ -384,7 +438,9 @@ Files to modify:
 | File | Change |
 |---|---|
 | `packages/acb_llm/acb_llm/client.py` | Log cache tokens; add `cache_key` and `enable_litellm_cache` params |
-| `apps/orchestrator/orchestrator/executor.py` | Insert `<!-- CACHE BREAK -->` sentinel at memory injection boundary |
+| `apps/orchestrator/orchestrator/executor.py` | Insert `<!-- CACHE BREAK -->` sentinel at memory injection boundary; (Phase 7.2) `tool_scope` for the email agent path |
+| `infra/litellm/acb_litellm_hooks.py` | (Phase 3.3) also add `cache_control` to the last entry of the `tools` array for Anthropic requests |
+| `apps/agent-email-assistant/agents.py` | (Phase 7) consolidate 63→~40 tools, trim mega-docstrings, drop UI-only tools, keep `_TOOLS` deterministically ordered — see `email_tool_consolidation.md` |
 | `infra/litellm/config.yaml` | Enable Redis cache; register hook callback |
 | `apps/gateway/gateway/routes/agent.py` | Session-scoped memory cache in Redis |
 | `apps/gateway/gateway/main.py` | Session-scoped memory cache for `/copilot/chat` path; startup cache warming |
@@ -404,6 +460,8 @@ For each phase:
 2. **Phase 2 (OpenAI routing key):** Use the workbench model picker to select an OpenAI model. Send 3 identical messages. Confirm `usage.prompt_tokens_details.cached_tokens` grows across turns in the gateway logs.
 
 3. **Phase 3 (Anthropic explicit cache):** With `ANTHROPIC_API_KEY` configured, run 2 requests to the same agent. First request should show `cache_creation_input_tokens ≈ 3,500`. Second request should show `cache_read_input_tokens ≈ 3,500`. Verify sentinel string does not appear in any LLM response.
+
+3b. **Phase 3.3 (tool-array cache):** Point a function-tool agent (email-assistant) at an Anthropic tier. First request → `cache_creation_input_tokens` includes the ~6,500-token tool array; second request → `cache_read_input_tokens` reflects it. Assert the `tools` array is byte-identical across the two requests (no per-request mutation).
 
 4. **Phase 4 (Session memory):** Run a 5-turn conversation. Confirm Redis key `session_mem:{thread_id}` is set after turn 1 and not re-fetched on turns 2–5 (check Mem0/Graphiti call count in logs).
 

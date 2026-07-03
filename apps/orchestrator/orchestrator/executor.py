@@ -106,20 +106,26 @@ def _gate_injected_tool(fn: Any) -> Any:
     tool_name = getattr(fn, "__name__", "tool")
 
     def _gate() -> tuple[bool, str]:
-        """Return (allowed, reason). Never raises."""
+        """Return (allowed, reason). Never raises. Logs EVERY decision.
+
+        Logging approvals too (not just denials) is what makes audit mode
+        actually observable — an operator running in audit needs the full
+        decision stream to judge the policy before flipping to enforce, and it
+        is how we confirm the gate is even on this tool's execution path.
+        """
         try:
             from acb_skills.permission_policy import decide  # noqa: PLC0415
             ok, code, _ = decide({"tool_name": tool_name})
             mode = os.environ.get(
                 "AGENT_PERMISSION_MODE", "enforce"
             ).strip().lower()
-            if not ok:
-                _log.info(
-                    "permission.decision", mode=mode, tool=tool_name,
-                    approved=(mode != "enforce"), would_deny=True, reason=code,
-                )
-                return (mode != "enforce"), code
-            return True, code
+            enforced = (not ok) and mode == "enforce"
+            _log.info(
+                "permission.decision", mode=mode, tool=tool_name,
+                approved=(not enforced), would_deny=(not ok), reason=code,
+                surface="injected_tool",
+            )
+            return (not enforced), code
         except Exception:  # noqa: BLE001 — a gate bug must never brick a tool
             return True, "gate_error"
 

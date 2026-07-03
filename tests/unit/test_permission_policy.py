@@ -219,6 +219,29 @@ def test_gate_wrapper_audit_mode_never_blocks(monkeypatch):
     assert asyncio.run(_gate_injected_tool(t)()) == "ran"  # audit = log-only
 
 
+def test_gate_logs_every_decision_including_approvals(monkeypatch):
+    # audit-mode observability contract: the gate must log approvals too, not
+    # only denials — otherwise "no permission.decision log" is ambiguous (did the
+    # gate run and approve, or never run?). Regression from the live-verify pass.
+    import asyncio
+
+    import structlog
+    from orchestrator.executor import _gate_injected_tool
+
+    monkeypatch.delenv("AGENT_PERMISSION_MODE", raising=False)  # enforce
+
+    async def web_search(q):  # read_only → approved
+        return "ok"
+
+    with structlog.testing.capture_logs() as caps:
+        assert asyncio.run(_gate_injected_tool(web_search)("q")) == "ok"
+    # A permission.decision event was emitted even though the call was approved.
+    decisions = [c for c in caps if c.get("event") == "permission.decision"]
+    assert decisions, "gate approved silently — audit mode would be blind"
+    assert decisions[0]["approved"] is True
+    assert decisions[0]["tool"] == "web_search"
+
+
 def test_inject_rewraps_repo_baked_tools(monkeypatch):
     # Regression (prod finding): agent-project-manager's OWN web_search executed
     # ungated on the Copilot-BYOK path because _inject only wrapped OUR tools.

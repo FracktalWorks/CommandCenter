@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Plus, X, ListPlus, Wind, Check, Sparkles, ArrowLeft, ArrowRight, Trash2 } from "lucide-react";
+import { Plus, X, ListPlus, Wind, Check, Sparkles, ArrowLeft, ArrowRight, Trash2, Loader2, CopyX } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
+import { apiAtomize } from "../lib/api";
 import { GTD_TRIGGERS } from "../lib/mockData";
 import { useVisualViewport } from "../lib/useVisualViewport";
 
@@ -31,7 +32,16 @@ function QuickCapturePanel() {
   const [added, setAdded] = useState(0);
   // Sweep has a review gate: write → review the parsed items → add.
   const [phase, setPhase] = useState<"write" | "review">("write");
-  const [reviewLines, setReviewLines] = useState<string[]>([]);
+  /** Review candidates. Verdicts come from the AI atomizer: "duplicate"
+   *  (confident same — excluded by default), "similar" (asks the user),
+   *  "new". The instant line-split shows first; the atomizer upgrades the
+   *  list in place unless the user already edited it. */
+  const [reviewItems, setReviewItems] = useState<
+    { title: string; include: boolean; verdict: "new" | "similar" | "duplicate"; matchTitle?: string }[]
+  >([]);
+  const [atomizing, setAtomizing] = useState(false);
+  const reviewEditedRef = useRef(false);
+  const backend = useTaskStore((s) => s.backend);
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -63,21 +73,42 @@ function QuickCapturePanel() {
     inputRef.current?.focus();
   };
 
-  // Sweep → review gate. Parse the brain dump into candidate items the user
-  // can edit/remove before anything lands in the inbox. This is also the seam
-  // where AI atomization + dedupe will populate `reviewLines` (spec §2.1).
+  // Sweep → review gate (the §2.1 AI seam, now live). The instant line-split
+  // renders immediately; the server atomizer (LLM splitting + duplicate
+  // check against open items, deterministic fallback) upgrades the list in
+  // place — unless the user already started editing (their edits win).
   const goToReview = () => {
     const lines = value
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter(Boolean);
     if (!lines.length) return;
-    setReviewLines(lines);
+    reviewEditedRef.current = false;
+    setReviewItems(lines.map((t) => ({ title: t, include: true, verdict: "new" as const })));
     setPhase("review");
+    if (backend !== "live") return;
+    setAtomizing(true);
+    apiAtomize(value)
+      .then(({ items }) => {
+        if (reviewEditedRef.current || !items.length) return;
+        setReviewItems(items.map((it) => ({
+          title: it.title,
+          // Confident duplicates are excluded by default (still listed, one
+          // tap re-includes); "similar" stays included but flagged.
+          include: it.verdict !== "duplicate",
+          verdict: it.verdict,
+          matchTitle: it.matchTitle,
+        })));
+      })
+      .catch(() => { /* keep the line split — atomizer is an upgrade */ })
+      .finally(() => setAtomizing(false));
   };
-  const reviewCount = reviewLines.filter((l) => l.trim()).length;
+  const reviewCount = reviewItems.filter((l) => l.include && l.title.trim()).length;
   const commitReview = () => {
-    const clean = reviewLines.map((l) => l.trim()).filter(Boolean);
+    const clean = reviewItems
+      .filter((l) => l.include)
+      .map((l) => l.title.trim())
+      .filter(Boolean);
     if (!clean.length) return;
     captureMany(clean.join("\n"));
     close();
@@ -211,44 +242,79 @@ function QuickCapturePanel() {
         ) : (
           <div className="p-4">
             <div className="mb-2.5 flex items-start gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-2 text-[11px] text-muted-foreground">
-              <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+              {atomizing ? (
+                <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+              ) : (
+                <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+              )}
               <span>
-                Review before adding — edit or remove any item. Nothing is filed
-                until you confirm. (AI will atomize run-on notes &amp; flag
-                duplicates here — coming.)
+                {atomizing
+                  ? "AI is splitting your dump into atomic items and checking for duplicates…"
+                  : "Review before adding — edit, remove, or re-include any item. Nothing is filed until you confirm."}
               </span>
             </div>
             <div className="flex max-h-[42vh] flex-col gap-1.5 overflow-y-auto pr-1">
-              {reviewLines.map((line, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <span className="w-4 shrink-0 text-right text-[10px] text-muted-foreground">
-                    {i + 1}
-                  </span>
-                  <input
-                    value={line}
-                    onChange={(e) =>
-                      setReviewLines((ls) =>
-                        ls.map((l, idx) => (idx === i ? e.target.value : l)),
-                      )
-                    }
-                    className="tech-transition flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
-                  />
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setReviewLines((ls) => ls.filter((_, idx) => idx !== i))
-                    }
-                    aria-label="Remove item"
-                    className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+              {reviewItems.map((item, i) => (
+                <div key={i} className="flex flex-col gap-0.5">
+                  <div className={`flex items-center gap-2 ${item.include ? "" : "opacity-45"}`}>
+                    <button
+                      type="button"
+                      aria-label={item.include ? "Skip this item" : "Include this item"}
+                      onClick={() => {
+                        reviewEditedRef.current = true;
+                        setReviewItems((ls) =>
+                          ls.map((l, idx) => (idx === i ? { ...l, include: !l.include } : l)),
+                        );
+                      }}
+                      className={`tech-transition flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded border ${
+                        item.include
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-border text-transparent"
+                      }`}
+                    >
+                      <Check className="h-3 w-3" />
+                    </button>
+                    <input
+                      value={item.title}
+                      onChange={(e) => {
+                        reviewEditedRef.current = true;
+                        setReviewItems((ls) =>
+                          ls.map((l, idx) => (idx === i ? { ...l, title: e.target.value } : l)),
+                        );
+                      }}
+                      className="tech-transition flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        reviewEditedRef.current = true;
+                        setReviewItems((ls) => ls.filter((_, idx) => idx !== i));
+                      }}
+                      aria-label="Remove item"
+                      className="tech-transition rounded-md p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  {item.verdict !== "new" && (
+                    <div className="ml-6 flex items-center gap-1 text-[10px]">
+                      <CopyX className={`h-3 w-3 ${item.verdict === "duplicate" ? "text-warning" : "text-muted-foreground"}`} />
+                      <span className={item.verdict === "duplicate" ? "text-warning" : "text-muted-foreground"}>
+                        {item.verdict === "duplicate"
+                          ? `Already in your system: "${item.matchTitle}" — skipped (tap the box to add anyway)`
+                          : `Similar to: "${item.matchTitle}" — same item? Untick to skip.`}
+                      </span>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
             <button
               type="button"
-              onClick={() => setReviewLines((ls) => [...ls, ""])}
+              onClick={() => {
+                reviewEditedRef.current = true;
+                setReviewItems((ls) => [...ls, { title: "", include: true, verdict: "new" }]);
+              }}
               className="tech-transition mt-2 inline-flex items-center gap-1 text-[11px] text-primary hover:underline"
             >
               <Plus className="h-3 w-3" /> Add another

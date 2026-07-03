@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Sparkles,
   Check,
@@ -17,6 +17,7 @@ import {
   HardDrive,
   Cloud,
   Search,
+  Mail as MailIcon,
   type LucideIcon,
 } from "lucide-react";
 import { useTaskStore, type ClarifyDecision } from "../lib/taskStore";
@@ -24,15 +25,20 @@ import {
   proposeClarification,
   defaultStatus,
   type ClarifyDisposition,
+  type ClarifyProposal,
 } from "../lib/clarify";
+import { apiClarifyPropose } from "../lib/api";
 import type { ConnectedProvider } from "../lib/mockData";
 import { Energy, GtdItem, GtdProject, Person, Target } from "../lib/types";
-import { durationLabel, initials, snoozeOptions } from "../lib/utils";
+import { durationLabel, initials, originEmailHref, snoozeOptions } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
 
 // F2 — Clarify. AI proposes a full disposition (what it is · next action · where
 // it's stored · who owns it · which stage); you confirm in one tap or adjust any
-// part. Proposal is a local heuristic today; the agent replaces it later (§2.2).
+// part. The local heuristic renders INSTANTLY; on a live backend the server
+// proposal (org-knowledge capability match + server project auto-match +
+// destination/stage defaults, §2.2 agent seam) upgrades it in place — but only
+// while the form is still untouched (the human's edits always win).
 
 const DISP: Record<
   ClarifyDisposition,
@@ -63,15 +69,23 @@ const providerStatuses = (t: Target, providers: ConnectedProvider[]): string[] =
 
 export function ClarifyPanel({ item }: { item: GtdItem }) {
   const clarify = useTaskStore((s) => s.clarify);
+  const backend = useTaskStore((s) => s.backend);
   const contexts = useTaskStore((s) => s.contexts);
   const people = useTaskStore((s) => s.people);
   const projects = useTaskStore((s) => s.projects);
   const providers = useTaskStore((s) => s.providers);
 
-  const proposal = useMemo(
+  const localProposal = useMemo(
     () => proposeClarification(item, people, projects),
     [item, people, projects],
   );
+  // The proposal shown in the header (rationale/confidence/assignee chip):
+  // starts as the instant local heuristic, upgraded by the server's when it
+  // arrives (richer people/project knowledge lives behind the gateway).
+  const [proposal, setProposal] = useState<ClarifyProposal>(localProposal);
+  // True once the user changed ANY field — a late server proposal must never
+  // stomp on human edits.
+  const dirtyRef = useRef(false);
 
   const [disposition, setDisposition] = useState<ClarifyDisposition>(proposal.disposition);
   const [nextAction, setNextAction] = useState(proposal.nextAction);
@@ -89,6 +103,44 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
   // "Where it goes" details stay collapsed by default — the assistant already
   // filled them in, so most items are a single tap. Expand only to fine-tune.
   const [showDetails, setShowDetails] = useState(false);
+
+  // ── Server proposal upgrade (live backend only) ──────────────────────
+  // The panel opened instantly on the local heuristic; swap in the server's
+  // richer proposal when it lands — unless the user already touched the form
+  // (dirtyRef, set by any interaction inside the panel root below).
+  useEffect(() => {
+    if (backend !== "live") return;
+    let cancelled = false;
+    apiClarifyPropose(item.id)
+      .then((sp) => {
+        if (cancelled || dirtyRef.current) return;
+        setProposal(sp);
+        setDisposition(sp.disposition);
+        setNextAction(sp.nextAction);
+        setOutcome(sp.outcome ?? `${item.title} — done`);
+        setContext(sp.context ?? "@computer");
+        setEnergy(sp.energy ?? "medium");
+        setAssignee(sp.suggestedAssignee ?? null);
+        if (sp.target) setDest(sp.target);
+        setProjectId(sp.projectId);
+        setStatus(
+          sp.status ??
+            defaultStatus(
+              sp.disposition,
+              providerStatuses(sp.target ?? { source: "LOCAL" }, providers),
+            ),
+        );
+      })
+      .catch(() => {
+        /* server proposal is an upgrade, not a dependency — keep the local one */
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Per-item effect: the panel remounts per item (key={item.id}), and the
+    // upgrade must run exactly once per mount — not re-fire on store churn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backend, item.id]);
 
   const selectedProject = projectId
     ? projects.find((p) => p.id === projectId)
@@ -196,7 +248,14 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
   const showWhere = ACTIONABLE.has(disposition) || disposition === "SOMEDAY";
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto">
+    <div
+      className="flex h-full flex-col overflow-y-auto"
+      // Any click/keystroke inside the panel = the human is editing; a late
+      // server proposal must no longer re-seed the form (capture phase so it
+      // fires before the child handler mutates state).
+      onPointerDownCapture={() => { dirtyRef.current = true; }}
+      onKeyDownCapture={() => { dirtyRef.current = true; }}
+    >
       <header className="border-b border-border bg-card px-5 py-4">
         <div className="mb-2 flex items-center gap-2">
           <span className="rounded bg-primary/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary">
@@ -205,6 +264,21 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
           <SourceBadge source={item.source} provider={item.provider} />
         </div>
         <h1 className="text-lg font-bold leading-snug text-foreground">{item.title}</h1>
+        {item.origin?.kind === "email" && (
+          <p className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+            <MailIcon className="h-3 w-3 shrink-0" />
+            <span className="truncate">
+              Captured from email — {item.origin.fromName || item.origin.fromEmail}
+              {item.origin.subject ? ` · “${item.origin.subject}”` : ""}
+            </span>
+            <a
+              href={originEmailHref(item.origin) ?? "/email"}
+              className="tech-transition shrink-0 font-medium text-primary hover:underline"
+            >
+              Open
+            </a>
+          </p>
+        )}
         <p className="mt-1 text-[11px] text-muted-foreground">
           What is it, what&apos;s the next action, and where does it go?
         </p>

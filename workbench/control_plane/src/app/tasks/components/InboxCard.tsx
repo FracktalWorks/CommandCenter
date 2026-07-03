@@ -19,12 +19,13 @@ import {
   Zap,
   Cloud,
   type LucideIcon,
+  Mail,
 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { proposeClarification, type ClarifyDisposition } from "../lib/clarify";
 import { GtdItem, GtdProject, Person } from "../lib/types";
 import type { ConnectedProvider } from "../lib/mockData";
-import { detectDateHint, relativeTime, snoozeOptions } from "../lib/utils";
+import { detectDateHint, originEmailHref, relativeTime, snoozeOptions } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
 
 // The assistant's at-a-glance read of a capture — shown on the card so you see
@@ -187,6 +188,24 @@ export function InboxCard({
           <p className="mt-1 flex items-start gap-1 text-[12px] leading-snug text-muted-foreground">
             <StickyNote className="mt-0.5 h-3 w-3 shrink-0" />
             <span className="line-clamp-2">{item.notes}</span>
+          </p>
+        )}
+        {item.origin?.kind === "email" && (
+          <p className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+            <Mail className="h-3 w-3 shrink-0" />
+            <span className="truncate">
+              From email — {item.origin.fromName || item.origin.fromEmail}
+              {item.origin.subject ? ` · “${item.origin.subject}”` : ""}
+            </span>
+            {originEmailHref(item.origin) && (
+              <a
+                href={originEmailHref(item.origin)!}
+                onClick={(e) => e.stopPropagation()}
+                className="tech-transition shrink-0 font-medium text-primary hover:underline"
+              >
+                Open
+              </a>
+            )}
           </p>
         )}
         <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">

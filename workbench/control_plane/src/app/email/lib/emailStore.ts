@@ -244,6 +244,11 @@ interface EmailState {
   openCompose: (defaults?: { to: string; subject: string; replyToBody?: string; quote?: string; replyToMessageId?: string }) => void;
   closeCompose: () => void;
   hydrateEmail: (email: Email) => void;
+  /** "Captured to Tasks" toast state (email → GTD inbox). */
+  taskCaptureNotice: { title: string; created: boolean } | null;
+  /** Capture an email into the task inbox (AI-drafted server-side). */
+  captureEmailToTasks: (emailId: string) => Promise<void>;
+  clearTaskCaptureNotice: () => void;
   updateEmail: (id: string, updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>) => Promise<void>;
   fetchLabels: (accountId?: string) => Promise<void>;
   /** Set a label/category's colour (preset token); syncs to the provider. */
@@ -756,6 +761,28 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       emails: get().emails.map((e) => (e.id === full.id ? { ...e, ...full } : e)),
     });
   },
+
+  taskCaptureNotice: null,
+
+  captureEmailToTasks: async (emailId) => {
+    const email = get().emails.find((e) => e.id === emailId);
+    if (!email) return;
+    let notice: { title: string; created: boolean };
+    try {
+      const { captureEmailToTask } = await import("./api");
+      notice = await captureEmailToTask(email.accountId, emailId);
+    } catch {
+      notice = { title: "Could not reach the tasks backend", created: false };
+    }
+    set({ taskCaptureNotice: notice });
+    // Auto-dismiss THIS notice only — an older capture's timer must not
+    // clear a newer notice (identity check, not a blanket null).
+    setTimeout(() => {
+      set((s) => (s.taskCaptureNotice === notice ? { taskCaptureNotice: null } : s));
+    }, 6000);
+  },
+
+  clearTaskCaptureNotice: () => set({ taskCaptureNotice: null }),
 
   updateEmail: async (id, updates) => {
     // Optimistic update. When an email is moved to a *different* folder than the

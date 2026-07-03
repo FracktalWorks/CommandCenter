@@ -11,9 +11,10 @@ import {
   CalendarClock,
   UploadCloud,
   ExternalLink,
+  Mail,
 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
-import {
+import { originEmailHref,
   DISPOSITION_LABEL,
   ENERGY_LABEL,
   durationLabel,
@@ -189,6 +190,22 @@ export function ItemDetail() {
               <p className="whitespace-pre-wrap text-sm text-muted-foreground">
                 {item.notes}
               </p>
+            </Field>
+          )}
+
+          {item.origin?.kind === "email" && (
+            <Field label="Captured from" icon={Mail}>
+              <span className="text-sm text-muted-foreground">
+                Email from {item.origin.fromName || item.origin.fromEmail || "someone"}
+                {item.origin.subject ? ` — “${item.origin.subject}”` : ""}
+                {"  "}
+                <a
+                  href={originEmailHref(item.origin) ?? "/email"}
+                  className="tech-transition font-medium text-primary hover:underline"
+                >
+                  Open email
+                </a>
+              </span>
             </Field>
           )}
 

@@ -395,6 +395,12 @@ async def organize_item(
         raise HTTPException(status_code=400, detail="assignee is required")
     if req.kind == "project" and not (req.outcome or "").strip():
         raise HTTPException(status_code=400, detail="outcome is required")
+    if req.kind == "calendar" and not (req.due_at or "").strip():
+        # GTD hard landscape: a calendar decision WITHOUT a date silently
+        # produced a hard-date item with no date — invisible on the Calendar
+        # view. Refuse with the reason instead.
+        raise HTTPException(status_code=400,
+                            detail="due_at is required for a calendar decision")
 
     uid = _uid(user)
     db = await _get_db()
@@ -513,9 +519,20 @@ async def push_item(
         provider = build_provider(account.provider, creds, account.workspace_id)
         assignee = _parse_jsonb(row.assignee) or {}
         due_ms = int(row.due_at.timestamp() * 1000) if row.due_at else None
+        # Email-origin items carry their source reference INTO the PM tool so
+        # the assignee sees where the task came from (lifecycle-long linkage).
+        description = row.description or ""
+        origin = _parse_jsonb(getattr(row, "origin", None)) or {}
+        if origin.get("kind") == "email":
+            ref = (
+                f"Captured from email — {origin.get('from_name') or origin.get('from_email') or 'unknown sender'}"
+                + (f" <{origin['from_email']}>" if origin.get("from_email") else "")
+                + (f": \"{origin['subject']}\"" if origin.get("subject") else "")
+            )
+            description = (description + "\n\n— " + ref).strip()
         created = await provider.create_task(project_ref, {
             "title": row.next_action or row.title,
-            "description": row.description,
+            "description": description or None,
             "status": row.provider_status,
             "due_at_ms": due_ms,
             "assignee_id": assignee.get("provider_user_id"),

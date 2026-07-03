@@ -76,6 +76,7 @@ class GtdItemModel(BaseModel):
     is_hard_date: bool = False
     completed_at: str | None = None
     clarified_at: str | None = None
+    origin: dict | None = None           # source linkage (e.g. captured from an email)
     created_at: str
     updated_at: str
 
@@ -206,6 +207,7 @@ def _row_to_item(row: Any) -> GtdItemModel:
         is_hard_date=bool(row.is_hard_date),
         completed_at=_iso(row.completed_at),
         clarified_at=_iso(row.clarified_at),
+        origin=_parse_jsonb(getattr(row, "origin", None)),
         created_at=_iso(row.created_at) or "",
         updated_at=_iso(row.updated_at) or "",
     )

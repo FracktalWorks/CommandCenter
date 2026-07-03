@@ -244,3 +244,250 @@ def test_propose_attaches_capability_owner_without_forcing_delegate():
     assert p["disposition"] == "NEXT"  # suggestion, not a forced WAITING
     assert p["suggested_assignee"]["name"] == "Rahul"
     assert "Rahul fits" in p["rationale"]
+
+
+# ---------------------------------------------------------------------------
+# Sync pull (§9.3 #1): provider list_tasks + the GTD lens on pulled tasks
+# ---------------------------------------------------------------------------
+
+from gateway.routes.tasks.sync import map_pulled_task  # noqa: E402
+
+
+def _pulled(**over):
+    base = {
+        "provider_task_id": "t1",
+        "title": "Task",
+        "status": "To-do",
+        "status_type": "custom",
+        "assignees": [],
+        "closed_at_ms": None,
+    }
+    base.update(over)
+    return base
+
+
+def test_pull_mapping_mine_open_is_next():
+    m = map_pulled_task(_pulled(
+        assignees=[{"name": "v", "provider_user_id": "42"}]), "42")
+    assert m["disposition"] == "NEXT"
+    assert m["is_mine"] is True
+    assert m["waiting_on"] is None
+
+
+def test_pull_mapping_others_task_is_waiting_with_monitor_record():
+    m = map_pulled_task(_pulled(
+        assignees=[{"name": "j", "provider_user_id": "7"}],
+        status="in progress"), "42")
+    assert m["disposition"] == "WAITING"
+    assert m["is_mine"] is False
+    assert m["waiting_on"]["provider_user_id"] == "7"
+
+
+def test_pull_mapping_backlog_stage_is_someday_even_when_mine():
+    m = map_pulled_task(_pulled(
+        assignees=[{"name": "v", "provider_user_id": "42"}],
+        status="Backlog"), "42")
+    assert m["disposition"] == "SOMEDAY"
+
+
+def test_pull_mapping_closed_wins_over_everything():
+    m = map_pulled_task(_pulled(
+        assignees=[{"name": "j", "provider_user_id": "7"}],
+        status="Backlog", status_type="closed", closed_at_ms=1719000000000), "42")
+    assert m["disposition"] == "DONE"
+    assert m["completed_at_ms"] == 1719000000000
+    assert m["waiting_on"] is None  # nothing to wait on once it's done
+
+
+def test_pull_mapping_unassigned_open_is_team_pool_next():
+    m = map_pulled_task(_pulled(), "42")
+    assert m["disposition"] == "NEXT"
+    assert m["is_mine"] is False  # team pool, not my list
+    assert m["assignee"] is None
+
+
+def test_pull_mapping_prefers_me_as_display_assignee():
+    m = map_pulled_task(_pulled(assignees=[
+        {"name": "j", "provider_user_id": "7"},
+        {"name": "v", "provider_user_id": "42"},
+    ]), "42")
+    assert m["is_mine"] is True
+    assert m["assignee"]["provider_user_id"] == "42"
+
+
+@pytest.mark.asyncio
+async def test_clickup_list_tasks_paginates_and_normalizes():
+    p = ClickUpProvider("pk_x", "9001")
+    pages = [
+        {"tasks": [{
+            "id": "abc", "name": "Ship it",
+            "text_content": "notes",
+            "status": {"status": "To-do", "type": "custom"},
+            "assignees": [{"id": 42, "username": "v", "email": "v@x.in"}],
+            "due_date": "1719000000000", "date_created": "1718000000000",
+            "date_updated": "1718500000000", "date_closed": None,
+            "url": "https://app.clickup.com/t/abc",
+            "list": {"id": "L1", "name": "Sprint"},
+        }], "last_page": False},
+        {"tasks": [{
+            "id": "def", "name": "Done one",
+            "status": {"status": "Complete", "type": "closed"},
+            "assignees": [], "date_closed": "1718600000000",
+            "list": {"id": "L1"},
+        }], "last_page": True},
+    ]
+    with patch.object(p, "_get", AsyncMock(side_effect=pages)) as mocked:
+        tasks = await p.list_tasks("9001", updated_since_ms=1718000000000)
+    assert len(tasks) == 2
+    t = tasks[0]
+    assert t["provider_task_id"] == "abc"
+    assert t["title"] == "Ship it"
+    assert t["description"] == "notes"
+    assert t["status"] == "To-do" and t["status_type"] == "custom"
+    assert t["assignees"] == [{"name": "v", "email": "v@x.in",
+                               "provider_user_id": "42"}]
+    assert t["due_at_ms"] == 1719000000000
+    assert t["project_ref"] == "L1"
+    assert tasks[1]["closed_at_ms"] == 1718600000000
+    # incremental cursor forwarded; closed tasks included; paginated
+    first_call = mocked.await_args_list[0]
+    assert first_call.args[0] == "/team/9001/task"
+    assert first_call.args[1]["date_updated_gt"] == 1718000000000
+    assert first_call.args[1]["include_closed"] == "true"
+    assert mocked.await_args_list[1].args[1]["page"] == 1
+
+
+def test_sync_upsert_preserves_user_overlay_and_owns_completion():
+    """The upsert must only refresh MIRRORED fields on re-sync: the user's
+    GTD overlay survives, except completion where the provider wins."""
+    from gateway.routes.tasks import sync as tasks_sync
+
+    sql = str(tasks_sync._UPSERT_SQL)
+    # provider owns completion state…
+    assert "WHEN EXCLUDED.completed_at IS NOT NULL THEN 'DONE'" in sql
+    # …and an upstream reopen un-DONEs the row
+    assert "gtd_items.disposition = 'DONE'" in sql
+    # …but an open row keeps the disposition the user chose
+    assert "ELSE gtd_items.disposition" in sql
+    # user's project refile is never clobbered
+    assert "coalesce(gtd_items.project_id, EXCLUDED.project_id)" in sql
+    # conflict target matches the partial unique index
+    assert "ON CONFLICT (account_id, provider_task_id) WHERE source <> 'LOCAL'" in sql
+
+
+# ---------------------------------------------------------------------------
+# Email → task capture (origin linkage) + calendar-date validation
+# ---------------------------------------------------------------------------
+
+from gateway.routes.tasks.capture_email import draft_task_fallback  # noqa: E402
+
+
+def test_email_capture_fallback_draft_names_sender_and_strips_reply_prefixes():
+    d = draft_task_fallback("Re: Fwd: Re: Vendor quote v2", "Sanjay Rao",
+                            "Please approve the revised quote by Friday.")
+    assert d["title"] == "Email from Sanjay Rao: Vendor quote v2"
+    assert d["notes"].startswith("Please approve")
+
+
+def test_email_capture_fallback_handles_empty_subject():
+    d = draft_task_fallback("", "", "")
+    assert d["title"] == "Handle email from someone"
+
+
+def test_email_capture_is_owner_checked_and_idempotent():
+    import inspect
+
+    from gateway.routes.tasks import capture_email
+
+    src = inspect.getsource(capture_email.capture_from_email)
+    assert "a.user_id = :uid" in src            # ownership through the mailbox
+    assert "origin->>'email_id'" in src         # idempotency per source email
+    assert "NOT IN ('DONE', 'TRASH')" in src    # only OPEN items block re-capture
+
+
+def test_calendar_decision_requires_a_date():
+    """GTD hard landscape: kind=calendar without due_at used to create a
+    hard-date item with no date — invisible on the Calendar view."""
+    import inspect
+
+    from gateway.routes.tasks import items as tasks_items
+
+    src = inspect.getsource(tasks_items.organize_item)
+    assert 'req.kind == "calendar" and not (req.due_at' in src
+
+
+def test_item_model_carries_origin():
+    from gateway.routes.tasks.core import GtdItemModel
+    assert "origin" in GtdItemModel.model_fields
+
+
+def test_push_carries_email_origin_reference_into_provider():
+    """Lifecycle-long linkage: pushing an email-origin item to the PM tool
+    appends the source-email reference to the description."""
+    import inspect
+
+    from gateway.routes.tasks import items as tasks_items
+
+    src = inspect.getsource(tasks_items.push_item)
+    assert 'origin.get("kind") == "email"' in src
+    assert "Captured from email" in src
+
+
+def test_agent_item_format_shows_email_origin():
+    from skill_task_gtd.core import _fmt_item
+
+    line = _fmt_item({"id": "x" * 12, "title": "Approve the quote",
+                      "disposition": "NEXT", "source": "LOCAL",
+                      "origin": {"kind": "email", "from_name": "Sanjay Rao",
+                                 "subject": "Vendor quote"}})
+    assert "from email: Sanjay Rao" in line
+    plain = _fmt_item({"id": "y" * 12, "title": "buy tape",
+                       "disposition": "INBOX", "source": "LOCAL"})
+    assert "from email" not in plain
+
+
+# ---------------------------------------------------------------------------
+# Per-user settings (AI tiers + toggles)
+# ---------------------------------------------------------------------------
+
+
+def test_settings_defaults_per_function():
+    """Each AI function has its own default tier (email-app parity): chat on
+    the strong tool-caller, high-volume triage on the fast tier."""
+    from gateway.routes.tasks.settings import DEFAULT_GTD_MODELS, GtdSettingsModel
+
+    assert DEFAULT_GTD_MODELS == {
+        "chat": "tier-powerful",
+        "clarify": "tier-balanced",
+        "atomize": "tier-fast",
+        "email_capture": "tier-fast",
+    }
+    s = GtdSettingsModel()
+    assert s.capture_dedup is True and s.auto_sync_on_open is True
+
+
+def test_ai_call_sites_use_configured_models():
+    """The atomizer and the email-capture drafter run on the user's
+    configured tier (gtd_settings), not a hardcoded one."""
+    import inspect
+
+    from gateway.routes.tasks import ai as tasks_ai
+    from gateway.routes.tasks import capture_email
+
+    src = inspect.getsource(tasks_ai.atomize_dump)
+    assert 'model=models["atomize"]' in src
+    src2 = inspect.getsource(capture_email.capture_from_email)
+    assert 'model=models["email_capture"]' in src2
+    # Both LLM helpers accept the model and route through the alias-aware
+    # completion path (tier-fast/-balanced/-powerful or a raw model id).
+    assert "acompletion_with_fallback" in inspect.getsource(tasks_ai._llm_atomize)
+    assert "acompletion_with_fallback" in inspect.getsource(capture_email._llm_draft)
+
+
+def test_settings_update_is_partial():
+    """PUT /tasks/settings only touches provided fields (patch semantics)."""
+    from gateway.routes.tasks.settings import GtdSettingsPatch
+
+    p = GtdSettingsPatch(capture_dedup=False)
+    fields = {k: v for k, v in p.model_dump().items() if v is not None}
+    assert fields == {"capture_dedup": False}

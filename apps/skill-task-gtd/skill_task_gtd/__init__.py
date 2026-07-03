@@ -10,6 +10,7 @@ from skill_task_gtd.core import (
     gtd_list_projects,
     gtd_organize,
     gtd_people,
+    gtd_sync,
     gtd_update,
 )
 
@@ -23,5 +24,6 @@ __all__ = [
     "gtd_list_projects",
     "gtd_organize",
     "gtd_people",
+    "gtd_sync",
     "gtd_update",
 ]

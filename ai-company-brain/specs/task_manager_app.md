@@ -718,13 +718,25 @@ write model (C-04); org-knowledge people layer (§6.1 v1, real company data,
 capability-aware delegation); GTD agent tool surface.
 
 **Next in line (🔲)** — in rough priority order:
-1. `POST /tasks/sync` — pull *existing* provider tasks into `gtd_items` (today
-   sync is push-only for newly clarified items). Interface layer method +
-   scheduler, then the Waiting/Next views fill from ClickUp.
+1. ✅ *(2026-07-03)* `POST /tasks/sync` — pull of existing provider tasks is
+   live: `BaseTaskProvider.list_tasks` (+ ClickUp impl, paginated/incremental
+   via `last_delta_token`), GTD lens on pulled rows (closed→DONE ·
+   backlog→SOMEDAY · mine→NEXT · others'→WAITING+`gtd_waiting` · unassigned→
+   team-pool NEXT), overlay-preserving upsert, background pull on app
+   hydrate + per-workspace Sync button + agent `gtd_sync` tool. Webhook/push
+   scheduler still later (Phase 4).
 2. Slice 3 — Engage "Now" view (F4, 4-criteria selection).
 3. Weekly Review wizard (F5) + Waiting-For monitoring surfaces (F6).
-4. Wire the task-manager agent into the Tasks assistant rail (F9; agent chat
-   currently runs via the generic `/agent` route).
+4. ✅ *(2026-07-03)* Tasks assistant rail (F9): AssistantRail is a live
+   AgentChat wrapper pinned to `task-manager` (email-app pattern) — shared
+   sessions, Mem0 memories, live GTD persona (`taskAssistantPersona.ts`:
+   workspaces + current view + open item + inbox pressure), quick actions →
+   composer. Same slice also wired the **server AI clarify proposal** into
+   ClarifyPanel (`apiClarifyPropose`: instant local heuristic, server
+   upgrade with org-knowledge capability match applied only while the form
+   is untouched). Browser-E2E-verified: capture → persist → clarify (server
+   proposal, "Rahul fits…") → accept → NEXT view → reload-persist → mind
+   sweep → rail quick actions.
 5. Live workload sync for `gtd_people` + overload warnings (§6.1 later-list).
 6. OAuth connect flow; more connectors (Asana/Jira/Linear); generic MCP connector.
 
@@ -734,6 +746,58 @@ pgvector; run `scripts/dump_schema.sh` on the PC). HITL question-card fix
 runs parked on `ask_user`/`ask_questions` after 300s — now HITL-aware; knobs:
 `HITL_IDLE_TIMEOUT_SECONDS` (3600), `COPILOT_STREAM_STALL_TIMEOUT` (300),
 `COPILOT_TOOL_TIMEOUT_SECONDS` (300).
+
+**Mind-dump atomization + capture dedup (2026-07-03)** — `POST
+/tasks/ai/atomize` turns freeform text (pasted paragraph, mind sweep, single
+capture) into atomic captures, each checked against the user's open items:
+`new` · `similar` (UI/agent asks "same or different?") · `duplicate`
+(confident same — skipped by default, undoable). LLM tier1 does the split +
+judgment with a deterministic sentence/connector splitter + token-similarity
+fallback, and a guardrail: an LLM duplicate claim without lexical support
+degrades to `similar` (a poisoned title can't silently delete a capture).
+Wired into: the sweep review phase (candidates + verdict badges, duplicates
+default-excluded), single capture (background check → warning banner:
+auto-skip w/ "Add anyway" for duplicates, "Same — remove / Different — keep"
+for similars), and the agent's `gtd_capture`/`gtd_capture_many` (paragraph in,
+skipped-duplicates report out). Golden-locked in
+`evals/trajectories/test_gtd_quality_trajectory.py`; browser-E2E-verified.
+
+**Email → task capture (2026-07-03)** — the email inbox is now a GTD
+capture channel (the biggest ubiquitous-capture gap from the GTD audit).
+`POST /tasks/capture/from-email {account_id, email_id}`: owner-checked
+through the mailbox, AI-drafts the capture (LLM tier1 names the ASK —
+"Approve Sanjay's revised quote" — not just the subject; deterministic
+"Email from <sender>: <subject>" fallback), files it as an INBOX item with
+`gtd_items.origin` (migration 50) linking back to the source email.
+Idempotent per email (re-capture returns the existing open item). UI:
+"Add to Tasks" in the email right-click context menu (single + bulk), the
+desktop unified toolbar, and the mobile detail toolbar; a toast confirms
+("Captured to Tasks …" / "Already in Tasks"). The clarify panel and item
+detail show the origin ("Captured from email — <sender> · <subject>" +
+open link) so processing has the context. Same GTD-audit pass also fixed:
+calendar decisions now REQUIRE a date (a hard-date item with no date was
+invisible on the Calendar view). Browser-E2E-verified 7/7.
+
+**Origin through the lifecycle (2026-07-03, same day)** — the email
+reference now follows the task everywhere: origin chip on every list row
+(Next/Waiting/…, tooltip with sender+subject), origin line on the inbox
+card, clarify header and item detail; every "Open" is a DEEP LINK
+(`/email?account=…&email=…` — the email page consumes `?email=` via
+`openEmailById`, fetching the message even outside the loaded folder);
+pushing an email-origin item to a PM tool appends "— Captured from email
+— <sender>: <subject>" to the task description so the assignee sees the
+source; the agent's `gtd_list` lines carry "from email: <sender>".
+
+**Per-user settings (2026-07-03)** — `gtd_settings` (migration 51) +
+`GET/PUT /tasks/settings` + a Settings dialog in the tasks sidebar (email-app
+model-roles parity, per USER since GTD is personal): pick the tier/model per
+AI function — assistant chat (default tier-powerful, the rail now locks to
+it), mind-dump atomizer/dedup (tier-fast, wired), email→task drafting
+(tier-fast, wired), clarify cognition (tier-balanced, reserved for the agent
+takeover) — options = LiteLLM tiers + the user's enabled models. Toggles:
+duplicate check on quick capture; auto-sync on open (both gate the store
+behaviours). Partial-update PUT; defaults served before a row exists. The
+/api/tasks proxy now forwards PUT.
 
 **Chat-stack state (same session, 2026-07-02)** — a full audit of the chat
 implementation (SSE · HITL · resume · multi-agent handoffs, both runtimes)

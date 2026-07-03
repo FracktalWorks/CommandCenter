@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   Pencil, Reply, ReplyAll, Forward, Archive, Trash2, FolderInput,
   Flag, Star, MailOpen, Mail, Tag, Printer, MoreHorizontal, X,
+  ListChecks,
 } from "lucide-react";
 import { useEmailStore } from "../lib/emailStore";
 import { LabelMenu } from "./LabelMenu";
@@ -31,6 +32,7 @@ export function EmailToolbar() {
   } = useEmailStore();
 
   const selectedEmail = emails.find((e) => e.id === selectedEmailId) ?? null;
+  const captureEmailToTasks = useEmailStore((s) => s.captureEmailToTasks);
   const [showMove, setShowMove] = useState(false);
   const [showLabel, setShowLabel] = useState(false);
   const [showMore, setShowMore] = useState(false);
@@ -71,6 +73,12 @@ export function EmailToolbar() {
           <TBtn icon={Reply} label="Reply" onClick={() => setViewerCommand("reply")} />
           <TBtn icon={ReplyAll} label="Reply All" onClick={() => setViewerCommand("reply-all")} />
           <TBtn icon={Forward} label="Forward" onClick={() => setViewerCommand("forward")} />
+
+          <TBtn
+            icon={ListChecks}
+            label="Add to Tasks"
+            onClick={() => captureEmailToTasks(selectedEmail.id)}
+          />
 
           <Divider />
 

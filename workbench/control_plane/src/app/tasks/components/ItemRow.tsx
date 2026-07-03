@@ -1,6 +1,6 @@
 "use client";
 
-import { Clock, AlertTriangle, FolderKanban, Zap } from "lucide-react";
+import { Clock, AlertTriangle, FolderKanban, Zap, Mail } from "lucide-react";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import {
@@ -52,6 +52,15 @@ export function ItemRow({ item, now }: { item: GtdItem; now: number }) {
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 pl-[22px] text-[11px] text-muted-foreground">
         {item.context && (
           <span className="font-mono text-[11px] text-primary/80">{item.context}</span>
+        )}
+        {item.origin?.kind === "email" && (
+          <span
+            className="inline-flex items-center gap-1"
+            title={`Captured from email — ${item.origin.fromName || item.origin.fromEmail || ""}${item.origin.subject ? `: ${item.origin.subject}` : ""}`}
+          >
+            <Mail className="h-3 w-3" />
+            {item.origin.fromName || "email"}
+          </span>
         )}
         {item.energy && (
           <span className="inline-flex items-center gap-1">

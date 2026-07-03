@@ -5,6 +5,7 @@ import {
   Star, Reply, Forward, Trash2, Archive, MoreHorizontal,
   Paperclip, ReplyAll, Flag, FolderInput,
   MailOpen, Tag, Printer, ExternalLink, X, AlertTriangle, Loader2, Send,
+  ListChecks,
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { fullDateLabel, initials, buildOptimisticSent, bodyMatchKey } from "../lib/utils";
@@ -32,6 +33,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
     updateEmail, deleteEmail, openCompose, hydrateEmail, folders,
     accounts, selectedAccountId, sendEmail, saveDraft, sendDraft,
     viewerCommand, setViewerCommand, triggerSync, softRefresh,
+    captureEmailToTasks,
   } = useEmailStore();
   const { isMobile } = useViewMode();
   const [starred, setStarred] = useState(email?.isStarred ?? false);
@@ -601,6 +603,14 @@ export function EmailDetail({ email }: EmailDetailProps) {
             label="Forward"
             onClick={() => startReply("forward")}
             active={replyMode === "forward"}
+          />
+
+          <TBtn
+            icon={ListChecks}
+            label="Add to Tasks"
+            onClick={() => {
+              if (email) captureEmailToTasks(email.id);
+            }}
           />
 
           <Divider />

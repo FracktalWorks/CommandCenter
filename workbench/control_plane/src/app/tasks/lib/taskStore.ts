@@ -30,6 +30,11 @@ import {
   apiPatchItem,
   apiPushItem,
   apiRefreshSchema,
+  apiSyncTasks,
+  apiAtomize,
+  fetchTaskSettings,
+  updateTaskSettings,
+  type TaskSettings,
   fetchAccounts,
   fetchItems,
   fetchPeople,
@@ -344,6 +349,32 @@ interface TaskState {
   disconnectAccount: (id: string) => Promise<void>;
   /** Refresh one account's provider schema (projects/members/statuses). */
   refreshAccountSchema: (id: string) => Promise<void>;
+  /** Duplicate-capture notice: the AI found the just-captured item is the
+   *  same as (verdict "duplicate" — auto-skipped, undoable) or similar to
+   *  (verdict "similar" — the user decides) an existing open item. */
+  dupNotice: {
+    verdict: "duplicate" | "similar";
+    /** the freshly captured item (already removed when verdict=duplicate) */
+    title: string;
+    itemId: string | null;
+    matchTitle: string;
+    matchId: string;
+  } | null;
+  /** Resolve the dup notice: keep both / treat as the same (remove new). */
+  resolveDupNotice: (action: "keep" | "same" | "dismiss") => void;
+  /** Per-user task-manager settings (AI tiers + toggles). Defaults render
+   *  immediately; hydrate() refreshes from the gateway. */
+  settings: TaskSettings;
+  /** Patch settings (optimistic; persisted via PUT /tasks/settings). */
+  updateSettings: (patch: Partial<TaskSettings>) => Promise<void>;
+  settingsModalOpen: boolean;
+  openSettings: () => void;
+  closeSettings: () => void;
+  /** True while a provider pull (POST /tasks/sync) is in flight. */
+  syncing: boolean;
+  /** Pull existing provider tasks into the mirror (one account, or all),
+   *  then re-fetch items so Waiting/Next fill from the connected tool. */
+  syncNow: (accountId?: string) => Promise<void>;
   /** Explicit user-approved push of a pending item to its workspace. */
   pushItem: (id: string) => Promise<void>;
   openQuickCapture: (mode: "single" | "sweep") => void;
@@ -395,7 +426,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     if (get().backend === "live") {
       // Optimistic row already shown; swap in the server row (real id) when it lands.
       sync(
-        apiCapture(t).then((server) =>
+        apiCapture(t).then((server) => {
           set((s) => ({
             items: s.items.map((i) => (i.id === item.id ? server : i)),
             lastCaptureIds: s.lastCaptureIds.map((x) =>
@@ -403,10 +434,58 @@ export const useTaskStore = create<TaskState>((set, get) => ({
             ),
             selectedItemId:
               s.selectedItemId === item.id ? server.id : s.selectedItemId,
-          })),
-        ),
+          }));
+          // Background duplicate check (capture stays frictionless): the AI
+          // compares the new capture against open items. Confident duplicate
+          // → auto-remove with an undoable notice; similar → ask the user.
+          if (!get().settings.captureDedup) return;
+          apiAtomize(t, { excludeIds: [server.id] })
+            .then(({ items: cands }) => {
+              const c = cands[0];
+              // The atomizer sees the just-created row too — a self-match
+              // (same id) is not a duplicate.
+              if (!c || c.verdict === "new" || !c.matchId || c.matchId === server.id) return;
+              if (c.verdict === "duplicate") {
+                set((s) => ({
+                  items: s.items.filter((i) => i.id !== server.id),
+                  dupNotice: {
+                    verdict: "duplicate", title: server.title,
+                    itemId: null, matchTitle: c.matchTitle ?? "",
+                    matchId: c.matchId!,
+                  },
+                }));
+                apiDeleteItem(server.id).catch(() => {});
+              } else {
+                set({
+                  dupNotice: {
+                    verdict: "similar", title: server.title,
+                    itemId: server.id, matchTitle: c.matchTitle ?? "",
+                    matchId: c.matchId!,
+                  },
+                });
+              }
+            })
+            .catch(() => { /* dedup is best-effort */ });
+        }),
       );
     }
+  },
+
+  dupNotice: null,
+
+  resolveDupNotice: (action) => {
+    const n = get().dupNotice;
+    if (!n) return;
+    if (action === "keep" && n.verdict === "duplicate") {
+      // Re-add the auto-skipped capture ("add anyway").
+      get().capture(n.title);
+    } else if (action === "same" && n.verdict === "similar" && n.itemId) {
+      // The user confirmed it's the same item — remove the new copy.
+      const id = n.itemId;
+      set((s) => ({ items: s.items.filter((i) => i.id !== id) }));
+      if (get().backend === "live") sync(apiDeleteItem(id).catch(() => {}));
+    }
+    set({ dupNotice: null });
   },
 
   captureMany: (text) => {
@@ -720,6 +799,14 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         providers,
         people,
       });
+      // Settings load in parallel (defaults already render); the auto-sync
+      // below honours the user's toggle once they arrive.
+      const settings = await fetchTaskSettings().catch(() => get().settings);
+      set({ settings });
+      // Background pull: refresh the provider mirror (incremental cursor
+      // makes this cheap) so Waiting/Next reflect the tool without a manual
+      // sync. Fire-and-forget — the UI is already usable on cached rows.
+      if (accounts.length > 0 && settings.autoSyncOnOpen) void get().syncNow();
     } catch {
       // Gateway absent/unreachable → stay in demo mode on the bundled mocks.
       set({ backend: "demo" });
@@ -766,6 +853,51 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   refreshAccountSchema: async (id) => {
     await apiRefreshSchema(id);
     await get().refreshAccounts();
+  },
+
+  settings: {
+    chatModel: "tier-powerful",
+    clarifyModel: "tier-balanced",
+    atomizeModel: "tier-fast",
+    emailCaptureModel: "tier-fast",
+    captureDedup: true,
+    autoSyncOnOpen: true,
+  },
+
+  updateSettings: async (patch) => {
+    // Optimistic: the modal reflects the change instantly; the server is the
+    // source of truth on response (and on the next hydrate if the PUT fails).
+    set((s) => ({ settings: { ...s.settings, ...patch } }));
+    if (get().backend !== "live") return;
+    try {
+      set({ settings: await updateTaskSettings(patch) });
+    } catch {
+      /* next hydrate reconciles */
+    }
+  },
+
+  settingsModalOpen: false,
+  openSettings: () => set({ settingsModalOpen: true }),
+  closeSettings: () => set({ settingsModalOpen: false }),
+
+  syncing: false,
+
+  syncNow: async (accountId) => {
+    if (get().backend !== "live" || get().syncing) return;
+    set({ syncing: true });
+    try {
+      await apiSyncTasks(accountId ? { accountId } : undefined);
+      // Re-pull items + account sync status so the views fill immediately.
+      const [items] = await Promise.all([
+        fetchItems("all"),
+        get().refreshAccounts(),
+      ]);
+      set({ items });
+    } catch {
+      /* account rows carry sync_error; next hydrate reconciles */
+    } finally {
+      set({ syncing: false });
+    }
   },
 
   pushItem: async (id) => {

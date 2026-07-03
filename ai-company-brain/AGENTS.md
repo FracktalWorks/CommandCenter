@@ -101,6 +101,7 @@ Status: 🟢 live/shipped · 🔄 in progress · 🔲 planned/not started. *(Ind
 | [`drawio_integration.md`](specs/drawio_integration.md) | **draw.io** — architecture, components, tickets ST-DRW-01…13, roadmap (master) | 🔲 proposed |
 | [`drawio_diagram_svc_contract.md`](specs/drawio_diagram_svc_contract.md) | draw.io — wire contract for `diagram-svc` / `create_diagram` / `DrawioEditor` (freeze-gated) | 🔲 proposed |
 | [`chat_ux.md`](specs/chat_ux.md) | Chat thinking/progress/tool rendering UI | 🔄 Phase 1 ✅, Phase 2 |
+| [`task_manager_harness_2026-07.md`](specs/task_manager_harness_2026-07.md) | **Task manager × harness engineering** — app-level review vs awesome-harness-engineering; tool risk annotations, trifecta guards, GTD golden evals, tool_scope | 🔄 Tier 1 ✅ (2026-07-03), Tier 2 planned |
 | [`chat_implementation_review_2026-07.md`](specs/chat_implementation_review_2026-07.md) | **Chat stack audit** (SSE · HITL · resume · handoffs, MAF + Copilot SDK) — prioritized P0/P1 fixes, 3 strategic refactors, doc-drift list | 🔨 in progress — batches 1–3 landed (see doc's status block); remaining: P0-3, P1-2/5/6/7/9, P2, §5 refactors |
 | [`stream_reconnection.md`](specs/stream_reconnection.md) | Fire-and-forget chat + Redis stream replay/reconnect | 🟢 implemented |
 | [`vscode_tool_integration.md`](specs/vscode_tool_integration.md) | 6 VS Code Copilot-Chat tools (HITL, errors, memory, history, GitHub search) | 🔄 impl. done, verify |

@@ -75,6 +75,7 @@ export default function EmailPage() {
     composeOpen,
     composeDefaults,
     pendingSend,
+    taskCaptureNotice,
     pendingChatPrompt,
     error,
     authErrors,
@@ -101,6 +102,25 @@ export default function EmailPage() {
   useEffect(() => {
     fetchAccounts();
   }, [fetchAccounts]);
+
+  // Deep link: /email?account=<id>&email=<id> opens a SPECIFIC message —
+  // the link tasks put on email-origin items ("Open"). The account param is
+  // consumed by the store's initial-account pick; the email param is ours:
+  // open once the right account is active (openEmailById fetches the
+  // message even if it isn't in the loaded folder page).
+  const deepLinkedEmailRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!selectedAccountId) return;
+    let emailParam: string | null = null;
+    try {
+      emailParam = new URL(window.location.href).searchParams.get("email");
+    } catch {
+      return;
+    }
+    if (!emailParam || deepLinkedEmailRef.current === emailParam) return;
+    deepLinkedEmailRef.current = emailParam;
+    useEmailStore.getState().openEmailById(emailParam);
+  }, [selectedAccountId]);
 
   // Fetch emails when account or folder changes
   useEffect(() => {
@@ -882,6 +902,29 @@ export default function EmailPage() {
         onClose={() => setPaletteOpen(false)}
         commands={commands}
       />
+
+      {/* Captured-to-Tasks toast */}
+      {taskCaptureNotice && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[80] flex items-center gap-3 bg-card border border-border shadow-xl rounded-lg px-4 py-2.5 text-xs">
+          <span className="text-foreground">
+            {taskCaptureNotice.created
+              ? <>Captured to Tasks: &ldquo;{taskCaptureNotice.title}&rdquo;</>
+              : taskCaptureNotice.title.startsWith("Could not")
+                ? taskCaptureNotice.title
+                : <>Already in Tasks: &ldquo;{taskCaptureNotice.title}&rdquo;</>}
+          </span>
+          <a href="/tasks" className="text-primary font-medium hover:opacity-80">
+            Open Tasks
+          </a>
+          <button
+            onClick={() => useEmailStore.getState().clearTaskCaptureNotice()}
+            className="text-muted-foreground hover:text-foreground"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Undo-send toast */}
       {pendingSend && (

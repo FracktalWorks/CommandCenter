@@ -4,6 +4,7 @@
 // falls back to the bundled mock data when it isn't (UI-first demo mode).
 
 import { GtdItem, GtdProject, Person, Source, ProviderKind, Disposition } from "./types";
+import type { ClarifyProposal, ClarifyDisposition, Confidence } from "./clarify";
 import type { ConnectedProvider } from "./mockData";
 
 async function gatewayFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -68,6 +69,16 @@ function mapItem(raw: Raw): GtdItem {
     dueAt: raw.due_at ? String(raw.due_at) : undefined,
     isHardDate: Boolean(raw.is_hard_date),
     createdAt: String(raw.created_at ?? ""),
+    origin: raw.origin && typeof raw.origin === "object"
+      ? {
+          kind: String((raw.origin as Raw).kind ?? ""),
+          accountId: (raw.origin as Raw).account_id ? String((raw.origin as Raw).account_id) : undefined,
+          emailId: (raw.origin as Raw).email_id ? String((raw.origin as Raw).email_id) : undefined,
+          subject: (raw.origin as Raw).subject ? String((raw.origin as Raw).subject) : undefined,
+          fromName: (raw.origin as Raw).from_name ? String((raw.origin as Raw).from_name) : undefined,
+          fromEmail: (raw.origin as Raw).from_email ? String((raw.origin as Raw).from_email) : undefined,
+        }
+      : undefined,
     updatedAt: String(raw.updated_at ?? ""),
     completedAt: raw.completed_at ? String(raw.completed_at) : undefined,
     clarifiedAt: raw.clarified_at ? String(raw.clarified_at) : undefined,
@@ -280,4 +291,149 @@ export async function apiRefreshSchema(id: string): Promise<TaskAccount> {
   return mapAccount(
     await gatewayFetch<Raw>(`/accounts/${id}/schema/refresh`, { method: "POST" })
   );
+}
+
+export interface TaskSettings {
+  chatModel: string;
+  clarifyModel: string;
+  atomizeModel: string;
+  emailCaptureModel: string;
+  captureDedup: boolean;
+  autoSyncOnOpen: boolean;
+}
+
+function mapSettings(r: Raw): TaskSettings {
+  return {
+    chatModel: String(r.chat_model ?? "tier-powerful"),
+    clarifyModel: String(r.clarify_model ?? "tier-balanced"),
+    atomizeModel: String(r.atomize_model ?? "tier-fast"),
+    emailCaptureModel: String(r.email_capture_model ?? "tier-fast"),
+    captureDedup: r.capture_dedup !== false,
+    autoSyncOnOpen: r.auto_sync_on_open !== false,
+  };
+}
+
+export async function fetchTaskSettings(): Promise<TaskSettings> {
+  return mapSettings(await gatewayFetch<Raw>(`/settings`));
+}
+
+/** Partial update — only the provided fields change. */
+export async function updateTaskSettings(
+  patch: Partial<TaskSettings>
+): Promise<TaskSettings> {
+  const body: Raw = {};
+  if (patch.chatModel !== undefined) body.chat_model = patch.chatModel;
+  if (patch.clarifyModel !== undefined) body.clarify_model = patch.clarifyModel;
+  if (patch.atomizeModel !== undefined) body.atomize_model = patch.atomizeModel;
+  if (patch.emailCaptureModel !== undefined)
+    body.email_capture_model = patch.emailCaptureModel;
+  if (patch.captureDedup !== undefined) body.capture_dedup = patch.captureDedup;
+  if (patch.autoSyncOnOpen !== undefined)
+    body.auto_sync_on_open = patch.autoSyncOnOpen;
+  return mapSettings(
+    await gatewayFetch<Raw>(`/settings`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    })
+  );
+}
+
+export interface SyncResult {
+  accountId: string;
+  label: string;
+  pulled: number;
+  created: number;
+  updated: number;
+  completed: number;
+  error?: string;
+}
+
+/** Pull existing provider tasks into the GTD mirror (one account, or all). */
+export async function apiSyncTasks(opts?: {
+  accountId?: string;
+  full?: boolean;
+}): Promise<SyncResult[]> {
+  const res = await gatewayFetch<Raw[]>(`/sync`, {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: opts?.accountId ?? null,
+      full: opts?.full ?? false,
+    }),
+  });
+  return (res ?? []).map((r) => ({
+    accountId: String(r.account_id ?? ""),
+    label: String(r.label ?? ""),
+    pulled: Number(r.pulled ?? 0),
+    created: Number(r.created ?? 0),
+    updated: Number(r.updated ?? 0),
+    completed: Number(r.completed ?? 0),
+    error: r.error ? String(r.error) : undefined,
+  }));
+}
+
+/** Server-side AI clarify proposal for one inbox item (§2.2 agent seam).
+ *  Richer than the local heuristic: org-knowledge capability matching
+ *  (people skills + availability), server project auto-match, and the
+ *  destination/stage defaults. Same shape as lib/clarify.ts's proposal. */
+export interface AtomizedItem {
+  title: string;
+  verdict: "new" | "similar" | "duplicate";
+  matchId?: string;
+  matchTitle?: string;
+  matchDisposition?: string;
+  score: number;
+}
+
+/** Split a mind-dump / paragraph into atomic captures, each checked against
+ *  the user's open items for duplicates (LLM-backed server-side, with a
+ *  deterministic fallback — the caller shouldn't care which ran). */
+export async function apiAtomize(
+  text: string,
+  opts?: { dedup?: boolean; excludeIds?: string[] }
+): Promise<{ items: AtomizedItem[]; usedLlm: boolean }> {
+  const res = await gatewayFetch<Raw>(`/ai/atomize`, {
+    method: "POST",
+    body: JSON.stringify({
+      text,
+      dedup: opts?.dedup ?? true,
+      exclude_ids: opts?.excludeIds ?? [],
+    }),
+  });
+  const items = ((res.items as Raw[]) ?? []).map((r) => ({
+    title: String(r.title ?? ""),
+    verdict: (["new", "similar", "duplicate"].includes(String(r.verdict))
+      ? String(r.verdict)
+      : "new") as AtomizedItem["verdict"],
+    matchId: r.match_id ? String(r.match_id) : undefined,
+    matchTitle: r.match_title ? String(r.match_title) : undefined,
+    matchDisposition: r.match_disposition ? String(r.match_disposition) : undefined,
+    score: Number(r.score ?? 0),
+  }));
+  return { items, usedLlm: Boolean(res.used_llm) };
+}
+
+export async function apiClarifyPropose(id: string): Promise<ClarifyProposal> {
+  const r = await gatewayFetch<Raw>(`/items/${id}/clarify`, { method: "POST" });
+  const accountId = r.account_id ? String(r.account_id) : undefined;
+  return {
+    actionable: Boolean(r.actionable),
+    disposition: String(r.disposition ?? "NEXT") as ClarifyDisposition,
+    nextAction: String(r.next_action ?? ""),
+    outcome: r.outcome ? String(r.outcome) : undefined,
+    context: r.context ? String(r.context) : undefined,
+    energy: (r.energy ?? undefined) as ClarifyProposal["energy"],
+    timeEstimateMins: r.time_estimate_mins
+      ? Number(r.time_estimate_mins)
+      : undefined,
+    isTwoMinute: Boolean(r.is_two_minute),
+    suggestedAssignee: asPerson(r.suggested_assignee),
+    target: accountId
+      ? { source: "SYNCED", accountId }
+      : { source: "LOCAL", provider: "local" },
+    projectId: r.project_id ? String(r.project_id) : undefined,
+    projectInferred: Boolean(r.project_inferred),
+    confidence: String(r.confidence ?? "medium") as Confidence,
+    rationale: String(r.rationale ?? ""),
+    status: r.status ? String(r.status) : undefined,
+  };
 }

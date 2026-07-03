@@ -21,6 +21,7 @@ import {
   Cloud,
   Plug,
   type LucideIcon,
+  Settings2,
 } from "lucide-react";
 import { useTaskStore, viewCounts, contextCounts } from "../lib/taskStore";
 import { ViewKey } from "../lib/types";
@@ -63,6 +64,7 @@ export function ListsSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const selectContextRaw = useTaskStore((s) => s.selectContext);
   const accounts = useTaskStore((s) => s.accounts);
   const openWorkspaces = useTaskStore((s) => s.openWorkspaces);
+  const openSettings = useTaskStore((s) => s.openSettings);
   const selectView: typeof selectViewRaw = (v) => {
     selectViewRaw(v);
     onNavigate?.();
@@ -149,6 +151,17 @@ export function ListsSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
         >
           <Plug className="h-3.5 w-3.5 shrink-0" />
           <span className="flex-1">Connect workspace…</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            openSettings();
+            onNavigate?.();
+          }}
+          className="tech-transition flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-[13px] text-muted-foreground hover:bg-secondary hover:text-foreground"
+        >
+          <Settings2 className="h-3.5 w-3.5 shrink-0" />
+          <span className="flex-1">Settings</span>
         </button>
       </div>
     </nav>

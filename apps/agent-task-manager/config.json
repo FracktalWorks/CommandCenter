@@ -1,12 +1,34 @@
 {
   "name": "task-manager",
-  "description": "GTD task manager — captures thoughts, clarifies the inbox, organizes to Local or a connected PM workspace (ClickUp), and answers status/progress/workload questions with citations.",
+  "description": "GTD task manager \u2014 captures thoughts, clarifies the inbox, organizes to Local or a connected PM workspace (ClickUp), and answers status/progress/workload questions with citations.",
   "version": "0.2.0",
   "runtime": "maf",
-  "skill_repos": ["skill-task-gtd", "skill-clickup-sync"],
+  "skill_repos": [
+    "skill-task-gtd",
+    "skill-clickup-sync"
+  ],
   "mcp_servers": {},
   "max_mutation_attempts": 1,
-  "tags": ["tasks", "gtd", "clickup", "project-management"],
-  "integrations": ["clickup"],
-  "optional_integrations": []
+  "tags": [
+    "tasks",
+    "gtd",
+    "clickup",
+    "project-management"
+  ],
+  "integrations": [
+    "clickup"
+  ],
+  "optional_integrations": [],
+  "tool_scope": [
+    "call_agent",
+    "ask_questions",
+    "manage_todo_list",
+    "remember",
+    "recall_timeline",
+    "save_memory",
+    "save_episode",
+    "save_note",
+    "recall_notes",
+    "emit_generative_ui"
+  ]
 }

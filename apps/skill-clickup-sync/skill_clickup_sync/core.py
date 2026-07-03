@@ -14,6 +14,16 @@ from typing import Any
 
 import httpx
 
+try:
+    # MCP-style risk annotations (HH-2) — both tools are read-only probes of
+    # the ClickUp API (open-world: they leave CommandCenter over the network).
+    from acb_skills.tool_annotations import annotate as _annotate_risk
+except Exception:  # pragma: no cover - platform package absent in isolation
+    def _annotate_risk(**_hints):  # type: ignore[misc]
+        def _wrap(fn):
+            return fn
+        return _wrap
+
 
 def _api_token() -> str:
     tok = os.environ.get("CLICKUP_API_TOKEN", "")
@@ -22,6 +32,7 @@ def _api_token() -> str:
     return tok
 
 
+@_annotate_risk(read_only=True, idempotent=True, open_world=True)
 async def get_task_status(task_id: str) -> str:
     """Return the current status, assignees, and due date of a ClickUp task.
 
@@ -60,6 +71,7 @@ async def get_task_status(task_id: str) -> str:
     )
 
 
+@_annotate_risk(read_only=True, idempotent=True, open_world=True)
 async def list_project_tasks(project_name: str, *, status_filter: str = "") -> str:
     """List open tasks in a ClickUp list matching project_name.
 

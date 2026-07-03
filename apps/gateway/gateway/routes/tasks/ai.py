@@ -58,7 +58,18 @@ _STOP_WORDS = frozenset(
 
 
 def _has(t: str, hints: list[str]) -> bool:
-    return any(h in t for h in hints)
+    """Hint match with word boundaries — bare substring matching misfiled
+    captures ("profile…" tripped the "file" reference hint). Trailing-space
+    hints (e.g. "learn ") are stripped first: the boundary check itself
+    prevents prefix matches like "learning". Locked by the GTD golden evals
+    (evals/trajectories/test_gtd_quality_trajectory.py)."""
+    for h in hints:
+        hint = h.strip()
+        if hint and re.search(
+            rf"(?<![a-z0-9]){re.escape(hint)}(?![a-z0-9])", t
+        ):
+            return True
+    return False
 
 
 def _infer_context(t: str) -> str:
@@ -210,10 +221,19 @@ def propose(item: Any, people: list[dict], projects: list[Any],
                     "confidence": "medium",
                     "rationale": f"Actionable now — a next action for {ctx}."}
 
-    # Project auto-match (skip for PROJECT — that creates a new one).
+    # Project auto-match. A PROJECT-classified capture that clearly belongs
+    # to an EXISTING active project files there as a next action instead of
+    # spawning a duplicate project (GTD: one project, many actions). Locked
+    # by the GTD golden evals.
     matched = None
-    if core["disposition"] != "PROJECT" and not item.project_id:
+    if not item.project_id:
         matched = _suggest_project(item.title, item.description or "", projects)
+    if matched is not None and core["disposition"] == "PROJECT":
+        core = {"actionable": True, "disposition": "NEXT",
+                "next_action": _draft_next_action(item.title, ctx),
+                "context": ctx, "energy": "medium", "confidence": "medium",
+                "rationale": "Part of an existing project — filing it there "
+                             "as a next action instead of starting a new one."}
     project = matched or next(
         (p for p in projects if item.project_id and str(p.id) == str(item.project_id)),
         None)

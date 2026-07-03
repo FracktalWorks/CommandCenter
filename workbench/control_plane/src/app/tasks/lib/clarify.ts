@@ -62,7 +62,14 @@ export function defaultStatus(
   return find(/to.?do|selected|to do/i) ?? statuses[1] ?? statuses[0];
 }
 
-const has = (t: string, ...words: string[]) => words.some((w) => t.includes(w));
+// Word-boundary hint match (mirror of gateway ai.py `_has`): bare substring
+// matching misfiled captures - "profile..." tripped the "file" reference hint.
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const has = (t: string, ...words: string[]) =>
+  words.some((w) => {
+    const hint = w.trim();
+    return !!hint && new RegExp(`(?<![a-z0-9])${esc(hint)}(?![a-z0-9])`).test(t);
+  });
 const CAP = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 // Words too common to carry a project signal.

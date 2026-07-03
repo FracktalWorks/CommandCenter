@@ -51,12 +51,13 @@ try:
         gtd_list_projects,
         gtd_organize,
         gtd_people,
+        gtd_sync,
         gtd_update,
     )
     _TOOLS += [
         gtd_capture, gtd_capture_many, gtd_list, gtd_list_projects,
         gtd_accounts, gtd_people, gtd_inbox_insights, gtd_clarify,
-        gtd_organize, gtd_update,
+        gtd_organize, gtd_update, gtd_sync,
     ]
 except ImportError:
     # skill-task-gtd not installed yet — agent still boots.

@@ -30,6 +30,7 @@ import {
   apiPatchItem,
   apiPushItem,
   apiRefreshSchema,
+  apiSyncTasks,
   fetchAccounts,
   fetchItems,
   fetchPeople,
@@ -344,6 +345,11 @@ interface TaskState {
   disconnectAccount: (id: string) => Promise<void>;
   /** Refresh one account's provider schema (projects/members/statuses). */
   refreshAccountSchema: (id: string) => Promise<void>;
+  /** True while a provider pull (POST /tasks/sync) is in flight. */
+  syncing: boolean;
+  /** Pull existing provider tasks into the mirror (one account, or all),
+   *  then re-fetch items so Waiting/Next fill from the connected tool. */
+  syncNow: (accountId?: string) => Promise<void>;
   /** Explicit user-approved push of a pending item to its workspace. */
   pushItem: (id: string) => Promise<void>;
   openQuickCapture: (mode: "single" | "sweep") => void;
@@ -720,6 +726,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         providers,
         people,
       });
+      // Background pull: refresh the provider mirror (incremental cursor
+      // makes this cheap) so Waiting/Next reflect the tool without a manual
+      // sync. Fire-and-forget — the UI is already usable on cached rows.
+      if (accounts.length > 0) void get().syncNow();
     } catch {
       // Gateway absent/unreachable → stay in demo mode on the bundled mocks.
       set({ backend: "demo" });
@@ -766,6 +776,26 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   refreshAccountSchema: async (id) => {
     await apiRefreshSchema(id);
     await get().refreshAccounts();
+  },
+
+  syncing: false,
+
+  syncNow: async (accountId) => {
+    if (get().backend !== "live" || get().syncing) return;
+    set({ syncing: true });
+    try {
+      await apiSyncTasks(accountId ? { accountId } : undefined);
+      // Re-pull items + account sync status so the views fill immediately.
+      const [items] = await Promise.all([
+        fetchItems("all"),
+        get().refreshAccounts(),
+      ]);
+      set({ items });
+    } catch {
+      /* account rows carry sync_error; next hydrate reconciles */
+    } finally {
+      set({ syncing: false });
+    }
   },
 
   pushItem: async (id) => {

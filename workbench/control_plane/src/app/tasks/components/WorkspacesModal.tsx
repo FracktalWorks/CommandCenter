@@ -34,6 +34,8 @@ function WorkspacesPanel() {
   const refreshAccounts = useTaskStore((s) => s.refreshAccounts);
   const disconnectAccount = useTaskStore((s) => s.disconnectAccount);
   const refreshAccountSchema = useTaskStore((s) => s.refreshAccountSchema);
+  const syncNow = useTaskStore((s) => s.syncNow);
+  const syncing = useTaskStore((s) => s.syncing);
 
   const [token, setToken] = useState("");
   const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
@@ -143,6 +145,19 @@ function WorkspacesPanel() {
                         </p>
                       )}
                     </div>
+                    <button
+                      type="button"
+                      title="Pull this workspace's tasks into the GTD views"
+                      disabled={syncing}
+                      onClick={() => void syncNow(a.id)}
+                      className="tech-transition rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
+                    >
+                      {syncing ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Cloud className="h-3.5 w-3.5" />
+                      )}
+                    </button>
                     <button
                       type="button"
                       title="Re-fetch projects/members/stages"

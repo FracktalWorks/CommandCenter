@@ -281,3 +281,36 @@ export async function apiRefreshSchema(id: string): Promise<TaskAccount> {
     await gatewayFetch<Raw>(`/accounts/${id}/schema/refresh`, { method: "POST" })
   );
 }
+
+export interface SyncResult {
+  accountId: string;
+  label: string;
+  pulled: number;
+  created: number;
+  updated: number;
+  completed: number;
+  error?: string;
+}
+
+/** Pull existing provider tasks into the GTD mirror (one account, or all). */
+export async function apiSyncTasks(opts?: {
+  accountId?: string;
+  full?: boolean;
+}): Promise<SyncResult[]> {
+  const res = await gatewayFetch<Raw[]>(`/sync`, {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: opts?.accountId ?? null,
+      full: opts?.full ?? false,
+    }),
+  });
+  return (res ?? []).map((r) => ({
+    accountId: String(r.account_id ?? ""),
+    label: String(r.label ?? ""),
+    pulled: Number(r.pulled ?? 0),
+    created: Number(r.created ?? 0),
+    updated: Number(r.updated ?? 0),
+    completed: Number(r.completed ?? 0),
+    error: r.error ? String(r.error) : undefined,
+  }));
+}

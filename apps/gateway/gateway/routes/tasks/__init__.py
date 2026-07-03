@@ -8,6 +8,7 @@ from gateway.routes.tasks import accounts as _accounts  # noqa: F401
 from gateway.routes.tasks import ai as _ai  # noqa: F401
 from gateway.routes.tasks import items as _items  # noqa: F401
 from gateway.routes.tasks import people as _people  # noqa: F401
+from gateway.routes.tasks import sync as _sync  # noqa: F401
 from gateway.routes.tasks.core import router
 
 __all__ = ["router"]

@@ -181,6 +181,30 @@ async def gtd_accounts() -> str:
     return "\n".join(out)
 
 
+async def gtd_sync(account_id: str = "", full: bool = False) -> str:
+    """Pull existing tasks from the connected PM tool(s) into the GTD views.
+
+    Use when the user asks to refresh/sync their ClickUp (or other provider)
+    tasks, or when Waiting/Next look stale. Incremental by default; set
+    full=True to re-pull everything. account_id from gtd_accounts; empty
+    syncs every sync-enabled workspace.
+    """
+    body = {"account_id": account_id or None, "full": bool(full)}
+    results = await _request("POST", "/tasks/sync", json=body)
+    if not results:
+        return "Nothing to sync — no sync-enabled workspaces connected."
+    lines = []
+    for r in results:
+        if r.get("error"):
+            lines.append(f"{r.get('label') or r['account_id']}: FAILED — {r['error']}")
+        else:
+            lines.append(
+                f"{r.get('label') or r['account_id']}: pulled {r['pulled']} "
+                f"({r['created']} new, {r['updated']} refreshed, "
+                f"{r['completed']} completed)")
+    return "\n".join(lines)
+
+
 async def gtd_inbox_insights() -> str:
     """Whole-inbox health: counts per bucket, oldest capture, stale
     waiting-fors, projects missing a next action. Use before processing."""

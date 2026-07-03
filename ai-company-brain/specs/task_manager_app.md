@@ -718,9 +718,13 @@ write model (C-04); org-knowledge people layer (§6.1 v1, real company data,
 capability-aware delegation); GTD agent tool surface.
 
 **Next in line (🔲)** — in rough priority order:
-1. `POST /tasks/sync` — pull *existing* provider tasks into `gtd_items` (today
-   sync is push-only for newly clarified items). Interface layer method +
-   scheduler, then the Waiting/Next views fill from ClickUp.
+1. ✅ *(2026-07-03)* `POST /tasks/sync` — pull of existing provider tasks is
+   live: `BaseTaskProvider.list_tasks` (+ ClickUp impl, paginated/incremental
+   via `last_delta_token`), GTD lens on pulled rows (closed→DONE ·
+   backlog→SOMEDAY · mine→NEXT · others'→WAITING+`gtd_waiting` · unassigned→
+   team-pool NEXT), overlay-preserving upsert, background pull on app
+   hydrate + per-workspace Sync button + agent `gtd_sync` tool. Webhook/push
+   scheduler still later (Phase 4).
 2. Slice 3 — Engage "Now" view (F4, 4-criteria selection).
 3. Weekly Review wizard (F5) + Waiting-For monitoring surfaces (F6).
 4. Wire the task-manager agent into the Tasks assistant rail (F9; agent chat

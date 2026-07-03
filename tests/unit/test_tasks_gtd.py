@@ -244,3 +244,132 @@ def test_propose_attaches_capability_owner_without_forcing_delegate():
     assert p["disposition"] == "NEXT"  # suggestion, not a forced WAITING
     assert p["suggested_assignee"]["name"] == "Rahul"
     assert "Rahul fits" in p["rationale"]
+
+
+# ---------------------------------------------------------------------------
+# Sync pull (§9.3 #1): provider list_tasks + the GTD lens on pulled tasks
+# ---------------------------------------------------------------------------
+
+from gateway.routes.tasks.sync import map_pulled_task  # noqa: E402
+
+
+def _pulled(**over):
+    base = {
+        "provider_task_id": "t1",
+        "title": "Task",
+        "status": "To-do",
+        "status_type": "custom",
+        "assignees": [],
+        "closed_at_ms": None,
+    }
+    base.update(over)
+    return base
+
+
+def test_pull_mapping_mine_open_is_next():
+    m = map_pulled_task(_pulled(
+        assignees=[{"name": "v", "provider_user_id": "42"}]), "42")
+    assert m["disposition"] == "NEXT"
+    assert m["is_mine"] is True
+    assert m["waiting_on"] is None
+
+
+def test_pull_mapping_others_task_is_waiting_with_monitor_record():
+    m = map_pulled_task(_pulled(
+        assignees=[{"name": "j", "provider_user_id": "7"}],
+        status="in progress"), "42")
+    assert m["disposition"] == "WAITING"
+    assert m["is_mine"] is False
+    assert m["waiting_on"]["provider_user_id"] == "7"
+
+
+def test_pull_mapping_backlog_stage_is_someday_even_when_mine():
+    m = map_pulled_task(_pulled(
+        assignees=[{"name": "v", "provider_user_id": "42"}],
+        status="Backlog"), "42")
+    assert m["disposition"] == "SOMEDAY"
+
+
+def test_pull_mapping_closed_wins_over_everything():
+    m = map_pulled_task(_pulled(
+        assignees=[{"name": "j", "provider_user_id": "7"}],
+        status="Backlog", status_type="closed", closed_at_ms=1719000000000), "42")
+    assert m["disposition"] == "DONE"
+    assert m["completed_at_ms"] == 1719000000000
+    assert m["waiting_on"] is None  # nothing to wait on once it's done
+
+
+def test_pull_mapping_unassigned_open_is_team_pool_next():
+    m = map_pulled_task(_pulled(), "42")
+    assert m["disposition"] == "NEXT"
+    assert m["is_mine"] is False  # team pool, not my list
+    assert m["assignee"] is None
+
+
+def test_pull_mapping_prefers_me_as_display_assignee():
+    m = map_pulled_task(_pulled(assignees=[
+        {"name": "j", "provider_user_id": "7"},
+        {"name": "v", "provider_user_id": "42"},
+    ]), "42")
+    assert m["is_mine"] is True
+    assert m["assignee"]["provider_user_id"] == "42"
+
+
+@pytest.mark.asyncio
+async def test_clickup_list_tasks_paginates_and_normalizes():
+    p = ClickUpProvider("pk_x", "9001")
+    pages = [
+        {"tasks": [{
+            "id": "abc", "name": "Ship it",
+            "text_content": "notes",
+            "status": {"status": "To-do", "type": "custom"},
+            "assignees": [{"id": 42, "username": "v", "email": "v@x.in"}],
+            "due_date": "1719000000000", "date_created": "1718000000000",
+            "date_updated": "1718500000000", "date_closed": None,
+            "url": "https://app.clickup.com/t/abc",
+            "list": {"id": "L1", "name": "Sprint"},
+        }], "last_page": False},
+        {"tasks": [{
+            "id": "def", "name": "Done one",
+            "status": {"status": "Complete", "type": "closed"},
+            "assignees": [], "date_closed": "1718600000000",
+            "list": {"id": "L1"},
+        }], "last_page": True},
+    ]
+    with patch.object(p, "_get", AsyncMock(side_effect=pages)) as mocked:
+        tasks = await p.list_tasks("9001", updated_since_ms=1718000000000)
+    assert len(tasks) == 2
+    t = tasks[0]
+    assert t["provider_task_id"] == "abc"
+    assert t["title"] == "Ship it"
+    assert t["description"] == "notes"
+    assert t["status"] == "To-do" and t["status_type"] == "custom"
+    assert t["assignees"] == [{"name": "v", "email": "v@x.in",
+                               "provider_user_id": "42"}]
+    assert t["due_at_ms"] == 1719000000000
+    assert t["project_ref"] == "L1"
+    assert tasks[1]["closed_at_ms"] == 1718600000000
+    # incremental cursor forwarded; closed tasks included; paginated
+    first_call = mocked.await_args_list[0]
+    assert first_call.args[0] == "/team/9001/task"
+    assert first_call.args[1]["date_updated_gt"] == 1718000000000
+    assert first_call.args[1]["include_closed"] == "true"
+    assert mocked.await_args_list[1].args[1]["page"] == 1
+
+
+def test_sync_upsert_preserves_user_overlay_and_owns_completion():
+    """The upsert must only refresh MIRRORED fields on re-sync: the user's
+    GTD overlay survives, except completion where the provider wins."""
+    from gateway.routes.tasks import sync as tasks_sync
+
+    sql = str(tasks_sync._UPSERT_SQL)
+    # provider owns completion state…
+    assert "WHEN EXCLUDED.completed_at IS NOT NULL THEN 'DONE'" in sql
+    # …and an upstream reopen un-DONEs the row
+    assert "gtd_items.disposition = 'DONE'" in sql
+    # …but an open row keeps the disposition the user chose
+    assert "ELSE gtd_items.disposition" in sql
+    # user's project refile is never clobbered
+    assert "coalesce(gtd_items.project_id, EXCLUDED.project_id)" in sql
+    # conflict target matches the partial unique index
+    assert "ON CONFLICT (account_id, provider_task_id) WHERE source <> 'LOCAL'" in sql

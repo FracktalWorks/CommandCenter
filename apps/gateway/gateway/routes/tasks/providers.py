@@ -66,6 +66,22 @@ class BaseTaskProvider(ABC):
         """Create a task in the tool (user-approved push) →
         {provider_task_id, provider_url, provider_status}."""
 
+    @abstractmethod
+    async def list_tasks(
+        self, workspace_id: str, *, updated_since_ms: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Pull the workspace's tasks (the sync read, §5.5) as canonical dicts:
+
+        {provider_task_id, provider_url, title, description, status,
+         status_type ('open'|'closed'|…), assignees: [{name, email,
+         provider_user_id}], due_at_ms, created_at_ms, updated_at_ms,
+         closed_at_ms, project_ref}
+
+        ``updated_since_ms`` enables incremental pulls (only tasks updated
+        after that epoch-ms); ``None`` = full pull. Closed tasks ARE included
+        so completions propagate to the GTD overlay.
+        """
+
 
 # ── ClickUp (reference API connector) ────────────────────────────────────────
 
@@ -190,6 +206,68 @@ class ClickUpProvider(BaseTaskProvider):
             "provider_url": t.get("url"),
             "provider_status": (t.get("status") or {}).get("status"),
         }
+
+    async def list_tasks(
+        self, workspace_id: str, *, updated_since_ms: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Filtered team-tasks endpoint, paginated (100/page, last_page flag).
+
+        include_closed=true so upstream completions flow into the mirror;
+        order_by=updated + date_updated_gt gives cheap incremental pulls.
+        """
+        def _ms(val: Any) -> int | None:
+            try:
+                return int(val) if val not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+
+        out: list[dict[str, Any]] = []
+        page = 0
+        while True:
+            params: dict[str, Any] = {
+                "page": page,
+                "include_closed": "true",
+                "subtasks": "false",
+                "order_by": "updated",
+                "reverse": "true",
+            }
+            if updated_since_ms:
+                params["date_updated_gt"] = int(updated_since_ms)
+            data = await self._get(f"/team/{workspace_id}/task", params)
+            tasks = data.get("tasks") or []
+            for t in tasks:
+                status = t.get("status") or {}
+                out.append({
+                    "provider_task_id": str(t.get("id", "")),
+                    "provider_url": t.get("url"),
+                    "title": t.get("name") or "Untitled",
+                    "description": (t.get("text_content")
+                                    or t.get("description") or None),
+                    "status": (status.get("status") or "").strip() or None,
+                    "status_type": (status.get("type") or "").strip() or None,
+                    "assignees": [
+                        {
+                            "name": a.get("username") or a.get("email") or "",
+                            "email": a.get("email"),
+                            "provider_user_id": str(a.get("id", "")),
+                        }
+                        for a in t.get("assignees") or []
+                        if a.get("username") or a.get("email")
+                    ],
+                    "due_at_ms": _ms(t.get("due_date")),
+                    "created_at_ms": _ms(t.get("date_created")),
+                    "updated_at_ms": _ms(t.get("date_updated")),
+                    "closed_at_ms": _ms(t.get("date_closed")),
+                    "project_ref": str((t.get("list") or {}).get("id") or "") or None,
+                })
+            if data.get("last_page", True) or not tasks:
+                break
+            page += 1
+            if page > 100:  # hard stop: 10k tasks per sync run
+                _log.warning("clickup.list_tasks.page_cap",
+                             workspace_id=workspace_id)
+                break
+        return out
 
 
 # ── Registry ─────────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
-# B6 — Permissions & Sandboxing (HH-6, near-term)
+# B6 — Permissions & Sandboxing (HH-6)
 
-> **Status:** **Shipped (2026-07-03)** — B6 grade C → B−. (Container isolation for normal runs remains the deferred Phase-5 item.)
+> **Status:** Near-term handler **shipped (2026-07-03)** — B6 grade C → B−. **Phase 5 (isolation) in progress (2026-07-04)** — see the "Phase 5" section below.
 > **Module:** B6 (core_module_map.md).
 > **Scope of THIS pass:** replace the blanket `PermissionHandler.approve_all`
 > with a **risk-aware allowlist handler** that gates shell / file-write /
@@ -115,3 +115,158 @@ shell/file/network requests surface.
   ~9s) and set `LOG_FORMAT=json` on the VPS (logs are now JSON, run-correlated).
   Prod is in `AGENT_PERMISSION_MODE=audit` (log-only) pending review of the
   decision stream before flipping to `enforce`.
+
+---
+
+# B6 Phase 5 — Isolation for normal agent runs
+
+> **Status:** In progress (2026-07-04). This is the deferred deep-isolation
+> work — the "real residual excessive-agency exposure" the module map flags.
+> The near-term permission handler above is the *policy* layer inside the
+> process; Phase 5 adds the *boundary*.
+
+## The exposure, precisely (audited 2026-07-04)
+
+Everything about a normal agent run executes **in the single gateway/orchestrator
+interpreter**, and that interpreter's `os.environ` holds **every decrypted
+integration secret**. Concretely, from the recon:
+
+1. **Shared ambient credentials — the top standing exposure.**
+   `executor._inject_integrations_to_env` (`executor.py:4509`) writes every
+   resolved credential into `os.environ` (`ZOHO_REFRESH_TOKEN`,
+   `CLICKUP_API_TOKEN`, `SMTP_PASSWORD`, `APIFY_API_TOKEN`, `INSTANTLY_API_KEY`,
+   the Gmail/Sheets SA-json paths, …). It's called on all three run paths
+   (sub-agent `:1419`, streaming `:2769`, batch `:4655`) and the guard is only
+   `if val and not os.environ.get(env_var)` — so creds are written once and
+   **never cleared**. They **accumulate globally** across every run and every
+   agent for the process lifetime. **Any agent — or any prompt-injected agent —
+   can read any other integration's secret today** with `os.getenv(...)` or a
+   shell `env`, regardless of its own `config.json` scope.
+2. **Arbitrary code in-process.** `loader._import_module_file`
+   (`loader.py:1240-1247`) `exec_module`s the agent repo's `agents.py` in the
+   gateway interpreter; imported modules persist process-wide (cleanup only pops
+   the run module + sys.path entries).
+3. **Shared venv.** `_install_agent_deps` (`loader.py:1095`) and the runtime
+   `install_dependency` tool (`dep_tools.py:79`) both `uv pip install --python
+   sys.executable` — into the gateway's own interpreter. One agent's deps can
+   shadow/break another agent's or the gateway's.
+4. **No resource/network limits anywhere** — even the *mutation* container
+   (our only existing isolation) runs with **zero** `--memory`/`--cpus`/
+   `--pids-limit`/`--network`/`--cap-drop`/`--read-only` flags (grep-confirmed).
+
+The one clean seam: the **model call already goes over loopback HTTP** to the
+gateway `/v1` (native MAF `OpenAIChatCompletionClient(base_url=…/v1)`;
+Copilot-SDK BYOK force-routed to the same). So a sandbox doesn't need the
+provider keys — it needs egress to the gateway `/v1` with a **scoped** key.
+
+## Why not "container-per-run" as the first move
+
+The obvious SOTA answer — run each agent in a `Dockerfile.mutation`-style
+container — is the *destination*, but shipping it as step 1 is wrong here:
+
+- **4GB VPS reality.** The box already runs systemd (`acb-gateway`) + Docker
+  infra (`acb-postgres`, `acb-redis`). A cold container per run costs hundreds of
+  MB + seconds of startup; naive container-per-run would OOM or serialize under
+  any real concurrency. A production model needs a **warm pool** or subprocess
+  tier — non-trivial infra.
+- **The tool boundary is the hard part, not the container.** ~12 injected tools
+  are **in-process closures** over gateway state (recon (c)): `call_agent`
+  re-enters the executor; `query_history` opens a Postgres session; memory tools
+  hit Mem0/Graphiti; `write_artifact`/`share_artifact` close over
+  `_WRITE_ARTIFACT_CONTEXT` + the live SSE queue; `install_dependency` mutates
+  `sys.executable`. Moving the run across a process boundary means **proxying
+  every one of these back over RPC** — that's the bulk of the work and it's
+  orthogonal to which isolation mechanism wraps it.
+- **The mutation container is batch-only.** It communicates by parsing stdout
+  sentinels after the process *exits* (`mutation.py:665`); normal runs need the
+  **live AG-UI SSE relay** (`stream_relay.py`). So even reusing the skeleton, we'd
+  be building a new live host↔sandbox event channel.
+
+So Phase 5 is **tiered** — ordered by (exposure removed) ÷ (infra cost), so each
+step is independently shippable and de-risks the next.
+
+## Tiered plan
+
+### Tier 0 — Per-run credential scoping (kill the shared-env exposure) ← **Phase-5 step 1, implementing now**
+The single highest-value slice, and it needs **no container at all** — it
+directly closes exposure #1 above, which is the concrete "any agent reads any
+secret" hole.
+
+Replace the write-and-never-clear `_inject_integrations_to_env(os.environ)` with
+a **scoped, per-run** materialization that is torn down when the run ends:
+
+- Only export the credentials for **this run's** resolved integrations (the
+  executor already has the per-run `integrations` dict — it's the argument).
+- **Restore `os.environ` to its prior state when the run completes** (context
+  manager / try-finally): capture the pre-existing value of each var, set ours,
+  and on exit restore the captured value (or delete if it wasn't set). So creds
+  for run A are gone before run B (or a concurrent idle agent) can read them.
+- **Concurrency caveat, stated honestly:** `os.environ` is process-global, so
+  under *concurrent* in-process runs this scoping is best-effort — two runs
+  overlapping still share the env for the overlap window. This is a real limit of
+  the in-process model and is exactly what Tier 2+ (a real process/container
+  boundary, each with its **own** env) fixes permanently. Tier 0's win is
+  removing the **permanent accumulation** (the steady-state where every secret
+  ever used is always present) and scoping to the run's own declared
+  integrations — a large, real reduction, not a complete fix. The residual
+  concurrent-overlap window is logged as a known limit here so it isn't mistaken
+  for closed.
+- Prefer, where the tool supports it, passing creds **per-call** (the structured
+  `state["integrations"]` dict the tools are *documented* to read —
+  `integrations.py:8-11`) over the env at all; the env export exists only for
+  subprocess skill scripts that call `os.getenv` directly. Audit which tools
+  actually need the env vs. which can take the dict, and shrink the env surface
+  to only the subprocess-callers.
+
+This is a contained executor change with unit-test coverage and no infra
+dependency — ships first.
+
+### Tier 1 — Egress-scoped model key + resource ceilings on the mutation container
+Before generalizing the container, **harden the one we already have** (it's the
+template Tier 2 reuses, and it currently has zero limits):
+- Add `--memory`, `--cpus`, `--pids-limit`, `--cap-drop=ALL`
+  (+ re-add only what's needed), and a `--read-only` rootfs with a writable
+  workspace mount, to the `docker run` in `mutation.py:626`. Sane defaults tuned
+  for the 4GB box, env-overridable.
+- Give the sandbox a **scoped gateway key** (not the `sk-local` master key) with
+  a short TTL / run-scoped identity, so a leaked sandbox key can't act as the
+  gateway. (Ties to B5 on-behalf-of vs fixed-credential.)
+- Constrain egress: the sandbox needs the gateway `/v1` + (for the self-heal
+  agent) GitHub; everything else can go through a default-deny with an allowlist.
+These flags are pure additions to the existing invocation and carry into Tier 2.
+
+### Tier 2 — Generalize the container to a live, streaming run sandbox (the big lift)
+Lift a **normal** Copilot/MAF run into the (now hardened) container:
+- New `sandbox_runner.py` (generalize `mutation_runner.py`) that runs the agent
+  turn and **streams AG-UI events live** to the host over a real channel
+  (Redis Stream keyed by thread_id — reuse `stream_relay.py`'s contract directly,
+  rather than post-exit stdout sentinels).
+- A **tool-proxy RPC**: the in-process tool closures stay host-side; the sandbox
+  calls them over the boundary (the host already owns Postgres/Redis/Mem0/the SSE
+  queue). Model calls stay HTTP-to-gateway (already the pattern).
+- **Per-agent venv/image** so dep installs can't collide (removes the
+  `--python sys.executable` shared-venv risk).
+- **Warm-pool** execution model for the 4GB box (a small pool of pre-started
+  sandbox containers claimed per run), not cold-container-per-run.
+This is genuinely multi-step infra and is scoped as its own sub-project; Tier 0
++ Tier 1 remove the concrete standing exposures and de-risk it.
+
+### Tier 3 — Default-deny tightening + intent-level auth
+Once Tier 2 gives real isolation, flip the near-term handler's *unknown →
+approve-open-but-logged* to *default-deny* (the honest reason it's fail-open
+today, per the near-term section, is that a hard deny on an in-process model that
+already runs arbitrary code gives false assurance — a real boundary removes that
+objection). Layer intent-level authorization over allow-everything.
+
+## Grade movement
+Tier 0 alone: B6 stays **B−** but closes the single worst concrete hole (shared
+ambient secrets). Tier 0+1: **B** (limits + scoped key + no permanent cred
+accumulation). Tier 2: **B+/A−** (real isolation boundary for normal runs). The
+map's "container isolation for normal runs" open item is fully closed only at
+Tier 2; Tiers 0–1 are the shippable de-risking that gets us there safely.
+
+## Status (Phase 5)
+- 2026-07-04 — Design from the B6 Phase-5 recon (mutation-container primitive +
+  in-process/credential boundary analysis). Tiered plan authored. Implementing
+  **Tier 0** (per-run credential scoping) first — the highest exposure-removed ÷
+  infra-cost slice, no container dependency.

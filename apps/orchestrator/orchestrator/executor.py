@@ -1411,12 +1411,16 @@ async def _run_sub_agent_streaming(
             _line = f"data: {_payload}\n\n"
             await _push_sse_to_stream(_relay_tid, _line)  # type: ignore[arg-type]
 
+    # B6 Phase-5 Tier 0: init before the try so the finally can always restore.
+    _integration_env_token: IntegrationEnvToken = {}
+
     try:
         with load_agent(agent_name, run_id=run_id, repo_name=_repo_name, local_path=_local_path) as loaded:
             mandatory = loaded.config.get("integrations", [])
             optional = loaded.config.get("optional_integrations", [])
             integrations, _ = build_integrations(mandatory, optional, settings)
-            _inject_integrations_to_env(integrations)
+            # Scope this sub-agent's creds to its run; restored in the finally.
+            _integration_env_token = _inject_integrations_to_env(integrations)
             agents = loaded.build_agents()
             # Honour .github/agents/<name>.agent.md instructions for sub-agents
             # too, so a delegated Copilot SDK agent keeps its authored identity.
@@ -1635,6 +1639,9 @@ async def _run_sub_agent_streaming(
         })
         return f"Sub-task to {agent_name!r} failed: {exc}"
     finally:
+        # B6 Phase-5 Tier 0: tear down this sub-agent's scoped integration creds
+        # so a delegated agent's secrets don't linger for the parent/next run.
+        _restore_integration_env(_integration_env_token)
         # Restore orchestrator's artifact context so subsequent tool calls
         # (including write_artifact) target the correct workspace.
         if _saved_artifact_ctx:
@@ -2754,6 +2761,10 @@ async def run_agent_stream(
     # Emit RUN_STARTED immediately so the UI can show ThinkingContainer at once.
     yield _sse({"type": "RUN_STARTED", "runId": run_id, "threadId": thread_id})
 
+    # B6 Phase-5 Tier 0: initialised here so the finally can always restore,
+    # even if load_agent / build_integrations raises before creds are injected.
+    _integration_env_token: IntegrationEnvToken = {}
+
     try:
         with load_agent(
             agent_name,
@@ -2766,7 +2777,9 @@ async def run_agent_stream(
             integrations, integration_warnings = build_integrations(
                 mandatory, optional, settings
             )
-            _inject_integrations_to_env(integrations)
+            # B6 Phase-5 Tier 0: scope creds to this run; token restored in the
+            # finally below so they don't linger in the shared process env.
+            _integration_env_token = _inject_integrations_to_env(integrations)
             agents = loaded.build_agents()
             # Honour .github/agents/<name>.agent.md (Copilot SDK definition):
             # override instructions + capture model, BEFORE tool injection so
@@ -4230,6 +4243,9 @@ async def run_agent_stream(
                 pass
         _stream_relay_thread_id.reset(_relay_token)
         _active_run_model.reset(_model_token)
+        # B6 Phase-5 Tier 0: tear down this run's scoped integration creds so
+        # they don't linger in the shared process env for the next agent.
+        _restore_integration_env(_integration_env_token)
         try:
             from acb_common import clear_run_context  # noqa: PLC0415
             clear_run_context()
@@ -4506,8 +4522,20 @@ async def _llm_recovery(
 # Internal: run a MAF agent list (replaces LangGraph _execute_graph)
 # ---------------------------------------------------------------------------
 
-def _inject_integrations_to_env(integrations: dict[str, Any]) -> None:
-    """Export resolved integration credentials into os.environ.
+# A restore token maps each env var this run set to its PRIOR value
+# (``None`` = the var did not exist before, so restore == delete).  Passed to
+# ``_restore_integration_env`` at the run's teardown site.  See B6 Phase-5
+# Tier 0 (permissions_sandbox_b6.md): credentials are now scoped to the run
+# that needs them and torn down when it ends, instead of being written once
+# into the shared gateway ``os.environ`` and accumulating there forever (where
+# any later/idle agent could read another integration's secret).
+IntegrationEnvToken = dict[str, "str | None"]
+
+
+def _inject_integrations_to_env(
+    integrations: dict[str, Any],
+) -> IntegrationEnvToken:
+    """Export this run's resolved integration credentials into os.environ.
 
     Skill scripts call os.getenv("ZOHO_CLIENT_ID") etc. directly.  The executor
     resolves credentials into a structured dict but never writes them to the
@@ -4515,9 +4543,24 @@ def _inject_integrations_to_env(integrations: dict[str, Any]) -> None:
     find them.  This function closes that gap by mapping the structured dict
     fields back to the canonical env var names.
 
-    Only sets vars that are not already in os.environ (gateway .env takes
-    precedence; this fills in anything that pydantic-settings loaded but didn't
-    export).
+    B6 Phase-5 Tier 0 — SCOPED, not permanent.  Returns a restore token (the
+    prior value of every var this call SET, ``None`` if it was previously
+    unset); the caller passes it to :func:`_restore_integration_env` at the
+    run's teardown so the credentials do NOT linger in the shared process env
+    after the run.  Previously this wrote each var once and never cleared it, so
+    every secret ever used accumulated in ``os.environ`` for the process
+    lifetime — any agent (incl. a prompt-injected one) could read any other
+    integration's secret regardless of its own ``config.json`` scope.
+
+    Gateway ``.env`` still wins: a var already present in ``os.environ`` is left
+    untouched AND excluded from the restore token (we neither overwrite nor
+    later delete an operator-provided value).
+
+    NOTE (honest limit): ``os.environ`` is process-global, so under *concurrent*
+    in-process runs the scoping is best-effort — two overlapping runs still
+    share the env for the overlap window.  A real per-run env (its own boundary)
+    is Tier 2 (container/subprocess).  Tier 0 removes the *permanent
+    accumulation* and scopes to the run's own declared integrations.
     """
     import os  # noqa: PLC0415
 
@@ -4547,13 +4590,43 @@ def _inject_integrations_to_env(integrations: dict[str, Any]) -> None:
         "litellm":       [("base_url", "LITELLM_BASE_URL"), ("api_key", "LITELLM_API_KEY")],
     }
 
+    token: IntegrationEnvToken = {}
     for service, creds in integrations.items():
         if not isinstance(creds, dict):
             continue
         for field, env_var in _FIELD_TO_ENV.get(service, []):
             val = creds.get(field, "")
-            if val and not os.environ.get(env_var):
+            # Gateway .env wins: never overwrite an already-present var, and
+            # don't record it in the token (so teardown won't delete an
+            # operator-provided value we didn't set).
+            if val and env_var not in os.environ and env_var not in token:
+                token[env_var] = None  # was unset before this run
                 os.environ[env_var] = str(val)
+    return token
+
+
+def _restore_integration_env(token: IntegrationEnvToken | None) -> None:
+    """Undo :func:`_inject_integrations_to_env` — restore each var this run set
+    to its prior value (``None`` prior → delete the var).
+
+    Called at the run teardown site (batch AsyncExitStack callback, streaming
+    ``finally``, sub-agent ``finally``) so this run's credentials do not linger
+    in the shared process env for the next/concurrent-idle agent to read.
+    Best-effort and never raises — a teardown failure must not mask the run's
+    own outcome.
+    """
+    if not token:
+        return
+    import os  # noqa: PLC0415
+
+    for env_var, prior in token.items():
+        try:
+            if prior is None:
+                os.environ.pop(env_var, None)
+            else:
+                os.environ[env_var] = prior
+        except Exception:  # noqa: BLE001 — teardown must not raise
+            pass
 
 
 async def _run_with_maf_agent(
@@ -4651,10 +4724,13 @@ async def _run_with_maf_agent(
     # Inject resolved integration credentials into os.environ so that tool
     # subprocesses (e.g. zoho_crm.py calling os.getenv("ZOHO_CLIENT_ID")) can
     # read them. This bridges the gap between the structured integrations dict
-    # and the env-var-based credential reading in skill scripts.
-    _inject_integrations_to_env(integrations)
+    # and the env-var-based credential reading in skill scripts.  B6 Phase-5
+    # Tier 0: scoped to this run — the restore token is torn down on the
+    # AsyncExitStack below (fires even on exception) so creds don't linger.
+    _integration_env_token = _inject_integrations_to_env(integrations)
 
     async with contextlib.AsyncExitStack() as stack:
+        stack.callback(_restore_integration_env, _integration_env_token)
         # GitHubCopilotAgent (and any agent with lifecycle) requires start/stop.
         # Standard Agent has a no-op __aenter__/__aexit__ — both are safe here.
         if hasattr(type(agent), "__aenter__"):

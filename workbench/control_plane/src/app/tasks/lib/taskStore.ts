@@ -30,6 +30,8 @@ import {
   apiPatchItem,
   apiPushItem,
   apiRefreshSchema,
+  apiRefreshMembers,
+  apiCreateAccountProject,
   apiSyncTasks,
   apiAtomize,
   fetchTaskSettings,
@@ -316,7 +318,7 @@ interface TaskState {
   selectItem: (id: string | null) => void;
   selectProject: (id: string | null) => void;
   /** Capture a new inbox item (frictionless quick-add). */
-  capture: (title: string) => void;
+  capture: (title: string, attachments?: import("./types").TaskAttachment[]) => void;
   /** Capture many items at once (mind sweep) — one per non-empty line. */
   captureMany: (text: string) => void;
   /** Undo the most recent capture batch (only items still in the inbox). */
@@ -349,6 +351,14 @@ interface TaskState {
   disconnectAccount: (id: string) => Promise<void>;
   /** Refresh one account's provider schema (projects/members/statuses). */
   refreshAccountSchema: (id: string) => Promise<void>;
+  /** LIVE member pull for one workspace — people removed in the tool
+   *  disappear from the delegate picker. */
+  refreshAccountMembers: (accountId: string) => Promise<void>;
+  /** Create a NEW provider project (ClickUp list) under a space/folder. */
+  createWorkspaceProject: (
+    accountId: string,
+    req: { name: string; spaceId: string; folderId?: string },
+  ) => Promise<{ projectId: string; providerRef: string; name: string }>;
   /** Duplicate-capture notice: the AI found the just-captured item is the
    *  same as (verdict "duplicate" — auto-skipped, undoable) or similar to
    *  (verdict "similar" — the user decides) an existing open item. */
@@ -418,15 +428,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   selectProject: (id) =>
     set({ selectedView: "projects", selectedProjectId: id, selectedItemId: null }),
 
-  capture: (title) => {
+  capture: (title, attachments) => {
     const t = title.trim();
     if (!t) return;
-    const item = makeCaptureItem(t);
+    const item = { ...makeCaptureItem(t), attachments };
     set((s) => ({ items: [item, ...s.items], lastCaptureIds: [item.id] }));
     if (get().backend === "live") {
       // Optimistic row already shown; swap in the server row (real id) when it lands.
       sync(
-        apiCapture(t).then((server) => {
+        apiCapture(t, undefined, attachments).then((server) => {
           set((s) => ({
             items: s.items.map((i) => (i.id === item.id ? server : i)),
             lastCaptureIds: s.lastCaptureIds.map((x) =>
@@ -624,14 +634,58 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         );
       } else {
         sync(
-          apply.then((server) =>
+          apply.then(async (server) => {
             set((s) => ({
               items: s.items.map((i) => (i.id === id ? server : i)),
-            })),
-          ),
+            }));
+            // Default-sync posture: an accepted decision that targeted a
+            // workspace (the accept UI showed the destination) pushes
+            // immediately when the tool has everything it needs (a real
+            // provider project). Otherwise it stays staged with the manual
+            // Push affordance — never lost, never silently failing.
+            if (server.syncState === "pending" && server.projectId) {
+              try {
+                const pushed = await apiPushItem(server.id);
+                set((s) => ({
+                  items: s.items.map((i) => (i.id === pushed.id ? pushed : i)),
+                }));
+              } catch {
+                /* stays pending — the Push button remains */
+              }
+            }
+          }),
         );
       }
     }
+  },
+
+  /** LIVE member refresh for one workspace (delegate-picker freshness). */
+  refreshAccountMembers: async (accountId: string) => {
+    if (get().backend !== "live") return;
+    try {
+      const fresh = await apiRefreshMembers(accountId);
+      set((s) => ({
+        accounts: s.accounts.map((a) => (a.id === accountId ? fresh : a)),
+      }));
+    } catch {
+      /* keep cached members */
+    }
+  },
+
+  /** Create a NEW provider project (ClickUp list) under a space/folder and
+   *  refresh the mirrored project list so pickers see it immediately. */
+  createWorkspaceProject: async (accountId, req) => {
+    const created = await apiCreateAccountProject(accountId, req);
+    try {
+      const [projects, accounts] = await Promise.all([
+        fetchProjects(),
+        fetchAccounts(),
+      ]);
+      set({ projects, accounts });
+    } catch {
+      /* next hydrate reconciles */
+    }
+    return created;
   },
 
   skipToNextInbox: () =>

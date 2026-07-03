@@ -799,6 +799,44 @@ duplicate check on quick capture; auto-sync on open (both gate the store
 behaviours). Partial-update PUT; defaults served before a row exists. The
 /api/tasks proxy now forwards PUT.
 
+**Clarify × ClickUp, dense inbox, capture attachments (2026-07-03, branch
+`claude/task-manager-engage-review`)** — six upgrades in one batch:
+(1) *Live members* — `BaseTaskProvider.list_members` + ClickUp impl;
+`POST /accounts/{id}/members/refresh` and every `/tasks/sync` refresh
+`schema_cache.members`, and the ClarifyPanel pulls a fresh list when a
+SYNCED destination is chosen — people removed on ClickUp drop out of the
+delegate picker (provider members enriched with org-people roles by
+id/email/name). (2) *Delegate → ClickUp by default* — WAITING with a LOCAL
+destination auto-selects the first SYNCED workspace (opt-out by picking
+Local); clarify decisions that stage a synced item now AUTO-PUSH
+(`apiPushItem` after organize; stays `pending` for manual push if it
+fails). (3) *Project accordion* — `get_schema` returns a navigable
+`hierarchy` (spaces → folders → lists, exactly ClickUp's tree, flat
+projects keep `space_id`/`folder_id`); the clarify project picker renders
+it as nested accordions with search + suggested-project sparkle.
+(4) *Create project in place* — `create_project` on the provider
+(`POST /space/{id}/list` or `/folder/{id}/list`) via
+`POST /accounts/{id}/projects`; "+ New project" rows inside each
+space/folder create the list on ClickUp, upsert `gtd_projects`, refresh
+the cached hierarchy, and select it for the item being clarified.
+(5) *Dense list view* — `InboxTable` (Notion-style rows: capture ·
+AI-suggests chip · From (email origin) · Source · Age · hover actions),
+cards/list toggle persisted per browser (`useSyncExternalStore`-backed —
+the earlier `useState(localStorage)` initializer was a hydration-mismatch
+bug). (6) *Capture attachments* — photo/file/link at capture time:
+migration `52_gtd_attachments.sql` (+ `gtd_items.attachments` JSONB),
+`POST /tasks/attachments` (15 MB cap, executable extensions blocked,
+sanitized names) and owner-checked serving; `AttachmentComposer` under
+the hero capture bar + QuickCapture; chips on cards, table rows
+(paperclip count), clarify header, item detail. The `/api/tasks` proxy
+passes multipart uploads and binary downloads byte-exact and retries
+idempotent GETs once (stale keep-alive sockets intermittently 502'd
+hydrate, flipping the store to demo mode). Unit tests 43 (provider
+hierarchy/members/create-project mocked, attachment sanitize/owner
+checks); browser-E2E 9/9 (upload+link → capture → persist → dense table →
+clarify chips). ClickUp accordion/create-project paths are unit-tested
+against a mocked provider — no live workspace in this environment.
+
 **Chat-stack state (same session, 2026-07-02)** — a full audit of the chat
 implementation (SSE · HITL · resume · multi-agent handoffs, both runtimes)
 lives in

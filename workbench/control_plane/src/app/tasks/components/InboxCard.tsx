@@ -26,6 +26,7 @@ import { proposeClarification, type ClarifyDisposition } from "../lib/clarify";
 import { GtdItem, GtdProject, Person } from "../lib/types";
 import type { ConnectedProvider } from "../lib/mockData";
 import { detectDateHint, originEmailHref, relativeTime, snoozeOptions } from "../lib/utils";
+import { AttachmentChips } from "./AttachmentComposer";
 import { SourceBadge } from "./SourceBadge";
 
 // The assistant's at-a-glance read of a capture — shown on the card so you see
@@ -189,6 +190,11 @@ export function InboxCard({
             <StickyNote className="mt-0.5 h-3 w-3 shrink-0" />
             <span className="line-clamp-2">{item.notes}</span>
           </p>
+        )}
+        {item.attachments && item.attachments.length > 0 && (
+          <div className="mt-1">
+            <AttachmentChips attachments={item.attachments} />
+          </div>
         )}
         {item.origin?.kind === "email" && (
           <p className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">

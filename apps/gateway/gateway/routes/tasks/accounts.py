@@ -76,6 +76,7 @@ def _row_to_account(row: Any) -> TaskAccountModel:
         statuses=[s for s in cache.get("statuses") or [] if isinstance(s, str)],
         members=members,
         project_count=len(cache.get("projects") or []),
+        hierarchy=[h for h in cache.get("hierarchy") or [] if isinstance(h, dict)],
     )
 
 
@@ -234,6 +235,120 @@ async def refresh_account_schema(
             text("SELECT * FROM task_accounts WHERE id = :id"), {"id": account_id},
         )).fetchone()
         return _row_to_account(row)
+    finally:
+        await db.close()
+
+
+class CreateProjectRequest(BaseModel):
+    name: str
+    space_id: str
+    folder_id: str | None = None
+
+
+@router.post("/accounts/{account_id}/members/refresh",
+             response_model=TaskAccountModel)
+async def refresh_account_members(
+    account_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """LIVE member pull (delegate-picker freshness): people removed in the
+    tool disappear immediately, without the heavier full schema refresh."""
+    db = await _get_db()
+    try:
+        row = await _assert_account_owner(db, account_id, _uid(user))
+        creds = json.loads(_key_store().decrypt(row.credentials_encrypted))
+        provider = build_provider(row.provider, creds, row.workspace_id)
+        members = await provider.list_members(row.workspace_id)
+        cache = _parse_jsonb(row.schema_cache) or {}
+        cache["members"] = members
+        await db.execute(
+            text("""UPDATE task_accounts
+                    SET schema_cache = :cache, updated_at = now()
+                    WHERE id = :id"""),
+            {"id": account_id, "cache": json.dumps(cache)},
+        )
+        await db.commit()
+        fresh = (await db.execute(
+            text("SELECT * FROM task_accounts WHERE id = :id"),
+            {"id": account_id},
+        )).fetchone()
+        return _row_to_account(fresh)
+    finally:
+        await db.close()
+
+
+@router.post("/accounts/{account_id}/projects", status_code=201)
+async def create_account_project(
+    account_id: str,
+    req: CreateProjectRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Create a NEW project (ClickUp: a List) in the workspace, under the
+    chosen space and optional folder — a user-approved provider write (the
+    explicit "Create project" action in the picker, same posture as push).
+    The new list is mirrored into gtd_projects and the schema cache so the
+    picker shows it immediately."""
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Project name is required")
+    db = await _get_db()
+    try:
+        row = await _assert_account_owner(db, account_id, _uid(user))
+        creds = json.loads(_key_store().decrypt(row.credentials_encrypted))
+        provider = build_provider(row.provider, creds, row.workspace_id)
+        created = await provider.create_project(
+            row.workspace_id, name, req.space_id, req.folder_id)
+
+        # Mirror into gtd_projects (same upsert the schema refresh uses).
+        project_id = str(uuid4())
+        proj_row = (await db.execute(
+            text("""INSERT INTO gtd_projects
+                    (id, user_id, source, account_id, provider_ref, outcome,
+                     status)
+                    VALUES (:id, :uid, 'SYNCED', :aid, :ref, :outcome,
+                            'ACTIVE')
+                    ON CONFLICT (account_id, provider_ref)
+                        WHERE source <> 'LOCAL'
+                    DO UPDATE SET outcome = EXCLUDED.outcome,
+                                  updated_at = now()
+                    RETURNING id"""),
+            {"id": project_id, "uid": _uid(user), "aid": account_id,
+             "ref": created["id"], "outcome": name},
+        )).fetchone()
+
+        # Keep the cached schema + hierarchy in step (picker refreshes from it).
+        cache = _parse_jsonb(row.schema_cache) or {}
+        space_name = ""
+        for sp in cache.get("hierarchy") or []:
+            if str(sp.get("id")) != str(req.space_id):
+                continue
+            space_name = sp.get("name", "")
+            node = {"id": created["id"], "name": name}
+            if req.folder_id:
+                for f in sp.get("folders") or []:
+                    if str(f.get("id")) == str(req.folder_id):
+                        f.setdefault("lists", []).append(node)
+                        break
+            else:
+                sp.setdefault("lists", []).append(node)
+            break
+        cache.setdefault("projects", []).append({
+            "id": created["id"], "name": name,
+            "space": space_name, "space_id": req.space_id,
+            "folder_id": req.folder_id, "folder_name": None,
+        })
+        await db.execute(
+            text("""UPDATE task_accounts
+                    SET schema_cache = :cache, updated_at = now()
+                    WHERE id = :id"""),
+            {"id": account_id, "cache": json.dumps(cache)},
+        )
+        await db.commit()
+        return {
+            "project_id": str(proj_row.id),
+            "provider_ref": created["id"],
+            "name": name,
+        }
     finally:
         await db.close()
 

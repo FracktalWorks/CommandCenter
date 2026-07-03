@@ -491,3 +491,117 @@ def test_settings_update_is_partial():
     p = GtdSettingsPatch(capture_dedup=False)
     fields = {k: v for k, v in p.model_dump().items() if v is not None}
     assert fields == {"capture_dedup": False}
+
+
+# ---------------------------------------------------------------------------
+# Clarify upgrades: live members, hierarchy, create-project + attachments
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_clickup_get_schema_builds_navigable_hierarchy():
+    p = ClickUpProvider("pk_x", "9001")
+    responses = {
+        "/team": {"teams": [{"id": "9001", "members": [
+            {"user": {"id": 42, "username": "vijay", "email": "v@x.in"}}]}]},
+        "/team/9001/space": {"spaces": [{
+            "id": "S1", "name": "Engineering",
+            "statuses": [{"status": "To-do"}, {"status": "Done"}]}]},
+        "/space/S1/list": {"lists": [{"id": "L1", "name": "Firmware"}]},
+        "/space/S1/folder": {"folders": [{
+            "id": "F1", "name": "Printers",
+            "lists": [{"id": "L2", "name": "F1 Launch"}]}]},
+    }
+
+    async def fake_get(path, params=None):
+        return responses[path]
+
+    with patch.object(p, "_get", AsyncMock(side_effect=fake_get)):
+        schema = await p.get_schema("9001")
+    # Flat projects carry structured space/folder ids (create + grouping).
+    by_id = {pr["id"]: pr for pr in schema["projects"]}
+    assert by_id["L1"]["space_id"] == "S1" and by_id["L1"]["folder_id"] is None
+    assert by_id["L2"]["folder_id"] == "F1"
+    # The accordion tree mirrors ClickUp: space → folder → list.
+    h = schema["hierarchy"]
+    assert h[0]["name"] == "Engineering"
+    assert h[0]["lists"][0]["id"] == "L1"
+    assert h[0]["folders"][0]["lists"][0]["id"] == "L2"
+
+
+@pytest.mark.asyncio
+async def test_clickup_list_members_is_live_membership():
+    p = ClickUpProvider("pk_x", "9001")
+    with patch.object(p, "_get", AsyncMock(return_value={"teams": [{
+        "id": "9001",
+        "members": [{"user": {"id": 7, "username": "rahul", "email": "r@x.in"}}],
+    }]})):
+        members = await p.list_members("9001")
+    assert members == [{"name": "rahul", "email": "r@x.in",
+                        "provider_user_id": "7"}]
+
+
+@pytest.mark.asyncio
+async def test_clickup_create_project_targets_folder_or_space():
+    p = ClickUpProvider("pk_x", "9001")
+    calls: list[str] = []
+
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {"id": "L9", "name": "New List"}
+
+    class _Client:
+        def __init__(self, *a, **k): ...
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, headers=None, json=None):
+            calls.append(url)
+            return _Resp()
+
+    with patch("gateway.routes.tasks.providers.httpx.AsyncClient", _Client):
+        in_folder = await p.create_project("9001", "New List", "S1", "F1")
+        in_space = await p.create_project("9001", "New List", "S1")
+    assert in_folder["id"] == "L9" and in_space["id"] == "L9"
+    assert calls[0].endswith("/folder/F1/list")
+    assert calls[1].endswith("/space/S1/list")
+
+
+def test_sync_refreshes_members_and_create_project_is_owner_checked():
+    import inspect
+
+    from gateway.routes.tasks import accounts as tasks_accounts
+    from gateway.routes.tasks import sync as tasks_sync
+
+    # Sync keeps the delegate list honest every pull.
+    assert "list_members" in inspect.getsource(tasks_sync._sync_account)
+    # Create-project + member refresh go through the ownership guard.
+    for fn in (tasks_accounts.create_account_project,
+               tasks_accounts.refresh_account_members):
+        assert "_assert_account_owner" in inspect.getsource(fn)
+
+
+def test_attachment_names_are_sanitized_and_executables_blocked():
+    from gateway.routes.tasks.attachments import _BLOCKED_EXT, _safe_name
+
+    assert _safe_name("../../etc/passwd") == "passwd"
+    assert _safe_name("photo (1).png") == "photo _1_.png"
+    assert _safe_name("") == "attachment"
+    assert ".exe" in _BLOCKED_EXT and ".sh" in _BLOCKED_EXT
+
+
+def test_attachment_serving_is_owner_checked():
+    import inspect
+
+    from gateway.routes.tasks import attachments
+
+    src = inspect.getsource(attachments.serve_attachment)
+    assert "user_id = :uid" in src
+
+
+def test_capture_accepts_attachments_and_item_model_carries_them():
+    from gateway.routes.tasks.core import GtdItemModel
+    from gateway.routes.tasks.items import CaptureRequest
+
+    assert "attachments" in CaptureRequest.model_fields
+    assert "attachments" in GtdItemModel.model_fields

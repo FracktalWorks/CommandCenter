@@ -31,6 +31,7 @@ import {
   apiPushItem,
   apiRefreshSchema,
   apiSyncTasks,
+  apiAtomize,
   fetchAccounts,
   fetchItems,
   fetchPeople,
@@ -345,6 +346,19 @@ interface TaskState {
   disconnectAccount: (id: string) => Promise<void>;
   /** Refresh one account's provider schema (projects/members/statuses). */
   refreshAccountSchema: (id: string) => Promise<void>;
+  /** Duplicate-capture notice: the AI found the just-captured item is the
+   *  same as (verdict "duplicate" — auto-skipped, undoable) or similar to
+   *  (verdict "similar" — the user decides) an existing open item. */
+  dupNotice: {
+    verdict: "duplicate" | "similar";
+    /** the freshly captured item (already removed when verdict=duplicate) */
+    title: string;
+    itemId: string | null;
+    matchTitle: string;
+    matchId: string;
+  } | null;
+  /** Resolve the dup notice: keep both / treat as the same (remove new). */
+  resolveDupNotice: (action: "keep" | "same" | "dismiss") => void;
   /** True while a provider pull (POST /tasks/sync) is in flight. */
   syncing: boolean;
   /** Pull existing provider tasks into the mirror (one account, or all),
@@ -401,7 +415,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     if (get().backend === "live") {
       // Optimistic row already shown; swap in the server row (real id) when it lands.
       sync(
-        apiCapture(t).then((server) =>
+        apiCapture(t).then((server) => {
           set((s) => ({
             items: s.items.map((i) => (i.id === item.id ? server : i)),
             lastCaptureIds: s.lastCaptureIds.map((x) =>
@@ -409,10 +423,57 @@ export const useTaskStore = create<TaskState>((set, get) => ({
             ),
             selectedItemId:
               s.selectedItemId === item.id ? server.id : s.selectedItemId,
-          })),
-        ),
+          }));
+          // Background duplicate check (capture stays frictionless): the AI
+          // compares the new capture against open items. Confident duplicate
+          // → auto-remove with an undoable notice; similar → ask the user.
+          apiAtomize(t, { excludeIds: [server.id] })
+            .then(({ items: cands }) => {
+              const c = cands[0];
+              // The atomizer sees the just-created row too — a self-match
+              // (same id) is not a duplicate.
+              if (!c || c.verdict === "new" || !c.matchId || c.matchId === server.id) return;
+              if (c.verdict === "duplicate") {
+                set((s) => ({
+                  items: s.items.filter((i) => i.id !== server.id),
+                  dupNotice: {
+                    verdict: "duplicate", title: server.title,
+                    itemId: null, matchTitle: c.matchTitle ?? "",
+                    matchId: c.matchId!,
+                  },
+                }));
+                apiDeleteItem(server.id).catch(() => {});
+              } else {
+                set({
+                  dupNotice: {
+                    verdict: "similar", title: server.title,
+                    itemId: server.id, matchTitle: c.matchTitle ?? "",
+                    matchId: c.matchId!,
+                  },
+                });
+              }
+            })
+            .catch(() => { /* dedup is best-effort */ });
+        }),
       );
     }
+  },
+
+  dupNotice: null,
+
+  resolveDupNotice: (action) => {
+    const n = get().dupNotice;
+    if (!n) return;
+    if (action === "keep" && n.verdict === "duplicate") {
+      // Re-add the auto-skipped capture ("add anyway").
+      get().capture(n.title);
+    } else if (action === "same" && n.verdict === "similar" && n.itemId) {
+      // The user confirmed it's the same item — remove the new copy.
+      const id = n.itemId;
+      set((s) => ({ items: s.items.filter((i) => i.id !== id) }));
+      if (get().backend === "live") sync(apiDeleteItem(id).catch(() => {}));
+    }
+    set({ dupNotice: null });
   },
 
   captureMany: (text) => {

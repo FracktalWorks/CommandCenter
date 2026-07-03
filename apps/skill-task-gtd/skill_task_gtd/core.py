@@ -137,20 +137,59 @@ async def gtd_capture(title: str, notes: str = "") -> str:
     """
     item = await _request("POST", "/tasks/items",
                           json={"title": title, "notes": notes or None})
-    return f"Captured to inbox: {item['title']} (id: {item['id']})"
+    msg = f"Captured to inbox: {item['title']} (id: {item['id']})"
+    # Best-effort duplicate check — if an open item looks the same, tell the
+    # agent so it can ask the user (same or different?) instead of silently
+    # stacking duplicates.
+    try:
+        atom = await _request("POST", "/tasks/ai/atomize",
+                              json={"text": title,
+                                    "exclude_ids": [item["id"]]})
+        c = (atom.get("items") or [{}])[0]
+        if (c.get("verdict") in ("duplicate", "similar")
+                and c.get("match_id") != item["id"]):
+            msg += (f"\nWARNING: looks {c['verdict'].upper()} to existing "
+                    f"\"{c.get('match_title')}\" — ask the user whether it's "
+                    "the same item; if yes, remove one via gtd_update/organize.")
+    except Exception:
+        pass
+    return msg
 
 
 @_annotate_risk(idempotent=False)
 async def gtd_capture_many(lines: str) -> str:
-    """Capture a brain-dump: one inbox item per non-empty line.
+    """Capture a brain-dump into the inbox. Freeform text is fine — a pasted
+    paragraph is atomized into individual items by the AI (deterministic
+    fallback), and each is checked against existing open items: confident
+    duplicates are SKIPPED, "maybe the same" items are captured but flagged
+    so you can ask the user.
 
     Args:
-        lines: Newline-separated thoughts (e.g. from a mind sweep).
+        lines: The raw dump — newline-separated thoughts OR a paragraph.
     """
-    titles = [ln.strip() for ln in lines.splitlines() if ln.strip()]
-    items = await _request("POST", "/tasks/items/batch", json={"titles": titles})
-    return f"Captured {len(items)} items to the inbox:\n" + "\n".join(
-        f"  - {i['title']}" for i in items)
+    atom = await _request("POST", "/tasks/ai/atomize", json={"text": lines})
+    cands = atom.get("items") or []
+    if not cands:
+        return "Nothing to capture."
+    to_add = [c for c in cands if c.get("verdict") != "duplicate"]
+    skipped = [c for c in cands if c.get("verdict") == "duplicate"]
+    similar = [c for c in to_add if c.get("verdict") == "similar"]
+    items = []
+    if to_add:
+        items = await _request("POST", "/tasks/items/batch",
+                               json={"titles": [c["title"] for c in to_add]})
+    out = [f"Captured {len(items)} item(s) to the inbox:"]
+    out += [f"  - {i['title']}" for i in items]
+    if skipped:
+        out.append("Skipped as already in the system:")
+        out += [f"  - \"{c['title']}\" = existing \"{c.get('match_title')}\""
+                for c in skipped]
+    if similar:
+        out.append("Captured but POSSIBLY duplicates — ask the user "
+                   "(same or different?):")
+        out += [f"  - \"{c['title']}\" ~ existing \"{c.get('match_title')}\""
+                for c in similar]
+    return "\n".join(out)
 
 
 # ── Browse ───────────────────────────────────────────────────────────────────

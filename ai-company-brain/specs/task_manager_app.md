@@ -747,6 +747,21 @@ runs parked on `ask_user`/`ask_questions` after 300s — now HITL-aware; knobs:
 `HITL_IDLE_TIMEOUT_SECONDS` (3600), `COPILOT_STREAM_STALL_TIMEOUT` (300),
 `COPILOT_TOOL_TIMEOUT_SECONDS` (300).
 
+**Mind-dump atomization + capture dedup (2026-07-03)** — `POST
+/tasks/ai/atomize` turns freeform text (pasted paragraph, mind sweep, single
+capture) into atomic captures, each checked against the user's open items:
+`new` · `similar` (UI/agent asks "same or different?") · `duplicate`
+(confident same — skipped by default, undoable). LLM tier1 does the split +
+judgment with a deterministic sentence/connector splitter + token-similarity
+fallback, and a guardrail: an LLM duplicate claim without lexical support
+degrades to `similar` (a poisoned title can't silently delete a capture).
+Wired into: the sweep review phase (candidates + verdict badges, duplicates
+default-excluded), single capture (background check → warning banner:
+auto-skip w/ "Add anyway" for duplicates, "Same — remove / Different — keep"
+for similars), and the agent's `gtd_capture`/`gtd_capture_many` (paragraph in,
+skipped-duplicates report out). Golden-locked in
+`evals/trajectories/test_gtd_quality_trajectory.py`; browser-E2E-verified.
+
 **Chat-stack state (same session, 2026-07-02)** — a full audit of the chat
 implementation (SSE · HITL · resume · multi-agent handoffs, both runtimes)
 lives in

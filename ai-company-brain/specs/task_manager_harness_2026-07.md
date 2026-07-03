@@ -53,3 +53,11 @@ caching (already inherited from the platform core — rebuilding would regress).
 
 - 2026-07-03 — Review done; Tier 1 shipped (annotations, trifecta delimiting,
   GTD golden evals + 2 heuristic bugs found-and-fixed, tool_scope, this doc).
+- 2026-07-03 — **Atomizer + capture dedup** shipped with the harness posture
+  baked in: LLM (tier1, temperature 0, strict-JSON contract) proposes the
+  split + same/maybe/different judgment; the deterministic splitter +
+  token-similarity path is both the fallback AND the guardrail (an LLM
+  "duplicate" verdict without lexical support degrades to "similar" — the
+  human decides; a poisoned existing title can't silently discard a capture).
+  Golden-locked in the GTD eval suite; `exclude_ids` prevents the
+  capture-then-check self-match.

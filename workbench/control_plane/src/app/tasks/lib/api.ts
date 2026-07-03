@@ -320,6 +320,43 @@ export async function apiSyncTasks(opts?: {
  *  Richer than the local heuristic: org-knowledge capability matching
  *  (people skills + availability), server project auto-match, and the
  *  destination/stage defaults. Same shape as lib/clarify.ts's proposal. */
+export interface AtomizedItem {
+  title: string;
+  verdict: "new" | "similar" | "duplicate";
+  matchId?: string;
+  matchTitle?: string;
+  matchDisposition?: string;
+  score: number;
+}
+
+/** Split a mind-dump / paragraph into atomic captures, each checked against
+ *  the user's open items for duplicates (LLM-backed server-side, with a
+ *  deterministic fallback — the caller shouldn't care which ran). */
+export async function apiAtomize(
+  text: string,
+  opts?: { dedup?: boolean; excludeIds?: string[] }
+): Promise<{ items: AtomizedItem[]; usedLlm: boolean }> {
+  const res = await gatewayFetch<Raw>(`/ai/atomize`, {
+    method: "POST",
+    body: JSON.stringify({
+      text,
+      dedup: opts?.dedup ?? true,
+      exclude_ids: opts?.excludeIds ?? [],
+    }),
+  });
+  const items = ((res.items as Raw[]) ?? []).map((r) => ({
+    title: String(r.title ?? ""),
+    verdict: (["new", "similar", "duplicate"].includes(String(r.verdict))
+      ? String(r.verdict)
+      : "new") as AtomizedItem["verdict"],
+    matchId: r.match_id ? String(r.match_id) : undefined,
+    matchTitle: r.match_title ? String(r.match_title) : undefined,
+    matchDisposition: r.match_disposition ? String(r.match_disposition) : undefined,
+    score: Number(r.score ?? 0),
+  }));
+  return { items, usedLlm: Boolean(res.used_llm) };
+}
+
 export async function apiClarifyPropose(id: string): Promise<ClarifyProposal> {
   const r = await gatewayFetch<Raw>(`/items/${id}/clarify`, { method: "POST" });
   const accountId = r.account_id ? String(r.account_id) : undefined;

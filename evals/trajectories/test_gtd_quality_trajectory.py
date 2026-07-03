@@ -177,3 +177,61 @@ def test_tool_scope_is_declared_and_lean():
               "call_agents_parallel", "call_agent_background"}
     assert banned.isdisjoint(scope), banned & set(scope)
     assert "ask_questions" in scope  # HITL stays available
+
+
+# ── 4. Atomizer + capture dedup golden set (§2.1 seam) ───────────────────
+
+def test_atomizer_splits_a_paragraph_into_atomic_captures():
+    from gateway.routes.tasks.ai import split_dump_heuristic
+
+    frags = split_dump_heuristic(
+        "I need to call the lab about calibration and also book the "
+        "Bangalore flights. Someone should follow up with Priya about the "
+        "vendor review; pay the electricity bill"
+    )
+    assert len(frags) == 4, frags
+    joined = " | ".join(f.lower() for f in frags)
+    for expected in ("call the lab", "bangalore flights", "priya", "electricity"):
+        assert expected in joined, expected
+    # Capture ≠ clarify: fragments keep the user's wording (no rewriting).
+    assert frags[0].startswith("I need to call")
+
+
+def test_atomizer_handles_bullets_and_lines_too():
+    from gateway.routes.tasks.ai import split_dump_heuristic
+
+    frags = split_dump_heuristic(
+        "- buy packing tape\n• renew the AMC contract\ncall Sanjay"
+    )
+    assert frags == ["buy packing tape", "renew the AMC contract", "call Sanjay"]
+
+
+def test_dedup_verdicts_duplicate_similar_new():
+    from gateway.routes.tasks.ai import dedup_verdict
+
+    existing = [{"id": "1", "title": "Call the lab about calibration",
+                 "disposition": "INBOX"}]
+    assert dedup_verdict("call the lab about calibration", existing)[0] == "duplicate"
+    assert dedup_verdict("call lab about calibration", existing)[0] == "duplicate"
+    # Overlapping-but-plausibly-different → the HUMAN decides, never auto-skip.
+    assert dedup_verdict("call the calibration lab back", existing)[0] == "similar"
+    assert dedup_verdict("water the office plants", existing)[0] == "new"
+
+
+def test_llm_duplicate_claim_needs_lexical_support():
+    """Guardrail: an LLM 'same=yes' with no lexical overlap must NOT auto-skip
+    the capture — it degrades to 'similar' so the user is asked. (Also the
+    injection posture: existing titles are data; an unsupported verdict from
+    poisoned context can't silently delete a capture.)"""
+    from gateway.routes.tasks import ai as tasks_ai
+
+    src = __import__("inspect").getsource(tasks_ai.atomize_dump)
+    assert "sup >= _SIMILAR_THRESHOLD" in src
+    assert '"duplicate" if sup' in src
+
+
+def test_agent_capture_many_routes_through_atomizer():
+    import skill_task_gtd
+    src = __import__("inspect").getsource(skill_task_gtd.core.gtd_capture_many)
+    assert "/tasks/ai/atomize" in src
+    assert "duplicate" in src  # skips confident duplicates

@@ -52,6 +52,8 @@ export function InboxView() {
   const undeferItem = useTaskStore((s) => s.undeferItem);
   const undoSnapshot = useTaskStore((s) => s.undoSnapshot);
   const undoLastChange = useTaskStore((s) => s.undoLastChange);
+  const dupNotice = useTaskStore((s) => s.dupNotice);
+  const resolveDupNotice = useTaskStore((s) => s.resolveDupNotice);
   const dismissUndo = useTaskStore((s) => s.dismissUndo);
   const processed = useTaskStore((s) => s.processedThisSession);
   const clarifyModalOpen = useTaskStore((s) => s.clarifyModalOpen);
@@ -356,6 +358,58 @@ export function InboxView() {
               <Undo2 className="h-3.5 w-3.5" />
               Undo
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* AI duplicate check on capture (atomizer verdicts): confident
+          duplicates were auto-skipped (undoable); "similar" asks the user. */}
+      {dupNotice && (
+        <div className="shrink-0 border-b border-warning/30 bg-warning/10">
+          <div className="mx-auto flex w-full max-w-2xl flex-wrap items-center justify-between gap-2 px-4 py-2 sm:px-6">
+            <span className="min-w-0 flex-1 text-[11px] text-foreground">
+              {dupNotice.verdict === "duplicate" ? (
+                <>Already in your system: &ldquo;{dupNotice.matchTitle}&rdquo; — not added again.</>
+              ) : (
+                <>&ldquo;{dupNotice.title}&rdquo; looks similar to &ldquo;{dupNotice.matchTitle}&rdquo;. Same item?</>
+              )}
+            </span>
+            <span className="flex shrink-0 items-center gap-3">
+              {dupNotice.verdict === "duplicate" ? (
+                <button
+                  type="button"
+                  onClick={() => resolveDupNotice("keep")}
+                  className="tech-transition text-[11px] font-medium text-primary hover:underline"
+                >
+                  Add anyway
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => resolveDupNotice("same")}
+                    className="tech-transition text-[11px] font-medium text-primary hover:underline"
+                  >
+                    Same — remove it
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => resolveDupNotice("keep")}
+                    className="tech-transition text-[11px] font-medium text-muted-foreground hover:underline"
+                  >
+                    Different — keep both
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                aria-label="Dismiss"
+                onClick={() => resolveDupNotice("dismiss")}
+                className="tech-transition text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </span>
           </div>
         </div>
       )}

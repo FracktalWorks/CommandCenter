@@ -25,6 +25,8 @@ from typing import Any
 
 from acb_common import get_logger, get_settings
 
+from ._gateway_env import gateway_only_env
+
 _log = get_logger("acb_memory.mem0")
 
 
@@ -119,8 +121,17 @@ class MemoryClient:
                 },
             }
 
-            self._client = _Mem0Memory.from_config(config_dict=config)
-            _log.info("mem0.client_ready", backend="pgvector")
+            # Build with provider-override env vars removed so mem0's OpenAI
+            # client uses our gateway (openai_base_url) — NOT OpenRouter — and
+            # can resolve the ``tier-fast`` alias.  See gateway_only_env.
+            with gateway_only_env():
+                self._client = _Mem0Memory.from_config(config_dict=config)
+            _log.info(
+                "mem0.client_ready",
+                backend="pgvector",
+                llm_base_url=_llm_url,
+                llm_model=_llm_model,
+            )
             return self._client
 
         except ImportError as exc:

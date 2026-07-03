@@ -32,6 +32,8 @@ from typing import Any
 
 from acb_common import get_logger, get_settings
 
+from ._gateway_env import gateway_only_env
+
 _log = get_logger("acb_memory.graphiti")
 
 
@@ -81,32 +83,38 @@ class GraphitiClient:
             # Reuse gateway /v1 (litellm SDK) for both LLM and embeddings so
             # no separate API key or model config is needed.  The gateway
             # routes tier aliases → actual providers via config.yaml.
-            openai_client = AsyncOpenAI(
-                api_key=litellm_key,
-                base_url=litellm_url,
-            )
-            llm_client = _GOpenAI(
-                config=LLMConfig(
-                    api_key=litellm_key,
-                    model="tier-fast",
-                    base_url=litellm_url,
-                ),
-                client=openai_client,
-            )
-
-            # Embedding model: prefer OpenAI text-embedding-3-small when an
-            # OPENAI_API_KEY is configured; otherwise fall back to Gemini
-            # embedding through the gateway (GEMINI_API_KEY is always set).
-            _embed_model = "text-embedding-3-small"
-            if not os.environ.get("OPENAI_API_KEY", "").strip():
-                _embed_model = "gemini-embedding"
-            embedder = OpenAIEmbedder(
-                config=OpenAIEmbedderConfig(
-                    embedding_model=_embed_model,
+            #
+            # Build the OpenAI clients with provider-override env vars removed
+            # (OPENROUTER_API_KEY etc.) so graphiti-core honours the base_url we
+            # pass instead of diverting to OpenRouter and rejecting the
+            # ``tier-fast`` alias — the same hijack mem0 hit.  See gateway_only_env.
+            with gateway_only_env():
+                openai_client = AsyncOpenAI(
                     api_key=litellm_key,
                     base_url=litellm_url,
                 )
-            )
+                llm_client = _GOpenAI(
+                    config=LLMConfig(
+                        api_key=litellm_key,
+                        model="tier-fast",
+                        base_url=litellm_url,
+                    ),
+                    client=openai_client,
+                )
+
+                # Embedding model: prefer OpenAI text-embedding-3-small when an
+                # OPENAI_API_KEY is configured; otherwise fall back to Gemini
+                # embedding through the gateway (GEMINI_API_KEY is always set).
+                _embed_model = "text-embedding-3-small"
+                if not os.environ.get("OPENAI_API_KEY", "").strip():
+                    _embed_model = "gemini-embedding"
+                embedder = OpenAIEmbedder(
+                    config=OpenAIEmbedderConfig(
+                        embedding_model=_embed_model,
+                        api_key=litellm_key,
+                        base_url=litellm_url,
+                    )
+                )
 
             self._graphiti = Graphiti(
                 neo4j_url,

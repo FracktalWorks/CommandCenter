@@ -147,6 +147,111 @@ def _gate_injected_tool(fn: Any) -> Any:
     return _sgated
 
 
+def _copilot_infinite_session_config() -> dict[str, Any] | None:
+    """Return the ``infinite_sessions`` SessionConfig block for Copilot-SDK runs.
+
+    The Copilot backend runs its own "infinite session" auto-compaction, keyed to
+    *the model's context window* — it starts background compaction at
+    ``background_compaction_threshold`` (default 0.80) and HARD-BLOCKS the turn at
+    ``buffer_exhaustion_threshold`` (default 0.95) of that window. For our BYOK
+    models (e.g. DeepSeek-V4-Pro, real 1M context) the backend does NOT know the
+    true window — its ``client.list_models()`` talks to api.githubcopilot.com, which
+    has no entry for our gateway-routed model — so it falls back to a small default
+    window and its 0.95 guard trips a false "context length exceeded" on short,
+    tool-heavy runs (diagnosed on technical-project-planner run 5b8c5836, 2026-07-03).
+
+    Since the backend can't be told the real window for a BYOK model, we relax the
+    guards so it stops prematurely blocking. Our own gateway-side context assembly
+    (acb_llm.assemble_run_context / C2) already bounds the prompt, and the real
+    DeepSeek API honours its 1M window — so the Copilot backend's guess should not
+    be the thing that fails the run.
+
+    Env overrides (all optional):
+      - ``COPILOT_INFINITE_SESSIONS=off``  → disable the backend compaction entirely
+        (``enabled: false``) — the strongest "stop guessing my window" setting.
+      - ``COPILOT_COMPACTION_THRESHOLD``   → background_compaction_threshold (float).
+      - ``COPILOT_BUFFER_THRESHOLD``       → buffer_exhaustion_threshold (float).
+    Returns ``None`` when the operator has explicitly opted out of any override
+    (``COPILOT_INFINITE_SESSIONS=default``), leaving the SDK's own defaults intact.
+    """
+    mode = os.environ.get("COPILOT_INFINITE_SESSIONS", "").strip().lower()
+    if mode == "default":
+        return None  # leave SDK defaults untouched (escape hatch)
+    if mode == "off":
+        return {"enabled": False}
+
+    def _f(name: str, fallback: float) -> float:
+        raw = os.environ.get(name, "").strip()
+        try:
+            v = float(raw) if raw else fallback
+        except ValueError:
+            v = fallback
+        # Keep in the valid (0, 1] band the backend expects.
+        return min(max(v, 0.01), 1.0)
+
+    # Relaxed defaults: don't background-compact until nearly full, and don't
+    # hard-block until the window is genuinely exhausted. This neutralises the
+    # premature 0.80/0.95 trip on a wrongly-small assumed window without turning
+    # compaction fully off (a genuinely huge run can still be managed).
+    return {
+        "enabled": True,
+        "background_compaction_threshold": _f("COPILOT_COMPACTION_THRESHOLD", 0.92),
+        "buffer_exhaustion_threshold": _f("COPILOT_BUFFER_THRESHOLD", 0.99),
+    }
+
+
+def _apply_copilot_infinite_sessions(agent: Any) -> bool:
+    """Inject ``infinite_sessions`` into a Copilot agent's SessionConfig.
+
+    The agent-framework wrapper's ``_create_session`` builds SessionConfig from a
+    FIXED set of keys (model/system_message/tools/permission/mcp) and drops
+    ``infinite_sessions`` — even though the underlying ``client.create_session``
+    honours it. So setting it on ``agent._default_options`` alone is not enough; we
+    wrap ``_create_session`` to merge our block into the config it produces.
+
+    Idempotent (guards ``__cc_inf_sessions__``); best-effort (never raises). Returns
+    True if the wrap was applied.
+    """
+    cfg = _copilot_infinite_session_config()
+    if cfg is None:
+        return False
+    orig = getattr(agent, "_create_session", None)
+    if not callable(orig) or getattr(agent, "__cc_inf_sessions__", False):
+        return False
+
+    import functools  # noqa: PLC0415
+
+    @functools.wraps(orig)
+    async def _wrapped(streaming: bool, runtime_options: Any = None) -> Any:
+        # ``_create_session`` builds SessionConfig and calls
+        # ``client.create_session`` in one shot, dropping infinite_sessions on the
+        # way. We can't edit the config it produces, so we intercept at the client:
+        # swap in a create_session that merges our block, run the original, restore.
+        client = getattr(agent, "_client", None)
+        orig_client_create = getattr(client, "create_session", None) if client else None
+        if not callable(orig_client_create):
+            return await orig(streaming, runtime_options)
+
+        async def _client_create(config: Any) -> Any:
+            if isinstance(config, dict) and "infinite_sessions" not in config:
+                config = {**config, "infinite_sessions": cfg}
+            return await orig_client_create(config)
+
+        try:
+            client.create_session = _client_create  # type: ignore[attr-defined]
+            return await orig(streaming, runtime_options)
+        finally:
+            client.create_session = orig_client_create  # type: ignore[attr-defined]
+
+    try:
+        agent._create_session = _wrapped  # type: ignore[attr-defined]
+        agent.__cc_inf_sessions__ = True  # type: ignore[attr-defined]
+        _log.info("executor.copilot_infinite_sessions_applied", config=cfg)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _missing_module_name(exc: BaseException) -> str | None:
     """Best-effort top-level module name from an ImportError/ModuleNotFoundError.
 
@@ -981,6 +1086,15 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
                             opts["system_message"] = {"mode": "append", "content": existing_sys + addendum}
                         else:
                             opts["system_message"] = {"mode": "append", "content": addendum}
+                except Exception:  # noqa: BLE001
+                    pass
+
+                # Neutralise the Copilot backend's infinite-session compaction so
+                # it doesn't false-trip "context length exceeded" on a wrongly-small
+                # assumed window for our BYOK models (see
+                # _copilot_infinite_session_config). Best-effort; no-op if opted out.
+                try:
+                    _apply_copilot_infinite_sessions(agent)
                 except Exception:  # noqa: BLE001
                     pass
 

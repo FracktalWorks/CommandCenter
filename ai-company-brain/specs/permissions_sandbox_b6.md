@@ -95,3 +95,23 @@ shell/file/network requests surface.
   `_inject_agent_tools`; deferred as a follow-up (the Copilot handler is where
   raw shell/file/network surface, so it's the primary win). Container isolation
   for normal runs stays the Phase-5 item.
+- 2026-07-03 — **Production verification (live VPS) + 3 follow-up fixes.**
+  Ran `scripts/feature_check.py` against the live gateway (4/4 PASS) and drove
+  real tool-calling runs. Key discovery: the initial wiring did NOT actually
+  gate the primary live tool path. On the **Copilot-MAF-BYOK** path (the common
+  runtime), platform tools (`web_search`, …) and the agent's OWN repo-baked
+  tools are executed as **agent-framework function-tools**, NOT through the
+  Copilot SDK's `on_permission_request` hook (that fires only for the SDK's
+  built-in shell/file/fetch) — so the 5-site handler never saw them. Fixes:
+  (1) `_gate_injected_tool` wraps every tool we inject; (2) `_inject_agent_tools`
+  RE-WRAPS the agent's existing `_tools[*].func` too (repo-baked tools land there
+  via the `GitHubCopilotAgent(tools=…)` ctor → `self._tools = normalize_tools`);
+  (3) the gate logs EVERY decision (approve + deny), because it only logged
+  denials before — which made a silent approval indistinguishable from "gate
+  never ran" and blinded audit mode. **Verified live:** a `web_search` run now
+  emits `permission.decision {tool:web_search, approved:true,
+  reason:tool_read_only, surface:injected_tool, mode:audit}`. Also fixed E2
+  `duration_ms` (was null — now derived from event stream-ids; live run shows
+  ~9s) and set `LOG_FORMAT=json` on the VPS (logs are now JSON, run-correlated).
+  Prod is in `AGENT_PERMISSION_MODE=audit` (log-only) pending review of the
+  decision stream before flipping to `enforce`.

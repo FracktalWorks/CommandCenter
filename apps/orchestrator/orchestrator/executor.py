@@ -929,6 +929,26 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
                     getattr(getattr(t, "func", t), "__name__", None)
                     for t in agent._tools
                 }
+                # Gate the agent's OWN repo-baked tools too (B6): these execute
+                # on the Copilot-BYOK path bypassing on_permission_request, and
+                # they're NOT in _extra_tools, so wrapping only our injected set
+                # left them ungated. Re-wrap each existing FunctionTool's .func
+                # with the permission gate in place (no-op in approve_all mode).
+                if _gate_on := (
+                    os.environ.get("AGENT_PERMISSION_MODE", "enforce")
+                    .strip().lower() != "approve_all"
+                ):
+                    for _t in agent._tools:
+                        _orig = getattr(_t, "func", None)
+                        if callable(_orig) and not getattr(
+                            _orig, "__cc_gated__", False
+                        ):
+                            _gated = _gate_injected_tool(_orig)
+                            _gated.__cc_gated__ = True  # type: ignore[attr-defined]
+                            try:
+                                _t.func = _gated
+                            except Exception:  # noqa: BLE001 — some tools frozen
+                                pass
                 for fn in _extra_tools:
                     if fn.__name__ not in existing_names:
                         # Wrap as FunctionTool so _prepare_tools() picks it up.

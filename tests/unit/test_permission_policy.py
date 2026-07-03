@@ -217,3 +217,38 @@ def test_gate_wrapper_audit_mode_never_blocks(monkeypatch):
         return "ran"
 
     assert asyncio.run(_gate_injected_tool(t)()) == "ran"  # audit = log-only
+
+
+def test_inject_rewraps_repo_baked_tools(monkeypatch):
+    # Regression (prod finding): agent-project-manager's OWN web_search executed
+    # ungated on the Copilot-BYOK path because _inject only wrapped OUR tools.
+    # _inject_agent_tools must now also re-wrap the agent's existing _tools .func.
+    import asyncio
+
+    from orchestrator.executor import _inject_agent_tools
+
+    monkeypatch.delenv("AGENT_PERMISSION_MODE", raising=False)  # enforce default
+
+    class _FakeFuncTool:
+        def __init__(self, fn):
+            self.func = fn
+
+    class _FakeCopilotAgent:
+        name = "agent-x"
+
+        def __init__(self):
+            async def web_search(q):
+                return f"repo result: {q}"
+
+            self._tools = [_FakeFuncTool(web_search)]
+            self.tools = []
+            self._default_options = {}
+
+    a = _FakeCopilotAgent()
+    before = a._tools[0].func
+    _inject_agent_tools([a])
+    after = a._tools[0].func
+    assert after is not before                       # re-wrapped
+    assert getattr(after, "__cc_gated__", False)      # marked so we don't double-wrap
+    assert after.__name__ == "web_search"             # SDK registration intact
+    assert asyncio.run(after("x")) == "repo result: x"  # read-only tool → runs

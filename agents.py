@@ -17,6 +17,7 @@ from pathlib import Path
 
 AGENT_DIR = Path(__file__).parent.resolve()
 PROMPTS_DIR = AGENT_DIR / ".github" / "prompts"
+SKILLS_DIR = AGENT_DIR / ".github" / "skills"
 
 _SYSTEM_MD = PROMPTS_DIR / "system.md"
 if _SYSTEM_MD.exists():
@@ -29,6 +30,73 @@ else:
         if _AGENTS_MD.exists()
         else "You are the CommandCenter self-anneal agent."
     )
+
+
+def _skill_description(skill_md: Path) -> str:
+    """Extract just the ``description:`` from a SKILL.md's YAML frontmatter.
+
+    We surface the when-to-use description only — NOT the full SKILL.md body
+    (task-observer's is ~75KB; inlining every body would bloat every run's
+    context). The agent reads the linked file on demand for the full procedure.
+    """
+    try:
+        text = skill_md.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    if not text.startswith("---"):
+        return ""
+    end = text.find("\n---", 3)
+    fm = text[3:end] if end != -1 else text[3:]
+    # description may be a single line or a folded/multi-line (">") block.
+    lines = fm.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().startswith("description:"):
+            val = line.split("description:", 1)[1].strip()
+            if val and val not in (">", "|", ">-", "|-"):
+                return val
+            # folded block: gather subsequent indented lines
+            parts: list[str] = []
+            for cont in lines[i + 1:]:
+                if cont.strip() == "" or cont[:1] in (" ", "\t"):
+                    parts.append(cont.strip())
+                else:
+                    break
+            return " ".join(p for p in parts if p)
+    return ""
+
+
+def _append_skills(base: str) -> str:
+    """Surface each ``.github/skills/*/SKILL.md`` (name + when-to-use) so the
+    agent KNOWS its dev skills exist and reaches for them.
+
+    The Copilot SDK does not auto-inject repo skill files into this agent's
+    prompt (unlike the DOE-v2 agents that build them in), so a committed skill
+    sits on disk unused unless surfaced here. We inline only the description as
+    a compact catalog and link the file for the full procedure. Best-effort —
+    a missing/unreadable dir never breaks the agent build.
+    """
+    if not SKILLS_DIR.is_dir():
+        return base
+    rows: list[str] = []
+    for skill_md in sorted(SKILLS_DIR.glob("*/SKILL.md")):
+        desc = _skill_description(skill_md)
+        rel = skill_md.relative_to(AGENT_DIR)
+        rows.append(
+            f"- **{skill_md.parent.name}** (`{rel}`): {desc or '(see SKILL.md)'}"
+        )
+    if not rows:
+        return base
+    return (
+        base
+        + "\n\n---\n\n## Available Dev Skills (`.github/skills/`)\n\n"
+        "Reach for these when relevant; read the linked SKILL.md for the full "
+        "procedure. Use **task-observer** at the START of any multi-step task, "
+        "and **impeccable** for Control Plane UI work.\n\n"
+        + "\n".join(rows)
+    )
+
+
+SYSTEM_PROMPT = _append_skills(SYSTEM_PROMPT)
 
 
 def build_agent():

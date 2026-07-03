@@ -30,7 +30,7 @@ import {
 import { apiClarifyPropose } from "../lib/api";
 import type { ConnectedProvider } from "../lib/mockData";
 import { Energy, GtdItem, GtdProject, Person, Target } from "../lib/types";
-import { durationLabel, initials, snoozeOptions } from "../lib/utils";
+import { durationLabel, initials, originEmailHref, snoozeOptions } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
 
 // F2 — Clarify. AI proposes a full disposition (what it is · next action · where
@@ -271,7 +271,10 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
               Captured from email — {item.origin.fromName || item.origin.fromEmail}
               {item.origin.subject ? ` · “${item.origin.subject}”` : ""}
             </span>
-            <a href="/email" className="tech-transition shrink-0 font-medium text-primary hover:underline">
+            <a
+              href={originEmailHref(item.origin) ?? "/email"}
+              className="tech-transition shrink-0 font-medium text-primary hover:underline"
+            >
               Open
             </a>
           </p>

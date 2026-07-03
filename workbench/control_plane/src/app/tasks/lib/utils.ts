@@ -155,3 +155,17 @@ export function initials(name: string): string {
     .map((p) => p[0]?.toUpperCase() ?? "")
     .join("");
 }
+
+/** Deep link to the source email of an email-origin item (the email app
+ *  reads ?account= at hydrate and ?email= on mount). */
+export function originEmailHref(origin?: {
+  kind: string;
+  accountId?: string;
+  emailId?: string;
+}): string | null {
+  if (!origin || origin.kind !== "email" || !origin.emailId) return null;
+  const params = new URLSearchParams();
+  if (origin.accountId) params.set("account", origin.accountId);
+  params.set("email", origin.emailId);
+  return `/email?${params.toString()}`;
+}

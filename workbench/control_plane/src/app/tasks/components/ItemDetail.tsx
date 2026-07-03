@@ -14,7 +14,7 @@ import {
   Mail,
 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
-import {
+import { originEmailHref,
   DISPOSITION_LABEL,
   ENERGY_LABEL,
   durationLabel,
@@ -200,10 +200,10 @@ export function ItemDetail() {
                 {item.origin.subject ? ` — “${item.origin.subject}”` : ""}
                 {"  "}
                 <a
-                  href="/email"
+                  href={originEmailHref(item.origin) ?? "/email"}
                   className="tech-transition font-medium text-primary hover:underline"
                 >
-                  Open Email app
+                  Open email
                 </a>
               </span>
             </Field>

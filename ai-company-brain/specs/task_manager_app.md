@@ -778,6 +778,16 @@ open link) so processing has the context. Same GTD-audit pass also fixed:
 calendar decisions now REQUIRE a date (a hard-date item with no date was
 invisible on the Calendar view). Browser-E2E-verified 7/7.
 
+**Origin through the lifecycle (2026-07-03, same day)** — the email
+reference now follows the task everywhere: origin chip on every list row
+(Next/Waiting/…, tooltip with sender+subject), origin line on the inbox
+card, clarify header and item detail; every "Open" is a DEEP LINK
+(`/email?account=…&email=…` — the email page consumes `?email=` via
+`openEmailById`, fetching the message even outside the loaded folder);
+pushing an email-origin item to a PM tool appends "— Captured from email
+— <sender>: <subject>" to the task description so the assignee sees the
+source; the agent's `gtd_list` lines carry "from email: <sender>".
+
 **Chat-stack state (same session, 2026-07-02)** — a full audit of the chat
 implementation (SSE · HITL · resume · multi-agent handoffs, both runtimes)
 lives in

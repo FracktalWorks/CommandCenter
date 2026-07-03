@@ -419,3 +419,28 @@ def test_calendar_decision_requires_a_date():
 def test_item_model_carries_origin():
     from gateway.routes.tasks.core import GtdItemModel
     assert "origin" in GtdItemModel.model_fields
+
+
+def test_push_carries_email_origin_reference_into_provider():
+    """Lifecycle-long linkage: pushing an email-origin item to the PM tool
+    appends the source-email reference to the description."""
+    import inspect
+
+    from gateway.routes.tasks import items as tasks_items
+
+    src = inspect.getsource(tasks_items.push_item)
+    assert 'origin.get("kind") == "email"' in src
+    assert "Captured from email" in src
+
+
+def test_agent_item_format_shows_email_origin():
+    from skill_task_gtd.core import _fmt_item
+
+    line = _fmt_item({"id": "x" * 12, "title": "Approve the quote",
+                      "disposition": "NEXT", "source": "LOCAL",
+                      "origin": {"kind": "email", "from_name": "Sanjay Rao",
+                                 "subject": "Vendor quote"}})
+    assert "from email: Sanjay Rao" in line
+    plain = _fmt_item({"id": "y" * 12, "title": "buy tape",
+                       "disposition": "INBOX", "source": "LOCAL"})
+    assert "from email" not in plain

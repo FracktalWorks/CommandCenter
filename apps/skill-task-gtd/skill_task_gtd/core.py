@@ -120,6 +120,10 @@ def _fmt_item(i: dict[str, Any]) -> str:
         bits.append(f"due {i['due_at'][:10]}")
     if i.get("sync_state") == "pending":
         bits.append("PENDING PUSH")
+    origin = i.get("origin") or {}
+    if origin.get("kind") == "email":
+        who = origin.get("from_name") or origin.get("from_email") or "email"
+        bits.append(f"from email: {who}")
     bits.append(f"id={i.get('id', '')[:8]}…" if len(i.get("id", "")) > 8
                 else f"id={i.get('id', '')}")
     return " · ".join(bits) + f"\n  full_id: {i.get('id', '')}"

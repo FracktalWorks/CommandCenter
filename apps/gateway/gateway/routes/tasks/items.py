@@ -519,9 +519,20 @@ async def push_item(
         provider = build_provider(account.provider, creds, account.workspace_id)
         assignee = _parse_jsonb(row.assignee) or {}
         due_ms = int(row.due_at.timestamp() * 1000) if row.due_at else None
+        # Email-origin items carry their source reference INTO the PM tool so
+        # the assignee sees where the task came from (lifecycle-long linkage).
+        description = row.description or ""
+        origin = _parse_jsonb(getattr(row, "origin", None)) or {}
+        if origin.get("kind") == "email":
+            ref = (
+                f"Captured from email — {origin.get('from_name') or origin.get('from_email') or 'unknown sender'}"
+                + (f" <{origin['from_email']}>" if origin.get("from_email") else "")
+                + (f": \"{origin['subject']}\"" if origin.get("subject") else "")
+            )
+            description = (description + "\n\n— " + ref).strip()
         created = await provider.create_task(project_ref, {
             "title": row.next_action or row.title,
-            "description": row.description,
+            "description": description or None,
             "status": row.provider_status,
             "due_at_ms": due_ms,
             "assignee_id": assignee.get("provider_user_id"),

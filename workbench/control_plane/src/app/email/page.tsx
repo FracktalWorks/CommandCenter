@@ -103,6 +103,25 @@ export default function EmailPage() {
     fetchAccounts();
   }, [fetchAccounts]);
 
+  // Deep link: /email?account=<id>&email=<id> opens a SPECIFIC message —
+  // the link tasks put on email-origin items ("Open"). The account param is
+  // consumed by the store's initial-account pick; the email param is ours:
+  // open once the right account is active (openEmailById fetches the
+  // message even if it isn't in the loaded folder page).
+  const deepLinkedEmailRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!selectedAccountId) return;
+    let emailParam: string | null = null;
+    try {
+      emailParam = new URL(window.location.href).searchParams.get("email");
+    } catch {
+      return;
+    }
+    if (!emailParam || deepLinkedEmailRef.current === emailParam) return;
+    deepLinkedEmailRef.current = emailParam;
+    useEmailStore.getState().openEmailById(emailParam);
+  }, [selectedAccountId]);
+
   // Fetch emails when account or folder changes
   useEffect(() => {
     if (selectedAccountId) {

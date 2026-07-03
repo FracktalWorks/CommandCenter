@@ -6,6 +6,33 @@
 > debug "error X happened with agent Y" after the fact, and eventually run
 > feature tests against the live VPS.
 
+## ⏩ RUNBOOK — the user reports "error X with agent Y" (start here)
+
+Follow in order; each step is more granular than the last. Prefer the API path
+(no SSH). See `observability-run-traces` memory for the exact copy-paste commands.
+
+1. **Is the feature even up, and where's it broken?** On the VPS:
+   `cd /opt/acb/app && uv run python scripts/feature_check.py` (add `--only chat_maf`
+   / `chat_copilot` to isolate a runtime, `--json` for machine output). It drives
+   the real endpoints, prints a pass/fail table, and **on failure prints the exact
+   `run_id` + the next command to run.**
+2. **Get the durable record + full trace (no SSH):** `GET /debug/runs?agent=Y&status=error&since_hours=24`
+   → pick the `run_id` → `GET /debug/runs/{run_id}` for the full trace + traceback.
+   (EXECUTIVE/AGENT-gated — traces hold message content.) `POST /debug/runs/{id}/flag`
+   to preserve a successful run's trace before it's pruned.
+3. **Correlated log stream (deepest, needs SSH):** `ssh acb@187.127.179.143` then
+   `journalctl -u acb-gateway -o cat | grep '"agent": "Y"'` — every line for the
+   run carries `run_id`/`thread_id`/`agent`/`user` and the `run_error` line carries
+   the full `exc_info` traceback. Requires `LOG_FORMAT=json` in `/opt/acb/app/.env`
+   (already set in prod). Durable DB fallback if journald has rotated:
+   `docker exec acb-postgres psql … "SELECT … FROM agent_run WHERE agent_name='Y' AND status='error' …"`.
+
+**Retention (know this before you look):** metadata + tool_summary are kept for
+ALL runs; the full `trace` + `error_traceback` only for errored / cancelled /
+flagged runs. A *successful* run you want to inspect must be `flag`ged first (or
+reproduced with an induced error). Redis event stream is latest-run-only, 1h TTL —
+`agent_run` is the thing that survives.
+
 ## The gap (audited 2026-07-03)
 
 - **Logs weren't correlated or machine-parseable.** structlog was configured

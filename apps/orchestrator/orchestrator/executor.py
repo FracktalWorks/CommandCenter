@@ -141,6 +141,56 @@ _active_run_queue: contextvars.ContextVar["asyncio.Queue[dict[str, Any] | None] 
     contextvars.ContextVar("_active_run_queue", default=None)
 )
 
+# Plain (non-ContextVar) registry of the active run's event queue, keyed by
+# session/thread id. The GitHub-Copilot SDK dispatches tool callables from its
+# JSON-RPC read thread via ``asyncio.run_coroutine_threadsafe`` (see
+# copilot/_jsonrpc.py), which schedules the coroutine with a FRESH context —
+# so ``_active_run_queue`` (a ContextVar) is NOT visible inside a tool invoked
+# by a Copilot agent. Tools that must push CUSTOM events into the live chat
+# stream (write_artifact, emit_generative_ui) resolve the queue from HERE first
+# (survives the thread hop), then fall back to the ContextVar for native-MAF
+# runs. Set/cleared alongside _active_run_queue by every run path.
+_RUN_QUEUES: dict[str, "asyncio.Queue[dict[str, Any] | None]"] = {}
+
+
+def _register_run_queue(
+    key: str | None, queue: "asyncio.Queue[dict[str, Any] | None]",
+) -> None:
+    """Register the active run's event queue under *key* (session/thread id).
+
+    A no-op when *key* is falsy. Idempotent — last writer for a key wins, which
+    is correct because a given thread has exactly one live run at a time.
+    """
+    if key:
+        _RUN_QUEUES[key] = queue
+
+
+def _unregister_run_queue(key: str | None) -> None:
+    """Drop the run-queue registration for *key* (best-effort)."""
+    if key:
+        _RUN_QUEUES.pop(key, None)
+
+
+def resolve_run_queue(
+    key: str | None = None,
+) -> "asyncio.Queue[dict[str, Any] | None] | None":
+    """Return the active run's event queue for pushing CUSTOM SSE events.
+
+    Resolution order: the ContextVar (native-MAF, same-context tool calls) →
+    the plain registry keyed by *key* (Copilot-SDK tools that run in a
+    context-reset thread). Tools pass the session/thread id they already hold
+    (from _WRITE_ARTIFACT_CONTEXT["session_id"]) as *key*.
+    """
+    q = _active_run_queue.get(None)
+    if q is not None:
+        return q
+    if key and key in _RUN_QUEUES:
+        return _RUN_QUEUES[key]
+    # Last resort: if exactly one run is active, it must be this one.
+    if len(_RUN_QUEUES) == 1:
+        return next(iter(_RUN_QUEUES.values()))
+    return None
+
 # ContextVar that bridges the executor's ask_questions detection with the
 # ask_questions tool function.  When the executor sees the Copilot SDK about
 # to call ask_questions, it generates a request_id, creates a
@@ -3284,14 +3334,18 @@ async def run_agent_stream(
                             except Exception:  # noqa: BLE001
                                 _log.exception("executor.store_session_failed")
 
-                # ── Artifact event relay ─────────────────────────────────
-                # Create a queue and expose it via _active_run_queue so the
-                # write_artifact tool (and any other tool) can push CUSTOM
-                # events (artifact_created, etc.) into the active SSE stream.
-                # Without this the Copilot SDK path never forwards artifact
-                # events — they silently drop because _active_run_queue is None.
+                # ── Artifact / CUSTOM event relay ────────────────────────
+                # Create a queue and expose it so tools (write_artifact,
+                # emit_generative_ui, …) can push CUSTOM events into this SSE
+                # stream.  The Copilot SDK dispatches tool callables from its
+                # JSON-RPC read thread with a FRESH context, so the ContextVar
+                # alone is invisible inside those tools — register the queue in
+                # the plain _RUN_QUEUES registry (keyed by the session id the
+                # tools already hold) as well, so resolve_run_queue() finds it.
                 _artifact_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
                 _t15_token = _active_run_queue.set(_artifact_queue)
+                _t15_qkey = thread_id or run_id
+                _register_run_queue(_t15_qkey, _artifact_queue)
 
                 # ── Retry loop: at most 2 attempts ─────────────────────────
                 # Attempt 0: normal run (may use a stored Copilot session).
@@ -3396,6 +3450,7 @@ async def run_agent_stream(
                     if _aev:
                         yield _sse(_aev)
                 _active_run_queue.reset(_t15_token)
+                _unregister_run_queue(_t15_qkey)
 
                 # ── Premature stream-end detection ───────────────────────
                 # If text was started but no tool call completed after it,

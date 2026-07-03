@@ -21,9 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
-import os
-import stat
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 _WRITE_ARTIFACT_CONTEXT: dict[str, str] = {}
@@ -109,7 +107,7 @@ async def write_artifact(
         *download_url* is a relative URL suitable for a clickable markdown
         link, e.g. ``/api/agent/workspace/{session}/file?path=outputs/x.md``.
     """
-    import asyncio  # noqa: PLC0415
+    import asyncio
 
     workspace_root = _WRITE_ARTIFACT_CONTEXT.get("workspace_root")
     session_id = _WRITE_ARTIFACT_CONTEXT.get("session_id")
@@ -118,7 +116,7 @@ async def write_artifact(
 
     if not workspace_root:
         # Fallback: write to a temp dir per session
-        import tempfile  # noqa: PLC0415
+        import tempfile
         workspace_root = str(Path(tempfile.gettempdir()) / "acb_artifacts" / (session_id or "unknown"))
         _WRITE_ARTIFACT_CONTEXT["workspace_root"] = workspace_root
 
@@ -168,7 +166,7 @@ async def write_artifact(
         "size": size,
         "sha256": digest,
         "mime_type": mime,
-        "modified_at": datetime.now(tz=timezone.utc).isoformat(),
+        "modified_at": datetime.now(tz=UTC).isoformat(),
         "is_dir": False,
     }
 
@@ -213,7 +211,7 @@ async def share_artifact(path: str) -> dict:
         "download_url": <first file's link>}``.  On error,
         ``{"error": str, "artifacts": []}``.
     """
-    import asyncio  # noqa: PLC0415
+    import asyncio
 
     workspace_root = _WRITE_ARTIFACT_CONTEXT.get("workspace_root")
     session_id = _WRITE_ARTIFACT_CONTEXT.get("session_id")
@@ -266,7 +264,7 @@ async def share_artifact(path: str) -> dict:
             "name": f.name,
             "size": size,
             "mime_type": mime,
-            "modified_at": datetime.now(tz=timezone.utc).isoformat(),
+            "modified_at": datetime.now(tz=UTC).isoformat(),
             "is_dir": False,
         }
         # Same CUSTOM event write_artifact emits → renders the ArtifactCard.
@@ -301,9 +299,12 @@ async def _notify(
     """
     # 1. Push AG-UI CUSTOM event into the active executor SSE queue so the
     #    frontend receives it immediately as part of the existing chat stream.
+    #    resolve_run_queue falls back to the plain _RUN_QUEUES registry (keyed
+    #    by session_id) so this reaches the chat stream even for Copilot-SDK
+    #    tools whose fresh-context thread can't see the ContextVar.
     try:
-        from orchestrator.executor import _active_run_queue  # noqa: PLC0415
-        queue = _active_run_queue.get(None)
+        from orchestrator.executor import resolve_run_queue
+        queue = resolve_run_queue(session_id)
         if queue is not None:
             _artifact_data = {
                 "path": artifact["path"],
@@ -316,7 +317,7 @@ async def _notify(
                 "name": "artifact_created",
                 "value": _artifact_data,
             })
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     if not session_id:
@@ -325,7 +326,7 @@ async def _notify(
     # 2. Also POST to gateway events endpoint so any other SSE subscribers
     #    (future browser tabs, monitoring) receive it.
     try:
-        import httpx  # noqa: PLC0415
+        import httpx
 
         headers = {
             "Authorization": f"Bearer {gateway_token}",
@@ -350,7 +351,7 @@ async def _notify(
                 },
                 headers=headers,
             )
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass  # Non-fatal — the sidebar can always refresh manually
 
 
@@ -400,7 +401,7 @@ async def emit_generative_ui(ui: str) -> dict:
           '{"type":"row","children":[{"type":"button","props":'
           '{"label":"Roll back","action":"roll back the deploy","tone":"danger"}}]}]}')
     """
-    import json  # noqa: PLC0415
+    import json
 
     try:
         spec = json.loads(ui) if isinstance(ui, str) else ui
@@ -409,11 +410,15 @@ async def emit_generative_ui(ui: str) -> dict:
     if not isinstance(spec, dict):
         return {"ok": False, "error": "ui must be a JSON object (a component node)"}
 
-    # Push the CUSTOM event into the active run's SSE queue — same mechanism as
-    # artifact_created (the executor sets _active_run_queue per run).
+    # Push the CUSTOM event into the active run's SSE queue. resolve_run_queue
+    # tries the ContextVar (native-MAF) first, then the plain _RUN_QUEUES
+    # registry keyed by the session id — the latter is what makes this work for
+    # GitHub-Copilot-SDK agents, whose tool callables run in a JSON-RPC read
+    # thread with a fresh context where the ContextVar is invisible.
     try:
-        from orchestrator.executor import _active_run_queue  # noqa: PLC0415
-        queue = _active_run_queue.get(None)
+        from orchestrator.executor import resolve_run_queue
+        session_id = _WRITE_ARTIFACT_CONTEXT.get("session_id")
+        queue = resolve_run_queue(session_id)
         if queue is not None:
             await queue.put({
                 "type": "CUSTOM",
@@ -421,6 +426,6 @@ async def emit_generative_ui(ui: str) -> dict:
                 "value": spec,
             })
             return {"ok": True}
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": False, "error": "no active run stream to render into"}

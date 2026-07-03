@@ -63,6 +63,30 @@ from orchestrator.watchdog import (  # noqa: E402
 _WATCHDOG = default_watchdog()
 
 
+def _copilot_permission_handler() -> Any:
+    """Return the Copilot-SDK permission handler for a run (B6 / HH-6).
+
+    ``AGENT_PERMISSION_MODE=approve_all`` → the SDK's blanket ``approve_all``
+    (escape hatch / old behaviour). Otherwise → our risk-aware handler, which
+    blocks dangerous shell + out-of-workspace writes, defers destructive tools to
+    their own request_confirmation gate, and logs every privileged op. Falls back
+    to ``approve_all`` if the policy module can't be imported (never break runs).
+    """
+    from copilot import PermissionHandler as _PH  # noqa: PLC0415
+
+    if os.environ.get("AGENT_PERMISSION_MODE", "enforce").strip().lower() == (
+        "approve_all"
+    ):
+        return _PH.approve_all
+    try:
+        from acb_skills.permission_policy import (  # noqa: PLC0415
+            risk_aware_permission_handler,
+        )
+        return risk_aware_permission_handler
+    except Exception:  # noqa: BLE001
+        return _PH.approve_all
+
+
 def _missing_module_name(exc: BaseException) -> str | None:
     """Best-effort top-level module name from an ImportError/ModuleNotFoundError.
 
@@ -1182,12 +1206,12 @@ async def _run_sub_agent_streaming(
                 return f"({agent_name!r} returned empty agent list)"
             agent = agents[0]
 
-            # Apply permission handler for GitHub Copilot SDK agents.
+            # Apply the risk-aware permission handler for Copilot SDK agents (B6).
             try:
-                from copilot import PermissionHandler as _PH  # noqa: PLC0415
+                _ph = _copilot_permission_handler()
                 for _a in agents:
                     if hasattr(_a, "_permission_handler") and _a._permission_handler is None:
-                        _a._permission_handler = _PH.approve_all
+                        _a._permission_handler = _ph
             except Exception:  # noqa: BLE001
                 pass
 
@@ -2563,13 +2587,14 @@ async def run_agent_stream(
                                thread_id=thread_id,
                                copilot_session=_copilot_session_id[:12])
 
-            # Ensure permission handler is set for GitHubCopilotAgent before ANY
-            # execution path — repos often omit it from default_options.
+            # Ensure the risk-aware permission handler is set for
+            # GitHubCopilotAgent before ANY execution path — repos often omit it
+            # from default_options (B6).
             try:
-                from copilot import PermissionHandler as _PH  # noqa: PLC0415
+                _ph = _copilot_permission_handler()
                 for _a in agents:
                     if hasattr(_a, "_permission_handler") and _a._permission_handler is None:
-                        _a._permission_handler = _PH.approve_all
+                        _a._permission_handler = _ph
             except Exception:  # noqa: BLE001
                 pass
 
@@ -3016,11 +3041,10 @@ async def run_agent_stream(
                 _byok_provider = _byok_provider_early
                 _byok_model_id = _byok_model_id_early
 
-                # Ensure permission handler.
+                # Ensure the risk-aware permission handler (B6).
                 try:
-                    from copilot import PermissionHandler as _PH  # noqa: PLC0415
                     if hasattr(agent, "_permission_handler") and agent._permission_handler is None:
-                        agent._permission_handler = _PH.approve_all
+                        agent._permission_handler = _copilot_permission_handler()
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -3569,6 +3593,36 @@ async def run_agent_stream(
                             "delta": json.dumps(call_args),
                         })
 
+                    # Permission gate for the native-MAF path (B6): the Copilot
+                    # SDK has its own PermissionRequest hook, but MAF tool calls
+                    # flow through this shim. Gate + log by tool name (enforce
+                    # denies, audit logs-only). Named platform tools approve
+                    # today; this is the enforcement point for any future
+                    # denyable tool + gives audit parity across runtimes.
+                    try:
+                        from acb_skills.permission_policy import (  # noqa: PLC0415
+                            decide as _perm_decide,
+                        )
+                        _ok, _code, _det = _perm_decide({"tool_name": tool_name})
+                        _pmode = os.environ.get(
+                            "AGENT_PERMISSION_MODE", "enforce"
+                        ).strip().lower()
+                        if not _ok and _pmode == "enforce":
+                            await queue.put({
+                                "type": "TOOL_CALL_RESULT",
+                                "toolCallId": tool_call_id,
+                                "content": (
+                                    f"Blocked by permission policy ({_code}). "
+                                    "Ask the user to approve this explicitly."
+                                ),
+                                "success": False,
+                            })
+                            return (
+                                f"[blocked by permission policy: {_code}]"
+                            )
+                    except Exception:  # noqa: BLE001 — never brick a tool call
+                        pass
+
                     try:
                         if not inspect.iscoroutinefunction(original_fn):
                             # Sync tools run inline and can't be interrupted by
@@ -3788,12 +3842,10 @@ async def run_agent_stream(
 
                     if hasattr(type(agent), "__aenter__"):
                         await stack.enter_async_context(agent)
-                    # Apply approve_all permission handler if needed (GitHubCopilotAgent)
+                    # Apply the risk-aware permission handler if needed (B6).
                     try:
-                        from copilot import \
-                            PermissionHandler as _PH  # noqa: PLC0415
                         if hasattr(agent, "_permission_handler") and agent._permission_handler is None:
-                            agent._permission_handler = _PH.approve_all
+                            agent._permission_handler = _copilot_permission_handler()
                     except Exception:  # noqa: BLE001
                         pass
                     # For BYOK MAF agents, pass history as proper MAF Message objects
@@ -4288,13 +4340,13 @@ async def _run_with_maf_agent(
 
     # GitHubCopilotAgent requires on_permission_request to approve tool calls.
     # Agent repos often omit it; patch _permission_handler directly so sessions
-    # are created without raising AgentException.
-    # PermissionHandler lives in the underlying `copilot` SDK package.
+    # are created without raising AgentException. B6: use the risk-aware handler
+    # (blocks dangerous shell / out-of-workspace writes; logs privileged ops).
     try:
-        from copilot import PermissionHandler as _PH  # noqa: PLC0415
+        _ph = _copilot_permission_handler()
         for _a in agents:
             if hasattr(_a, "_permission_handler") and _a._permission_handler is None:
-                _a._permission_handler = _PH.approve_all
+                _a._permission_handler = _ph
     except Exception:  # noqa: BLE001
         pass
 

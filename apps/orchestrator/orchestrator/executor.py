@@ -87,6 +87,60 @@ def _copilot_permission_handler() -> Any:
         return _PH.approve_all
 
 
+def _gate_injected_tool(fn: Any) -> Any:
+    """Wrap an injected platform tool with the risk-aware permission gate (B6).
+
+    The Copilot-SDK ``on_permission_request`` hook only fires for the SDK's
+    BUILT-IN shell/file/fetch capabilities — our injected function-tools
+    (web_search, write_artifact, …) are executed directly by the agent-framework
+    on the streaming/BYOK path and bypass that hook entirely. Wrapping each tool
+    here makes the gate universal: whichever runtime path invokes the tool, the
+    decision runs + logs (``permission.decision``, auto-correlated to the run via
+    the E2 contextvars). ``enforce`` mode blocks a denied call; ``audit`` /
+    ``approve_all`` never block. Preserves the tool's name/signature (functools
+    .wraps) so the SDK/MAF tool registration is unchanged.
+    """
+    import functools  # noqa: PLC0415
+    import inspect  # noqa: PLC0415
+
+    tool_name = getattr(fn, "__name__", "tool")
+
+    def _gate() -> tuple[bool, str]:
+        """Return (allowed, reason). Never raises."""
+        try:
+            from acb_skills.permission_policy import decide  # noqa: PLC0415
+            ok, code, _ = decide({"tool_name": tool_name})
+            mode = os.environ.get(
+                "AGENT_PERMISSION_MODE", "enforce"
+            ).strip().lower()
+            if not ok:
+                _log.info(
+                    "permission.decision", mode=mode, tool=tool_name,
+                    approved=(mode != "enforce"), would_deny=True, reason=code,
+                )
+                return (mode != "enforce"), code
+            return True, code
+        except Exception:  # noqa: BLE001 — a gate bug must never brick a tool
+            return True, "gate_error"
+
+    if inspect.iscoroutinefunction(fn):
+        @functools.wraps(fn)
+        async def _agated(*args: Any, **kwargs: Any) -> Any:
+            allowed, reason = _gate()
+            if not allowed:
+                return f"[blocked by permission policy: {reason}]"
+            return await fn(*args, **kwargs)
+        return _agated
+
+    @functools.wraps(fn)
+    def _sgated(*args: Any, **kwargs: Any) -> Any:
+        allowed, reason = _gate()
+        if not allowed:
+            return f"[blocked by permission policy: {reason}]"
+        return fn(*args, **kwargs)
+    return _sgated
+
+
 def _missing_module_name(exc: BaseException) -> str | None:
     """Best-effort top-level module name from an ImportError/ModuleNotFoundError.
 
@@ -837,6 +891,16 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
             _extra_tools = _all_tools
     else:
         _extra_tools = _all_tools
+
+    # Gate every injected tool with the risk-aware permission policy (B6). This
+    # closes the live gap where injected function-tools (web_search, …) executed
+    # on the Copilot-BYOK/streaming path bypass the SDK's on_permission_request
+    # hook. functools.wraps keeps __name__/signature so name-based special-cases
+    # (call_agent, ask_questions) and SDK/MAF registration are unaffected.
+    if os.environ.get("AGENT_PERMISSION_MODE", "enforce").strip().lower() != (
+        "approve_all"
+    ):
+        _extra_tools = [_gate_injected_tool(fn) for fn in _extra_tools]
 
     for agent in agents:
         injected = False

@@ -163,6 +163,30 @@ def test_derive_status_error_wins_over_cancel():
     assert msg == "x"
 
 
+def test_duration_derived_from_event_stream_ids():
+    # Regression: duration_ms was null in prod because started_ms wasn't passed.
+    # It now derives from the first/last event's Redis stream-id timestamps.
+    events = [
+        {"type": "RUN_STARTED", "_stream_id": "1000-0"},
+        {"type": "TEXT_MESSAGE_CONTENT", "_stream_id": "2000-0"},
+        {"type": "RUN_FINISHED", "_stream_id": "3500-0"},
+    ]
+    row = build_run_trace_row(
+        run_id="rd", thread_id="t", agent_name="a", user_id="u", model="m",
+        events=events, folded=_folded(),
+    )
+    assert row["duration_ms"] == 2500  # 3500 - 1000
+
+
+def test_explicit_times_win_over_event_derivation():
+    events = [{"type": "RUN_FINISHED", "_stream_id": "9999-0"}]
+    row = build_run_trace_row(
+        run_id="rd2", thread_id="t", agent_name="a", user_id="u", model="m",
+        events=events, folded=_folded(), started_ms=100, ended_ms=600,
+    )
+    assert row["duration_ms"] == 500  # explicit values, not the event ms
+
+
 def test_no_folded_run_still_produces_a_row():
     # A run that errored before producing any message (folded is None) still
     # yields a trace row — that itself is a debuggable outcome.

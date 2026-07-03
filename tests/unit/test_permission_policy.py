@@ -164,3 +164,56 @@ def test_handler_never_raises_on_bad_request(monkeypatch):
     # A malformed request must not brick the run — approve on internal error.
     res = pp.risk_aware_permission_handler(object(), {})
     assert res.kind == "approved"
+
+
+# ── Injected-tool gate wrapper (closes the live BYOK/streaming bypass) ───────
+
+
+def test_gate_wrapper_preserves_name_and_allows_readonly_tool():
+    import asyncio
+
+    from orchestrator.executor import _gate_injected_tool
+
+    async def web_search(q):  # read_only in TOOL_ANNOTATIONS → allowed
+        return f"results for {q}"
+
+    gated = _gate_injected_tool(web_search)
+    assert gated.__name__ == "web_search"  # SDK/MAF registration unaffected
+    assert asyncio.run(gated("openai ceo")) == "results for openai ceo"
+
+
+def test_gate_wrapper_blocks_a_denied_tool_in_enforce(monkeypatch):
+    import asyncio
+
+    from orchestrator.executor import _gate_injected_tool
+
+    monkeypatch.setenv("AGENT_PERMISSION_MODE", "enforce")
+
+    # Force decide() to deny this tool name to prove the wrapper enforces.
+    import acb_skills.permission_policy as _pp
+    monkeypatch.setattr(
+        _pp, "decide", lambda req: (False, "test_denied", req.get("tool_name", "")),
+    )
+
+    async def dangerous_tool():
+        return "SHOULD NOT RUN"
+
+    gated = _gate_injected_tool(dangerous_tool)
+    out = asyncio.run(gated())
+    assert "blocked by permission policy" in out
+    assert "SHOULD NOT RUN" not in out
+
+
+def test_gate_wrapper_audit_mode_never_blocks(monkeypatch):
+    import asyncio
+
+    from orchestrator.executor import _gate_injected_tool
+
+    monkeypatch.setenv("AGENT_PERMISSION_MODE", "audit")
+    import acb_skills.permission_policy as _pp
+    monkeypatch.setattr(_pp, "decide", lambda req: (False, "would_deny", ""))
+
+    async def t():
+        return "ran"
+
+    assert asyncio.run(_gate_injected_tool(t)()) == "ran"  # audit = log-only

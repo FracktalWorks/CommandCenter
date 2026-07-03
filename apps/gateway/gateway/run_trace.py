@@ -40,6 +40,17 @@ def _derive_status(events: list[dict[str, Any]]) -> tuple[str, str, str]:
     return status, err_msg, ""
 
 
+def _stream_id_ms(event: dict[str, Any]) -> int | None:
+    """Epoch-ms from a Redis stream id (``<ms>-<seq>``), if present.
+
+    Mirror of chat_fold._stream_id_ms — kept local so run_trace has no import
+    dependency on the fold module's internals.
+    """
+    sid = str(event.get("_stream_id") or "")
+    ms, _, _ = sid.partition("-")
+    return int(ms) if ms.isdigit() else None
+
+
 def _tool_summary(folded: dict[str, Any] | None) -> list[dict[str, str]]:
     """Lightweight [{"name","status"}...] over the run's tools (all runs)."""
     if not folded:
@@ -77,6 +88,21 @@ def build_run_trace_row(
     keep_trace = status in ("error", "cancelled") or flagged
 
     tool_summary = _tool_summary(folded)
+
+    # Derive start/end from the events' Redis stream-id timestamps (<ms>-<seq>)
+    # when the caller didn't pass them — the run boundary rarely has the start
+    # time handy, but the first/last event bracket the run. This is what makes
+    # duration_ms populate (it was null before: only ended_ms was passed).
+    _event_ms = [
+        _ms
+        for ev in events
+        if (_ms := _stream_id_ms(ev)) is not None
+    ]
+    if started_ms is None and _event_ms:
+        started_ms = min(_event_ms)
+    if ended_ms is None and _event_ms:
+        ended_ms = max(_event_ms)
+
     duration_ms = (
         (ended_ms - started_ms)
         if (started_ms is not None and ended_ms is not None

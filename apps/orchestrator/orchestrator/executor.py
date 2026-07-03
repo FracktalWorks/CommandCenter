@@ -380,6 +380,41 @@ def resolve_run_queue(
         return next(iter(_RUN_QUEUES.values()))
     return None
 
+
+def resolve_relay_thread_id() -> str | None:
+    """Return the active run's stream-relay thread_id, surviving a thread hop.
+
+    The blocking HITL tools (``ask_questions``, ``request_confirmation``) need the
+    thread_id to push their card to the Redis relay and park on a Future. The
+    natural source, ``_stream_relay_thread_id``, is a ContextVar — visible on the
+    native-MAF path but RESET when the GitHub-Copilot SDK dispatches a tool from
+    its JSON-RPC read thread (``run_coroutine_threadsafe`` schedules with a fresh
+    context). So a Copilot agent's ask_questions saw ``None`` and fell through to
+    the non-blocking path — the card looped and never accepted input.
+
+    Resolution order (works for BOTH runtimes):
+      1. ``_stream_relay_thread_id`` ContextVar — native-MAF, same-context tools.
+      2. ``_WRITE_ARTIFACT_CONTEXT["session_id"]`` — a plain module dict the
+         executor sets to ``thread_id or run_id`` on every run path (Copilot too),
+         so it survives the SDK thread hop. Same trick write_artifact uses.
+      3. The single active run-queue key, when exactly one run is live.
+    """
+    tid = _stream_relay_thread_id.get(None)
+    if tid:
+        return tid
+    try:
+        from acb_skills.write_artifact import (  # noqa: PLC0415
+            _WRITE_ARTIFACT_CONTEXT,
+        )
+        sid = _WRITE_ARTIFACT_CONTEXT.get("session_id")
+        if sid:
+            return str(sid)
+    except Exception:  # noqa: BLE001
+        pass
+    if len(_RUN_QUEUES) == 1:
+        return next(iter(_RUN_QUEUES.keys()))
+    return None
+
 # ContextVar that bridges the executor's ask_questions detection with the
 # ask_questions tool function.  When the executor sees the Copilot SDK about
 # to call ask_questions, it generates a request_id, creates a

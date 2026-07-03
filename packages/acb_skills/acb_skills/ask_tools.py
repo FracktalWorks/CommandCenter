@@ -205,17 +205,18 @@ async def ask_questions(questions: str) -> str:
             _pending_user_input,
         )
         _req_id = _active_elicitation_request_id.get(None)
-        # ── Poll for the executor bridge ──────────────────────────
-        # The Copilot SDK fires tool execution concurrently with the
-        # executor's streaming loop.  If we check _req_id before the
-        # executor has processed the EXTERNAL_TOOL_REQUESTED event
-        # and set the ContextVar, we fall through to the non-blocking
-        # Path B2 and the agent doesn't pause.  Poll for up to 3s at
-        # 50 ms intervals — same pattern used by the Copilot SDK's
-        # native ask_user bridge.
+        # ── Briefly poll for the executor bridge ──────────────────
+        # The executor may set this ContextVar concurrently with tool
+        # execution. When it IS visible (native-MAF, and Copilot when the
+        # context happens to carry over) B1 is the preferred path — its Future is
+        # keyed to the tool_call_id for correct cleanup. But on the Copilot SDK
+        # the tool runs in a thread-hopped context that usually RESETS this
+        # ContextVar, so it stays None; a short poll then falls through to the
+        # thread-hop-safe Path C below (resolve_relay_thread_id) rather than
+        # stalling. 0.5s is ample — if it's going to appear it appears at once.
         if _req_id is None:
             import asyncio as _asyncio
-            _deadline = _asyncio.get_running_loop().time() + 3.0
+            _deadline = _asyncio.get_running_loop().time() + 0.5
             while _req_id is None:
                 await _asyncio.sleep(0.05)
                 _req_id = _active_elicitation_request_id.get(None)
@@ -249,10 +250,13 @@ async def ask_questions(questions: str) -> str:
     try:
         from orchestrator.executor import (  # noqa: PLC0415
             _pending_user_input,
-            _stream_relay_thread_id,
             _push_sse_to_stream,
+            resolve_relay_thread_id,
         )
-        _tid = _stream_relay_thread_id.get(None)
+        # resolve_relay_thread_id survives the Copilot SDK thread hop (the raw
+        # _stream_relay_thread_id ContextVar does NOT) — so this blocking path now
+        # engages for BOTH Copilot-SDK and native-MAF agents.
+        _tid = resolve_relay_thread_id()
         if _tid:
             import asyncio as _asyncio
             import uuid as _uuid
@@ -385,14 +389,20 @@ async def request_confirmation(
         await queue.put(_event(_rid))
         return await _block_on(_fut, _rid, _pending_user_input)
 
-    # ── Path C: Redis relay (native MAF when queue not in context) ───────
+    # ── Path C: Redis relay (blocking on BOTH Copilot-SDK and native MAF) ──
+    # resolve_relay_thread_id survives the Copilot SDK thread hop that resets the
+    # _stream_relay_thread_id ContextVar. WITHOUT this, a Copilot agent's
+    # request_confirmation found no thread_id, skipped this path, and fell through
+    # to the non-interactive default below — silently DENYING the action without
+    # ever showing the user the confirmation card. This is the safety gate for
+    # send_email etc., so blocking must work on the Copilot path too.
     try:
         from orchestrator.executor import (  # noqa: PLC0415
             _pending_user_input,
             _push_sse_to_stream,
-            _stream_relay_thread_id,
+            resolve_relay_thread_id,
         )
-        _tid = _stream_relay_thread_id.get(None)
+        _tid = resolve_relay_thread_id()
         if _tid:
             import asyncio as _asyncio
             import uuid as _uuid

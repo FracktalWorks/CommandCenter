@@ -51,9 +51,23 @@ Read root `AGENTS.md` for the full list.  Key ones:
 - Chat frontend: `workbench/control_plane/src/`
 - System design: `ai-company-brain/`
 
+## Available Dev Skills (`.github/skills/`)
+
+These skills are committed to the repo and auto-discoverable — reach for them:
+
+- **task-observer** — invoke at the START of any multi-step task. Watches the
+  session for corrections, repeated workflows, and gaps no skill covers, and
+  surfaces reusable-skill candidates. Use it to keep improving how you work on
+  CommandCenter.
+- **impeccable** — design-quality language for frontend work. Use when
+  editing/reviewing the Next.js Control Plane UI (`workbench/control_plane/`):
+  `polish`, `audit`, `critique`, `distill`, `harden`, etc. Not for
+  backend/non-UI changes.
+
 ## Before Editing
 
 1. Read the AGENTS.md chain (DOX framework) from root → target
 2. Use `uv` not `pip` for Python commands
 3. Run tests after changes: `uv run python -m pytest tests/unit/ -x -q`
 4. Update AGENTS.md after meaningful changes
+5. For multi-step work, invoke **task-observer** first; for UI work, use **impeccable**

@@ -126,6 +126,27 @@ function mapEmail(raw: Record<string, unknown>): Email {
 
 // ── Email Accounts ───────────────────────────────────────────────────────
 
+/** Capture an email into the GTD task inbox (AI drafts the task title +
+ *  context server-side; idempotent per email — re-capturing returns the
+ *  existing open item). Goes through the tasks proxy, not /api/email. */
+export async function captureEmailToTask(
+  accountId: string,
+  emailId: string
+): Promise<{ title: string; created: boolean }> {
+  const res = await gatewayFetch<Record<string, unknown>>(
+    "/tasks/capture/from-email",
+    {
+      method: "POST",
+      body: JSON.stringify({ account_id: accountId, email_id: emailId }),
+    }
+  );
+  const item = (res.item ?? {}) as Record<string, unknown>;
+  return {
+    title: String(item.title ?? ""),
+    created: Boolean(res.created),
+  };
+}
+
 export async function listEmailAccounts(): Promise<EmailAccount[]> {
   const raw = await gatewayFetch<Record<string, unknown>[]>("/email/accounts");
   return (raw ?? []).map(mapAccount);

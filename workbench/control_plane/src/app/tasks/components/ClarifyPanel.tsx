@@ -17,6 +17,7 @@ import {
   HardDrive,
   Cloud,
   Search,
+  Mail as MailIcon,
   type LucideIcon,
 } from "lucide-react";
 import { useTaskStore, type ClarifyDecision } from "../lib/taskStore";
@@ -263,6 +264,18 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
           <SourceBadge source={item.source} provider={item.provider} />
         </div>
         <h1 className="text-lg font-bold leading-snug text-foreground">{item.title}</h1>
+        {item.origin?.kind === "email" && (
+          <p className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+            <MailIcon className="h-3 w-3 shrink-0" />
+            <span className="truncate">
+              Captured from email — {item.origin.fromName || item.origin.fromEmail}
+              {item.origin.subject ? ` · “${item.origin.subject}”` : ""}
+            </span>
+            <a href="/email" className="tech-transition shrink-0 font-medium text-primary hover:underline">
+              Open
+            </a>
+          </p>
+        )}
         <p className="mt-1 text-[11px] text-muted-foreground">
           What is it, what&apos;s the next action, and where does it go?
         </p>

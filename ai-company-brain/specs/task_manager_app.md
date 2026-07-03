@@ -762,6 +762,22 @@ for similars), and the agent's `gtd_capture`/`gtd_capture_many` (paragraph in,
 skipped-duplicates report out). Golden-locked in
 `evals/trajectories/test_gtd_quality_trajectory.py`; browser-E2E-verified.
 
+**Email → task capture (2026-07-03)** — the email inbox is now a GTD
+capture channel (the biggest ubiquitous-capture gap from the GTD audit).
+`POST /tasks/capture/from-email {account_id, email_id}`: owner-checked
+through the mailbox, AI-drafts the capture (LLM tier1 names the ASK —
+"Approve Sanjay's revised quote" — not just the subject; deterministic
+"Email from <sender>: <subject>" fallback), files it as an INBOX item with
+`gtd_items.origin` (migration 50) linking back to the source email.
+Idempotent per email (re-capture returns the existing open item). UI:
+"Add to Tasks" in the email right-click context menu (single + bulk), the
+desktop unified toolbar, and the mobile detail toolbar; a toast confirms
+("Captured to Tasks …" / "Already in Tasks"). The clarify panel and item
+detail show the origin ("Captured from email — <sender> · <subject>" +
+open link) so processing has the context. Same GTD-audit pass also fixed:
+calendar decisions now REQUIRE a date (a hard-date item with no date was
+invisible on the Calendar view). Browser-E2E-verified 7/7.
+
 **Chat-stack state (same session, 2026-07-02)** — a full audit of the chat
 implementation (SSE · HITL · resume · multi-agent handoffs, both runtimes)
 lives in

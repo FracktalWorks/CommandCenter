@@ -106,6 +106,15 @@ export interface GtdItem {
   isHardDate?: boolean;
 
   createdAt: string;
+  /** Source linkage when the capture came from another app (email, etc.). */
+  origin?: {
+    kind: string;
+    accountId?: string;
+    emailId?: string;
+    subject?: string;
+    fromName?: string;
+    fromEmail?: string;
+  };
   updatedAt: string;
   /** set when disposition becomes DONE (e.g. the 2-minute rule) */
   completedAt?: string;

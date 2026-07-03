@@ -6,6 +6,7 @@ import {
   Reply, ReplyAll, Forward, MailOpen, Mail, Tag,
   Paperclip, Star, AlertTriangle, ChevronRight, Loader2, Check, X,
   MessagesSquare, RefreshCw, Minus, Plus,
+  ListChecks,
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { timeLabel } from "../lib/utils";
@@ -75,7 +76,7 @@ export function EmailList({
     triggerSync, selectedAccountId, syncStatus,
     availableLabels, applyLabel, applyLabelBulk, clearCategories,
     selectedIds, toggleEmailSelected, setSelectedEmails, clearEmailSelection,
-    bulkUpdateSelected, bulkDeleteSelected,
+    bulkUpdateSelected, bulkDeleteSelected, captureEmailToTasks,
   } = useEmailStore();
   const { isMobile } = useViewMode();
   const syncing = selectedAccountId
@@ -509,6 +510,11 @@ export function EmailList({
           }
           onClose={() => setCtx(null)}
           onReply={(k) => onToolbarAction(k, ctx.email)}
+          onAddToTasks={() =>
+            (ctx.bulk ? [...selected] : [ctx.email.id]).forEach((id) =>
+              captureEmailToTasks(id),
+            )
+          }
           onUpdate={(u) => updateEmail(ctx.email.id, u)}
           onDelete={() => deleteEmail(ctx.email.id)}
           onBulkUpdate={(u) => bulkUpdate(u)}
@@ -528,6 +534,7 @@ function ContextMenu({
   onClearCategories,
   onClose,
   onReply,
+  onAddToTasks,
   onUpdate,
   onDelete,
   onBulkUpdate,
@@ -541,6 +548,7 @@ function ContextMenu({
   onClearCategories: () => void;
   onClose: () => void;
   onReply: (action: string) => void;
+  onAddToTasks: () => void;
   onUpdate: (
     updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>
   ) => void;
@@ -594,6 +602,12 @@ function ContextMenu({
           </>
         )}
 
+        <CtxItem
+          icon={ListChecks}
+          label={bulk ? `Add ${count} to Tasks` : "Add to Tasks"}
+          onClick={() => run(onAddToTasks)}
+        />
+        <CtxDivider />
         <CtxItem
           icon={MailOpen}
           label="Mark as read"

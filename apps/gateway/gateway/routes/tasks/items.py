@@ -395,6 +395,12 @@ async def organize_item(
         raise HTTPException(status_code=400, detail="assignee is required")
     if req.kind == "project" and not (req.outcome or "").strip():
         raise HTTPException(status_code=400, detail="outcome is required")
+    if req.kind == "calendar" and not (req.due_at or "").strip():
+        # GTD hard landscape: a calendar decision WITHOUT a date silently
+        # produced a hard-date item with no date — invisible on the Calendar
+        # view. Refuse with the reason instead.
+        raise HTTPException(status_code=400,
+                            detail="due_at is required for a calendar decision")
 
     uid = _uid(user)
     db = await _get_db()

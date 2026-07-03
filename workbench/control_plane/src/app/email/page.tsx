@@ -75,6 +75,7 @@ export default function EmailPage() {
     composeOpen,
     composeDefaults,
     pendingSend,
+    taskCaptureNotice,
     pendingChatPrompt,
     error,
     authErrors,
@@ -882,6 +883,29 @@ export default function EmailPage() {
         onClose={() => setPaletteOpen(false)}
         commands={commands}
       />
+
+      {/* Captured-to-Tasks toast */}
+      {taskCaptureNotice && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[80] flex items-center gap-3 bg-card border border-border shadow-xl rounded-lg px-4 py-2.5 text-xs">
+          <span className="text-foreground">
+            {taskCaptureNotice.created
+              ? <>Captured to Tasks: &ldquo;{taskCaptureNotice.title}&rdquo;</>
+              : taskCaptureNotice.title.startsWith("Could not")
+                ? taskCaptureNotice.title
+                : <>Already in Tasks: &ldquo;{taskCaptureNotice.title}&rdquo;</>}
+          </span>
+          <a href="/tasks" className="text-primary font-medium hover:opacity-80">
+            Open Tasks
+          </a>
+          <button
+            onClick={() => useEmailStore.getState().clearTaskCaptureNotice()}
+            className="text-muted-foreground hover:text-foreground"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Undo-send toast */}
       {pendingSend && (

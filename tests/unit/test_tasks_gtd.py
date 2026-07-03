@@ -373,3 +373,49 @@ def test_sync_upsert_preserves_user_overlay_and_owns_completion():
     assert "coalesce(gtd_items.project_id, EXCLUDED.project_id)" in sql
     # conflict target matches the partial unique index
     assert "ON CONFLICT (account_id, provider_task_id) WHERE source <> 'LOCAL'" in sql
+
+
+# ---------------------------------------------------------------------------
+# Email → task capture (origin linkage) + calendar-date validation
+# ---------------------------------------------------------------------------
+
+from gateway.routes.tasks.capture_email import draft_task_fallback  # noqa: E402
+
+
+def test_email_capture_fallback_draft_names_sender_and_strips_reply_prefixes():
+    d = draft_task_fallback("Re: Fwd: Re: Vendor quote v2", "Sanjay Rao",
+                            "Please approve the revised quote by Friday.")
+    assert d["title"] == "Email from Sanjay Rao: Vendor quote v2"
+    assert d["notes"].startswith("Please approve")
+
+
+def test_email_capture_fallback_handles_empty_subject():
+    d = draft_task_fallback("", "", "")
+    assert d["title"] == "Handle email from someone"
+
+
+def test_email_capture_is_owner_checked_and_idempotent():
+    import inspect
+
+    from gateway.routes.tasks import capture_email
+
+    src = inspect.getsource(capture_email.capture_from_email)
+    assert "a.user_id = :uid" in src            # ownership through the mailbox
+    assert "origin->>'email_id'" in src         # idempotency per source email
+    assert "NOT IN ('DONE', 'TRASH')" in src    # only OPEN items block re-capture
+
+
+def test_calendar_decision_requires_a_date():
+    """GTD hard landscape: kind=calendar without due_at used to create a
+    hard-date item with no date — invisible on the Calendar view."""
+    import inspect
+
+    from gateway.routes.tasks import items as tasks_items
+
+    src = inspect.getsource(tasks_items.organize_item)
+    assert 'req.kind == "calendar" and not (req.due_at' in src
+
+
+def test_item_model_carries_origin():
+    from gateway.routes.tasks.core import GtdItemModel
+    assert "origin" in GtdItemModel.model_fields

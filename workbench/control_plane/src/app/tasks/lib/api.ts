@@ -69,6 +69,16 @@ function mapItem(raw: Raw): GtdItem {
     dueAt: raw.due_at ? String(raw.due_at) : undefined,
     isHardDate: Boolean(raw.is_hard_date),
     createdAt: String(raw.created_at ?? ""),
+    origin: raw.origin && typeof raw.origin === "object"
+      ? {
+          kind: String((raw.origin as Raw).kind ?? ""),
+          accountId: (raw.origin as Raw).account_id ? String((raw.origin as Raw).account_id) : undefined,
+          emailId: (raw.origin as Raw).email_id ? String((raw.origin as Raw).email_id) : undefined,
+          subject: (raw.origin as Raw).subject ? String((raw.origin as Raw).subject) : undefined,
+          fromName: (raw.origin as Raw).from_name ? String((raw.origin as Raw).from_name) : undefined,
+          fromEmail: (raw.origin as Raw).from_email ? String((raw.origin as Raw).from_email) : undefined,
+        }
+      : undefined,
     updatedAt: String(raw.updated_at ?? ""),
     completedAt: raw.completed_at ? String(raw.completed_at) : undefined,
     clarifiedAt: raw.clarified_at ? String(raw.clarified_at) : undefined,

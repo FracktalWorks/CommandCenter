@@ -489,6 +489,8 @@ if _HAS_MAF:
                     folded = await persist_final_assistant_message(
                         _thread_id, assistant_message_id,
                         user_id=user_id, agent_name="orchestrator",
+                        run_id=assistant_message_id,  # run-unique per turn
+                        model=(_resolved_model or model),
                     )
                     # Memory extraction at the SAME run boundary (P1-9): fires on
                     # finish/error/cancel/reconnect via run_detached's finally,

@@ -2230,7 +2230,17 @@ async def run_agent(
         ) from exc
 
     except Exception as exc:
-        _log.error("executor.run_error", agent=agent_name, run_id=run_id, error=str(exc))
+        # exc_info=True → the format_exc_info processor renders the full
+        # traceback; with Phase-1 correlation this log line already carries
+        # run_id/agent/user, so `journalctl … | grep <run_id>` shows the stack.
+        _log.error(
+            "executor.run_error", agent=agent_name, run_id=run_id,
+            error=str(exc), exc_info=True,
+        )
+        import traceback as _tb  # noqa: PLC0415
+        _run_tb = "".join(
+            _tb.format_exception(type(exc), exc, exc.__traceback__)
+        )[:8000]
 
         # ── Self-annealing: detect → fix in-process → retry → LLM recovery ──
         recovery = await _self_anneal(
@@ -2264,6 +2274,8 @@ async def run_agent(
                 payload={
                     "run_id": run_id,
                     "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "traceback": _run_tb,
                     "mutation_pr": pr_url,
                 },
             )
@@ -2396,6 +2408,26 @@ async def run_agent_stream(
             # ContextVar's reach (single-user deployments).
             os.environ["ACB_AGENT_USER_EMAIL"] = _mu
     except Exception:  # noqa: BLE001
+        pass
+
+    # ── Run correlation (E2 observability) ─────────────────────────────────
+    # Bind run_id/thread_id/agent/user into structlog contextvars so EVERY log
+    # line this run emits (across all tiers + injected tools on this context)
+    # carries them — the thing that makes "show me all logs for run X / agent Y"
+    # possible. Cleared in the finally below.
+    try:
+        from acb_common import bind_run_context  # noqa: PLC0415
+        _corr_user = ""
+        if isinstance(event_payload, dict):
+            _corr_user = str(
+                event_payload.get("user_email")
+                or event_payload.get("user_id") or ""
+            )
+        bind_run_context(
+            run_id=run_id, thread_id=thread_id,
+            agent=agent_name, user=_corr_user or None,
+        )
+    except Exception:  # noqa: BLE001 — logging correlation must never block a run
         pass
 
     # ── Stream relay: tee all SSE events to Redis for reconnection support ─
@@ -3907,6 +3939,11 @@ async def run_agent_stream(
                 pass
         _stream_relay_thread_id.reset(_relay_token)
         _active_run_model.reset(_model_token)
+        try:
+            from acb_common import clear_run_context  # noqa: PLC0415
+            clear_run_context()
+        except Exception:  # noqa: BLE001
+            pass
         _thread_emit_seq.pop(thread_id, None)  # P1-5 counter cleanup
         # Drop the cross-worker HITL applier for this run (P1-2).  run_detached's
         # finally also clears ALL handlers for the thread, but this generator can

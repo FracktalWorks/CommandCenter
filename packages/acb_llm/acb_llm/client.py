@@ -457,6 +457,13 @@ def _emit_usage(model: str, tier: str, response: Any) -> None:
     stats = _usage_stats(response)
     if not stats:
         return
+    # Run correlation (E2): merge_contextvars already tags this LOG line with
+    # run_id/agent/user; pull them explicitly so the AUDIT row is joinable too.
+    try:
+        from acb_common import get_run_context  # noqa: PLC0415
+        _run_ctx = get_run_context()
+    except Exception:  # noqa: BLE001
+        _run_ctx = {}
     _log.info("acb_llm.usage", model=model, tier=tier, **stats)
     if os.environ.get("LLM_USAGE_AUDIT", "0") != "1":
         return
@@ -465,10 +472,11 @@ def _emit_usage(model: str, tier: str, response: Any) -> None:
 
         def _persist() -> None:
             record(AuditEvent(
-                actor="system:acb_llm",
+                actor=f"agent:{_run_ctx.get('agent')}" if _run_ctx.get("agent")
+                else "system:acb_llm",
                 action="llm_completion",
                 target=f"model:{model}",
-                payload={"tier": tier, **stats},
+                payload={"tier": tier, **stats, **_run_ctx},
             ))
 
         try:

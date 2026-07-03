@@ -368,6 +368,8 @@ async def persist_final_assistant_message(
     *,
     user_id: str = "",
     agent_name: str = "orchestrator",
+    run_id: str = "",
+    model: str | None = None,
 ) -> dict[str, Any] | None:
     """Replay the run's event log and upsert the authoritative message row.
 
@@ -389,6 +391,28 @@ async def persist_final_assistant_message(
 
         events = await replay_events(thread_id, since_id="0-0", count=10_000)
         folded = fold_run_events(events)
+
+        # Durable per-run observability trace (E2): record the run row from the
+        # SAME replay — status/tokens/tools/error for every run, full trace for
+        # errored/flagged ones. Independent of message persistence: a run that
+        # produced no assistant message (folded is None) still gets a trace row
+        # (that itself is a debuggable outcome — e.g. an immediate error).
+        try:
+            from gateway.run_trace import record_run_trace  # noqa: PLC0415
+            _last_ms = (folded or {}).get("timestamp") or None
+            await record_run_trace(
+                run_id=run_id or message_id,  # message_id is run-unique per turn
+                thread_id=thread_id,
+                agent_name=agent_name,
+                user_id=user_id,
+                model=model,
+                events=events,
+                folded=folded,
+                ended_ms=_last_ms,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
         if folded is None:
             return None
 

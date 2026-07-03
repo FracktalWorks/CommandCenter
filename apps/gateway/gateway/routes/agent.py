@@ -1214,6 +1214,7 @@ async def run_agent_stream_endpoint(
         folded = await persist_final_assistant_message(
             thread_id, _persist_message_id,
             user_id=_mem_user, agent_name=agent_name,
+            run_id=run_id, model=req.model,
         )
         # Memory extraction at the SAME run boundary (review P1-9): the Next
         # translator only extracted while its reader was alive, so turns

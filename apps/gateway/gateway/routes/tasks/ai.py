@@ -429,13 +429,15 @@ def dedup_verdict(
 
 
 async def _llm_atomize(
-    text_: str, existing: list[dict[str, Any]]
+    text_: str, existing: list[dict[str, Any]],
+    model: str = "tier-fast",
 ) -> list[dict[str, Any]] | None:
-    """LLM splitting + dedup judgment. Returns candidate dicts
-    [{title, duplicate_of: idx|None, same: yes|maybe|no}] or None on ANY
-    failure (caller falls back to the deterministic path)."""
+    """LLM splitting + dedup judgment on the user's configured atomize model
+    (gtd_settings). Returns candidate dicts [{title, duplicate_of: idx|None,
+    same: yes|maybe|no}] or None on ANY failure (caller falls back to the
+    deterministic path)."""
     try:
-        from acb_llm.client import LLMTier, complete
+        from acb_llm.context import acompletion_with_fallback
     except Exception:
         return None
 
@@ -456,14 +458,15 @@ async def _llm_atomize(
     )
     user = f"MIND-DUMP:\n{text_.strip()[:4000]}\n\nEXISTING OPEN ITEMS:\n{numbered or '(none)'}"
     try:
-        raw = await complete(
-            tier=LLMTier.TIER_1,
+        resp, _used = await acompletion_with_fallback(
+            model=model,
+            fallback_model="tier-fast",
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": user}],
             temperature=0.0,
             max_tokens=1500,
-            enable_litellm_cache=True,
         )
+        raw = resp.choices[0].message.content or ""
         import json as _json
         start, end = raw.find("{"), raw.rfind("}")
         data = _json.loads(raw[start:end + 1])
@@ -524,6 +527,13 @@ async def atomize_dump(
         return AtomizeResponse(items=[])
 
     uid = _uid(user)
+    # Per-user model choice (gtd_settings) — cheap read, defaults on failure.
+    from gateway.routes.tasks.settings import gtd_models
+    _mdb = await _get_db()
+    try:
+        models = await gtd_models(_mdb, uid)
+    finally:
+        await _mdb.close()
     existing: list[dict[str, Any]] = []
     if req.dedup:
         db = await _get_db()
@@ -541,7 +551,7 @@ async def atomize_dump(
         finally:
             await db.close()
 
-    llm_items = await _llm_atomize(text_, existing)
+    llm_items = await _llm_atomize(text_, existing, model=models["atomize"])
     used_llm = llm_items is not None
     candidates = llm_items if llm_items is not None else [
         {"title": t, "duplicate_of": None, "same": "no"}

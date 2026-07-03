@@ -444,3 +444,50 @@ def test_agent_item_format_shows_email_origin():
     plain = _fmt_item({"id": "y" * 12, "title": "buy tape",
                        "disposition": "INBOX", "source": "LOCAL"})
     assert "from email" not in plain
+
+
+# ---------------------------------------------------------------------------
+# Per-user settings (AI tiers + toggles)
+# ---------------------------------------------------------------------------
+
+
+def test_settings_defaults_per_function():
+    """Each AI function has its own default tier (email-app parity): chat on
+    the strong tool-caller, high-volume triage on the fast tier."""
+    from gateway.routes.tasks.settings import DEFAULT_GTD_MODELS, GtdSettingsModel
+
+    assert DEFAULT_GTD_MODELS == {
+        "chat": "tier-powerful",
+        "clarify": "tier-balanced",
+        "atomize": "tier-fast",
+        "email_capture": "tier-fast",
+    }
+    s = GtdSettingsModel()
+    assert s.capture_dedup is True and s.auto_sync_on_open is True
+
+
+def test_ai_call_sites_use_configured_models():
+    """The atomizer and the email-capture drafter run on the user's
+    configured tier (gtd_settings), not a hardcoded one."""
+    import inspect
+
+    from gateway.routes.tasks import ai as tasks_ai
+    from gateway.routes.tasks import capture_email
+
+    src = inspect.getsource(tasks_ai.atomize_dump)
+    assert 'model=models["atomize"]' in src
+    src2 = inspect.getsource(capture_email.capture_from_email)
+    assert 'model=models["email_capture"]' in src2
+    # Both LLM helpers accept the model and route through the alias-aware
+    # completion path (tier-fast/-balanced/-powerful or a raw model id).
+    assert "acompletion_with_fallback" in inspect.getsource(tasks_ai._llm_atomize)
+    assert "acompletion_with_fallback" in inspect.getsource(capture_email._llm_draft)
+
+
+def test_settings_update_is_partial():
+    """PUT /tasks/settings only touches provided fields (patch semantics)."""
+    from gateway.routes.tasks.settings import GtdSettingsPatch
+
+    p = GtdSettingsPatch(capture_dedup=False)
+    fields = {k: v for k, v in p.model_dump().items() if v is not None}
+    assert fields == {"capture_dedup": False}

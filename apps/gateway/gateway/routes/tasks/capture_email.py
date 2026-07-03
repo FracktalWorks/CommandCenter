@@ -68,12 +68,14 @@ def draft_task_fallback(
 
 
 async def _llm_draft(
-    subject: str, from_name: str, from_email: str, body: str
+    subject: str, from_name: str, from_email: str, body: str,
+    model: str = "tier-fast",
 ) -> dict[str, str] | None:
-    """LLM capture draft: a title naming the concrete ASK + 1-2 lines of
-    context. None on any failure (caller uses the fallback)."""
+    """LLM capture draft on the user's configured email-capture model
+    (gtd_settings): a title naming the concrete ASK + 1-2 lines of context.
+    None on any failure (caller uses the fallback)."""
     try:
-        from acb_llm.client import LLMTier, complete
+        from acb_llm.context import acompletion_with_fallback
     except Exception:
         return None
     system = (
@@ -94,14 +96,15 @@ async def _llm_draft(
         f"BODY (may be truncated):\n{(body or '')[:3000]}"
     )
     try:
-        raw = await complete(
-            tier=LLMTier.TIER_1,
+        resp, _used = await acompletion_with_fallback(
+            model=model,
+            fallback_model="tier-fast",
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": user}],
             temperature=0.0,
             max_tokens=300,
-            enable_litellm_cache=True,
         )
+        raw = resp.choices[0].message.content or ""
         start, end = raw.find("{"), raw.rfind("}")
         data = json.loads(raw[start:end + 1])
         title = _clean_title(str(data.get("title") or ""), "")
@@ -156,8 +159,11 @@ async def capture_from_email(
         from_name = str(from_addr.get("name") or from_addr.get("email") or "")
         from_email_ = str(from_addr.get("email") or "")
 
+        from gateway.routes.tasks.settings import gtd_models
+        models = await gtd_models(db, uid)
         draft = await _llm_draft(email.subject or "", from_name, from_email_,
-                                 email.body_text or email.snippet or "")
+                                 email.body_text or email.snippet or "",
+                                 model=models["email_capture"])
         used_llm = draft is not None
         if draft is None:
             draft = draft_task_fallback(email.subject or "", from_name,

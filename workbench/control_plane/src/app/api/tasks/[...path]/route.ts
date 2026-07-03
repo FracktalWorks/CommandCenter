@@ -51,7 +51,7 @@ function buildUpstreamUrl(path: string[], req: NextRequest): string {
 }
 
 async function forward(
-  method: "GET" | "POST" | "PATCH" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   req: NextRequest,
   params: Promise<{ path: string[] }>
 ): Promise<NextResponse> {
@@ -95,6 +95,13 @@ export async function POST(
   ctx: { params: Promise<{ path: string[] }> }
 ): Promise<NextResponse> {
   return forward("POST", req, ctx.params);
+}
+
+export async function PUT(
+  req: NextRequest,
+  ctx: { params: Promise<{ path: string[] }> }
+): Promise<NextResponse> {
+  return forward("PUT", req, ctx.params);
 }
 
 export async function PATCH(

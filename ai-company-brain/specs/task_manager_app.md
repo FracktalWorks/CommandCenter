@@ -788,6 +788,17 @@ pushing an email-origin item to a PM tool appends "— Captured from email
 — <sender>: <subject>" to the task description so the assignee sees the
 source; the agent's `gtd_list` lines carry "from email: <sender>".
 
+**Per-user settings (2026-07-03)** — `gtd_settings` (migration 51) +
+`GET/PUT /tasks/settings` + a Settings dialog in the tasks sidebar (email-app
+model-roles parity, per USER since GTD is personal): pick the tier/model per
+AI function — assistant chat (default tier-powerful, the rail now locks to
+it), mind-dump atomizer/dedup (tier-fast, wired), email→task drafting
+(tier-fast, wired), clarify cognition (tier-balanced, reserved for the agent
+takeover) — options = LiteLLM tiers + the user's enabled models. Toggles:
+duplicate check on quick capture; auto-sync on open (both gate the store
+behaviours). Partial-update PUT; defaults served before a row exists. The
+/api/tasks proxy now forwards PUT.
+
 **Chat-stack state (same session, 2026-07-02)** — a full audit of the chat
 implementation (SSE · HITL · resume · multi-agent handoffs, both runtimes)
 lives in

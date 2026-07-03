@@ -1,0 +1,280 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { X, Settings2, Sparkles, Inbox, RefreshCw } from "lucide-react";
+import { useTaskStore } from "../lib/taskStore";
+import type { TaskSettings } from "../lib/api";
+
+// Task Manager settings (mirror of the email app's AI Settings): pick the
+// model tier per AI function + behaviour toggles. Same gate pattern as
+// WorkspacesModal: mounts fresh each open so local state starts clean.
+export function TaskSettingsModal() {
+  const open = useTaskStore((s) => s.settingsModalOpen);
+  if (!open) return null;
+  return <SettingsPanel />;
+}
+
+interface LLMTierInfo {
+  tier_name: string;
+}
+interface EnabledModel {
+  id: string;
+  label?: string;
+}
+
+/** The per-function model pickers, in the email app's exact idiom:
+ *  tiers (auto-routing) + the user's enabled models. */
+const MODEL_FIELDS: {
+  key: keyof Pick<
+    TaskSettings,
+    "chatModel" | "atomizeModel" | "emailCaptureModel" | "clarifyModel"
+  >;
+  title: string;
+  description: string;
+  def: string;
+}[] = [
+  {
+    key: "chatModel",
+    title: "Assistant chat model",
+    description:
+      "The model the task-manager chat rail runs on. A powerful tier is " +
+      "recommended — it drives tools (capture, clarify, organize, sync).",
+    def: "tier-powerful",
+  },
+  {
+    key: "atomizeModel",
+    title: "Mind-dump atomizer model",
+    description:
+      "Splits pasted paragraphs into atomic captures and judges duplicates. " +
+      "High-volume triage — a fast tier is recommended.",
+    def: "tier-fast",
+  },
+  {
+    key: "emailCaptureModel",
+    title: "Email → task drafting model",
+    description:
+      "Turns an email into an actionable capture title + context when you " +
+      "use “Add to Tasks” in the email app.",
+    def: "tier-fast",
+  },
+  {
+    key: "clarifyModel",
+    title: "Clarify proposals model",
+    description:
+      "Reserved for agent-driven clarify cognition. Today's proposals use " +
+      "the instant deterministic heuristic; this tier applies as the agent " +
+      "takes Clarify over.",
+    def: "tier-balanced",
+  },
+];
+
+function SettingsPanel() {
+  const close = useTaskStore((s) => s.closeSettings);
+  const backend = useTaskStore((s) => s.backend);
+  const settings = useTaskStore((s) => s.settings);
+  const updateSettings = useTaskStore((s) => s.updateSettings);
+
+  // Tier list + enabled models — the same sources the email settings use.
+  const [tiers, setTiers] = useState<LLMTierInfo[]>([]);
+  const [enabledModels, setEnabledModels] = useState<EnabledModel[]>([]);
+   
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/settings/llm")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d?.tiers) setTiers(d.tiers);
+      })
+      .catch(() => {});
+    fetch("/api/settings/llm/enabled-models")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && Array.isArray(d)) setEnabledModels(d);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+   
+
+  return (
+    <div
+      className="chat-fade-in fixed inset-0 z-[80] flex items-end justify-center bg-black/50 p-0 sm:items-start sm:p-4 sm:pt-[8vh]"
+      onClick={close}
+    >
+      <div
+        className="flex max-h-full w-full max-w-xl flex-col overflow-hidden rounded-t-2xl border-t border-border bg-card shadow-2xl pb-safe sm:max-h-[85vh] sm:rounded-2xl sm:border sm:pb-0"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* header */}
+        <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+          <Settings2 className="h-4 w-4 text-primary" />
+          <h2 className="text-sm font-semibold text-foreground">
+            Task Manager settings
+          </h2>
+          <button
+            type="button"
+            onClick={close}
+            aria-label="Close"
+            className="tech-transition ml-auto rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="flex flex-col gap-5 overflow-y-auto p-4">
+          {backend !== "live" && (
+            <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
+              The tasks backend isn&apos;t reachable — changes apply to this
+              session only and won&apos;t persist.
+            </p>
+          )}
+
+          {/* ── AI models ── */}
+          <section>
+            <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <Sparkles className="h-3.5 w-3.5" /> AI models
+            </h3>
+            <div className="flex flex-col gap-2">
+              {MODEL_FIELDS.map((cfg) => (
+                <div
+                  key={cfg.key}
+                  className="rounded-lg border border-border px-3 py-2.5"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[13px] font-medium text-foreground">
+                      {cfg.title}
+                    </p>
+                    <select
+                      value={settings[cfg.key] || cfg.def}
+                      onChange={(e) =>
+                        void updateSettings({ [cfg.key]: e.target.value })
+                      }
+                      className="tech-transition w-52 rounded-md border border-border bg-background/60 px-2 py-1 text-xs text-foreground focus:border-primary/50 focus:outline-none"
+                    >
+                      {tiers.length > 0 || enabledModels.length > 0 ? (
+                        <>
+                          {tiers.length > 0 && (
+                            <optgroup label="Tiers (auto-routing)">
+                              {tiers.map((t) => (
+                                <option key={t.tier_name} value={t.tier_name}>
+                                  {t.tier_name}
+                                  {t.tier_name === cfg.def ? " (default)" : ""}
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
+                          {enabledModels.length > 0 && (
+                            <optgroup label="Your enabled models">
+                              {enabledModels.map((m) => (
+                                <option key={m.id} value={m.id}>
+                                  {m.label || m.id}
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
+                          {/* Keep a previously-saved value selectable even if
+                              it's no longer a tier or an enabled model. */}
+                          {settings[cfg.key] &&
+                            !tiers.some(
+                              (t) => t.tier_name === settings[cfg.key],
+                            ) &&
+                            !enabledModels.some(
+                              (m) => m.id === settings[cfg.key],
+                            ) && (
+                              <option value={settings[cfg.key]}>
+                                {settings[cfg.key]}
+                              </option>
+                            )}
+                        </>
+                      ) : (
+                        <option value={settings[cfg.key] || cfg.def}>
+                          {settings[cfg.key] || cfg.def} (default)
+                        </option>
+                      )}
+                    </select>
+                  </div>
+                  <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+                    {cfg.description}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* ── Capture ── */}
+          <section>
+            <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <Inbox className="h-3.5 w-3.5" /> Capture
+            </h3>
+            <Toggle
+              title="Duplicate check on quick capture"
+              description="After a capture lands, the AI compares it against your open items in the background — confident duplicates are skipped (undoable), lookalikes ask you. Mind-sweep review always checks."
+              checked={settings.captureDedup}
+              onChange={(v) => void updateSettings({ captureDedup: v })}
+            />
+          </section>
+
+          {/* ── Sync ── */}
+          <section>
+            <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <RefreshCw className="h-3.5 w-3.5" /> Sync
+            </h3>
+            <Toggle
+              title="Sync workspaces when Tasks opens"
+              description="Pull the latest tasks from your connected PM workspaces (incremental) each time you open the app. Manual sync stays available per workspace."
+              checked={settings.autoSyncOnOpen}
+              onChange={(v) => void updateSettings({ autoSyncOnOpen: v })}
+            />
+            <p className="mt-2 px-1 text-[11px] text-muted-foreground">
+              Per-workspace connections, schema refresh, and disconnect live in
+              the Workspaces dialog.
+            </p>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Toggle({
+  title,
+  description,
+  checked,
+  onChange,
+}: {
+  title: string;
+  description: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-lg border border-border px-3 py-2.5">
+      <div className="min-w-0">
+        <p className="text-[13px] font-medium text-foreground">{title}</p>
+        <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+          {description}
+        </p>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={title}
+        onClick={() => onChange(!checked)}
+        className={[
+          "tech-transition relative mt-0.5 h-5 w-9 shrink-0 rounded-full",
+          checked ? "bg-primary" : "bg-secondary",
+        ].join(" ")}
+      >
+        <span
+          className={[
+            "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform",
+            checked ? "translate-x-4.5" : "translate-x-0.5",
+          ].join(" ")}
+        />
+      </button>
+    </div>
+  );
+}

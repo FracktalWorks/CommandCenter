@@ -36,6 +36,7 @@ export function AssistantRail() {
   const userId: string = nextAuthSession?.user?.email ?? "dev@fracktal.in";
 
   const accounts = useTaskStore((s) => s.accounts);
+  const chatModel = useTaskStore((s) => s.settings.chatModel);
   const items = useTaskStore((s) => s.items);
   const selectedView = useTaskStore((s) => s.selectedView);
   const selectedItemId = useTaskStore((s) => s.selectedItemId);
@@ -262,6 +263,8 @@ export function AssistantRail() {
             agentName={AGENT}
             sessionId={activeSession.id}
             compact
+            model={chatModel}
+            lockModel
             persona={taskContextStr}
             memories={memories}
             memoryUserId={userId}

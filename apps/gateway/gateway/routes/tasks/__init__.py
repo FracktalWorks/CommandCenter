@@ -9,6 +9,7 @@ from gateway.routes.tasks import ai as _ai  # noqa: F401
 from gateway.routes.tasks import capture_email as _capture_email  # noqa: F401
 from gateway.routes.tasks import items as _items  # noqa: F401
 from gateway.routes.tasks import people as _people  # noqa: F401
+from gateway.routes.tasks import settings as _settings  # noqa: F401
 from gateway.routes.tasks import sync as _sync  # noqa: F401
 from gateway.routes.tasks.core import router
 

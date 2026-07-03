@@ -32,6 +32,9 @@ import {
   apiRefreshSchema,
   apiSyncTasks,
   apiAtomize,
+  fetchTaskSettings,
+  updateTaskSettings,
+  type TaskSettings,
   fetchAccounts,
   fetchItems,
   fetchPeople,
@@ -359,6 +362,14 @@ interface TaskState {
   } | null;
   /** Resolve the dup notice: keep both / treat as the same (remove new). */
   resolveDupNotice: (action: "keep" | "same" | "dismiss") => void;
+  /** Per-user task-manager settings (AI tiers + toggles). Defaults render
+   *  immediately; hydrate() refreshes from the gateway. */
+  settings: TaskSettings;
+  /** Patch settings (optimistic; persisted via PUT /tasks/settings). */
+  updateSettings: (patch: Partial<TaskSettings>) => Promise<void>;
+  settingsModalOpen: boolean;
+  openSettings: () => void;
+  closeSettings: () => void;
   /** True while a provider pull (POST /tasks/sync) is in flight. */
   syncing: boolean;
   /** Pull existing provider tasks into the mirror (one account, or all),
@@ -427,6 +438,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
           // Background duplicate check (capture stays frictionless): the AI
           // compares the new capture against open items. Confident duplicate
           // → auto-remove with an undoable notice; similar → ask the user.
+          if (!get().settings.captureDedup) return;
           apiAtomize(t, { excludeIds: [server.id] })
             .then(({ items: cands }) => {
               const c = cands[0];
@@ -787,10 +799,14 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         providers,
         people,
       });
+      // Settings load in parallel (defaults already render); the auto-sync
+      // below honours the user's toggle once they arrive.
+      const settings = await fetchTaskSettings().catch(() => get().settings);
+      set({ settings });
       // Background pull: refresh the provider mirror (incremental cursor
       // makes this cheap) so Waiting/Next reflect the tool without a manual
       // sync. Fire-and-forget — the UI is already usable on cached rows.
-      if (accounts.length > 0) void get().syncNow();
+      if (accounts.length > 0 && settings.autoSyncOnOpen) void get().syncNow();
     } catch {
       // Gateway absent/unreachable → stay in demo mode on the bundled mocks.
       set({ backend: "demo" });
@@ -838,6 +854,31 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     await apiRefreshSchema(id);
     await get().refreshAccounts();
   },
+
+  settings: {
+    chatModel: "tier-powerful",
+    clarifyModel: "tier-balanced",
+    atomizeModel: "tier-fast",
+    emailCaptureModel: "tier-fast",
+    captureDedup: true,
+    autoSyncOnOpen: true,
+  },
+
+  updateSettings: async (patch) => {
+    // Optimistic: the modal reflects the change instantly; the server is the
+    // source of truth on response (and on the next hydrate if the PUT fails).
+    set((s) => ({ settings: { ...s.settings, ...patch } }));
+    if (get().backend !== "live") return;
+    try {
+      set({ settings: await updateTaskSettings(patch) });
+    } catch {
+      /* next hydrate reconciles */
+    }
+  },
+
+  settingsModalOpen: false,
+  openSettings: () => set({ settingsModalOpen: true }),
+  closeSettings: () => set({ settingsModalOpen: false }),
 
   syncing: false,
 

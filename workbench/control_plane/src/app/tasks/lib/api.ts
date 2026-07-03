@@ -293,6 +293,51 @@ export async function apiRefreshSchema(id: string): Promise<TaskAccount> {
   );
 }
 
+export interface TaskSettings {
+  chatModel: string;
+  clarifyModel: string;
+  atomizeModel: string;
+  emailCaptureModel: string;
+  captureDedup: boolean;
+  autoSyncOnOpen: boolean;
+}
+
+function mapSettings(r: Raw): TaskSettings {
+  return {
+    chatModel: String(r.chat_model ?? "tier-powerful"),
+    clarifyModel: String(r.clarify_model ?? "tier-balanced"),
+    atomizeModel: String(r.atomize_model ?? "tier-fast"),
+    emailCaptureModel: String(r.email_capture_model ?? "tier-fast"),
+    captureDedup: r.capture_dedup !== false,
+    autoSyncOnOpen: r.auto_sync_on_open !== false,
+  };
+}
+
+export async function fetchTaskSettings(): Promise<TaskSettings> {
+  return mapSettings(await gatewayFetch<Raw>(`/settings`));
+}
+
+/** Partial update — only the provided fields change. */
+export async function updateTaskSettings(
+  patch: Partial<TaskSettings>
+): Promise<TaskSettings> {
+  const body: Raw = {};
+  if (patch.chatModel !== undefined) body.chat_model = patch.chatModel;
+  if (patch.clarifyModel !== undefined) body.clarify_model = patch.clarifyModel;
+  if (patch.atomizeModel !== undefined) body.atomize_model = patch.atomizeModel;
+  if (patch.emailCaptureModel !== undefined)
+    body.email_capture_model = patch.emailCaptureModel;
+  if (patch.captureDedup !== undefined) body.capture_dedup = patch.captureDedup;
+  if (patch.autoSyncOnOpen !== undefined)
+    body.auto_sync_on_open = patch.autoSyncOnOpen;
+  return mapSettings(
+    await gatewayFetch<Raw>(`/settings`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    })
+  );
+}
+
 export interface SyncResult {
   accountId: string;
   label: string;

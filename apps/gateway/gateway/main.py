@@ -627,6 +627,14 @@ except Exception:  # pragma: no cover
     pass
 
 try:
+    # E2 Phase 3 — run diagnostics API over the agent_run trace store.
+    from gateway.routes.debug import router as _debug_router
+
+    app.include_router(_debug_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
     from gateway.routes.oauth import router as _oauth_router
 
     app.include_router(_oauth_router)

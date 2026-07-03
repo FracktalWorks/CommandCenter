@@ -1,7 +1,7 @@
 # E2 — Observability & Debugging (interaction logging + run traces)
 
-> **Status:** Phases 1+2 **shipped** (2026-07-03). Phases 3+4 designed, not built.
-> **Module:** E2 (core_module_map.md) — grade C+ → B+ after Phases 1+2.
+> **Status:** Phases 1–4 **shipped** (2026-07-03). E2 C+ → A−.
+> **Module:** E2 (core_module_map.md).
 > **Goal (user request):** log every agent/model interaction so an engineer can
 > debug "error X happened with agent Y" after the fact, and eventually run
 > feature tests against the live VPS.
@@ -78,17 +78,41 @@ reachability.
 - **Cost / token attribution** → `agent_run` token columns + the correlated
   `acb_llm.usage` lines (per agent).
 
-## Designed next — Phases 3+4 (not built)
-- **Phase 3 — Diagnostics API.** `GET /debug/runs?agent=&status=&limit=` (list)
-  and `GET /debug/runs/{run_id}` (full trace + error + tokens). Extends the
-  existing coarse `GET /agent/run/{id}/status` (`agent.py:1571`). This is what
-  lets me query prod without SSH, and lets a UI panel surface failures.
-- **Phase 4 — VPS feature-test harness.** Build on the EXISTING live-VPS suite
-  `tests/integration/test_chat_features.py` (env-configurable gateway/token/
-  agents; already covers SSE/thinking/tools/HITL/delegation/memory/artifacts/
-  reconnection) — turn it into a one-command "exercise chat + each AI app,
-  assert each completes, capture the trace, report pass/fail per feature" run
-  over SSH against the live VPS.
+## Phase 3 — Diagnostics API (`apps/gateway/gateway/routes/debug.py`)
+Read-only, EXECUTIVE/AGENT-gated (a trace can hold message content):
+- `GET /debug/runs?agent=&status=&user=&thread_id=&since_hours=&limit=` — list
+  recent runs newest-first, all filters AND-combined, `limit` clamped [1,500].
+  **Lean rows — no `trace` blob** (that's the detail view). Invalid status → 400.
+- `GET /debug/runs/{run_id}` — full record: metadata + tokens + error +
+  traceback + the folded `trace` (present only per the retention policy). 404 if
+  unknown.
+- `POST /debug/runs/{run_id}/flag` — set `flagged=true` to keep a run's trace.
+
+This is what lets me query prod **without SSH** (and a UI panel could surface
+failures). Extends the coarse `GET /agent/run/{id}/status` (`agent.py:1571`).
+Verified end-to-end via TestClient against the live DB: filters, the lean-vs-
+full split, retention honored through the API, the EXECUTIVE gate (employee →
+403), and 404s.
+
+## Phase 4 — VPS feature-check harness (`scripts/feature_check.py`)
+One command, human-readable pass/fail table (or `--json`), CI/monitoring exit
+code (non-zero on any fail):
+
+    cd /opt/acb/app && uv run python scripts/feature_check.py
+
+Checks: `health`, `debug_api` (the diagnostics API must itself be up),
+`chat_maf` and `chat_copilot` (drive `/agent/run/stream` on each runtime, assert
+`RUN_FINISHED` + text + no `RUN_ERROR`). For each run it then looks up the E2
+**run trace** (`GET /debug/runs/{run_id}`) and prints the durable status — and on
+failure prints the exact `GET /debug/runs/{id}` + `journalctl | grep <run_id>`
+lines to debug. Shares the `CC_*` env config with the exhaustive
+`tests/integration/test_chat_features.py` (which stays the CI-depth suite; this
+is the fast operator "is it up, and where's it broken?" sweep). `--only <name>`
+runs a single check.
+
+Debugging loop is now fully self-serve: `feature_check.py` says WHAT broke +
+the run_id → `GET /debug/runs/{id}` gives the full trace + traceback, no SSH
+needed (SSH `journalctl` remains available for the correlated log stream).
 
 ## Tests
 - `tests/unit/test_observability.py` (11): contextvar bind/clear (no leak),
@@ -100,3 +124,8 @@ reachability.
 
 ## Status
 - 2026-07-03 — Phases 1+2 shipped. E2 C+ → B+.
+- 2026-07-03 — Phases 3+4 shipped. E2 B+ → A−. `/debug/runs` diagnostics API
+  (`routes/debug.py`, registered in main.py) + `scripts/feature_check.py`
+  one-command live sweep. 9 debug-route integration tests (TestClient vs live
+  DB) + 3 harness unit tests; full suite 667 green. OTLP trace-backend export
+  remains the only deferred item (dormant, gated on `OTEL_EXPORTER_OTLP_ENDPOINT`).

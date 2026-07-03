@@ -43,6 +43,8 @@ export interface ClarifyProposal {
   confidence: Confidence;
   /** short why, shown under the proposal */
   rationale: string;
+  /** provider stage default for the destination (server proposal only) */
+  status?: string;
 }
 
 /** Map a GTD disposition to a sensible provider stage/status.

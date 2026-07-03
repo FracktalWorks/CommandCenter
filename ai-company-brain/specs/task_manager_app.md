@@ -727,8 +727,16 @@ capability-aware delegation); GTD agent tool surface.
    scheduler still later (Phase 4).
 2. Slice 3 — Engage "Now" view (F4, 4-criteria selection).
 3. Weekly Review wizard (F5) + Waiting-For monitoring surfaces (F6).
-4. Wire the task-manager agent into the Tasks assistant rail (F9; agent chat
-   currently runs via the generic `/agent` route).
+4. ✅ *(2026-07-03)* Tasks assistant rail (F9): AssistantRail is a live
+   AgentChat wrapper pinned to `task-manager` (email-app pattern) — shared
+   sessions, Mem0 memories, live GTD persona (`taskAssistantPersona.ts`:
+   workspaces + current view + open item + inbox pressure), quick actions →
+   composer. Same slice also wired the **server AI clarify proposal** into
+   ClarifyPanel (`apiClarifyPropose`: instant local heuristic, server
+   upgrade with org-knowledge capability match applied only while the form
+   is untouched). Browser-E2E-verified: capture → persist → clarify (server
+   proposal, "Rahul fits…") → accept → NEXT view → reload-persist → mind
+   sweep → rail quick actions.
 5. Live workload sync for `gtd_people` + overload warnings (§6.1 later-list).
 6. OAuth connect flow; more connectors (Asana/Jira/Linear); generic MCP connector.
 

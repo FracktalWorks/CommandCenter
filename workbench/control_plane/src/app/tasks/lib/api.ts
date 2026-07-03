@@ -4,6 +4,7 @@
 // falls back to the bundled mock data when it isn't (UI-first demo mode).
 
 import { GtdItem, GtdProject, Person, Source, ProviderKind, Disposition } from "./types";
+import type { ClarifyProposal, ClarifyDisposition, Confidence } from "./clarify";
 import type { ConnectedProvider } from "./mockData";
 
 async function gatewayFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -313,4 +314,34 @@ export async function apiSyncTasks(opts?: {
     completed: Number(r.completed ?? 0),
     error: r.error ? String(r.error) : undefined,
   }));
+}
+
+/** Server-side AI clarify proposal for one inbox item (§2.2 agent seam).
+ *  Richer than the local heuristic: org-knowledge capability matching
+ *  (people skills + availability), server project auto-match, and the
+ *  destination/stage defaults. Same shape as lib/clarify.ts's proposal. */
+export async function apiClarifyPropose(id: string): Promise<ClarifyProposal> {
+  const r = await gatewayFetch<Raw>(`/items/${id}/clarify`, { method: "POST" });
+  const accountId = r.account_id ? String(r.account_id) : undefined;
+  return {
+    actionable: Boolean(r.actionable),
+    disposition: String(r.disposition ?? "NEXT") as ClarifyDisposition,
+    nextAction: String(r.next_action ?? ""),
+    outcome: r.outcome ? String(r.outcome) : undefined,
+    context: r.context ? String(r.context) : undefined,
+    energy: (r.energy ?? undefined) as ClarifyProposal["energy"],
+    timeEstimateMins: r.time_estimate_mins
+      ? Number(r.time_estimate_mins)
+      : undefined,
+    isTwoMinute: Boolean(r.is_two_minute),
+    suggestedAssignee: asPerson(r.suggested_assignee),
+    target: accountId
+      ? { source: "SYNCED", accountId }
+      : { source: "LOCAL", provider: "local" },
+    projectId: r.project_id ? String(r.project_id) : undefined,
+    projectInferred: Boolean(r.project_inferred),
+    confidence: String(r.confidence ?? "medium") as Confidence,
+    rationale: String(r.rationale ?? ""),
+    status: r.status ? String(r.status) : undefined,
+  };
 }

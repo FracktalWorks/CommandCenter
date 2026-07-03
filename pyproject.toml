@@ -25,6 +25,11 @@ dependencies = [
     "ingestion",
     "reconciler",
     "action-broker",
+    # Skill packages imported by the root test suite / evals — must be installed
+    # into the shared venv by `uv sync` or CI fails with ModuleNotFoundError
+    # (they resolve locally only because a dev venv already has them editable).
+    "skill-task-gtd",
+    "skill-clickup-sync",
     "bcrypt>=5.0.0",
     "python-multipart>=0.0.32",
 ]
@@ -63,6 +68,8 @@ ingestion     = { workspace = true }
 reconciler    = { workspace = true }
 action-broker  = { workspace = true }
 email-ingestion = { workspace = true }
+skill-task-gtd  = { workspace = true }
+skill-clickup-sync = { workspace = true }
 
 # ---------- Tooling config ----------
 

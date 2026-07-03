@@ -386,6 +386,8 @@ dependencies = [
     { name = "orchestrator" },
     { name = "python-multipart" },
     { name = "reconciler" },
+    { name = "skill-clickup-sync" },
+    { name = "skill-task-gtd" },
 ]
 
 [package.dev-dependencies]
@@ -418,6 +420,8 @@ requires-dist = [
     { name = "orchestrator", editable = "apps/orchestrator" },
     { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "reconciler", editable = "apps/reconciler" },
+    { name = "skill-clickup-sync", editable = "apps/skill-clickup-sync" },
+    { name = "skill-task-gtd", editable = "apps/skill-task-gtd" },
 ]
 
 [package.metadata.requires-dev]

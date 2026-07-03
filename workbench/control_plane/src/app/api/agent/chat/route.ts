@@ -427,22 +427,27 @@ async function translateAndPersistStream(
           if (unfolded.reasoningBlocks && unfolded.reasoningBlocks !== reasoningBlocks) {
             reasoningBlocks.splice(0, reasoningBlocks.length, ...unfolded.reasoningBlocks);
           }
-          // Segment ground truth (Phase 3b): when the runtime emitted real
-          // segments the LAST segment IS the answer — no inference. If the fold
-          // heuristic still left content empty (its known miss: turn ended on a
-          // tool with a cursor miss), promote the last segment back, blanking the
-          // matching folded block so every reasoningCutoff index stays aligned.
-          // Mirror of chat_fold.py's segment-rescue so both persisters agree.
-          if (segments.length > 0 && !assistantContent.trim()) {
-            const lastText = segments[segments.length - 1].text;
-            if (lastText.trim()) {
-              for (let i = reasoningBlocks.length - 1; i >= 0; i--) {
-                if (reasoningBlocks[i].trim() === lastText.trim()) {
-                  reasoningBlocks[i] = "";
-                  break;
+          // Segment ground truth (Phase 3c — VS Code parity): when the runtime
+          // emitted real segments, EVERY assistant text segment is answer body,
+          // not just the last — assistant text emitted before a tool call is
+          // answer content, not thinking-pane narration. `content` is the full
+          // answer = all non-empty segments joined (matching the renderer's
+          // answerBody and chat_fold.py's fold so both persisters agree). Blank
+          // any segment text the tool-boundary fold stranded in reasoning so it
+          // isn't shown twice.
+          if (segments.length > 0) {
+            const segTexts = segments.map((s) => s.text).filter((t) => t.trim());
+            const joined = segTexts.join("\n\n");
+            if (joined.trim()) {
+              for (const st of segTexts) {
+                for (let i = reasoningBlocks.length - 1; i >= 0; i--) {
+                  if (reasoningBlocks[i].trim() === st.trim()) {
+                    reasoningBlocks[i] = "";
+                    break;
+                  }
                 }
               }
-              assistantContent = lastText;
+              assistantContent = joined;
             }
           }
           out = { type: "done", run_id: ev.runId || ev.run_id };

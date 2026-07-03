@@ -223,19 +223,21 @@ export function applyStreamEvent(
       if ((m.toolEvents ?? []).some((t) => t.id === toolId)) return m;
       const isDelegate = String(evt.name ?? "").toLowerCase().includes("call_agent");
       const hasSegments = (m.segments?.length ?? 0) > 0;
-      // VS Code-style narration fold: text emitted BEFORE a tool call is the
-      // model narrating its plan ("Let me check…"), not the final answer.  Move
-      // it into the thinking timeline; only text after the LAST tool call
-      // remains as the visible answer.
+      // Phase 3c (VS Code parity): when the runtime supplied real segment ids,
+      // EVERY assistant text segment is answer body — including text emitted
+      // before this tool call (it is answer content, not disposable narration).
+      // The SEGMENTS hold every piece of assistant text and the renderer builds
+      // the body from ALL of them, interleaving tool cards via segmentCutoff. So
+      // we must NOT fold `content` into reasoningBlocks (that would wrongly bury
+      // answer text in the thinking pane — the startup-guru bug). We still clear
+      // the live `content` scratch so it doesn't double-render alongside the
+      // segment-derived body; segments are the source of truth. reasoningBlocks
+      // holds ONLY genuine chain-of-thought (THINKING_TEXT_MESSAGE_CONTENT).
       //
-      // Phase 3b: when the runtime supplied real segment ids, the SEGMENTS
-      // already hold every piece of assistant text (narration + answer) — so we
-      // must NOT also fold `content` into reasoningBlocks (that would duplicate
-      // the narration: once as a segment, once as a reasoning block). We still
-      // clear the live `content` so a stale pre-tool narration doesn't linger as
-      // the answer body; the renderer rebuilds the body from the last segment.
-      // reasoningBlocks then holds ONLY genuine chain-of-thought
-      // (THINKING_TEXT_MESSAGE_CONTENT), which segments never capture.
+      // Legacy id-less runtimes (no segments) keep the old fold: their pre-tool
+      // text goes to the timeline, since there's no segment ground truth to
+      // render inline. Those runtimes never emitted structured answer text
+      // before tools anyway.
       const narration = m.content.trim();
       const { blocks, cutoff } = hasSegments
         ? { blocks: m.reasoningBlocks ?? [], cutoff: m.reasoningBlocks?.length ?? 0 }

@@ -331,18 +331,21 @@ test.describe("Unified chat interface", () => {
     expect(requests[1]?.message).toBe("Use tighter language");
   });
 
-  test("renders a multi-segment turn segment-native: narration in the timeline, last segment as the answer body (Phase 3b)", async ({ page }) => {
-    // A real message-id-native run: the model narrates ("Let me check…") in
-    // segment m-1, calls a tool, then answers in segment m-2. The renderer must
-    // put the LAST segment in the answer body and the earlier segment in the
-    // ThinkingContainer timeline — ground truth, no fold heuristic.
+  test("renders a multi-segment turn VS Code-style: ALL assistant text is body, tools stay in the thinking timeline (Phase 3c)", async ({ page }) => {
+    // A real message-id-native run: the model emits substantive answer text in
+    // segment m-1 ("Here's the current state…"), calls a tool, then continues
+    // the answer in segment m-2. BOTH text segments are answer content the user
+    // must see in the chat BODY — assistant text a model happens to emit before
+    // a tool call is NOT disposable narration to bury in the thinking container.
+    // Only the tool call belongs in the ThinkingContainer timeline. This is the
+    // startup-guru bug: pre-tool answer text was landing in the thinking pane.
     const requests: ChatRequest[] = [];
     await installChatMocks(
       page,
       () => ({
         events: [
           { type: "message_start", messageId: "m-1" },
-          { type: "delta", content: "Let me check your inbox first.", messageId: "m-1" },
+          { type: "delta", content: "Here's the current state of your inbox.", messageId: "m-1" },
           { type: "message_end", messageId: "m-1" },
           { type: "tool_start", id: "tool-1", name: "query_inbox", args: { account_id: "a1" } },
           { type: "tool_end", id: "tool-1", name: "query_inbox", success: true, result: "2 unread" },
@@ -360,24 +363,20 @@ test.describe("Unified chat interface", () => {
     await page.getByPlaceholder(/Message orchestrator/i).fill("Any new mail?");
     await page.getByRole("button", { name: "Send", exact: true }).click();
 
-    // The final answer (last segment) renders as the message BODY paragraph —
-    // scope to the paragraph role so the sidebar session-preview snippet (which
-    // also shows the last message) doesn't count.
+    // BOTH assistant text segments render as message BODY paragraphs — the
+    // pre-tool text is answer content, not thinking-pane narration. Scope to the
+    // paragraph role so the sidebar session-preview snippet doesn't count.
+    await expect(
+      page.getByRole("paragraph").filter({ hasText: "Here's the current state of your inbox." }),
+    ).toBeVisible({ timeout: 5_000 });
     await expect(
       page.getByRole("paragraph").filter({ hasText: "You have 2 unread emails." }),
-    ).toBeVisible({ timeout: 5_000 });
+    ).toBeVisible();
 
-    // The tool row is present in the thinking timeline ("Searched Query Inbox").
+    // The tool row is still present in the thinking timeline ("Searched Query Inbox").
     await expect(
       page.getByRole("button", { name: /Searched\s+Query Inbox/i }),
     ).toBeVisible();
-
-    // The narration SEGMENT ("Let me check…") renders in the timeline…
-    await expect(page.getByText("Let me check your inbox first.")).toBeVisible();
-    // …but must NOT leak into the answer body — it is never a message paragraph.
-    await expect(
-      page.getByRole("paragraph").filter({ hasText: "Let me check your inbox first." }),
-    ).toHaveCount(0);
   });
 
   test("renders an agent-pushed generative-UI tree inline, and a button action sends a follow-up", async ({ page }) => {

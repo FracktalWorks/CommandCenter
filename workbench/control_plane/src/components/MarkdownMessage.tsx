@@ -269,30 +269,35 @@ export default function MarkdownMessage({
   sessionId,
   mdFilePath,
 }: MarkdownMessageProps) {
-  // ── Segment-native rendering (Phase 3b) ────────────────────────────────────
-  // When the runtime supplied real segment ids, the LAST segment is the answer
-  // and earlier segments are narration shown in the timeline — ground truth, no
-  // fold heuristic. Absent ids (litellm/langgraph/legacy rows) → fall back to
-  // `content` + folded reasoningBlocks exactly as before.
+  // ── Segment-native rendering (Phase 3c — VS Code parity) ────────────────────
+  // Every assistant TEXT segment is answer BODY, rendered inline in
+  // chronological order. Assistant text a model emits *before* a tool call
+  // ("Here's the current state: … Let me fix this now.") is real answer content
+  // the user must see in the chat — NOT disposable narration to bury in the
+  // thinking container. Only genuine chain-of-thought
+  // (THINKING_TEXT_MESSAGE_CONTENT → reasoningBlocks) and tool calls belong in
+  // the ThinkingContainer. This corrects the earlier last-segment-only split
+  // that swept pre-tool answer text into the thinking pane.
+  //
+  // Absent segment ids (litellm/langgraph/legacy rows) → fall back to `content`
+  // exactly as before (those runtimes never populated segments).
   const hasSegments = !!(segments && segments.length > 0);
   const answerBody = hasSegments
-    // Last segment is the answer; while it's still empty mid-stream (tool just
-    // opened a new segment, no text yet) fall back to `content` so nothing
-    // flickers away.
-    ? (segments![segments!.length - 1].text.trim()
-        ? segments![segments!.length - 1].text
-        : content)
+    // Join every non-empty segment in order — the full assistant answer,
+    // including any prose emitted between tool calls. Blank a stale trailing
+    // empty segment (a tool just opened a new one, no text yet) so nothing
+    // flickers. Fall back to `content` if segments somehow hold no text.
+    ? (segments!.map((s) => s.text).filter((t) => t.trim()).join("\n\n")
+        || content)
     : content;
-  // Narration segments = everything but the last, non-empty, in order.
-  const narrationSegments = hasSegments
-    ? segments!.slice(0, -1).map((s) => s.text).filter((t) => t.trim())
-    : [];
+  // Assistant text NEVER goes to the ThinkingContainer anymore — it's body.
+  const narrationSegments: string[] = [];
 
   const hasTools =
     (toolEvents && toolEvents.length > 0) ||
     (progressLines && progressLines.length > 0);
   const hasReasoning = !!(reasoningBlocks && reasoningBlocks.length > 0);
-  const hasNarration = narrationSegments.length > 0;
+  const hasNarration = false;
   // Show the ThinkingContainer for the ENTIRE active phase (not just until the
   // first token). The container disappears mid-stream if we gate on content===""
   // — the user sees "Thinking…" flash then nothing while text is still arriving.

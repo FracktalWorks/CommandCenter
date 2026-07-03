@@ -156,11 +156,13 @@ def test_segments_persist_alongside_todos():
     }
 
 
-def test_segment_native_does_not_double_fold_narration():
-    """Phase 3b: with real segment ids, the pre-tool narration lives ONLY in
-    segments — it must NOT also be folded into reasoning_blocks (that would
-    duplicate it). reasoning_blocks then holds only genuine chain-of-thought,
-    and each tool records segmentCutoff = segment count at its start."""
+def test_segment_native_all_text_is_body_vscode_style():
+    """Phase 3c (VS Code parity): EVERY assistant text segment is answer body,
+    including text emitted BEFORE a tool call. `content` is the full answer =
+    all non-empty segments joined; genuine chain-of-thought stays in
+    reasoning_blocks; assistant text is never double-folded there. Each tool
+    still records segmentCutoff = segment count at its start (for interleaving
+    the tool card between the body segments on render)."""
     events = [
         _ev("TEXT_MESSAGE_START", 900, messageId="m-1"),
         _ev("TEXT_MESSAGE_CONTENT", 1000, delta="Let me check the inbox.",
@@ -175,20 +177,21 @@ def test_segment_native_does_not_double_fold_narration():
     ]
     folded = fold_run_events(events)
     assert folded is not None
-    # Last segment is the answer body.
-    assert folded["content"] == "You have 2 new emails."
-    # Both real segments preserved in order.
+    # BOTH assistant text segments are the answer body — the pre-tool text is
+    # answer content, not thinking-pane narration (the startup-guru fix).
+    assert folded["content"] == "Let me check the inbox.\n\nYou have 2 new emails."
+    # Both real segments preserved in order (renderer reads these for inline
+    # display; content is the flat mirror).
     assert folded["agent_state"]["segments"] == [
         {"id": "m-1", "text": "Let me check the inbox."},
         {"id": "m-2", "text": "You have 2 new emails."},
     ]
-    # reasoning_blocks holds ONLY the genuine chain-of-thought — the narration
-    # "Let me check the inbox." must NOT appear there (no double-fold).
+    # reasoning_blocks holds ONLY the genuine chain-of-thought — no assistant
+    # text ("Let me check the inbox.") is ever double-folded there.
     blocks = json.loads(folded["reasoning"])
     assert "The provider was slow." in blocks
     assert not any("Let me check the inbox." in b for b in blocks)
-    # segmentCutoff records "1 segment existed when t1 started"; reasoningCutoff
-    # stays 0 because nothing was folded on the segment path.
+    # segmentCutoff records "1 segment existed when t1 started".
     [tool] = folded["tool_events"]
     assert tool["segmentCutoff"] == 1
     assert tool["reasoningCutoff"] == 0

@@ -285,20 +285,29 @@ def fold_run_events(events: list[dict[str, Any]]) -> dict[str, Any] | None:
                 content, reasoning_blocks, folded_answer_idx,
             )
 
-    # ── Segment ground truth (Phase 3a) ─────────────────────────────────────
-    # When the runtime emitted real message segments, the LAST segment's text
-    # IS the answer — no inference. If the fold heuristic left the answer
-    # stranded in the timeline (its known failure class: runs ending on a
-    # tool call with a cursor miss), promote it back, blanking the matching
-    # folded block so every tool's reasoningCutoff index stays aligned.
-    if segments and not content.strip():
-        last_text = segments[-1]["text"]
-        if last_text.strip():
-            for i in range(len(reasoning_blocks) - 1, -1, -1):
-                if reasoning_blocks[i].strip() == last_text.strip():
-                    reasoning_blocks[i] = ""
-                    break
-            content = last_text
+    # ── Segment ground truth (Phase 3c — VS Code parity) ────────────────────
+    # When the runtime emitted real message segments, EVERY assistant text
+    # segment is answer body — not just the last. Assistant text emitted before
+    # a tool call ("Here's the current state… Let me fix this now.") is answer
+    # content, so `content` is the full answer = all non-empty segments joined,
+    # matching the renderer's `answerBody`. (Earlier logic used only the last
+    # segment, which dropped pre-tool answer text from `content` — the sidebar
+    # preview, copy/edit, and any non-segment consumer then lost it.) The
+    # renderer reads `segments` directly for inline display; `content` is the
+    # flat mirror for everything else.
+    if segments:
+        _seg_texts = [s["text"] for s in segments if s["text"].strip()]
+        _joined = "\n\n".join(_seg_texts)
+        if _joined.strip():
+            # Any segment text that the tool-boundary fold stranded in the
+            # reasoning timeline is genuine answer text — blank those blocks so
+            # it isn't shown twice (once as body, once in the thinking pane).
+            for _st in _seg_texts:
+                for i in range(len(reasoning_blocks) - 1, -1, -1):
+                    if reasoning_blocks[i].strip() == _st.strip():
+                        reasoning_blocks[i] = ""
+                        break
+            content = _joined
 
     if not (
         content.strip() or tool_events or reasoning_blocks

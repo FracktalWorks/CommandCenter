@@ -49,8 +49,6 @@ def test_memory_client_disabled_when_mem0_not_enabled() -> None:
     
     Uses monkeypatch to force mem0_enabled=False regardless of .env value.
     """
-    from unittest.mock import patch
-
     import acb_memory.mem0_client
 
     from acb_common import get_settings

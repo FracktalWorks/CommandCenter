@@ -11,6 +11,7 @@ from acb_llm.context import (
     fit_messages_to_context,
     resolve_underlying_model,
 )
+from acb_llm.message_compress import compress_message_content
 from acb_llm.tool_output import compress_tool_output, is_compressible_tool
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "assemble_run_context",
     "complete",
     "complete_with_tools",
+    "compress_message_content",
     "compress_tool_output",
     "context_window_for",
     "count_message_tokens",

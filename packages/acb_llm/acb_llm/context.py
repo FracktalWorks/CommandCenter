@@ -26,6 +26,8 @@ from typing import Any
 
 from acb_common import get_logger
 
+from acb_llm.message_compress import compress_message_content
+
 _log = get_logger("acb_llm.context")
 
 # Conservative input-token budgets for the gateway tier aliases. Mirrors
@@ -163,10 +165,11 @@ def fit_messages_to_context(
         content = out[idx]["content"]
         body_len = len(content) - (len(_TRUNCATION_MARKER) if _TRUNCATION_MARKER in content else 0)
         keep = max(200, int(body_len * 0.7))
-        head = (keep * 3) // 4
-        tail = keep - head
-        out[idx]["content"] = (
-            content[:head] + _TRUNCATION_MARKER + (content[-tail:] if tail else "")
+        # Structure-aware: preserve an email thread's newest message / JSON
+        # shape instead of slicing mid-structure; falls back to the prior
+        # head+tail char-slice on anything unrecognized (never regresses).
+        out[idx]["content"] = compress_message_content(
+            content, keep, marker=_TRUNCATION_MARKER,
         )
         truncated = True
 

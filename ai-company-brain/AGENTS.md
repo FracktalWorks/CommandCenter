@@ -108,6 +108,7 @@ Status: 🟢 live/shipped · 🔄 in progress · 🔲 planned/not started. *(Ind
 | [`artifact_viewer.md`](specs/artifact_viewer.md) | Right-sidebar file browser + inline document viewer | 🔲 M3 target |
 | [`llm_caching_memory.md`](specs/llm_caching_memory.md) | Prompt caching + session-scoped memory (ADR-008) | 🔲 Phase 2 |
 | [`mcp_plugin_integration.md`](specs/mcp_plugin_integration.md) | MCP servers vs Claude plugins vs REST — design proposal | 🔲 brainstorm |
+| [`dev_velocity_tooling_2026-07.md`](specs/dev_velocity_tooling_2026-07.md) | **Dev-velocity tooling** — keeping a large codebase agent-developable: L1 complexity/correctness/mypy gates (grandfather-and-ratchet), L2 CodeGraph MCP (`.mcp.json`), L3 weekly code-health workflow + `codebase_health_audit` skill (flag-only) | 🟢 Phases 1-3 shipped (2026-07-04) |
 
 ---
 

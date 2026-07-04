@@ -1264,7 +1264,7 @@ async def _apply_rule_actions(
                     from gateway.routes.email.core import (  # noqa: PLC0415
                         hydrate_message_body,
                     )
-                    _hb = await hydrate_message_body(db, str(message_id), account_user)
+                    _hb = await hydrate_message_body(db, str(message_id), user_email)
                     draft_email = {
                         **email,
                         "body": (_hb or "").strip() or email.get("body", ""),

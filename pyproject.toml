@@ -45,6 +45,10 @@ dev = [
     "httpx>=0.27",
     "pre-commit>=4.0",
     "ipython>=8.29",
+    # Complexity / maintainability gates (see § Complexity gate below).
+    # radon = reporting (cc + mi); xenon = CI enforcement (fails past threshold).
+    "radon>=6.0",
+    "xenon>=0.9",
 ]
 
 [tool.uv.workspace]
@@ -79,12 +83,22 @@ target-version = "py312"
 extend-exclude = ["workbench", "infra"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W", "B", "UP", "SIM", "RUF"]
+select = ["E", "F", "I", "W", "B", "UP", "SIM", "RUF", "C90"]
 ignore = [
     "E501",    # line length handled by formatter
     "B008",    # function-call-in-default-arg — FastAPI Depends() pattern
     "RUF006",  # asyncio-dangling-task — intentional fire-and-forget relays
 ]
+
+[tool.ruff.lint.mccabe]
+# Grandfather-and-ratchet: the repo has legacy functions up to cc=223
+# (executor.run_agent_stream). This gate targets NEW code — 15 is a
+# generous ceiling that current well-factored code clears. The ~108 legacy
+# functions above 15 are tracked for refactor, not force-failed here; the
+# CI job runs C90 as a diff-scoped report (see .github/workflows/pr-check.yml)
+# and xenon owns the absolute grandfathered ceiling. Ratchet 15 → 12 → 10
+# as the legacy tail is paid down.
+max-complexity = 15
 
 [tool.ruff.format]
 quote-style = "double"

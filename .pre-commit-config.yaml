@@ -1,0 +1,54 @@
+# Pre-commit hooks for CommandCenter.
+#
+# Grandfather-and-ratchet philosophy: every hook here is diff-scoped —
+# pre-commit only runs against STAGED files, so legacy code is never
+# force-touched. New and edited code must pass; the ~250 not-yet-formatted
+# and ~37 over-complex legacy files are paid down incrementally, not in a
+# big-bang rewrite.
+#
+# Setup (once per clone):   uv run pre-commit install
+# Run manually on a diff:   uv run pre-commit run
+# Run on the whole repo:    uv run pre-commit run --all-files   (opt-in only)
+#
+# Scope note: Python only. The workbench/ (Next.js) and infra/ trees are
+# excluded here and gated by their own eslint config / CI.
+
+exclude: '^(workbench/|infra/|__pycache__/|.*\.egg-info/)'
+
+repos:
+  # --- Ruff: lint + format, pinned to match the dev dependency ---
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.10
+    hooks:
+      # Lint (incl. C901 complexity at max-complexity=15 from pyproject).
+      # --fix auto-repairs the safe ones; anything left blocks the commit.
+      - id: ruff
+        args: [--fix]
+      # Format staged files only. Does NOT reformat the whole repo —
+      # legacy files reformat organically the next time they're touched.
+      - id: ruff-format
+
+  # --- mypy: strict type check (config in pyproject [tool.mypy]) ---
+  # Diff-scoped and non-blocking-in-CI initially (see pr-check.yml), but
+  # locally it surfaces type errors on the code you're actually changing.
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.18.2
+    hooks:
+      - id: mypy
+        # Use the project's own resolution rather than the isolated hook env,
+        # so workspace packages + stubs are visible.
+        pass_filenames: false
+        entry: uv run mypy
+        language: system
+        types: [python]
+
+  # --- Hygiene: strip the UTF-8 BOMs that break radon/xenon/other parsers ---
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: fix-byte-order-marker
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]

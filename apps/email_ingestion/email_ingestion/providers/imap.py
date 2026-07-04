@@ -235,7 +235,10 @@ class IMAPProvider(BaseEmailProvider):
             if s != "OK" or not data:
                 raise ValueError(f"Message not found: {provider_message_id}")
 
-            return _parse_imap_full_message(data)
+            messages = _parse_imap_fetch_full(data)
+            if not messages:
+                raise ValueError(f"Message not found: {provider_message_id}")
+            return messages[0]
 
         return await asyncio.to_thread(_get)
 

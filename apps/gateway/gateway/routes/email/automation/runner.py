@@ -1257,8 +1257,17 @@ async def _apply_rule_actions(
                 if tmpl:
                     body = tmpl
                 else:
+                    # Hydrate the FULL incoming body before AI drafting — a
+                    # header-only row (Outlook/Graph) otherwise hands the drafter
+                    # a ~200-char snippet cut off mid-sentence. Just-in-time for
+                    # the one message being drafted (no batch-wide provider cost).
+                    from gateway.routes.email.core import (  # noqa: PLC0415
+                        hydrate_message_body,
+                    )
+                    _hb = await hydrate_message_body(db, str(message_id), account_user)
                     draft_email = {
                         **email,
+                        "body": (_hb or "").strip() or email.get("body", ""),
                         "thread": await _fetch_thread_context(
                             db, account_id, email.get("thread_id", ""),
                             provider_msg_id) if email.get("thread_id") else "",

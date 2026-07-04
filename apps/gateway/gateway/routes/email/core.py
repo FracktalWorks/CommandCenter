@@ -183,6 +183,64 @@ async def _persist_rotated_creds(db: Any, store: Any, account_id: str, provider)
         )
 
 
+async def hydrate_message_body(db: Any, message_id: str, user_email: str) -> str:
+    """Ensure a message's full ``body_text`` is present, fetching it if needed.
+
+    Some providers (notably Outlook/Graph) sync message *headers* only, so the
+    stored ``body_text`` is empty and only a ~200-char ``snippet`` exists.  Any
+    consumer that does ``body_text or snippet`` then silently operates on the
+    200-char preview — which for the reply drafter meant it saw the incoming
+    message cut off mid-sentence (e.g. "…I am ava") and wrote that truncation
+    into the draft.  This helper fetches the full body from the provider ONCE
+    and persists it, so the drafter (and any other reader) gets the real body.
+
+    Returns the full ``body_text`` (possibly still empty if the provider has no
+    text body, e.g. a pure-HTML or attachment-only message).  Best-effort: a
+    provider/auth failure logs and returns whatever is already stored — never
+    raises, so it can't break a draft/classify call.
+    """
+    row = (await db.execute(
+        text("SELECT body_text, body_html, snippet FROM email_messages WHERE id = :id"),
+        {"id": message_id},
+    )).fetchone()
+    if row is None:
+        return ""
+    if (row.body_text or "").strip():
+        return row.body_text  # already hydrated
+    # Header-only row: fetch the full body from the provider and persist it.
+    try:
+        provider, provider_msg_id, account_id, store = await _provider_for_message(
+            db, message_id, user_email,
+        )
+        if not await provider.authenticate():
+            return row.body_text or ""
+        full = await provider.get_message(provider_msg_id)
+        body_text = _truncate_body(full.body_text or "", MAX_BODY_TEXT_BYTES)
+        body_html = (
+            _truncate_body(full.body_html, MAX_BODY_HTML_BYTES)
+            if full.body_html else None
+        )
+        await db.execute(
+            text(
+                """UPDATE email_messages
+                   SET body_text = :bt, body_html = :bh, updated_at = now()
+                   WHERE id = :id"""
+            ),
+            {"id": message_id, "bt": body_text, "bh": body_html},
+        )
+        await _persist_rotated_creds(db, store, account_id, provider)
+        await db.commit()
+        return body_text
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — never break the caller on a hydrate miss
+        import structlog  # noqa: PLC0415
+        structlog.get_logger("email.core").warning(
+            "hydrate_message_body.failed", message_id=message_id, error=str(exc)[:200],
+        )
+        return row.body_text or ""
+
+
 _ENGINE = None
 
 

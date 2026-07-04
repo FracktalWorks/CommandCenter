@@ -75,6 +75,78 @@ async def test_drafter_includes_full_thread_context() -> None:
     assert "THREAD_TAIL_MARKER" in user_msg
 
 
+# ── Truncation-narration guard + body hydration (snippet-fallback bug) ────────
+# A header-only row (Outlook/Graph sync) stores body_text='' + a ~200-char
+# snippet; `body_text or snippet` then handed the drafter a message cut off
+# mid-sentence ("…I am ava"), and the model narrated that into the reply
+# ("your message seems cut off, could you finish that?"). Fix: hydrate the full
+# body before drafting + a prompt rule against commenting on truncation.
+
+
+async def test_draft_prompt_forbids_narrating_truncation() -> None:
+    captured: dict = {}
+    with patch("acb_llm.context.acompletion_with_fallback",
+               _fake_completion(captured)):
+        await _drafting._llm_draft_reply(
+            {"from": "p@x.com", "from_name": "Prawin", "subject": "Re: setup",
+             "body": "Sounds good. I am ava"},  # looks cut off
+            about="", signature="", user_email="me@x.com")
+    sys_prompt = captured["messages"][0]["content"].lower()
+    # The system prompt must instruct the model NOT to react to a truncated input.
+    assert "cut off" in sys_prompt
+    assert "mid-sentence" in sys_prompt
+    assert "resend" in sys_prompt or "finish that" in sys_prompt
+
+
+async def test_hydrate_fetches_full_body_when_only_snippet_stored() -> None:
+    from gateway.routes.email import core as _core
+
+    # Stored row: empty body_text, a 200-char snippet cut at "I am ava".
+    stored = SimpleNamespace(body_text="", body_html=None, snippet="x" * 190 + " I am ava")
+    db = AsyncMock()
+    # 1st execute = SELECT body/snippet; later execute()s (the UPDATE persist)
+    # return a generic result — AsyncMock's default handles them.
+    db.execute.side_effect = [_one(stored), MagicMock(), MagicMock()]
+
+    provider = AsyncMock()
+    provider.authenticate.return_value = True
+    provider.get_message.return_value = SimpleNamespace(
+        body_text="Sounds good. I am available Tuesday and Thursday afternoon.",
+        body_html=None,
+    )
+    # credentials_dirty is a SYNC method — override AsyncMock's async default so
+    # _persist_rotated_creds sees a plain False, not a truthy coroutine.
+    provider.credentials_dirty = MagicMock(return_value=False)
+
+    async def fake_provider_for_message(_db, _mid, _u):
+        return provider, "pmid-1", "acc-1", MagicMock()
+
+    with patch.object(_core, "_provider_for_message", fake_provider_for_message):
+        body = await _core.hydrate_message_body(db, "m1", "me@x.com")
+
+    # The FULL provider body is returned (not the 200-char snippet) + persisted.
+    assert "available Tuesday and Thursday" in body
+    assert "I am ava" != body[-8:]  # not truncated mid-word
+    # It ran an UPDATE to persist (SELECT + UPDATE = 2 execute calls).
+    assert db.execute.await_count >= 2
+    provider.get_message.assert_awaited_once()
+
+
+async def test_hydrate_noop_when_body_already_present() -> None:
+    from gateway.routes.email import core as _core
+
+    stored = SimpleNamespace(
+        body_text="Full body already here, nothing to fetch.",
+        body_html=None, snippet="preview",
+    )
+    db = AsyncMock()
+    db.execute.side_effect = [_one(stored)]
+    with patch.object(_core, "_provider_for_message",
+                      side_effect=AssertionError("must NOT fetch when body present")):
+        body = await _core.hydrate_message_body(db, "m2", "me@x.com")
+    assert body == "Full body already here, nothing to fetch."
+
+
 # ── Auto-draft dedup (inbox-zero handlePreviousDraftDeletion parity) ──────────
 
 async def test_resolve_draft_none_when_no_existing() -> None:

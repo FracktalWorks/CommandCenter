@@ -560,6 +560,13 @@ async def _llm_draft_reply(
             "professional, not a single terse line.\n"
             "- Ground every fact in the email or the supplied context and never "
             "invent specifics — if something is missing, keep it open or ask.\n"
+            "- NEVER comment on the incoming email's formatting or completeness. "
+            "If it appears to end abruptly or mid-sentence, do NOT say it 'seems "
+            "cut off', do NOT ask them to 'finish that' or resend, and do NOT "
+            "quote the fragment back. Just reply naturally to the substance you "
+            "can see; if a needed detail is genuinely absent, ask for that detail "
+            "by name (e.g. 'what's your availability this week?') without "
+            "referencing any truncation.\n"
             "- Never use placeholders for names (e.g. [Your Name], [Name]). "
             f"{sig_rule}\n"
             "- If the context contains <personal_instructions>, follow them. If "
@@ -1111,6 +1118,14 @@ async def draft_reply_smart(
             raise HTTPException(status_code=404, detail="Message not found")
         frm = row.from_address if isinstance(row.from_address, dict) \
             else json.loads(row.from_address or "{}")
+        # Ensure the FULL incoming body is present before drafting. Header-only
+        # rows (Outlook/Graph sync) store an empty body_text + a ~200-char
+        # snippet; without this the drafter saw the message cut off mid-sentence
+        # and wrote that truncation into the reply. Hydrate from the provider,
+        # then fall back to snippet only if the body is genuinely empty.
+        from gateway.routes.email.core import hydrate_message_body  # noqa: PLC0415
+        _hydrated_body = await hydrate_message_body(
+            db, str(row.id), user.email or "anonymous")
         email = {
             "subject": row.subject or "", "from": frm.get("email", ""),
             "from_name": frm.get("name", "") or "",
@@ -1118,7 +1133,7 @@ async def draft_reply_smart(
             "cc": _fmt_addr_list(row.cc_addresses),
             "attachments": (await _attachment_summaries(
                 db, [row.id])).get(str(row.id), ""),
-            "body": row.body_text or row.snippet or "",
+            "body": (_hydrated_body or "").strip() or row.body_text or row.snippet or "",
             "thread_id": row.thread_id or "",
             "thread": await _fetch_thread_context(
                 db, req.account_id, row.thread_id or "",

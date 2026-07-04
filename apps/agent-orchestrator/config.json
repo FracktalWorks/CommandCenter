@@ -8,5 +8,15 @@
   "max_mutation_attempts": 1,
   "tags": ["orchestrator", "core", "routing"],
   "integrations": [],
-  "optional_integrations": []
+  "optional_integrations": [],
+  "tool_scope": [
+    "call_agent",
+    "call_agents_parallel",
+    "call_agent_background",
+    "ask_questions",
+    "query_history",
+    "recall_timeline",
+    "remember",
+    "emit_generative_ui"
+  ]
 }

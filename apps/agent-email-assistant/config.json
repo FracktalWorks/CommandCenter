@@ -8,5 +8,37 @@
   "optional_integrations": [],
   "runtime": "maf",
   "icon": "Mail",
-  "category": "apps"
+  "category": "apps",
+  "tool_scope": [
+    "ask_questions",
+    "remember",
+    "recall_timeline",
+    "save_memory",
+    "emit_generative_ui",
+    "call_agent"
+  ],
+  "own_tool_scope": [
+    "list_accounts",
+    "search_emails",
+    "query_inbox",
+    "get_important_emails",
+    "read_email",
+    "read_thread",
+    "get_full_body_email",
+    "find_urgent",
+    "find_needs_reply",
+    "get_unread_count",
+    "get_account_overview",
+    "manage_inbox",
+    "apply_labels",
+    "move_to_folder",
+    "list_labels",
+    "create_label",
+    "draft_reply",
+    "send_email",
+    "send_reply",
+    "send_draft",
+    "find_follow_ups",
+    "get_digest"
+  ]
 }

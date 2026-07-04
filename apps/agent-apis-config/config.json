@@ -8,5 +8,14 @@
   "max_mutation_attempts": 1,
   "tags": ["configuration", "apis", "setup", "credentials", "admin"],
   "integrations": [],
-  "optional_integrations": ["serpapi"]
+  "optional_integrations": ["serpapi"],
+  "tool_scope": [
+    "ask_questions",
+    "web_search",
+    "fetch_page",
+    "install_dependency",
+    "save_note",
+    "recall_notes",
+    "emit_generative_ui"
+  ]
 }

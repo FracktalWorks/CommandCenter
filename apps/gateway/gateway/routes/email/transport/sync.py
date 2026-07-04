@@ -440,6 +440,24 @@ async def trigger_sync(
             )
             await db.commit()
 
+            # Recompute Reply-Zero thread status on newly-synced mail so the
+            # category/status pill reflects reality — in particular an upstream
+            # reply the user sent from Outlook/Gmail (a new "sent"-folder message
+            # in the thread) flips the thread To-Reply → Actioned. Without this,
+            # a manual/pull-to-refresh sync persisted the reply but left the pill
+            # stale until the background scheduler poll ran (the scheduler does
+            # this; the UI-triggered sync did not — that was the gap). Best-effort
+            # + gated on new mail so it's a no-op/cheap when nothing changed.
+            if persisted_count:
+                try:
+                    from gateway.routes.email import (  # noqa: PLC0415
+                        _maybe_classify_threads,
+                    )
+                    await _maybe_classify_threads(req.account_id)
+                except Exception as exc:  # noqa: BLE001
+                    _log.warning("email.sync_classify_threads_failed",
+                                 account_id=req.account_id, error=str(exc)[:200])
+
             return {
                 "ok": True,
                 "messages_synced": persisted_count,
@@ -533,6 +551,17 @@ async def _webhook_sync(account_id: str) -> None:
         res = await _sync_account(account_id)
         if isinstance(res, dict) and res.get("synced", 0):
             await _maybe_auto_run_rules(account_id)
+            # Also recompute thread status so an upstream reply (native-client
+            # send landing via the Graph notification) flips the pill — the
+            # webhook previously re-ran rules but not the Reply-Zero classifier.
+            try:
+                from gateway.routes.email import (  # noqa: PLC0415
+                    _maybe_classify_threads,
+                )
+                await _maybe_classify_threads(account_id)
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("email.webhook_classify_failed",
+                             account_id=account_id, error=str(exc)[:200])
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.webhook_sync_failed", account_id=account_id,
                      error=str(exc)[:200])

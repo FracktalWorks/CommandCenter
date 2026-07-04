@@ -337,6 +337,38 @@ function persistAccountId(id: string | null): void {
   }
 }
 
+/** Per-account cache of the label→colour map, so a refresh paints chips in
+ *  their real (provider) colours on the FIRST render instead of the
+ *  deterministic hash colour, then flipping once fetchLabels resolves (the
+ *  reported flicker). The network fetch still runs and overwrites this, but the
+ *  cached seed makes the initial paint already correct. */
+const LABEL_COLORS_LS_PREFIX = "cc.email.labelColors.";
+
+function readCachedLabelColors(accountId: string | null): Record<string, string | null> {
+  if (!accountId || typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(LABEL_COLORS_LS_PREFIX + accountId);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeCachedLabelColors(
+  accountId: string | null, colors: Record<string, string | null>,
+): void {
+  if (!accountId || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      LABEL_COLORS_LS_PREFIX + accountId, JSON.stringify(colors),
+    );
+  } catch {
+    /* storage disabled (private mode) — flicker returns but nothing breaks */
+  }
+}
+
 /** Choose the initial account from a fetched list: a still-valid persisted/URL
  *  choice wins, else the user's default mailbox, else the first account. */
 function pickInitialAccount(accounts: EmailAccount[]): string | null {
@@ -354,7 +386,9 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   emailsPage: 1,
   folders: [],
   availableLabels: [],
-  labelColors: {},
+  // Seed from the per-account cache so chips paint in their real colours on the
+  // first render (no hash-colour → provider-colour flip once fetchLabels lands).
+  labelColors: readCachedLabelColors(readPreferredAccountId()),
   quickActions: QUICK_ACTIONS,
 
   // Loading states
@@ -651,6 +685,9 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     set({
       selectedAccountId: id, selectedEmailId: null,
       selectedEmailOverride: null, selectedIds: new Set(),
+      // Seed this account's cached label colours so switching accounts doesn't
+      // flash the previous account's / hash colours before fetchLabels lands.
+      labelColors: readCachedLabelColors(id),
     });
     // Remember the choice (localStorage + URL) so it survives a refresh.
     persistAccountId(id);
@@ -833,6 +870,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       const colors: Record<string, string | null> = {};
       for (const l of labels) if (l.color) colors[l.name] = l.color;
       set({ availableLabels: names, labelColors: colors });
+      // Cache for this account so the next refresh's first paint is correct.
+      writeCachedLabelColors(aid, colors);
     } catch {
       // Even if the provider list fails, offer the standard categories.
       set({
@@ -847,7 +886,9 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     if (!aid) return;
     const prev = get().labelColors;
     // Optimistically recolour everywhere chips read from labelColors.
-    set({ labelColors: { ...prev, [name]: color } });
+    const next = { ...prev, [name]: color };
+    set({ labelColors: next });
+    writeCachedLabelColors(aid, next);  // persist so the next paint is correct
     if (DEMO) return;
     try {
       await api.setLabelColor(aid, name, color);

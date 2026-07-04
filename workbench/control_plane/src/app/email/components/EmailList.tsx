@@ -77,6 +77,7 @@ export function EmailList({
     availableLabels, applyLabel, applyLabelBulk, clearCategories,
     selectedIds, toggleEmailSelected, setSelectedEmails, clearEmailSelection,
     bulkUpdateSelected, bulkDeleteSelected, captureEmailToTasks,
+    runTestOnMessage, testRunningIds,
   } = useEmailStore();
   const { isMobile } = useViewMode();
   const syncing = selectedAccountId
@@ -444,8 +445,12 @@ export function EmailList({
                   {email.snippet}
                 </div>
 
-                {/* Categories / user labels — click to filter the list */}
-                {email.categories.length > 0 && (
+                {/* Categories / user labels — click to filter the list.
+                    When an email has NO category (rules haven't run or the
+                    agent couldn't categorize it), show an "Uncategorized" pill
+                    so it's visible as needing attention — clicking it reruns
+                    the rules on just this email (applies matches). */}
+                {email.categories.length > 0 ? (
                   <div className="flex flex-wrap gap-1 mt-0.5">
                     {email.categories.slice(0, 3).map((label) => (
                       <LabelChip
@@ -460,6 +465,36 @@ export function EmailList({
                         }}
                       />
                     ))}
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-1 mt-0.5">
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      title={
+                        testRunningIds.includes(email.id)
+                          ? "Re-running rules…"
+                          : "Uncategorized — click to re-run rules on this email"
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        if (selectedAccountId && !testRunningIds.includes(email.id)) {
+                          runTestOnMessage(selectedAccountId, email.id, false);
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          if (selectedAccountId && !testRunningIds.includes(email.id)) {
+                            runTestOnMessage(selectedAccountId, email.id, false);
+                          }
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 rounded-full font-medium text-[11px] px-2 py-0.5 border border-dashed border-border text-muted-foreground hover:bg-secondary/60 cursor-pointer transition-colors"
+                    >
+                      {testRunningIds.includes(email.id) ? "Re-running…" : "Uncategorized"}
+                    </span>
                   </div>
                 )}
               </button>

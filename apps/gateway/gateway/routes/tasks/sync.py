@@ -47,6 +47,7 @@ from gateway.routes.tasks.core import (
     _get_db,
     _key_store,
     _log,
+    _parse_jsonb,
     _uid,
     router,
 )
@@ -186,6 +187,22 @@ async def _sync_account(db: Any, account: Any, *, full: bool) -> AccountSyncResu
     tasks = await provider.list_tasks(account.workspace_id,
                                       updated_since_ms=since_ms)
     result.pulled = len(tasks)
+
+    # Keep the member cache honest on every sync: someone removed in the
+    # tool must drop out of the delegate picker, not linger until the next
+    # full schema refresh.
+    try:
+        members = await provider.list_members(account.workspace_id)
+        cache = _parse_jsonb(account.schema_cache) or {}
+        cache["members"] = members
+        await db.execute(
+            text("""UPDATE task_accounts
+                    SET schema_cache = :cache WHERE id = :id"""),
+            {"id": str(account.id), "cache": json.dumps(cache)},
+        )
+    except Exception as exc:
+        _log.warning("tasks.sync.members_refresh_failed",
+                     error=str(exc)[:120])
 
     # provider list/project ref → mirrored gtd_projects id (for linkage).
     proj_rows = (await db.execute(

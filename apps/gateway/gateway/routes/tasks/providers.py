@@ -67,6 +67,22 @@ class BaseTaskProvider(ABC):
         {provider_task_id, provider_url, provider_status}."""
 
     @abstractmethod
+    async def list_members(self, workspace_id: str) -> list[dict[str, Any]]:
+        """CURRENT workspace members → [{name, email, provider_user_id}].
+        The live source of truth for the delegate picker — people removed in
+        the tool must disappear here (schema_cache is just the warm copy)."""
+
+    @abstractmethod
+    async def create_project(
+        self, workspace_id: str, name: str,
+        space_id: str, folder_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a project/list in the tool under the given space (and
+        optional folder) → {id, name, space_id, space_name?, folder_id?}.
+        A user-approved write (invoked from the explicit "create project"
+        UI action, same posture as push)."""
+
+    @abstractmethod
     async def list_tasks(
         self, workspace_id: str, *, updated_since_ms: int | None = None
     ) -> list[dict[str, Any]]:
@@ -153,6 +169,9 @@ class ClickUpProvider(BaseTaskProvider):
 
         projects: list[dict[str, Any]] = []
         statuses: list[str] = []
+        # Structured hierarchy for the picker accordion: mirrors ClickUp's
+        # navigation exactly (space → folder → list).
+        hierarchy: list[dict[str, Any]] = []
         spaces = (await self._get(
             f"/team/{workspace_id}/space", {"archived": "false"}
         )).get("spaces") or []
@@ -161,7 +180,10 @@ class ClickUpProvider(BaseTaskProvider):
                 name = (st.get("status") or "").strip()
                 if name and name.lower() not in (s.lower() for s in statuses):
                     statuses.append(name)
-            sid, sname = space.get("id"), space.get("name", "")
+            sid, sname = str(space.get("id") or ""), space.get("name", "")
+            space_node: dict[str, Any] = {
+                "id": sid, "name": sname, "folders": [], "lists": [],
+            }
             folderless = (await self._get(
                 f"/space/{sid}/list", {"archived": "false"}
             )).get("lists") or []
@@ -169,16 +191,31 @@ class ClickUpProvider(BaseTaskProvider):
                 f"/space/{sid}/folder", {"archived": "false"}
             )).get("folders") or []
             for lst in folderless:
-                projects.append({"id": str(lst["id"]), "name": lst.get("name", ""),
-                                 "space": sname})
+                entry = {"id": str(lst["id"]), "name": lst.get("name", ""),
+                         "space": sname, "space_id": sid,
+                         "folder_id": None, "folder_name": None}
+                projects.append(entry)
+                space_node["lists"].append(
+                    {"id": entry["id"], "name": entry["name"]})
             for folder in folders:
+                fid, fname = str(folder.get("id") or ""), folder.get("name", "")
+                folder_node: dict[str, Any] = {
+                    "id": fid, "name": fname, "lists": [],
+                }
                 for lst in folder.get("lists") or []:
-                    projects.append({
+                    entry = {
                         "id": str(lst["id"]), "name": lst.get("name", ""),
-                        "space": f"{sname} / {folder.get('name', '')}",
-                    })
+                        "space": f"{sname} / {fname}", "space_id": sid,
+                        "folder_id": fid, "folder_name": fname,
+                    }
+                    projects.append(entry)
+                    folder_node["lists"].append(
+                        {"id": entry["id"], "name": entry["name"]})
+                space_node["folders"].append(folder_node)
+            hierarchy.append(space_node)
 
-        return {"projects": projects, "members": members, "statuses": statuses}
+        return {"projects": projects, "members": members,
+                "statuses": statuses, "hierarchy": hierarchy}
 
     async def create_task(
         self, project_ref: str, payload: dict[str, Any]
@@ -205,6 +242,44 @@ class ClickUpProvider(BaseTaskProvider):
             "provider_task_id": str(t.get("id", "")),
             "provider_url": t.get("url"),
             "provider_status": (t.get("status") or {}).get("status"),
+        }
+
+    async def list_members(self, workspace_id: str) -> list[dict[str, Any]]:
+        members: list[dict[str, Any]] = []
+        for t in (await self._get("/team")).get("teams") or []:
+            if str(t.get("id")) != str(workspace_id):
+                continue
+            for m in t.get("members") or []:
+                u = m.get("user") or {}
+                if not (u.get("username") or u.get("email")):
+                    continue
+                members.append({
+                    "name": u.get("username") or u.get("email"),
+                    "email": u.get("email"),
+                    "provider_user_id": str(u.get("id", "")),
+                })
+        return members
+
+    async def create_project(
+        self, workspace_id: str, name: str,
+        space_id: str, folder_id: str | None = None,
+    ) -> dict[str, Any]:
+        """ClickUp: a project = a List, created in a folder when given,
+        else directly in the space (folderless)."""
+        path = (f"/folder/{folder_id}/list" if folder_id
+                else f"/space/{space_id}/list")
+        async with httpx.AsyncClient(timeout=20.0) as http:
+            r = await http.post(f"{_CLICKUP}{path}", headers=self._headers(),
+                                json={"name": name})
+        if r.status_code >= 400:
+            raise ProviderError(
+                "clickup", f"create list → {r.status_code}: {r.text[:200]}")
+        lst = r.json()
+        return {
+            "id": str(lst.get("id", "")),
+            "name": lst.get("name", name),
+            "space_id": space_id,
+            "folder_id": folder_id,
         }
 
     async def list_tasks(

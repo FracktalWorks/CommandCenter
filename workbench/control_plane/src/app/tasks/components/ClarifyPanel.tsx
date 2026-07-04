@@ -18,6 +18,9 @@ import {
   Cloud,
   Search,
   Mail as MailIcon,
+  ChevronRight,
+  Plus,
+  Loader2,
   type LucideIcon,
 } from "lucide-react";
 import { useTaskStore, type ClarifyDecision } from "../lib/taskStore";
@@ -29,9 +32,11 @@ import {
 } from "../lib/clarify";
 import { apiClarifyPropose } from "../lib/api";
 import type { ConnectedProvider } from "../lib/mockData";
-import { Energy, GtdItem, GtdProject, Person, Target } from "../lib/types";
+import { Energy, GtdItem, GtdProject, Person, Target, WorkspaceHierarchySpace } from "../lib/types";
+import type { TaskAccount } from "../lib/api";
 import { durationLabel, initials, originEmailHref, snoozeOptions } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
+import { AttachmentChips } from "./AttachmentComposer";
 
 // F2 — Clarify. AI proposes a full disposition (what it is · next action · where
 // it's stored · who owns it · which stage); you confirm in one tap or adjust any
@@ -74,6 +79,9 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
   const people = useTaskStore((s) => s.people);
   const projects = useTaskStore((s) => s.projects);
   const providers = useTaskStore((s) => s.providers);
+  const accounts = useTaskStore((s) => s.accounts);
+  const refreshAccountMembers = useTaskStore((s) => s.refreshAccountMembers);
+  const createWorkspaceProject = useTaskStore((s) => s.createWorkspaceProject);
 
   const localProposal = useMemo(
     () => proposeClarification(item, people, projects),
@@ -146,6 +154,53 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
     ? projects.find((p) => p.id === projectId)
     : undefined;
   const statusesForDest = useMemo(() => providerStatuses(dest, providers), [dest, providers]);
+  const destAccount: TaskAccount | undefined = useMemo(
+    () => (dest.source === "SYNCED"
+      ? accounts.find((a) => a.id === (dest.accountId ?? destEntry(dest, providers)?.id))
+      : undefined),
+    [dest, accounts, providers],
+  );
+
+  // ── LIVE delegate list ────────────────────────────────────────────────
+  // When the destination is a workspace, pull its CURRENT members once per
+  // account per mount — someone removed in ClickUp disappears from the
+  // picker right here, not at the next full schema refresh.
+  const refreshedAccountsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const aid = destAccount?.id;
+    if (!aid || refreshedAccountsRef.current.has(aid)) return;
+    refreshedAccountsRef.current.add(aid);
+    void refreshAccountMembers(aid);
+  }, [destAccount?.id, refreshAccountMembers]);
+
+  // Delegate options: the workspace's CURRENT members (enriched with the org
+  // layer's skills-bearing Person when it matches) for a SYNCED destination;
+  // the org list only for LOCAL.
+  const peopleForDelegate: Person[] = useMemo(() => {
+    if (!destAccount) return people;
+    return destAccount.members.map((m) => {
+      const org = people.find(
+        (op) =>
+          (m.providerUserId && op.providerUserId === m.providerUserId) ||
+          (m.email && op.email && op.email.toLowerCase() === m.email.toLowerCase()) ||
+          op.name.toLowerCase() === m.name.toLowerCase(),
+      );
+      return org ?? m;
+    });
+  }, [destAccount, people]);
+
+  // A picked assignee who is no longer a member (removed in the tool) is
+  // cleared — never delegate to someone who can't receive the task.
+  // Reset-during-render (React's adjust-state-on-change pattern, keeps the
+  // set-state-in-effect lint rule happy and avoids a cascading render).
+  if (destAccount && assignee) {
+    const still = peopleForDelegate.some(
+      (m) =>
+        (assignee.providerUserId && m.providerUserId === assignee.providerUserId) ||
+        m.name.toLowerCase() === assignee.name.toLowerCase(),
+    );
+    if (!still) setAssignee(null);
+  }
   const projectsForDest = useMemo(
     () =>
       projects.filter(
@@ -278,6 +333,11 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
               Open
             </a>
           </p>
+        )}
+        {item.attachments && item.attachments.length > 0 && (
+          <div className="mt-1">
+            <AttachmentChips attachments={item.attachments} />
+          </div>
         )}
         <p className="mt-1 text-[11px] text-muted-foreground">
           What is it, what&apos;s the next action, and where does it go?
@@ -424,7 +484,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
 
             {disposition === "WAITING" && (
               <Field label="Delegate to">
-                <PeoplePicker people={people} value={assignee} onChange={setAssignee} />
+                <PeoplePicker people={peopleForDelegate} value={assignee} onChange={setAssignee} />
               </Field>
             )}
 
@@ -539,14 +599,33 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
                   <div className="mt-2.5 flex flex-col gap-2.5">
                     {disposition !== "PROJECT" && (
                       <SubField label="Project">
-                        <ProjectPicker
-                          projects={projectsForDest}
-                          suggestedId={
-                            proposal.projectInferred ? proposal.projectId : undefined
-                          }
-                          value={projectId}
-                          onChange={setProjectId}
-                        />
+                        {destAccount && destAccount.hierarchy.length > 0 ? (
+                          <WorkspaceProjectAccordion
+                            hierarchy={destAccount.hierarchy}
+                            projects={projectsForDest}
+                            suggestedId={
+                              proposal.projectInferred ? proposal.projectId : undefined
+                            }
+                            value={projectId}
+                            onChange={setProjectId}
+                            onCreate={async (spaceId, folderId, name) => {
+                              const created = await createWorkspaceProject(
+                                destAccount.id,
+                                { name, spaceId, folderId },
+                              );
+                              setProjectId(created.projectId);
+                            }}
+                          />
+                        ) : (
+                          <ProjectPicker
+                            projects={projectsForDest}
+                            suggestedId={
+                              proposal.projectInferred ? proposal.projectId : undefined
+                            }
+                            value={projectId}
+                            onChange={setProjectId}
+                          />
+                        )}
                       </SubField>
                     )}
 
@@ -564,7 +643,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
 
                     {disposition !== "WAITING" && (
                       <SubField label="Assignee (optional)">
-                        <PeoplePicker people={people} value={assignee} onChange={setAssignee} allowNone />
+                        <PeoplePicker people={peopleForDelegate} value={assignee} onChange={setAssignee} allowNone />
                       </SubField>
                     )}
 
@@ -641,6 +720,270 @@ function PeoplePicker({
 
 // Scales to many projects: shows the assistant's match first, then a filter box
 // so you never scan a wall of pills. Type to search; tap to file.
+/**
+ * Workspace project picker — mirrors ClickUp's own navigation exactly:
+ * Space → Folder → List as nested accordions, so finding the project feels
+ * like finding it in ClickUp. Every level offers "+ New list here" (an
+ * explicit user-approved provider write). Selecting a list resolves to the
+ * mirrored gtd project (matched by providerRef).
+ */
+function WorkspaceProjectAccordion({
+  hierarchy,
+  projects,
+  suggestedId,
+  value,
+  onChange,
+  onCreate,
+}: {
+  hierarchy: WorkspaceHierarchySpace[];
+  projects: GtdProject[];
+  suggestedId?: string;
+  value?: string;
+  onChange: (id: string | undefined) => void;
+  onCreate: (spaceId: string, folderId: string | undefined, name: string) => Promise<void>;
+}) {
+  const [q, setQ] = useState("");
+  const [openSpaces, setOpenSpaces] = useState<Set<string>>(() => {
+    // Open the space containing the current/suggested selection by default.
+    const target = value ?? suggestedId;
+    const ref = target ? projects.find((p) => p.id === target)?.providerRef : undefined;
+    const open = new Set<string>();
+    if (ref) {
+      for (const sp of hierarchy) {
+        const inSpace =
+          sp.lists.some((l) => l.id === ref) ||
+          sp.folders.some((f) => f.lists.some((l) => l.id === ref));
+        if (inSpace) open.add(sp.id);
+      }
+    }
+    if (!open.size && hierarchy.length === 1) open.add(hierarchy[0].id);
+    return open;
+  });
+  const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
+  /** Where the inline "new list" input is open: space id or `folder:<id>`. */
+  const [creatingAt, setCreatingAt] = useState<string | null>(null);
+  const [newName, setNewName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  const byRef = useMemo(() => {
+    const m = new Map<string, GtdProject>();
+    for (const pr of projects) if (pr.providerRef) m.set(pr.providerRef, pr);
+    return m;
+  }, [projects]);
+
+  const toggle = (set: Set<string>, id: string) => {
+    const next = new Set(set);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  };
+
+  const submitCreate = async (spaceId: string, folderId?: string) => {
+    const name = newName.trim();
+    if (!name || creating) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      await onCreate(spaceId, folderId, name);
+      setCreatingAt(null);
+      setNewName("");
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "Could not create the project");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const listRow = (l: { id: string; name: string }, depth: number) => {
+    const proj = byRef.get(l.id);
+    const active = !!proj && proj.id === value;
+    const isSuggested = !!proj && proj.id === suggestedId;
+    return (
+      <button
+        key={l.id}
+        type="button"
+        onClick={() => onChange(proj?.id)}
+        disabled={!proj}
+        title={proj ? undefined : "Not mirrored yet — refresh the workspace schema"}
+        className={[
+          "tech-transition flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-left text-[13px]",
+          depth === 2 ? "ml-8 w-[calc(100%-2rem)]" : "ml-4 w-[calc(100%-1rem)]",
+          active
+            ? "border-primary bg-primary/10 text-primary"
+            : "border-transparent text-foreground hover:bg-secondary disabled:opacity-40",
+        ].join(" ")}
+      >
+        <FolderKanban className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate">{l.name}</span>
+        {isSuggested && <Sparkles className="h-3 w-3 shrink-0 text-primary" />}
+        {active && <Check className="h-3.5 w-3.5 shrink-0" />}
+      </button>
+    );
+  };
+
+  const createRow = (spaceId: string, folderId: string | undefined, depth: number) => {
+    const key = folderId ? `folder:${folderId}` : spaceId;
+    if (creatingAt !== key) {
+      return (
+        <button
+          key={`new-${key}`}
+          type="button"
+          onClick={() => {
+            setCreatingAt(key);
+            setNewName("");
+            setCreateError(null);
+          }}
+          className={[
+            "tech-transition flex items-center gap-1.5 rounded-md px-3 py-1 text-left text-[12px] text-primary hover:underline",
+            depth === 2 ? "ml-8" : "ml-4",
+          ].join(" ")}
+        >
+          <Plus className="h-3 w-3" /> New project here
+        </button>
+      );
+    }
+    return (
+      <div key={`new-${key}`} className={depth === 2 ? "ml-8" : "ml-4"}>
+        <div className="flex items-center gap-1.5">
+          <input
+            autoFocus
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void submitCreate(spaceId, folderId);
+              if (e.key === "Escape") setCreatingAt(null);
+            }}
+            placeholder="New project (ClickUp list) name…"
+            className="flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
+          />
+          <button
+            type="button"
+            disabled={!newName.trim() || creating}
+            onClick={() => void submitCreate(spaceId, folderId)}
+            className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground disabled:opacity-50"
+          >
+            {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+            Create
+          </button>
+        </div>
+        {createError && (
+          <p className="mt-1 text-[11px] text-destructive">{createError}</p>
+        )}
+      </div>
+    );
+  };
+
+  // Search mode: flat filtered list across every space/folder.
+  const ql = q.trim().toLowerCase();
+  if (ql) {
+    const hits: { id: string; name: string; path: string }[] = [];
+    for (const sp of hierarchy) {
+      for (const l of sp.lists)
+        if (l.name.toLowerCase().includes(ql))
+          hits.push({ ...l, path: sp.name });
+      for (const f of sp.folders)
+        for (const l of f.lists)
+          if (l.name.toLowerCase().includes(ql))
+            hits.push({ ...l, path: `${sp.name} / ${f.name}` });
+    }
+    return (
+      <div className="flex flex-col gap-1.5">
+        <SearchBox q={q} setQ={setQ} />
+        {hits.slice(0, 10).map((h) => (
+          <div key={h.id}>
+            <p className="ml-4 text-[10px] uppercase tracking-wide text-muted-foreground/70">{h.path}</p>
+            {listRow(h, 1)}
+          </div>
+        ))}
+        {!hits.length && (
+          <p className="px-1 py-1 text-[11px] text-muted-foreground">No matching projects.</p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <SearchBox q={q} setQ={setQ} />
+      <button
+        type="button"
+        onClick={() => onChange(undefined)}
+        className={[
+          "tech-transition flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-left text-[13px]",
+          value === undefined
+            ? "border-primary bg-primary/10 text-primary"
+            : "border-transparent text-foreground hover:bg-secondary",
+        ].join(" ")}
+      >
+        <FolderKanban className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <span className="flex-1">No project</span>
+        {value === undefined && <Check className="h-3.5 w-3.5 shrink-0" />}
+      </button>
+      <div className="max-h-56 overflow-y-auto pr-0.5">
+        {hierarchy.map((sp) => (
+          <div key={sp.id}>
+            <button
+              type="button"
+              onClick={() => setOpenSpaces((cur) => toggle(cur, sp.id))}
+              className="tech-transition flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12px] font-semibold text-foreground hover:bg-secondary"
+            >
+              <ChevronRight
+                className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${openSpaces.has(sp.id) ? "rotate-90" : ""}`}
+              />
+              {sp.name}
+              <span className="ml-auto text-[10px] font-normal text-muted-foreground">
+                {sp.lists.length + sp.folders.reduce((n, f) => n + f.lists.length, 0)}
+              </span>
+            </button>
+            {openSpaces.has(sp.id) && (
+              <div className="flex flex-col gap-0.5 pb-1">
+                {sp.lists.map((l) => listRow(l, 1))}
+                {sp.folders.map((f) => (
+                  <div key={f.id}>
+                    <button
+                      type="button"
+                      onClick={() => setOpenFolders((cur) => toggle(cur, f.id))}
+                      className="tech-transition ml-4 flex w-[calc(100%-1rem)] items-center gap-1.5 rounded-md px-2 py-1 text-left text-[12px] font-medium text-muted-foreground hover:bg-secondary"
+                    >
+                      <ChevronRight
+                        className={`h-3 w-3 shrink-0 transition-transform ${openFolders.has(f.id) ? "rotate-90" : ""}`}
+                      />
+                      {f.name}
+                      <span className="ml-auto text-[10px] font-normal">{f.lists.length}</span>
+                    </button>
+                    {openFolders.has(f.id) && (
+                      <div className="flex flex-col gap-0.5">
+                        {f.lists.map((l) => listRow(l, 2))}
+                        {createRow(sp.id, f.id, 2)}
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {createRow(sp.id, undefined, 1)}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SearchBox({ q, setQ }: { q: string; setQ: (v: string) => void }) {
+  return (
+    <div className="relative">
+      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+      <input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="Search projects…"
+        className="w-full rounded-md border border-border bg-background/60 py-1.5 pl-8 pr-3 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
+      />
+    </div>
+  );
+}
+
 function ProjectPicker({
   projects,
   suggestedId,

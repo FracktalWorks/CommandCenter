@@ -23,6 +23,7 @@ import { originEmailHref,
   relativeTime,
 } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
+import { AttachmentChips } from "./AttachmentComposer";
 import { ClarifyPanel } from "./ClarifyPanel";
 
 const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
@@ -190,6 +191,12 @@ export function ItemDetail() {
               <p className="whitespace-pre-wrap text-sm text-muted-foreground">
                 {item.notes}
               </p>
+            </Field>
+          )}
+
+          {item.attachments && item.attachments.length > 0 && (
+            <Field label="Attachments">
+              <AttachmentChips attachments={item.attachments} />
             </Field>
           )}
 

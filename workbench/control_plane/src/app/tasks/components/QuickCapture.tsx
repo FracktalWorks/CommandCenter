@@ -5,6 +5,8 @@ import { Plus, X, ListPlus, Wind, Check, Sparkles, ArrowLeft, ArrowRight, Trash2
 import { useTaskStore } from "../lib/taskStore";
 import { apiAtomize } from "../lib/api";
 import { GTD_TRIGGERS } from "../lib/mockData";
+import { AttachmentComposer } from "./AttachmentComposer";
+import type { TaskAttachment } from "../lib/types";
 import { useVisualViewport } from "../lib/useVisualViewport";
 
 // Ubiquitous capture (C2) + Mind Sweep (C3/C4). A global palette openable from
@@ -30,6 +32,7 @@ function QuickCapturePanel() {
   const [mode, setMode] = useState<"single" | "sweep">(storeMode);
   const [value, setValue] = useState("");
   const [added, setAdded] = useState(0);
+  const [pendingAtts, setPendingAtts] = useState<TaskAttachment[]>([]);
   // Sweep has a review gate: write → review the parsed items → add.
   const [phase, setPhase] = useState<"write" | "review">("write");
   /** Review candidates. Verdicts come from the AI atomizer: "duplicate"
@@ -67,8 +70,9 @@ function QuickCapturePanel() {
   const submitSingle = () => {
     const t = value.trim();
     if (!t) return;
-    capture(t);
+    capture(t, pendingAtts.length ? pendingAtts : undefined);
     setValue("");
+    setPendingAtts([]);
     setAdded((a) => a + 1);
     inputRef.current?.focus();
   };
@@ -178,6 +182,7 @@ function QuickCapturePanel() {
                 ↵
               </kbd>
             </div>
+            <AttachmentComposer attachments={pendingAtts} onChange={setPendingAtts} compact />
             <div className="mt-2 flex items-center justify-between px-1 text-[11px] text-muted-foreground">
               <span>Enter to add · keep going · Esc to close</span>
               {added > 0 && (

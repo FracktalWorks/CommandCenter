@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState, KeyboardEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  KeyboardEvent,
+} from "react";
 import {
   Inbox,
   Plus,
@@ -21,6 +27,8 @@ import {
   X,
   RotateCcw,
   Keyboard,
+  LayoutGrid,
+  LayoutList,
 } from "lucide-react";
 import FilterPills from "@/components/FilterPills";
 import { useTaskStore } from "../lib/taskStore";
@@ -33,9 +41,36 @@ import {
   relativeTime,
 } from "../lib/utils";
 import { InboxCard } from "./InboxCard";
+import { InboxTable } from "./InboxTable";
+import { AttachmentComposer } from "./AttachmentComposer";
+import type { TaskAttachment } from "../lib/types";
 import { ClarifyModal } from "./ClarifyModal";
 
 const AGING_MS = 3 * 24 * 3600 * 1000; // GTD: empty regularly — flag stale items
+
+// Density preference (cards vs Notion-style dense list), sticky per browser.
+// Read via useSyncExternalStore so SSR HTML (always "cards") hydrates cleanly
+// and the client value takes over without a mismatch.
+const DENSITY_KEY = "cc.tasks.inboxDensity";
+const densityListeners = new Set<() => void>();
+function subscribeDensity(cb: () => void) {
+  densityListeners.add(cb);
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === DENSITY_KEY) cb();
+  };
+  window.addEventListener("storage", onStorage);
+  return () => {
+    densityListeners.delete(cb);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+function readDensity(): "cards" | "list" {
+  try {
+    return window.localStorage.getItem(DENSITY_KEY) === "list" ? "list" : "cards";
+  } catch {
+    return "cards";
+  }
+}
 
 type DateFilter = "all" | DateBucketKey;
 type SortOrder = "newest" | "oldest";
@@ -90,6 +125,14 @@ export function InboxView() {
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
+  const density = useSyncExternalStore(subscribeDensity, readDensity, () => "cards");
+  const setDensityPersist = (d: "cards" | "list") => {
+    try {
+      window.localStorage.setItem(DENSITY_KEY, d);
+    } catch { /* private mode */ }
+    densityListeners.forEach((cb) => cb());
+  };
+  const [pendingAtts, setPendingAtts] = useState<TaskAttachment[]>([]);
   const [showTickler, setShowTickler] = useState(false);
   const [cursorId, setCursorId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -240,8 +283,9 @@ export function InboxView() {
   const submit = () => {
     const t = value.trim();
     if (!t) return;
-    capture(t);
+    capture(t, pendingAtts.length ? pendingAtts : undefined);
     setValue("");
+    setPendingAtts([]);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
@@ -297,6 +341,9 @@ export function InboxView() {
               </kbd>
             )}
           </div>
+          {/* Context attachments: a photo, a file, or a link kept WITH the
+              capture — clarify sees them later. */}
+          <AttachmentComposer attachments={pendingAtts} onChange={setPendingAtts} />
 
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-muted-foreground">
             <button
@@ -520,6 +567,21 @@ export function InboxView() {
                     <ArrowDownUp className="h-3.5 w-3.5" />
                     {sortOrder === "newest" ? "Newest" : "Oldest"}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDensityPersist(density === "cards" ? "list" : "cards")
+                    }
+                    title={density === "cards" ? "Dense list view" : "Card view"}
+                    className="tech-transition inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    {density === "cards" ? (
+                      <LayoutList className="h-3.5 w-3.5" />
+                    ) : (
+                      <LayoutGrid className="h-3.5 w-3.5" />
+                    )}
+                    {density === "cards" ? "List" : "Cards"}
+                  </button>
                 </div>
               ))}
           </div>
@@ -565,21 +627,30 @@ export function InboxView() {
                   Showing {visible.length} of {activeInbox.length}
                 </p>
               )}
-              <div className="flex flex-col gap-2">
-                {visible.map((item) => (
-                  <InboxCard
-                    key={item.id}
-                    item={item}
-                    cursor={cursorId === item.id}
-                    selected={selectedIds.has(item.id)}
-                    selectionMode={selectionActive}
-                    editing={editingId === item.id}
-                    onSelectToggle={() => toggleSelect(item.id)}
-                    onEditStart={() => setEditingId(item.id)}
-                    onEditEnd={() => setEditingId(null)}
-                  />
-                ))}
-              </div>
+              {density === "list" ? (
+                <InboxTable
+                  items={visible}
+                  cursorId={cursorId}
+                  selectedIds={selectedIds}
+                  onSelectToggle={toggleSelect}
+                />
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {visible.map((item) => (
+                    <InboxCard
+                      key={item.id}
+                      item={item}
+                      cursor={cursorId === item.id}
+                      selected={selectedIds.has(item.id)}
+                      selectionMode={selectionActive}
+                      editing={editingId === item.id}
+                      onSelectToggle={() => toggleSelect(item.id)}
+                      onEditStart={() => setEditingId(item.id)}
+                      onEditEnd={() => setEditingId(null)}
+                    />
+                  ))}
+                </div>
+              )}
             </>
           )}
         </div>

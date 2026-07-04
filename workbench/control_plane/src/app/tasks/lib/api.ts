@@ -3,7 +3,7 @@
 // The store hydrates from here when the gateway is reachable and silently
 // falls back to the bundled mock data when it isn't (UI-first demo mode).
 
-import { GtdItem, GtdProject, Person, Source, ProviderKind, Disposition } from "./types";
+import { GtdItem, GtdProject, Person, Source, ProviderKind, Disposition, TaskAttachment, WorkspaceHierarchySpace } from "./types";
 import type { ClarifyProposal, ClarifyDisposition, Confidence } from "./clarify";
 import type { ConnectedProvider } from "./mockData";
 
@@ -69,6 +69,9 @@ function mapItem(raw: Raw): GtdItem {
     dueAt: raw.due_at ? String(raw.due_at) : undefined,
     isHardDate: Boolean(raw.is_hard_date),
     createdAt: String(raw.created_at ?? ""),
+    attachments: Array.isArray(raw.attachments)
+      ? (raw.attachments as TaskAttachment[])
+      : undefined,
     origin: raw.origin && typeof raw.origin === "object"
       ? {
           kind: String((raw.origin as Raw).kind ?? ""),
@@ -92,6 +95,7 @@ function mapProject(raw: Raw): GtdProject {
     source: (raw.source === "SYNCED" ? "SYNCED" : "LOCAL") as Source,
     provider: (raw.provider ?? undefined) as ProviderKind | undefined,
     accountId: raw.account_id ? String(raw.account_id) : undefined,
+    providerRef: raw.provider_ref ? String(raw.provider_ref) : undefined,
     outcome: String(raw.outcome ?? ""),
     purpose: raw.purpose ? String(raw.purpose) : undefined,
     status: String(raw.status ?? "ACTIVE") as GtdProject["status"],
@@ -102,6 +106,7 @@ function mapProject(raw: Raw): GtdProject {
 export interface TaskAccount {
   id: string;
   provider: string;
+  hierarchy: WorkspaceHierarchySpace[];
   workspaceId: string;
   label: string;
   syncEnabled: boolean;
@@ -115,6 +120,7 @@ export interface TaskAccount {
 
 function mapAccount(raw: Raw): TaskAccount {
   return {
+    hierarchy: Array.isArray(raw.hierarchy) ? (raw.hierarchy as WorkspaceHierarchySpace[]) : [],
     id: String(raw.id ?? ""),
     provider: String(raw.provider ?? ""),
     workspaceId: String(raw.workspace_id ?? ""),
@@ -171,11 +177,29 @@ export async function fetchPeople(): Promise<Person[]> {
     .filter((p) => p.name);
 }
 
-export async function apiCapture(title: string, notes?: string): Promise<GtdItem> {
+export async function apiCapture(
+  title: string,
+  notes?: string,
+  attachments?: TaskAttachment[]
+): Promise<GtdItem> {
   return mapItem(
     await gatewayFetch<Raw>(`/items`, {
       method: "POST",
-      body: JSON.stringify({ title, notes: notes || null }),
+      body: JSON.stringify({
+        title,
+        notes: notes ?? null,
+        attachments:
+          attachments && attachments.length > 0
+            ? attachments.map((a) => ({
+                kind: a.kind,
+                name: a.name,
+                url: a.url,
+                attachment_id: a.attachmentId ?? null,
+                mime: a.mime ?? null,
+                size: a.size ?? null,
+              }))
+            : null,
+      }),
     })
   );
 }
@@ -291,6 +315,58 @@ export async function apiRefreshSchema(id: string): Promise<TaskAccount> {
   return mapAccount(
     await gatewayFetch<Raw>(`/accounts/${id}/schema/refresh`, { method: "POST" })
   );
+}
+
+/** LIVE workspace-member pull — the delegate picker's freshness call.
+ *  People removed in the tool disappear from the returned account. */
+export async function apiRefreshMembers(id: string): Promise<TaskAccount> {
+  return mapAccount(
+    await gatewayFetch<Raw>(`/accounts/${id}/members/refresh`, { method: "POST" })
+  );
+}
+
+/** Create a NEW project (ClickUp list) under a space/folder — an explicit
+ *  user-approved provider write from the picker's "create project" action. */
+export async function apiCreateAccountProject(
+  accountId: string,
+  req: { name: string; spaceId: string; folderId?: string }
+): Promise<{ projectId: string; providerRef: string; name: string }> {
+  const r = await gatewayFetch<Raw>(`/accounts/${accountId}/projects`, {
+    method: "POST",
+    body: JSON.stringify({
+      name: req.name,
+      space_id: req.spaceId,
+      folder_id: req.folderId ?? null,
+    }),
+  });
+  return {
+    projectId: String(r.project_id ?? ""),
+    providerRef: String(r.provider_ref ?? ""),
+    name: String(r.name ?? req.name),
+  };
+}
+
+/** Upload one attachment (multipart through the proxy) → descriptor for the
+ *  capture payload. */
+export async function apiUploadAttachment(file: File): Promise<TaskAttachment> {
+  const fd = new FormData();
+  fd.append("file", file, file.name);
+  const res = await fetch(`/api/tasks/attachments`, { method: "POST", body: fd });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      (body as { detail?: string }).detail || `Upload failed (${res.status})`
+    );
+  }
+  const r = (await res.json()) as Raw;
+  return {
+    kind: (r.kind === "image" ? "image" : "file") as TaskAttachment["kind"],
+    name: String(r.name ?? file.name),
+    url: String(r.url ?? ""),
+    attachmentId: r.attachment_id ? String(r.attachment_id) : undefined,
+    mime: r.mime ? String(r.mime) : undefined,
+    size: r.size != null ? Number(r.size) : undefined,
+  };
 }
 
 export interface TaskSettings {

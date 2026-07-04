@@ -47,6 +47,9 @@ class TaskAccountModel(BaseModel):
     statuses: list[str] = []
     members: list[PersonModel] = []
     project_count: int = 0
+    # ClickUp-shaped navigation tree for the project picker accordion:
+    # [{id, name, folders: [{id, name, lists: [{id, name}]}], lists: [...]}]
+    hierarchy: list[dict] = []
 
 
 class GtdItemModel(BaseModel):
@@ -77,6 +80,7 @@ class GtdItemModel(BaseModel):
     completed_at: str | None = None
     clarified_at: str | None = None
     origin: dict | None = None           # source linkage (e.g. captured from an email)
+    attachments: list[dict] = []         # context refs: file/image/link descriptors
     created_at: str
     updated_at: str
 
@@ -208,6 +212,7 @@ def _row_to_item(row: Any) -> GtdItemModel:
         completed_at=_iso(row.completed_at),
         clarified_at=_iso(row.clarified_at),
         origin=_parse_jsonb(getattr(row, "origin", None)),
+        attachments=_parse_jsonb(getattr(row, "attachments", None)) or [],
         created_at=_iso(row.created_at) or "",
         updated_at=_iso(row.updated_at) or "",
     )

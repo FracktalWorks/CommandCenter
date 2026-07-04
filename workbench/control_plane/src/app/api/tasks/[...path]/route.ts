@@ -58,23 +58,57 @@ async function forward(
   const { path } = await params;
   const upstream = buildUpstreamUrl(path, req);
   try {
+    const reqType = req.headers.get("content-type") ?? "";
+    const isMultipart = reqType.startsWith("multipart/form-data");
     const init: RequestInit = {
       method,
       headers: {
         ...(await buildGatewayHeaders()),
         ...(method === "GET" || method === "DELETE"
           ? {}
-          : { "Content-Type": "application/json" }),
+          : // Multipart (attachment uploads) must pass through byte-exact
+            // with its boundary; everything else is JSON as before.
+            { "Content-Type": isMultipart ? reqType : "application/json" }),
       },
       signal: AbortSignal.timeout(30_000),
     };
     if (method !== "GET" && method !== "DELETE") {
-      const body = await req.json().catch(() => ({}));
-      init.body = JSON.stringify(body);
+      if (isMultipart) {
+        init.body = Buffer.from(await req.arrayBuffer());
+      } else {
+        const body = await req.json().catch(() => ({}));
+        init.body = JSON.stringify(body);
+      }
     }
-    const res = await fetch(upstream, init);
+    // A pooled keep-alive socket can be closed by the gateway just as we
+    // reuse it, failing the fetch spuriously (undici vs uvicorn's short
+    // keep-alive). GETs are idempotent — retry once on network failure.
+    let res: Response;
+    try {
+      res = await fetch(upstream, init);
+    } catch (err) {
+      if (method !== "GET") throw err;
+      res = await fetch(upstream, {
+        ...init,
+        signal: AbortSignal.timeout(30_000),
+      });
+    }
     if (res.status === 204) {
       return new NextResponse(null, { status: 204 });
+    }
+    const resType = res.headers.get("content-type") ?? "";
+    if (!resType.includes("application/json")) {
+      // Binary passthrough (attachment downloads): keep type + disposition.
+      const buf = Buffer.from(await res.arrayBuffer());
+      return new NextResponse(buf, {
+        status: res.status,
+        headers: {
+          "Content-Type": resType || "application/octet-stream",
+          ...(res.headers.get("content-disposition")
+            ? { "Content-Disposition": res.headers.get("content-disposition")! }
+            : {}),
+        },
+      });
     }
     const resBody = await res.json().catch(() => ({}));
     return NextResponse.json(resBody, { status: res.status });

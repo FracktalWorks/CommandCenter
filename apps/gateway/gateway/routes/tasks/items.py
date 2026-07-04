@@ -60,6 +60,9 @@ VIEW_WHERE: dict[str, str] = {
 class CaptureRequest(BaseModel):
     title: str
     notes: str | None = None
+    # Context refs from the capture UI: {kind: file|image|link, name, url,
+    # attachment_id?, mime?, size?}. Links need no upload.
+    attachments: list[dict] | None = None
 
 
 class CaptureBatchRequest(BaseModel):
@@ -76,6 +79,7 @@ class ItemPatch(BaseModel):
     context: str | None = None
     energy: str | None = None
     due_at: str | None = None
+    attachments: list[dict] | None = None  # replaces the whole list
 
 
 class OrganizeRequest(BaseModel):
@@ -132,9 +136,12 @@ async def capture_item(
     try:
         item_id = str(uuid4())
         await db.execute(
-            text("""INSERT INTO gtd_items (id, user_id, title, description)
-                    VALUES (:id, :uid, :title, :notes)"""),
-            {"id": item_id, "uid": _uid(user), "title": title, "notes": req.notes},
+            text("""INSERT INTO gtd_items
+                    (id, user_id, title, description, attachments)
+                    VALUES (:id, :uid, :title, :notes, :atts)"""),
+            {"id": item_id, "uid": _uid(user), "title": title,
+             "notes": req.notes,
+             "atts": json.dumps(req.attachments) if req.attachments else None},
         )
         await db.commit()
         return _row_to_item(await _fetch_item(db, item_id, _uid(user)))
@@ -315,6 +322,9 @@ async def patch_item(
     if patch.due_at is not None:
         sets.append("due_at = :due")
         params["due"] = _parse_ts(patch.due_at)
+    if patch.attachments is not None:
+        sets.append("attachments = :atts")
+        params["atts"] = json.dumps(patch.attachments) or None
     if not sets:
         raise HTTPException(status_code=400, detail="No fields to update")
     sets.append("updated_at = now()")

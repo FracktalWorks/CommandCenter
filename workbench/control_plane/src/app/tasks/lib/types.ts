@@ -51,6 +51,9 @@ export interface GtdProject {
   provider?: ProviderKind;
   /** which connected workspace account a SYNCED project mirrors */
   accountId?: string;
+  /** native project/list id in the tool (ClickUp list id) — the accordion
+   *  picker selects by this */
+  providerRef?: string;
   /** the desired outcome / "wild success" statement (the title) */
   outcome: string;
   /** natural-planning: why this matters */
@@ -106,6 +109,8 @@ export interface GtdItem {
   isHardDate?: boolean;
 
   createdAt: string;
+  /** Context attachments captured with the item (photo/file/link). */
+  attachments?: TaskAttachment[];
   /** Source linkage when the capture came from another app (email, etc.). */
   origin?: {
     kind: string;
@@ -145,3 +150,22 @@ export type ViewKey =
   | "reference"
   | "engage"
   | "horizons";
+
+/** A context reference kept with a capture. Files/images are served from the
+ *  gateway attachment store; links are references only. */
+export interface TaskAttachment {
+  kind: "file" | "image" | "link";
+  name: string;
+  url: string;
+  attachmentId?: string;
+  mime?: string;
+  size?: number;
+}
+
+/** ClickUp-shaped navigation node for the project picker accordion. */
+export interface WorkspaceHierarchySpace {
+  id: string;
+  name: string;
+  lists: { id: string; name: string }[];
+  folders: { id: string; name: string; lists: { id: string; name: string }[] }[];
+}

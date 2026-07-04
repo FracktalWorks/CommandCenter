@@ -453,6 +453,69 @@ def _validate_agent_name(name: str) -> str:
     return registry_names.get(safe_no_prefix) or dynamic_names.get(safe_no_prefix) or safe_no_prefix
 
 
+# The sentinel a session carries when its real agent hasn't been resolved yet
+# (e.g. /chat/active-sessions returns it for a Redis-active thread with no
+# chat_session row yet). It must NEVER reach a run dispatch as a literal agent
+# name — see _resolve_agent_for_run below.
+_UNRESOLVED_AGENT_SENTINELS = {"unknown", "", "undefined", "null", "none"}
+
+
+def _resolve_agent_for_run(agent: str | None, thread_id: str | None) -> str:
+    """Resolve the agent name for a run, recovering an unresolved sentinel.
+
+    A chat session can carry ``agent_name='unknown'`` (the placeholder that
+    ``/chat/active-sessions`` returns for a Redis-active thread whose
+    ``chat_session`` row doesn't exist yet). If that poisoned value is dispatched
+    verbatim, ``_validate_agent_name`` 422s with the raw registry list — the
+    "Unknown agent 'unknown'" error users hit.
+
+    When the requested agent is such a sentinel AND we have a ``thread_id``, the
+    thread's most recent ``agent_run`` trace records the REAL agent that ran on
+    it — recover from there before validating. Otherwise fall through to
+    ``_validate_agent_name``, which now gives an actionable message for the
+    sentinel instead of dumping the registry.
+    """
+    raw = (agent or "").strip()
+    if raw.lower() not in _UNRESOLVED_AGENT_SENTINELS:
+        return _validate_agent_name(raw)
+
+    # Sentinel — try to recover the real agent from the run trace.
+    if thread_id:
+        try:
+            from acb_graph import get_session  # noqa: PLC0415
+            from sqlalchemy import text  # noqa: PLC0415
+
+            with get_session() as s:
+                rows = s.execute(
+                    text(
+                        "SELECT agent_name FROM agent_run "
+                        "WHERE thread_id = :tid AND agent_name <> '' "
+                        "ORDER BY started_at DESC LIMIT 10"
+                    ),
+                    {"tid": thread_id},
+                ).fetchall()
+            # Take the most recent trace whose agent is a REAL agent (skip any
+            # sentinel that a prior run might itself have recorded). Filtering
+            # in Python keeps the SQL free of expanding-bindparam subtleties.
+            for r in rows:
+                name = (r.agent_name or "").strip()
+                if name and name.lower() not in _UNRESOLVED_AGENT_SENTINELS:
+                    # Validate the recovered name (still guards against a stale
+                    # trace pointing at a since-removed agent).
+                    return _validate_agent_name(name)
+        except Exception:  # noqa: BLE001 — fall through to the actionable error
+            pass
+
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail=(
+            "This conversation isn't linked to an agent yet — please pick "
+            "an agent to continue (the session's agent could not be resolved"
+            f"{' from its history' if thread_id else ''})."
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Webhook routing table
 # Maps (source, event_type) → agent name.
@@ -1061,7 +1124,7 @@ async def run_agent_stream_endpoint(
     """
     from orchestrator.executor import run_agent_stream  # noqa: PLC0415
 
-    agent_name = _validate_agent_name(req.agent)
+    agent_name = _resolve_agent_for_run(req.agent, req.thread_id)
     run_id = req.run_id or str(uuid.uuid4())
     user_id: str = getattr(user, "email", "") or "anonymous"
 
@@ -1510,7 +1573,7 @@ async def run_agent_sync(
     """
     from orchestrator.executor import AgentRunError, run_agent  # noqa: PLC0415
 
-    agent = _validate_agent_name(req.agent)
+    agent = _resolve_agent_for_run(req.agent, req.thread_id)
     run_id = req.run_id or str(uuid.uuid4())
 
     try:
@@ -1550,7 +1613,7 @@ async def run_agent_async(
     """
     from orchestrator.executor import run_agent  # noqa: PLC0415
 
-    agent = _validate_agent_name(req.agent)
+    agent = _resolve_agent_for_run(req.agent, req.thread_id)
     run_id = req.run_id or str(uuid.uuid4())
 
     async def _run() -> None:

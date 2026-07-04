@@ -26,6 +26,21 @@ export interface ChatSession {
 
 const STORAGE_KEY = "cc-chat-sessions";
 
+/**
+ * Sentinels a session's agentName can carry when its real agent hasn't been
+ * resolved — chiefly "unknown", which /chat/active-sessions returns for a
+ * Redis-active thread with no chat_session row yet. Such a value must NEVER be
+ * dispatched to /agent/run/stream verbatim (it 422s "Unknown agent 'unknown'").
+ * The gateway now recovers the real agent from the run trace on dispatch; the
+ * client mirrors that intent by treating these as "unresolved → show picker".
+ */
+const UNRESOLVED_AGENT_SENTINELS = new Set(["", "unknown", "undefined", "null", "none"]);
+
+/** True when a session's agentName is a placeholder, not a real agent. */
+export function isUnresolvedAgent(agentName: string | null | undefined): boolean {
+  return UNRESOLVED_AGENT_SENTINELS.has((agentName ?? "").trim().toLowerCase());
+}
+
 /** Write to localStorage without letting a QuotaExceededError crash the caller
  *  (the session list / message cache can fill the quota on heavy users). */
 function safeSetItem(key: string, value: string): void {
@@ -68,6 +83,17 @@ export function deleteSession(id: string): void {
 }
 
 export function createSession(agentName = "orchestrator"): ChatSession {
+  // Never mint a session on a placeholder agent — that's the poisoned-row bug
+  // (chat_session.agent_name='unknown' → dispatch 422). A caller passing a
+  // sentinel means the agent wasn't resolved upstream; surface it loudly and
+  // fall back to the orchestrator rather than persist an undispatchable name.
+  if (isUnresolvedAgent(agentName)) {
+    console.warn(
+      `createSession called with unresolved agent ${JSON.stringify(agentName)} — ` +
+      `falling back to "orchestrator". Resolve the agent before creating the session.`,
+    );
+    agentName = "orchestrator";
+  }
   const now = new Date().toISOString();
   return {
     id: crypto.randomUUID(),

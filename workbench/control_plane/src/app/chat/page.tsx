@@ -11,6 +11,7 @@ import {
   createSession,
   enrichSession,
   fetchAndMergeSessionsFromDb,
+  isUnresolvedAgent,
   type ChatSession,
 } from "@/lib/sessions";
 import type { Mem0Memory } from "@/lib/memory";
@@ -658,12 +659,23 @@ function ChatPageInner() {
   const handleSelectAgent = useCallback(
     (agentName: string) => {
       setShowPicker(false);
+      // If the active session is unresolved ("unknown"), REPAIR it in place
+      // rather than spawning a duplicate — the user picked the agent for THIS
+      // conversation, so adopt it (updates localStorage + Postgres via upsert).
+      const current = getSessions().find((s) => s.id === activeSessionId);
+      if (current && isUnresolvedAgent(current.agentName)) {
+        const repaired = { ...current, agentName, updatedAt: new Date().toISOString() };
+        upsertSession(repaired);
+        setSessions(getSessions());
+        setActiveSessionId(repaired.id);
+        return;
+      }
       const s = createSession(agentName);
       upsertSession(s);
       setSessions(getSessions());
       setActiveSessionId(s.id);
     },
-    []
+    [activeSessionId]
   );
 
   const handleSelectSession = useCallback((id: string) => {
@@ -709,6 +721,20 @@ function ChatPageInner() {
   );
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+
+  // ── Unresolved-agent guard ("infer, else prompt") ──────────────────────
+  // A session persisted with agentName="unknown" (the /chat/active-sessions
+  // placeholder that leaked into chat_session rows) must NOT be dispatched — it
+  // 422s "Unknown agent 'unknown'". The gateway now infers the real agent from
+  // the run trace on dispatch, and the data migration repairs stored rows; this
+  // is the client "else prompt" fallback for a still-unresolved active session:
+  // open the picker so the user resolves it, which repairs the row in place
+  // (handleSelectAgent). Only fires when a session is actually selected.
+  useEffect(() => {
+    if (activeSession && isUnresolvedAgent(activeSession.agentName)) {
+      setShowPicker(true);
+    }
+  }, [activeSession]);
 
   // ── Mobile: drawer content builders ────────────────────────────────────
   const conversationsContent = (

@@ -52,6 +52,12 @@ tmp/
 # Docker volumes (if mounted locally)
 infra/volumes/
 
+# CodeGraph — per-checkout local symbol index (dev-velocity tooling, Phase 2).
+# The .mcp.json + codegraph.json config IS committed; the index is not.
+.codegraph/
+.codegraph.db
+codegraph.db
+
 # Theia IDE (old PRD - ADR-014 removed)
 ide/
 .vps

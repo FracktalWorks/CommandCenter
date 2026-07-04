@@ -69,6 +69,13 @@ jobs:
         continue-on-error: true
         run: uv run mypy apps packages || echo "type errors above (non-blocking — tracked)"
 
+      # Non-blocking: per-PR codebase-health on just the changed files, so a PR
+      # that adds a big/complex function is visible in review before it merges.
+      # The weekly whole-repo report is a separate scheduled workflow.
+      - name: Codebase health (changed files, report-only)
+        continue-on-error: true
+        run: uv run python scripts/codebase_health.py --diff --top 10
+
   test:
     name: "Unit tests"
     runs-on: ubuntu-latest

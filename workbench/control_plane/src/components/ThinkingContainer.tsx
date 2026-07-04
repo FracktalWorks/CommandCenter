@@ -511,6 +511,25 @@ export default function ThinkingContainer({
         {hasContent && <span className="ml-auto shrink-0 text-muted-foreground text-[10px]">{expanded ? "▲" : "▼"}</span>}
       </button>
 
+      {/* ── Pre-content working indicator ──────────────────────────────
+          The dead-air gap between "run started" and the first tool/reasoning
+          event used to show only a static "Thinking…" header, which reads as
+          "stuck". Show a rotating working message + animated typing dots the
+          moment the agent is active with no content yet, so every chat surface
+          (this container renders for main chat, email, and task-manager alike)
+          has clear motion from the start. Hands off to the in-body spinner once
+          content arrives (this row hides when hasContent). */}
+      {isActive && !hasContent && (
+        <div className="flex items-center gap-2 px-3 pb-2 -mt-1 chat-fade-in">
+          <span className="ml-6 text-[11px] text-muted-foreground italic">{workingMsg}</span>
+          <span className="flex items-center gap-1 text-muted-foreground/70" aria-hidden="true">
+            <span className="chat-typing-dot" />
+            <span className="chat-typing-dot" />
+            <span className="chat-typing-dot" />
+          </span>
+        </div>
+      )}
+
       {/* ── Body: vertical timeline ────────────────────────────────── */}
       {expanded && hasContent && (
         <div

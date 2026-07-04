@@ -156,3 +156,28 @@ async def get_errors(filePaths: str = "[]") -> str:
         lines.append(f"  ... and {len(errors) - 50} more issues")
 
     return "\n".join(lines)
+
+
+async def run_diagnostics(filePaths: str = "[]") -> str:
+    """Run code diagnostics on the workspace (syntax + lint check).
+
+    Alias of :func:`get_errors` under a clearer, action-oriented name — some
+    agents/models reach for "run_diagnostics" rather than "get_errors". Both are
+    injected into every agent (Copilot SDK + native MAF) and do the same thing:
+    run ``py_compile`` (syntax) and ``ruff`` (lint) over the target files and
+    return a structured report.
+
+    **Use this tool when:**
+    - You have just edited or created Python files
+    - You are about to commit changes / report success
+    - A run failed and you need to diagnose syntax or lint errors
+
+    Args:
+        filePaths: JSON array of file paths relative to the workspace root
+            (e.g. ``'["executor.py"]'``), or ``'[]'`` to auto-discover recently
+            changed ``.py`` files.
+
+    Returns:
+        Structured error report, or a "No errors found" message if clean.
+    """
+    return await get_errors(filePaths)

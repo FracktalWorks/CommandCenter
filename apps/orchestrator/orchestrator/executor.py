@@ -737,7 +737,7 @@ emit_generative_ui(ui) — render a rich UI element inline (JSON component tree:
 remember(query), recall_timeline(entity,query), save_memory(fact), save_episode(name,content)
 manage_todo_list(todoList) — structured task tracking panel (JSON array)
 ask_user(question,choices?) — HITL: pause and ask the user one question (blocking; the run resumes with their answer)
-get_errors(filePaths?) — check Python files for syntax/lint errors
+run_diagnostics(filePaths?) — run code diagnostics: check Python files for syntax/lint errors (alias: get_errors)
 install_dependency(packages) — install Python package(s) into the agent venv at runtime
 save_note(path,fact), recall_notes(path,query?) — repo-scoped working memory
 query_history(sql) — SELECT-only query against chat history DB
@@ -782,7 +782,7 @@ Workspace folders visible in the Files Viewer: **outputs/** (default for generat
 **MANDATORY — You MUST call these functions. Do NOT use other tools for these purposes.**
 - For todo/task tracking: call ``manage_todo_list`` — do NOT use ``remember``, ``task_manager``, ClickUp, or any other tool.
 - For clarifying questions: call ``ask_user`` (native, blocking) or ``ask_questions`` — do NOT just ask in text.
-- For checking code: call ``get_errors``.
+- For checking code / diagnostics: call ``run_diagnostics`` (alias ``get_errors``).
 - For notes: call ``save_note`` / ``recall_notes``.
 - For history: call ``query_history``.
 - For code search: call ``github_search`` / ``github_repo_search``.
@@ -793,7 +793,7 @@ Function calls trigger real-time UI (TodoPanel, ElicitationCard) — text does n
 - **ask_questions(questions)** — Alternative for asking SEVERAL questions at once via a multi-question card (JSON object with a ``"questions"`` array; each has ``header``, ``question``, optional ``options``/``multiSelect``/``allowFreeformInput``).  Prefer ``ask_user`` for single blocking questions.
 
 ### Code quality & error checking
-- **get_errors(filePaths?)** — Check Python files for syntax, type, and lint errors.  Call after editing or creating files.  Pass a JSON array of file paths (e.g. ``'["executor.py"]'``) or ``'[]'`` to auto-discover recently changed files.  Runs ``py_compile`` (syntax) and ``ruff`` (lint, if installed).  Returns structured errors or ``"No errors found."``.
+- **run_diagnostics(filePaths?)** (alias **get_errors**) — Run code diagnostics: check Python files for syntax, type, and lint errors.  Call after editing or creating files, before committing, or to diagnose a failed run.  Pass a JSON array of file paths (e.g. ``'["executor.py"]'``) or ``'[]'`` to auto-discover recently changed files.  Runs ``py_compile`` (syntax) and ``ruff`` (lint, if installed).  Returns structured errors or ``"No errors found."``.  Both names call the same tool.
 
 ### Runtime dependencies
 - **install_dependency(packages)** — Install Python package(s) into the agent runtime so your imports/tools work.  Use this when you hit a ``ModuleNotFoundError`` or know a task needs a package that isn't installed.  Pass space- or comma-separated specs, e.g. ``"pandas openpyxl"`` or ``"requests==2.31.0"`` (plain names + optional version; no flags/URLs).  Installs into the shared agent venv via ``uv``; the package is importable immediately.  Prefer this over shell ``pip install`` (the venv has no pip).
@@ -983,9 +983,14 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
         pass
 
     # Code error checking — lint/syntax/type checks after edits.
+    # get_errors + its clearer alias run_diagnostics (same behaviour); both are
+    # injected into every agent shape so either name resolves on Copilot + MAF.
     try:
-        from acb_skills.error_tools import get_errors  # noqa: PLC0415
-        _all_tools = _all_tools + [get_errors]
+        from acb_skills.error_tools import (  # noqa: PLC0415
+            get_errors,
+            run_diagnostics,
+        )
+        _all_tools = _all_tools + [get_errors, run_diagnostics]
     except ImportError:
         pass
 

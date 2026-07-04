@@ -41,6 +41,7 @@ TOOL_ANNOTATIONS: dict[str, dict[str, bool]] = {
     "request_confirmation":  {"read_only": True,  "destructive": False, "idempotent": False, "open_world": False},
     # Code / runtime
     "get_errors":            {"read_only": True,  "destructive": False, "idempotent": True,  "open_world": False},
+    "run_diagnostics":       {"read_only": True,  "destructive": False, "idempotent": True,  "open_world": False},
     "install_dependency":    {"read_only": False, "destructive": False, "idempotent": True,  "open_world": True},
     # Notes / history / code search
     "save_note":             {"read_only": False, "destructive": False, "idempotent": False, "open_world": False},

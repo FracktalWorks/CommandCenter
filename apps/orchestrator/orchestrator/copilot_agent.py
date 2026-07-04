@@ -6,6 +6,7 @@ import logging
 import os
 from typing import Any, AsyncIterable
 
+from acb_llm import compress_tool_output
 from agent_framework import AgentResponseUpdate, Content, Message
 from agent_framework.exceptions import AgentException
 from agent_framework_github_copilot import GitHubCopilotAgent
@@ -418,6 +419,7 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
 
                 elif t == SessionEventType.TOOL_EXECUTION_COMPLETE:
                     tc_id = getattr(d, "tool_call_id", "") or ""
+                    tc_name = getattr(d, "tool_name", "") or ""
                     result_obj = getattr(d, "result", None)
                     result_text = getattr(result_obj, "content", "") if result_obj else ""
                     success = getattr(d, "success", None)
@@ -429,11 +431,16 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                             if hasattr(error_val, "message")
                             else str(error_val)
                         )
+                    # RTK-style: compress large shell/test/build output before it
+                    # re-enters context (gated on tool name; structured tool
+                    # results and small output pass through untouched). Full
+                    # output stays in the run trace. See Item ② of
+                    # specs/runtime_agent_effectiveness_2026-07.md.
                     queue.put_nowait(AgentResponseUpdate(
                         role="tool",
                         contents=[Content.from_function_result(
                             call_id=tc_id,
-                            result=result_text or "",
+                            result=compress_tool_output(tc_name, result_text or ""),
                             exception=exception,
                             raw_representation=d,
                         )],
@@ -464,6 +471,7 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
 
                 elif t == SessionEventType.EXTERNAL_TOOL_COMPLETED:
                     tc_id = getattr(d, "tool_call_id", "") or ""
+                    tc_name = getattr(d, "tool_name", "") or ""
                     result_obj = getattr(d, "result", None)
                     result_text = (
                         getattr(result_obj, "content", "")
@@ -478,11 +486,15 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                             if hasattr(error_val, "message")
                             else str(error_val)
                         )
+                    # Same RTK-style compression; the tool-name gate means our
+                    # structured custom tools (manage_todo_list, ask_questions, …)
+                    # pass through UNTOUCHED — only a custom tool that shells out
+                    # would ever be compressed. See Item ② of the spec.
                     queue.put_nowait(AgentResponseUpdate(
                         role="tool",
                         contents=[Content.from_function_result(
                             call_id=tc_id,
-                            result=result_text or "",
+                            result=compress_tool_output(tc_name, result_text or ""),
                             exception=exception,
                             raw_representation=d,
                         )],

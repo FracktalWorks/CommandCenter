@@ -295,11 +295,61 @@ def test_unfold_is_noop_when_answer_followed_tool():
 
 # ── End-to-end: run_detached → on_complete → persisted row ──────────────────
 
+class _FakePubSub:
+    """Minimal async pub/sub stand-in — one Redis-side channel queue per
+    subscription, fed by :meth:`_FakeRedis.publish`. Mirrors the proven
+    implementation in test_stream_replay_trajectory.py so run_detached's
+    control listener (stream_relay._control_listener) works under FakeRedis."""
+
+    def __init__(self, hub: _FakeRedis) -> None:
+        self._hub = hub
+        self._queues: dict[str, asyncio.Queue] = {}
+
+    async def subscribe(self, channel: str) -> None:
+        q: asyncio.Queue = asyncio.Queue()
+        self._queues[channel] = q
+        self._hub._subs.setdefault(channel, []).append(q)
+
+    async def unsubscribe(self, channel: str) -> None:
+        q = self._queues.pop(channel, None)
+        subs = self._hub._subs.get(channel)
+        if subs and q in subs:
+            subs.remove(q)
+
+    async def listen(self):
+        while True:
+            getters = [asyncio.ensure_future(q.get()) for q in self._queues.values()]
+            if not getters:
+                await asyncio.sleep(0.005)
+                continue
+            done, pending = await asyncio.wait(
+                getters, return_when=asyncio.FIRST_COMPLETED,
+            )
+            for p in pending:
+                p.cancel()
+            for d in done:
+                yield d.result()
+
+    async def aclose(self) -> None:
+        for ch in list(self._queues):
+            await self.unsubscribe(ch)
+
+
 class _FakeRedis:
     def __init__(self) -> None:
         self.streams: dict[str, list[tuple[str, dict]]] = {}
         self.kv: dict[str, str] = {}
+        self._subs: dict[str, list[asyncio.Queue]] = {}
         self._seq = 0
+
+    async def publish(self, channel: str, data: str) -> int:
+        subs = self._subs.get(channel, [])
+        for q in subs:
+            q.put_nowait({"type": "message", "channel": channel, "data": data})
+        return len(subs)
+
+    def pubsub(self) -> _FakePubSub:
+        return _FakePubSub(self)
 
     @staticmethod
     def _id(eid: str) -> tuple[int, int]:
@@ -381,6 +431,15 @@ async def test_detached_run_persists_final_message(monkeypatch):
                            persisted.append((sid, msgs)))[-1],
     )
 
+    # The E2 run-trace write (added after this test) hits Postgres; offline it
+    # blocks on the connection timeout for minutes. Stub it — this test locks
+    # message persistence, not the trace row (that has its own coverage).
+    import gateway.run_trace as run_trace
+
+    async def _noop_trace(**_kw):
+        return None
+    monkeypatch.setattr(run_trace, "record_run_trace", _noop_trace)
+
     async def _agent_gen():
         yield 'data: {"type": "TEXT_MESSAGE_CONTENT", "delta": "Hello "}\n\n'
         yield 'data: {"type": "TEXT_MESSAGE_CONTENT", "delta": "world."}\n\n'
@@ -443,6 +502,13 @@ async def test_cancelled_run_still_persists_partial_turn(monkeypatch):
         chat_routes, "_upsert_messages",
         lambda sid, msgs: persisted.append(msgs),
     )
+    # Stub the E2 run-trace DB write (see the sibling test) — offline it blocks
+    # on the Postgres connection timeout for minutes.
+    import gateway.run_trace as run_trace
+
+    async def _noop_trace(**_kw):
+        return None
+    monkeypatch.setattr(run_trace, "record_run_trace", _noop_trace)
 
     started = asyncio.Event()
 

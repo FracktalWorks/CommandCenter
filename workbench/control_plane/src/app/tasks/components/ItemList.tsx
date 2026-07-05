@@ -9,6 +9,7 @@ import {
   Lightbulb,
   CheckCircle2,
   AlertTriangle,
+  Loader2,
 } from "lucide-react";
 import { useTaskStore, itemsForView } from "../lib/taskStore";
 import { ViewKey } from "../lib/types";
@@ -32,6 +33,7 @@ const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
 
 export function ItemList() {
   const items = useTaskStore((s) => s.items);
+  const loading = useTaskStore((s) => s.loading);
   const view = useTaskStore((s) => s.selectedView);
   const context = useTaskStore((s) => s.selectedContext);
 
@@ -74,7 +76,12 @@ export function ItemList() {
         )}
       </header>
 
-      {visible.length === 0 ? (
+      {loading ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/60" />
+          <p className="text-xs text-muted-foreground">Loading…</p>
+        </div>
+      ) : visible.length === 0 ? (
         <EmptyState view={view} />
       ) : (
         <div className="flex-1 overflow-y-auto">

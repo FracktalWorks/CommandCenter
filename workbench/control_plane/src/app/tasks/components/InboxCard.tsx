@@ -67,6 +67,7 @@ export function InboxCard({
 }: InboxCardProps) {
   const openClarify = useTaskStore((s) => s.openClarify);
   const quickDispose = useTaskStore((s) => s.quickDispose);
+  const deleteItem = useTaskStore((s) => s.deleteItem);
   const deferItem = useTaskStore((s) => s.deferItem);
   const updateItem = useTaskStore((s) => s.updateItem);
   const people = useTaskStore((s) => s.people);
@@ -267,10 +268,10 @@ export function InboxCard({
           onClick={() => quickDispose(item.id, "REFERENCE")}
         />
         <CardAction
-          label="Trash"
+          label="Delete"
           icon={Trash2}
           danger
-          onClick={() => quickDispose(item.id, "TRASH")}
+          onClick={() => deleteItem(item.id)}
         />
         <CardAction
           label="Clarify"

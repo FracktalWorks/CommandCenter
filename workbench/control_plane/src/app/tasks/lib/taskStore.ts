@@ -240,6 +240,10 @@ interface UndoSnapshot {
   label: string;
   /** which item ids the change touched (live mode reverts these server-side). */
   changedIds?: string[];
+  /** Items HARD-DELETED by this change. Undo re-creates them server-side
+   *  (a new row/id) via capture, since delete is permanent — unlike a
+   *  disposition change, which undo reverts in place via changedIds. */
+  deletedItems?: GtdItem[];
 }
 
 /** Friendly past-tense label for a one-tap disposition (undo toast). */
@@ -285,6 +289,9 @@ interface TaskState {
   people: Person[];
   /** 'demo' = bundled mock data (no gateway); 'live' = the /tasks API. */
   backend: "demo" | "live";
+  /** True until the first hydrate() resolves — the UI shows a spinner instead
+   *  of the (empty) initial state, so production never flashes mock data. */
+  loading: boolean;
   /** Destination entries for Clarify — Local + each connected workspace.
    *  In live mode entry ids are task_account UUIDs. */
   providers: ConnectedProvider[];
@@ -331,6 +338,11 @@ interface TaskState {
   quickDispose: (id: string, disposition: Disposition) => void;
   /** Apply the same disposition to many items at once (multi-select). */
   bulkDispose: (ids: string[], disposition: Disposition) => void;
+  /** PERMANENTLY delete an item (hard-remove the row, not a GTD "Trash"
+   *  disposition). Optimistic + undoable (undo re-creates it). */
+  deleteItem: (id: string) => void;
+  /** Permanently delete many items at once (multi-select). */
+  deleteItems: (ids: string[]) => void;
   /** Defer (tickler): hide from the active inbox until a date, then resurface. */
   deferItem: (id: string, dateIso: string) => void;
   /** Bring a deferred item back into the active inbox now. */
@@ -397,11 +409,15 @@ interface TaskState {
 }
 
 export const useTaskStore = create<TaskState>((set, get) => ({
-  items: MOCK_ITEMS,
-  projects: MOCK_PROJECTS,
+  // Start EMPTY + loading. hydrate() fills from the gateway (live) or, only if
+  // the gateway is truly absent, falls back to the bundled mocks (demo/local
+  // dev). This is what stops production briefly flashing dummy tasks on load.
+  items: [],
+  projects: [],
   contexts: MOCK_CONTEXTS,
-  people: MOCK_PEOPLE,
+  people: [],
   backend: "demo",
+  loading: true,
   providers: CONNECTED_PROVIDERS,
   accounts: [],
 
@@ -739,6 +755,48 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     if (get().backend === "live") sync(apiBulkDispose(ids, disposition));
   },
 
+  deleteItem: (id) => {
+    const target = get().items.find((i) => i.id === id);
+    if (!target) return;
+    set((s) => ({
+      items: s.items.filter((i) => i.id !== id),
+      selectedItemId: s.selectedItemId === id ? null : s.selectedItemId,
+      undoSnapshot: {
+        items: s.items,
+        projects: s.projects,
+        processed: s.processedThisSession,
+        selectedItemId: s.selectedItemId,
+        label: "Deleted",
+        deletedItems: [target],
+      },
+    }));
+    if (get().backend === "live") sync(apiDeleteItem(id).catch(() => {}));
+  },
+
+  deleteItems: (ids) => {
+    const remove = new Set(ids);
+    const targets = get().items.filter((i) => remove.has(i.id));
+    if (!targets.length) return;
+    set((s) => ({
+      items: s.items.filter((i) => !remove.has(i.id)),
+      selectedItemId:
+        s.selectedItemId && remove.has(s.selectedItemId)
+          ? null
+          : s.selectedItemId,
+      undoSnapshot: {
+        items: s.items,
+        projects: s.projects,
+        processed: s.processedThisSession,
+        selectedItemId: s.selectedItemId,
+        label: `Deleted ${targets.length} item${targets.length === 1 ? "" : "s"}`,
+        deletedItems: targets,
+      },
+    }));
+    if (get().backend === "live") {
+      sync(Promise.all(ids.map((id) => apiDeleteItem(id).catch(() => {}))));
+    }
+  },
+
   deferItem: (id, dateIso) => {
     set((s) => ({
       items: s.items.map((i) =>
@@ -798,7 +856,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   undoLastChange: () => {
     const snap = get().undoSnapshot;
     if (!snap) return;
-    const { items, projects, processed, selectedItemId, changedIds } = snap;
+    const { items, projects, processed, selectedItemId, changedIds, deletedItems } = snap;
     set({
       items,
       projects,
@@ -806,7 +864,28 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       selectedItemId,
       undoSnapshot: null,
     });
-    if (get().backend === "live" && changedIds?.length) {
+    if (get().backend !== "live") return;
+    if (deletedItems?.length) {
+      // Undo a HARD delete: the row is gone server-side, so re-create it (a
+      // new id) and swap the restored local placeholder to the server row so
+      // future edits target a real row. Local state is already restored.
+      sync(
+        Promise.all(
+          deletedItems.map(async (d) => {
+            try {
+              const created = await apiCapture(d.title, d.notes ?? undefined);
+              set((s) => ({
+                items: s.items.map((i) => (i.id === d.id ? created : i)),
+                selectedItemId:
+                  s.selectedItemId === d.id ? created.id : s.selectedItemId,
+              }));
+            } catch {
+              /* leave the local restore; a reload reconciles */
+            }
+          }),
+        ),
+      );
+    } else if (changedIds?.length) {
       // Revert the server rows to their pre-change disposition (the local
       // state is already fully restored from the snapshot).
       const prev = new Map(items.map((i) => [i.id, i]));
@@ -847,6 +926,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
           : MOCK_PEOPLE;
       set({
         backend: "live",
+        loading: false,
         items,
         projects,
         accounts,
@@ -862,8 +942,16 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       // sync. Fire-and-forget — the UI is already usable on cached rows.
       if (accounts.length > 0 && settings.autoSyncOnOpen) void get().syncNow();
     } catch {
-      // Gateway absent/unreachable → stay in demo mode on the bundled mocks.
-      set({ backend: "demo" });
+      // Gateway absent/unreachable → demo mode on the bundled mocks (local
+      // dev only). We seed the mocks HERE, not at init, so production (gateway
+      // present) never shows them even for a frame.
+      set({
+        backend: "demo",
+        loading: false,
+        items: MOCK_ITEMS,
+        projects: MOCK_PROJECTS,
+        people: MOCK_PEOPLE,
+      });
     }
   },
 

@@ -29,6 +29,7 @@ import {
   Keyboard,
   LayoutGrid,
   LayoutList,
+  Loader2,
 } from "lucide-react";
 import FilterPills from "@/components/FilterPills";
 import { useTaskStore } from "../lib/taskStore";
@@ -77,6 +78,7 @@ type SortOrder = "newest" | "oldest";
 
 export function InboxView() {
   const items = useTaskStore((s) => s.items);
+  const loading = useTaskStore((s) => s.loading);
   const capture = useTaskStore((s) => s.capture);
   const openClarify = useTaskStore((s) => s.openClarify);
   const openQuickCapture = useTaskStore((s) => s.openQuickCapture);
@@ -84,6 +86,8 @@ export function InboxView() {
   const undoLastCapture = useTaskStore((s) => s.undoLastCapture);
   const quickDispose = useTaskStore((s) => s.quickDispose);
   const bulkDispose = useTaskStore((s) => s.bulkDispose);
+  const deleteItem = useTaskStore((s) => s.deleteItem);
+  const deleteItems = useTaskStore((s) => s.deleteItems);
   const undeferItem = useTaskStore((s) => s.undeferItem);
   const undoSnapshot = useTaskStore((s) => s.undoSnapshot);
   const undoLastChange = useTaskStore((s) => s.undoLastChange);
@@ -179,6 +183,10 @@ export function InboxView() {
     bulkDispose([...selectedIds], d);
     clearSelection();
   };
+  const bulkDelete = () => {
+    deleteItems([...selectedIds]);
+    clearSelection();
+  };
 
   // ── keyboard navigation + triage over the visible list ──
   useEffect(() => {
@@ -202,6 +210,12 @@ export function InboxView() {
         const nextId =
           visible[idx + 1]?.id ?? visible[idx - 1]?.id ?? null;
         quickDispose(cur.id, d);
+        setCursorId(nextId);
+      };
+      const deleteAdvance = () => {
+        const nextId =
+          visible[idx + 1]?.id ?? visible[idx - 1]?.id ?? null;
+        deleteItem(cur.id);
         setCursorId(nextId);
       };
 
@@ -232,7 +246,7 @@ export function InboxView() {
           break;
         case "t":
           e.preventDefault();
-          disposeAdvance("TRASH");
+          deleteAdvance();
           break;
         case "s":
           e.preventDefault();
@@ -269,6 +283,7 @@ export function InboxView() {
     quickCaptureOpen,
     openClarify,
     quickDispose,
+    deleteItem,
     undoSnapshot,
     undoLastChange,
   ]);
@@ -378,7 +393,7 @@ export function InboxView() {
               <Sc k="↵">clarify</Sc>
               <Sc k="e">edit</Sc>
               <Sc k="x">select</Sc>
-              <Sc k="t">trash</Sc>
+              <Sc k="t">delete</Sc>
               <Sc k="s">someday</Sc>
               <Sc k="r">reference</Sc>
               <Sc k="2">do now</Sc>
@@ -531,8 +546,8 @@ export function InboxView() {
                     <BulkBtn icon={FileText} onClick={() => bulk("REFERENCE")}>
                       Reference
                     </BulkBtn>
-                    <BulkBtn icon={Trash2} danger onClick={() => bulk("TRASH")}>
-                      Trash
+                    <BulkBtn icon={Trash2} danger onClick={bulkDelete}>
+                      Delete
                     </BulkBtn>
                     <button
                       type="button"
@@ -599,7 +614,12 @@ export function InboxView() {
       {/* List */}
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-4xl px-4 py-4 sm:px-6 sm:py-5">
-          {showTickler ? (
+          {loading ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/60" />
+              <p className="text-xs text-muted-foreground">Loading your inbox…</p>
+            </div>
+          ) : showTickler ? (
             <TicklerList items={tickler} onUndefer={undeferItem} />
           ) : activeInbox.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">

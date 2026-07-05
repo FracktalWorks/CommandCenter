@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import {
   Inbox,
   ListChecks,
@@ -12,12 +12,41 @@ import {
   Loader2,
   HardDrive,
   Cloud,
+  LayoutList,
+  Columns3,
 } from "lucide-react";
 import { useTaskStore, itemsForView } from "../lib/taskStore";
 import { ViewKey } from "../lib/types";
 import { isOverdue } from "../lib/utils";
-import { ItemRow } from "./ItemRow";
 import { ProjectsList } from "./ProjectsList";
+import { TaskCard } from "./TaskCard";
+import { TaskBoard } from "./TaskBoard";
+
+// View mode (list vs kanban board) for the processed-task views, sticky per
+// browser via useSyncExternalStore (SSR-safe, same recipe as the inbox density
+// toggle — avoids the useState(localStorage) hydration-mismatch bug).
+const MODE_KEY = "cc.tasks.viewMode";
+const modeListeners = new Set<() => void>();
+function subscribeMode(cb: () => void) {
+  modeListeners.add(cb);
+  const onStorage = (e: StorageEvent) => { if (e.key === MODE_KEY) cb(); };
+  window.addEventListener("storage", onStorage);
+  return () => {
+    modeListeners.delete(cb);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+function readMode(): "list" | "board" {
+  try {
+    return window.localStorage.getItem(MODE_KEY) === "board" ? "board" : "list";
+  } catch {
+    return "list";
+  }
+}
+function setModePersist(m: "list" | "board") {
+  try { window.localStorage.setItem(MODE_KEY, m); } catch { /* private mode */ }
+  modeListeners.forEach((cb) => cb());
+}
 
 const VIEW_META: Record<
   string,
@@ -40,6 +69,7 @@ export function ItemList() {
   const context = useTaskStore((s) => s.selectedContext);
   const sourceFilter = useTaskStore((s) => s.sourceFilter);
   const hasSynced = useTaskStore((s) => s.accounts.length > 0);
+  const mode = useSyncExternalStore(subscribeMode, readMode, () => "list");
 
   const visible = useMemo(
     () => itemsForView(items, view, context, sourceFilter),
@@ -53,6 +83,9 @@ export function ItemList() {
   const meta = VIEW_META[view] ?? VIEW_META.inbox;
   const Icon = meta.icon;
   const overdueCount = visible.filter((i) => isOverdue(i, MOCK_NOW)).length;
+  // Calendar is inherently a date-ordered list; the board would be a single
+  // column, so keep it list-only. Everything else offers both.
+  const boardable = view !== "calendar";
 
   return (
     <div className="flex h-full flex-col">
@@ -67,12 +100,50 @@ export function ItemList() {
               </span>
             )}
           </h1>
+          {/* List ⇄ Board view mode toggle (Jira-style). Sticky per browser. */}
+          {boardable && (
+            <div className="ml-auto flex items-center gap-0.5 rounded-md border border-border bg-background p-0.5">
+              <button
+                type="button"
+                onClick={() => setModePersist("list")}
+                aria-pressed={mode === "list"}
+                title="List view"
+                className={[
+                  "tech-transition inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium",
+                  mode === "list"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                ].join(" ")}
+              >
+                <LayoutList className="h-3 w-3" />
+                List
+              </button>
+              <button
+                type="button"
+                onClick={() => setModePersist("board")}
+                aria-pressed={mode === "board"}
+                title="Board view"
+                className={[
+                  "tech-transition inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium",
+                  mode === "board"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                ].join(" ")}
+              >
+                <Columns3 className="h-3 w-3" />
+                Board
+              </button>
+            </div>
+          )}
           {/* The source toggle lives in the sidebar (governs every view). When
               it's narrowed, show a small chip here so the active scope is
               obvious on this page too. */}
           {hasSynced && sourceFilter !== "all" && (
             <span
-              className="ml-auto inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"
+              className={[
+                "inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary",
+                boardable ? "ml-2" : "ml-auto",
+              ].join(" ")}
               title="Filtered by source — change it in the sidebar"
             >
               {sourceFilter === "local" ? (
@@ -85,8 +156,9 @@ export function ItemList() {
           )}
           <span
             className={
-              (hasSynced && sourceFilter !== "all" ? "ml-2" : "ml-auto") +
-              " text-xs text-muted-foreground"
+              (boardable || (hasSynced && sourceFilter !== "all")
+                ? "ml-2"
+                : "ml-auto") + " text-xs text-muted-foreground"
             }
           >
             {visible.length} item{visible.length === 1 ? "" : "s"}
@@ -108,10 +180,14 @@ export function ItemList() {
         </div>
       ) : visible.length === 0 ? (
         <EmptyState view={view} />
+      ) : boardable && mode === "board" ? (
+        <div className="min-h-0 flex-1">
+          <TaskBoard items={visible} view={view} />
+        </div>
       ) : (
         <div className="flex-1 overflow-y-auto">
           {visible.map((item) => (
-            <ItemRow key={item.id} item={item} now={MOCK_NOW} />
+            <TaskCard key={item.id} item={item} variant="row" />
           ))}
         </div>
       )}

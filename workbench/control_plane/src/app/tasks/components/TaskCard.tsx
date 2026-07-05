@@ -1,0 +1,175 @@
+"use client";
+
+import {
+  Clock,
+  AlertTriangle,
+  FolderKanban,
+  Zap,
+  Mail,
+  Paperclip,
+  GripVertical,
+} from "lucide-react";
+import { GtdItem } from "../lib/types";
+import { useTaskStore } from "../lib/taskStore";
+import { durationLabel, initials, isOverdue, relativeTime } from "../lib/utils";
+import { SourceBadge } from "./SourceBadge";
+
+const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
+
+const ENERGY_DOT: Record<string, string> = {
+  low: "bg-success",
+  medium: "bg-warning",
+  high: "bg-destructive",
+};
+
+// A rich, PM-tool-style task card (Jira/Linear-shaped) used by both the board
+// columns and the list view. Clicking opens the full-page focus modal. On the
+// board it's draggable (native HTML5 DnD wired by the parent column).
+export function TaskCard({
+  item,
+  variant = "board",
+  draggable = false,
+  onDragStart,
+  onDragEnd,
+}: {
+  item: GtdItem;
+  /** "board" = full card (default); "row" = denser one-line-ish list row. */
+  variant?: "board" | "row";
+  draggable?: boolean;
+  onDragStart?: (e: React.DragEvent) => void;
+  onDragEnd?: (e: React.DragEvent) => void;
+}) {
+  const openFocus = useTaskStore((s) => s.openFocus);
+  const projects = useTaskStore((s) => s.projects);
+  const project = item.projectId
+    ? projects.find((p) => p.id === item.projectId)
+    : undefined;
+  const overdue = isOverdue(item, MOCK_NOW);
+  const atts = item.attachments?.length ?? 0;
+
+  const meta = (
+    <>
+      {item.context && (
+        <span className="inline-flex items-center rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary/90">
+          {item.context}
+        </span>
+      )}
+      {item.energy && (
+        <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+          <span className={`h-1.5 w-1.5 rounded-full ${ENERGY_DOT[item.energy]}`} />
+          {item.energy}
+        </span>
+      )}
+      {item.timeEstimateMins ? (
+        <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+          <Zap className="h-3 w-3" />
+          {durationLabel(item.timeEstimateMins)}
+        </span>
+      ) : null}
+      {item.dueAt && (
+        <span
+          className={[
+            "inline-flex items-center gap-1 text-[10px]",
+            overdue ? "font-medium text-destructive" : "text-muted-foreground",
+          ].join(" ")}
+        >
+          {overdue ? <AlertTriangle className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
+          {relativeTime(item.dueAt, MOCK_NOW)}
+        </span>
+      )}
+      {atts > 0 && (
+        <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground">
+          <Paperclip className="h-3 w-3" />
+          {atts}
+        </span>
+      )}
+      {item.origin?.kind === "email" && (
+        <span
+          className="inline-flex items-center gap-1 text-[10px] text-muted-foreground"
+          title={`From email — ${item.origin.fromName || item.origin.fromEmail || ""}`}
+        >
+          <Mail className="h-3 w-3" />
+        </span>
+      )}
+    </>
+  );
+
+  if (variant === "row") {
+    return (
+      <button
+        type="button"
+        onClick={() => openFocus(item.id)}
+        className="tech-transition group flex w-full items-center gap-2.5 border-b border-border px-3.5 py-2.5 text-left hover:bg-secondary/50"
+      >
+        <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+          {item.title}
+        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          {meta}
+          {project && (
+            <span className="hidden items-center gap-1 text-[10px] text-muted-foreground sm:inline-flex">
+              <FolderKanban className="h-3 w-3" />
+              <span className="max-w-[120px] truncate">{project.outcome}</span>
+            </span>
+          )}
+          {item.assignee && <Avatar name={item.assignee.name} />}
+          <SourceBadge source={item.source} provider={item.provider} size="xs" />
+        </div>
+      </button>
+    );
+  }
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onClick={() => openFocus(item.id)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openFocus(item.id);
+        }
+      }}
+      className="group tech-transition relative flex cursor-pointer flex-col gap-2 rounded-lg border border-border bg-card p-3 shadow-sm hover:border-primary/40 hover:shadow-md"
+    >
+      {draggable && (
+        <GripVertical className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-muted-foreground/30 opacity-0 transition-opacity group-hover:opacity-100" />
+      )}
+      <p className="pr-4 text-[13px] font-medium leading-snug text-foreground">
+        {item.title}
+      </p>
+      {item.nextAction && item.nextAction !== item.title && (
+        <p className="line-clamp-2 text-[11px] text-muted-foreground">
+          {item.nextAction}
+        </p>
+      )}
+      {project && (
+        <span className="inline-flex w-fit items-center gap-1 rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          <FolderKanban className="h-3 w-3" />
+          <span className="max-w-[160px] truncate">{project.outcome}</span>
+        </span>
+      )}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">{meta}</div>
+      <div className="mt-0.5 flex items-center justify-between">
+        <SourceBadge source={item.source} provider={item.provider} size="xs" />
+        {item.assignee && (
+          <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+            <Avatar name={item.assignee.name} />
+            <span className="max-w-[90px] truncate">{item.assignee.name}</span>
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Avatar({ name }: { name: string }) {
+  return (
+    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary/15 text-[8px] font-bold text-primary">
+      {initials(name)}
+    </span>
+  );
+}

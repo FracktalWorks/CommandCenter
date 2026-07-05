@@ -245,7 +245,13 @@ interface EmailState {
   closeCompose: () => void;
   hydrateEmail: (email: Email) => void;
   /** "Captured to Tasks" toast state (email → GTD inbox). */
-  taskCaptureNotice: { title: string; created: boolean } | null;
+  taskCaptureNotice: {
+    title: string;
+    created: boolean;
+    disposition?: string;
+    assigneeName?: string | null;
+    dueAt?: string | null;
+  } | null;
   /** Capture an email into the task inbox (AI-drafted server-side). */
   captureEmailToTasks: (emailId: string) => Promise<void>;
   clearTaskCaptureNotice: () => void;
@@ -803,8 +809,19 @@ export const useEmailStore = create<EmailState>((set, get) => ({
 
   captureEmailToTasks: async (emailId) => {
     const email = get().emails.find((e) => e.id === emailId);
-    if (!email) return;
-    let notice: { title: string; created: boolean };
+    type Notice = NonNullable<EmailState["taskCaptureNotice"]>;
+    if (!email) {
+      // e.g. a brand-new draft not yet saved to the message list.
+      set({
+        taskCaptureNotice: {
+          title: "Save this draft first, then add it to Tasks",
+          created: false,
+        },
+      });
+      setTimeout(() => get().clearTaskCaptureNotice(), 6000);
+      return;
+    }
+    let notice: Notice;
     try {
       const { captureEmailToTask } = await import("./api");
       notice = await captureEmailToTask(email.accountId, emailId);

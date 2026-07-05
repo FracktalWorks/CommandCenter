@@ -847,6 +847,17 @@ export function EmailDetail({ email }: EmailDetailProps) {
               {fullDateLabel(email.receivedAt)}
             </div>
           </div>
+          {/* Card-level capture: turn this email (with its thread + who's on it)
+              into a routed GTD task — always visible with the message. */}
+          <button
+            type="button"
+            onClick={() => captureEmailToTasks(email.id)}
+            title="Add to Tasks — the assistant reads the thread and files a routed task (follow-up / delegated / next action) with a due date if implied."
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary transition-colors"
+          >
+            <ListChecks size={14} />
+            <span className="hidden sm:inline">Add to Tasks</span>
+          </button>
         </div>
 
         {/* Body */}

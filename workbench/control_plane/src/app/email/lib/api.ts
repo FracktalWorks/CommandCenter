@@ -132,7 +132,13 @@ function mapEmail(raw: Record<string, unknown>): Email {
 export async function captureEmailToTask(
   accountId: string,
   emailId: string
-): Promise<{ title: string; created: boolean }> {
+): Promise<{
+  title: string;
+  created: boolean;
+  disposition: string;
+  assigneeName: string | null;
+  dueAt: string | null;
+}> {
   const res = await gatewayFetch<Record<string, unknown>>(
     "/tasks/capture/from-email",
     {
@@ -144,6 +150,9 @@ export async function captureEmailToTask(
   return {
     title: String(item.title ?? ""),
     created: Boolean(res.created),
+    disposition: String(res.disposition ?? "INBOX"),
+    assigneeName: res.assignee_name ? String(res.assignee_name) : null,
+    dueAt: res.due_at ? String(res.due_at) : null,
   };
 }
 

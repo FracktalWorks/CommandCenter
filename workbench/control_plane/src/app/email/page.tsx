@@ -904,27 +904,56 @@ export default function EmailPage() {
       />
 
       {/* Captured-to-Tasks toast */}
-      {taskCaptureNotice && (
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[80] flex items-center gap-3 bg-card border border-border shadow-xl rounded-lg px-4 py-2.5 text-xs">
-          <span className="text-foreground">
-            {taskCaptureNotice.created
-              ? <>Captured to Tasks: &ldquo;{taskCaptureNotice.title}&rdquo;</>
-              : taskCaptureNotice.title.startsWith("Could not")
-                ? taskCaptureNotice.title
-                : <>Already in Tasks: &ldquo;{taskCaptureNotice.title}&rdquo;</>}
-          </span>
-          <a href="/tasks" className="text-primary font-medium hover:opacity-80">
-            Open Tasks
-          </a>
-          <button
-            onClick={() => useEmailStore.getState().clearTaskCaptureNotice()}
-            className="text-muted-foreground hover:text-foreground"
-            aria-label="Dismiss"
-          >
-            ×
-          </button>
-        </div>
-      )}
+      {taskCaptureNotice && (() => {
+        const n = taskCaptureNotice;
+        // A non-created notice with no task title is a plain message (draft/
+        // error), not an "already in Tasks" idempotent hit.
+        const isMessage = !n.created && !n.title.includes("“") &&
+          (n.title.startsWith("Could not") || n.title.startsWith("Save"));
+        // Friendly disposition label + why-it's-that.
+        const dispLabel: Record<string, string> = {
+          WAITING: n.assigneeName ? `Delegated to ${n.assigneeName}` : "Follow-up",
+          NEXT: "Next action",
+          CALENDAR: "Scheduled",
+          SOMEDAY: "Someday",
+          INBOX: "Inbox",
+        };
+        const disp = n.disposition ? dispLabel[n.disposition] : null;
+        const due = n.dueAt
+          ? new Date(n.dueAt).toLocaleDateString(undefined, {
+              month: "short", day: "numeric",
+            })
+          : null;
+        return (
+          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[80] flex items-center gap-3 bg-card border border-border shadow-xl rounded-lg px-4 py-2.5 text-xs">
+            <span className="text-foreground">
+              {isMessage ? (
+                n.title
+              ) : n.created ? (
+                <>Captured to Tasks: &ldquo;{n.title}&rdquo;</>
+              ) : (
+                <>Already in Tasks: &ldquo;{n.title}&rdquo;</>
+              )}
+            </span>
+            {n.created && disp && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 text-primary px-2 py-0.5 font-medium">
+                {disp}
+                {due ? ` · due ${due}` : ""}
+              </span>
+            )}
+            <a href="/tasks" className="text-primary font-medium hover:opacity-80">
+              Open Tasks
+            </a>
+            <button
+              onClick={() => useEmailStore.getState().clearTaskCaptureNotice()}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        );
+      })()}
 
       {/* Undo-send toast */}
       {pendingSend && (

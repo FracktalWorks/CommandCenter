@@ -481,7 +481,7 @@ def test_ai_call_sites_use_configured_models():
     # Both LLM helpers accept the model and route through the alias-aware
     # completion path (tier-fast/-balanced/-powerful or a raw model id).
     assert "acompletion_with_fallback" in inspect.getsource(tasks_ai._llm_atomize)
-    assert "acompletion_with_fallback" in inspect.getsource(capture_email._llm_draft)
+    assert "acompletion_with_fallback" in inspect.getsource(capture_email._llm_capture)
 
 
 def test_settings_update_is_partial():

@@ -49,6 +49,11 @@ class GtdSettingsModel(BaseModel):
     # heuristic only. background_sync: keep workspaces synced on a schedule.
     clarify_use_llm: bool = True
     background_sync: bool = True
+    # Mirror already-completed provider tasks into the local board. Default OFF:
+    # a connected workspace can carry hundreds of closed tasks that would
+    # otherwise swamp the working views. Existing mirrored rows still flip to
+    # DONE when closed upstream; this only governs importing NEW closed tasks.
+    mirror_done_tasks: bool = False
 
 
 class GtdSettingsPatch(BaseModel):
@@ -60,6 +65,7 @@ class GtdSettingsPatch(BaseModel):
     auto_sync_on_open: bool | None = None
     clarify_use_llm: bool | None = None
     background_sync: bool | None = None
+    mirror_done_tasks: bool | None = None
 
 
 async def gtd_models(db: Any, user_id: str) -> dict[str, str]:
@@ -88,15 +94,17 @@ async def gtd_toggles(db: Any, user_id: str) -> dict[str, bool]:
     """The user's AI/behaviour toggles with safe defaults. Never raises — a
     missing row or a pre-migration DB (no such column) returns the defaults
     (features on), so callers degrade to current behaviour rather than break."""
-    out = {"clarify_use_llm": True, "background_sync": True}
+    out = {"clarify_use_llm": True, "background_sync": True,
+           "mirror_done_tasks": False}
     try:
         row = (await db.execute(text(
-            """SELECT clarify_use_llm, background_sync
+            """SELECT clarify_use_llm, background_sync, mirror_done_tasks
                FROM gtd_settings WHERE user_id = :uid"""),
             {"uid": user_id})).fetchone()
         if row:
             out["clarify_use_llm"] = bool(row.clarify_use_llm)
             out["background_sync"] = bool(row.background_sync)
+            out["mirror_done_tasks"] = bool(row.mirror_done_tasks)
     except Exception as exc:
         _log.warning("tasks.settings.toggles_failed", error=str(exc)[:160])
     return out
@@ -119,6 +127,7 @@ async def _load(db: Any, user_id: str) -> GtdSettingsModel:
         # getattr defaults keep a pre-migration row (no such column) working.
         clarify_use_llm=bool(getattr(row, "clarify_use_llm", True)),
         background_sync=bool(getattr(row, "background_sync", True)),
+        mirror_done_tasks=bool(getattr(row, "mirror_done_tasks", False)),
     )
 
 

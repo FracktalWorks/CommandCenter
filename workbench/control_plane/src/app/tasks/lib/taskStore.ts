@@ -303,6 +303,10 @@ interface TaskState {
   selectedContext: string | null;
   selectedItemId: string | null;
   selectedProjectId: string | null;
+  /** "Mine only / Synced / All" board filter — hides the connected-workspace
+   *  mirror so your own captures aren't swamped. */
+  sourceFilter: "all" | "local" | "synced";
+  setSourceFilter: (f: "all" | "local" | "synced") => void;
 
   /** ids of the most recent capture batch (for undo). */
   lastCaptureIds: string[];
@@ -423,6 +427,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   selectedView: "inbox",
   selectedContext: null,
+  sourceFilter: "all",
+  setSourceFilter: (f) => set({ sourceFilter: f }),
   selectedItemId: null,
   selectedProjectId: null,
   lastCaptureIds: [],
@@ -1006,6 +1012,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     autoSyncOnOpen: true,
     clarifyUseLlm: true,
     backgroundSync: true,
+    mirrorDoneTasks: false,
   },
 
   updateSettings: async (patch) => {
@@ -1052,12 +1059,17 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
 // ── Derived selectors (pure; keep view logic in one place) ──────────────────
 
-/** Items shown for a given view (+ optional context drill-down). */
+/** Items shown for a given view (+ optional context drill-down + source
+ *  filter). ``source`` hides the connected-workspace mirror ("local") or shows
+ *  only it ("synced"); "all" (default) shows both. */
 export function itemsForView(
   items: GtdItem[],
   view: ViewKey,
   context: string | null,
+  source: "all" | "local" | "synced" = "all",
 ): GtdItem[] {
+  if (source === "local") items = items.filter((i) => i.source === "LOCAL");
+  else if (source === "synced") items = items.filter((i) => i.source !== "LOCAL");
   switch (view) {
     case "inbox":
       return items.filter((i) => i.disposition === "INBOX");

@@ -76,6 +76,7 @@ class AccountSyncResult(BaseModel):
     created: int = 0                # new gtd_items rows
     updated: int = 0                # existing rows refreshed
     completed: int = 0              # rows flipped to DONE this run
+    skipped: int = 0                # new closed tasks not mirrored (see toggle)
     error: str | None = None
 
 
@@ -218,11 +219,34 @@ async def _sync_account(db: Any, account: Any, *, full: bool) -> AccountSyncResu
     project_by_ref = {r.provider_ref: str(r.id) for r in proj_rows
                       if r.provider_ref}
 
+    # Unless the user opts in, we don't import a provider's completed-task
+    # backlog — it would swamp the working board. We still reflect completion
+    # of tasks we ALREADY mirror, so preload their provider ids and only skip a
+    # DONE task when it's brand-new to us.
+    from gateway.routes.tasks.settings import gtd_toggles
+    mirror_done = (await gtd_toggles(db, account.user_id)).get(
+        "mirror_done_tasks", False)
+    known_ids: set[str] = set()
+    if not mirror_done:
+        known_rows = (await db.execute(
+            text("""SELECT provider_task_id FROM gtd_items
+                    WHERE account_id = :aid AND source <> 'LOCAL'
+                      AND provider_task_id IS NOT NULL"""),
+            {"aid": str(account.id)},
+        )).fetchall()
+        known_ids = {r.provider_task_id for r in known_rows}
+
     for task in tasks:
         tid = task.get("provider_task_id")
         if not tid:
             continue
         mapped = map_pulled_task(task, my_id)
+        # Skip NEW completed tasks when done-mirroring is off. (Tasks we already
+        # mirror fall through so their completion is reflected.)
+        if (not mirror_done and mapped["disposition"] == "DONE"
+                and tid not in known_ids):
+            result.skipped += 1
+            continue
         row = (await db.execute(_UPSERT_SQL, {
             "id": str(uuid4()),
             "uid": account.user_id,

@@ -150,8 +150,12 @@ export function accountToProviderEntry(a: TaskAccount): ConnectedProvider {
 
 // ── Calls ────────────────────────────────────────────────────────────────────
 
-export async function fetchItems(view = "all"): Promise<GtdItem[]> {
-  const rows = await gatewayFetch<Raw[]>(`/items?view=${view}`);
+export async function fetchItems(
+  view = "all",
+  source: "" | "local" | "synced" = "",
+): Promise<GtdItem[]> {
+  const qs = source ? `?view=${view}&source=${source}` : `?view=${view}`;
+  const rows = await gatewayFetch<Raw[]>(`/items${qs}`);
   return rows.map(mapItem);
 }
 
@@ -378,6 +382,7 @@ export interface TaskSettings {
   autoSyncOnOpen: boolean;
   clarifyUseLlm: boolean;
   backgroundSync: boolean;
+  mirrorDoneTasks: boolean;
 }
 
 function mapSettings(r: Raw): TaskSettings {
@@ -390,6 +395,7 @@ function mapSettings(r: Raw): TaskSettings {
     autoSyncOnOpen: r.auto_sync_on_open !== false,
     clarifyUseLlm: r.clarify_use_llm !== false,
     backgroundSync: r.background_sync !== false,
+    mirrorDoneTasks: r.mirror_done_tasks === true,
   };
 }
 
@@ -414,6 +420,8 @@ export async function updateTaskSettings(
     body.clarify_use_llm = patch.clarifyUseLlm;
   if (patch.backgroundSync !== undefined)
     body.background_sync = patch.backgroundSync;
+  if (patch.mirrorDoneTasks !== undefined)
+    body.mirror_done_tasks = patch.mirrorDoneTasks;
   return mapSettings(
     await gatewayFetch<Raw>(`/settings`, {
       method: "PUT",
@@ -429,6 +437,7 @@ export interface SyncResult {
   created: number;
   updated: number;
   completed: number;
+  skipped: number;
   error?: string;
 }
 
@@ -451,6 +460,7 @@ export async function apiSyncTasks(opts?: {
     created: Number(r.created ?? 0),
     updated: Number(r.updated ?? 0),
     completed: Number(r.completed ?? 0),
+    skipped: Number(r.skipped ?? 0),
     error: r.error ? String(r.error) : undefined,
   }));
 }

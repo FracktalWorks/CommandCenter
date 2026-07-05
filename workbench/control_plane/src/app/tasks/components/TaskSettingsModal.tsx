@@ -247,6 +247,12 @@ function SettingsPanel() {
                 checked={settings.autoSyncOnOpen}
                 onChange={(v) => void updateSettings({ autoSyncOnOpen: v })}
               />
+              <Toggle
+                title="Mirror completed tasks from workspaces"
+                description="Import already-completed tasks from your connected PM workspaces into the board. Off (recommended) keeps a large finished backlog from swamping your active views — your own captures stay visible, and tasks you already track still flip to Done when closed upstream."
+                checked={settings.mirrorDoneTasks}
+                onChange={(v) => void updateSettings({ mirrorDoneTasks: v })}
+              />
             </div>
             <p className="mt-2 px-1 text-[11px] text-muted-foreground">
               Per-workspace connections, schema refresh, and disconnect live in

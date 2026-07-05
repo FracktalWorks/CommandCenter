@@ -53,7 +53,11 @@ VIEW_WHERE: dict[str, str] = {
     "done": "i.disposition = 'DONE'",
     "calendar": "i.due_at IS NOT NULL AND i.is_hard_date "
                 "AND i.disposition NOT IN ('DONE','TRASH')",
-    "all": "i.disposition <> 'TRASH'",
+    # The default working board: everything still in play. DONE is EXCLUDED here
+    # (it has its own "done" view) so a large synced backlog of completed tasks
+    # can't swamp the list and push LOCAL/open items past the row cap. Trashed
+    # rows are always hidden.
+    "all": "i.disposition NOT IN ('DONE', 'TRASH')",
 }
 
 
@@ -187,6 +191,7 @@ async def list_items(
     q: str = "",
     context: str = "",
     project_id: str = "",
+    source: str = "",          # "" all sources | "local" | "synced"
     limit: int = 500,
     user: UserContext = Depends(get_current_user),
 ):
@@ -204,11 +209,24 @@ async def list_items(
     if project_id.strip():
         clauses.append("i.project_id = :pid")
         params["pid"] = project_id.strip()
+    # Source filter (the "Mine only / All" toggle): LOCAL rows are ours,
+    # everything else is a mirrored PM tool.
+    src = source.strip().lower()
+    if src == "local":
+        clauses.append("i.source = 'LOCAL'")
+    elif src == "synced":
+        clauses.append("i.source <> 'LOCAL'")
     db = await _get_db()
     try:
+        # LOCAL (unprocessed / ours) rows ALWAYS sort first, so a large synced
+        # mirror can never push our own captures past the row cap — the Inbox
+        # invariant ("unprocessed items are always visible") holds regardless of
+        # how many tasks a connected workspace imports. Newest-first within each
+        # group.
         rows = (await db.execute(
             text(ITEM_SELECT + " WHERE " + " AND ".join(clauses)
-                 + " ORDER BY i.created_at DESC LIMIT :limit"),
+                 + " ORDER BY (i.source = 'LOCAL') DESC, i.created_at DESC"
+                 + " LIMIT :limit"),
             params,
         )).fetchall()
         return [_row_to_item(r) for r in rows]

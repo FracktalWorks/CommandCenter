@@ -36,10 +36,13 @@ export function ItemList() {
   const loading = useTaskStore((s) => s.loading);
   const view = useTaskStore((s) => s.selectedView);
   const context = useTaskStore((s) => s.selectedContext);
+  const sourceFilter = useTaskStore((s) => s.sourceFilter);
+  const setSourceFilter = useTaskStore((s) => s.setSourceFilter);
+  const hasSynced = useTaskStore((s) => s.accounts.length > 0);
 
   const visible = useMemo(
-    () => itemsForView(items, view, context),
-    [items, view, context],
+    () => itemsForView(items, view, context, sourceFilter),
+    [items, view, context, sourceFilter],
   );
 
   if (view === "projects") {
@@ -63,7 +66,39 @@ export function ItemList() {
               </span>
             )}
           </h1>
-          <span className="ml-auto text-xs text-muted-foreground">
+          {hasSynced && (
+            <div className="ml-auto flex items-center gap-0.5 rounded-md border border-border bg-background p-0.5">
+              {(["all", "local", "synced"] as const).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setSourceFilter(f)}
+                  className={
+                    "rounded px-2 py-0.5 text-[11px] font-medium capitalize transition-colors " +
+                    (sourceFilter === f
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground")
+                  }
+                  aria-pressed={sourceFilter === f}
+                  title={
+                    f === "local"
+                      ? "Only tasks you captured here"
+                      : f === "synced"
+                        ? "Only tasks mirrored from ClickUp"
+                        : "All tasks"
+                  }
+                >
+                  {f === "local" ? "Mine" : f}
+                </button>
+              ))}
+            </div>
+          )}
+          <span
+            className={
+              (hasSynced ? "ml-2" : "ml-auto") +
+              " text-xs text-muted-foreground"
+            }
+          >
             {visible.length} item{visible.length === 1 ? "" : "s"}
           </span>
         </div>

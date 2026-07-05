@@ -172,6 +172,16 @@ def test_view_map_covers_the_gtd_views():
         assert view in VIEW_WHERE
 
 
+def test_all_view_excludes_done_and_trash():
+    # The default working board must not surface a connected workspace's
+    # completed backlog — DONE has its own view. Trash is always hidden.
+    clause = VIEW_WHERE["all"]
+    assert "DONE" in clause and "TRASH" in clause
+    assert "NOT IN" in clause
+    # 'done' view is the ONLY one that shows DONE.
+    assert VIEW_WHERE["done"] == "i.disposition = 'DONE'"
+
+
 def test_dispositions_are_the_canonical_set():
     assert {"INBOX", "NEXT", "WAITING", "SOMEDAY", "PROJECT",
                             "REFERENCE", "DONE", "TRASH"} == DISPOSITIONS

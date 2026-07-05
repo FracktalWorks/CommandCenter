@@ -223,7 +223,14 @@ export async function apiPatchItem(
     notes?: string;
     disposition?: Disposition;
     defer_until?: string;
+    next_action?: string;
+    context?: string;
+    energy?: string;
+    time_estimate_mins?: number;
     due_at?: string;
+    provider_status?: string;
+    assignee?: { name: string; email?: string; provider_user_id?: string };
+    clear_assignee?: boolean;
   }
 ): Promise<GtdItem> {
   return mapItem(

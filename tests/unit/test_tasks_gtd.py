@@ -85,6 +85,61 @@ async def test_clickup_create_task_payload_and_result():
     assert out["provider_status"] == "to do"
 
 
+@pytest.mark.asyncio
+async def test_clickup_update_task_backsync_fields_and_assignee_delta():
+    """A back-synced edit PUTs only the changed fields, and models an assignee
+    change as ClickUp's add/rem delta (reassign from 7 → 42)."""
+    provider = ClickUpProvider("pk_123", "team-9")
+    fake_resp = SimpleNamespace(
+        status_code=200,
+        json=lambda: {"id": "86abc",
+                      "url": "https://app.clickup.com/t/86abc",
+                      "status": {"status": "in progress"}},
+        text="",
+    )
+    with patch("gateway.routes.tasks.providers.httpx.AsyncClient") as client_cls:
+        http = client_cls.return_value.__aenter__.return_value
+        http.put = AsyncMock(return_value=fake_resp)
+        out = await provider.update_task("86abc", {
+            "title": "Renamed",
+            "status": "In progress",
+            "assignee_id": "42",
+            "prev_assignee_id": "7",
+        })
+        args, kwargs = http.put.call_args
+        assert args[0].endswith("/task/86abc")
+        body = kwargs["json"]
+        assert body["name"] == "Renamed"
+        assert body["status"] == "In progress"
+        assert body["assignees"] == {"add": [42], "rem": [7]}
+    assert out["provider_status"] == "in progress"
+
+
+@pytest.mark.asyncio
+async def test_clickup_update_task_clear_assignee_removes_prev():
+    provider = ClickUpProvider("pk_123", "team-9")
+    fake_resp = SimpleNamespace(status_code=200, json=lambda: {"id": "86abc"}, text="")
+    with patch("gateway.routes.tasks.providers.httpx.AsyncClient") as client_cls:
+        http = client_cls.return_value.__aenter__.return_value
+        http.put = AsyncMock(return_value=fake_resp)
+        await provider.update_task("86abc",
+                                   {"clear_assignee": True, "prev_assignee_id": "7"})
+        body = http.put.call_args.kwargs["json"]
+        assert body["assignees"] == {"rem": [7]}
+
+
+@pytest.mark.asyncio
+async def test_clickup_update_task_noop_when_nothing_writable():
+    """A local-only field edit (no ClickUp-writable change) makes no HTTP call."""
+    provider = ClickUpProvider("pk_123", "team-9")
+    with patch("gateway.routes.tasks.providers.httpx.AsyncClient") as client_cls:
+        http = client_cls.return_value.__aenter__.return_value
+        http.put = AsyncMock()
+        out = await provider.update_task("86abc", {})
+        http.put.assert_not_called()
+    assert out["provider_task_id"] == "86abc"
+
+
 # ---------------------------------------------------------------------------
 # Clarify heuristic (ai.propose)
 # ---------------------------------------------------------------------------

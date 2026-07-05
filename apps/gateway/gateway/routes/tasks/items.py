@@ -31,6 +31,7 @@ from gateway.routes.tasks.core import (
     _assert_account_owner,
     _get_db,
     _key_store,
+    _log,
     _parse_jsonb,
     _row_to_item,
     _row_to_project,
@@ -74,7 +75,11 @@ class CaptureBatchRequest(BaseModel):
 
 
 class ItemPatch(BaseModel):
-    """Small in-place edits: rename, note, tickler, quick-dispose."""
+    """In-place edits to a task's metadata — used both for inbox captures
+    (rename/note/tickler/quick-dispose) and for editing a clarified task's
+    overlay (context/energy/estimate/due/stage/assignee). For a SYNCED task the
+    mapped fields also back-sync to the connected tool (see _push_patch_upstream).
+    """
     title: str | None = None
     notes: str | None = None
     disposition: str | None = None
@@ -82,7 +87,11 @@ class ItemPatch(BaseModel):
     next_action: str | None = None
     context: str | None = None
     energy: str | None = None
+    time_estimate_mins: int | None = None
     due_at: str | None = None
+    provider_status: str | None = None   # the tool's stage, e.g. 'To-do'
+    assignee: PersonModel | None = None   # a PersonModel to set; sentinel below to clear
+    clear_assignee: bool = False          # explicit unassign (assignee=None is "unchanged")
     attachments: list[dict] | None = None  # replaces the whole list
 
 
@@ -300,21 +309,35 @@ async def delete_item(item_id: str, user: UserContext = Depends(get_current_user
 
 # ── Small edits (rename / note / tickler / quick-dispose) ────────────────────
 
-@router.patch("/items/{item_id}", response_model=GtdItemModel)
-async def patch_item(
-    item_id: str,
-    patch: ItemPatch,
-    user: UserContext = Depends(get_current_user),
-):
-    sets, params = [], {"id": item_id, "uid": _uid(user)}
+def _build_item_update(
+    item_id: str, uid: str, patch: ItemPatch,
+) -> tuple[list[str], dict[str, Any]]:
+    """Translate an ItemPatch into (SET clauses, bound params). Raises 400 on
+    an empty title or bad disposition. Extracted so patch_item stays thin."""
+    sets: list[str] = []
+    params: dict[str, Any] = {"id": item_id, "uid": uid}
+    # Simple column → (clause, value) mappings. Each only fires when the field
+    # was provided (is not None), so a partial patch touches only what changed.
+    simple: list[tuple[Any, str, Any]] = [
+        (patch.notes, "description = :notes", patch.notes),
+        (patch.next_action, "next_action = :na", patch.next_action),
+        (patch.context, "context = :ctx", patch.context),
+        (patch.energy, "energy = :energy", patch.energy),
+        (patch.time_estimate_mins, "time_estimate_mins = :tem",
+         (patch.time_estimate_mins or None)),
+        (patch.provider_status, "provider_status = :pstatus",
+         (patch.provider_status or None)),
+    ]
+    keys = ["notes", "na", "ctx", "energy", "tem", "pstatus"]
+    for (present, clause, value), key in zip(simple, keys, strict=True):
+        if present is not None:
+            sets.append(clause)
+            params[key] = value
     if patch.title is not None:
         if not patch.title.strip():
             raise HTTPException(status_code=400, detail="Title cannot be empty")
         sets.append("title = :title")
         params["title"] = patch.title.strip()
-    if patch.notes is not None:
-        sets.append("description = :notes")
-        params["notes"] = patch.notes
     if patch.disposition is not None:
         if patch.disposition not in DISPOSITIONS:
             raise HTTPException(status_code=400,
@@ -328,26 +351,37 @@ async def patch_item(
     if patch.defer_until is not None:
         sets.append("defer_until = :defer")
         params["defer"] = _parse_ts(patch.defer_until)  # "" → None → clears
-    if patch.next_action is not None:
-        sets.append("next_action = :na")
-        params["na"] = patch.next_action
-    if patch.context is not None:
-        sets.append("context = :ctx")
-        params["ctx"] = patch.context
-    if patch.energy is not None:
-        sets.append("energy = :energy")
-        params["energy"] = patch.energy
     if patch.due_at is not None:
         sets.append("due_at = :due")
         params["due"] = _parse_ts(patch.due_at)
+    if patch.clear_assignee:
+        sets.append("assignee = NULL")
+    elif patch.assignee is not None:
+        sets.append("assignee = :assignee")
+        params["assignee"] = json.dumps(patch.assignee.model_dump())
     if patch.attachments is not None:
         sets.append("attachments = :atts")
         params["atts"] = json.dumps(patch.attachments) or None
     if not sets:
         raise HTTPException(status_code=400, detail="No fields to update")
     sets.append("updated_at = now()")
+    return sets, params
+
+
+@router.patch("/items/{item_id}", response_model=GtdItemModel)
+async def patch_item(
+    item_id: str,
+    patch: ItemPatch,
+    user: UserContext = Depends(get_current_user),
+):
+    sets, params = _build_item_update(item_id, _uid(user), patch)
     db = await _get_db()
     try:
+        # Snapshot the row BEFORE the write — we need the prior assignee id to
+        # build ClickUp's assignee add/rem delta, and provider linkage.
+        before = await _fetch_item(db, item_id, _uid(user))
+        if not before:
+            raise HTTPException(status_code=404, detail="Item not found")
         res = (await db.execute(
             text(f"UPDATE gtd_items SET {', '.join(sets)} "
                  "WHERE id = :id AND user_id = :uid RETURNING id"),
@@ -356,9 +390,69 @@ async def patch_item(
         if not res:
             raise HTTPException(status_code=404, detail="Item not found")
         await db.commit()
+        # Back-sync the edit to the connected tool (SYNCED tasks only). Runs
+        # AFTER the local commit and is best-effort: the user's edit is already
+        # saved, so an upstream hiccup logs but never loses the edit.
+        await _push_patch_upstream(db, before, patch, _uid(user))
         return _row_to_item(await _fetch_item(db, item_id, _uid(user)))
     finally:
         await db.close()
+
+
+async def _push_patch_upstream(
+    db: Any, before: Any, patch: ItemPatch, uid: str,
+) -> None:
+    """Back-sync a PATCH to the connected PM tool for a SYNCED, already-pushed
+    task. No-op for LOCAL/pending items. Best-effort — never raises to the
+    caller (a failed upstream write must not undo the saved local edit)."""
+    if before.source == "LOCAL" or not before.provider_task_id \
+            or not before.account_id:
+        return
+    # Only the ClickUp-writable fields warrant a call.
+    writable = any(v is not None for v in (
+        patch.title, patch.notes, patch.provider_status, patch.due_at,
+    )) or patch.assignee is not None or patch.clear_assignee
+    if not writable:
+        return
+    try:
+        account = await _assert_account_owner(db, str(before.account_id), uid)
+        creds = json.loads(_key_store().decrypt(account.credentials_encrypted))
+        provider = build_provider(account.provider, creds, account.workspace_id)
+        payload: dict[str, Any] = {}
+        if patch.title is not None:
+            payload["title"] = patch.title.strip()
+        if patch.notes is not None:
+            payload["description"] = patch.notes
+        if patch.provider_status is not None:
+            payload["status"] = patch.provider_status
+        if patch.due_at is not None:
+            due = _parse_ts(patch.due_at)
+            payload["due_at_ms"] = int(due.timestamp() * 1000) if due else None
+        prev = _parse_jsonb(before.assignee) or {}
+        if patch.clear_assignee:
+            payload["clear_assignee"] = True
+            payload["prev_assignee_id"] = prev.get("provider_user_id")
+        elif patch.assignee is not None:
+            payload["assignee_id"] = patch.assignee.provider_user_id
+            payload["prev_assignee_id"] = prev.get("provider_user_id")
+        result = await provider.update_task(str(before.provider_task_id), payload)
+        # Persist the tool's normalized stage/url back onto the mirror.
+        upd, uparams = [], {"id": str(before.id)}
+        if result.get("provider_status"):
+            upd.append("provider_status = :ps")
+            uparams["ps"] = result["provider_status"]
+        if result.get("provider_url"):
+            upd.append("provider_url = :url")
+            uparams["url"] = result["provider_url"]
+        if upd:
+            await db.execute(
+                text(f"UPDATE gtd_items SET {', '.join(upd)} WHERE id = :id"),
+                uparams,
+            )
+            await db.commit()
+    except Exception as exc:  # best-effort back-sync — never fail the local edit
+        _log.warning("tasks.patch.backsync_failed",
+                     item_id=str(before.id)[:12], error=str(exc)[:160])
 
 
 @router.post("/items/bulk", response_model=list[GtdItemModel])

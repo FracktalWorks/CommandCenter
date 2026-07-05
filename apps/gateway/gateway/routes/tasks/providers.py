@@ -66,6 +66,17 @@ class BaseTaskProvider(ABC):
         """Create a task in the tool (user-approved push) →
         {provider_task_id, provider_url, provider_status}."""
 
+    async def update_task(
+        self, provider_task_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Back-sync an edit to an existing task (user-initiated). ``payload``
+        carries only the changed fields (any of: title, description, status,
+        due_at_ms, assignee_id, clear_assignee) → returns the refreshed
+        {provider_task_id, provider_url, provider_status}. Default raises so a
+        connector that hasn't implemented writes fails loudly rather than
+        silently dropping the edit."""
+        raise ProviderError(self.provider, "update_task not supported", 501)
+
     @abstractmethod
     async def list_members(self, workspace_id: str) -> list[dict[str, Any]]:
         """CURRENT workspace members → [{name, email, provider_user_id}].
@@ -240,6 +251,52 @@ class ClickUpProvider(BaseTaskProvider):
         t = r.json()
         return {
             "provider_task_id": str(t.get("id", "")),
+            "provider_url": t.get("url"),
+            "provider_status": (t.get("status") or {}).get("status"),
+        }
+
+    async def update_task(
+        self, provider_task_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """PUT the changed fields to ClickUp. Field edits (name/description/
+        status/due) go on the task; assignee changes use ClickUp's add/rem
+        assignee delta on the same PUT."""
+        body: dict[str, Any] = {}
+        if "title" in payload:
+            body["name"] = payload["title"] or "Untitled"
+        if "description" in payload:
+            body["description"] = payload["description"] or ""
+        if payload.get("status"):
+            body["status"] = payload["status"]
+        if "due_at_ms" in payload:
+            body["due_date"] = (int(payload["due_at_ms"])
+                                if payload["due_at_ms"] else None)
+        # Assignees are a delta on ClickUp: {add: [...], rem: [...]}.
+        if payload.get("clear_assignee") and payload.get("prev_assignee_id"):
+            with contextlib.suppress(TypeError, ValueError):
+                body["assignees"] = {"rem": [int(payload["prev_assignee_id"])]}
+        elif payload.get("assignee_id"):
+            with contextlib.suppress(TypeError, ValueError):
+                add = [int(payload["assignee_id"])]
+                rem = ([int(payload["prev_assignee_id"])]
+                       if payload.get("prev_assignee_id")
+                       and str(payload["prev_assignee_id"])
+                       != str(payload["assignee_id"]) else [])
+                body["assignees"] = {"add": add, "rem": rem}
+        if not body:
+            # Nothing ClickUp-writable changed (e.g. a local-only field).
+            return {"provider_task_id": provider_task_id}
+        async with httpx.AsyncClient(timeout=20.0) as http:
+            r = await http.put(
+                f"{_CLICKUP}/task/{provider_task_id}",
+                headers=self._headers(), json=body,
+            )
+        if r.status_code >= 400:
+            raise ProviderError(
+                "clickup", f"update task → {r.status_code}: {r.text[:200]}")
+        t = r.json()
+        return {
+            "provider_task_id": str(t.get("id", provider_task_id)),
             "provider_url": t.get("url"),
             "provider_status": (t.get("status") or {}).get("status"),
         }

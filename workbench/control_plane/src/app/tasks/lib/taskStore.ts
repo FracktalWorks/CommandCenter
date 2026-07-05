@@ -94,6 +94,21 @@ export type ClarifyDecision =
       energy?: Energy;
     } & SyncFields);
 
+/** The editable metadata of a task (post-clarify edit). Every field optional —
+ *  only what's provided changes. Maps to the gateway PATCH /items/{id}. Nulls
+ *  aren't used; pass "" to clear a string field, undefined to leave it. */
+export interface ItemMetaPatch {
+  title?: string;
+  notes?: string;
+  nextAction?: string;
+  context?: string;
+  energy?: Energy;
+  timeEstimateMins?: number;
+  dueAt?: string;              // ISO; "" clears
+  providerStatus?: string;    // the tool's stage
+  assignee?: Person | null;   // null → unassign
+}
+
 /** Resolve a storage target into item source/provider/syncState fields.
  *  SYNCED items start 'pending' — the actual write to ClickUp/Jira is
  *  Action-Broker-gated, so they queue until pushed (or finished later). */
@@ -351,8 +366,10 @@ interface TaskState {
   deferItem: (id: string, dateIso: string) => void;
   /** Bring a deferred item back into the active inbox now. */
   undeferItem: (id: string) => void;
-  /** Edit a captured item's title and/or note. */
-  updateItem: (id: string, patch: { title?: string; notes?: string }) => void;
+  /** Edit a task's editable fields — works for inbox captures AND clarified
+   *  items (context/energy/estimate/due/stage/assignee/next action/notes).
+   *  For a SYNCED ClickUp task, the mapped fields also back-sync upstream. */
+  updateItem: (id: string, patch: ItemMetaPatch) => void;
   /** Inline-rename a captured item (fix a typo without clarifying). */
   renameItem: (id: string, title: string) => void;
   /** Undo the most recent dispose/clarify — restores the item(s) to the inbox. */
@@ -835,16 +852,60 @@ export const useTaskStore = create<TaskState>((set, get) => ({
           ...i,
           title,
           notes: patch.notes !== undefined ? patch.notes : i.notes,
+          nextAction:
+            patch.nextAction !== undefined ? patch.nextAction : i.nextAction,
+          context: patch.context !== undefined ? patch.context : i.context,
+          energy: patch.energy !== undefined ? patch.energy : i.energy,
+          timeEstimateMins:
+            patch.timeEstimateMins !== undefined
+              ? patch.timeEstimateMins || undefined
+              : i.timeEstimateMins,
+          dueAt: patch.dueAt !== undefined ? patch.dueAt || undefined : i.dueAt,
+          providerStatus:
+            patch.providerStatus !== undefined
+              ? patch.providerStatus
+              : i.providerStatus,
+          assignee:
+            patch.assignee !== undefined
+              ? patch.assignee ?? undefined
+              : i.assignee,
           updatedAt: new Date().toISOString(),
         };
       }),
     }));
     if (get().backend === "live") {
-      const body: { title?: string; notes?: string } = {};
+      const body: Parameters<typeof apiPatchItem>[1] = {};
       if (patch.title !== undefined && patch.title.trim())
         body.title = patch.title.trim();
       if (patch.notes !== undefined) body.notes = patch.notes;
-      if (Object.keys(body).length) sync(apiPatchItem(id, body));
+      if (patch.nextAction !== undefined) body.next_action = patch.nextAction;
+      if (patch.context !== undefined) body.context = patch.context;
+      if (patch.energy !== undefined) body.energy = patch.energy;
+      if (patch.timeEstimateMins !== undefined)
+        body.time_estimate_mins = patch.timeEstimateMins;
+      if (patch.dueAt !== undefined) body.due_at = patch.dueAt;
+      if (patch.providerStatus !== undefined)
+        body.provider_status = patch.providerStatus;
+      if (patch.assignee !== undefined) {
+        if (patch.assignee === null) body.clear_assignee = true;
+        else
+          body.assignee = {
+            name: patch.assignee.name,
+            email: patch.assignee.email,
+            provider_user_id: patch.assignee.providerUserId,
+          };
+      }
+      if (Object.keys(body).length) {
+        // Swap in the server row (authoritative — e.g. a ClickUp back-sync may
+        // normalize the stage) so the optimistic edit reconciles.
+        sync(
+          apiPatchItem(id, body).then((server) =>
+            set((s) => ({
+              items: s.items.map((i) => (i.id === id ? server : i)),
+            })),
+          ),
+        );
+      }
     }
   },
 

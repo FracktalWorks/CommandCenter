@@ -12,28 +12,57 @@ import {
   UploadCloud,
   ExternalLink,
   Mail,
+  Check,
+  X,
+  Pencil,
+  Gauge,
+  Tag,
+  UserRound,
+  CircleDot,
+  Trash2,
+  type LucideIcon,
 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
-import { originEmailHref,
+import {
+  originEmailHref,
   DISPOSITION_LABEL,
-  ENERGY_LABEL,
   durationLabel,
   initials,
   isOverdue,
   relativeTime,
 } from "../lib/utils";
+import { Disposition, Energy, GtdItem, Person } from "../lib/types";
 import { SourceBadge } from "./SourceBadge";
 import { AttachmentChips } from "./AttachmentComposer";
 import { ClarifyPanel } from "./ClarifyPanel";
 
 const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
 
+const ENERGY_DOT: Record<Energy, string> = {
+  low: "bg-success",
+  medium: "bg-warning",
+  high: "bg-destructive",
+};
+
+// Disposition → accent, so a processed task reads like a real status chip.
+const DISP_TONE: Record<Disposition, string> = {
+  INBOX: "bg-secondary text-muted-foreground",
+  NEXT: "bg-primary/15 text-primary",
+  WAITING: "bg-warning/15 text-warning",
+  SOMEDAY: "bg-secondary text-muted-foreground",
+  PROJECT: "bg-primary/15 text-primary",
+  REFERENCE: "bg-secondary text-muted-foreground",
+  DONE: "bg-success/15 text-success",
+  TRASH: "bg-destructive/15 text-destructive",
+};
+
+const ESTIMATES = [5, 15, 30, 60, 120, 240];
+
 export function ItemDetail() {
   const items = useTaskStore((s) => s.items);
   const projects = useTaskStore((s) => s.projects);
   const backend = useTaskStore((s) => s.backend);
   const pushItem = useTaskStore((s) => s.pushItem);
-  const [pushState, setPushState] = useState<"idle" | "busy" | string>("idle");
   const selectedItemId = useTaskStore((s) => s.selectedItemId);
   const view = useTaskStore((s) => s.selectedView);
   const selectedProjectId = useTaskStore((s) => s.selectedProjectId);
@@ -42,187 +71,14 @@ export function ItemDetail() {
     ? items.find((i) => i.id === selectedItemId)
     : undefined;
 
-  // Inbox items get the Clarify decision tree (F2); everything else is read-only.
-  // Keyed by id so the wizard resets when a different item is selected.
+  // Inbox items get the Clarify decision tree (F2). A clarified task gets the
+  // editable detail view below. Keyed by id so state resets per item.
   if (item && item.disposition === "INBOX") {
     return <ClarifyPanel key={item.id} item={item} />;
   }
 
   if (item) {
-    const project = item.projectId
-      ? projects.find((p) => p.id === item.projectId)
-      : undefined;
-    const overdue = isOverdue(item, MOCK_NOW);
-    return (
-      <div className="flex h-full flex-col overflow-y-auto">
-        <div className="border-b border-border bg-card px-5 py-4">
-          <div className="mb-2 flex items-center gap-2">
-            <span className="rounded bg-secondary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-              {DISPOSITION_LABEL[item.disposition]}
-            </span>
-            <SourceBadge source={item.source} provider={item.provider} />
-          </div>
-          <h1 className="text-lg font-bold leading-snug text-foreground">
-            {item.title}
-          </h1>
-        </div>
-
-        <div className="flex flex-col gap-4 px-5 py-4">
-          {item.nextAction && (
-            <Field label="Next action" icon={ArrowRight}>
-              <p className="text-sm text-foreground">{item.nextAction}</p>
-            </Field>
-          )}
-
-          <div className="grid grid-cols-2 gap-3">
-            {item.context && (
-              <Meta label="Context">
-                <span className="font-mono text-primary/90">{item.context}</span>
-              </Meta>
-            )}
-            {item.energy && <Meta label="Energy">{ENERGY_LABEL[item.energy]}</Meta>}
-            {item.timeEstimateMins ? (
-              <Meta label="Estimate">
-                <span className="inline-flex items-center gap-1">
-                  <Zap className="h-3 w-3" />
-                  {durationLabel(item.timeEstimateMins)}
-                </span>
-              </Meta>
-            ) : null}
-            {item.dueAt && (
-              <Meta label="Due">
-                <span
-                  className={`inline-flex items-center gap-1 ${overdue ? "font-medium text-destructive" : ""}`}
-                >
-                  {overdue ? (
-                    <AlertTriangle className="h-3 w-3" />
-                  ) : item.isHardDate ? (
-                    <CalendarClock className="h-3 w-3" />
-                  ) : (
-                    <Clock className="h-3 w-3" />
-                  )}
-                  {relativeTime(item.dueAt, MOCK_NOW)}
-                  {item.isHardDate && (
-                    <span className="text-[10px] text-muted-foreground">(hard)</span>
-                  )}
-                </span>
-              </Meta>
-            )}
-            {item.providerStatus && <Meta label="Stage">{item.providerStatus}</Meta>}
-            {item.assignee && (
-              <Meta label="Assignee">
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary/15 text-[8px] font-bold text-primary">
-                    {initials(item.assignee.name)}
-                  </span>
-                  {item.assignee.name}
-                </span>
-              </Meta>
-            )}
-            {item.syncState === "pending" && (
-              <Meta label="Sync">
-                <span className="inline-flex items-center gap-1 text-warning">
-                  <Clock className="h-3 w-3" />
-                  Pending push
-                </span>
-                {backend === "live" && (
-                  <button
-                    type="button"
-                    disabled={pushState === "busy"}
-                    onClick={async () => {
-                      setPushState("busy");
-                      try {
-                        await pushItem(item.id);
-                        setPushState("idle");
-                      } catch (e) {
-                        setPushState(e instanceof Error ? e.message : "Push failed");
-                      }
-                    }}
-                    className="tech-transition mt-1 inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/20 disabled:opacity-50"
-                  >
-                    <UploadCloud className="h-3 w-3" />
-                    {pushState === "busy" ? "Pushing…" : `Push to ${item.provider ?? "tool"}`}
-                  </button>
-                )}
-                {pushState !== "idle" && pushState !== "busy" && (
-                  <p className="mt-1 text-[10px] text-destructive">{pushState}</p>
-                )}
-              </Meta>
-            )}
-            {item.syncState === "synced" && item.providerUrl && (
-              <Meta label="Sync">
-                <a
-                  href={item.providerUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-primary hover:underline"
-                >
-                  <ExternalLink className="h-3 w-3" />
-                  Open in {item.provider}
-                </a>
-              </Meta>
-            )}
-          </div>
-
-          {item.waitingOn && (
-            <Field label="Waiting on" icon={Clock}>
-              <span className="inline-flex items-center gap-2 text-sm text-foreground">
-                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/15 text-[10px] font-bold text-primary">
-                  {initials(item.waitingOn.name)}
-                </span>
-                {item.waitingOn.name}
-                {item.delegatedAt && (
-                  <span className="text-xs text-muted-foreground">
-                    · since {relativeTime(item.delegatedAt, MOCK_NOW)}
-                  </span>
-                )}
-              </span>
-            </Field>
-          )}
-
-          {project && (
-            <Field label="Project" icon={FolderKanban}>
-              <span className="text-sm text-foreground">{project.outcome}</span>
-            </Field>
-          )}
-
-          {item.notes && (
-            <Field label="Notes">
-              <p className="whitespace-pre-wrap text-sm text-muted-foreground">
-                {item.notes}
-              </p>
-            </Field>
-          )}
-
-          {item.attachments && item.attachments.length > 0 && (
-            <Field label="Attachments">
-              <AttachmentChips attachments={item.attachments} />
-            </Field>
-          )}
-
-          {item.origin?.kind === "email" && (
-            <Field label="Captured from" icon={Mail}>
-              <span className="text-sm text-muted-foreground">
-                Email from {item.origin.fromName || item.origin.fromEmail || "someone"}
-                {item.origin.subject ? ` — “${item.origin.subject}”` : ""}
-                {"  "}
-                <a
-                  href={originEmailHref(item.origin) ?? "/email"}
-                  className="tech-transition font-medium text-primary hover:underline"
-                >
-                  Open email
-                </a>
-              </span>
-            </Field>
-          )}
-
-          <p className="mt-2 border-t border-border pt-3 text-[11px] text-muted-foreground">
-            Clarify, organize, and delegate actions arrive in the next slices — this
-            panel is read-only for now.
-          </p>
-        </div>
-      </div>
-    );
+    return <TaskDetail key={item.id} item={item} backend={backend} pushItem={pushItem} />;
   }
 
   // Project selected (projects view) → show its actions.
@@ -285,33 +141,639 @@ export function ItemDetail() {
   );
 }
 
-function Field({
-  label,
-  icon: Icon,
-  children,
+// ── The editable task view ──────────────────────────────────────────────────
+
+function TaskDetail({
+  item,
+  backend,
+  pushItem,
 }: {
-  label: string;
-  icon?: typeof Clock;
-  children: React.ReactNode;
+  item: GtdItem;
+  backend: string;
+  pushItem: (id: string) => Promise<void>;
 }) {
+  const projects = useTaskStore((s) => s.projects);
+  const contexts = useTaskStore((s) => s.contexts);
+  const people = useTaskStore((s) => s.people);
+  const accounts = useTaskStore((s) => s.accounts);
+  const updateItem = useTaskStore((s) => s.updateItem);
+  const quickDispose = useTaskStore((s) => s.quickDispose);
+  const deleteItem = useTaskStore((s) => s.deleteItem);
+
+  const [pushState, setPushState] = useState<"idle" | "busy" | string>("idle");
+
+  const project = item.projectId
+    ? projects.find((p) => p.id === item.projectId)
+    : undefined;
+  const overdue = isOverdue(item, MOCK_NOW);
+  const isSynced = item.source === "SYNCED";
+  const account = item.accountId
+    ? accounts.find((a) => a.id === item.accountId)
+    : undefined;
+  // Delegate/assignee options + stage options for a synced task.
+  const memberPeople: Person[] = account?.members?.length ? account.members : people;
+  const stageOptions: string[] = account?.statuses ?? [];
+
+  const dueValue = item.dueAt ? item.dueAt.slice(0, 10) : "";
+
   return (
-    <div>
-      <h3 className="mb-1 inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {Icon && <Icon className="h-3 w-3" />}
-        {label}
-      </h3>
-      {children}
+    <div className="flex h-full flex-col overflow-y-auto bg-background">
+      {/* Header — status chip, source, deep link, editable title */}
+      <div className="border-b border-border bg-card px-5 py-4">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <StatusPicker item={item} onPick={(d) => quickDispose(item.id, d)} />
+          <SourceBadge source={item.source} provider={item.provider} />
+          {isSynced && item.providerUrl && (
+            <a
+              href={item.providerUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="tech-transition inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+            >
+              <ExternalLink className="h-3 w-3" />
+              Open in {item.provider}
+            </a>
+          )}
+          <button
+            type="button"
+            title="Delete task"
+            aria-label="Delete task"
+            onClick={() => deleteItem(item.id)}
+            className="tech-transition ml-auto rounded-md p-1 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+        <EditableTitle
+          value={item.title}
+          onSave={(t) => updateItem(item.id, { title: t })}
+        />
+        {isSynced && (
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            Edits sync back to {item.provider === "clickup" ? "ClickUp" : item.provider}.
+          </p>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-5 px-5 py-4">
+        {/* Next action — the cardinal GTD field, prominent + editable */}
+        <section>
+          <SectionLabel icon={ArrowRight}>Next action</SectionLabel>
+          <EditableText
+            value={item.nextAction ?? ""}
+            placeholder="The next physical, visible step…"
+            emptyHint="Add the next action"
+            onSave={(v) => updateItem(item.id, { nextAction: v })}
+          />
+        </section>
+
+        {/* Metadata grid — every cell is click-to-edit */}
+        <section>
+          <SectionLabel icon={Tag}>Details</SectionLabel>
+          <div className="grid grid-cols-2 gap-2">
+            {/* Context */}
+            <MetaEdit label="Context" icon={Tag}
+              display={item.context
+                ? <span className="font-mono text-primary/90">{item.context}</span>
+                : null}
+            >
+              {(close) => (
+                <ChipMenu
+                  options={contexts.map((c) => c.name)}
+                  active={item.context}
+                  mono
+                  allowClear
+                  onPick={(v) => { updateItem(item.id, { context: v ?? "" }); close(); }}
+                />
+              )}
+            </MetaEdit>
+
+            {/* Energy */}
+            <MetaEdit label="Energy" icon={Gauge}
+              display={item.energy
+                ? <span className="inline-flex items-center gap-1.5 capitalize">
+                    <span className={`h-2 w-2 rounded-full ${ENERGY_DOT[item.energy]}`} />
+                    {item.energy}
+                  </span>
+                : null}
+            >
+              {(close) => (
+                <ChipMenu
+                  options={["low", "medium", "high"]}
+                  active={item.energy}
+                  capitalize
+                  allowClear
+                  onPick={(v) => { updateItem(item.id, { energy: (v as Energy) ?? undefined }); close(); }}
+                />
+              )}
+            </MetaEdit>
+
+            {/* Estimate */}
+            <MetaEdit label="Estimate" icon={Zap}
+              display={item.timeEstimateMins
+                ? <span>{durationLabel(item.timeEstimateMins)}</span>
+                : null}
+            >
+              {(close) => (
+                <ChipMenu
+                  options={ESTIMATES.map((m) => durationLabel(m))}
+                  active={item.timeEstimateMins ? durationLabel(item.timeEstimateMins) : undefined}
+                  allowClear
+                  onPick={(label) => {
+                    const mins = label ? ESTIMATES[ESTIMATES.map((m) => durationLabel(m)).indexOf(label)] : 0;
+                    updateItem(item.id, { timeEstimateMins: mins });
+                    close();
+                  }}
+                />
+              )}
+            </MetaEdit>
+
+            {/* Due */}
+            <MetaEdit label="Due" icon={CalendarClock}
+              display={item.dueAt
+                ? <span className={`inline-flex items-center gap-1 ${overdue ? "font-medium text-destructive" : ""}`}>
+                    {overdue ? <AlertTriangle className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
+                    {relativeTime(item.dueAt, MOCK_NOW)}
+                  </span>
+                : null}
+            >
+              {(close) => (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="date"
+                    defaultValue={dueValue}
+                    autoFocus
+                    onChange={(e) => {
+                      updateItem(item.id, {
+                        dueAt: e.target.value ? new Date(e.target.value).toISOString() : "",
+                      });
+                      close();
+                    }}
+                    className="rounded-md border border-border bg-background px-2 py-1 text-[13px] text-foreground focus:border-primary/50 focus:outline-none"
+                  />
+                  {item.dueAt && (
+                    <button type="button" onClick={() => { updateItem(item.id, { dueAt: "" }); close(); }}
+                      className="tech-transition rounded p-1 text-muted-foreground hover:text-destructive" title="Clear">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+              )}
+            </MetaEdit>
+
+            {/* Stage (synced only) */}
+            {isSynced && stageOptions.length > 0 && (
+              <MetaEdit label="Stage" icon={CircleDot}
+                display={item.providerStatus ? <span>{item.providerStatus}</span> : null}
+              >
+                {(close) => (
+                  <ChipMenu
+                    options={stageOptions}
+                    active={item.providerStatus}
+                    onPick={(v) => { updateItem(item.id, { providerStatus: v ?? "" }); close(); }}
+                  />
+                )}
+              </MetaEdit>
+            )}
+
+            {/* Assignee */}
+            <MetaEdit label="Assignee" icon={UserRound}
+              display={item.assignee
+                ? <span className="inline-flex items-center gap-1.5">
+                    <Avatar name={item.assignee.name} />
+                    {item.assignee.name}
+                  </span>
+                : null}
+            >
+              {(close) => (
+                <PersonMenu
+                  people={memberPeople}
+                  active={item.assignee ?? null}
+                  onPick={(p) => { updateItem(item.id, { assignee: p }); close(); }}
+                />
+              )}
+            </MetaEdit>
+
+            {/* Project (read-only link for now — re-file happens via clarify) */}
+            {project && (
+              <div className="rounded-md border border-border bg-card px-3 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Project
+                </div>
+                <div className="mt-0.5 inline-flex items-center gap-1.5 text-sm text-foreground">
+                  <FolderKanban className="h-3.5 w-3.5 text-primary/70" />
+                  <span className="truncate">{project.outcome}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* Waiting-on (delegated) */}
+        {item.waitingOn && (
+          <section>
+            <SectionLabel icon={Clock}>Waiting on</SectionLabel>
+            <span className="inline-flex items-center gap-2 text-sm text-foreground">
+              <Avatar name={item.waitingOn.name} lg />
+              {item.waitingOn.name}
+              {item.delegatedAt && (
+                <span className="text-xs text-muted-foreground">
+                  · since {relativeTime(item.delegatedAt, MOCK_NOW)}
+                </span>
+              )}
+            </span>
+          </section>
+        )}
+
+        {/* Notes — editable */}
+        <section>
+          <SectionLabel>Notes</SectionLabel>
+          <EditableText
+            value={item.notes ?? ""}
+            placeholder="Add notes, links, context…"
+            emptyHint="Add notes"
+            multiline
+            onSave={(v) => updateItem(item.id, { notes: v })}
+          />
+        </section>
+
+        {/* Attachments */}
+        {item.attachments && item.attachments.length > 0 && (
+          <section>
+            <SectionLabel>Attachments</SectionLabel>
+            <AttachmentChips attachments={item.attachments} />
+          </section>
+        )}
+
+        {/* Captured-from linkage */}
+        {item.origin?.kind === "email" && (
+          <section>
+            <SectionLabel icon={Mail}>Captured from</SectionLabel>
+            <span className="text-sm text-muted-foreground">
+              Email from {item.origin.fromName || item.origin.fromEmail || "someone"}
+              {item.origin.subject ? ` — “${item.origin.subject}”` : ""}{"  "}
+              <a
+                href={originEmailHref(item.origin) ?? "/email"}
+                className="tech-transition font-medium text-primary hover:underline"
+              >
+                Open email
+              </a>
+            </span>
+          </section>
+        )}
+
+        {/* Pending push affordance */}
+        {item.syncState === "pending" && backend === "live" && (
+          <section className="rounded-lg border border-warning/30 bg-warning/5 px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-warning">
+                <Clock className="h-3.5 w-3.5" />
+                Not yet pushed to {item.provider ?? "the tool"}
+              </span>
+              <button
+                type="button"
+                disabled={pushState === "busy"}
+                onClick={async () => {
+                  setPushState("busy");
+                  try {
+                    await pushItem(item.id);
+                    setPushState("idle");
+                  } catch (e) {
+                    setPushState(e instanceof Error ? e.message : "Push failed");
+                  }
+                }}
+                className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+              >
+                <UploadCloud className="h-3.5 w-3.5" />
+                {pushState === "busy" ? "Pushing…" : "Push now"}
+              </button>
+            </div>
+            {pushState !== "idle" && pushState !== "busy" && (
+              <p className="mt-1 text-[10px] text-destructive">{pushState}</p>
+            )}
+          </section>
+        )}
+
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          Updated {relativeTime(item.updatedAt, MOCK_NOW)}
+          {item.completedAt ? ` · completed ${relativeTime(item.completedAt, MOCK_NOW)}` : ""}
+        </p>
+      </div>
     </div>
   );
 }
 
-function Meta({ label, children }: { label: string; children: React.ReactNode }) {
+// ── Small editable building blocks ──────────────────────────────────────────
+
+function SectionLabel({
+  icon: Icon,
+  children,
+}: {
+  icon?: LucideIcon;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="rounded-md bg-secondary/50 px-3 py-2">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
+    <h3 className="mb-1.5 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      {Icon && <Icon className="h-3 w-3" />}
+      {children}
+    </h3>
+  );
+}
+
+function EditableTitle({ value, onSave }: { value: string; onSave: (v: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const startEdit = () => { setDraft(value); setEditing(true); };
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={startEdit}
+        className="group flex w-full items-start gap-2 text-left"
+        title="Click to edit"
+      >
+        <h1 className="text-lg font-bold leading-snug text-foreground">{value}</h1>
+        <Pencil className="mt-1.5 h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+      </button>
+    );
+  }
+  const save = () => {
+    const t = draft.trim();
+    if (t) onSave(t);
+    setEditing(false);
+  };
+  return (
+    <textarea
+      autoFocus
+      value={draft}
+      rows={2}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={save}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); save(); }
+        if (e.key === "Escape") { setDraft(value); setEditing(false); }
+      }}
+      className="w-full resize-none rounded-md border border-primary/40 bg-background px-2 py-1 text-lg font-bold leading-snug text-foreground focus:outline-none"
+    />
+  );
+}
+
+function EditableText({
+  value,
+  placeholder,
+  emptyHint,
+  multiline,
+  onSave,
+}: {
+  value: string;
+  placeholder: string;
+  emptyHint: string;
+  multiline?: boolean;
+  onSave: (v: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const startEdit = () => { setDraft(value); setEditing(true); };
+
+  if (!editing) {
+    return value ? (
+      <button
+        type="button"
+        onClick={startEdit}
+        className="group flex w-full items-start gap-2 rounded-md text-left"
+        title="Click to edit"
+      >
+        <p className={`flex-1 text-sm text-foreground ${multiline ? "whitespace-pre-wrap" : ""}`}>
+          {value}
+        </p>
+        <Pencil className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+      </button>
+    ) : (
+      <button
+        type="button"
+        onClick={startEdit}
+        className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-2.5 py-1.5 text-[13px] text-muted-foreground hover:border-primary/40 hover:text-foreground"
+      >
+        <Pencil className="h-3 w-3" />
+        {emptyHint}
+      </button>
+    );
+  }
+  const save = () => {
+    onSave(draft.trim());
+    setEditing(false);
+  };
+  const common = {
+    autoFocus: true,
+    value: draft,
+    placeholder,
+    onBlur: save,
+    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+      setDraft(e.target.value),
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === "Escape") { setDraft(value); setEditing(false); }
+      if (e.key === "Enter" && !multiline) { e.preventDefault(); save(); }
+    },
+    className:
+      "w-full rounded-md border border-primary/40 bg-background px-2.5 py-1.5 text-sm text-foreground focus:outline-none",
+  };
+  return multiline ? (
+    <textarea rows={4} {...common} className={`${common.className} resize-none`} />
+  ) : (
+    <input {...common} />
+  );
+}
+
+/** A metadata cell that flips to an inline editor on click. */
+function MetaEdit({
+  label,
+  icon: Icon,
+  display,
+  children,
+}: {
+  label: string;
+  icon: LucideIcon;
+  display: React.ReactNode;
+  children: (close: () => void) => React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-md border border-border bg-card px-3 py-2">
+      <div className="flex items-center justify-between">
+        <div className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <Icon className="h-3 w-3" />
+          {label}
+        </div>
+        {!open && (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="tech-transition rounded p-0.5 text-muted-foreground/60 hover:text-primary"
+            aria-label={`Edit ${label}`}
+          >
+            <Pencil className="h-3 w-3" />
+          </button>
+        )}
       </div>
-      <div className="mt-0.5 text-sm text-foreground">{children}</div>
+      {open ? (
+        <div className="mt-1.5">{children(() => setOpen(false))}</div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="mt-0.5 block w-full text-left text-sm text-foreground"
+        >
+          {display ?? <span className="text-muted-foreground/60">—</span>}
+        </button>
+      )}
     </div>
+  );
+}
+
+function ChipMenu({
+  options,
+  active,
+  mono,
+  capitalize,
+  allowClear,
+  onPick,
+}: {
+  options: string[];
+  active?: string;
+  mono?: boolean;
+  capitalize?: boolean;
+  allowClear?: boolean;
+  onPick: (v: string | null) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {options.map((o) => (
+        <button
+          key={o}
+          type="button"
+          onClick={() => onPick(o)}
+          className={[
+            "tech-transition rounded-full border px-2 py-0.5 text-[12px]",
+            mono ? "font-mono" : capitalize ? "capitalize" : "",
+            active === o
+              ? "border-primary bg-primary/10 text-primary"
+              : "border-border text-muted-foreground hover:bg-secondary",
+          ].join(" ")}
+        >
+          {o}
+        </button>
+      ))}
+      {allowClear && active && (
+        <button
+          type="button"
+          onClick={() => onPick(null)}
+          className="tech-transition rounded-full border border-border px-2 py-0.5 text-[12px] text-muted-foreground hover:border-destructive/40 hover:text-destructive"
+        >
+          Clear
+        </button>
+      )}
+    </div>
+  );
+}
+
+function PersonMenu({
+  people,
+  active,
+  onPick,
+}: {
+  people: Person[];
+  active: Person | null;
+  onPick: (p: Person | null) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <button
+        type="button"
+        onClick={() => onPick(null)}
+        className={[
+          "tech-transition rounded-full border px-2 py-0.5 text-[12px]",
+          !active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
+        ].join(" ")}
+      >
+        Unassigned
+      </button>
+      {people.map((p) => (
+        <button
+          key={p.name}
+          type="button"
+          onClick={() => onPick(p)}
+          className={[
+            "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[12px]",
+            active?.name === p.name ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
+          ].join(" ")}
+        >
+          <Avatar name={p.name} />
+          {p.name}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Status/disposition picker in the header — flips to a small menu. */
+function StatusPicker({
+  item,
+  onPick,
+}: {
+  item: GtdItem;
+  onPick: (d: Disposition) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const OPTIONS: Disposition[] = ["NEXT", "WAITING", "SOMEDAY", "REFERENCE", "DONE"];
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={[
+          "tech-transition inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+          DISP_TONE[item.disposition],
+        ].join(" ")}
+      >
+        {DISPOSITION_LABEL[item.disposition]}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-full z-50 mt-1 w-40 rounded-lg border border-border bg-popover p-1 shadow-xl">
+            {OPTIONS.map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => { onPick(d); setOpen(false); }}
+                className={[
+                  "tech-transition flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px]",
+                  item.disposition === d ? "bg-primary/10 text-primary" : "text-foreground hover:bg-secondary",
+                ].join(" ")}
+              >
+                {item.disposition === d && <Check className="h-3.5 w-3.5" />}
+                <span className={item.disposition === d ? "" : "ml-[22px]"}>
+                  {DISPOSITION_LABEL[d]}
+                </span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Avatar({ name, lg }: { name: string; lg?: boolean }) {
+  return (
+    <span
+      className={[
+        "flex items-center justify-center rounded-full bg-primary/15 font-bold text-primary",
+        lg ? "h-6 w-6 text-[10px]" : "h-4 w-4 text-[8px]",
+      ].join(" ")}
+    >
+      {initials(name)}
+    </span>
   );
 }

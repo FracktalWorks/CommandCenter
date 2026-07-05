@@ -576,12 +576,16 @@ async def clarify_item(
 
         # LLM clarify cognition (the user's clarify_model) reasons over the
         # same context; the deterministic propose() is overlaid underneath as
-        # the schema authority + guaranteed fallback. Any LLM failure → the
-        # pure heuristic (propose_with_llm(..., None)).
-        from gateway.routes.tasks.settings import gtd_models
-        models = await gtd_models(db, uid)
-        llm_core = await _llm_propose(
-            item, people, projects, account_statuses, models["clarify"])
+        # the schema authority + guaranteed fallback. Gated by the user's
+        # `clarify_use_llm` toggle (off → instant heuristic, no LLM round-trip);
+        # any LLM failure also falls back (propose_with_llm(..., None)).
+        from gateway.routes.tasks.settings import gtd_models, gtd_toggles
+        toggles = await gtd_toggles(db, uid)
+        llm_core = None
+        if toggles["clarify_use_llm"]:
+            models = await gtd_models(db, uid)
+            llm_core = await _llm_propose(
+                item, people, projects, account_statuses, models["clarify"])
         return propose_with_llm(
             item, people, projects, account_statuses, llm_core)
     finally:

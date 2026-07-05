@@ -152,13 +152,19 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
 
 
 async def _read_interval(account_id: str) -> tuple[int, bool]:
-    """(interval_secs, sync_enabled) for an account, clamped to the floor.
-    Missing row → (default, False) so the loop stops itself."""
+    """(interval_secs, enabled) for an account, clamped to the floor. "enabled"
+    is the account's sync_enabled AND the owner's background_sync toggle (a
+    LEFT JOIN so a user with no settings row defaults to on). Missing account →
+    (default, False) so the loop stops itself; a user turning background_sync
+    off mid-run also self-stops the loop next cycle."""
     db = await _get_db()
     try:
         row = (await db.execute(
-            text("""SELECT sync_interval_secs, sync_enabled
-                    FROM task_accounts WHERE id = :id"""),
+            text("""SELECT a.sync_interval_secs, a.sync_enabled,
+                           coalesce(s.background_sync, true) AS background_sync
+                    FROM task_accounts a
+               LEFT JOIN gtd_settings s ON s.user_id = a.user_id
+                   WHERE a.id = :id"""),
             {"id": account_id},
         )).fetchone()
     finally:
@@ -167,7 +173,7 @@ async def _read_interval(account_id: str) -> tuple[int, bool]:
         return _DEFAULT_INTERVAL_SECS, False
     interval = max(row.sync_interval_secs or _DEFAULT_INTERVAL_SECS,
                    _MIN_INTERVAL_SECS)
-    return interval, bool(row.sync_enabled)
+    return interval, bool(row.sync_enabled and row.background_sync)
 
 
 # ── Lifecycle (start/stop/refresh/remove + status) ───────────────────────────
@@ -182,9 +188,14 @@ async def start_background_sync() -> dict[str, int]:
             return {}
         db = await _get_db()
         try:
+            # Launch only for accounts whose owner hasn't turned background_sync
+            # off (LEFT JOIN → users with no settings row default to on).
             rows = (await db.execute(
-                text("""SELECT id, sync_interval_secs FROM task_accounts
-                        WHERE sync_enabled = true"""),
+                text("""SELECT a.id, a.sync_interval_secs
+                        FROM task_accounts a
+                   LEFT JOIN gtd_settings s ON s.user_id = a.user_id
+                       WHERE a.sync_enabled = true
+                         AND coalesce(s.background_sync, true) = true"""),
             )).fetchall()
         finally:
             await db.close()

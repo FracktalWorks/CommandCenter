@@ -376,6 +376,8 @@ export interface TaskSettings {
   emailCaptureModel: string;
   captureDedup: boolean;
   autoSyncOnOpen: boolean;
+  clarifyUseLlm: boolean;
+  backgroundSync: boolean;
 }
 
 function mapSettings(r: Raw): TaskSettings {
@@ -386,6 +388,8 @@ function mapSettings(r: Raw): TaskSettings {
     emailCaptureModel: String(r.email_capture_model ?? "tier-fast"),
     captureDedup: r.capture_dedup !== false,
     autoSyncOnOpen: r.auto_sync_on_open !== false,
+    clarifyUseLlm: r.clarify_use_llm !== false,
+    backgroundSync: r.background_sync !== false,
   };
 }
 
@@ -406,6 +410,10 @@ export async function updateTaskSettings(
   if (patch.captureDedup !== undefined) body.capture_dedup = patch.captureDedup;
   if (patch.autoSyncOnOpen !== undefined)
     body.auto_sync_on_open = patch.autoSyncOnOpen;
+  if (patch.clarifyUseLlm !== undefined)
+    body.clarify_use_llm = patch.clarifyUseLlm;
+  if (patch.backgroundSync !== undefined)
+    body.background_sync = patch.backgroundSync;
   return mapSettings(
     await gatewayFetch<Raw>(`/settings`, {
       method: "PUT",

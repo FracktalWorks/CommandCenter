@@ -61,9 +61,9 @@ const MODEL_FIELDS: {
     key: "clarifyModel",
     title: "Clarify proposals model",
     description:
-      "Reserved for agent-driven clarify cognition. Today's proposals use " +
-      "the instant deterministic heuristic; this tier applies as the agent " +
-      "takes Clarify over.",
+      "The model behind AI-powered Clarify — it reasons over your active " +
+      "projects, team skills, and workspace stages to propose a disposition, " +
+      "next action, and best owner. Applies when “AI-powered clarify” is on.",
     def: "tier-balanced",
   },
 ];
@@ -203,6 +203,19 @@ function SettingsPanel() {
             </div>
           </section>
 
+          {/* ── Clarify ── */}
+          <section>
+            <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <Sparkles className="h-3.5 w-3.5" /> Clarify
+            </h3>
+            <Toggle
+              title="AI-powered clarify"
+              description="Let the assistant reason over your ClickUp projects, team (skills, seniority, free hours), and workspace stages to propose the disposition, next action, and best owner. Off = the instant deterministic heuristic only (no AI round-trip on each clarify)."
+              checked={settings.clarifyUseLlm}
+              onChange={(v) => void updateSettings({ clarifyUseLlm: v })}
+            />
+          </section>
+
           {/* ── Capture ── */}
           <section>
             <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -221,12 +234,20 @@ function SettingsPanel() {
             <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               <RefreshCw className="h-3.5 w-3.5" /> Sync
             </h3>
-            <Toggle
-              title="Sync workspaces when Tasks opens"
-              description="Pull the latest tasks from your connected PM workspaces (incremental) each time you open the app. Manual sync stays available per workspace."
-              checked={settings.autoSyncOnOpen}
-              onChange={(v) => void updateSettings({ autoSyncOnOpen: v })}
-            />
+            <div className="flex flex-col gap-2">
+              <Toggle
+                title="Keep workspaces synced in the background"
+                description="Refresh your connected PM workspaces (tasks, projects, and team) on a schedule — even when the app is closed — so the assistant always reasons over current data. Off = only manual and on-open sync run."
+                checked={settings.backgroundSync}
+                onChange={(v) => void updateSettings({ backgroundSync: v })}
+              />
+              <Toggle
+                title="Sync workspaces when Tasks opens"
+                description="Pull the latest tasks from your connected PM workspaces (incremental) each time you open the app. Manual sync stays available per workspace."
+                checked={settings.autoSyncOnOpen}
+                onChange={(v) => void updateSettings({ autoSyncOnOpen: v })}
+              />
+            </div>
             <p className="mt-2 px-1 text-[11px] text-muted-foreground">
               Per-workspace connections, schema refresh, and disconnect live in
               the Workspaces dialog.

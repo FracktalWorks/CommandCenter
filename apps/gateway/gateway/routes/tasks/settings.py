@@ -45,6 +45,10 @@ class GtdSettingsModel(BaseModel):
     email_capture_model: str = DEFAULT_GTD_MODELS["email_capture"]
     capture_dedup: bool = True
     auto_sync_on_open: bool = True
+    # AI-clarify cognition (Phase 3): use the LLM pass, or the instant
+    # heuristic only. background_sync: keep workspaces synced on a schedule.
+    clarify_use_llm: bool = True
+    background_sync: bool = True
 
 
 class GtdSettingsPatch(BaseModel):
@@ -54,6 +58,8 @@ class GtdSettingsPatch(BaseModel):
     email_capture_model: str | None = None
     capture_dedup: bool | None = None
     auto_sync_on_open: bool | None = None
+    clarify_use_llm: bool | None = None
+    background_sync: bool | None = None
 
 
 async def gtd_models(db: Any, user_id: str) -> dict[str, str]:
@@ -78,6 +84,24 @@ async def gtd_models(db: Any, user_id: str) -> dict[str, str]:
     return out
 
 
+async def gtd_toggles(db: Any, user_id: str) -> dict[str, bool]:
+    """The user's AI/behaviour toggles with safe defaults. Never raises — a
+    missing row or a pre-migration DB (no such column) returns the defaults
+    (features on), so callers degrade to current behaviour rather than break."""
+    out = {"clarify_use_llm": True, "background_sync": True}
+    try:
+        row = (await db.execute(text(
+            """SELECT clarify_use_llm, background_sync
+               FROM gtd_settings WHERE user_id = :uid"""),
+            {"uid": user_id})).fetchone()
+        if row:
+            out["clarify_use_llm"] = bool(row.clarify_use_llm)
+            out["background_sync"] = bool(row.background_sync)
+    except Exception as exc:
+        _log.warning("tasks.settings.toggles_failed", error=str(exc)[:160])
+    return out
+
+
 async def _load(db: Any, user_id: str) -> GtdSettingsModel:
     row = (await db.execute(text(
         "SELECT * FROM gtd_settings WHERE user_id = :uid"),
@@ -92,6 +116,9 @@ async def _load(db: Any, user_id: str) -> GtdSettingsModel:
                              or DEFAULT_GTD_MODELS["email_capture"]),
         capture_dedup=bool(row.capture_dedup),
         auto_sync_on_open=bool(row.auto_sync_on_open),
+        # getattr defaults keep a pre-migration row (no such column) working.
+        clarify_use_llm=bool(getattr(row, "clarify_use_llm", True)),
+        background_sync=bool(getattr(row, "background_sync", True)),
     )
 
 
@@ -125,6 +152,37 @@ async def put_gtd_settings(
                     DO UPDATE SET {sets}, updated_at = now()"""),
                 {"uid": uid, **fields})
             await db.commit()
+
+            # A background_sync toggle must (re)start or stop this user's
+            # workspace loops at runtime — otherwise the change only takes
+            # effect on the next gateway restart.
+            if "background_sync" in fields:
+                await _apply_background_sync_toggle(
+                    db, uid, bool(fields["background_sync"]))
         return await _load(db, uid)
     finally:
         await db.close()
+
+
+async def _apply_background_sync_toggle(
+    db: Any, user_id: str, enabled: bool,
+) -> None:
+    """Start (enabled) or stop (disabled) the background loops for every
+    sync-enabled workspace this user owns. Best-effort — a scheduler hiccup
+    never fails the settings save."""
+    try:
+        from gateway.routes.tasks.scheduler import (
+            refresh_account_sync,
+            remove_account_sync,
+        )
+        rows = (await db.execute(text(
+            """SELECT id FROM task_accounts
+               WHERE user_id = :uid AND sync_enabled = true"""),
+            {"uid": user_id})).fetchall()
+        for r in rows:
+            if enabled:
+                await refresh_account_sync(str(r.id))
+            else:
+                await remove_account_sync(str(r.id))
+    except Exception as exc:
+        _log.warning("tasks.settings.bg_toggle_failed", error=str(exc)[:160])

@@ -916,6 +916,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     emailCaptureModel: "tier-fast",
     captureDedup: true,
     autoSyncOnOpen: true,
+    clarifyUseLlm: true,
+    backgroundSync: true,
   },
 
   updateSettings: async (patch) => {

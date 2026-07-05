@@ -27,6 +27,7 @@ from gateway.routes.tasks.core import (
     _assert_account_owner,
     _get_db,
     _key_store,
+    _log,
     _parse_jsonb,
     _uid,
     router,
@@ -166,6 +167,13 @@ async def create_account(
         row = (await db.execute(
             text("SELECT * FROM task_accounts WHERE id = :id"), {"id": account_id},
         )).fetchone()
+        # Launch this workspace's background sync loop now (no gateway restart).
+        try:
+            from gateway.routes.tasks.scheduler import refresh_account_sync
+            await refresh_account_sync(account_id)
+        except Exception as exc:
+            _log.warning("tasks.accounts.scheduler_start_failed",
+                         account_id=account_id[:12], error=str(exc)[:160])
         return _row_to_account(row)
     finally:
         await db.close()
@@ -196,6 +204,18 @@ async def update_account(
             params,
         )).fetchone()
         await db.commit()
+        # Reflect a sync_enabled toggle in the background scheduler at runtime.
+        if req.sync_enabled is not None:
+            try:
+                if req.sync_enabled:
+                    from gateway.routes.tasks.scheduler import refresh_account_sync
+                    await refresh_account_sync(account_id)
+                else:
+                    from gateway.routes.tasks.scheduler import remove_account_sync
+                    await remove_account_sync(account_id)
+            except Exception as exc:
+                _log.warning("tasks.accounts.scheduler_toggle_failed",
+                             account_id=account_id[:12], error=str(exc)[:160])
         return _row_to_account(row)
     finally:
         await db.close()
@@ -217,6 +237,13 @@ async def delete_account(
         if res is None:
             raise HTTPException(status_code=404, detail="Account not found")
         await db.commit()
+        # Stop this workspace's background sync loop.
+        try:
+            from gateway.routes.tasks.scheduler import remove_account_sync
+            await remove_account_sync(account_id)
+        except Exception as exc:
+            _log.warning("tasks.accounts.scheduler_remove_failed",
+                         account_id=account_id[:12], error=str(exc)[:160])
     finally:
         await db.close()
 

@@ -6,8 +6,19 @@ the GTD decision tree, organizes items toward LOCAL or a connected PM
 workspace (ClickUp first), and answers status/progress/workload questions.
 
 Tool surface:
-  skill-task-gtd     — the GTD engine over the gateway /tasks API
-  skill-clickup-sync — legacy direct ClickUp status Q&A (transition-era)
+  skill-task-gtd     — the GTD engine over the gateway /tasks API. Every ClickUp
+                       read/stage goes through the gateway's provider interface
+                       layer, which resolves the RIGHT per-workspace connector
+                       from the user's ``task_accounts`` rows (multi-workspace,
+                       per-account encrypted token).
+
+The legacy ``skill-clickup-sync`` tools (``get_task_status`` /
+``list_project_tasks``) were RETIRED from this agent (2026-07-05): they read a
+single process-global ``CLICKUP_API_TOKEN`` (System A), which can only ever see
+one workspace and contradicts the multi-workspace architecture. Status/progress
+questions are now answered through the per-account GTD store — ``gtd_list``
+(SYNCED provider tasks, with URLs) and ``gtd_list_projects`` — so one clean,
+multi-workspace-correct credential path serves the whole agent.
 
 Exports:
     build_agents() -> list[GitHubCopilotAgent]   (Dynamic Agent Loader entry point)
@@ -31,11 +42,11 @@ INSTRUCTIONS = _INSTRUCTIONS_FILE.read_text(encoding="utf-8") if _INSTRUCTIONS_F
 
 # ---------------------------------------------------------------------------
 # Tools
-#   skill-task-gtd     — capture/clarify/organize over the gateway /tasks API
-#                        (provider-agnostic; the interface layer resolves the
-#                        connector)
-#   skill-clickup-sync — legacy direct ClickUp status Q&A, kept during the
-#                        transition (spec §3.1)
+#   skill-task-gtd — capture/clarify/organize/list/sync over the gateway
+#                    /tasks API (provider-agnostic; the interface layer
+#                    resolves the per-workspace connector). This is the ONLY
+#                    ClickUp path the agent uses — the legacy direct-REST
+#                    skill-clickup-sync tools were retired (see module docstring).
 # ---------------------------------------------------------------------------
 
 _TOOLS: list = []
@@ -61,13 +72,6 @@ try:
     ]
 except ImportError:
     # skill-task-gtd not installed yet — agent still boots.
-    pass
-
-try:
-    from skill_clickup_sync import get_task_status, list_project_tasks
-    _TOOLS += [get_task_status, list_project_tasks]
-except ImportError:
-    # skill-clickup-sync not installed yet — agent still boots.
     pass
 
 

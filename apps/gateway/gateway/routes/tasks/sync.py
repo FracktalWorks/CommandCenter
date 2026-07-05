@@ -278,6 +278,61 @@ async def _sync_account(db: Any, account: Any, *, full: bool) -> AccountSyncResu
     return result
 
 
+@router.get("/sync/status")
+async def sync_status(user: UserContext = Depends(get_current_user)):
+    """Freshness + background-scheduler health for the user's workspaces.
+
+    Per account: sync_enabled/interval, last_synced_at, current sync_status,
+    any error, and whether it's overdue (now - last_synced_at > interval → the
+    background loop hasn't refreshed it in time, e.g. loop not yet running).
+    Plus the live scheduler state (which account loops are running)."""
+    uid = _uid(user)
+    db = await _get_db()
+    try:
+        rows = (await db.execute(
+            text("""SELECT id, label, provider, sync_enabled, sync_interval_secs,
+                           sync_status, sync_error, last_synced_at,
+                           EXTRACT(EPOCH FROM (now() - last_synced_at)) AS age_secs
+                    FROM task_accounts WHERE user_id = :uid
+                    ORDER BY created_at"""),
+            {"uid": uid},
+        )).fetchall()
+    finally:
+        await db.close()
+
+    try:
+        from gateway.routes.tasks.scheduler import get_scheduler_status
+        sched = get_scheduler_status()
+    except Exception:
+        sched = {"running": False, "accounts": [], "count": 0}
+
+    running = set(sched.get("accounts") or [])
+    accounts = []
+    for r in rows:
+        interval = r.sync_interval_secs or 300
+        age = float(r.age_secs) if r.age_secs is not None else None
+        # Overdue = enabled but the last successful sync is older than one
+        # interval (with a grace multiple to avoid flapping mid-cycle).
+        overdue = bool(
+            r.sync_enabled and (age is None or age > interval * 2)
+        )
+        accounts.append({
+            "account_id": str(r.id),
+            "label": r.label or "",
+            "provider": r.provider,
+            "sync_enabled": bool(r.sync_enabled),
+            "sync_interval_secs": interval,
+            "sync_status": r.sync_status or "idle",
+            "sync_error": r.sync_error,
+            "last_synced_at": r.last_synced_at.isoformat()
+            if r.last_synced_at else None,
+            "age_secs": int(age) if age is not None else None,
+            "loop_running": str(r.id) in running,
+            "overdue": overdue,
+        })
+    return {"scheduler_running": bool(sched.get("running")), "accounts": accounts}
+
+
 @router.post("/sync", response_model=list[AccountSyncResult])
 async def sync_tasks(
     req: SyncRequest,

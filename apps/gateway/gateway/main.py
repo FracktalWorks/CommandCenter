@@ -199,6 +199,18 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         _log.warning("gateway.email_sync_skipped", error=str(exc))
 
+    # Start background Tasks (GTD) provider-sync scheduler — one loop per
+    # sync-enabled ClickUp/PM workspace keeps the agent's project/task/people
+    # picture fresh between visits (routes/tasks/scheduler.py).
+    try:
+        from gateway.routes.tasks.scheduler import (
+            start_background_sync as start_tasks_sync,
+        )
+        await start_tasks_sync()
+        _log.info("gateway.tasks_sync_started")
+    except Exception as exc:
+        _log.warning("gateway.tasks_sync_skipped", error=str(exc))
+
     # Anthropic prompt-cache warming (specs/llm_caching_memory.md Phase 6).
     # Fire the orchestrator's stable prefix at any Anthropic-backed tier with
     # max_tokens=0 so the first real user request is a cache HIT, not a cold
@@ -212,6 +224,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         from email_ingestion.scheduler import stop_background_sync
         await stop_background_sync()
+    except Exception:
+        pass
+
+    # Stop background Tasks (GTD) provider-sync scheduler
+    try:
+        from gateway.routes.tasks.scheduler import (
+            stop_background_sync as stop_tasks_sync,
+        )
+        await stop_tasks_sync()
     except Exception:
         pass
 

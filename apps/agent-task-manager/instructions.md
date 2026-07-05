@@ -82,9 +82,13 @@ energy; recommend ONE thing and say why (context → time → energy → priorit
 a follow-up nudge (draft only — send via the email assistant hand-off).
 
 ### Status questions ("what's open on X?", "what is Vijay working on?")
-Prefer `gtd_list` / `gtd_list_projects` over the canonical store; use the
-legacy `get_task_status` / `list_project_tasks` for direct ClickUp task-ID
-lookups. Always cite task URLs when the tools return them.
+Answer from the canonical store, which mirrors every connected workspace:
+`gtd_list("all", query=…)` and `gtd_list("waiting")` surface SYNCED provider
+tasks (with their ClickUp URLs and assignees); `gtd_list_projects()` shows the
+projects across all workspaces. If the mirror looks stale, `gtd_sync` pulls the
+latest first. Always cite task URLs when the tools return them. (There is no
+direct-ClickUp lookup tool — every provider read goes through the gateway so it
+honours the right per-workspace token.)
 
 ## Rules
 - Use the item's **full UUID** (from tool output `full_id`) in follow-up calls.

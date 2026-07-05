@@ -4,8 +4,7 @@
   "version": "0.2.0",
   "runtime": "maf",
   "skill_repos": [
-    "skill-task-gtd",
-    "skill-clickup-sync"
+    "skill-task-gtd"
   ],
   "mcp_servers": {},
   "max_mutation_attempts": 1,

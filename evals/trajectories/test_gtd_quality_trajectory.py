@@ -126,7 +126,6 @@ def test_sync_lens_golden_set():
 # ── 3. Safety invariants (annotations + trifecta delimiting) ─────────────
 
 def test_every_gtd_tool_is_annotated_and_none_destructive():
-    import skill_clickup_sync  # noqa: F401  (registers via decorator import)
     import skill_task_gtd
     from acb_skills.tool_annotations import TOOL_ANNOTATIONS
 
@@ -135,9 +134,6 @@ def test_every_gtd_tool_is_annotated_and_none_destructive():
         # C-04: the agent has NO destructive tool — pushing to a provider is
         # an explicit human action in the UI, never an agent call.
         assert not TOOL_ANNOTATIONS[name]["destructive"], name
-    for name in ("get_task_status", "list_project_tasks"):
-        assert TOOL_ANNOTATIONS[name]["read_only"], name
-        assert TOOL_ANNOTATIONS[name]["open_world"], name
 
     # The read/write split the permission layer depends on:
     read_only = {"gtd_list", "gtd_list_projects", "gtd_accounts", "gtd_people",
@@ -177,6 +173,19 @@ def test_tool_scope_is_declared_and_lean():
               "call_agents_parallel", "call_agent_background"}
     assert banned.isdisjoint(scope), banned & set(scope)
     assert "ask_questions" in scope  # HITL stays available
+
+
+def test_legacy_single_workspace_clickup_skill_is_retired():
+    """Multi-workspace invariant: the agent loads ONLY the gateway-backed GTD
+    skill. The legacy skill-clickup-sync (direct ClickUp REST on a single
+    process-global CLICKUP_API_TOKEN) is retired from the agent — every
+    provider read now goes through the per-account interface layer, so an
+    agent run honours the right per-workspace token instead of one global one.
+    """
+    import json
+    cfg = json.loads((REPO / "apps/agent-task-manager/config.json").read_text())
+    assert cfg.get("skill_repos") == ["skill-task-gtd"], cfg.get("skill_repos")
+    assert "skill-clickup-sync" not in (cfg.get("skill_repos") or [])
 
 
 # ── 4. Atomizer + capture dedup golden set (§2.1 seam) ───────────────────

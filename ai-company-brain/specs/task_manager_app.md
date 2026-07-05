@@ -582,8 +582,11 @@ src/app/tasks/
 ├── components/
 │   ├── ListsSidebar.tsx      — Inbox · Next (by @context) · Waiting · Projects · Calendar · Someday · Horizons
 │   ├── CaptureBar.tsx        — universal quick-add (global hotkey)
-│   ├── ItemList.tsx          — current list (inbox / context / project)
-│   ├── ItemDetail.tsx        — item view + edit
+│   ├── ItemList.tsx          — processed-task views with a List ⇄ Board toggle
+│   ├── TaskCard.tsx          — rich PM-tool task card (board card + dense row); opens the focus modal
+│   ├── TaskBoard.tsx         — Kanban board (columns by @context / stage / disposition), native HTML5 drag-to-refile → updateItem (back-syncs to ClickUp)
+│   ├── ItemDetail.tsx        — editable task detail (+ ClickUp back-sync, comments/attachments/subtasks)
+│   ├── TaskFocusModal.tsx    — full-page focused task view (the "task card pops up" surface)
 │   ├── ClarifyPanel.tsx      — GTD decision-tree UI (agent proposal + approve/edit)
 │   ├── ProjectPlanner.tsx    — natural-planning flow
 │   ├── EngageView.tsx        — "Now": filter by context/time/energy/priority
@@ -661,6 +664,25 @@ The desktop 4-panel layout collapses to a **single-pane** flow on ≤767px (`use
 
 **Commits on `main`:** shell+browse `9dfa571` · clarify `c26890f` · backend wiring (this change).
 **Resume here →** Slice 3 (Engage "Now") on the frontend · `/tasks/sync` (pull existing provider tasks into the inbox views) on the backend.
+
+**Processed-task UI overhaul (2026-07-05/06)** — the post-inbox views were a plain
+`ItemRow` stack ("looked like an email server"). Replaced, inspired by
+[trungvose/jira-clone-angular](https://github.com/trungvose/jira-clone-angular):
+(1) **Editable detail** — `ItemDetail` is now a click-to-edit PM-tool view
+(title/nextAction/notes + Context/Energy/Estimate/Due/Stage/Assignee cells);
+`updateItem` takes a full `ItemMetaPatch`; backend `ItemPatch`/`patch_item`
+extended (`_build_item_update`). (2) **ClickUp back-sync** — `provider.update_task`
+(add/rem assignee delta) + `_push_patch_upstream` best-effort back-sync of a SYNCED
+task's edits. (3) **Rich ClickUp detail** — `provider.get_task_detail` + `GET
+/items/{id}/detail` → comments/attachments/subtasks rendered in the panel.
+(4) **Full-page view** — `TaskFocusModal` (store `focusedItemId`/`openFocus`).
+(5) **List ⇄ Board** — `TaskCard` (rich card, board + dense-row variants; click →
+focus modal) + `TaskBoard` (Kanban; columns by @context [Next] / stage
+[Waiting/Someday] / disposition; **native HTML5 drag-to-refile** → `updateItem`,
+which back-syncs to ClickUp — no DnD lib); `ItemList` gained a sticky List/Board
+toggle (Calendar stays list-only). Unit tests: `update_task` + `get_task_detail`
+(48). **Still not built (from §7 wishlist):** EngageView, WeeklyReview,
+WaitingForView (dedicated), HorizonsView, ProjectPlanner.
 
 ### 9.2 Backend phases (after the UI slices)
 

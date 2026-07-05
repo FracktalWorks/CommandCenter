@@ -427,6 +427,17 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
               <SlidersHorizontal className="h-3.5 w-3.5" />
               Adjust
             </button>
+            {/* Trash is a first-class outcome of clarifying — surface it here
+                instead of burying it as one pill inside Adjust. */}
+            <button
+              type="button"
+              onClick={() => clarify(item.id, { kind: "trash" })}
+              title="Trash this — it's not actionable"
+              className="tech-transition ml-auto inline-flex items-center gap-1.5 rounded-md border border-transparent px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Trash
+            </button>
           </div>
         </div>
 

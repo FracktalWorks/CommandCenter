@@ -238,7 +238,7 @@ export function InboxCard({
         </div>
       </div>
 
-      {/* hover quick-actions (desktop; on touch, tap the card → Clarify sheet) */}
+      {/* Secondary quick-actions (desktop hover; on touch, tap card → Clarify) */}
       <div className="hidden shrink-0 items-center gap-0.5 opacity-0 tech-transition focus-within:opacity-100 group-hover:opacity-100 sm:flex">
         <CardAction label="Edit" icon={Pencil} onClick={onEditStart} />
         <div className="relative">
@@ -268,18 +268,27 @@ export function InboxCard({
           onClick={() => quickDispose(item.id, "REFERENCE")}
         />
         <CardAction
-          label="Delete"
-          icon={Trash2}
-          danger
-          onClick={() => deleteItem(item.id)}
-        />
-        <CardAction
           label="Clarify"
           icon={Sparkles}
           primary
           onClick={() => openClarify(item.id)}
         />
       </div>
+
+      {/* Trash — always visible (not hover-gated), on touch and desktop, so
+          removing a capture is never buried. */}
+      <button
+        type="button"
+        title="Delete"
+        aria-label="Delete"
+        onClick={(e) => {
+          e.stopPropagation();
+          deleteItem(item.id);
+        }}
+        className="tech-transition mt-0.5 shrink-0 rounded-md p-1.5 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
+      >
+        <Trash2 className="h-4 w-4" />
+      </button>
     </div>
   );
 }

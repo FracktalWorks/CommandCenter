@@ -9,8 +9,9 @@ import { SourceBadge } from "./SourceBadge";
 
 // Dense Notion-style list view for the inbox: one row per capture with the
 // attributes that matter at triage time as columns — far more items on
-// screen than the card view. Same actions as the cards (clarify · someday ·
-// trash) on hover; row click selects, title click opens Clarify.
+// screen than the card view. Someday · clarify reveal on hover; the trash
+// icon is always visible (removing a capture is never buried). Row click
+// selects, title click opens Clarify.
 export function InboxTable({
   items,
   cursorId,
@@ -26,6 +27,7 @@ export function InboxTable({
   const projects = useTaskStore((s) => s.projects);
   const openClarify = useTaskStore((s) => s.openClarify);
   const quickDispose = useTaskStore((s) => s.quickDispose);
+  const deleteItem = useTaskStore((s) => s.deleteItem);
   const selectItem = useTaskStore((s) => s.selectItem);
 
   return (
@@ -120,7 +122,7 @@ export function InboxTable({
                   {relativeTime(item.createdAt)}
                 </td>
                 <td className="px-2 py-1.5">
-                  <span className="flex items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                  <span className="flex items-center justify-end gap-0.5">
                     <button
                       type="button"
                       title="Someday / maybe"
@@ -128,20 +130,9 @@ export function InboxTable({
                         e.stopPropagation();
                         quickDispose(item.id, "SOMEDAY");
                       }}
-                      className="tech-transition rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                      className="tech-transition rounded p-1 text-muted-foreground opacity-0 hover:bg-secondary hover:text-foreground group-hover:opacity-100"
                     >
                       <Lightbulb className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      title="Trash"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        quickDispose(item.id, "TRASH");
-                      }}
-                      className="tech-transition rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
                     </button>
                     <button
                       type="button"
@@ -150,9 +141,22 @@ export function InboxTable({
                         e.stopPropagation();
                         openClarify(item.id);
                       }}
-                      className="tech-transition rounded p-1 text-primary hover:bg-primary/10"
+                      className="tech-transition rounded p-1 text-primary opacity-0 hover:bg-primary/10 group-hover:opacity-100"
                     >
                       <ArrowRight className="h-3.5 w-3.5" />
+                    </button>
+                    {/* Trash always visible — never hover-gated. */}
+                    <button
+                      type="button"
+                      title="Delete"
+                      aria-label="Delete"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteItem(item.id);
+                      }}
+                      className="tech-transition rounded p-1 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   </span>
                 </td>

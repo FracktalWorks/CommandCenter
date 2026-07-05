@@ -101,6 +101,78 @@ def test_clarify_stage_default_follows_gtd_mapping():
     assert tasks_ai.default_status("NEXT", ["Backlog", "To-do", "Done"]) == "To-do"
 
 
+# ── 1b. LLM clarify cognition — overlay + guaranteed fallback (§2.2 seam) ─
+# The LLM pass replaces only the cognition; the deterministic propose() stays
+# the schema authority and the guaranteed fallback. These lock: (a) no LLM →
+# byte-identical to the heuristic, (b) a valid LLM proposal overlays the
+# cognitive fields, (c) the LLM can never invent a disposition or a delegate.
+
+def test_llm_clarify_fallback_is_identical_to_heuristic():
+    """propose_with_llm(..., None) MUST equal propose(...) exactly — an LLM
+    failure can never make clarify worse than the eval-locked heuristic."""
+    for title, _ in GOLDEN_DISPOSITIONS:
+        base = tasks_ai.propose(_item(title), PEOPLE, [], {})
+        fb = tasks_ai.propose_with_llm(_item(title), PEOPLE, [], {}, None)
+        assert base == fb, title
+
+
+def test_llm_clarify_overlay_replaces_cognition_only():
+    """A valid LLM core overlays disposition/next_action/rationale and marks
+    clarified_by=llm; the deterministic status is re-derived from it."""
+    llm_core = {"actionable": True, "disposition": "DO_NOW",
+                "next_action": "Email the lab about calibration",
+                "confidence": "high", "rationale": "under two minutes"}
+    m = tasks_ai.propose_with_llm(
+        _item("call the lab about calibration"), PEOPLE, [], {}, llm_core)
+    assert m["disposition"] == "DO_NOW"
+    assert m["next_action"] == "Email the lab about calibration"
+    assert m["clarified_by"] == "llm"
+
+
+def test_llm_propose_rejects_unknown_disposition_and_empty_action():
+    """Validation gate: an unknown disposition or an actionable proposal with
+    no next_action returns None → caller keeps the heuristic."""
+    import asyncio
+
+    class _Resp:
+        def __init__(self, content):
+            self.choices = [SimpleNamespace(
+                message=SimpleNamespace(content=content))]
+
+    def _mock(content):
+        async def _f(**_kw):
+            return _Resp(content), "m"
+        return _f
+
+    import acb_llm.context as ctx
+    orig = getattr(ctx, "acompletion_with_fallback", None)
+    try:
+        ctx.acompletion_with_fallback = _mock('{"disposition":"FOO","next_action":"x"}')
+        assert asyncio.run(tasks_ai._llm_propose(
+            _item("x"), PEOPLE, [], {}, "m")) is None
+        ctx.acompletion_with_fallback = _mock('{"disposition":"NEXT","next_action":""}')
+        assert asyncio.run(tasks_ai._llm_propose(
+            _item("x"), PEOPLE, [], {}, "m")) is None
+        # A valid WAITING resolves the named delegate to a real person id.
+        ctx.acompletion_with_fallback = _mock(
+            '{"disposition":"WAITING","next_action":"Ask Rahul to profile it",'
+            '"assignee_name":"Rahul","confidence":"high","rationale":"his area"}')
+        core = asyncio.run(tasks_ai._llm_propose(
+            _item("profile the stepper driver"), PEOPLE, [], {}, "m"))
+        assert core and core["disposition"] == "WAITING"
+        assert core["suggested_assignee"]["provider_user_id"] == "7"
+        # The model cannot invent a delegate not on the roster.
+        ctx.acompletion_with_fallback = _mock(
+            '{"disposition":"WAITING","next_action":"Ask Ghost to do it",'
+            '"assignee_name":"Ghost McNobody","confidence":"low","rationale":"?"}')
+        core = asyncio.run(tasks_ai._llm_propose(
+            _item("do the thing"), PEOPLE, [], {}, "m"))
+        assert core and "suggested_assignee" not in core
+    finally:
+        if orig is not None:
+            ctx.acompletion_with_fallback = orig
+
+
 # ── 2. Sync-pull GTD lens golden set ─────────────────────────────────────
 
 def test_sync_lens_golden_set():

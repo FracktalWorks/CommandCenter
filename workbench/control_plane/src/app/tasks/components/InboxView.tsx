@@ -30,6 +30,8 @@ import {
   LayoutGrid,
   LayoutList,
   Loader2,
+  HardDrive,
+  Cloud,
 } from "lucide-react";
 import FilterPills from "@/components/FilterPills";
 import { useTaskStore } from "../lib/taskStore";
@@ -97,18 +99,27 @@ export function InboxView() {
   const processed = useTaskStore((s) => s.processedThisSession);
   const clarifyModalOpen = useTaskStore((s) => s.clarifyModalOpen);
   const quickCaptureOpen = useTaskStore((s) => s.quickCaptureOpen);
+  const sourceFilter = useTaskStore((s) => s.sourceFilter);
+
+  // Respect the sidebar's Mine / ClickUp / All filter so the inbox matches the
+  // rest of the app when local and synced tasks are mixed.
+  const sourced = useMemo(() => {
+    if (sourceFilter === "local") return items.filter((i) => i.source === "LOCAL");
+    if (sourceFilter === "synced") return items.filter((i) => i.source !== "LOCAL");
+    return items;
+  }, [items, sourceFilter]);
 
   // Active inbox = to-process (INBOX, not tickled). Tickler = deferred items.
   const activeInbox = useMemo(
-    () => items.filter((i) => i.disposition === "INBOX" && !isTickled(i)),
-    [items],
+    () => sourced.filter((i) => i.disposition === "INBOX" && !isTickled(i)),
+    [sourced],
   );
   const tickler = useMemo(
     () =>
-      items
+      sourced
         .filter((i) => i.disposition === "INBOX" && isTickled(i))
         .sort((a, b) => (a.deferUntil ?? "").localeCompare(b.deferUntil ?? "")),
-    [items],
+    [sourced],
   );
 
   const oldest = useMemo(() => {
@@ -485,6 +496,19 @@ export function InboxView() {
                 <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
                   {activeInbox.length} to process
                 </span>
+                {sourceFilter !== "all" && (
+                  <span
+                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"
+                    title="Filtered by source — change it in the sidebar"
+                  >
+                    {sourceFilter === "local" ? (
+                      <HardDrive className="h-3 w-3" />
+                    ) : (
+                      <Cloud className="h-3 w-3" />
+                    )}
+                    {sourceFilter === "local" ? "Mine" : "ClickUp"}
+                  </span>
+                )}
                 {processed > 0 && (
                   <span className="hidden items-center gap-1 whitespace-nowrap text-[11px] text-success sm:inline-flex">
                     <CheckCircle2 className="h-3 w-3" />

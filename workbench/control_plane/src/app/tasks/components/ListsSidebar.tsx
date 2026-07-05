@@ -20,6 +20,8 @@ import {
   Circle,
   Cloud,
   Plug,
+  HardDrive,
+  Layers,
   type LucideIcon,
   Settings2,
 } from "lucide-react";
@@ -65,6 +67,8 @@ export function ListsSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const accounts = useTaskStore((s) => s.accounts);
   const openWorkspaces = useTaskStore((s) => s.openWorkspaces);
   const openSettings = useTaskStore((s) => s.openSettings);
+  const sourceFilter = useTaskStore((s) => s.sourceFilter);
+  const setSourceFilter = useTaskStore((s) => s.setSourceFilter);
   const selectView: typeof selectViewRaw = (v) => {
     selectViewRaw(v);
     onNavigate?.();
@@ -84,6 +88,46 @@ export function ListsSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
         <h2 className="text-sm font-semibold text-foreground">Tasks</h2>
         <p className="text-[11px] text-muted-foreground">Getting Things Done</p>
       </div>
+
+      {/* Source filter — persistent across every view, so wherever local and
+          ClickUp tasks are mixed you can narrow to just your own or just the
+          workspace's. Only shown once a workspace is connected. */}
+      {accounts.length > 0 && (
+        <div className="mb-1 px-1">
+          <div className="flex items-center gap-0.5 rounded-lg border border-border bg-background p-0.5">
+            {(
+              [
+                { id: "all", label: "All", Icon: Layers },
+                { id: "local", label: "Mine", Icon: HardDrive },
+                { id: "synced", label: "ClickUp", Icon: Cloud },
+              ] as const
+            ).map(({ id, label, Icon }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setSourceFilter(id)}
+                aria-pressed={sourceFilter === id}
+                title={
+                  id === "local"
+                    ? "Only tasks you captured here (local)"
+                    : id === "synced"
+                      ? "Only tasks mirrored from ClickUp"
+                      : "All tasks (local + ClickUp)"
+                }
+                className={[
+                  "tech-transition flex flex-1 items-center justify-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium",
+                  sourceFilter === id
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                ].join(" ")}
+              >
+                <Icon className="h-3 w-3 shrink-0" />
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {PRIMARY.map((row) => {
         if (row.view === "next") {

@@ -279,6 +279,271 @@ function CredentialForm({ api, onSaved }: {
   );
 }
 
+// ---------------------------------------------------------------------------
+// ClickUp — multi-account connector (System B: task_accounts, per-account
+// encrypted tokens). ClickUp is special-cased in the APIs tab: instead of the
+// single-token CredentialForm (which wrote a process-wide CLICKUP_API_TOKEN),
+// this connects N workspaces from N tokens — the same backend the Tasks app
+// uses (/tasks/accounts via the /api/tasks proxy, which forwards the user's
+// identity). Flow: paste token → verify + list its workspaces → pick → connect.
+// ---------------------------------------------------------------------------
+
+interface ClickUpAccount {
+  id: string;
+  label: string;
+  workspace_id: string;
+  provider: string;
+  project_count?: number;
+  members?: unknown[];
+  sync_error?: string | null;
+}
+type ClickUpWorkspace = { id: string; name: string; member_count: number };
+
+function ClickUpConnector({ onChange }: { onChange?: () => void }) {
+  const [accounts, setAccounts] = useState<ClickUpAccount[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [token, setToken] = useState("");
+  const [workspaces, setWorkspaces] = useState<ClickUpWorkspace[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const loadAccounts = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch("/api/tasks/accounts");
+      const d = r.ok ? await r.json() : [];
+      setAccounts(
+        (Array.isArray(d) ? d : []).filter(
+          (a: ClickUpAccount) => a.provider === "clickup",
+        ),
+      );
+    } catch {
+      /* non-fatal */
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadAccounts();
+  }, [loadAccounts]);
+
+  const findWorkspaces = async () => {
+    setBusy("find");
+    setErr(null);
+    try {
+      const r = await fetch("/api/tasks/providers/clickup/workspaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_token: token.trim() }),
+      });
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(String(b.detail ?? `Could not reach ClickUp (${r.status})`));
+      }
+      const d = await r.json();
+      setWorkspaces(d.workspaces ?? []);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not reach ClickUp");
+      setWorkspaces(null);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const connect = async (w: ClickUpWorkspace) => {
+    setBusy(w.id);
+    setErr(null);
+    try {
+      const r = await fetch("/api/tasks/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "clickup",
+          api_token: token.trim(),
+          workspace_id: w.id,
+          label: w.name,
+        }),
+      });
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(String(b.detail ?? `Connect failed (${r.status})`));
+      }
+      setWorkspaces((ws) => ws?.filter((x) => x.id !== w.id) ?? null);
+      await loadAccounts();
+      onChange?.();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Connect failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const disconnect = async (id: string) => {
+    if (!confirm("Disconnect this ClickUp workspace?")) return;
+    setBusy(id);
+    try {
+      await fetch(`/api/tasks/accounts/${id}`, { method: "DELETE" });
+      await loadAccounts();
+      onChange?.();
+    } catch {
+      setErr("Disconnect failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const connectedIds = new Set(accounts.map((a) => a.workspace_id));
+
+  return (
+    <div className="space-y-4">
+      {/* Connected workspaces */}
+      <div>
+        <div className="text-[10px] text-muted uppercase tracking-wider mb-1.5">
+          Connected workspaces
+        </div>
+        {loading ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…
+          </div>
+        ) : accounts.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No ClickUp workspaces connected yet. Connect one below — each
+            workspace is a separate account with its own token, so several
+            companies can coexist.
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            {accounts.map((a) => (
+              <div
+                key={a.id}
+                className="flex items-center gap-2.5 rounded-lg border border-border px-3 py-2"
+              >
+                <Box className="w-4 h-4 shrink-0 text-primary/80" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13px] font-medium text-foreground">
+                    {a.label}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {a.project_count ?? 0} projects · {a.members?.length ?? 0} members
+                  </div>
+                  {a.sync_error && (
+                    <div className="truncate text-[11px] text-destructive">
+                      {a.sync_error}
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  title="Disconnect workspace"
+                  disabled={busy === a.id}
+                  onClick={() => void disconnect(a.id)}
+                  className="p-1.5 rounded-md text-muted-foreground hover:bg-red-500/10 hover:text-red-400 transition-colors disabled:opacity-50"
+                >
+                  {busy === a.id ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <X className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Connect flow */}
+      <div>
+        <div className="text-[10px] text-muted uppercase tracking-wider mb-1.5">
+          Connect a workspace
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex flex-1 items-center gap-2 rounded-lg border border-border bg-secondary px-3 py-2 focus-within:border-primary">
+            <Lock className="w-3 h-3 shrink-0 text-muted-foreground" />
+            <input
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              type="password"
+              autoComplete="off"
+              placeholder="Personal API token (pk_…)"
+              className="flex-1 bg-transparent text-sm text-foreground placeholder-muted-foreground focus:outline-none"
+            />
+          </div>
+          <button
+            type="button"
+            disabled={!token.trim() || busy === "find"}
+            onClick={() => void findWorkspaces()}
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 transition-colors"
+          >
+            {busy === "find" ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Plus className="w-4 h-4" />
+            )}
+            Find
+          </button>
+        </div>
+        <p className="mt-1 text-[10px] text-muted-foreground">
+          ClickUp → Settings → Apps → API Token. Stored per-workspace, encrypted
+          at rest — no shared environment token.
+        </p>
+
+        {err && (
+          <p className="mt-2 text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">
+            {err}
+          </p>
+        )}
+
+        {workspaces && (
+          <div className="mt-2 space-y-1.5">
+            {workspaces.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                This token reaches no workspaces.
+              </p>
+            )}
+            {workspaces.map((w) => {
+              const already = connectedIds.has(w.id);
+              return (
+                <div
+                  key={w.id}
+                  className="flex items-center gap-2.5 rounded-lg border border-border px-3 py-2"
+                >
+                  <Box className="w-4 h-4 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[13px] text-foreground">{w.name}</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {w.member_count} members
+                    </div>
+                  </div>
+                  {already ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] text-success">
+                      <Check className="w-3.5 h-3.5" /> connected
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={busy === w.id}
+                      onClick={() => void connect(w)}
+                      className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-50 transition-colors"
+                    >
+                      {busy === w.id ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Plus className="w-3.5 h-3.5" />
+                      )}
+                      Connect
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ApiSidePanel({ api, agents, onClose, onRefresh }: {
   api: ApiEntry; agents: AgentEntry[]; onClose: () => void; onRefresh: () => void;
 }) {
@@ -362,6 +627,10 @@ function ApiSidePanel({ api, agents, onClose, onRefresh }: {
 
         {api.service === "github" ? (
           <GitHubAccountBadge integration={api} onRefresh={onRefresh} />
+        ) : api.service === "clickup" ? (
+          // ClickUp uses the multi-account System-B connector (task_accounts),
+          // not the single-token credential form.
+          <ClickUpConnector onChange={onRefresh} />
         ) : mode === "info" ? (
           <div className="space-y-4">
             {api.instructions && (
@@ -694,9 +963,30 @@ function ApisTab() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [sRes, aRes] = await Promise.all([fetch("/api/integrations/status"), fetch("/api/agent/list")]);
+      // ClickUp's "connected" state comes from task_accounts (System B,
+      // multi-account), NOT provider_keys — so override its status from the
+      // real count of connected workspaces.
+      const [sRes, aRes, cuRes] = await Promise.all([
+        fetch("/api/integrations/status"),
+        fetch("/api/agent/list"),
+        fetch("/api/tasks/accounts").catch(() => null),
+      ]);
       const [sData, aData] = await Promise.all([sRes.json(), aRes.json()]);
-      setApis((Array.isArray(sData) ? sData : []).map((a: ApiEntry) => ({ ...a, category: a.category ?? "custom" })));
+      let clickupCount = 0;
+      if (cuRes && cuRes.ok) {
+        const accts = await cuRes.json().catch(() => []);
+        clickupCount = (Array.isArray(accts) ? accts : []).filter(
+          (a: { provider?: string }) => a.provider === "clickup",
+        ).length;
+      }
+      setApis(
+        (Array.isArray(sData) ? sData : []).map((a: ApiEntry) => {
+          const base = { ...a, category: a.category ?? "custom" };
+          return a.service === "clickup"
+            ? { ...base, configured: clickupCount > 0 }
+            : base;
+        }),
+      );
       setAgents(Array.isArray(aData) ? aData : []);
     } catch { /* non-fatal */ }
     finally { setLoading(false); }

@@ -131,18 +131,24 @@ _SETUP_GUIDES: dict[str, dict[str, Any]] = {
     },
     "clickup": {
         "label": "ClickUp",
-        "description": "Task and project management.",
+        "description": "Task and project management. Connect one or more "
+        "workspaces — each stored as its own per-account encrypted token so "
+        "several companies can coexist.",
         "setup_url": "https://app.clickup.com/settings/apps",
         "docs_url": "https://clickup.com/api/",
         "instructions": (
-            "1. Go to ClickUp Settings → Apps.\n"
-            "2. Click 'Generate' under Personal API Token.\n"
-            "3. Copy the token and your Workspace ID from the URL bar."
+            "Connect ClickUp per-workspace (multi-account) from the panel:\n"
+            "1. ClickUp → Settings → Apps → Generate a Personal API Token.\n"
+            "2. Paste it to list the workspaces it can reach, then connect "
+            "each one you want. Repeat with other tokens for other companies."
         ),
-        "env_vars": [
-            {"key": "CLICKUP_API_TOKEN", "label": "Personal API Token", "sensitive": True},
-            {"key": "CLICKUP_WORKSPACE_ID", "label": "Workspace ID", "sensitive": False},
-        ],
+        # NO env_vars: ClickUp is NOT a process-wide env credential. It uses the
+        # multi-account System-B store (task_accounts, per-account encrypted
+        # tokens) via /tasks/accounts. Empty env_vars keeps it out of
+        # _ALLOWED_ENV_KEYS so the legacy single-token write path is closed; the
+        # APIs-tab tile renders a dedicated multi-account connector instead of
+        # the generic credential form.
+        "env_vars": [],
     },
     "smtp": {
         "label": "SMTP (email relay)",
@@ -350,7 +356,13 @@ def _is_configured(service_name: str, settings: Any) -> bool:
             (s.msft_oauth_client_id and s.msft_oauth_client_secret)
             or (os.getenv("AUTH_MICROSOFT_ENTRA_ID_ID") and os.getenv("AUTH_MICROSOFT_ENTRA_ID_SECRET"))
         ),
-        "clickup":       lambda s: bool(s.clickup_api_token),
+        # ClickUp is multi-account (task_accounts, System B) — its "connected"
+        # state is NOT a process-wide env token. The APIs-tab tile overrides
+        # `configured` from the real task_accounts count on the client, so the
+        # server-side env check is deliberately False (never report the legacy
+        # global CLICKUP_API_TOKEN as "connected").
+        "clickup":       lambda s: False,
+
         "smtp":          lambda s: bool(s.smtp_host and s.smtp_username),
         "github":        lambda s: bool(s.github_token),
         "serpapi":       lambda s: bool(getattr(s, "serpapi_api_key", "") or os.getenv("SERPAPI_API_KEY", "")),

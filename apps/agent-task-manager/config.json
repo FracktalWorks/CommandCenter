@@ -14,9 +14,7 @@
     "clickup",
     "project-management"
   ],
-  "integrations": [
-    "clickup"
-  ],
+  "integrations": [],
   "optional_integrations": [],
   "tool_scope": [
     "call_agent",

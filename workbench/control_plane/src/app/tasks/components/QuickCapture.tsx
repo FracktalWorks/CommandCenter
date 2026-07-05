@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Plus, X, ListPlus, Wind, Check, Sparkles, ArrowLeft, ArrowRight, Trash2, Loader2, CopyX } from "lucide-react";
+import { Plus, X, ListPlus, Wind, Check, Sparkles, ArrowLeft, ArrowRight, Trash2, Loader2, CopyX, CornerDownLeft } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { apiAtomize } from "../lib/api";
 import { GTD_TRIGGERS } from "../lib/mockData";
@@ -178,9 +178,20 @@ function QuickCapturePanel() {
                 aria-label="Capture to inbox"
                 className="flex-1 bg-transparent text-base text-foreground placeholder:text-muted-foreground focus:outline-none"
               />
-              <kbd className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                ↵
-              </kbd>
+              <button
+                type="button"
+                onClick={submitSingle}
+                disabled={!value.trim()}
+                aria-label="Add to inbox"
+                className={[
+                  "tech-transition inline-flex shrink-0 items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium",
+                  value.trim()
+                    ? "bg-primary text-primary-foreground hover:opacity-90"
+                    : "cursor-not-allowed bg-secondary text-muted-foreground",
+                ].join(" ")}
+              >
+                Add <CornerDownLeft className="h-3.5 w-3.5" />
+              </button>
             </div>
             <AttachmentComposer attachments={pendingAtts} onChange={setPendingAtts} compact />
             <div className="mt-2 flex items-center justify-between px-1 text-[11px] text-muted-foreground">

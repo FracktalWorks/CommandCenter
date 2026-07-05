@@ -309,7 +309,7 @@ export function InboxView() {
       {/* Capture hero — desktop only. On mobile the dedicated Capture button
           (bottom nav / `C`) handles capture, so we give the list the space. */}
       <div className="hidden shrink-0 border-b border-border sm:block">
-        <div className="mx-auto w-full max-w-2xl px-4 py-6 sm:px-6 sm:py-8">
+        <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 sm:py-8">
           <div className="mb-1 flex items-center gap-2">
             <Inbox className="h-5 w-5 text-primary" />
             <h1 className="text-xl font-bold text-foreground">Inbox</h1>
@@ -393,7 +393,7 @@ export function InboxView() {
       {/* Capture undo — kept out of the hero so it shows on mobile too */}
       {undoCount > 0 && (
         <div className="shrink-0 border-b border-border bg-secondary/40">
-          <div className="mx-auto flex w-full max-w-2xl items-center justify-between px-4 py-2 sm:px-6">
+          <div className="mx-auto flex w-full max-w-4xl items-center justify-between px-4 py-2 sm:px-6">
             <span className="text-[11px] text-muted-foreground">
               Captured {undoCount} item{undoCount === 1 ? "" : "s"}
             </span>
@@ -413,7 +413,7 @@ export function InboxView() {
           duplicates were auto-skipped (undoable); "similar" asks the user. */}
       {dupNotice && (
         <div className="shrink-0 border-b border-warning/30 bg-warning/10">
-          <div className="mx-auto flex w-full max-w-2xl flex-wrap items-center justify-between gap-2 px-4 py-2 sm:px-6">
+          <div className="mx-auto flex w-full max-w-4xl flex-wrap items-center justify-between gap-2 px-4 py-2 sm:px-6">
             <span className="min-w-0 flex-1 text-[11px] text-foreground">
               {dupNotice.verdict === "duplicate" ? (
                 <>Already in your system: &ldquo;{dupNotice.matchTitle}&rdquo; — not added again.</>
@@ -464,7 +464,7 @@ export function InboxView() {
       {/* Controls */}
       {(activeInbox.length > 0 || tickler.length > 0) && (
         <div className="shrink-0 border-b border-border bg-background/80 backdrop-blur">
-          <div className="mx-auto w-full max-w-2xl px-4 sm:px-6">
+          <div className="mx-auto w-full max-w-4xl px-4 sm:px-6">
             <div className="flex items-center justify-between gap-2 py-3">
               <div className="flex min-w-0 items-center gap-2">
                 <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
@@ -590,7 +590,7 @@ export function InboxView() {
               items={pills}
               activeId={dateFilter}
               onChange={(id) => setDateFilter(id as DateFilter)}
-              className="mx-auto max-w-2xl !px-4 sm:!px-6"
+              className="mx-auto max-w-4xl !px-4 sm:!px-6"
             />
           )}
         </div>
@@ -598,7 +598,7 @@ export function InboxView() {
 
       {/* List */}
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-2xl px-4 py-4 sm:px-6 sm:py-5">
+        <div className="mx-auto w-full max-w-4xl px-4 py-4 sm:px-6 sm:py-5">
           {showTickler ? (
             <TicklerList items={tickler} onUndefer={undeferItem} />
           ) : activeInbox.length === 0 ? (

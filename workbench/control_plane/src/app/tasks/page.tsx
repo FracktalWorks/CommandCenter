@@ -175,8 +175,9 @@ export default function TasksPage() {
           </div>
         ) : (
           <>
-            {/* Middle: capture bar + item list */}
-            <div className="flex w-[380px] shrink-0 flex-col overflow-hidden border-r border-border">
+            {/* Middle: capture bar + item list. Widens on larger monitors so the
+                list isn't cramped; the detail pane (flex-1) absorbs the rest. */}
+            <div className="flex w-[380px] shrink-0 flex-col overflow-hidden border-r border-border lg:w-[440px] xl:w-[520px]">
               <CaptureBar />
               <div className="min-h-0 flex-1">
                 <ItemList />

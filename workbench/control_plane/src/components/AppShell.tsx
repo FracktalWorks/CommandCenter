@@ -265,10 +265,10 @@ function MobileBottomNavInner({
   };
 
   return (
-    <nav className="flex items-center justify-around py-1.5 px-2">
+    <nav className="flex items-stretch justify-around gap-0.5 py-1.5 px-1">
         <button
           onClick={() => { open(menuContent); }}
-          className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-colors min-w-[52px] ${
+          className={`flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors ${
             isOpen ? "text-primary" : "text-muted-foreground hover:text-foreground"
           }`}
         >
@@ -279,21 +279,21 @@ function MobileBottomNavInner({
           <>
             <button
               onClick={() => dispatchNav("email-accounts")}
-              className="flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground min-w-[52px]"
+              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
               <Mail size={21} />
               <span className="text-[10px] font-medium leading-none">Inbox</span>
             </button>
             <button
               onClick={() => dispatchNav("email-automation")}
-              className="flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground min-w-[52px]"
+              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
               <Zap size={21} />
               <span className="text-[10px] font-medium leading-none">Automation</span>
             </button>
             <button
               onClick={() => dispatchNav("email-ai")}
-              className="flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground min-w-[52px]"
+              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
               <MessageCircle size={21} />
               <span className="text-[10px] font-medium leading-none">AI Chat</span>
@@ -304,7 +304,7 @@ function MobileBottomNavInner({
           <>
             <button
               onClick={() => dispatchNav("chats")}
-              className="relative flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground min-w-[56px]"
+              className="relative flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
               <MessageCircle size={22} />
               {activeCount > 0 && (
@@ -316,7 +316,7 @@ function MobileBottomNavInner({
             </button>
             <button
               onClick={() => dispatchNav("files")}
-              className="flex flex-col items-center gap-0.5 px-5 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground min-w-[56px]"
+              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
               <FolderOpen size={22} />
               <span className="text-[10px] font-medium leading-none">Files</span>
@@ -370,7 +370,7 @@ function TaskTab({
   return (
     <button
       onClick={onClick}
-      className={`flex min-w-[48px] flex-col items-center gap-0.5 rounded-lg px-2 py-1.5 transition-colors ${
+      className={`flex flex-1 min-w-0 flex-col items-center gap-0.5 rounded-lg px-1 py-1.5 transition-colors ${
         accent
           ? "text-primary"
           : active

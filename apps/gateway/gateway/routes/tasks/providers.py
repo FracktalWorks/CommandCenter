@@ -77,6 +77,18 @@ class BaseTaskProvider(ABC):
         silently dropping the edit."""
         raise ProviderError(self.provider, "update_task not supported", 501)
 
+    async def get_task_detail(self, provider_task_id: str) -> dict[str, Any]:
+        """Fetch the rich, on-demand detail of one task for the detail view:
+
+        {comments: [{id, author, text, created_at_ms}],
+         attachments: [{id, name, url, mime, size}],
+         subtasks: [{provider_task_id, title, status, status_type,
+                     assignees:[...], provider_url}]}
+
+        Read-only; called when a task's detail panel opens. Default returns
+        empty sections so a connector without rich detail degrades gracefully."""
+        return {"comments": [], "attachments": [], "subtasks": []}
+
     @abstractmethod
     async def list_members(self, workspace_id: str) -> list[dict[str, Any]]:
         """CURRENT workspace members → [{name, email, provider_user_id}].
@@ -400,6 +412,66 @@ class ClickUpProvider(BaseTaskProvider):
                              workspace_id=workspace_id)
                 break
         return out
+
+    async def get_task_detail(self, provider_task_id: str) -> dict[str, Any]:
+        """One GET /task (with subtasks+attachments) + one GET /task/comment."""
+        def _ms(val: Any) -> int | None:
+            try:
+                return int(val) if val not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+
+        def _person(u: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "name": u.get("username") or u.get("email") or "",
+                "email": u.get("email"),
+                "provider_user_id": str(u.get("id", "")),
+            }
+
+        task = await self._get(
+            f"/task/{provider_task_id}",
+            {"include_subtasks": "true", "include_markdown_description": "false"},
+        )
+        attachments = [
+            {
+                "id": str(a.get("id", "")),
+                "name": a.get("title") or a.get("name") or "attachment",
+                "url": a.get("url") or a.get("url_w_query"),
+                "mime": a.get("mimetype") or a.get("extension"),
+                "size": a.get("size"),
+            }
+            for a in task.get("attachments") or []
+            if a.get("url") or a.get("url_w_query")
+        ]
+        subtasks = [
+            {
+                "provider_task_id": str(s.get("id", "")),
+                "title": s.get("name") or "Untitled",
+                "status": ((s.get("status") or {}).get("status") or "").strip()
+                or None,
+                "status_type": ((s.get("status") or {}).get("type") or "").strip()
+                or None,
+                "provider_url": s.get("url"),
+                "assignees": [_person(a) for a in s.get("assignees") or []
+                              if a.get("username") or a.get("email")],
+            }
+            for s in task.get("subtasks") or []
+        ]
+
+        comments: list[dict[str, Any]] = []
+        with contextlib.suppress(ProviderError):
+            cdata = await self._get(f"/task/{provider_task_id}/comment")
+            for c in cdata.get("comments") or []:
+                comments.append({
+                    "id": str(c.get("id", "")),
+                    "author": (c.get("user") or {}).get("username")
+                    or (c.get("user") or {}).get("email") or "Someone",
+                    "text": c.get("comment_text") or "",
+                    "created_at_ms": _ms(c.get("date")),
+                })
+
+        return {"comments": comments, "attachments": attachments,
+                "subtasks": subtasks}
 
 
 # ── Registry ─────────────────────────────────────────────────────────────────

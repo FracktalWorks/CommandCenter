@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   MousePointerClick,
   ArrowRight,
@@ -20,6 +20,11 @@ import {
   UserRound,
   CircleDot,
   Trash2,
+  MessageSquare,
+  Paperclip,
+  ListTree,
+  Loader2,
+  Maximize2,
   type LucideIcon,
 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
@@ -32,6 +37,12 @@ import {
   relativeTime,
 } from "../lib/utils";
 import { Disposition, Energy, GtdItem, Person } from "../lib/types";
+import {
+  apiItemDetail,
+  type ProviderTaskDetail,
+  type TaskComment,
+  type TaskSubtask,
+} from "../lib/api";
 import { SourceBadge } from "./SourceBadge";
 import { AttachmentChips } from "./AttachmentComposer";
 import { ClarifyPanel } from "./ClarifyPanel";
@@ -60,7 +71,6 @@ const ESTIMATES = [5, 15, 30, 60, 120, 240];
 
 export function ItemDetail() {
   const items = useTaskStore((s) => s.items);
-  const projects = useTaskStore((s) => s.projects);
   const backend = useTaskStore((s) => s.backend);
   const pushItem = useTaskStore((s) => s.pushItem);
   const selectedItemId = useTaskStore((s) => s.selectedItemId);
@@ -80,6 +90,19 @@ export function ItemDetail() {
   if (item) {
     return <TaskDetail key={item.id} item={item} backend={backend} pushItem={pushItem} />;
   }
+
+  return <ItemDetailEmpty view={view} selectedProjectId={selectedProjectId} />;
+}
+
+function ItemDetailEmpty({
+  view,
+  selectedProjectId,
+}: {
+  view: string;
+  selectedProjectId: string | null;
+}) {
+  const items = useTaskStore((s) => s.items);
+  const projects = useTaskStore((s) => s.projects);
 
   // Project selected (projects view) → show its actions.
   if (view === "projects" && selectedProjectId) {
@@ -143,14 +166,18 @@ export function ItemDetail() {
 
 // ── The editable task view ──────────────────────────────────────────────────
 
-function TaskDetail({
+export function TaskDetail({
   item,
   backend,
   pushItem,
+  focused,
 }: {
   item: GtdItem;
   backend: string;
   pushItem: (id: string) => Promise<void>;
+  /** true when rendered inside the full-page focus overlay (hides the
+   *  expand button; wider content handled by the modal wrapper). */
+  focused?: boolean;
 }) {
   const projects = useTaskStore((s) => s.projects);
   const contexts = useTaskStore((s) => s.contexts);
@@ -159,6 +186,7 @@ function TaskDetail({
   const updateItem = useTaskStore((s) => s.updateItem);
   const quickDispose = useTaskStore((s) => s.quickDispose);
   const deleteItem = useTaskStore((s) => s.deleteItem);
+  const openFocus = useTaskStore((s) => s.openFocus);
 
   const [pushState, setPushState] = useState<"idle" | "busy" | string>("idle");
 
@@ -194,12 +222,26 @@ function TaskDetail({
               Open in {item.provider}
             </a>
           )}
+          {!focused && (
+            <button
+              type="button"
+              title="Open full page"
+              aria-label="Open full page"
+              onClick={() => openFocus(item.id)}
+              className="tech-transition ml-auto rounded-md p-1 text-muted-foreground/70 hover:bg-secondary hover:text-foreground"
+            >
+              <Maximize2 className="h-4 w-4" />
+            </button>
+          )}
           <button
             type="button"
             title="Delete task"
             aria-label="Delete task"
             onClick={() => deleteItem(item.id)}
-            className="tech-transition ml-auto rounded-md p-1 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
+            className={[
+              "tech-transition rounded-md p-1 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive",
+              focused ? "ml-auto" : "",
+            ].join(" ")}
           >
             <Trash2 className="h-4 w-4" />
           </button>
@@ -397,12 +439,17 @@ function TaskDetail({
           />
         </section>
 
-        {/* Attachments */}
+        {/* Attachments captured with the item (local) */}
         {item.attachments && item.attachments.length > 0 && (
           <section>
             <SectionLabel>Attachments</SectionLabel>
             <AttachmentChips attachments={item.attachments} />
           </section>
+        )}
+
+        {/* Live ClickUp detail: subtasks · comments · attachments */}
+        {isSynced && item.providerUrl && (
+          <ProviderDetailSections itemId={item.id} provider={item.provider} />
         )}
 
         {/* Captured-from linkage */}
@@ -457,6 +504,144 @@ function TaskDetail({
         <p className="mt-1 text-[11px] text-muted-foreground">
           Updated {relativeTime(item.updatedAt, MOCK_NOW)}
           {item.completedAt ? ` · completed ${relativeTime(item.completedAt, MOCK_NOW)}` : ""}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── Live provider detail (comments / attachments / subtasks) ────────────────
+
+function ProviderDetailSections({
+  itemId,
+  provider,
+}: {
+  itemId: string;
+  provider?: string;
+}) {
+  const [detail, setDetail] = useState<ProviderTaskDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Keyed by item.id upstream, so this component remounts per task and the
+  // initial loading=true already covers the reset — the effect only kicks off
+  // the fetch and flips state from its async callbacks (no sync setState here).
+  useEffect(() => {
+    let cancelled = false;
+    apiItemDetail(itemId)
+      .then((d) => { if (!cancelled) setDetail(d); })
+      .catch(() => { if (!cancelled) setDetail(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [itemId]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Loading {provider === "clickup" ? "ClickUp" : provider} detail…
+      </div>
+    );
+  }
+  if (!detail) return null;
+
+  const { comments, subtasks, attachments, error } = detail;
+  const nothing =
+    !comments.length && !subtasks.length && !attachments.length;
+
+  return (
+    <>
+      {subtasks.length > 0 && (
+        <section>
+          <SectionLabel icon={ListTree}>Subtasks · {subtasks.length}</SectionLabel>
+          <div className="flex flex-col gap-1">
+            {subtasks.map((s) => <SubtaskRow key={s.providerTaskId} s={s} />)}
+          </div>
+        </section>
+      )}
+
+      {attachments.length > 0 && (
+        <section>
+          <SectionLabel icon={Paperclip}>
+            Attachments · {attachments.length}
+          </SectionLabel>
+          <AttachmentChips attachments={attachments} />
+        </section>
+      )}
+
+      {comments.length > 0 && (
+        <section>
+          <SectionLabel icon={MessageSquare}>
+            Comments · {comments.length}
+          </SectionLabel>
+          <div className="flex flex-col gap-2.5">
+            {comments.map((c) => <CommentRow key={c.id} c={c} />)}
+          </div>
+        </section>
+      )}
+
+      {error ? (
+        <p className="text-[11px] text-muted-foreground">
+          {error}. <a
+            className="text-primary hover:underline"
+            href="#"
+            onClick={(e) => { e.preventDefault(); setLoading(true); apiItemDetail(itemId).then(setDetail).finally(() => setLoading(false)); }}
+          >Retry</a>
+        </p>
+      ) : nothing ? (
+        <p className="text-[11px] text-muted-foreground">
+          No subtasks, comments, or attachments in {provider === "clickup" ? "ClickUp" : "the tool"}.
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+function SubtaskRow({ s }: { s: TaskSubtask }) {
+  const done = s.statusType === "closed" || s.statusType === "done";
+  const inner = (
+    <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-[13px]">
+      <span
+        className={[
+          "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
+          done ? "border-success bg-success/15 text-success" : "border-border",
+        ].join(" ")}
+      >
+        {done && <Check className="h-2.5 w-2.5" />}
+      </span>
+      <span className={`min-w-0 flex-1 truncate ${done ? "text-muted-foreground line-through" : "text-foreground"}`}>
+        {s.title}
+      </span>
+      {s.status && (
+        <span className="shrink-0 rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          {s.status}
+        </span>
+      )}
+      {s.assignees[0] && <Avatar name={s.assignees[0].name} />}
+      {s.providerUrl && <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground/60" />}
+    </div>
+  );
+  return s.providerUrl ? (
+    <a href={s.providerUrl} target="_blank" rel="noreferrer" className="tech-transition hover:opacity-80">
+      {inner}
+    </a>
+  ) : inner;
+}
+
+function CommentRow({ c }: { c: TaskComment }) {
+  return (
+    <div className="flex gap-2">
+      <Avatar name={c.author} lg />
+      <div className="min-w-0 flex-1 rounded-lg rounded-tl-sm border border-border bg-card px-3 py-2">
+        <div className="mb-0.5 flex items-center gap-2">
+          <span className="text-[12px] font-semibold text-foreground">{c.author}</span>
+          {c.createdAtMs && (
+            <span className="text-[10px] text-muted-foreground">
+              {relativeTime(new Date(c.createdAtMs).toISOString())}
+            </span>
+          )}
+        </div>
+        <p className="whitespace-pre-wrap break-words text-[13px] text-muted-foreground">
+          {c.text}
         </p>
       </div>
     </div>

@@ -318,6 +318,11 @@ interface TaskState {
   selectedContext: string | null;
   selectedItemId: string | null;
   selectedProjectId: string | null;
+  /** A task opened FULL-PAGE (focused overlay) — the ClickUp/Linear-style
+   *  maximized view over the same editable detail. null = closed. */
+  focusedItemId: string | null;
+  openFocus: (id: string) => void;
+  closeFocus: () => void;
   /** "Mine only / Synced / All" board filter — hides the connected-workspace
    *  mirror so your own captures aren't swamped. */
   sourceFilter: "all" | "local" | "synced";
@@ -444,6 +449,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   selectedView: "inbox",
   selectedContext: null,
+  focusedItemId: null,
+  openFocus: (id) => set({ focusedItemId: id, selectedItemId: id }),
+  closeFocus: () => set({ focusedItemId: null }),
   sourceFilter: "all",
   setSourceFilter: (f) => set({ sourceFilter: f }),
   selectedItemId: null,

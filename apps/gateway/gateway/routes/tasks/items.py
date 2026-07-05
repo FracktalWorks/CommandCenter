@@ -673,3 +673,37 @@ async def push_item(
         return _row_to_item(await _fetch_item(db, item_id, uid))
     finally:
         await db.close()
+
+
+# ── Rich provider detail (comments / attachments / subtasks) ─────────────────
+
+@router.get("/items/{item_id}/detail")
+async def item_detail(
+    item_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """On-demand rich detail for a SYNCED task's detail panel: the connected
+    tool's comments, attachments, and subtasks. Empty sections for a LOCAL task
+    or one not yet pushed. Read-only, best-effort — a provider hiccup returns
+    empty sections with an ``error`` note rather than failing the panel."""
+    uid = _uid(user)
+    empty = {"comments": [], "attachments": [], "subtasks": []}
+    db = await _get_db()
+    try:
+        row = await _fetch_item(db, item_id, uid)
+        if not row:
+            raise HTTPException(status_code=404, detail="Item not found")
+        if row.source == "LOCAL" or not row.provider_task_id \
+                or not row.account_id:
+            return empty
+        account = await _assert_account_owner(db, str(row.account_id), uid)
+        creds = json.loads(_key_store().decrypt(account.credentials_encrypted))
+        provider = build_provider(account.provider, creds, account.workspace_id)
+        try:
+            return await provider.get_task_detail(str(row.provider_task_id))
+        except Exception as exc:  # provider hiccup — panel still renders
+            _log.warning("tasks.item_detail.failed",
+                         item_id=item_id[:12], error=str(exc)[:160])
+            return {**empty, "error": "Could not load live detail"}
+    finally:
+        await db.close()

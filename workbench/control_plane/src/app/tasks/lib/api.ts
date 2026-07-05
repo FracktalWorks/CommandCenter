@@ -159,6 +159,72 @@ export async function fetchItems(
   return rows.map(mapItem);
 }
 
+// ── Rich provider detail (comments / attachments / subtasks) ────────────────
+
+export interface TaskComment {
+  id: string;
+  author: string;
+  text: string;
+  createdAtMs?: number;
+}
+export interface TaskSubtask {
+  providerTaskId: string;
+  title: string;
+  status?: string;
+  statusType?: string;
+  providerUrl?: string;
+  assignees: Person[];
+}
+export interface ProviderTaskDetail {
+  comments: TaskComment[];
+  attachments: TaskAttachment[];
+  subtasks: TaskSubtask[];
+  error?: string;
+}
+
+/** Pull the connected tool's comments/attachments/subtasks for one task.
+ *  Returns empty sections for a LOCAL / not-yet-pushed item. */
+export async function apiItemDetail(id: string): Promise<ProviderTaskDetail> {
+  const r = await gatewayFetch<Raw>(`/items/${id}/detail`);
+  const asPersonList = (v: unknown): Person[] =>
+    Array.isArray(v)
+      ? (v.map(asPerson).filter(Boolean) as Person[])
+      : [];
+  return {
+    comments: (Array.isArray(r.comments) ? r.comments : []).map((c) => {
+      const raw = c as Raw;
+      return {
+        id: String(raw.id ?? ""),
+        author: String(raw.author ?? "Someone"),
+        text: String(raw.text ?? ""),
+        createdAtMs: raw.created_at_ms ? Number(raw.created_at_ms) : undefined,
+      };
+    }),
+    attachments: (Array.isArray(r.attachments) ? r.attachments : []).map((a) => {
+      const raw = a as Raw;
+      return {
+        kind: "link" as const,
+        name: String(raw.name ?? "attachment"),
+        url: String(raw.url ?? ""),
+        mime: raw.mime ? String(raw.mime) : undefined,
+        size: raw.size ? Number(raw.size) : undefined,
+      };
+    }),
+    subtasks: (Array.isArray(r.subtasks) ? r.subtasks : []).map((s) => {
+      const raw = s as Raw;
+      return {
+        providerTaskId: String(raw.provider_task_id ?? ""),
+        title: String(raw.title ?? "Untitled"),
+        status: raw.status ? String(raw.status) : undefined,
+        statusType: raw.status_type ? String(raw.status_type) : undefined,
+        providerUrl: raw.provider_url ? String(raw.provider_url) : undefined,
+        assignees: asPersonList(raw.assignees),
+      };
+    }),
+    error: r.error ? String(r.error) : undefined,
+  };
+}
+
 export async function fetchProjects(): Promise<GtdProject[]> {
   const rows = await gatewayFetch<Raw[]>(`/projects`);
   return rows.map(mapProject);

@@ -140,6 +140,43 @@ async def test_clickup_update_task_noop_when_nothing_writable():
     assert out["provider_task_id"] == "86abc"
 
 
+@pytest.mark.asyncio
+async def test_clickup_get_task_detail_normalizes_comments_subtasks_attachments():
+    provider = ClickUpProvider("pk_123", "team-9")
+
+    async def fake_get(path, params=None):
+        if path.endswith("/comment"):
+            return {"comments": [
+                {"id": 5, "user": {"username": "Ana"},
+                 "comment_text": "Looks good", "date": "1751000000000"},
+            ]}
+        return {  # GET /task/{id}
+            "id": "86abc",
+            "attachments": [
+                {"id": 9, "title": "spec.pdf",
+                 "url": "https://x/spec.pdf", "mimetype": "application/pdf",
+                 "size": 1234},
+                {"id": 10, "title": "no-url"},  # dropped: no url
+            ],
+            "subtasks": [
+                {"id": "sub1", "name": "Draft it",
+                 "status": {"status": "to do", "type": "open"},
+                 "url": "https://x/sub1",
+                 "assignees": [{"id": 7, "username": "Bo"}]},
+            ],
+        }
+
+    provider._get = fake_get  # type: ignore[assignment]
+    out = await provider.get_task_detail("86abc")
+    assert [a["name"] for a in out["attachments"]] == ["spec.pdf"]  # url-less dropped
+    assert out["attachments"][0]["size"] == 1234
+    assert out["subtasks"][0]["title"] == "Draft it"
+    assert out["subtasks"][0]["status"] == "to do"
+    assert out["subtasks"][0]["assignees"][0]["name"] == "Bo"
+    assert out["comments"][0]["author"] == "Ana"
+    assert out["comments"][0]["text"] == "Looks good"
+
+
 # ---------------------------------------------------------------------------
 # Clarify heuristic (ai.propose)
 # ---------------------------------------------------------------------------

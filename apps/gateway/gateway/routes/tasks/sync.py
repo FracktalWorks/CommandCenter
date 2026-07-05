@@ -58,6 +58,11 @@ from sqlalchemy import text
 # Stage names that read as "parked / not actioned yet" across PM tools.
 _BACKLOG_STAGES = ("backlog", "icebox", "someday", "later", "parked", "on hold")
 
+# A synced project with no open task touched in this window reads as dormant
+# (passive) and is demoted to SOMEDAY so clarify stops proposing it. Fixed
+# module constant (not user input) — safe to interpolate into the SQL interval.
+_DORMANT_DAYS = 45
+
 
 class SyncRequest(BaseModel):
     account_id: str | None = None   # None → every sync-enabled account
@@ -265,6 +270,31 @@ async def _sync_account(db: Any, account: Any, *, full: bool) -> AccountSyncResu
                  or datetime.now(tz=UTC),
                  "expected": _dt(task.get("due_at_ms"))},
             )
+
+    # Active vs passive (dormant) provider projects. A synced project with no
+    # OPEN task touched in the activity window reads as dormant → mark SOMEDAY
+    # so clarify stops proposing it as a home for new work; one with recent
+    # open activity is ACTIVE. Only SYNCED projects are reclassified, and a
+    # user's deliberate DONE/DROPPED is never overwritten. This is what gives
+    # the agent an active/passive signal without a schema change or extra
+    # provider calls — it reads the mirror we just upserted.
+    await db.execute(
+        text(f"""
+            UPDATE gtd_projects p SET
+                status = CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM gtd_items i
+                        WHERE i.project_id = p.id
+                          AND i.disposition NOT IN ('DONE', 'TRASH')
+                          AND i.updated_at > now() - interval '{_DORMANT_DAYS} days'
+                    ) THEN 'ACTIVE' ELSE 'SOMEDAY' END,
+                updated_at = now()
+            WHERE p.account_id = :aid
+              AND p.source <> 'LOCAL'
+              AND p.status IN ('ACTIVE', 'SOMEDAY')
+        """),
+        {"aid": str(account.id)},
+    )
 
     await db.execute(
         text("""UPDATE task_accounts

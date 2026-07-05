@@ -122,12 +122,17 @@ def _suggest_project(title: str, notes: str, projects: list[Any]) -> Any | None:
 
 
 def _match_capability(text_: str, people: list[dict]) -> dict | None:
-    """Best-fit owner by skills (org-knowledge layer, §6.1): score each person
-    by how many of their skills appear in the task text (word-boundary match);
-    tie-break by available hours. Conservative — None when nothing matches."""
+    """Best-fit owner from the org-knowledge layer (§6.1): score each person by
+    how many of their skills appear in the task text (word-boundary match), plus
+    a bonus when their résumé-inferred domain is referenced. Tie-break by
+    experience then available hours. Conservative — None when nothing matches.
+
+    Uses résumé depth (domain, years_experience) when present so delegation
+    weighs seniority/field, not just skill keywords; falls back cleanly to
+    skills-only for people whose CV wasn't deeply parsed."""
     t = text_.lower()
     best: dict | None = None
-    best_key: tuple[int, int] = (0, -1)
+    best_key: tuple[int, int, int] = (0, -1, -1)
     for p in people:
         score = 0
         for skill in p.get("skills") or []:
@@ -136,9 +141,17 @@ def _match_capability(text_: str, people: list[dict]) -> dict | None:
                 continue
             if re.search(rf"\b{re.escape(sk)}\b", t):
                 score += 1
+        # Domain bonus: a person whose primary field is named in the task is a
+        # stronger owner than a bare keyword hit (worth two skill matches).
+        dom = (p.get("domain") or "").strip().lower()
+        if len(dom) >= 3 and dom not in ("unknown",) and re.search(
+                rf"\b{re.escape(dom)}\b", t):
+            score += 2
         if score == 0:
             continue
-        key = (score, p.get("available_hours_per_week") or 0)
+        # Tie-break: score → experience → free hours (all higher-is-better).
+        key = (score, p.get("years_experience") or 0,
+               p.get("available_hours_per_week") or 0)
         if key > best_key:
             best, best_key = p, key
     return best
@@ -262,9 +275,19 @@ def propose(item: Any, people: list[dict], projects: list[Any],
                 "name": fit["name"], "email": fit.get("email"),
                 "provider_user_id": fit.get("provider_user_id"),
             }
+            # Build the "why this person" reasons: skill hits, a matched
+            # résumé domain, and seniority — whichever the data supports.
+            reasons = list(hits[:3])
+            task_text = f"{item.title} {item.description or ''}".lower()
+            dom = (fit.get("domain") or "").strip()
+            if (len(dom) >= 3 and dom.lower() not in ("unknown",)
+                    and re.search(rf"\b{re.escape(dom.lower())}\b", task_text)):
+                reasons.append(f"{dom} domain")
+            yrs = fit.get("years_experience")
             avail = fit.get("available_hours_per_week")
             core["rationale"] += (
-                f" {fit['name']} fits ({', '.join(hits[:3])}"
+                f" {fit['name']} fits ({', '.join(reasons) or 'capability'}"
+                + (f"; {yrs}y experience" if yrs else "")
                 + (f"; {avail}h free this week" if avail is not None else "")
                 + ").")
 

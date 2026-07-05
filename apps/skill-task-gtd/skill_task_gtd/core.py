@@ -315,10 +315,22 @@ async def gtd_people(query: str = "") -> str:
     for p in people[:25]:
         skills = ", ".join((p.get("skills") or [])[:6])
         avail = p.get("available_hours_per_week")
+        domain = (p.get("domain") or "").strip()
+        yrs = p.get("years_experience")
+        summary = (p.get("resume_summary") or "").strip()
+        # Résumé depth (domain · years) rides on the role/department line when
+        # present, so the agent can weigh seniority/field, not just skills.
+        depth = " · ".join(
+            x for x in (
+                domain if domain and domain.lower() != "unknown" else "",
+                f"{yrs}y exp" if yrs else "",
+            ) if x)
         out.append(
             f"{p['name']} — {p.get('role') or '?'} · {p.get('department') or '?'}"
             + (f" · {avail}h free/wk" if avail is not None else "")
-            + (f"\n  skills: {skills}" if skills else ""))
+            + (f"\n  {depth}" if depth else "")
+            + (f"\n  skills: {skills}" if skills else "")
+            + (f"\n  résumé: {summary[:160]}" if summary else ""))
     return f"{len(people)} people:\n" + "\n".join(out)
 
 

@@ -31,6 +31,11 @@ class OrgPersonModel(BaseModel):
     status: str = "active"
     skills: list[str] = []
     domain: str | None = None
+    # Résumé-extracted depth (from the CVs, via agent-project-manager's
+    # ingest_resumes.py → import_hr_people.py). Served so delegation can weigh
+    # seniority/experience, not just skill keywords.
+    resume_summary: str | None = None
+    years_experience: int | None = None
     capacity_hours_per_week: int | None = None
     current_load_hours_per_week: int | None = None
     available_hours_per_week: int | None = None
@@ -49,6 +54,8 @@ def _row_to_person(row: Any) -> OrgPersonModel:
         status=row.status or "active",
         skills=list(row.skills or []),
         domain=row.domain,
+        resume_summary=row.resume_summary,
+        years_experience=row.years_experience,
         capacity_hours_per_week=row.capacity_hours_per_week,
         current_load_hours_per_week=row.current_load_hours_per_week,
         available_hours_per_week=row.available_hours_per_week,
@@ -90,7 +97,7 @@ async def fetch_people_for_clarify(db: Any) -> list[dict[str, Any]]:
     try:
         rows = (await db.execute(text(
             """SELECT name, email, clickup_user_id, skills,
-                      available_hours_per_week, role
+                      available_hours_per_week, role, domain, years_experience
                FROM gtd_people WHERE status = 'active'"""))).fetchall()
     except Exception:
         return []
@@ -102,6 +109,8 @@ async def fetch_people_for_clarify(db: Any) -> list[dict[str, Any]]:
             "skills": list(r.skills or []),
             "available_hours_per_week": r.available_hours_per_week,
             "role": r.role,
+            "domain": r.domain,
+            "years_experience": r.years_experience,
         }
         for r in rows
     ]

@@ -129,6 +129,56 @@ def test_llm_clarify_overlay_replaces_cognition_only():
     assert m["clarified_by"] == "llm"
 
 
+def test_llm_overlay_strips_stale_disposition_fields():
+    """A DO_NOW base carries is_two_minute/time_estimate_mins; when the LLM
+    overlays a NEXT disposition those must NOT leak through (they described the
+    old disposition). Regression guard from the review."""
+    base = tasks_ai.propose(_item("reply to the GEM portal confirmation"),
+                            [], [], {})
+    assert base["disposition"] == "DO_NOW" and base.get("is_two_minute")
+    llm_core = {"actionable": True, "disposition": "NEXT",
+                "next_action": "Reply on the portal", "confidence": "high",
+                "rationale": "needs a considered response"}
+    m = tasks_ai.propose_with_llm(
+        _item("reply to the GEM portal confirmation"), [], [], {}, llm_core)
+    assert m["disposition"] == "NEXT"
+    assert "is_two_minute" not in m and "time_estimate_mins" not in m
+
+
+def test_llm_overlay_waiting_keeps_a_destination_account():
+    """An LLM that upgrades a non-delegated capture to WAITING must still get a
+    destination workspace + stage (the deterministic fallback), not a dangling
+    LOCAL delegate. Regression guard from the review."""
+    account_statuses = {"acc-1": ["To-do", "Backlog"]}
+    llm_core = {"actionable": True, "disposition": "WAITING",
+                "next_action": "Ask Rahul to benchmark the driver",
+                "confidence": "high", "rationale": "his area",
+                "suggested_assignee": {"name": "Rahul", "email": None,
+                                       "provider_user_id": "7"}}
+    m = tasks_ai.propose_with_llm(
+        _item("benchmark the stepper driver"), [], [], account_statuses,
+        llm_core)
+    assert m["account_id"] == "acc-1"
+    assert m["status"] is not None
+
+
+def test_llm_overlay_cannot_duplicate_a_matched_project():
+    """The eval-locked dedup (a capture belonging to an existing active project
+    files there as NEXT, never a new PROJECT) must survive the LLM overlay —
+    the LLM cannot re-promote a matched item to PROJECT. Regression guard."""
+    projects = [SimpleNamespace(
+        id="p1", status="ACTIVE", account_id=None,
+        outcome="Launch the resin printer product line", purpose="")]
+    llm_core = {"actionable": True, "disposition": "PROJECT",
+                "next_action": "Outline the launch", "outcome": "Resin done",
+                "confidence": "medium", "rationale": "multi-step"}
+    m = tasks_ai.propose_with_llm(
+        _item("draft the resin printer launch checklist"), [], projects, {},
+        llm_core)
+    assert m["project_inferred"] is True
+    assert m["disposition"] == "NEXT" and "outcome" not in m
+
+
 def test_llm_propose_rejects_unknown_disposition_and_empty_action():
     """Validation gate: an unknown disposition or an actionable proposal with
     no next_action returns None → caller keeps the heuristic."""

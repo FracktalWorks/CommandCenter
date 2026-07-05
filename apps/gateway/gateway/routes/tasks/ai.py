@@ -122,6 +122,16 @@ def _suggest_project(title: str, notes: str, projects: list[Any]) -> Any | None:
     return best if best_score >= 2 else None
 
 
+def _domain_in_text(domain: str | None, text_lower: str) -> bool:
+    """True when a person's résumé domain is a meaningful word in the task text.
+    One definition shared by the capability scorer and the rationale builder so
+    they can't disagree. ``text_lower`` must already be lowercased."""
+    dom = (domain or "").strip().lower()
+    if len(dom) < 3 or dom == "unknown":
+        return False
+    return bool(re.search(rf"\b{re.escape(dom)}\b", text_lower))
+
+
 def _match_capability(text_: str, people: list[dict]) -> dict | None:
     """Best-fit owner from the org-knowledge layer (§6.1): score each person by
     how many of their skills appear in the task text (word-boundary match), plus
@@ -144,9 +154,7 @@ def _match_capability(text_: str, people: list[dict]) -> dict | None:
                 score += 1
         # Domain bonus: a person whose primary field is named in the task is a
         # stronger owner than a bare keyword hit (worth two skill matches).
-        dom = (p.get("domain") or "").strip().lower()
-        if len(dom) >= 3 and dom not in ("unknown",) and re.search(
-                rf"\b{re.escape(dom)}\b", t):
+        if _domain_in_text(p.get("domain"), t):
             score += 2
         if score == 0:
             continue
@@ -281,8 +289,7 @@ def propose(item: Any, people: list[dict], projects: list[Any],
             reasons = list(hits[:3])
             task_text = f"{item.title} {item.description or ''}".lower()
             dom = (fit.get("domain") or "").strip()
-            if (len(dom) >= 3 and dom.lower() not in ("unknown",)
-                    and re.search(rf"\b{re.escape(dom.lower())}\b", task_text)):
+            if _domain_in_text(dom, task_text):
                 reasons.append(f"{dom} domain")
             yrs = fit.get("years_experience")
             avail = fit.get("available_hours_per_week")
@@ -438,7 +445,7 @@ async def _llm_propose(
         "actionable": actionable,
         "disposition": disp,
         "next_action": next_action or item.title,
-        "confidence": (str(data.get("confidence") or "medium").strip().lower()
+        "confidence": (data["confidence"]
                        if data.get("confidence") in ("low", "medium", "high")
                        else "medium"),
         "rationale": str(data.get("rationale") or "").strip()
@@ -455,12 +462,19 @@ async def _llm_propose(
     # a person actually on the list, so the model can't invent an assignee.
     who = (data.get("assignee_name") or "").strip().lower()
     if disp == "WAITING" and who:
+        who_tokens = who.split()
+
+        def _names_match(full: str) -> bool:
+            # Exact full name, OR the LLM's name is a leading whole-token prefix
+            # of the person's name ("Priya" → "Priya Nair", "Priya N" → "Priya
+            # Nair"). Token-based so a bare substring ("Sam" ⊂ "Samuel") never
+            # mis-delegates to the wrong person.
+            ptoks = full.strip().lower().split()
+            return bool(ptoks) and (ptoks == who_tokens
+                                    or ptoks[:len(who_tokens)] == who_tokens)
+
         match = next(
-            (p for p in people
-             if (p.get("name") or "").strip().lower() == who
-             or (p.get("name") or "").strip().lower().startswith(who)
-             or who in (p.get("name") or "").strip().lower()),
-            None)
+            (p for p in people if _names_match(p.get("name") or "")), None)
         if match is not None:
             core["suggested_assignee"] = {
                 "name": match["name"], "email": match.get("email"),
@@ -481,21 +495,48 @@ def propose_with_llm(
     if not llm_core:
         return base
 
-    # Overlay the LLM's cognitive fields; then re-derive the destination stage
-    # from the (possibly changed) disposition so status stays consistent.
-    merged = dict(base)
-    for k in ("disposition", "next_action", "outcome", "context", "energy",
-              "confidence", "rationale", "actionable", "suggested_assignee"):
+    # Rebuild from the DETERMINISTIC destination scaffold (project match,
+    # account, inferred flags) but take the *cognition* from the LLM. We do NOT
+    # dict(base)+patch: base carries disposition-specific fields (is_two_minute,
+    # time_estimate_mins, suggested_assignee for a DIFFERENT disposition) that
+    # would leak through when the LLM picks another disposition. So we start
+    # from only the routing keys and layer the LLM's cognitive keys on top.
+    disp = llm_core["disposition"]
+    matched_existing = bool(base.get("project_inferred"))
+    merged: dict[str, Any] = {
+        # Deterministic routing (schema authority) — kept verbatim.
+        "project_id": base.get("project_id"),
+        "project_inferred": base.get("project_inferred"),
+        "account_id": base.get("account_id"),
+        # LLM cognition.
+        "actionable": llm_core.get("actionable", disp not in (
+            "SOMEDAY", "REFERENCE", "TRASH")),
+        "disposition": disp,
+        "next_action": llm_core.get("next_action") or item.title,
+        "confidence": llm_core.get("confidence", "medium"),
+        "rationale": llm_core.get("rationale") or "Clarified by the assistant.",
+        "clarified_by": "llm",
+    }
+    for k in ("outcome", "context", "energy", "suggested_assignee"):
         if k in llm_core:
             merged[k] = llm_core[k]
-    merged["clarified_by"] = "llm"
 
-    # If the LLM delegated but named no known person, fall back to the
-    # deterministic assignee (capability match) rather than an empty WAITING.
-    if (merged.get("disposition") == "WAITING"
-            and not merged.get("suggested_assignee")
-            and base.get("suggested_assignee")):
-        merged["suggested_assignee"] = base["suggested_assignee"]
+    # Dedup guard (eval-locked, mirrors propose()): a capture that matched an
+    # EXISTING active project files there as a NEXT action — the LLM must not
+    # re-promote it to PROJECT and spawn a duplicate. Honour the deterministic
+    # match over the LLM's disposition in exactly this case.
+    if disp == "PROJECT" and matched_existing:
+        merged["disposition"] = "NEXT"
+        merged.pop("outcome", None)
+
+    # WAITING must carry a destination: reuse the deterministic fallback (first
+    # workspace) when the LLM delegated but base didn't route an account, and
+    # fall back to the deterministic assignee when the LLM named no known one.
+    if merged["disposition"] == "WAITING":
+        if not merged.get("account_id") and account_statuses:
+            merged["account_id"] = next(iter(account_statuses))
+        if not merged.get("suggested_assignee") and base.get("suggested_assignee"):
+            merged["suggested_assignee"] = base["suggested_assignee"]
 
     statuses = account_statuses.get(merged.get("account_id") or "", [])
     merged["status"] = default_status(merged["disposition"], statuses)
@@ -702,9 +743,8 @@ async def _llm_atomize(
             max_tokens=1500,
         )
         raw = resp.choices[0].message.content or ""
-        import json as _json
         start, end = raw.find("{"), raw.rfind("}")
-        data = _json.loads(raw[start:end + 1])
+        data = json.loads(raw[start:end + 1])
         items = data.get("items")
         if not isinstance(items, list) or not items:
             return None

@@ -59,8 +59,8 @@ from sqlalchemy import text
 _BACKLOG_STAGES = ("backlog", "icebox", "someday", "later", "parked", "on hold")
 
 # A synced project with no open task touched in this window reads as dormant
-# (passive) and is demoted to SOMEDAY so clarify stops proposing it. Fixed
-# module constant (not user input) — safe to interpolate into the SQL interval.
+# (passive) and is demoted to SOMEDAY so clarify stops proposing it. Passed as
+# a bound query parameter (make_interval), never string-interpolated.
 _DORMANT_DAYS = 45
 
 
@@ -272,28 +272,33 @@ async def _sync_account(db: Any, account: Any, *, full: bool) -> AccountSyncResu
             )
 
     # Active vs passive (dormant) provider projects. A synced project with no
-    # OPEN task touched in the activity window reads as dormant → mark SOMEDAY
-    # so clarify stops proposing it as a home for new work; one with recent
-    # open activity is ACTIVE. Only SYNCED projects are reclassified, and a
-    # user's deliberate DONE/DROPPED is never overwritten. This is what gives
-    # the agent an active/passive signal without a schema change or extra
-    # provider calls — it reads the mirror we just upserted.
+    # OPEN task touched in the activity window reads as dormant → demote to
+    # SOMEDAY so clarify stops proposing it as a home for new work.
+    #
+    # ONE-DIRECTIONAL BY DESIGN: we only demote ACTIVE → SOMEDAY. We do NOT
+    # auto-promote SOMEDAY → ACTIVE, because sync-derived dormancy and a user's
+    # deliberate "park this" share the one `status` column — auto-promoting
+    # would silently overwrite the user's choice the moment a teammate touched
+    # any task. A freshly-synced project enters as ACTIVE (via _refresh_schema),
+    # so genuinely-active projects stay ACTIVE and only real dormancy demotes;
+    # a user's manual SOMEDAY (or DONE/DROPPED) is never resurrected. The WHERE
+    # `status = 'ACTIVE'` + the dormant predicate means only rows that actually
+    # change are written (no updated_at churn). Bound param, not an f-string.
     await db.execute(
-        text(f"""
-            UPDATE gtd_projects p SET
-                status = CASE
-                    WHEN EXISTS (
-                        SELECT 1 FROM gtd_items i
-                        WHERE i.project_id = p.id
-                          AND i.disposition NOT IN ('DONE', 'TRASH')
-                          AND i.updated_at > now() - interval '{_DORMANT_DAYS} days'
-                    ) THEN 'ACTIVE' ELSE 'SOMEDAY' END,
-                updated_at = now()
-            WHERE p.account_id = :aid
-              AND p.source <> 'LOCAL'
-              AND p.status IN ('ACTIVE', 'SOMEDAY')
+        text("""
+            UPDATE gtd_projects p
+               SET status = 'SOMEDAY', updated_at = now()
+             WHERE p.account_id = :aid
+               AND p.source <> 'LOCAL'
+               AND p.status = 'ACTIVE'
+               AND NOT EXISTS (
+                   SELECT 1 FROM gtd_items i
+                    WHERE i.project_id = p.id
+                      AND i.disposition NOT IN ('DONE', 'TRASH')
+                      AND i.updated_at > now() - make_interval(days => :dormant_days)
+               )
         """),
-        {"aid": str(account.id)},
+        {"aid": str(account.id), "dormant_days": _DORMANT_DAYS},
     )
 
     await db.execute(

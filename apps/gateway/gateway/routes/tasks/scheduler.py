@@ -82,8 +82,9 @@ async def _run_one_cycle(account_id: str, *, refresh_schema: bool) -> None:
 
         # 1) Pull tasks into the mirror (commits internally; updates
         #    sync_status/last_synced_at/last_delta_token and refreshes the
-        #    member cache). It never raises for provider errors — it records
-        #    them on the row and returns a result with .error set.
+        #    member cache). It CAN raise (bad creds / provider 401 surface
+        #    before its own try), so we wrap it and roll back on failure so the
+        #    schema-refresh step below runs on a clean session.
         try:
             result = await _sync_account(db, account, full=False)
             if result.error:
@@ -137,9 +138,15 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
         # takes effect without a restart.
         interval_secs, still_enabled = await _read_interval(account_id)
         if not still_enabled:
+            # Self-stop: just return. We deliberately do NOT pop
+            # _scheduler_tasks here — mutating the registry outside
+            # _scheduler_lock races refresh/remove/stop, and taking the lock
+            # would deadlock against stop_background_sync (which holds it while
+            # awaiting this task). The now-completed task entry is harmless and
+            # is replaced/removed the next time refresh/remove runs for this
+            # account.
             _log.info("tasks.scheduler.loop_self_stop",
                       account_id=account_id[:12])
-            _scheduler_tasks.pop(account_id, None)
             return
         await asyncio.sleep(interval_secs)
 
@@ -204,9 +211,11 @@ async def stop_background_sync() -> None:
         _scheduler_tasks.clear()
         for task in tasks:
             task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        _log.info("tasks.scheduler.stopped", cancelled=len(tasks))
+    # Await cancellation OUTSIDE the lock so a self-stopping loop (or any
+    # lock-taking teardown) can't deadlock against shutdown.
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _log.info("tasks.scheduler.stopped", cancelled=len(tasks))
 
 
 async def refresh_account_sync(account_id: str) -> None:

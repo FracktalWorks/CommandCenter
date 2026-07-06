@@ -24,8 +24,8 @@ export default function TasksPage() {
   const { isMobile } = useViewMode();
   const { open: openDrawer, close: closeDrawer } = useMobileDrawer();
   const selectedView = useTaskStore((s) => s.selectedView);
-  const selectedItemId = useTaskStore((s) => s.selectedItemId);
-  const selectItem = useTaskStore((s) => s.selectItem);
+  const selectedProjectId = useTaskStore((s) => s.selectedProjectId);
+  const selectProject = useTaskStore((s) => s.selectProject);
   const selectView = useTaskStore((s) => s.selectView);
   const openQuickCapture = useTaskStore((s) => s.openQuickCapture);
   const quickCaptureOpen = useTaskStore((s) => s.quickCaptureOpen);
@@ -34,6 +34,7 @@ export default function TasksPage() {
   const [leftOpen, setLeftOpen] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
   const isInbox = selectedView === "inbox";
+  const isProjects = selectedView === "projects";
 
   // Load live data from the gateway once; stays on the bundled mock data when
   // the backend isn't reachable (UI-first demo mode).
@@ -101,17 +102,19 @@ export default function TasksPage() {
 
   if (isMobile) {
     // Single-pane mobile flow. Section switching + capture live in the AppShell
-    // bottom bar; here we render just the current surface full-width.
+    // bottom bar; here we render just the current surface full-width. Tapping a
+    // task opens it as a pop-up card (TaskFocusModal — full-screen on mobile),
+    // the same detail surface as desktop.
     return (
       <div className="flex h-full w-full flex-col overflow-hidden bg-background">
         {isInbox ? (
           <InboxView />
-        ) : selectedItemId ? (
-          // list → detail (full-screen with a back affordance)
+        ) : isProjects && selectedProjectId ? (
+          // A selected project → full-screen roll-up with a Back affordance.
           <div className="flex h-full flex-col">
             <button
               type="button"
-              onClick={() => selectItem(null)}
+              onClick={() => selectProject(null)}
               className="tech-transition flex shrink-0 items-center gap-1.5 border-b border-border bg-card px-4 py-2.5 text-sm text-muted-foreground hover:text-foreground"
             >
               <ArrowLeft className="h-4 w-4" />
@@ -175,22 +178,30 @@ export default function TasksPage() {
           <div className="min-w-0 flex-1 overflow-hidden border-r border-border">
             <InboxView />
           </div>
-        ) : (
+        ) : isProjects ? (
+          /* Projects keep the list + project-detail split (a project isn't a
+             task card — its detail is a roll-up of its actions). */
           <>
-            {/* Middle: capture bar + item list. Widens on larger monitors so the
-                list isn't cramped; the detail pane (flex-1) absorbs the rest. */}
             <div className="flex w-[380px] shrink-0 flex-col overflow-hidden border-r border-border lg:w-[440px] xl:w-[520px]">
               <CaptureBar />
               <div className="min-h-0 flex-1">
                 <ItemList />
               </div>
             </div>
-
-            {/* Detail */}
             <div className="min-w-0 flex-1 overflow-hidden border-r border-border">
               <ItemDetail />
             </div>
           </>
+        ) : (
+          /* Task views (Next/Waiting/Someday/Calendar): a full-width list/board.
+             Clicking a task opens it as a pop-up card (TaskFocusModal,
+             Jira/ClickUp-style) rather than a persistent detail sidebar. */
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden border-r border-border">
+            <CaptureBar />
+            <div className="min-h-0 flex-1">
+              <ItemList />
+            </div>
+          </div>
         )}
 
         {/* Assistant rail */}

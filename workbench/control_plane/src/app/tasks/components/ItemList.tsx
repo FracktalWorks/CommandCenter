@@ -57,7 +57,7 @@ const VIEW_META: Record<
   { title: string; icon: typeof Inbox; hint: string }
 > = {
   inbox: { title: "Inbox", icon: Inbox, hint: "Capture, then clarify each item to zero." },
-  next: { title: "Next Actions", icon: ListChecks, hint: "The very next physical step for each commitment." },
+  next: { title: "My Next Actions", icon: ListChecks, hint: "Tasks assigned to you — the very next physical step for each." },
   waiting: { title: "Waiting For", icon: Clock, hint: "Delegated or blocked on someone else." },
   calendar: { title: "Calendar", icon: Calendar, hint: "Date-specific actions — the hard landscape." },
   someday: { title: "Someday / Maybe", icon: Lightbulb, hint: "Incubating. Reviewed weekly." },
@@ -252,7 +252,9 @@ function EmptyState({ view }: { view: ViewKey }) {
       ? "Inbox zero. Mind like water."
       : view === "waiting"
         ? "Nothing on your Waiting-For list."
-        : "Nothing here yet.";
+        : view === "next"
+          ? "No next actions assigned to you."
+          : "Nothing here yet.";
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
       <CheckCircle2 className="h-8 w-8 text-success/70" />

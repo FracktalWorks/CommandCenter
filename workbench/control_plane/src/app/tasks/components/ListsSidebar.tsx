@@ -46,7 +46,7 @@ type NavRow = {
 
 const PRIMARY: NavRow[] = [
   { view: "inbox", label: "Inbox", icon: Inbox, showCount: true },
-  { view: "next", label: "Next Actions", icon: ListChecks, showCount: true },
+  { view: "next", label: "My Next Actions", icon: ListChecks, showCount: true },
   { view: "waiting", label: "Waiting For", icon: Clock, showCount: true },
   { view: "calendar", label: "Calendar", icon: Calendar, showCount: true },
   { view: "projects", label: "Projects", icon: FolderKanban },

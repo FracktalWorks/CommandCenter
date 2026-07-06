@@ -202,7 +202,7 @@ export default function TasksPage() {
           /* Projects keep the list + project-detail split (a project isn't a
              task card — its detail is a roll-up of its actions). */
           <>
-            <div className="flex w-[380px] shrink-0 flex-col overflow-hidden border-r border-border lg:w-[440px] xl:w-[520px]">
+            <div className="flex w-[260px] shrink-0 flex-col overflow-hidden border-r border-border lg:w-[300px] xl:w-[340px]">
               <CaptureBar />
               <div className="min-h-0 flex-1">
                 <ItemList />

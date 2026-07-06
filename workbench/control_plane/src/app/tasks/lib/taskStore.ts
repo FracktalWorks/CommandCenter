@@ -1351,8 +1351,15 @@ export function itemsForView(
     case "inbox":
       return items.filter((i) => i.disposition === "INBOX");
     case "next":
+      // "My Next Actions" = only tasks assigned to ME (isMine). This excludes
+      // unassigned "team pool" tasks (synced as NEXT but is_mine=false) and, of
+      // course, anything delegated to someone else (which is WAITING anyway).
+      // Co-assigned tasks (me + others) keep is_mine=true, so they stay.
       return items.filter(
-        (i) => i.disposition === "NEXT" && (!context || i.context === context),
+        (i) =>
+          i.disposition === "NEXT" &&
+          i.isMine &&
+          (!context || i.context === context),
       );
     case "waiting":
       return items.filter((i) => i.disposition === "WAITING");
@@ -1378,7 +1385,7 @@ export function viewCounts(items: GtdItem[]): Record<ViewKey, number> {
   for (const i of items) {
     if (i.archivedAt) continue; // archived rows never count toward active views
     if (i.disposition === "INBOX" && !isTickled(i)) c.inbox++;
-    else if (i.disposition === "NEXT") c.next++;
+    else if (i.disposition === "NEXT" && i.isMine) c.next++; // My Next Actions only
     else if (i.disposition === "WAITING") c.waiting++;
     else if (i.disposition === "SOMEDAY") c.someday++;
     else if (i.disposition === "REFERENCE") c.reference++;
@@ -1387,11 +1394,13 @@ export function viewCounts(items: GtdItem[]): Record<ViewKey, number> {
   return c;
 }
 
-/** Count of NEXT items per context (for the expandable @context sub-list). */
+/** Count of MY NEXT items per context (for the expandable @context sub-list).
+ *  Mirrors the "My Next Actions" filter — only tasks assigned to me count, so
+ *  the subfolder badges match what the view actually shows. */
 export function contextCounts(items: GtdItem[]): Record<string, number> {
   const out: Record<string, number> = {};
   for (const i of items) {
-    if (i.disposition !== "NEXT" || !i.context) continue;
+    if (i.disposition !== "NEXT" || !i.isMine || !i.context) continue;
     out[i.context] = (out[i.context] ?? 0) + 1;
   }
   return out;

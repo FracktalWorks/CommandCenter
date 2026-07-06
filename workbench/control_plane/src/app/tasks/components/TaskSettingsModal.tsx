@@ -417,14 +417,14 @@ function Toggle({
         aria-label={title}
         onClick={() => onChange(!checked)}
         className={[
-          "tech-transition relative mt-0.5 h-5 w-9 shrink-0 rounded-full",
+          "tech-transition relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full",
           checked ? "bg-primary" : "bg-secondary",
         ].join(" ")}
       >
         <span
           className={[
-            "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform",
-            checked ? "translate-x-4.5" : "translate-x-0.5",
+            "inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform",
+            checked ? "translate-x-[18px]" : "translate-x-[2px]",
           ].join(" ")}
         />
       </button>

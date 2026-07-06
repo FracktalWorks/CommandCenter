@@ -70,8 +70,8 @@ export function EmailToolbar() {
       {selectedEmail ? (
         <>
           <Divider />
-          <TBtn icon={Reply} label="Reply" onClick={() => setViewerCommand("reply")} />
           <TBtn icon={ReplyAll} label="Reply All" onClick={() => setViewerCommand("reply-all")} />
+          <TBtn icon={Reply} label="Reply" onClick={() => setViewerCommand("reply")} />
           <TBtn icon={Forward} label="Forward" onClick={() => setViewerCommand("forward")} />
 
           <TBtn

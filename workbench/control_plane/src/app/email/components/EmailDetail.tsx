@@ -413,6 +413,28 @@ export function EmailDetail({ email }: EmailDetailProps) {
     );
   };
 
+  /** Switch reply mode without resetting the body/draft — only rebuilds recipients. */
+  const switchReplyMode = (mode: "reply" | "reply-all") => {
+    const src = replyTargetRef.current ?? view;
+    const recips =
+      mode === "reply-all"
+        ? [src.from.email, ...(src.to || []).map((t: {email: string}) => t.email)]
+        : [src.from.email];
+    const to = recips.filter(
+      (e, i) => e && recips.indexOf(e) === i && e.toLowerCase() !== ownEmail
+    );
+    const cc =
+      mode === "reply-all"
+        ? (src.cc || [])
+            .map((c: {email: string}) => c.email)
+            .filter((e: string | undefined) => e && e.toLowerCase() !== ownEmail)
+        : [];
+    setReplyTo(to.join(", "));
+    setReplyCc(cc.join(", "));
+    setReplyMode(mode);
+    replyDirty.current = true;
+  };
+
   const replySubject = () => {
     const subj = replyTarget.subject || "";
     return replyMode === "forward"
@@ -587,16 +609,16 @@ export function EmailDetail({ email }: EmailDetailProps) {
         {/* Left group */}
         <div className="flex items-center gap-0.5 flex-wrap">
           <TBtn
-            icon={Reply}
-            label="Reply"
-            onClick={() => startReply("reply")}
-            active={replyMode === "reply"}
-          />
-          <TBtn
             icon={ReplyAll}
             label="Reply All"
             onClick={() => startReply("reply-all")}
             active={replyMode === "reply-all"}
+          />
+          <TBtn
+            icon={Reply}
+            label="Reply"
+            onClick={() => startReply("reply")}
+            active={replyMode === "reply"}
           />
           <TBtn
             icon={Forward}
@@ -937,12 +959,37 @@ export function EmailDetail({ email }: EmailDetailProps) {
             className="mt-8 border border-primary/30 rounded-lg overflow-hidden bg-secondary/30"
           >
             <div className="px-4 py-2 bg-secondary text-xs text-muted-foreground border-b border-border flex items-center justify-between">
-              <span>
-                {replyLabel} to{" "}
-                <span className="text-foreground">
-                  {replyMode === "forward" ? "…" : replyTarget.from.name}
+              <div className="flex items-center gap-2">
+                <span>
+                  Replying to{" "}
+                  <span className="text-foreground">
+                    {replyMode === "forward" ? "…" : replyTarget.from.name}
+                  </span>
                 </span>
-              </span>
+                {/* Reply / Reply All mode toggle (hidden for forward) */}
+                {replyMode !== "forward" && (
+                  <div className="flex items-center bg-background rounded-md p-0.5 ml-2">
+                    <button
+                      onClick={() => switchReplyMode("reply-all")}
+                      className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${
+                        replyMode === "reply-all" ? "bg-primary text-primary-foreground" : "hover:text-foreground"
+                      }`}
+                      title="Reply to all"
+                    >
+                      <ReplyAll size={11} />
+                    </button>
+                    <button
+                      onClick={() => switchReplyMode("reply")}
+                      className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${
+                        replyMode === "reply" ? "bg-primary text-primary-foreground" : "hover:text-foreground"
+                      }`}
+                      title="Reply to sender only"
+                    >
+                      <Reply size={11} />
+                    </button>
+                  </div>
+                )}
+              </div>
               <button
                 className="text-muted-foreground hover:text-foreground transition-colors"
                 onClick={() => setReplyMode(null)}

@@ -161,14 +161,14 @@ export function ConversationView({
                   {onReply && (
                     <div className="flex items-center gap-0.5 flex-shrink-0 -mt-0.5">
                       <CardAction
-                        icon={Reply}
-                        label="Reply"
-                        onClick={() => onReply(view, "reply")}
-                      />
-                      <CardAction
                         icon={ReplyAll}
                         label="Reply all"
                         onClick={() => onReply(view, "reply-all")}
+                      />
+                      <CardAction
+                        icon={Reply}
+                        label="Reply"
+                        onClick={() => onReply(view, "reply")}
                       />
                       <CardAction
                         icon={Forward}

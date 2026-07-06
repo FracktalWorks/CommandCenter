@@ -6,31 +6,30 @@ import { useTaskStore } from "../lib/taskStore";
 import { TaskCard } from "./TaskCard";
 import { applySort, byManualOrder } from "../lib/ordering";
 
-// A Kanban board over the current view's items (Jira/ClickUp-style). Columns:
-//   next     → the user's configured WORKFLOW STAGES (settings.workflowStages);
-//              context becomes a card chip. Dropping on the LAST stage marks the
-//              task DONE (backend). Fixed columns — empty stages still show.
-//   waiting  → by provider stage (or "No stage")
-//   someday  → by provider stage (or a single column)
-//   default  → by disposition
+// A Kanban board over the Next Actions items (Jira/ClickUp-style). Columns are
+// the user's configured WORKFLOW STAGES (settings.workflowStages) — a single,
+// GLOBAL, status-only axis (@context is a card chip, not a column; it already
+// drives the left sidebar). Dropping on the LAST stage marks the task DONE
+// (backend). Fixed columns — empty stages still show.
+//
 // Cards render in manual (sortKey) order within a column and are drag-
 // reorderable: a drop computes a fractional rank between its new neighbours
-// (reorderItem), and a cross-column drop ALSO re-files the stage/status in the
-// same write. A field sort disables reordering (the sort overrides manual
-// position). Native HTML5 DnD, no extra deps.
+// (reorderItem), and a cross-column drop ALSO re-files the stage in the same
+// write. A field sort disables reordering (the sort overrides manual position).
+// Native HTML5 DnD, no extra deps.
+//
+// The board is only offered for Next Actions (see ItemList `boardable`); other
+// views render list-only until their own status model is designed.
 
-type ColumnKind = "workflow" | "stage" | "disposition";
+type ColumnKind = "workflow" | "disposition";
 
 function columnKindFor(view: ViewKey): ColumnKind {
-  if (view === "next") return "workflow";
-  if (view === "waiting" || view === "someday") return "stage";
-  return "disposition";
+  return view === "next" ? "workflow" : "disposition";
 }
 
 const UNSET = "—"; // em-dash sentinel for the "no value" column
 
 export function TaskBoard({ items, view }: { items: GtdItem[]; view: ViewKey }) {
-  const accounts = useTaskStore((s) => s.accounts);
   const workflowStages = useTaskStore((s) => s.settings.workflowStages);
   const sort = useTaskStore((s) => s.sort);
   const reorderItem = useTaskStore((s) => s.reorderItem);
@@ -51,31 +50,22 @@ export function TaskBoard({ items, view }: { items: GtdItem[]; view: ViewKey }) 
         ? (i.workflowStage && workflowStages.includes(i.workflowStage)
             ? i.workflowStage
             : firstStage)
-        : (colValue(i, kind) ?? UNSET),
+        : (i.disposition ?? UNSET),
     [kind, workflowStages, firstStage],
   );
 
-  // Column keys for this view — a stable, ordered set.
+  // Column keys — the configured global stages (workflow board). The
+  // disposition fallback is a defensive single-axis for any non-Next view that
+  // ever reaches the board.
   const columns = useMemo(() => {
     if (kind === "workflow") {
       return workflowStages.map((s) => ({ key: s, label: s }));
     }
     const present = new Set<string>();
-    for (const i of items) present.add(colValue(i, kind) ?? UNSET);
-    const ordered: { key: string; label: string }[] = [];
-    if (kind === "stage") {
-      const stages = accounts.flatMap((a) => a.statuses ?? []);
-      const seen = new Set<string>();
-      for (const s of stages)
-        if (present.has(s) && !seen.has(s)) { seen.add(s); ordered.push({ key: s, label: s }); }
-      for (const v of present)
-        if (v !== UNSET && !seen.has(v)) { seen.add(v); ordered.push({ key: v, label: v }); }
-      if (present.has(UNSET)) ordered.push({ key: UNSET, label: "No stage" });
-    } else {
-      for (const v of present) ordered.push({ key: v, label: v });
-    }
+    for (const i of items) present.add(i.disposition ?? UNSET);
+    const ordered = [...present].map((v) => ({ key: v, label: v }));
     return ordered.length ? ordered : [{ key: UNSET, label: "All" }];
-  }, [items, kind, accounts, workflowStages]);
+  }, [items, kind, workflowStages]);
 
   const byColumn = useMemo(() => {
     const m = new Map<string, GtdItem[]>();
@@ -90,11 +80,7 @@ export function TaskBoard({ items, view }: { items: GtdItem[]; view: ViewKey }) 
   }, [items, columns, stageOf, sort]);
 
   const refileFor = (colKey: string) =>
-    kind === "workflow"
-      ? { workflowStage: colKey }
-      : kind === "stage"
-        ? { providerStatus: colKey === UNSET ? "" : colKey }
-        : undefined;
+    kind === "workflow" ? { workflowStage: colKey } : undefined;
 
   // Drop onto a specific gap (index) within a column — reorder + re-file.
   const dropAtIndex = (colKey: string, index: number) => {
@@ -222,11 +208,4 @@ function DropGap({
       ].join(" ")}
     />
   );
-}
-
-/** The value that decides which column an item sits in, for the stage/
- *  disposition kinds. (The "workflow" kind is handled by stageOf.) */
-function colValue(i: GtdItem, kind: ColumnKind): string | undefined {
-  if (kind === "stage") return i.providerStatus || undefined;
-  return i.disposition;
 }

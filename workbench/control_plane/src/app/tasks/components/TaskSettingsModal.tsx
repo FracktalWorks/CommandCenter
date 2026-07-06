@@ -269,7 +269,9 @@ function SettingsPanel() {
               <Columns3 className="h-3.5 w-3.5" /> Kanban stages
             </h3>
             <p className="mb-2 px-1 text-[11px] text-muted-foreground">
-              The columns of your Next Actions board. Drag a card to move it
+              One global set of stages for <span className="font-medium">all</span>{" "}
+              Next Actions — the columns of the board and the groups in the list.
+              Add, rename, reorder, or remove them below. Drag a card to move it
               between stages; the <span className="font-medium">last</span> stage
               marks a task done (and closes it in ClickUp).
             </p>

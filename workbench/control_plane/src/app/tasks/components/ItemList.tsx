@@ -98,16 +98,17 @@ export function ItemList() {
   const meta = VIEW_META[view] ?? VIEW_META.inbox;
   const Icon = meta.icon;
   const overdueCount = visible.filter((i) => isOverdue(i, MOCK_NOW)).length;
-  // Calendar is date-ordered and Archive is a flat recovery list; the board
-  // adds nothing there, so keep them list-only. Everything else offers both.
-  const boardable = view !== "calendar" && view !== "archive";
+  // The Kanban board is the Next Actions workflow board (columns = the global
+  // workflow stages). Other views stay list-only until their own status model
+  // is designed, so the List/Board toggle only appears on Next Actions.
+  const boardable = view === "next";
   // The filter/sort toolbar rides above every processed-task view (inbox has
   // its own triage UI; projects is a different surface). Calendar/Archive get
   // it too — search/sort still help there — but they stay list-only.
   const showToolbar = view !== "inbox";
-  // A view has a status axis to segment the list under (Next → workflow stages,
-  // Waiting/Someday → provider stage). Others render a flat list.
-  const grouped = view === "next" || view === "waiting" || view === "someday";
+  // Status-segmented list: only Next Actions groups (by the global workflow
+  // stages). @context is NOT a grouping axis here — it drives the left sidebar.
+  const grouped = view === "next";
 
   return (
     <div className="flex h-full flex-col">

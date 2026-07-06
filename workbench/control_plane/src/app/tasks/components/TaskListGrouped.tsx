@@ -15,18 +15,18 @@ import { applySort, byManualOrder } from "../lib/ordering";
 //
 // Grouping axis, matching the board's columnKindFor:
 //   next    → the configured workflow stages
-//   waiting → provider stage (or "No stage")
-//   someday → provider stage
-//   else    → a single "All" group (no useful status axis)
+//   else → a single flat group (no status headers)
+//
+// Grouping is STATUS-ONLY and applies to Next Actions alone. @context is not a
+// grouping axis here — it already drives the left sidebar. Waiting/Someday/etc.
+// render flat for now (their own status model is a later workstream).
 
 const UNSET = "—";
 
-type GroupKind = "workflow" | "stage" | "none";
+type GroupKind = "workflow" | "none";
 
 function groupKindFor(view: ViewKey): GroupKind {
-  if (view === "next") return "workflow";
-  if (view === "waiting" || view === "someday") return "stage";
-  return "none";
+  return view === "next" ? "workflow" : "none";
 }
 
 export function TaskListGrouped({
@@ -37,7 +37,6 @@ export function TaskListGrouped({
   view: ViewKey;
 }) {
   const workflowStages = useTaskStore((s) => s.settings.workflowStages);
-  const accounts = useTaskStore((s) => s.accounts);
   const sort = useTaskStore((s) => s.sort);
   const reorderItem = useTaskStore((s) => s.reorderItem);
 
@@ -51,38 +50,19 @@ export function TaskListGrouped({
   const [dropAt, setDropAt] = useState<string | null>(null);
 
   const groupOf = useCallback(
-    (i: GtdItem): string => {
-      if (kind === "workflow")
-        return i.workflowStage && workflowStages.includes(i.workflowStage)
-          ? i.workflowStage
-          : firstStage;
-      if (kind === "stage") return i.providerStatus || UNSET;
-      return UNSET;
-    },
+    (i: GtdItem): string =>
+      kind === "workflow"
+        ? (i.workflowStage && workflowStages.includes(i.workflowStage)
+            ? i.workflowStage
+            : firstStage)
+        : UNSET,
     [kind, workflowStages, firstStage],
   );
 
   const groups = useMemo(() => {
     if (kind === "none") return [{ key: UNSET, label: "" }];
-    if (kind === "workflow")
-      return workflowStages.map((s) => ({ key: s, label: s }));
-    // stage: provider statuses that are present, in the account's declared order
-    const present = new Set(items.map(groupOf));
-    const ordered: { key: string; label: string }[] = [];
-    const seen = new Set<string>();
-    for (const s of accounts.flatMap((a) => a.statuses ?? []))
-      if (present.has(s) && !seen.has(s)) {
-        seen.add(s);
-        ordered.push({ key: s, label: s });
-      }
-    for (const v of present)
-      if (v !== UNSET && !seen.has(v)) {
-        seen.add(v);
-        ordered.push({ key: v, label: v });
-      }
-    if (present.has(UNSET)) ordered.push({ key: UNSET, label: "No stage" });
-    return ordered.length ? ordered : [{ key: UNSET, label: "No stage" }];
-  }, [kind, workflowStages, items, accounts, groupOf]);
+    return workflowStages.map((s) => ({ key: s, label: s }));
+  }, [kind, workflowStages]);
 
   const byGroup = useMemo(() => {
     const m = new Map<string, GtdItem[]>();
@@ -111,12 +91,10 @@ export function TaskListGrouped({
     setDragId(null);
     if (!id || !manual) return;
     const dest = byManualOrder(byGroup.get(groupKey) ?? []);
+    // Dropping into a stage group re-files the workflow stage (Next Actions
+    // only); the flat "none" view just reorders.
     const refile =
-      kind === "workflow"
-        ? { workflowStage: groupKey }
-        : kind === "stage"
-          ? { providerStatus: groupKey === UNSET ? "" : groupKey }
-          : undefined;
+      kind === "workflow" ? { workflowStage: groupKey } : undefined;
     reorderItem(id, dest, index, refile);
   };
 

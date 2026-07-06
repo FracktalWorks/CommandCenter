@@ -682,10 +682,18 @@ stage [Waiting/Someday] / disposition; **native HTML5 drag** — no DnD lib);
 `ItemList` gained a sticky List/Board toggle (Calendar/Archive stay list-only).
 
 (6) **Grouped list + reorder + filter/sort (2026-07-06, `jira_clone`-inspired,
-migration 58).** The list view is now **status-segmented** (`TaskListGrouped`):
-Next Actions groups rows under collapsible **workflow-stage** headers (same
-stages as the board), Waiting/Someday under provider-stage headers, each with a
-count. **Manual drag-to-reorder** works in BOTH views — a drop computes a
+migration 58).** SCOPED to **Next Actions** (2026-07-06 follow-up): grouping is
+**status-only** on ONE global stage set — @context is NOT a grouping axis in the
+views (it already drives the left sidebar), and the List/Board toggle + stage
+grouping appear on Next Actions alone (`boardable`/`grouped` = `view==='next'`).
+Waiting/Someday/etc. render flat until their own status model is designed (the
+old provider-stage grouping was removed). The list view is **status-segmented**
+(`TaskListGrouped`): Next Actions groups rows under collapsible **workflow-stage**
+headers (same global stages as the board), each with a count. Stages are
+edited/created/renamed/reordered in Settings → Kanban stages (`StageEditor`,
+`gtd_settings.workflow_stages`, per-user global); a card whose stage was renamed/
+removed falls back to the first stage (guarded by `workflowStages.includes`).
+**Manual drag-to-reorder** works in BOTH list and board — a drop computes a
 fractional `gtd_items.sort_key` (`DOUBLE PRECISION`, `rankForDrop` = midpoint of
 the new neighbours; NULLS-LAST fallback to created-at) and a cross-group/column
 drop ALSO re-files the stage in the same PATCH (`store.reorderItem`). New

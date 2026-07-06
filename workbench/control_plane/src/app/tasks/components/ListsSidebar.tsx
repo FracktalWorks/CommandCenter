@@ -22,6 +22,7 @@ import {
   Plug,
   HardDrive,
   Layers,
+  Sparkles,
   type LucideIcon,
   Settings2,
 } from "lucide-react";
@@ -56,7 +57,17 @@ const SECONDARY: NavRow[] = [
   { view: "horizons", label: "Horizons of Focus", icon: Mountain, soon: true },
 ];
 
-export function ListsSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
+export function ListsSidebar({
+  onNavigate,
+  onOpenAssistant,
+  assistantActive,
+}: {
+  onNavigate?: () => void;
+  /** Open the AI assistant as a scene (email-app pattern). */
+  onOpenAssistant?: () => void;
+  /** Highlight the Assistant entry while its scene is open. */
+  assistantActive?: boolean;
+} = {}) {
   const items = useTaskStore((s) => s.items);
   const contexts = useTaskStore((s) => s.contexts);
   const projects = useTaskStore((s) => s.projects);
@@ -170,6 +181,30 @@ export function ListsSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
           <NavButton key={row.view} row={row} active={false} onClick={() => {}} />
         ))}
       </div>
+
+      {/* AI assistant — opens as a scene (mirrors the email app's left-rail
+          Chat entry) instead of an always-on right rail. */}
+      {onOpenAssistant && (
+        <div className="mt-3 border-t border-border pt-3">
+          <button
+            type="button"
+            onClick={() => {
+              onOpenAssistant();
+              onNavigate?.();
+            }}
+            aria-pressed={assistantActive}
+            className={[
+              "tech-transition flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left",
+              assistantActive
+                ? "bg-primary/10 text-primary"
+                : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+            ].join(" ")}
+          >
+            <Sparkles className="h-4 w-4 shrink-0" />
+            <span className="flex-1">Assistant</span>
+          </button>
+        </div>
+      )}
 
       <div className="mt-3 border-t border-border pt-3">
         <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">

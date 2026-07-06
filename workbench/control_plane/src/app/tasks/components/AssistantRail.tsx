@@ -31,7 +31,7 @@ import { QUICK_ACTIONS } from "../lib/mockData";
 
 const AGENT = "task-manager";
 
-export function AssistantRail() {
+export function AssistantRail({ onClose }: { onClose?: () => void } = {}) {
   const { data: nextAuthSession } = useSession();
   const userId: string = nextAuthSession?.user?.email ?? "dev@fracktal.in";
 
@@ -173,6 +173,16 @@ export function AssistantRail() {
           >
             <Plus size={15} />
           </button>
+          {onClose && (
+            <button
+              onClick={onClose}
+              title="Close assistant"
+              aria-label="Close assistant"
+              className="p-1 rounded text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+            >
+              <X size={15} />
+            </button>
+          )}
         </div>
       </div>
 

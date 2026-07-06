@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { PanelLeft, PanelRight, Plus, ArrowLeft } from "lucide-react";
+import { PanelLeft, Plus, ArrowLeft, Sparkles } from "lucide-react";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
 import { useTaskStore } from "./lib/taskStore";
@@ -32,7 +32,9 @@ export default function TasksPage() {
   const clarifyModalOpen = useTaskStore((s) => s.clarifyModalOpen);
   const hydrate = useTaskStore((s) => s.hydrate);
   const [leftOpen, setLeftOpen] = useState(true);
-  const [railOpen, setRailOpen] = useState(true);
+  // The AI assistant opens as a scene from the left sidebar (email-app pattern),
+  // not an always-on right rail.
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const isInbox = selectedView === "inbox";
   const isProjects = selectedView === "projects";
 
@@ -157,23 +159,41 @@ export default function TasksPage() {
           Capture
           <kbd className="rounded border border-border px-1 text-[9px]">C</kbd>
         </button>
-        <PanelToggle
-          active={railOpen}
-          onClick={() => setRailOpen((v) => !v)}
-          label="Toggle assistant"
-          icon={PanelRight}
-          className="ml-auto"
-        />
+        <button
+          type="button"
+          onClick={() => setAssistantOpen((v) => !v)}
+          aria-pressed={assistantOpen}
+          title="Assistant"
+          className={[
+            "tech-transition ml-auto inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs",
+            assistantOpen
+              ? "border-primary/40 bg-primary/10 text-primary"
+              : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground",
+          ].join(" ")}
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          Assistant
+        </button>
       </div>
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {leftOpen && (
           <aside className="w-60 shrink-0 border-r border-border bg-card">
-            <ListsSidebar />
+            <ListsSidebar
+              onOpenAssistant={() => setAssistantOpen(true)}
+              assistantActive={assistantOpen}
+            />
           </aside>
         )}
 
-        {isInbox ? (
+        {assistantOpen ? (
+          /* Assistant as a full scene (email-app pattern) — replaces the main
+             panes, keeps the left sidebar. Close via its header × or the
+             toolbar toggle. */
+          <div className="min-w-0 flex-1 overflow-hidden">
+            <AssistantRail onClose={() => setAssistantOpen(false)} />
+          </div>
+        ) : isInbox ? (
           /* Inbox: a single capture-first surface — no list/detail split */
           <div className="min-w-0 flex-1 overflow-hidden border-r border-border">
             <InboxView />
@@ -202,13 +222,6 @@ export default function TasksPage() {
               <ItemList />
             </div>
           </div>
-        )}
-
-        {/* Assistant rail */}
-        {railOpen && (
-          <aside className="w-80 shrink-0">
-            <AssistantRail />
-          </aside>
         )}
       </div>
 

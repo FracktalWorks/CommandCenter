@@ -251,6 +251,82 @@ def test_propose_no_match_stays_local():
     assert p["project_id"] is None
 
 
+def test_propose_emits_complexity_parity():
+    # The deterministic path always carries a complexity so the field exists
+    # even when the LLM is off: PROJECT → "project", else "single".
+    proj = tasks_ai.propose(_item("Plan the Hyderabad lab fit-out"), [], [], {})
+    assert proj["complexity"] == "project"
+    single = tasks_ai.propose(_item("Reply to the landlord email"), [], [], {})
+    assert single["complexity"] == "single"
+
+
+# ---------------------------------------------------------------------------
+# Clarify — LLM project match resolution + overlay (Phase 1)
+# ---------------------------------------------------------------------------
+
+def test_resolve_project_match_by_token_and_fuzzy_and_none():
+    projects = [
+        _project("p1", "Overhaul the print-farm reliability program", "acct-9"),
+        _project("p2", "Run the Q3 hiring wave", "acct-9"),
+        _project("pX", "Dormant thing", status="SOMEDAY"),  # excluded (not ACTIVE)
+    ]
+    # [P#] token indexes into the ACTIVE projects, in order.
+    assert tasks_ai._resolve_project_match("[P0]", projects).id == "p1"
+    assert tasks_ai._resolve_project_match("P1", projects).id == "p2"
+    # Fuzzy: the model echoed the outcome words (≥2 overlap).
+    assert tasks_ai._resolve_project_match(
+        "the Q3 hiring wave", projects).id == "p2"
+    # No match / sentinels / out-of-range → None (never invents a project).
+    assert tasks_ai._resolve_project_match("none", projects) is None
+    assert tasks_ai._resolve_project_match("", projects) is None
+    assert tasks_ai._resolve_project_match("[P9]", projects) is None
+    assert tasks_ai._resolve_project_match("totally unrelated", projects) is None
+
+
+def test_llm_overlay_files_actionable_item_under_matched_project():
+    # A NEXT item the LLM filed under an existing ClickUp project inherits that
+    # project's id + account, even though the disposition is not PROJECT.
+    projects = [_project("p1", "Acme rollout", "acct-9")]
+    llm_core = {
+        "disposition": "NEXT",
+        "next_action": "Email Acme the revised quote",
+        "confidence": "high",
+        "rationale": "Part of the Acme rollout.",
+        "llm_project": projects[0],
+    }
+    merged = tasks_ai.propose_with_llm(
+        _item("send Acme the new quote"), [], projects,
+        {"acct-9": ["Backlog", "To-do"]}, llm_core)
+    assert merged["disposition"] == "NEXT"
+    assert merged["project_id"] == "p1"
+    assert merged["project_inferred"] is True
+    assert merged["account_id"] == "acct-9"
+
+
+def test_llm_overlay_carries_complexity_and_subtasks():
+    projects: list = []
+    llm_core = {
+        "disposition": "NEXT",
+        "next_action": "Draft the onboarding checklist",
+        "confidence": "medium",
+        "rationale": "One deliverable, a few steps.",
+        "complexity": "subtasks",
+        "subtasks": ["List the accounts to create", "Write the welcome email"],
+    }
+    merged = tasks_ai.propose_with_llm(
+        _item("set up new hire onboarding"), [], projects, {}, llm_core)
+    assert merged["complexity"] == "subtasks"
+    assert merged["subtasks"][0] == "List the accounts to create"
+
+
+def test_llm_overlay_without_llm_core_is_deterministic_with_complexity():
+    # llm_core=None → pure heuristic, but the complexity field still rides along.
+    merged = tasks_ai.propose_with_llm(
+        _item("Plan the offsite"), [], [], {}, None)
+    assert merged["disposition"] == "PROJECT"
+    assert merged["complexity"] == "project"
+
+
 def test_default_status_gtd_mapping():
     statuses = ["Backlog", "To-do", "In Process", "Review", "Done"]
     assert tasks_ai.default_status("SOMEDAY", statuses) == "Backlog"

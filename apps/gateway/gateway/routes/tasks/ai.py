@@ -304,6 +304,9 @@ def propose(item: Any, people: list[dict], projects: list[Any],
         "project_id": str(project.id) if project is not None else None,
         "project_inferred": matched is not None,
         "account_id": account_id,
+        # Complexity parity with the LLM path — the heuristic can't decompose,
+        # so it only distinguishes a multi-action PROJECT from a single action.
+        "complexity": "project" if core["disposition"] == "PROJECT" else "single",
         "status": default_status(core["disposition"], statuses),
     }
 
@@ -358,14 +361,49 @@ def _people_brief(people: list[dict]) -> str:
 
 def _projects_brief(projects: list[Any]) -> str:
     """Active projects only (dormant ones were demoted to SOMEDAY by sync) so
-    the model files work under live projects, not parked ones."""
+    the model files work under live projects, not parked ones. Each line is
+    prefixed with a stable reference token [P#] the model echoes back in
+    `project_match`, and tagged with its HOME (ClickUp workspace vs local) so the
+    model understands the two-source split when deciding where work belongs."""
     lines = []
-    for p in projects:
-        if getattr(p, "status", "ACTIVE") != "ACTIVE":
-            continue
-        lines.append(f"- {p.outcome}"
-                     + (f" (purpose: {p.purpose})" if getattr(p, "purpose", None) else ""))
-    return "\n".join(lines[:40]) or "(no active projects)"
+    for idx, p in enumerate(_active_projects(projects)[:40]):
+        home = "ClickUp" if getattr(p, "account_id", None) else "local"
+        line = (f"- [P{idx}] {p.outcome} · {home}"
+                + (f" — {p.purpose}" if getattr(p, "purpose", None) else ""))
+        lines.append(line)
+    return "\n".join(lines) or "(no active projects)"
+
+
+def _active_projects(projects: list[Any]) -> list[Any]:
+    """The ACTIVE projects in a stable order — the single source the brief and
+    the `project_match` resolver share, so a [P#] token maps to the same row."""
+    return [p for p in projects if getattr(p, "status", "ACTIVE") == "ACTIVE"]
+
+
+def _resolve_project_match(token: str, projects: list[Any]) -> Any | None:
+    """Map the LLM's `project_match` back to a real project. Accepts the [P#]
+    reference token from the brief (authoritative) OR a fuzzy outcome match
+    (leading whole-word overlap) so a model that echoes the name still resolves.
+    Returns None for '', 'none', or no match — the model can't invent a project."""
+    t = (token or "").strip()
+    if not t or t.lower() in ("none", "null", "no", "n/a"):
+        return None
+    active = _active_projects(projects)
+    m = re.fullmatch(r"\[?[pP](\d+)\]?", t)
+    if m:
+        i = int(m.group(1))
+        return active[i] if 0 <= i < len(active) else None
+    # Fuzzy: the model echoed an outcome. Require a real word overlap so a stray
+    # phrase doesn't file under an unrelated project.
+    want = _tokenize(t)
+    if not want:
+        return None
+    best, best_score = None, 0
+    for p in active:
+        score = len(want & _tokenize(str(p.outcome)))
+        if score > best_score:
+            best, best_score = p, score
+    return best if best_score >= 2 else None
 
 
 async def _llm_propose(
@@ -401,13 +439,25 @@ async def _llm_propose(
         "- SOMEDAY: incubate, not committed.\n"
         "- REFERENCE: information to keep.\n"
         "- TRASH: no value.\n\n"
+        "Also decide TWO things beyond the disposition:\n"
+        "1. `project_match`: if this work clearly belongs under one of the "
+        "ACTIVE PROJECTS listed, return that project's [P#] token — it then "
+        "files THERE as an action instead of floating loose. This applies to "
+        "ANY actionable disposition (NEXT/CALENDAR/WAITING), not just PROJECT. "
+        "Return null if none fits — never invent a project.\n"
+        "2. `complexity`: 'single' (one action), 'subtasks' (one deliverable "
+        "with a handful of concrete steps — list them in `subtasks`), or "
+        "'project' (a multi-outcome effort deserving its own PROJECT). Only "
+        "return subtasks when they're genuinely distinct physical steps.\n\n"
         "Rules: next_action is PHYSICAL and visible ('Call Sanjay re: quote', "
         "not 'handle quote'). Only delegate to a person in the list. Give a "
         "one-sentence `rationale`. Do not invent projects or people.\n"
         'Return STRICT JSON only: {"disposition": str, "next_action": str, '
         '"outcome": str|null, "context": "@computer"|"@calls"|"@errands"|'
         '"@agenda"|null, "energy": "low"|"medium"|"high"|null, '
-        '"assignee_name": str|null, "confidence": "low"|"medium"|"high", '
+        '"assignee_name": str|null, "project_match": str|null, '
+        '"complexity": "single"|"subtasks"|"project", '
+        '"subtasks": [str], "confidence": "low"|"medium"|"high", '
         '"rationale": str}'
     )
     user = (
@@ -480,6 +530,23 @@ async def _llm_propose(
                 "name": match["name"], "email": match.get("email"),
                 "provider_user_id": match.get("provider_user_id"),
             }
+
+    # Existing-project match — resolve the model's [P#]/name to a real project so
+    # the item files under it (any actionable disposition, not only PROJECT).
+    matched_project = _resolve_project_match(
+        str(data.get("project_match") or ""), projects)
+    if matched_project is not None:
+        core["llm_project"] = matched_project
+
+    # Complexity + suggested subtasks (Phase 2 consumes these; harmless now).
+    complexity = str(data.get("complexity") or "").strip().lower()
+    if complexity in ("single", "subtasks", "project"):
+        core["complexity"] = complexity
+    subs = data.get("subtasks")
+    if isinstance(subs, list):
+        clean = [str(s).strip() for s in subs if str(s).strip()][:12]
+        if clean:
+            core["subtasks"] = clean
     return core
 
 
@@ -516,10 +583,30 @@ def propose_with_llm(
         "confidence": llm_core.get("confidence", "medium"),
         "rationale": llm_core.get("rationale") or "Clarified by the assistant.",
         "clarified_by": "llm",
+        # Default complexity to the heuristic's read; the LLM's own value (if it
+        # returned one) overwrites this in the copy loop below.
+        "complexity": base.get("complexity", "single"),
     }
-    for k in ("outcome", "context", "energy", "suggested_assignee"):
+    for k in ("outcome", "context", "energy", "suggested_assignee",
+              "complexity", "subtasks"):
         if k in llm_core:
             merged[k] = llm_core[k]
+
+    # LLM existing-project match wins over the keyword scaffold: an actionable
+    # item the model filed under a live project takes THAT project's id + home,
+    # and (like the dedup guard) files as a NEXT action rather than a new
+    # PROJECT. This lets "email Acme the quote" land under the Acme project.
+    llm_project = llm_core.get("llm_project")
+    if llm_project is not None and merged["disposition"] in (
+            "NEXT", "PROJECT", "CALENDAR", "WAITING"):
+        merged["project_id"] = str(llm_project.id)
+        merged["project_inferred"] = True
+        if getattr(llm_project, "account_id", None):
+            merged["account_id"] = str(llm_project.account_id)
+        if merged["disposition"] == "PROJECT":
+            merged["disposition"] = "NEXT"
+            merged.pop("outcome", None)
+        matched_existing = True
 
     # Dedup guard (eval-locked, mirrors propose()): a capture that matched an
     # EXISTING active project files there as a NEXT action — the LLM must not

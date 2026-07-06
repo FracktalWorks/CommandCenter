@@ -3,14 +3,14 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   Loader2, Reply, Clock, PenLine, Mail, Check, CheckCircle2, RotateCcw,
-  RefreshCw, Info, Newspaper, Megaphone, Calendar, Receipt, Bell, Snowflake,
+  Info, Newspaper, Megaphone, Calendar, Receipt, Bell, Snowflake,
   Archive, Trash2, ChevronRight, Send, Search, X, Sparkles, Paperclip,
-  BellRing, Keyboard,
+  BellRing, Keyboard, CircleDashed,
 } from "lucide-react";
 import {
-  getReplyZero, draftReplySmart, resolveThread, reclassifyReplyZero,
-  listEmails, getEmail, updateEmail, deleteEmail, sendEmail, saveDraftText,
-  scanFollowUps,
+  getReplyZero, draftReplySmart, resolveThread, listEmails, getEmail,
+  updateEmail, deleteEmail, saveDraft, sendDraft, composeAssist,
+  listSenders, scanFollowUps,
 } from "../../lib/api";
 import { ReplyZeroThread, Email } from "../../lib/types";
 import { timeLabel, fullDateLabel } from "../../lib/utils";
@@ -24,13 +24,18 @@ interface RapidInboxViewProps {
 }
 
 /**
- * A Rapid Inbox category. "Needs you" buckets (To Reply / Awaiting / Done) come
- * from the Reply Zero thread-status projection and carry the reason + existing
- * draft; the "Sorted" categories are provider labels applied by the rules, read
- * straight from the message list (`listEmails({ label })`). Both collapse to the
- * same `RapidItem` so a single card renders every category.
+ * A Rapid Inbox category. It is a lens over classification the system has
+ * ALREADY done — never a re-classifier:
+ *  - "bucket"  reads the Reply Zero thread-status projection (To Reply /
+ *              Awaiting / Actioned), carrying the reason + any auto-draft.
+ *  - "label"   reads a per-message rule label (FYI).
+ *  - "sender"  reads the always-on sender categorizer (email_senders.category),
+ *              the same source that powers the Inbox Cleaner — so Newsletter /
+ *              Receipt / Notification populate without any manual pass.
+ *  - "unclassified" is inbox mail nothing has sorted yet.
+ * Every source collapses to the same `RapidItem` so one card renders them all.
  */
-type CatSource = "bucket" | "label";
+type CatSource = "bucket" | "label" | "sender" | "unclassified";
 type Bucket = "needs_reply" | "awaiting" | "done";
 
 interface Category {
@@ -40,6 +45,8 @@ interface Category {
   source: CatSource;
   group: "needs" | "sorted";
   bucket?: Bucket;
+  /** For label/sender sources: the category string to match on. */
+  match?: string;
   /** Active-chip + tag palette (works on light & dark). */
   cls: string;
 }
@@ -51,29 +58,33 @@ const CATEGORIES: Category[] = [
   { key: "awaiting", label: "Awaiting", icon: Clock, source: "bucket",
     group: "needs", bucket: "awaiting",
     cls: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
-  { key: "done", label: "Done", icon: CheckCircle2, source: "bucket",
+  { key: "actioned", label: "Actioned", icon: CheckCircle2, source: "bucket",
     group: "needs", bucket: "done",
     cls: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" },
-  { key: "fyi", label: "FYI", icon: Info, source: "label", group: "sorted",
+  { key: "fyi", label: "FYI", icon: Info, source: "label", match: "FYI",
+    group: "needs",
     cls: "bg-sky-500/15 text-sky-600 dark:text-sky-400" },
-  { key: "newsletter", label: "Newsletter", icon: Newspaper, source: "label",
-    group: "sorted",
+  { key: "newsletter", label: "Newsletter", icon: Newspaper, source: "sender",
+    match: "Newsletter", group: "sorted",
     cls: "bg-blue-500/15 text-blue-600 dark:text-blue-400" },
-  { key: "marketing", label: "Marketing", icon: Megaphone, source: "label",
-    group: "sorted",
+  { key: "marketing", label: "Marketing", icon: Megaphone, source: "sender",
+    match: "Marketing", group: "sorted",
     cls: "bg-orange-500/15 text-orange-600 dark:text-orange-400" },
-  { key: "calendar", label: "Calendar", icon: Calendar, source: "label",
-    group: "sorted",
+  { key: "calendar", label: "Calendar", icon: Calendar, source: "sender",
+    match: "Calendar", group: "sorted",
     cls: "bg-teal-500/15 text-teal-600 dark:text-teal-400" },
-  { key: "receipt", label: "Receipt", icon: Receipt, source: "label",
-    group: "sorted",
+  { key: "receipt", label: "Receipt", icon: Receipt, source: "sender",
+    match: "Receipt", group: "sorted",
     cls: "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400" },
-  { key: "notification", label: "Notification", icon: Bell, source: "label",
-    group: "sorted",
+  { key: "notification", label: "Notification", icon: Bell, source: "sender",
+    match: "Notification", group: "sorted",
     cls: "bg-slate-500/15 text-slate-600 dark:text-slate-300" },
-  { key: "cold", label: "Cold Email", icon: Snowflake, source: "label",
-    group: "sorted",
+  { key: "cold", label: "Cold Email", icon: Snowflake, source: "sender",
+    match: "Cold Email", group: "sorted",
     cls: "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400" },
+  { key: "unclassified", label: "Unclassified", icon: CircleDashed,
+    source: "unclassified", group: "sorted",
+    cls: "bg-secondary text-foreground" },
 ];
 
 type SortKey = "newest" | "oldest" | "unread";
@@ -82,6 +93,13 @@ const SORTS: { key: SortKey; label: string }[] = [
   { key: "oldest", label: "Oldest" },
   { key: "unread", label: "Unread" },
 ];
+
+/** A sender category counts as "sorted" (i.e. not unclassified) unless it's blank
+ *  or the catch-all Unknown. */
+function isCategorized(cat: string | undefined): boolean {
+  const c = (cat || "").trim().toLowerCase();
+  return c !== "" && c !== "unknown";
+}
 
 /** The one shape every category's rows render as. */
 interface RapidItem {
@@ -93,7 +111,6 @@ interface RapidItem {
   receivedAt: string | null;
   isRead: boolean;
   preview?: string;
-  reason?: string;
   draftId?: string | null;
   draftPreview?: string | null;
   awaitingDays?: number | null;
@@ -109,8 +126,6 @@ function fromThread(t: ReplyZeroThread): RapidItem {
     fromEmail: t.from_email,
     receivedAt: t.received_at,
     isRead: t.is_read,
-    preview: t.reason || undefined,
-    reason: t.reason,
     draftId: t.draft_id,
     draftPreview: t.draft_preview,
     awaitingDays: t.awaiting_days,
@@ -141,32 +156,59 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
   const [items, setItems] = useState<RapidItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [counts, setCounts] = useState<Record<string, number>>({});
-  const [reclassifying, setReclassifying] = useState(false);
   const [scanningFu, setScanningFu] = useState(false);
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<SortKey>("newest");
   const [showKeys, setShowKeys] = useState(false);
 
-  // Which card is expanded, and which has its reply composer open. Both are
-  // parent-owned so keyboard shortcuts can drive them.
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [replyForId, setReplyForId] = useState<string | null>(null);
   const [fullCache, setFullCache] = useState<Record<string, Email>>({});
   const [fullLoading, setFullLoading] = useState<string | null>(null);
 
-  // Keyboard focus (the "cursor" for j/k triage).
   const [focusIdx, setFocusIdx] = useState(0);
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
 
-  // Bulk selection (inbox-cleaner parity).
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState<string | null>(null);
-
-  // A transient toast: a message plus an optional Undo action.
   const [toast, setToast] = useState<{ msg: string; undo?: () => void } | null>(null);
 
+  // Sender→category map (fetched once per account) — used to define
+  // "Unclassified" as inbox mail whose sender isn't categorized.
+  const sendersRef = useRef<Record<string, string> | null>(null);
+  const ensureSenders = useCallback(async (): Promise<Record<string, string>> => {
+    if (sendersRef.current) return sendersRef.current;
+    const list = await listSenders(accountId!, "inbox", 300).catch(() => []);
+    const map: Record<string, string> = {};
+    for (const s of list) if (s.category) map[s.email.toLowerCase()] = s.category;
+    sendersRef.current = map;
+    return map;
+  }, [accountId]);
+
+  // ── Fetch the items for one category from its existing classification ──
+  const fetchCategory = useCallback(
+    async (c: Category): Promise<RapidItem[]> => {
+      if (!accountId) return [];
+      if (c.source === "bucket")
+        return (await getReplyZero(accountId, c.bucket!, 100)).map(fromThread);
+      if (c.source === "label")
+        return (await listEmails({ accountId, label: c.match, pageSize: 60 }))
+          .emails.map(fromEmail);
+      if (c.source === "sender")
+        return (await listEmails({ accountId, senderCategory: c.match, pageSize: 60 }))
+          .emails.map(fromEmail);
+      // unclassified: inbox mail with no rule label and an uncategorized sender.
+      const map = await ensureSenders();
+      const r = await listEmails({ accountId, folder: "inbox", pageSize: 100 });
+      return r.emails
+        .filter((e) => !isCategorized(map[(e.from.email || "").toLowerCase()]))
+        .map(fromEmail);
+    },
+    [accountId, ensureSenders],
+  );
+
   // ── Load the active category ──
-  const load = useCallback(() => {
+  const load = useCallback(async () => {
     if (!accountId) {
       setLoading(false);
       return;
@@ -175,42 +217,43 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
     setExpandedId(null);
     setReplyForId(null);
     const active = CATEGORIES.find((c) => c.key === catKey) ?? CATEGORIES[0];
-    const req: Promise<RapidItem[]> =
-      active.source === "bucket"
-        ? getReplyZero(accountId, active.bucket!, 100).then((ts) => ts.map(fromThread))
-        : listEmails({ accountId, label: active.label, pageSize: 60 }).then((r) =>
-            r.emails.map(fromEmail),
-          );
-    req
-      .then((its) => setItems(its))
-      .catch(() => setItems([]))
-      .finally(() => setLoading(false));
-  }, [accountId, catKey]);
+    try {
+      const its = await fetchCategory(active);
+      setItems(its);
+      // "Unclassified" has no cheap count query — reflect what we loaded.
+      if (active.source === "unclassified")
+        setCounts((c) => ({ ...c, [active.key]: its.length }));
+    } catch {
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [accountId, catKey, fetchCategory]);
 
-  useEffect(load, [load]);
+  useEffect(() => { void load(); }, [load]);
 
   // ── Category counts, fetched in the background so the chips fill in ──
   const loadCounts = useCallback(() => {
     if (!accountId) return;
-    CATEGORIES.forEach((c) => {
-      const p =
-        c.source === "bucket"
-          ? getReplyZero(accountId, c.bucket!, 100).then((ts) => ts.length)
-          : listEmails({ accountId, label: c.label, pageSize: 1 }).then(
-              (r) => r.total,
-            );
-      p.then((n) => setCounts((prev) => ({ ...prev, [c.key]: n }))).catch(
-        () => undefined,
-      );
-    });
+    for (const c of CATEGORIES) {
+      let p: Promise<number> | null = null;
+      if (c.source === "bucket")
+        p = getReplyZero(accountId, c.bucket!, 100).then((ts) => ts.length);
+      else if (c.source === "label")
+        p = listEmails({ accountId, label: c.match, pageSize: 1 }).then((r) => r.total);
+      else if (c.source === "sender")
+        p = listEmails({ accountId, senderCategory: c.match, pageSize: 1 }).then((r) => r.total);
+      // unclassified is counted on load (no cheap total).
+      p?.then((n) => setCounts((prev) => ({ ...prev, [c.key]: n }))).catch(() => undefined);
+    }
   }, [accountId]);
 
   useEffect(() => {
     setCounts({});
+    sendersRef.current = null;
     loadCounts();
   }, [loadCounts]);
 
-  // Auto-dismiss the toast (undo toasts linger a little longer).
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), toast.undo ? 7000 : 4000);
@@ -228,23 +271,19 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
             it.fromEmail.toLowerCase().includes(q),
         )
       : items;
-    const at = (it: RapidItem) =>
-      it.receivedAt ? new Date(it.receivedAt).getTime() : 0;
-    const sorted = [...filtered];
-    if (sort === "oldest") sorted.sort((a, b) => at(a) - at(b));
+    const at = (it: RapidItem) => (it.receivedAt ? new Date(it.receivedAt).getTime() : 0);
+    const s = [...filtered];
+    if (sort === "oldest") s.sort((a, b) => at(a) - at(b));
     else if (sort === "unread")
-      sorted.sort((a, b) => Number(a.isRead) - Number(b.isRead) || at(b) - at(a));
-    else sorted.sort((a, b) => at(b) - at(a));
-    return sorted;
+      s.sort((a, b) => Number(a.isRead) - Number(b.isRead) || at(b) - at(a));
+    else s.sort((a, b) => at(b) - at(a));
+    return s;
   }, [items, filter, sort]);
 
-  // Keep the keyboard cursor in range as the list changes (auto-advance falls
-  // out of this: after a drop the same index now points at the next item).
   useEffect(() => {
     setFocusIdx((i) => Math.min(Math.max(0, i), Math.max(0, visible.length - 1)));
   }, [visible.length]);
 
-  // Scroll the focused row into view when the cursor moves.
   useEffect(() => {
     rowRefs.current[focusIdx]?.scrollIntoView({ block: "nearest" });
   }, [focusIdx]);
@@ -293,7 +332,6 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
     setCounts((c) => ({ ...c, [catKey]: Math.max(0, (c[catKey] ?? 0) + delta) }));
   }, [catKey]);
 
-  // Archive / delete are instant + reversible (inbox-zero style, no confirm).
   const archive = useCallback(
     async (it: RapidItem) => {
       drop(it.messageId);
@@ -305,14 +343,14 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
           undo: async () => {
             await updateEmail(it.messageId, { folder: "inbox" });
             setToast(null);
-            load();
+            void load();
             loadCounts();
           },
         });
         onArchived?.();
       } catch {
         setToast({ msg: "Couldn't archive that email." });
-        load();
+        void load();
       }
     },
     [drop, bump, load, loadCounts, onArchived],
@@ -329,20 +367,19 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
           undo: async () => {
             await updateEmail(it.messageId, { folder: "inbox" });
             setToast(null);
-            load();
+            void load();
             loadCounts();
           },
         });
         onArchived?.();
       } catch {
         setToast({ msg: "Couldn't delete that email." });
-        load();
+        void load();
       }
     },
     [drop, bump, load, loadCounts, onArchived],
   );
 
-  // Mark done / reopen — only meaningful for the conversation buckets.
   const resolve = useCallback(
     async (it: RapidItem, done: boolean) => {
       if (!accountId || !it.threadId) return;
@@ -352,7 +389,7 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
         await resolveThread(accountId, it.threadId, done);
         loadCounts();
       } catch {
-        load();
+        void load();
       }
     },
     [accountId, drop, bump, load, loadCounts],
@@ -363,8 +400,9 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
       drop(it.messageId);
       bump(-1);
       setToast({ msg: `Reply sent to ${it.from}.` });
+      onArchived?.();
     },
-    [drop, bump],
+    [drop, bump, onArchived],
   );
 
   // ── Bulk actions ──
@@ -387,8 +425,7 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
     try {
       for (const it of targets) {
         try {
-          if (action === "archive")
-            await updateEmail(it.messageId, { folder: "archive" });
+          if (action === "archive") await updateEmail(it.messageId, { folder: "archive" });
           else await deleteEmail(it.messageId);
           drop(it.messageId);
         } catch {
@@ -403,7 +440,7 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
           for (const it of targets)
             await updateEmail(it.messageId, { folder: "inbox" }).catch(() => undefined);
           setToast(null);
-          load();
+          void load();
           loadCounts();
         },
       });
@@ -413,39 +450,19 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
     }
   };
 
-  // ── Toolbar actions ──
-  const reclassify = async () => {
-    if (!accountId || reclassifying) return;
-    setReclassifying(true);
-    try {
-      await reclassifyReplyZero(accountId);
-      for (const delay of [3000, 6000, 12000]) {
-        await new Promise((r) => setTimeout(r, delay));
-        load();
-        loadCounts();
-      }
-    } catch {
-      /* ignore — the user can retry */
-    } finally {
-      setReclassifying(false);
-    }
-  };
-
   const findFollowUps = async () => {
     if (!accountId || scanningFu) return;
     setScanningFu(true);
     try {
       const r = await scanFollowUps(accountId);
       if (!r.configured) {
-        setToast({
-          msg: "Set a follow-up window in AI Settings first.",
-        });
+        setToast({ msg: "Set a follow-up window in AI Settings first." });
       } else {
         setToast({
           msg: `Scanned ${r.scanned} — flagged ${r.labeled}` +
             (r.drafted ? `, drafted ${r.drafted} nudge(s).` : "."),
         });
-        load();
+        void load();
         loadCounts();
       }
     } catch {
@@ -487,7 +504,7 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
           if (cur) { e.preventDefault(); toggleExpand(cur); }
           break;
         case "r":
-          if (cur && cat.key !== "done") { e.preventDefault(); toggleExpand(cur, true); }
+          if (cur && cat.bucket !== "done") { e.preventDefault(); toggleExpand(cur, true); }
           break;
         case "e":
           if (cur) { e.preventDefault(); archive(cur); }
@@ -497,7 +514,7 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
           if (cur) { e.preventDefault(); remove(cur); }
           break;
         case "d":
-          if (cur && cat.source === "bucket" && cat.key !== "done") {
+          if (cur && cat.source === "bucket" && cat.bucket !== "done") {
             e.preventDefault(); resolve(cur, true);
           }
           break;
@@ -527,7 +544,7 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, focusIdx, expandedId, replyForId, cat, toggleExpand, archive, remove, resolve]);
+  }, [visible, focusIdx, expandedId, replyForId, cat, catKey, toggleExpand, archive, remove, resolve, switchCat]);
 
   if (!accountId) {
     return (
@@ -538,7 +555,7 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
   }
 
   const needs = CATEGORIES.filter((c) => c.group === "needs");
-  const sorted = CATEGORIES.filter((c) => c.group === "sorted");
+  const sortedCats = CATEGORIES.filter((c) => c.group === "sorted");
 
   return (
     <div className="h-full flex flex-col">
@@ -549,13 +566,13 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
             onClick={() => switchCat(c.key)} />
         ))}
         <div className="w-px h-5 bg-border mx-1 flex-shrink-0" />
-        {sorted.map((c) => (
+        {sortedCats.map((c) => (
           <Chip key={c.key} c={c} active={c.key === catKey} n={counts[c.key]}
             onClick={() => switchCat(c.key)} />
         ))}
       </div>
 
-      {/* ── Toolbar: filter · sort · (follow-ups) · reclassify ── */}
+      {/* ── Toolbar: filter · sort · (follow-ups) · shortcuts ── */}
       <div className="flex items-center gap-2 px-3 sm:px-5 py-2 border-b border-border flex-shrink-0 flex-wrap">
         <div className="flex items-center gap-2 bg-secondary rounded-md px-2.5 py-1.5 flex-1 min-w-[8rem] max-w-xs">
           <Search size={13} className="text-muted-foreground" />
@@ -602,15 +619,6 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
           >
             <Keyboard size={12} />
           </button>
-          <button
-            onClick={reclassify}
-            disabled={reclassifying}
-            title="Reclassify — rebuild every category from your rules (keeps Done)"
-            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
-          >
-            <RefreshCw size={12} className={reclassifying ? "animate-spin" : undefined} />
-            {reclassifying ? "Reclassifying…" : "Reclassify"}
-          </button>
         </div>
       </div>
 
@@ -628,11 +636,7 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
             disabled={busy === "__bulk__"}
             className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-muted-foreground border border-border hover:bg-secondary transition-colors disabled:opacity-50"
           >
-            {busy === "__bulk__" ? (
-              <Loader2 size={13} className="animate-spin" />
-            ) : (
-              <Archive size={13} />
-            )}
+            {busy === "__bulk__" ? <Loader2 size={13} className="animate-spin" /> : <Archive size={13} />}
             Archive
           </button>
           <button
@@ -656,18 +660,18 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
       <div className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="divide-y divide-border">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <RowSkeleton key={i} />
-            ))}
+            {Array.from({ length: 6 }).map((_, i) => <RowSkeleton key={i} />)}
           </div>
         ) : visible.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2 text-sm px-6 text-center">
             <Mail size={22} className="opacity-40" />
             {cat.key === "to_reply"
               ? "Nothing needs a reply. Inbox zero! 🎉"
-              : filter
-                ? `No ${cat.label} email matches “${filter}”.`
-                : `No ${cat.label} email right now.`}
+              : cat.key === "unclassified"
+                ? "Everything in your inbox is sorted. 🎉"
+                : filter
+                  ? `No ${cat.label} email matches “${filter}”.`
+                  : `No ${cat.label} email right now.`}
           </div>
         ) : (
           <div className="divide-y divide-border">
@@ -754,26 +758,9 @@ function Chip({
 // ── One expandable email card + inline reply ────────────────────────────────
 
 function RapidCard({
-  accountId,
-  item,
-  cat,
-  focused,
-  expanded,
-  replyOpen,
-  full,
-  fullLoading,
-  selected,
-  busy,
-  onFocus,
-  onToggleSelect,
-  onToggleExpand,
-  onOpenReply,
-  onCloseReply,
-  onArchive,
-  onDelete,
-  onResolve,
-  onSent,
-  onNotice,
+  accountId, item, cat, focused, expanded, replyOpen, full, fullLoading,
+  selected, busy, onFocus, onToggleSelect, onToggleExpand, onOpenReply,
+  onCloseReply, onArchive, onDelete, onResolve, onSent, onNotice,
 }: {
   accountId: string;
   item: RapidItem;
@@ -802,11 +789,7 @@ function RapidCard({
   const initial = (item.from || item.fromEmail || "?").trim().charAt(0).toUpperCase();
 
   return (
-    <div
-      className={`${selected ? "bg-primary/5" : ""} ${
-        focused ? "ring-2 ring-inset ring-primary/40" : ""
-      }`}
-    >
+    <div className={`${selected ? "bg-primary/5" : ""} ${focused ? "ring-2 ring-inset ring-primary/40" : ""}`}>
       {/* Row */}
       <div className="flex items-start gap-2.5 px-3 sm:px-5 py-2.5">
         <input
@@ -816,7 +799,6 @@ function RapidCard({
           className="accent-primary flex-shrink-0 mt-1.5"
           onClick={(e) => e.stopPropagation()}
         />
-        {/* Sender avatar */}
         <div
           className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-[11px] font-semibold mt-0.5"
           style={{ backgroundColor: avatarBg, color: textOn(avatarBg) }}
@@ -824,35 +806,21 @@ function RapidCard({
         >
           {initial}
         </div>
-        <button
-          onClick={() => { onFocus(); onToggleExpand(); }}
-          className="flex-1 min-w-0 text-left"
-        >
+        <button onClick={() => { onFocus(); onToggleExpand(); }} className="flex-1 min-w-0 text-left">
           <div className="flex items-center gap-2">
-            <span
-              className={`text-xs truncate ${
-                item.isRead ? "text-foreground/70" : "text-foreground font-semibold"
-              }`}
-            >
+            <span className={`text-xs truncate ${item.isRead ? "text-foreground/70" : "text-foreground font-semibold"}`}>
               {item.from}
             </span>
             <div className="ml-auto flex items-center gap-1.5 flex-shrink-0">
-              {!item.isRead && (
-                <span className="w-1.5 h-1.5 rounded-full bg-primary" />
-              )}
+              {!item.isRead && <span className="w-1.5 h-1.5 rounded-full bg-primary" />}
               <span className="text-[10px] text-muted-foreground whitespace-nowrap">
                 {item.receivedAt ? timeLabel(item.receivedAt) : ""}
               </span>
-              <ChevronRight
-                size={13}
-                className={`text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`}
-              />
+              <ChevronRight size={13} className={`text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`} />
             </div>
           </div>
           <div className="flex items-center gap-1.5">
-            <span
-              className={`text-xs truncate ${item.isRead ? "text-foreground/60" : "text-foreground"}`}
-            >
+            <span className={`text-xs truncate ${item.isRead ? "text-foreground/60" : "text-foreground"}`}>
               {item.subject}
             </span>
             {item.needsFollowUp && (
@@ -862,16 +830,16 @@ function RapidCard({
             )}
             {item.draftId && !isDone && (
               <span
-                title="A draft is already saved for this thread"
+                title="An AI draft is ready for this thread — open to review & send"
                 className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 flex items-center gap-0.5 flex-shrink-0"
               >
-                <Check size={9} /> Draft
+                <Check size={9} /> Draft ready
               </span>
             )}
           </div>
           {item.preview && (
             <div className="text-[11px] text-muted-foreground truncate leading-relaxed">
-              {item.reason ? <span className="italic">{item.preview}</span> : item.preview}
+              {item.preview}
             </div>
           )}
         </button>
@@ -889,17 +857,14 @@ function RapidCard({
                 </ActionBtn>
               )}
               {isDone && (
-                <ActionBtn title="Reopen" onClick={() => onResolve(false)}
-                  className="hover:bg-secondary">
+                <ActionBtn title="Reopen" onClick={() => onResolve(false)} className="hover:bg-secondary">
                   <RotateCcw size={13} />
                 </ActionBtn>
               )}
-              <ActionBtn title="Archive (e)" onClick={onArchive}
-                className="hover:bg-secondary">
+              <ActionBtn title="Archive (e)" onClick={onArchive} className="hover:bg-secondary">
                 <Archive size={13} />
               </ActionBtn>
-              <ActionBtn title="Delete (#)" onClick={onDelete}
-                className="hover:bg-red-500/10 hover:text-red-400">
+              <ActionBtn title="Delete (#)" onClick={onDelete} className="hover:bg-red-500/10 hover:text-red-400">
                 <Trash2 size={13} />
               </ActionBtn>
             </>
@@ -924,17 +889,12 @@ function RapidCard({
               ) : full && (full.bodyHtml || full.bodyText) ? (
                 <MessageContent html={full.bodyHtml} text={full.bodyText} />
               ) : (
-                <div className="text-xs text-muted-foreground italic py-2">
-                  No preview text.
-                </div>
+                <div className="text-xs text-muted-foreground italic py-2">No preview text.</div>
               )}
               {(full?.attachments?.length ?? 0) > 0 && (
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {full!.attachments!.map((a) => (
-                    <span
-                      key={a.id}
-                      className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border border-border text-muted-foreground"
-                    >
+                    <span key={a.id} className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border border-border text-muted-foreground">
                       <Paperclip size={10} /> {a.filename}
                     </span>
                   ))}
@@ -942,7 +902,7 @@ function RapidCard({
               )}
             </div>
 
-            {/* Reply — like the main inbox composer, inline under the card */}
+            {/* Reply — reuses the app's draft flow, inline under the card */}
             {!isDone &&
               (replyOpen ? (
                 <InlineReply
@@ -960,7 +920,8 @@ function RapidCard({
                     onClick={onOpenReply}
                     className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-muted-foreground border border-border hover:text-primary hover:bg-primary/10 transition-colors"
                   >
-                    <Reply size={13} /> {cat.bucket === "awaiting" ? "Nudge" : "Reply"}
+                    <Reply size={13} />
+                    {item.draftId ? "Review draft" : cat.bucket === "awaiting" ? "Nudge" : "Reply"}
                   </button>
                 </div>
               ))}
@@ -971,16 +932,10 @@ function RapidCard({
   );
 }
 
-// ── Inline reply composer (main-inbox style, compact) ───────────────────────
+// ── Inline reply composer — reuses saveDraft / sendDraft / composeAssist ─────
 
 function InlineReply({
-  accountId,
-  item,
-  full,
-  followUp,
-  onSent,
-  onNotice,
-  onClose,
+  accountId, item, full, followUp, onSent, onNotice, onClose,
 }: {
   accountId: string;
   item: RapidItem;
@@ -997,18 +952,20 @@ function InlineReply({
   const [sending, setSending] = useState(false);
   const [savedTo, setSavedTo] = useState(!!item.draftId);
   const [error, setError] = useState<string | null>(null);
+  // The local draft id we update in place (seeded from any auto-created draft).
+  const draftIdRef = useRef<string | null>(item.draftId ?? null);
 
   const subject = useMemo(() => {
     const s = full?.subject || item.subject || "";
     return s.startsWith("Re:") ? s : `Re: ${s}`;
   }, [full, item.subject]);
 
-  // Keep the recipient in sync once the full message resolves.
   useEffect(() => {
     if (full?.from?.email) setTo(full.from.email);
   }, [full]);
 
-  const aiDraft = async () => {
+  // From scratch → the Reply Zero contextual drafter (memory + agents).
+  const draftWithAi = async () => {
     setDrafting(true);
     setError(null);
     try {
@@ -1022,12 +979,47 @@ function InlineReply({
     }
   };
 
+  // In place → the shared compose-assist improver (same as the main composer).
+  const improveWithAi = async () => {
+    setDrafting(true);
+    setError(null);
+    try {
+      const res = await composeAssist({
+        accountId,
+        body,
+        mode: "reply",
+        messageId: item.messageId,
+        to: to.split(",").map((s) => s.trim()).filter(Boolean),
+        subject,
+      });
+      if (res.draft) { setBody(res.draft); setSavedTo(false); }
+    } catch {
+      setError("AI couldn't improve this draft.");
+    } finally {
+      setDrafting(false);
+    }
+  };
+
+  /** Persist the current body as a provider draft (create or update in place). */
+  const persist = async (): Promise<string | null> => {
+    const saved = await saveDraft({
+      accountId,
+      draftId: draftIdRef.current ?? undefined,
+      replyToMessageId: draftIdRef.current ? undefined : item.messageId,
+      to: to.split(",").map((s) => s.trim()).filter(Boolean),
+      subject,
+      body,
+    });
+    draftIdRef.current = saved.id;
+    return saved.id;
+  };
+
   const save = async () => {
     if (!body.trim()) return;
     setSaving(true);
     setError(null);
     try {
-      await saveDraftText(accountId, item.messageId, body);
+      await persist();
       setSavedTo(true);
       onNotice("Saved to your Drafts.");
     } catch {
@@ -1042,19 +1034,16 @@ function InlineReply({
     setSending(true);
     setError(null);
     try {
-      await sendEmail({
-        accountId,
-        to: to.split(",").map((s) => s.trim()).filter(Boolean),
-        subject,
-        bodyText: body,
-        replyToMessageId: full?.providerMessageId || undefined,
-      });
+      const id = await persist();
+      if (id) await sendDraft(accountId, id);
       onSent();
     } catch (e) {
       setError((e as Error).message || "Failed to send.");
       setSending(false);
     }
   };
+
+  const hasText = body.trim().length > 0;
 
   return (
     <div className="border-t border-border px-3 py-3 space-y-2 bg-secondary/20">
@@ -1081,13 +1070,13 @@ function InlineReply({
       {error && <div className="text-[11px] text-destructive">{error}</div>}
       <div className="flex items-center gap-2 flex-wrap">
         <button
-          onClick={aiDraft}
+          onClick={hasText ? improveWithAi : draftWithAi}
           disabled={drafting}
-          title="Draft a context-aware reply with memory + specialist agents"
+          title={hasText ? "Improve this draft with AI" : "Draft a context-aware reply with memory + specialist agents"}
           className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] text-muted-foreground border border-border hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-50"
         >
           {drafting ? <Loader2 className="animate-spin" size={12} /> : <Sparkles size={12} />}
-          {body.trim() ? "Redraft with AI" : followUp ? "Draft nudge" : "Draft with AI"}
+          {hasText ? "Improve with AI" : followUp ? "Draft nudge" : "Draft with AI"}
         </button>
         {savedTo ? (
           <span className="flex items-center gap-1 text-[11px] text-emerald-400">

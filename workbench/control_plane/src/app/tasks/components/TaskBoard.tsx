@@ -30,36 +30,60 @@ function columnKindFor(view: ViewKey): ColumnKind {
 
 const UNSET = "—"; // em-dash sentinel for the "no value" column
 
-export function TaskBoard({ items, view }: { items: GtdItem[]; view: ViewKey }) {
-  const workflowStages = useTaskStore((s) => s.settings.workflowStages);
+export function TaskBoard({
+  items,
+  view,
+  stageMode,
+  stages,
+}: {
+  items: GtdItem[];
+  view: ViewKey;
+  /** Override the column axis. "provider" groups by the connected tool's
+   *  status (ClickUp list stages) and drags re-file `providerStatus` (which
+   *  back-syncs). Omitted → the view-derived axis (workflow stages for Next). */
+  stageMode?: "workflow" | "provider";
+  /** Explicit ordered column set (e.g. a project's own ClickUp statuses). When
+   *  omitted the global workflow stages are used. */
+  stages?: string[];
+}) {
+  const workflowSettingStages = useTaskStore((s) => s.settings.workflowStages);
+  const workflowStages = stages ?? workflowSettingStages;
   const sort = useTaskStore((s) => s.sort);
   const reorderItem = useTaskStore((s) => s.reorderItem);
   const updateItem = useTaskStore((s) => s.updateItem);
 
-  const kind = columnKindFor(view);
+  // "provider" mode groups by the connected tool's own stages; else the
+  // view decides (workflow stages for Next, disposition elsewhere).
+  const kind: "workflow" | "provider" | "disposition" =
+    stageMode ?? columnKindFor(view);
   const manual = sort.field === "manual";
   const [dragId, setDragId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<string | null>(null);
   // Exact gap "<colKey>:<index>" the card would drop into (manual mode only).
   const [dropAt, setDropAt] = useState<string | null>(null);
 
-  // For the workflow board an unstaged task sits in the FIRST configured stage.
+  // An unstaged task sits in the FIRST configured stage of its axis.
   const firstStage = workflowStages[0];
   const stageOf = useCallback(
-    (i: GtdItem): string =>
-      kind === "workflow"
-        ? (i.workflowStage && workflowStages.includes(i.workflowStage)
-            ? i.workflowStage
-            : firstStage)
-        : (i.disposition ?? UNSET),
+    (i: GtdItem): string => {
+      if (kind === "workflow")
+        return i.workflowStage && workflowStages.includes(i.workflowStage)
+          ? i.workflowStage
+          : firstStage;
+      if (kind === "provider")
+        return i.providerStatus && workflowStages.includes(i.providerStatus)
+          ? i.providerStatus
+          : firstStage;
+      return i.disposition ?? UNSET;
+    },
     [kind, workflowStages, firstStage],
   );
 
-  // Column keys — the configured global stages (workflow board). The
-  // disposition fallback is a defensive single-axis for any non-Next view that
-  // ever reaches the board.
+  // Column keys — the stage set for this axis. workflow/provider use the ordered
+  // `workflowStages` (global stages or a project's ClickUp statuses); the
+  // disposition fallback derives columns from the items present.
   const columns = useMemo(() => {
-    if (kind === "workflow") {
+    if (kind === "workflow" || kind === "provider") {
       return workflowStages.map((s) => ({ key: s, label: s }));
     }
     const present = new Set<string>();
@@ -81,7 +105,11 @@ export function TaskBoard({ items, view }: { items: GtdItem[]; view: ViewKey }) 
   }, [items, columns, stageOf, sort]);
 
   const refileFor = (colKey: string) =>
-    kind === "workflow" ? { workflowStage: colKey } : undefined;
+    kind === "workflow"
+      ? { workflowStage: colKey }
+      : kind === "provider"
+        ? { providerStatus: colKey }
+        : undefined;
 
   // Drop onto a specific gap (index) within a column — reorder + re-file.
   const dropAtIndex = (colKey: string, index: number) => {

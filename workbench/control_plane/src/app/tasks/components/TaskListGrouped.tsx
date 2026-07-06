@@ -24,7 +24,7 @@ import { stageAccent } from "../lib/stageColors";
 
 const UNSET = "—";
 
-type GroupKind = "workflow" | "none";
+type GroupKind = "workflow" | "provider" | "none";
 
 function groupKindFor(view: ViewKey): GroupKind {
   return view === "next" ? "workflow" : "none";
@@ -33,15 +33,23 @@ function groupKindFor(view: ViewKey): GroupKind {
 export function TaskListGrouped({
   items,
   view,
+  stageMode,
+  stages,
 }: {
   items: GtdItem[];
   view: ViewKey;
+  /** Override the grouping axis. "provider" groups by the connected tool's
+   *  status and drags re-file `providerStatus` (back-syncs to ClickUp). */
+  stageMode?: "workflow" | "provider";
+  /** Explicit ordered stage set (e.g. a project's ClickUp statuses). */
+  stages?: string[];
 }) {
-  const workflowStages = useTaskStore((s) => s.settings.workflowStages);
+  const workflowSettingStages = useTaskStore((s) => s.settings.workflowStages);
+  const workflowStages = stages ?? workflowSettingStages;
   const sort = useTaskStore((s) => s.sort);
   const reorderItem = useTaskStore((s) => s.reorderItem);
 
-  const kind = groupKindFor(view);
+  const kind: GroupKind = stageMode ?? groupKindFor(view);
   const manual = sort.field === "manual";
   const firstStage = workflowStages[0];
 
@@ -51,12 +59,17 @@ export function TaskListGrouped({
   const [dropAt, setDropAt] = useState<string | null>(null);
 
   const groupOf = useCallback(
-    (i: GtdItem): string =>
-      kind === "workflow"
-        ? (i.workflowStage && workflowStages.includes(i.workflowStage)
-            ? i.workflowStage
-            : firstStage)
-        : UNSET,
+    (i: GtdItem): string => {
+      if (kind === "workflow")
+        return i.workflowStage && workflowStages.includes(i.workflowStage)
+          ? i.workflowStage
+          : firstStage;
+      if (kind === "provider")
+        return i.providerStatus && workflowStages.includes(i.providerStatus)
+          ? i.providerStatus
+          : firstStage;
+      return UNSET;
+    },
     [kind, workflowStages, firstStage],
   );
 
@@ -92,10 +105,15 @@ export function TaskListGrouped({
     setDragId(null);
     if (!id || !manual) return;
     const dest = byManualOrder(byGroup.get(groupKey) ?? []);
-    // Dropping into a stage group re-files the workflow stage (Next Actions
-    // only); the flat "none" view just reorders.
+    // Dropping into a stage group re-files the stage: workflow stage (Next
+    // Actions / local project) or provider status (ClickUp project — back-syncs);
+    // the flat "none" view just reorders.
     const refile =
-      kind === "workflow" ? { workflowStage: groupKey } : undefined;
+      kind === "workflow"
+        ? { workflowStage: groupKey }
+        : kind === "provider"
+          ? { providerStatus: groupKey }
+          : undefined;
     reorderItem(id, dest, index, refile);
   };
 

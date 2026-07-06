@@ -9,12 +9,11 @@ import {
   Cloud,
   Folder,
   Boxes,
-  ListTree,
   Plus,
   Loader2,
 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
-import { GtdItem, GtdProject } from "../lib/types";
+import { GtdProject } from "../lib/types";
 import type { LocalFolder, LocalSpace } from "../lib/api";
 import type { TaskAccount } from "../lib/api";
 
@@ -384,7 +383,9 @@ function TreeNode({
   );
 }
 
-/** A project (ClickUp list or local project). Expands to its tasks. */
+/** A project (ClickUp list or local project) — a SELECTABLE leaf. Clicking it
+ *  selects the project; its tasks render in the right-hand pane (list/board),
+ *  not nested here. Not-yet-mirrored ClickUp lists are shown muted + disabled. */
 function ProjectNode({
   project,
   fallbackName,
@@ -396,189 +397,78 @@ function ProjectNode({
 }) {
   const items = useTaskStore((s) => s.items);
   const selectProject = useTaskStore((s) => s.selectProject);
-  const [open, setOpen] = useState(false);
+  const selectedProjectId = useTaskStore((s) => s.selectedProjectId);
 
   const name = project?.outcome ?? fallbackName ?? "Untitled";
   // Not-yet-mirrored ClickUp lists have no local project row — show them muted.
   const notMirrored = !project;
+  const selected = !!project && selectedProjectId === project.id;
 
-  const tasks = useMemo(
+  const openTasks = useMemo(
     () =>
       project
         ? items.filter(
-            (i) => i.projectId === project.id && !i.parentItemId,
-          )
-        : [],
+            (i) =>
+              i.projectId === project.id &&
+              !i.parentItemId &&
+              i.disposition === "NEXT",
+          ).length
+        : 0,
     [items, project],
   );
-  const openTasks = tasks.filter((t) => t.disposition === "NEXT").length;
 
   return (
-    <div>
-      <div
-        className="group flex items-center gap-1 rounded-md py-1 pr-1.5 hover:bg-secondary/50"
-        style={{ paddingLeft: depth * INDENT + 4 }}
+    <button
+      type="button"
+      onClick={() => project && selectProject(project.id)}
+      disabled={notMirrored}
+      title={notMirrored ? "Not mirrored yet — sync the workspace" : undefined}
+      style={{ paddingLeft: depth * INDENT + 22 }}
+      className={[
+        "tech-transition group flex w-full items-center gap-1.5 rounded-md py-1 pr-1.5 text-left disabled:cursor-default",
+        selected
+          ? "bg-primary/10"
+          : notMirrored
+            ? ""
+            : "hover:bg-secondary/50",
+      ].join(" ")}
+    >
+      <FolderKanban
+        className={[
+          "h-3.5 w-3.5 shrink-0",
+          notMirrored
+            ? "text-muted-foreground/40"
+            : selected
+              ? "text-primary"
+              : "text-primary/70",
+        ].join(" ")}
+      />
+      <span
+        className={[
+          "min-w-0 flex-1 truncate text-[13px]",
+          notMirrored
+            ? "text-muted-foreground/60"
+            : selected
+              ? "font-medium text-primary"
+              : "text-foreground",
+        ].join(" ")}
       >
-        <button
-          type="button"
-          onClick={() => !notMirrored && setOpen((o) => !o)}
-          disabled={notMirrored}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left disabled:cursor-default"
-          title={notMirrored ? "Not mirrored yet — sync the workspace" : undefined}
+        {name}
+      </span>
+      {project && !project.hasNextAction && openTasks === 0 && (
+        <span
+          className="inline-flex shrink-0 items-center text-warning"
+          title="No next action"
         >
-          <ChevronRight
-            className={[
-              "h-3.5 w-3.5 shrink-0 transition-transform",
-              notMirrored ? "opacity-20" : "text-muted-foreground",
-              open ? "rotate-90" : "",
-            ].join(" ")}
-          />
-          <FolderKanban
-            className={[
-              "h-3.5 w-3.5 shrink-0",
-              notMirrored ? "text-muted-foreground/40" : "text-primary/70",
-            ].join(" ")}
-          />
-          <span
-            className={[
-              "truncate text-[13px]",
-              notMirrored ? "text-muted-foreground/60" : "text-foreground",
-            ].join(" ")}
-          >
-            {name}
-          </span>
-          {project && !project.hasNextAction && tasks.length === 0 && (
-            <span className="inline-flex items-center gap-0.5 text-[10px] text-warning">
-              <AlertTriangle className="h-3 w-3" />
-            </span>
-          )}
-          {openTasks > 0 && (
-            <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
-              {openTasks}
-            </span>
-          )}
-        </button>
-        {project && (
-          <button
-            type="button"
-            onClick={() => selectProject(project.id)}
-            className="shrink-0 rounded px-1 text-[10px] text-muted-foreground opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
-            title="Open project"
-          >
-            Open
-          </button>
-        )}
-      </div>
-      {open && project && (
-        <div>
-          {tasks.map((t) => (
-            <TaskNode key={t.id} task={t} depth={depth + 1} />
-          ))}
-          {tasks.length === 0 && (
-            <EmptyLeaf depth={depth + 1} text="No tasks yet" />
-          )}
-        </div>
+          <AlertTriangle className="h-3 w-3" />
+        </span>
       )}
-    </div>
-  );
-}
-
-/** A task under a project. Expands to its subtasks if it has any. */
-function TaskNode({ task, depth }: { task: GtdItem; depth: number }) {
-  const loadSubtasks = useTaskStore((s) => s.loadSubtasks);
-  const openFocus = useTaskStore((s) => s.openFocus);
-  const [open, setOpen] = useState(false);
-  const [subs, setSubs] = useState<GtdItem[] | null>(null);
-  const hasSubs = (task.subtaskCount ?? 0) > 0;
-
-  const toggle = () => {
-    const next = !open;
-    setOpen(next);
-    if (next && subs === null && hasSubs) {
-      void loadSubtasks(task.id).then(setSubs);
-    }
-  };
-  const done = task.disposition === "DONE";
-
-  return (
-    <div>
-      <div
-        className="group flex items-center gap-1 rounded-md py-1 pr-1.5 hover:bg-secondary/50"
-        style={{ paddingLeft: depth * INDENT + 4 }}
-      >
-        {hasSubs ? (
-          <button type="button" onClick={toggle} className="shrink-0">
-            <ChevronRight
-              className={[
-                "h-3.5 w-3.5 text-muted-foreground transition-transform",
-                open ? "rotate-90" : "",
-              ].join(" ")}
-            />
-          </button>
-        ) : (
-          <span className="h-3.5 w-3.5 shrink-0" />
-        )}
-        <button
-          type="button"
-          onClick={() => openFocus(task.id)}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-        >
-          <span
-            className={[
-              "h-1.5 w-1.5 shrink-0 rounded-full",
-              done ? "bg-success" : "bg-muted-foreground/40",
-            ].join(" ")}
-          />
-          <span
-            className={[
-              "truncate text-[12px]",
-              done ? "text-muted-foreground line-through" : "text-foreground",
-            ].join(" ")}
-          >
-            {task.title}
-          </span>
-          {hasSubs && (
-            <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground">
-              <ListTree className="h-3 w-3" />
-              {task.subtaskCount}
-            </span>
-          )}
-        </button>
-      </div>
-      {open && subs && (
-        <div>
-          {subs.map((s) => (
-            <div
-              key={s.id}
-              className="flex items-center gap-1.5 rounded-md py-0.5 pr-1.5 hover:bg-secondary/40"
-              style={{ paddingLeft: (depth + 1) * INDENT + 4 }}
-            >
-              <span className="h-3.5 w-3.5 shrink-0" />
-              <span
-                className={[
-                  "h-1 w-1 shrink-0 rounded-full",
-                  s.disposition === "DONE"
-                    ? "bg-success"
-                    : "bg-muted-foreground/40",
-                ].join(" ")}
-              />
-              <button
-                type="button"
-                onClick={() => openFocus(s.id)}
-                className={[
-                  "min-w-0 flex-1 truncate text-left text-[11px]",
-                  s.disposition === "DONE"
-                    ? "text-muted-foreground line-through"
-                    : "text-muted-foreground",
-                ].join(" ")}
-              >
-                {s.title}
-              </button>
-            </div>
-          ))}
-        </div>
+      {openTasks > 0 && (
+        <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+          {openTasks}
+        </span>
       )}
-    </div>
+    </button>
   );
 }
 

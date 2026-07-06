@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import {
-  MousePointerClick,
   ArrowRight,
   Clock,
   AlertTriangle,
@@ -49,6 +48,7 @@ import {
 import { SourceBadge } from "./SourceBadge";
 import { AttachmentChips } from "./AttachmentComposer";
 import { ClarifyPanel } from "./ClarifyPanel";
+import { ProjectTasksView } from "./ProjectTasksView";
 
 const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
 
@@ -104,64 +104,25 @@ function ItemDetailEmpty({
   view: string;
   selectedProjectId: string | null;
 }) {
-  const items = useTaskStore((s) => s.items);
   const projects = useTaskStore((s) => s.projects);
 
-  // Project selected (projects view) → show its actions.
+  // Project selected (projects view) → its tasks as a list/board (the same UI
+  // as Next Actions), stages from the project's home (ClickUp statuses for a
+  // synced project, global stages for a local one).
   if (view === "projects" && selectedProjectId) {
     const project = projects.find((p) => p.id === selectedProjectId);
-    const actions = items.filter((i) => i.projectId === selectedProjectId);
     if (project) {
-      return (
-        <div className="flex h-full flex-col overflow-y-auto">
-          <div className="border-b border-border bg-card px-5 py-4">
-            <div className="mb-2 flex items-center gap-2">
-              <FolderKanban className="h-4 w-4 text-primary" />
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Project
-              </span>
-              <SourceBadge source={project.source} provider={project.provider} />
-            </div>
-            <h1 className="text-lg font-bold leading-snug text-foreground">
-              {project.outcome}
-            </h1>
-            {project.purpose && (
-              <p className="mt-1 text-sm text-muted-foreground">{project.purpose}</p>
-            )}
-          </div>
-          <div className="px-5 py-4">
-            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Actions ({actions.length})
-            </h2>
-            <div className="flex flex-col gap-1.5">
-              {actions.map((a) => (
-                <div
-                  key={a.id}
-                  className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-foreground"
-                >
-                  <span className="rounded bg-secondary px-1.5 py-0.5 text-[9px] uppercase text-muted-foreground">
-                    {DISPOSITION_LABEL[a.disposition]}
-                  </span>
-                  <span className="flex-1 truncate">{a.title}</span>
-                  {a.context && (
-                    <span className="font-mono text-[11px] text-primary/80">
-                      {a.context}
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      );
+      return <ProjectTasksView project={project} />;
     }
   }
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
-      <MousePointerClick className="h-8 w-8 text-muted-foreground/50" />
+      <FolderKanban className="h-8 w-8 text-muted-foreground/40" />
       <p className="text-sm text-muted-foreground">
-        Select an item to see its details.
+        {view === "projects"
+          ? "Select a project to see its tasks."
+          : "Select an item to see its details."}
       </p>
     </div>
   );

@@ -37,6 +37,10 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
   const clearFilters = useTaskStore((s) => s.clearFilters);
   const sort = useTaskStore((s) => s.sort);
   const setSort = useTaskStore((s) => s.setSort);
+  // When already drilled into a single @context (a Next Actions subfolder),
+  // every visible task IS that context — the Context dropdown is redundant, so
+  // it only appears at the top-level Next Actions where all contexts are mixed.
+  const inContextSubview = useTaskStore((s) => s.selectedContext !== null);
 
   // The option lists come from the items actually in view, so the dropdowns
   // never offer a context/assignee that would return nothing.
@@ -79,8 +83,9 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
         )}
       </div>
 
-      {/* Context filter */}
-      {contexts.length > 0 && (
+      {/* Context filter — only at top-level Next Actions (not inside a single
+          @context subfolder, where every task already shares that context). */}
+      {!inContextSubview && contexts.length > 0 && (
         <Select
           label="Context"
           value={filters.context}

@@ -724,8 +724,14 @@ export async function apiAtomize(
   return { items, usedLlm: Boolean(res.used_llm) };
 }
 
-export async function apiClarifyPropose(id: string): Promise<ClarifyProposal> {
-  const r = await gatewayFetch<Raw>(`/items/${id}/clarify`, { method: "POST" });
+export async function apiClarifyPropose(
+  id: string,
+  /** true → re-clarify an already-processed task (preserves a SYNCED task's
+   *  ClickUp destination binding server-side). */
+  reclarify = false,
+): Promise<ClarifyProposal> {
+  const q = reclarify ? "?reclarify=true" : "";
+  const r = await gatewayFetch<Raw>(`/items/${id}/clarify${q}`, { method: "POST" });
   const accountId = r.account_id ? String(r.account_id) : undefined;
   return {
     actionable: Boolean(r.actionable),
@@ -753,5 +759,65 @@ export async function apiClarifyPropose(id: string): Promise<ClarifyProposal> {
     suggestedSubtasks: Array.isArray(r.subtasks)
       ? (r.subtasks as unknown[]).map(String).filter(Boolean)
       : undefined,
+    /** true when the server locked a SYNCED task's destination (reclarify). */
+    lockedDestination: Boolean(r.locked_destination),
   };
+}
+
+/** The fields an enrich pass proposed for a task's MISSING slots. Any subset. */
+export interface EnrichFields {
+  context?: string;
+  energy?: "low" | "medium" | "high";
+  timeEstimateMins?: number;
+  dueAt?: string;
+  assignee?: Person;
+}
+
+/** Ask the assistant to fill a task's missing details (context/energy/time/
+ *  due/assignee). Proposes only — the caller applies via apiPatchItem. */
+export async function apiEnrichItem(id: string): Promise<EnrichFields> {
+  const r = await gatewayFetch<Raw>(`/items/${id}/enrich`, { method: "POST" });
+  const f = (r.fields ?? {}) as Raw;
+  return {
+    context: f.context ? String(f.context) : undefined,
+    energy: (["low", "medium", "high"].includes(String(f.energy))
+      ? String(f.energy)
+      : undefined) as EnrichFields["energy"],
+    timeEstimateMins: f.time_estimate_mins
+      ? Number(f.time_estimate_mins)
+      : undefined,
+    dueAt: f.due_at ? String(f.due_at) : undefined,
+    assignee: asPerson(f.assignee),
+  };
+}
+
+/** Auto-assign @context to actionable tasks that have none (the synced ClickUp
+ *  tasks that arrive context-less). Writes directly; returns the count set. */
+export async function apiBackfillContext(): Promise<{
+  scanned: number;
+  updated: number;
+}> {
+  const r = await gatewayFetch<Raw>(`/ai/backfill-context`, { method: "POST" });
+  return { scanned: Number(r.scanned ?? 0), updated: Number(r.updated ?? 0) };
+}
+
+/** Promote a LOCAL task to a ClickUp task delegated to a teammate — re-homes it
+ *  onto the chosen workspace/project and pushes it upstream in one call. */
+export async function apiDelegateItem(
+  id: string,
+  body: {
+    assignee: { name: string; email?: string; provider_user_id?: string };
+    account_id: string;
+    project_id: string;
+    next_action?: string;
+    status?: string;
+    due_at?: string;
+  },
+): Promise<GtdItem> {
+  return mapItem(
+    await gatewayFetch<Raw>(`/items/${id}/delegate`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  );
 }

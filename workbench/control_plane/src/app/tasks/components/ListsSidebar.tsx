@@ -18,6 +18,7 @@ import {
   Home,
   Users,
   Circle,
+  CircleDashed,
   Cloud,
   Plug,
   HardDrive,
@@ -27,7 +28,12 @@ import {
   type LucideIcon,
   Settings2,
 } from "lucide-react";
-import { useTaskStore, viewCounts, contextCounts } from "../lib/taskStore";
+import {
+  useTaskStore,
+  viewCounts,
+  contextCounts,
+  NO_CONTEXT,
+} from "../lib/taskStore";
 import { ViewKey } from "../lib/types";
 
 const CONTEXT_ICONS: Record<string, LucideIcon> = {
@@ -157,10 +163,16 @@ export function ListsSidebar({
               active={selectedView === "next"}
               activeContext={selectedContext}
               count={counts.next}
-              contexts={contexts.map((c) => c.name)}
-              contextIcons={Object.fromEntries(
-                contexts.map((c) => [c.name, CONTEXT_ICONS[c.icon] ?? Circle]),
-              )}
+              // Append the "@no context" bucket last when it holds tasks — the
+              // synced ClickUp tasks that arrive without a @context.
+              contexts={[
+                ...contexts.map((c) => c.name),
+                ...(ctxCounts[NO_CONTEXT] ? [NO_CONTEXT] : []),
+              ]}
+              contextIcons={Object.fromEntries([
+                ...contexts.map((c) => [c.name, CONTEXT_ICONS[c.icon] ?? Circle]),
+                [NO_CONTEXT, CircleDashed],
+              ])}
               ctxCounts={ctxCounts}
               expanded={nextExpanded}
               onToggle={() => setNextExpanded((v) => !v)}

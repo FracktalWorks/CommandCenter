@@ -50,6 +50,9 @@ export interface ClarifyProposal {
   complexity?: "single" | "subtasks" | "project";
   /** concrete child steps the assistant suggests, when complexity="subtasks". */
   suggestedSubtasks?: string[];
+  /** true when re-clarifying a SYNCED task: its ClickUp destination (account +
+   *  project) is locked and the "Where it goes" picker should be read-only. */
+  lockedDestination?: boolean;
 }
 
 /** Map a GTD disposition to a sensible provider stage/status.

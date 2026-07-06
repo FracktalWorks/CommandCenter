@@ -407,6 +407,86 @@ def test_organize_request_accepts_subtasks():
     assert req.subtasks == ["step one", "step two"]
 
 
+# ---------------------------------------------------------------------------
+# Enrich (fill missing fields) + reclarify binding + delegate promotion
+# ---------------------------------------------------------------------------
+
+def test_missing_fields_reports_only_empty():
+    from gateway.routes.tasks.ai import _missing_fields
+
+    full = SimpleNamespace(title="x", description="", context="@calls",
+                           energy="low", time_estimate_mins=10,
+                           due_at=object(), assignee={"name": "Bo"})
+    assert _missing_fields(full) == set()
+    bare = SimpleNamespace(title="x", description="", context=None,
+                           energy="", time_estimate_mins=None, due_at=None,
+                           assignee=None)
+    assert _missing_fields(bare) == {
+        "context", "energy", "time_estimate_mins", "due_at", "assignee"}
+
+
+def test_enrich_heuristic_fills_only_requested_and_never_invents_due():
+    from gateway.routes.tasks.ai import enrich_heuristic
+
+    item = SimpleNamespace(title="Call the vendor about the quote",
+                           description="")
+    out = enrich_heuristic(item, {"context", "due_at"}, [])
+    # A call → @calls; it never fabricates a due date.
+    assert out["context"] == "@calls"
+    assert "due_at" not in out
+    # Only the requested fields come back — energy wasn't asked for.
+    assert "energy" not in out
+
+
+def test_apply_reclarify_binding_locks_synced_destination():
+    from gateway.routes.tasks.ai import _apply_reclarify_binding
+
+    synced = SimpleNamespace(source="SYNCED", account_id="acct-1",
+                             project_id="proj-9")
+    prop = {"account_id": "acct-OTHER", "project_id": "proj-OTHER",
+            "project_inferred": True, "disposition": "NEXT"}
+    out = _apply_reclarify_binding(dict(prop), synced)
+    assert out["account_id"] == "acct-1"
+    assert out["project_id"] == "proj-9"
+    assert out["project_inferred"] is False
+    assert out["locked_destination"] is True
+    # A LOCAL task is free to be re-homed — binding untouched.
+    local = SimpleNamespace(source="LOCAL", account_id=None, project_id=None)
+    out2 = _apply_reclarify_binding(dict(prop), local)
+    assert out2["account_id"] == "acct-OTHER"
+    assert "locked_destination" not in out2
+
+
+def test_clarify_route_accepts_reclarify_flag():
+    import inspect
+
+    from gateway.routes.tasks import ai as tasks_ai_mod
+
+    sig = inspect.signature(tasks_ai_mod.clarify_item)
+    assert "reclarify" in sig.parameters
+
+
+def test_delegate_request_shape():
+    from gateway.routes.tasks.core import PersonModel
+    from gateway.routes.tasks.items import DelegateRequest
+
+    req = DelegateRequest(
+        assignee=PersonModel(name="Priya Sharma", provider_user_id="7"),
+        account_id="acct-1", project_id="proj-1")
+    assert req.assignee.name == "Priya Sharma"
+    assert req.next_action is None  # optional re-phrase
+
+
+def test_enrich_and_delegate_routes_are_registered():
+    from gateway.routes.tasks import router
+
+    paths = {getattr(r, "path", "") for r in router.routes}
+    for p in ("/tasks/items/{item_id}/enrich",
+              "/tasks/ai/backfill-context",
+              "/tasks/items/{item_id}/delegate"):
+        assert p in paths, f"missing route {p}"
+
+
 def test_local_hierarchy_routes_are_registered():
     # The Projects-view tree depends on these local hierarchy endpoints.
     from gateway.routes.tasks import router
@@ -738,7 +818,8 @@ def test_push_carries_email_origin_reference_into_provider():
 
     from gateway.routes.tasks import items as tasks_items
 
-    src = inspect.getsource(tasks_items.push_item)
+    # The push machinery lives in the shared helper (reused by push + delegate).
+    src = inspect.getsource(tasks_items._push_pending_item)
     assert 'origin.get("kind") == "email"' in src
     assert "Captured from email" in src
 

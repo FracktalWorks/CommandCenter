@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useSyncExternalStore } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import {
   Inbox,
   ListChecks,
@@ -15,6 +15,7 @@ import {
   LayoutList,
   Columns3,
   Archive,
+  Sparkles,
 } from "lucide-react";
 import { useTaskStore, itemsForView } from "../lib/taskStore";
 import { ViewKey } from "../lib/types";
@@ -89,6 +90,12 @@ export function ItemList() {
   const visible = useMemo(
     () => applySort(applyFilters(inView, filters), sort),
     [inView, filters, sort],
+  );
+  // Offer "auto-assign contexts" when Next Actions has context-less tasks (the
+  // synced ClickUp tasks that never went through Clarify → @no context bucket).
+  const contextlessCount = useMemo(
+    () => (view === "next" ? inView.filter((i) => !i.context).length : 0),
+    [view, inView],
   );
 
   if (view === "projects") {
@@ -177,9 +184,14 @@ export function ItemList() {
               {sourceFilter === "local" ? "Mine" : "ClickUp"}
             </span>
           )}
+          {hasSynced && contextlessCount > 0 && (
+            <ContextBackfillButton count={contextlessCount} />
+          )}
           <span
             className={
-              (boardable || (hasSynced && sourceFilter !== "all")
+              (boardable ||
+              (hasSynced && sourceFilter !== "all") ||
+              (hasSynced && contextlessCount > 0)
                 ? "ml-2"
                 : "ml-auto") + " text-xs text-muted-foreground"
             }
@@ -243,6 +255,42 @@ function NoMatchState() {
         Clear filters
       </button>
     </div>
+  );
+}
+
+/** Auto-assign @context to the actionable tasks that have none — the synced
+ *  ClickUp tasks that arrive context-less. One tap runs the assistant over them
+ *  and re-pulls, so they move out of the "@no context" bucket. */
+function ContextBackfillButton({ count }: { count: number }) {
+  const backfill = useTaskStore((s) => s.backfillContext);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        setDone(null);
+        try {
+          const res = await backfill();
+          setDone(res.updated > 0 ? `Set ${res.updated}` : "None to set");
+        } catch {
+          setDone("Failed");
+        } finally {
+          setBusy(false);
+        }
+      }}
+      title="Let the assistant assign @context to tasks that have none"
+      className="tech-transition ml-auto inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
+    >
+      {busy ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      ) : (
+        <Sparkles className="h-3.5 w-3.5" />
+      )}
+      {done ?? `Assign context · ${count}`}
+    </button>
   );
 }
 

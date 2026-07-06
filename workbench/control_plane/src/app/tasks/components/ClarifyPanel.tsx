@@ -21,6 +21,7 @@ import {
   ChevronRight,
   Plus,
   Loader2,
+  Lock,
   type LucideIcon,
 } from "lucide-react";
 import { useTaskStore, type ClarifyDecision } from "../lib/taskStore";
@@ -72,7 +73,19 @@ const destEntry = (t: Target, providers: ConnectedProvider[]) =>
 const providerStatuses = (t: Target, providers: ConnectedProvider[]): string[] =>
   destEntry(t, providers)?.statuses ?? [];
 
-export function ClarifyPanel({ item }: { item: GtdItem }) {
+export function ClarifyPanel({
+  item,
+  reclarify = false,
+  onDone,
+}: {
+  item: GtdItem;
+  /** Re-clarifying an already-processed task: seed from its CURRENT state, ask
+   *  the server to preserve a SYNCED task's ClickUp binding, and lock the
+   *  destination picker so the two-way sync target can't be moved. */
+  reclarify?: boolean;
+  /** Called after a decision is applied (the reclarify modal closes on this). */
+  onDone?: () => void;
+}) {
   const clarify = useTaskStore((s) => s.clarify);
   const backend = useTaskStore((s) => s.backend);
   const contexts = useTaskStore((s) => s.contexts);
@@ -83,9 +96,37 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
   const refreshAccountMembers = useTaskStore((s) => s.refreshAccountMembers);
   const createWorkspaceProject = useTaskStore((s) => s.createWorkspaceProject);
 
+  // Re-clarify seeds the form from the task's CURRENT clarified state (an edit,
+  // not a fresh decision). The item's own target is reconstructed so a SYNCED
+  // task opens on its ClickUp destination.
+  const currentTarget: Target = useMemo(
+    () =>
+      item.source === "SYNCED"
+        ? { source: "SYNCED", provider: item.provider, accountId: item.accountId }
+        : { source: "LOCAL", provider: "local" },
+    [item.source, item.provider, item.accountId],
+  );
   const localProposal = useMemo(
-    () => proposeClarification(item, people, projects),
-    [item, people, projects],
+    () =>
+      reclarify
+        ? {
+            ...proposeClarification(item, people, projects),
+            // Reflect what the task already IS, so nothing looks like it's about
+            // to change until the user (or the server upgrade) touches it.
+            disposition:
+              item.disposition === "WAITING"
+                ? ("WAITING" as ClarifyDisposition)
+                : ("NEXT" as ClarifyDisposition),
+            nextAction: item.nextAction || item.title,
+            context: item.context ?? undefined,
+            energy: item.energy,
+            target: currentTarget,
+            projectId: item.projectId,
+            rationale:
+              "Re-clarify — adjust the details or break this into next actions.",
+          }
+        : proposeClarification(item, people, projects),
+    [item, people, projects, reclarify, currentTarget],
   );
   // The proposal shown in the header (rationale/confidence/assignee chip):
   // starts as the instant local heuristic, upgraded by the server's when it
@@ -124,7 +165,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
   useEffect(() => {
     if (backend !== "live") return;
     let cancelled = false;
-    apiClarifyPropose(item.id)
+    apiClarifyPropose(item.id, reclarify)
       .then((sp) => {
         if (cancelled || dirtyRef.current) return;
         setProposal(sp);
@@ -278,8 +319,11 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
 
   const apply = useCallback(() => {
     const decision = buildDecision(disposition);
-    if (decision) clarify(item.id, decision);
-  }, [buildDecision, disposition, clarify, item.id]);
+    if (decision) {
+      clarify(item.id, decision);
+      onDone?.();
+    }
+  }, [buildDecision, disposition, clarify, item.id, onDone]);
 
   const canApply = !!buildDecision(disposition);
 
@@ -308,6 +352,10 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
       ? defaultStatus(proposal.disposition, providerStatuses(proposal.target, providers))
       : undefined;
   const isSynced = dest.source === "SYNCED";
+  // A re-clarified SYNCED task is two-way bound to its ClickUp list — the
+  // destination (workspace + project) can't move, only the local cognition and
+  // the break-down can change. The server flags this; lock the picker.
+  const destLocked = reclarify && !!proposal.lockedDestination;
   const showWhere = ACTIONABLE.has(disposition) || disposition === "SOMEDAY";
 
   return (
@@ -439,7 +487,10 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
                 instead of burying it as one pill inside Adjust. */}
             <button
               type="button"
-              onClick={() => clarify(item.id, { kind: "trash" })}
+              onClick={() => {
+                clarify(item.id, { kind: "trash" });
+                onDone?.();
+              }}
               title="Trash this — it's not actionable"
               className="tech-transition ml-auto inline-flex items-center gap-1.5 rounded-md border border-transparent px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
             >
@@ -549,7 +600,43 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
             )}
 
             {/* Where it goes — dual-source + the connected tool's project/stage/owner/due (§5.1) */}
-            {showWhere && (
+            {showWhere && destLocked && (
+              <Field label="Where it goes">
+                <div className="flex items-center gap-2 rounded-md border border-border bg-background/40 px-3 py-2">
+                  <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-[12px] text-foreground">
+                    <Cloud className="h-3.5 w-3.5 text-primary/70" />
+                    {destEntry(dest, providers)?.label ?? "ClickUp"}
+                    {selectedProject && (
+                      <>
+                        <span className="text-border">·</span>
+                        <FolderKanban className="h-3 w-3 text-muted-foreground" />
+                        {short(selectedProject.outcome, 22)}
+                      </>
+                    )}
+                  </span>
+                </div>
+                {statusesForDest.length > 0 && (
+                  <div className="mt-2">
+                    <SubField label="Stage">
+                      <div className="flex flex-wrap gap-1.5">
+                        {statusesForDest.map((s) => (
+                          <Pill key={s} plain active={status === s} onClick={() => setStatus(s)}>
+                            {s}
+                          </Pill>
+                        ))}
+                      </div>
+                    </SubField>
+                  </div>
+                )}
+                <p className="mt-1.5 text-[10px] text-muted-foreground">
+                  Two-way synced with ClickUp — the workspace and project stay
+                  put. You can still change the stage, refine the details below,
+                  and break it into subtasks.
+                </p>
+              </Field>
+            )}
+            {showWhere && !destLocked && (
               <Field label="Where it goes">
                 <div className="flex flex-wrap gap-1.5">
                   {providers.map((cp) => {

@@ -49,6 +49,8 @@ import { SourceBadge } from "./SourceBadge";
 import { AttachmentChips } from "./AttachmentComposer";
 import { ClarifyPanel } from "./ClarifyPanel";
 import { ProjectTasksView } from "./ProjectTasksView";
+import { AiTaskActions } from "./AiTaskActions";
+import { DelegateDialog } from "./DelegateDialog";
 
 const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
 
@@ -155,6 +157,10 @@ export function TaskDetail({
   const isArchived = !!item.archivedAt;
 
   const [pushState, setPushState] = useState<"idle" | "busy" | string>("idle");
+  // Delegating a LOCAL task opens the "create in ClickUp under a project" flow
+  // (a teammate can't be assigned to a private local task). Holds the picked
+  // person until the destination dialog resolves.
+  const [delegateTo, setDelegateTo] = useState<Person | null>(null);
 
   const project = item.projectId
     ? projects.find((p) => p.id === item.projectId)
@@ -231,6 +237,14 @@ export function TaskDetail({
           value={item.title}
           onSave={(t) => updateItem(item.id, { title: t })}
         />
+        {/* AI affordances — re-clarify (break down / refine) + fill missing
+            details. Available for every task, local or ClickUp. Hidden for
+            unprocessed inbox items (they clarify from the inbox flow). */}
+        {item.disposition !== "INBOX" && (
+          <div className="mt-2">
+            <AiTaskActions item={item} />
+          </div>
+        )}
         {isSynced && (
           <p className="mt-1.5 text-[11px] text-muted-foreground">
             Edits sync back to {item.provider === "clickup" ? "ClickUp" : item.provider}.
@@ -372,7 +386,18 @@ export function TaskDetail({
                 <PersonMenu
                   people={memberPeople}
                   active={item.assignee ?? null}
-                  onPick={(p) => { updateItem(item.id, { assignee: p }); close(); }}
+                  onPick={(p) => {
+                    // A LOCAL task assigned to a teammate must become a ClickUp
+                    // task (they can't see a private local one) → open the
+                    // destination picker. Un-assigning (p=null) or an already-
+                    // synced task just patches (back-syncs the assignee delta).
+                    if (p && !isSynced) {
+                      setDelegateTo(p);
+                    } else {
+                      updateItem(item.id, { assignee: p });
+                    }
+                    close();
+                  }}
                 />
               )}
             </MetaEdit>
@@ -492,6 +517,14 @@ export function TaskDetail({
           {item.completedAt ? ` · completed ${relativeTime(item.completedAt, MOCK_NOW)}` : ""}
         </p>
       </div>
+
+      {delegateTo && (
+        <DelegateDialog
+          item={item}
+          assignee={delegateTo}
+          onClose={() => setDelegateTo(null)}
+        />
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
-import { ChevronRight, GripVertical } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronRight, GripVertical, CornerDownRight, Loader2, Circle, CheckCircle2 } from "lucide-react";
 import { GtdItem, ViewKey } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { TaskCard } from "./TaskCard";
@@ -243,6 +243,12 @@ function DraggableRow({
   onDragOverGap: () => void;
   onDropGap: () => void;
 }) {
+  // Jira/ClickUp-style nesting: a task with subtasks shows ONE row with an
+  // expand chevron + a progress count; expanding lazily loads and reveals the
+  // child subtasks (the actual next actions) indented beneath it.
+  const [expanded, setExpanded] = useState(false);
+  const hasSubtasks = (item.subtaskCount ?? 0) > 0;
+
   return (
     <div
       draggable={manual}
@@ -259,7 +265,7 @@ function DraggableRow({
         onDropGap();
       }}
       className={[
-        "group/row relative flex items-stretch border-t-2 transition-colors",
+        "group/row relative border-t-2 transition-colors",
         isDropTarget ? "border-primary" : "border-transparent",
       ].join(" ")}
     >
@@ -267,14 +273,114 @@ function DraggableRow({
       {isDropTarget && (
         <span className="pointer-events-none absolute -top-[3px] left-0 h-1 w-1.5 rounded-full bg-primary" />
       )}
-      {manual && (
-        <span className="flex w-5 shrink-0 cursor-grab items-center justify-center text-muted-foreground/25 transition-colors group-hover/row:text-muted-foreground/60 active:cursor-grabbing">
-          <GripVertical className="h-3.5 w-3.5" />
+      <div className="flex items-stretch">
+        {manual && (
+          <span className="flex w-5 shrink-0 cursor-grab items-center justify-center text-muted-foreground/25 transition-colors group-hover/row:text-muted-foreground/60 active:cursor-grabbing">
+            <GripVertical className="h-3.5 w-3.5" />
+          </span>
+        )}
+        {/* expand toggle — only for parents; keeps a fixed-width gutter so all
+            rows stay left-aligned whether or not they have subtasks. */}
+        <span className="flex w-5 shrink-0 items-center justify-center">
+          {hasSubtasks && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              aria-label={expanded ? "Collapse subtasks" : "Expand subtasks"}
+              aria-expanded={expanded}
+              className="tech-transition rounded p-0.5 text-muted-foreground/60 hover:bg-secondary hover:text-foreground"
+            >
+              <ChevronRight
+                className={[
+                  "h-3.5 w-3.5 transition-transform",
+                  expanded ? "rotate-90" : "",
+                ].join(" ")}
+              />
+            </button>
+          )}
         </span>
-      )}
-      <div className="min-w-0 flex-1">
-        <TaskCard item={item} variant="row" />
+        <div className="min-w-0 flex-1">
+          <TaskCard item={item} variant="row" />
+        </div>
       </div>
+      {hasSubtasks && expanded && <SubtaskRows parent={item} />}
+    </div>
+  );
+}
+
+// The lazily-loaded child subtasks of an expanded parent row. Each is the next
+// physical action for finishing the parent; clicking opens it, and the leading
+// dot toggles completion (a one-tap "did this step").
+function SubtaskRows({ parent }: { parent: GtdItem }) {
+  const loadSubtasks = useTaskStore((s) => s.loadSubtasks);
+  const openFocus = useTaskStore((s) => s.openFocus);
+  const quickDispose = useTaskStore((s) => s.quickDispose);
+  const [children, setChildren] = useState<GtdItem[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadSubtasks(parent.id).then((rows) => {
+      if (!cancelled) setChildren(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Re-load when the parent's subtask count changes (added/removed elsewhere).
+  }, [parent.id, parent.subtaskCount, loadSubtasks]);
+
+  if (children === null) {
+    return (
+      <div className="flex items-center gap-2 py-2 pl-14 text-[11px] text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        Loading subtasks…
+      </div>
+    );
+  }
+  if (children.length === 0) {
+    return (
+      <p className="py-1.5 pl-14 text-[11px] italic text-muted-foreground/50">
+        No subtasks.
+      </p>
+    );
+  }
+  return (
+    <div className="border-l border-border/60 ml-[26px]">
+      {children.map((c) => {
+        const done = c.disposition === "DONE";
+        return (
+          <div
+            key={c.id}
+            className="tech-transition group/sub flex items-center gap-2 py-1.5 pl-4 pr-3.5 hover:bg-secondary/40"
+          >
+            <button
+              type="button"
+              onClick={() => quickDispose(c.id, done ? "NEXT" : "DONE")}
+              aria-label={done ? "Mark not done" : "Mark done"}
+              title={done ? "Mark not done" : "Mark done"}
+              className="tech-transition shrink-0 text-muted-foreground/50 hover:text-success"
+            >
+              {done ? (
+                <CheckCircle2 className="h-4 w-4 text-success" />
+              ) : (
+                <Circle className="h-4 w-4" />
+              )}
+            </button>
+            <CornerDownRight className="h-3 w-3 shrink-0 text-muted-foreground/30" />
+            <button
+              type="button"
+              onClick={() => openFocus(c.id)}
+              className={[
+                "min-w-0 flex-1 truncate text-left text-[13px]",
+                done
+                  ? "text-muted-foreground line-through"
+                  : "text-foreground hover:text-primary",
+              ].join(" ")}
+            >
+              {c.nextAction || c.title}
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -44,6 +44,9 @@ import {
   apiCreateAccountProject,
   apiSyncTasks,
   apiAtomize,
+  apiEnrichItem,
+  apiBackfillContext,
+  apiDelegateItem,
   fetchTaskSettings,
   updateTaskSettings,
   type TaskSettings,
@@ -65,6 +68,11 @@ import {
 function sync(promise: Promise<unknown>): void {
   void promise.catch(() => {});
 }
+
+/** Sentinel @context for tasks that have none yet — the "@no context" bucket
+ *  under My Next Actions. Synced ClickUp tasks arrive here (Clarify never ran),
+ *  where they can be re-clarified or have their context auto-assigned. */
+export const NO_CONTEXT = "@no context";
 
 /** The outcome of clarifying an inbox item — the GTD decision tree (F2). */
 /** Fields shared by clarified items that can be stored on a PM tool. */
@@ -494,6 +502,30 @@ interface TaskState {
   /** Open/close the clarify overlay for an item. */
   openClarify: (id: string) => void;
   closeClarify: () => void;
+  /** Re-clarify an ALREADY-processed task (synced ClickUp task that skipped
+   *  Clarify, or one that needs breaking down). Opens the same wizard seeded
+   *  from the item's current state; a SYNCED task keeps its ClickUp binding. */
+  reclarifyItemId: string | null;
+  openReclarify: (id: string) => void;
+  closeReclarify: () => void;
+  /** Ask the assistant to fill a task's MISSING fields; returns the proposed
+   *  values (the caller confirms, then applies via updateItem). */
+  enrichItem: (id: string) => Promise<import("./api").EnrichFields>;
+  /** Auto-assign @context to actionable tasks that have none; re-hydrates. */
+  backfillContext: () => Promise<{ scanned: number; updated: number }>;
+  /** Delegate a LOCAL task to a teammate → promote it to a ClickUp task under
+   *  the chosen project. No-op for already-synced tasks (PATCH the assignee). */
+  delegateLocalToClickUp: (
+    id: string,
+    req: {
+      assignee: Person;
+      accountId: string;
+      projectId: string;
+      nextAction?: string;
+      status?: string;
+      dueAt?: string;
+    },
+  ) => Promise<void>;
   openWorkspaces: () => void;
   closeWorkspaces: () => void;
 }
@@ -672,6 +704,53 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   closeQuickCapture: () => set({ quickCaptureOpen: false }),
   openClarify: (id) => set({ selectedItemId: id, clarifyModalOpen: true }),
   closeClarify: () => set({ clarifyModalOpen: false }),
+  reclarifyItemId: null,
+  openReclarify: (id) => set({ selectedItemId: id, reclarifyItemId: id }),
+  closeReclarify: () => set({ reclarifyItemId: null }),
+
+  enrichItem: async (id) => {
+    if (get().backend !== "live") return {};
+    try {
+      return await apiEnrichItem(id);
+    } catch {
+      return {};
+    }
+  },
+
+  backfillContext: async () => {
+    if (get().backend !== "live") return { scanned: 0, updated: 0 };
+    const res = await apiBackfillContext();
+    if (res.updated > 0) {
+      // Contexts changed server-side — re-pull so the @context sidebar + the
+      // Next Actions list reflect the new assignments.
+      try {
+        set({ items: await fetchItems("all") });
+      } catch {
+        /* next hydrate reconciles */
+      }
+    }
+    return res;
+  },
+
+  delegateLocalToClickUp: async (id, req) => {
+    if (get().backend !== "live") return;
+    const server = await apiDelegateItem(id, {
+      assignee: {
+        name: req.assignee.name,
+        email: req.assignee.email,
+        provider_user_id: req.assignee.providerUserId,
+      },
+      account_id: req.accountId,
+      project_id: req.projectId,
+      next_action: req.nextAction,
+      status: req.status,
+      due_at: req.dueAt,
+    });
+    // The row is now SYNCED + WAITING (no longer in My Next Actions). Swap in
+    // the authoritative server row.
+    set((s) => ({ items: s.items.map((i) => (i.id === id ? server : i)) }));
+  },
+
   openWorkspaces: () => set({ workspacesModalOpen: true }),
   closeWorkspaces: () => set({ workspacesModalOpen: false }),
 
@@ -727,6 +806,14 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         );
       } else {
         items = s.items.map((i) => (i.id === id ? applyDecision(i, decision) : i));
+      }
+      // Re-clarify (the item wasn't in the inbox) is an in-place edit — don't
+      // walk the inbox, bump the session counter, or close the reclarify modal
+      // out from under the wizard's own close handler.
+      const wasInbox =
+        s.items.find((i) => i.id === id)?.disposition === "INBOX";
+      if (!wasInbox) {
+        return { items, projects, undoSnapshot: snapshot };
       }
       // advance to the OLDEST remaining inbox item — GTD processes FIFO
       const remaining = items.filter((i) => i.disposition === "INBOX");
@@ -1355,11 +1442,17 @@ export function itemsForView(
       // unassigned "team pool" tasks (synced as NEXT but is_mine=false) and, of
       // course, anything delegated to someone else (which is WAITING anyway).
       // Co-assigned tasks (me + others) keep is_mine=true, so they stay.
+      // The "@no context" bucket (NO_CONTEXT) holds tasks with no @context yet —
+      // e.g. synced ClickUp tasks that never went through Clarify.
       return items.filter(
         (i) =>
           i.disposition === "NEXT" &&
           i.isMine &&
-          (!context || i.context === context),
+          (!context
+            ? true
+            : context === NO_CONTEXT
+              ? !i.context
+              : i.context === context),
       );
     case "waiting":
       return items.filter((i) => i.disposition === "WAITING");
@@ -1400,8 +1493,11 @@ export function viewCounts(items: GtdItem[]): Record<ViewKey, number> {
 export function contextCounts(items: GtdItem[]): Record<string, number> {
   const out: Record<string, number> = {};
   for (const i of items) {
-    if (i.disposition !== "NEXT" || !i.isMine || !i.context) continue;
-    out[i.context] = (out[i.context] ?? 0) + 1;
+    if (i.disposition !== "NEXT" || !i.isMine) continue;
+    // Context-less "My Next Actions" (unprocessed synced tasks) fall into the
+    // "@no context" bucket so they're visible and can be clarified/backfilled.
+    const key = i.context || NO_CONTEXT;
+    out[key] = (out[key] ?? 0) + 1;
   }
   return out;
 }

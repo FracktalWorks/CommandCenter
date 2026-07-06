@@ -778,6 +778,73 @@ async def add_subtasks(
 
 # ── The approved push (staged → provider) ────────────────────────────────────
 
+async def _push_pending_item(db: Any, item_id: str, uid: str) -> Any:
+    """Create a staged (sync_state='pending') task in its destination workspace
+    and mark it synced. Shared by the manual Push and the delegate-promotion
+    path. Commits and returns the refreshed row. Raises 400 with a reason when
+    the item isn't in a pushable state (no account, no provider project)."""
+    row = await _fetch_item(db, item_id, uid)
+    if row.sync_state != "pending" or not row.account_id:
+        raise HTTPException(status_code=400,
+                            detail="Item has no pending destination")
+    account = await _assert_account_owner(db, str(row.account_id), uid)
+
+    project_ref = None
+    if row.project_id:
+        proj = (await db.execute(
+            text("SELECT provider_ref FROM gtd_projects WHERE id = :id"),
+            {"id": str(row.project_id)},
+        )).fetchone()
+        project_ref = proj.provider_ref if proj else None
+    if not project_ref:
+        raise HTTPException(
+            status_code=400,
+            detail="Pick a project that exists in the workspace first — "
+                   "the tool needs a list/project to create the task in",
+        )
+
+    creds = json.loads(_key_store().decrypt(account.credentials_encrypted))
+    provider = build_provider(account.provider, creds, account.workspace_id)
+    assignee = _parse_jsonb(row.assignee) or {}
+    due_ms = int(row.due_at.timestamp() * 1000) if row.due_at else None
+    # Email-origin items carry their source reference INTO the PM tool so
+    # the assignee sees where the task came from (lifecycle-long linkage).
+    description = row.description or ""
+    origin = _parse_jsonb(getattr(row, "origin", None)) or {}
+    if origin.get("kind") == "email":
+        ref = (
+            f"Captured from email — {origin.get('from_name') or origin.get('from_email') or 'unknown sender'}"
+            + (f" <{origin['from_email']}>" if origin.get("from_email") else "")
+            + (f": \"{origin['subject']}\"" if origin.get("subject") else "")
+        )
+        description = (description + "\n\n— " + ref).strip()
+    created = await provider.create_task(project_ref, {
+        "title": row.next_action or row.title,
+        "description": description or None,
+        "status": row.provider_status,
+        "due_at_ms": due_ms,
+        "assignee_id": assignee.get("provider_user_id"),
+    })
+    parent_tid = created.get("provider_task_id")
+    await db.execute(
+        text("""UPDATE gtd_items
+                SET provider_task_id = :tid, provider_url = :url,
+                    provider_status = coalesce(:status, provider_status),
+                    sync_state = 'synced', synced_at = now(), updated_at = now()
+                WHERE id = :id"""),
+        {"id": item_id, "tid": parent_tid,
+         "url": created.get("provider_url"),
+         "status": created.get("provider_status")},
+    )
+    # Push any local subtasks as ClickUp subtasks of the just-created parent
+    # (best-effort per child — a failed child never rolls back the parent).
+    if parent_tid:
+        await _push_child_subtasks(
+            db, item_id, uid, provider, project_ref, parent_tid)
+    await db.commit()
+    return _row_to_item(await _fetch_item(db, item_id, uid))
+
+
 @router.post("/items/{item_id}/push", response_model=GtdItemModel)
 async def push_item(
     item_id: str,
@@ -788,66 +855,82 @@ async def push_item(
     uid = _uid(user)
     db = await _get_db()
     try:
-        row = await _fetch_item(db, item_id, uid)
-        if row.sync_state != "pending" or not row.account_id:
-            raise HTTPException(status_code=400,
-                                detail="Item has no pending destination")
-        account = await _assert_account_owner(db, str(row.account_id), uid)
+        return await _push_pending_item(db, item_id, uid)
+    finally:
+        await db.close()
 
-        project_ref = None
-        if row.project_id:
-            proj = (await db.execute(
-                text("SELECT provider_ref FROM gtd_projects WHERE id = :id"),
-                {"id": str(row.project_id)},
-            )).fetchone()
-            project_ref = proj.provider_ref if proj else None
-        if not project_ref:
+
+class DelegateRequest(BaseModel):
+    """Delegate a LOCAL task to a teammate — it MUST land in the PM tool so the
+    assignee actually sees it. Carries the destination the UI picked."""
+    assignee: PersonModel
+    account_id: str                      # which connected workspace
+    project_id: str                      # which project/list in that workspace
+    next_action: str | None = None       # optional re-phrase for the delegated ask
+    status: str | None = None            # provider stage
+    due_at: str | None = None
+
+
+@router.post("/items/{item_id}/delegate", response_model=GtdItemModel)
+async def delegate_item(
+    item_id: str,
+    req: DelegateRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Promote a LOCAL task to a ClickUp task assigned to someone else.
+
+    Assigning a local task to a non-me teammate can't stay local — the teammate
+    lives in the PM tool. So we re-home the row onto the chosen workspace/project
+    as WAITING (not mine), stage it pending, and push it upstream in one step.
+    Already-synced tasks don't use this path: a plain assignee PATCH back-syncs
+    to their existing ClickUp task."""
+    uid = _uid(user)
+    db = await _get_db()
+    try:
+        row = await _fetch_item(db, item_id, uid)
+        if row.source == "SYNCED":
             raise HTTPException(
                 status_code=400,
-                detail="Pick a project that exists in the workspace first — "
-                       "the tool needs a list/project to create the task in",
-            )
-
-        creds = json.loads(_key_store().decrypt(account.credentials_encrypted))
-        provider = build_provider(account.provider, creds, account.workspace_id)
-        assignee = _parse_jsonb(row.assignee) or {}
-        due_ms = int(row.due_at.timestamp() * 1000) if row.due_at else None
-        # Email-origin items carry their source reference INTO the PM tool so
-        # the assignee sees where the task came from (lifecycle-long linkage).
-        description = row.description or ""
-        origin = _parse_jsonb(getattr(row, "origin", None)) or {}
-        if origin.get("kind") == "email":
-            ref = (
-                f"Captured from email — {origin.get('from_name') or origin.get('from_email') or 'unknown sender'}"
-                + (f" <{origin['from_email']}>" if origin.get("from_email") else "")
-                + (f": \"{origin['subject']}\"" if origin.get("subject") else "")
-            )
-            description = (description + "\n\n— " + ref).strip()
-        created = await provider.create_task(project_ref, {
-            "title": row.next_action or row.title,
-            "description": description or None,
-            "status": row.provider_status,
-            "due_at_ms": due_ms,
-            "assignee_id": assignee.get("provider_user_id"),
-        })
-        parent_tid = created.get("provider_task_id")
+                detail="Already a synced task — change the assignee with PATCH "
+                       "(it back-syncs to the existing ClickUp task).")
+        await _assert_account_owner(db, req.account_id, uid)
+        owned = (await db.execute(
+            text("SELECT 1 FROM gtd_projects WHERE id = :id AND user_id = :uid "
+                 "AND account_id = :aid"),
+            {"id": req.project_id, "uid": uid, "aid": req.account_id},
+        )).fetchone()
+        if not owned:
+            raise HTTPException(status_code=404,
+                                detail="Project not found in that workspace")
+        due = _parse_ts(req.due_at)
         await db.execute(
             text("""UPDATE gtd_items
-                    SET provider_task_id = :tid, provider_url = :url,
+                    SET disposition = 'WAITING', is_mine = false,
+                        source = 'SYNCED', account_id = :aid, project_id = :pid,
+                        assignee = :assignee,
+                        next_action = coalesce(:na, next_action, title),
                         provider_status = coalesce(:status, provider_status),
-                        sync_state = 'synced', synced_at = now(), updated_at = now()
-                    WHERE id = :id"""),
-            {"id": item_id, "tid": parent_tid,
-             "url": created.get("provider_url"),
-             "status": created.get("provider_status")},
+                        due_at = coalesce(:due, due_at),
+                        sync_state = 'pending', clarified_at = now(),
+                        updated_at = now()
+                    WHERE id = :id AND user_id = :uid"""),
+            {"id": item_id, "uid": uid, "aid": req.account_id,
+             "pid": req.project_id,
+             "assignee": json.dumps(req.assignee.model_dump()),
+             "na": (req.next_action or "").strip() or None,
+             "status": req.status, "due": due},
         )
-        # Push any local subtasks as ClickUp subtasks of the just-created parent
-        # (best-effort per child — a failed child never rolls back the parent).
-        if parent_tid:
-            await _push_child_subtasks(
-                db, item_id, uid, provider, project_ref, parent_tid)
+        # A delegated task is one we're waiting on — open a waiting-for record.
+        await db.execute(
+            text("""INSERT INTO gtd_waiting
+                    (item_id, waiting_on, delegated_at, expected_by)
+                    VALUES (:iid, :who, now(), :expected)"""),
+            {"iid": item_id, "who": json.dumps(req.assignee.model_dump()),
+             "expected": due},
+        )
         await db.commit()
-        return _row_to_item(await _fetch_item(db, item_id, uid))
+        # Now create it in ClickUp assigned to the teammate.
+        return await _push_pending_item(db, item_id, uid)
     finally:
         await db.close()
 

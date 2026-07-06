@@ -1,17 +1,20 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   Loader2, Reply, Clock, PenLine, Mail, Check, CheckCircle2, RotateCcw,
   RefreshCw, Info, Newspaper, Megaphone, Calendar, Receipt, Bell, Snowflake,
   Archive, Trash2, ChevronRight, Send, Search, X, Sparkles, Paperclip,
+  BellRing, Keyboard,
 } from "lucide-react";
 import {
   getReplyZero, draftReplySmart, resolveThread, reclassifyReplyZero,
   listEmails, getEmail, updateEmail, deleteEmail, sendEmail, saveDraftText,
+  scanFollowUps,
 } from "../../lib/api";
 import { ReplyZeroThread, Email } from "../../lib/types";
 import { timeLabel, fullDateLabel } from "../../lib/utils";
+import { deterministicPreset, presetHex, textOn } from "../../lib/labelColors";
 import { MessageContent } from "../MessageContent";
 
 interface RapidInboxViewProps {
@@ -21,9 +24,9 @@ interface RapidInboxViewProps {
 }
 
 /**
- * A Rapid Inbox category. Conversation buckets (To Reply / Awaiting / Done) come
+ * A Rapid Inbox category. "Needs you" buckets (To Reply / Awaiting / Done) come
  * from the Reply Zero thread-status projection and carry the reason + existing
- * draft; the remaining categories are provider labels applied by the rules, read
+ * draft; the "Sorted" categories are provider labels applied by the rules, read
  * straight from the message list (`listEmails({ label })`). Both collapse to the
  * same `RapidItem` so a single card renders every category.
  */
@@ -35,6 +38,7 @@ interface Category {
   label: string;
   icon: React.ElementType;
   source: CatSource;
+  group: "needs" | "sorted";
   bucket?: Bucket;
   /** Active-chip + tag palette (works on light & dark). */
   cls: string;
@@ -42,28 +46,41 @@ interface Category {
 
 const CATEGORIES: Category[] = [
   { key: "to_reply", label: "To Reply", icon: Reply, source: "bucket",
-    bucket: "needs_reply",
+    group: "needs", bucket: "needs_reply",
     cls: "bg-violet-500/15 text-violet-600 dark:text-violet-400" },
-  { key: "awaiting", label: "Awaiting Reply", icon: Clock, source: "bucket",
-    bucket: "awaiting",
+  { key: "awaiting", label: "Awaiting", icon: Clock, source: "bucket",
+    group: "needs", bucket: "awaiting",
     cls: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
-  { key: "fyi", label: "FYI", icon: Info, source: "label",
+  { key: "done", label: "Done", icon: CheckCircle2, source: "bucket",
+    group: "needs", bucket: "done",
+    cls: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" },
+  { key: "fyi", label: "FYI", icon: Info, source: "label", group: "sorted",
     cls: "bg-sky-500/15 text-sky-600 dark:text-sky-400" },
   { key: "newsletter", label: "Newsletter", icon: Newspaper, source: "label",
+    group: "sorted",
     cls: "bg-blue-500/15 text-blue-600 dark:text-blue-400" },
   { key: "marketing", label: "Marketing", icon: Megaphone, source: "label",
+    group: "sorted",
     cls: "bg-orange-500/15 text-orange-600 dark:text-orange-400" },
   { key: "calendar", label: "Calendar", icon: Calendar, source: "label",
+    group: "sorted",
     cls: "bg-teal-500/15 text-teal-600 dark:text-teal-400" },
   { key: "receipt", label: "Receipt", icon: Receipt, source: "label",
+    group: "sorted",
     cls: "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400" },
   { key: "notification", label: "Notification", icon: Bell, source: "label",
+    group: "sorted",
     cls: "bg-slate-500/15 text-slate-600 dark:text-slate-300" },
   { key: "cold", label: "Cold Email", icon: Snowflake, source: "label",
+    group: "sorted",
     cls: "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400" },
-  { key: "done", label: "Done", icon: CheckCircle2, source: "bucket",
-    bucket: "done",
-    cls: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" },
+];
+
+type SortKey = "newest" | "oldest" | "unread";
+const SORTS: { key: SortKey; label: string }[] = [
+  { key: "newest", label: "Newest" },
+  { key: "oldest", label: "Oldest" },
+  { key: "unread", label: "Unread" },
 ];
 
 /** The one shape every category's rows render as. */
@@ -75,6 +92,7 @@ interface RapidItem {
   fromEmail: string;
   receivedAt: string | null;
   isRead: boolean;
+  preview?: string;
   reason?: string;
   draftId?: string | null;
   draftPreview?: string | null;
@@ -91,6 +109,7 @@ function fromThread(t: ReplyZeroThread): RapidItem {
     fromEmail: t.from_email,
     receivedAt: t.received_at,
     isRead: t.is_read,
+    preview: t.reason || undefined,
     reason: t.reason,
     draftId: t.draft_id,
     draftPreview: t.draft_preview,
@@ -108,6 +127,7 @@ function fromEmail(e: Email): RapidItem {
     fromEmail: e.from.email,
     receivedAt: e.receivedAt,
     isRead: e.isRead,
+    preview: e.snippet || undefined,
   };
 }
 
@@ -122,17 +142,28 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
   const [loading, setLoading] = useState(true);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [reclassifying, setReclassifying] = useState(false);
+  const [scanningFu, setScanningFu] = useState(false);
   const [filter, setFilter] = useState("");
-  const [notice, setNotice] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortKey>("newest");
+  const [showKeys, setShowKeys] = useState(false);
 
-  // Full messages fetched on expand (cached so re-opening a card is instant).
+  // Which card is expanded, and which has its reply composer open. Both are
+  // parent-owned so keyboard shortcuts can drive them.
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [replyForId, setReplyForId] = useState<string | null>(null);
   const [fullCache, setFullCache] = useState<Record<string, Email>>({});
   const [fullLoading, setFullLoading] = useState<string | null>(null);
+
+  // Keyboard focus (the "cursor" for j/k triage).
+  const [focusIdx, setFocusIdx] = useState(0);
+  const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   // Bulk selection (inbox-cleaner parity).
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState<string | null>(null);
+
+  // A transient toast: a message plus an optional Undo action.
+  const [toast, setToast] = useState<{ msg: string; undo?: () => void } | null>(null);
 
   // ── Load the active category ──
   const load = useCallback(() => {
@@ -142,6 +173,7 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
     }
     setLoading(true);
     setExpandedId(null);
+    setReplyForId(null);
     const active = CATEGORIES.find((c) => c.key === catKey) ?? CATEGORIES[0];
     const req: Promise<RapidItem[]> =
       active.source === "bucket"
@@ -178,90 +210,167 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
     loadCounts();
   }, [loadCounts]);
 
-  // Auto-dismiss the transient result banner.
+  // Auto-dismiss the toast (undo toasts linger a little longer).
   useEffect(() => {
-    if (!notice) return;
-    const t = setTimeout(() => setNotice(null), 5000);
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), toast.undo ? 7000 : 4000);
     return () => clearTimeout(t);
-  }, [notice]);
+  }, [toast]);
+
+  // ── Derived list (filter + sort) ──
+  const visible = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    const filtered = q
+      ? items.filter(
+          (it) =>
+            it.subject.toLowerCase().includes(q) ||
+            it.from.toLowerCase().includes(q) ||
+            it.fromEmail.toLowerCase().includes(q),
+        )
+      : items;
+    const at = (it: RapidItem) =>
+      it.receivedAt ? new Date(it.receivedAt).getTime() : 0;
+    const sorted = [...filtered];
+    if (sort === "oldest") sorted.sort((a, b) => at(a) - at(b));
+    else if (sort === "unread")
+      sorted.sort((a, b) => Number(a.isRead) - Number(b.isRead) || at(b) - at(a));
+    else sorted.sort((a, b) => at(b) - at(a));
+    return sorted;
+  }, [items, filter, sort]);
+
+  // Keep the keyboard cursor in range as the list changes (auto-advance falls
+  // out of this: after a drop the same index now points at the next item).
+  useEffect(() => {
+    setFocusIdx((i) => Math.min(Math.max(0, i), Math.max(0, visible.length - 1)));
+  }, [visible.length]);
+
+  // Scroll the focused row into view when the cursor moves.
+  useEffect(() => {
+    rowRefs.current[focusIdx]?.scrollIntoView({ block: "nearest" });
+  }, [focusIdx]);
 
   // ── Expand a card: fetch the full message once ──
-  const toggleExpand = (it: RapidItem) => {
-    if (expandedId === it.messageId) {
-      setExpandedId(null);
-      return;
-    }
-    setExpandedId(it.messageId);
-    if (!fullCache[it.messageId]) {
-      setFullLoading(it.messageId);
-      getEmail(it.messageId)
-        .then((e) => setFullCache((prev) => ({ ...prev, [it.messageId]: e })))
+  const openFull = useCallback(
+    (messageId: string) => {
+      if (fullCache[messageId]) return;
+      setFullLoading(messageId);
+      getEmail(messageId)
+        .then((e) => setFullCache((prev) => ({ ...prev, [messageId]: e })))
         .catch(() => undefined)
         .finally(() => setFullLoading(null));
-    }
-  };
+    },
+    [fullCache],
+  );
 
-  // ── Row-level state changes (drop from the list + refresh counts/parent) ──
-  const drop = (messageId: string) => {
+  const toggleExpand = useCallback(
+    (it: RapidItem, withReply = false) => {
+      if (expandedId === it.messageId && !withReply) {
+        setExpandedId(null);
+        setReplyForId(null);
+        return;
+      }
+      setExpandedId(it.messageId);
+      openFull(it.messageId);
+      // Surface an existing draft, or open the composer on an explicit reply.
+      setReplyForId(withReply || it.draftId ? it.messageId : null);
+    },
+    [expandedId, openFull],
+  );
+
+  // ── Row-level state changes ──
+  const drop = useCallback((messageId: string) => {
     setItems((prev) => prev.filter((x) => x.messageId !== messageId));
     setSelected((prev) => {
       const next = new Set(prev);
       next.delete(messageId);
       return next;
     });
-    if (expandedId === messageId) setExpandedId(null);
-  };
+    setExpandedId((cur) => (cur === messageId ? null : cur));
+    setReplyForId((cur) => (cur === messageId ? null : cur));
+  }, []);
 
-  const archive = async (it: RapidItem) => {
-    setBusy(it.messageId);
-    try {
-      await updateEmail(it.messageId, { folder: "archive" });
-      drop(it.messageId);
-      setCounts((c) => ({ ...c, [catKey]: Math.max(0, (c[catKey] ?? 1) - 1) }));
-      setNotice(`Archived “${it.subject}”.`);
-      onArchived?.();
-    } catch {
-      setNotice("Couldn't archive that email.");
-    } finally {
-      setBusy(null);
-    }
-  };
+  const bump = useCallback((delta: number) => {
+    setCounts((c) => ({ ...c, [catKey]: Math.max(0, (c[catKey] ?? 0) + delta) }));
+  }, [catKey]);
 
-  const remove = async (it: RapidItem) => {
-    if (!window.confirm(`Move “${it.subject}” to Trash?`)) return;
-    setBusy(it.messageId);
-    try {
-      await deleteEmail(it.messageId);
+  // Archive / delete are instant + reversible (inbox-zero style, no confirm).
+  const archive = useCallback(
+    async (it: RapidItem) => {
       drop(it.messageId);
-      setCounts((c) => ({ ...c, [catKey]: Math.max(0, (c[catKey] ?? 1) - 1) }));
-      setNotice(`Deleted “${it.subject}”.`);
-      onArchived?.();
-    } catch {
-      setNotice("Couldn't delete that email.");
-    } finally {
-      setBusy(null);
-    }
-  };
+      bump(-1);
+      try {
+        await updateEmail(it.messageId, { folder: "archive" });
+        setToast({
+          msg: `Archived “${trim(it.subject)}”.`,
+          undo: async () => {
+            await updateEmail(it.messageId, { folder: "inbox" });
+            setToast(null);
+            load();
+            loadCounts();
+          },
+        });
+        onArchived?.();
+      } catch {
+        setToast({ msg: "Couldn't archive that email." });
+        load();
+      }
+    },
+    [drop, bump, load, loadCounts, onArchived],
+  );
+
+  const remove = useCallback(
+    async (it: RapidItem) => {
+      drop(it.messageId);
+      bump(-1);
+      try {
+        await deleteEmail(it.messageId);
+        setToast({
+          msg: `Deleted “${trim(it.subject)}”.`,
+          undo: async () => {
+            await updateEmail(it.messageId, { folder: "inbox" });
+            setToast(null);
+            load();
+            loadCounts();
+          },
+        });
+        onArchived?.();
+      } catch {
+        setToast({ msg: "Couldn't delete that email." });
+        load();
+      }
+    },
+    [drop, bump, load, loadCounts, onArchived],
+  );
 
   // Mark done / reopen — only meaningful for the conversation buckets.
-  const resolve = async (it: RapidItem, done: boolean) => {
-    if (!accountId || !it.threadId) return;
-    setBusy(it.messageId);
-    drop(it.messageId);
-    try {
-      await resolveThread(accountId, it.threadId, done);
-      loadCounts();
-    } catch {
-      load();
-    } finally {
-      setBusy(null);
-    }
-  };
+  const resolve = useCallback(
+    async (it: RapidItem, done: boolean) => {
+      if (!accountId || !it.threadId) return;
+      drop(it.messageId);
+      bump(-1);
+      try {
+        await resolveThread(accountId, it.threadId, done);
+        loadCounts();
+      } catch {
+        load();
+      }
+    },
+    [accountId, drop, bump, load, loadCounts],
+  );
 
-  // ── Bulk actions (inbox-cleaner parity) ──
+  const onSent = useCallback(
+    (it: RapidItem) => {
+      drop(it.messageId);
+      bump(-1);
+      setToast({ msg: `Reply sent to ${it.from}.` });
+    },
+    [drop, bump],
+  );
+
+  // ── Bulk actions ──
   const selectedItems = useMemo(
-    () => items.filter((x) => selected.has(x.messageId)),
-    [items, selected],
+    () => visible.filter((x) => selected.has(x.messageId)),
+    [visible, selected],
   );
   const toggleSel = (messageId: string) =>
     setSelected((prev) => {
@@ -273,12 +382,6 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
 
   const bulk = async (action: "archive" | "trash") => {
     if (selectedItems.length === 0) return;
-    if (
-      action === "trash" &&
-      !window.confirm(`Move ${selectedItems.length} email(s) to Trash?`)
-    ) {
-      return;
-    }
     setBusy("__bulk__");
     const targets = [...selectedItems];
     try {
@@ -294,16 +397,23 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
       }
       setSelected(new Set());
       loadCounts();
-      setNotice(
-        `${action === "archive" ? "Archived" : "Deleted"} ${targets.length} email(s).`,
-      );
+      setToast({
+        msg: `${action === "archive" ? "Archived" : "Deleted"} ${targets.length} email(s).`,
+        undo: async () => {
+          for (const it of targets)
+            await updateEmail(it.messageId, { folder: "inbox" }).catch(() => undefined);
+          setToast(null);
+          load();
+          loadCounts();
+        },
+      });
       onArchived?.();
     } finally {
       setBusy(null);
     }
   };
 
-  // ── Rendering ──
+  // ── Toolbar actions ──
   const reclassify = async () => {
     if (!accountId || reclassifying) return;
     setReclassifying(true);
@@ -321,16 +431,103 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
     }
   };
 
-  const visible = useMemo(() => {
-    const q = filter.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter(
-      (it) =>
-        it.subject.toLowerCase().includes(q) ||
-        it.from.toLowerCase().includes(q) ||
-        it.fromEmail.toLowerCase().includes(q),
-    );
-  }, [items, filter]);
+  const findFollowUps = async () => {
+    if (!accountId || scanningFu) return;
+    setScanningFu(true);
+    try {
+      const r = await scanFollowUps(accountId);
+      if (!r.configured) {
+        setToast({
+          msg: "Set a follow-up window in AI Settings first.",
+        });
+      } else {
+        setToast({
+          msg: `Scanned ${r.scanned} — flagged ${r.labeled}` +
+            (r.drafted ? `, drafted ${r.drafted} nudge(s).` : "."),
+        });
+        load();
+        loadCounts();
+      }
+    } catch {
+      setToast({ msg: "Follow-up scan failed." });
+    } finally {
+      setScanningFu(false);
+    }
+  };
+
+  const switchCat = useCallback((key: string) => {
+    setCatKey(key);
+    setSelected(new Set());
+    setFilter("");
+    setFocusIdx(0);
+    setExpandedId(null);
+    setReplyForId(null);
+  }, []);
+
+  // ── Keyboard triage (j/k, Enter, e, #, r, d, [ ], ?) ──
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const typing =
+        !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+      if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+      const cur = visible[focusIdx];
+
+      switch (e.key) {
+        case "j":
+          e.preventDefault();
+          setFocusIdx((i) => Math.min(visible.length - 1, i + 1));
+          break;
+        case "k":
+          e.preventDefault();
+          setFocusIdx((i) => Math.max(0, i - 1));
+          break;
+        case "Enter":
+        case "o":
+          if (cur) { e.preventDefault(); toggleExpand(cur); }
+          break;
+        case "r":
+          if (cur && cat.key !== "done") { e.preventDefault(); toggleExpand(cur, true); }
+          break;
+        case "e":
+          if (cur) { e.preventDefault(); archive(cur); }
+          break;
+        case "#":
+        case "Delete":
+          if (cur) { e.preventDefault(); remove(cur); }
+          break;
+        case "d":
+          if (cur && cat.source === "bucket" && cat.key !== "done") {
+            e.preventDefault(); resolve(cur, true);
+          }
+          break;
+        case "x":
+          if (cur) { e.preventDefault(); toggleSel(cur.messageId); }
+          break;
+        case "Escape":
+          if (replyForId) { e.preventDefault(); setReplyForId(null); }
+          else if (expandedId) { e.preventDefault(); setExpandedId(null); }
+          break;
+        case "[":
+        case "]": {
+          e.preventDefault();
+          const i = CATEGORIES.findIndex((c) => c.key === catKey);
+          const next = CATEGORIES[
+            (i + (e.key === "]" ? 1 : CATEGORIES.length - 1)) % CATEGORIES.length
+          ];
+          switchCat(next.key);
+          break;
+        }
+        case "?":
+          e.preventDefault();
+          setShowKeys((v) => !v);
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, focusIdx, expandedId, replyForId, cat, toggleExpand, archive, remove, resolve]);
 
   if (!accountId) {
     return (
@@ -340,41 +537,27 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
     );
   }
 
+  const needs = CATEGORIES.filter((c) => c.group === "needs");
+  const sorted = CATEGORIES.filter((c) => c.group === "sorted");
+
   return (
     <div className="h-full flex flex-col">
-      {/* ── Category chips ── */}
+      {/* ── Category chips: "Needs you" | "Sorted" ── */}
       <div className="flex items-center gap-1.5 px-3 sm:px-5 py-2.5 border-b border-border flex-shrink-0 overflow-x-auto scrollbar-hide">
-        {CATEGORIES.map((c) => {
-          const Icon = c.icon;
-          const active = c.key === catKey;
-          const n = counts[c.key];
-          return (
-            <button
-              key={c.key}
-              onClick={() => {
-                setCatKey(c.key);
-                setSelected(new Set());
-                setFilter("");
-              }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs whitespace-nowrap transition-colors flex-shrink-0 ${
-                active
-                  ? c.cls
-                  : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-              }`}
-            >
-              <Icon size={13} />
-              {c.label}
-              {typeof n === "number" && (
-                <span className={active ? "opacity-70" : "opacity-50"}>{n}</span>
-              )}
-            </button>
-          );
-        })}
+        {needs.map((c) => (
+          <Chip key={c.key} c={c} active={c.key === catKey} n={counts[c.key]}
+            onClick={() => switchCat(c.key)} />
+        ))}
+        <div className="w-px h-5 bg-border mx-1 flex-shrink-0" />
+        {sorted.map((c) => (
+          <Chip key={c.key} c={c} active={c.key === catKey} n={counts[c.key]}
+            onClick={() => switchCat(c.key)} />
+        ))}
       </div>
 
-      {/* ── Toolbar: filter + reclassify ── */}
-      <div className="flex items-center gap-2 px-3 sm:px-5 py-2 border-b border-border flex-shrink-0">
-        <div className="flex items-center gap-2 bg-secondary rounded-md px-2.5 py-1.5 flex-1 max-w-xs">
+      {/* ── Toolbar: filter · sort · (follow-ups) · reclassify ── */}
+      <div className="flex items-center gap-2 px-3 sm:px-5 py-2 border-b border-border flex-shrink-0 flex-wrap">
+        <div className="flex items-center gap-2 bg-secondary rounded-md px-2.5 py-1.5 flex-1 min-w-[8rem] max-w-xs">
           <Search size={13} className="text-muted-foreground" />
           <input
             value={filter}
@@ -383,23 +566,55 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
             className="bg-transparent outline-none text-xs w-full text-foreground placeholder:text-muted-foreground"
           />
         </div>
-        <button
-          onClick={reclassify}
-          disabled={reclassifying}
-          title="Reclassify — rebuild every category from your rules (keeps Done)"
-          className="ml-auto flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
-        >
-          <RefreshCw size={12} className={reclassifying ? "animate-spin" : undefined} />
-          {reclassifying ? "Reclassifying…" : "Reclassify"}
-        </button>
+        <div className="flex items-center gap-0.5 bg-secondary rounded-md p-0.5">
+          {SORTS.map((s) => (
+            <button
+              key={s.key}
+              onClick={() => setSort(s.key)}
+              className={`px-2 py-1 rounded text-[11px] transition-colors ${
+                sort === s.key
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+        <div className="ml-auto flex items-center gap-1">
+          {cat.key === "awaiting" && (
+            <button
+              onClick={findFollowUps}
+              disabled={scanningFu}
+              title="Find threads waiting too long and draft polite nudges"
+              className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+            >
+              <BellRing size={12} className={scanningFu ? "animate-pulse" : undefined} />
+              {scanningFu ? "Scanning…" : "Find follow-ups"}
+            </button>
+          )}
+          <button
+            onClick={() => setShowKeys((v) => !v)}
+            title="Keyboard shortcuts (?)"
+            className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] transition-colors ${
+              showKeys ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+            }`}
+          >
+            <Keyboard size={12} />
+          </button>
+          <button
+            onClick={reclassify}
+            disabled={reclassifying}
+            title="Reclassify — rebuild every category from your rules (keeps Done)"
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+          >
+            <RefreshCw size={12} className={reclassifying ? "animate-spin" : undefined} />
+            {reclassifying ? "Reclassifying…" : "Reclassify"}
+          </button>
+        </div>
       </div>
 
-      {notice && (
-        <div className="px-3 sm:px-5 py-2 text-xs text-primary bg-primary/10 border-b border-border flex items-center gap-1.5 flex-shrink-0">
-          <Check size={12} className="flex-shrink-0" />
-          {notice}
-        </div>
-      )}
+      {showKeys && <ShortcutBar />}
 
       {/* ── Bulk action bar ── */}
       {selectedItems.length > 0 && (
@@ -440,49 +655,99 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
       {/* ── List ── */}
       <div className="flex-1 overflow-y-auto">
         {loading ? (
-          <div className="flex items-center justify-center h-full text-muted-foreground gap-2 text-sm">
-            <Loader2 className="animate-spin" size={16} /> Loading…
+          <div className="divide-y divide-border">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <RowSkeleton key={i} />
+            ))}
           </div>
         ) : visible.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2 text-sm">
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2 text-sm px-6 text-center">
             <Mail size={22} className="opacity-40" />
             {cat.key === "to_reply"
               ? "Nothing needs a reply. Inbox zero! 🎉"
-              : `No ${cat.label} email${filter ? " matches your filter" : ""}.`}
+              : filter
+                ? `No ${cat.label} email matches “${filter}”.`
+                : `No ${cat.label} email right now.`}
           </div>
         ) : (
           <div className="divide-y divide-border">
-            {visible.map((it) => (
-              <RapidCard
-                key={it.messageId}
-                accountId={accountId}
-                item={it}
-                cat={cat}
-                expanded={expandedId === it.messageId}
-                full={fullCache[it.messageId] ?? null}
-                fullLoading={fullLoading === it.messageId}
-                selected={selected.has(it.messageId)}
-                busy={busy === it.messageId}
-                onToggleSelect={() => toggleSel(it.messageId)}
-                onToggleExpand={() => toggleExpand(it)}
-                onArchive={() => archive(it)}
-                onDelete={() => remove(it)}
-                onResolve={(done) => resolve(it, done)}
-                onSent={() => {
-                  drop(it.messageId);
-                  setCounts((c) => ({
-                    ...c,
-                    [catKey]: Math.max(0, (c[catKey] ?? 1) - 1),
-                  }));
-                  setNotice(`Reply sent to ${it.from}.`);
-                }}
-                onNotice={setNotice}
-              />
+            {visible.map((it, i) => (
+              <div key={it.messageId} ref={(el) => { rowRefs.current[i] = el; }}>
+                <RapidCard
+                  accountId={accountId}
+                  item={it}
+                  cat={cat}
+                  focused={i === focusIdx}
+                  expanded={expandedId === it.messageId}
+                  replyOpen={replyForId === it.messageId}
+                  full={fullCache[it.messageId] ?? null}
+                  fullLoading={fullLoading === it.messageId}
+                  selected={selected.has(it.messageId)}
+                  busy={busy === it.messageId}
+                  onFocus={() => setFocusIdx(i)}
+                  onToggleSelect={() => toggleSel(it.messageId)}
+                  onToggleExpand={() => toggleExpand(it)}
+                  onOpenReply={() => { setExpandedId(it.messageId); openFull(it.messageId); setReplyForId(it.messageId); }}
+                  onCloseReply={() => setReplyForId(null)}
+                  onArchive={() => archive(it)}
+                  onDelete={() => remove(it)}
+                  onResolve={(done) => resolve(it, done)}
+                  onSent={() => onSent(it)}
+                  onNotice={(msg) => setToast({ msg })}
+                />
+              </div>
             ))}
           </div>
         )}
       </div>
+
+      {/* ── Undo / status toast ── */}
+      {toast && (
+        <div className="flex-shrink-0 flex items-center gap-3 px-3 sm:px-5 py-2 border-t border-border bg-card">
+          <Check size={13} className="text-primary flex-shrink-0" />
+          <span className="text-xs text-foreground truncate">{toast.msg}</span>
+          {toast.undo && (
+            <button
+              onClick={toast.undo}
+              className="ml-auto text-xs text-primary font-medium hover:opacity-80 flex items-center gap-1 flex-shrink-0"
+            >
+              <RotateCcw size={12} /> Undo
+            </button>
+          )}
+          <button
+            onClick={() => setToast(null)}
+            className={`text-muted-foreground hover:text-foreground flex-shrink-0 ${toast.undo ? "" : "ml-auto"}`}
+            title="Dismiss"
+          >
+            <X size={13} />
+          </button>
+        </div>
+      )}
     </div>
+  );
+}
+
+// ── Category chip ────────────────────────────────────────────────────────────
+
+function Chip({
+  c, active, n, onClick,
+}: {
+  c: Category; active: boolean; n?: number; onClick: () => void;
+}) {
+  const Icon = c.icon;
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs whitespace-nowrap transition-colors flex-shrink-0 ${
+        active ? c.cls : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+      }`}
+    >
+      <Icon size={13} />
+      {c.label}
+      {typeof n === "number" && n > 0 && (
+        <span className={active ? "opacity-70" : "opacity-50"}>{n}</span>
+      )}
+    </button>
   );
 }
 
@@ -492,13 +757,18 @@ function RapidCard({
   accountId,
   item,
   cat,
+  focused,
   expanded,
+  replyOpen,
   full,
   fullLoading,
   selected,
   busy,
+  onFocus,
   onToggleSelect,
   onToggleExpand,
+  onOpenReply,
+  onCloseReply,
   onArchive,
   onDelete,
   onResolve,
@@ -508,13 +778,18 @@ function RapidCard({
   accountId: string;
   item: RapidItem;
   cat: Category;
+  focused: boolean;
   expanded: boolean;
+  replyOpen: boolean;
   full: Email | null;
   fullLoading: boolean;
   selected: boolean;
   busy: boolean;
+  onFocus: () => void;
   onToggleSelect: () => void;
   onToggleExpand: () => void;
+  onOpenReply: () => void;
+  onCloseReply: () => void;
   onArchive: () => void;
   onDelete: () => void;
   onResolve: (done: boolean) => void;
@@ -523,46 +798,66 @@ function RapidCard({
 }) {
   const isDone = cat.bucket === "done";
   const isBucket = cat.source === "bucket";
-  const [replyOpen, setReplyOpen] = useState(false);
-
-  // Auto-open the reply composer when a card with an existing draft expands, so
-  // the AI/saved draft is right there to review.
-  useEffect(() => {
-    if (expanded && item.draftId) setReplyOpen(true);
-  }, [expanded, item.draftId]);
+  const avatarBg = presetHex(deterministicPreset(item.fromEmail || item.from));
+  const initial = (item.from || item.fromEmail || "?").trim().charAt(0).toUpperCase();
 
   return (
-    <div className={selected ? "bg-primary/5" : undefined}>
+    <div
+      className={`${selected ? "bg-primary/5" : ""} ${
+        focused ? "ring-2 ring-inset ring-primary/40" : ""
+      }`}
+    >
       {/* Row */}
-      <div className="flex items-start gap-3 px-3 sm:px-5 py-2.5">
+      <div className="flex items-start gap-2.5 px-3 sm:px-5 py-2.5">
         <input
           type="checkbox"
           checked={selected}
           onChange={onToggleSelect}
-          className="accent-primary flex-shrink-0 mt-1"
+          className="accent-primary flex-shrink-0 mt-1.5"
           onClick={(e) => e.stopPropagation()}
         />
+        {/* Sender avatar */}
+        <div
+          className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-[11px] font-semibold mt-0.5"
+          style={{ backgroundColor: avatarBg, color: textOn(avatarBg) }}
+          title={item.fromEmail}
+        >
+          {initial}
+        </div>
         <button
-          onClick={onToggleExpand}
+          onClick={() => { onFocus(); onToggleExpand(); }}
           className="flex-1 min-w-0 text-left"
         >
-          <div className="flex items-center gap-1.5">
-            <ChevronRight
-              size={13}
-              className={`text-muted-foreground flex-shrink-0 transition-transform ${
-                expanded ? "rotate-90" : ""
+          <div className="flex items-center gap-2">
+            <span
+              className={`text-xs truncate ${
+                item.isRead ? "text-foreground/70" : "text-foreground font-semibold"
               }`}
-            />
-            {!item.isRead && (
-              <span className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
-            )}
-            <span className="text-xs font-medium text-foreground truncate">
+            >
+              {item.from}
+            </span>
+            <div className="ml-auto flex items-center gap-1.5 flex-shrink-0">
+              {!item.isRead && (
+                <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+              )}
+              <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                {item.receivedAt ? timeLabel(item.receivedAt) : ""}
+              </span>
+              <ChevronRight
+                size={13}
+                className={`text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`}
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`text-xs truncate ${item.isRead ? "text-foreground/60" : "text-foreground"}`}
+            >
               {item.subject}
             </span>
             {item.needsFollowUp && (
               <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 flex-shrink-0">
-                Follow up
-                {typeof item.awaitingDays === "number" ? ` · ${item.awaitingDays}d` : ""}
+                Follow up{typeof item.awaitingDays === "number" ? ` · ${item.awaitingDays}d` : ""}
               </span>
             )}
             {item.draftId && !isDone && (
@@ -574,13 +869,9 @@ function RapidCard({
               </span>
             )}
           </div>
-          <div className="text-[11px] text-muted-foreground truncate pl-[18px]">
-            {item.from}
-            {item.receivedAt ? ` · ${timeLabel(item.receivedAt)}` : ""}
-          </div>
-          {item.reason && (
-            <div className="text-[10px] text-muted-foreground/80 italic truncate pl-[18px]">
-              {item.reason}
+          {item.preview && (
+            <div className="text-[11px] text-muted-foreground truncate leading-relaxed">
+              {item.reason ? <span className="italic">{item.preview}</span> : item.preview}
             </div>
           )}
         </button>
@@ -592,35 +883,23 @@ function RapidCard({
           ) : (
             <>
               {isBucket && !isDone && (
-                <ActionBtn
-                  title="Mark done — handled, no further action needed"
-                  onClick={() => onResolve(true)}
-                  className="hover:bg-emerald-500/10 hover:text-emerald-500"
-                >
+                <ActionBtn title="Mark done (d)" onClick={() => onResolve(true)}
+                  className="hover:bg-emerald-500/10 hover:text-emerald-500">
                   <Check size={13} />
                 </ActionBtn>
               )}
               {isDone && (
-                <ActionBtn
-                  title="Reopen — move back to To Reply / Awaiting"
-                  onClick={() => onResolve(false)}
-                  className="hover:bg-secondary"
-                >
+                <ActionBtn title="Reopen" onClick={() => onResolve(false)}
+                  className="hover:bg-secondary">
                   <RotateCcw size={13} />
                 </ActionBtn>
               )}
-              <ActionBtn
-                title="Archive"
-                onClick={onArchive}
-                className="hover:bg-secondary"
-              >
+              <ActionBtn title="Archive (e)" onClick={onArchive}
+                className="hover:bg-secondary">
                 <Archive size={13} />
               </ActionBtn>
-              <ActionBtn
-                title="Delete (move to Trash)"
-                onClick={onDelete}
-                className="hover:bg-red-500/10 hover:text-red-400"
-              >
+              <ActionBtn title="Delete (#)" onClick={onDelete}
+                className="hover:bg-red-500/10 hover:text-red-400">
                 <Trash2 size={13} />
               </ActionBtn>
             </>
@@ -630,7 +909,7 @@ function RapidCard({
 
       {/* Expanded body + reply */}
       {expanded && (
-        <div className="px-3 sm:px-5 pb-3 pl-[46px]">
+        <div className="px-3 sm:px-5 pb-3 pl-[52px]">
           <div className="rounded-lg border border-border bg-card overflow-hidden">
             <div className="px-3 py-2 border-b border-border bg-secondary/40 text-[11px] text-muted-foreground">
               {full?.from?.name || item.from}
@@ -673,15 +952,15 @@ function RapidCard({
                   followUp={cat.bucket === "awaiting"}
                   onSent={onSent}
                   onNotice={onNotice}
-                  onClose={() => setReplyOpen(false)}
+                  onClose={onCloseReply}
                 />
               ) : (
                 <div className="px-3 py-2 border-t border-border">
                   <button
-                    onClick={() => setReplyOpen(true)}
+                    onClick={onOpenReply}
                     className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-muted-foreground border border-border hover:text-primary hover:bg-primary/10 transition-colors"
                   >
-                    <Reply size={13} /> Reply
+                    <Reply size={13} /> {cat.bucket === "awaiting" ? "Nudge" : "Reply"}
                   </button>
                 </div>
               ))}
@@ -724,8 +1003,7 @@ function InlineReply({
     return s.startsWith("Re:") ? s : `Re: ${s}`;
   }, [full, item.subject]);
 
-  // Keep the recipient in sync once the full message resolves (its from-address
-  // is authoritative).
+  // Keep the recipient in sync once the full message resolves.
   useEffect(() => {
     if (full?.from?.email) setTo(full.from.email);
   }, [full]);
@@ -794,12 +1072,10 @@ function InlineReply({
       </div>
       <textarea
         value={body}
-        onChange={(e) => {
-          setBody(e.target.value);
-          setSavedTo(false);
-        }}
+        onChange={(e) => { setBody(e.target.value); setSavedTo(false); }}
         rows={6}
-        placeholder="Write your reply…"
+        autoFocus
+        placeholder={followUp ? "Write a follow-up nudge…" : "Write your reply…"}
         className="w-full bg-background border border-border rounded-lg px-2.5 py-2 text-xs text-foreground outline-none focus:border-primary transition-colors resize-none leading-relaxed"
       />
       {error && <div className="text-[11px] text-destructive">{error}</div>}
@@ -810,12 +1086,8 @@ function InlineReply({
           title="Draft a context-aware reply with memory + specialist agents"
           className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] text-muted-foreground border border-border hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-50"
         >
-          {drafting ? (
-            <Loader2 className="animate-spin" size={12} />
-          ) : (
-            <Sparkles size={12} />
-          )}
-          {body.trim() ? "Redraft with AI" : "Draft with AI"}
+          {drafting ? <Loader2 className="animate-spin" size={12} /> : <Sparkles size={12} />}
+          {body.trim() ? "Redraft with AI" : followUp ? "Draft nudge" : "Draft with AI"}
         </button>
         {savedTo ? (
           <span className="flex items-center gap-1 text-[11px] text-emerald-400">
@@ -851,11 +1123,50 @@ function InlineReply({
   );
 }
 
+// ── Small pieces ─────────────────────────────────────────────────────────────
+
+const SHORTCUTS: { keys: string; label: string }[] = [
+  { keys: "j / k", label: "Move" },
+  { keys: "↵", label: "Open" },
+  { keys: "r", label: "Reply" },
+  { keys: "e", label: "Archive" },
+  { keys: "#", label: "Delete" },
+  { keys: "d", label: "Done" },
+  { keys: "x", label: "Select" },
+  { keys: "[ ]", label: "Category" },
+];
+
+function ShortcutBar() {
+  return (
+    <div className="flex items-center gap-3 px-3 sm:px-5 py-1.5 border-b border-border bg-secondary/30 flex-shrink-0 overflow-x-auto scrollbar-hide">
+      {SHORTCUTS.map((s) => (
+        <span key={s.keys} className="flex items-center gap-1 text-[10px] text-muted-foreground whitespace-nowrap">
+          <kbd className="px-1 py-0.5 rounded border border-border bg-card text-foreground font-mono text-[9px]">
+            {s.keys}
+          </kbd>
+          {s.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function RowSkeleton() {
+  return (
+    <div className="flex items-start gap-2.5 px-3 sm:px-5 py-2.5 animate-pulse">
+      <div className="w-4 h-4 rounded bg-secondary mt-1" />
+      <div className="w-7 h-7 rounded-full bg-secondary flex-shrink-0" />
+      <div className="flex-1 min-w-0 space-y-1.5 py-0.5">
+        <div className="h-2.5 bg-secondary rounded w-1/3" />
+        <div className="h-2.5 bg-secondary rounded w-2/3" />
+        <div className="h-2 bg-secondary/60 rounded w-1/2" />
+      </div>
+    </div>
+  );
+}
+
 function ActionBtn({
-  children,
-  onClick,
-  title,
-  className = "",
+  children, onClick, title, className = "",
 }: {
   children: React.ReactNode;
   onClick: () => void;
@@ -871,4 +1182,9 @@ function ActionBtn({
       {children}
     </button>
   );
+}
+
+/** Clamp a subject for a toast line. */
+function trim(s: string, n = 42): string {
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }

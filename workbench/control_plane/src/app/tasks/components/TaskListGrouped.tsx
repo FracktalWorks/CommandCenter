@@ -6,6 +6,7 @@ import { GtdItem, ViewKey } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { TaskCard } from "./TaskCard";
 import { applySort, byManualOrder } from "../lib/ordering";
+import { stageAccent } from "../lib/stageColors";
 
 // A status-segmented list (Jira backlog style): rows grouped under collapsible
 // stage headers with counts. In Manual sort the rows are drag-reorderable —
@@ -98,33 +99,64 @@ export function TaskListGrouped({
     reorderItem(id, dest, index, refile);
   };
 
+  const total = groups.length;
+
   return (
     <div className="flex-1 overflow-y-auto">
-      {groups.map((g) => {
+      {groups.map((g, gi) => {
         const rows = byGroup.get(g.key) ?? [];
         const isCollapsed = collapsed.has(g.key);
         const showHeader = kind !== "none";
+        const accent = stageAccent(g.label || g.key, gi, total);
+        const isDone = gi === total - 1;
+        // Highlight the whole group while a card hovers anywhere over it, so a
+        // cross-stage move reads clearly even before hitting a precise gap.
+        const groupHot = dropAt?.startsWith(`${g.key}:`) ?? false;
         return (
-          <section key={g.key}>
+          <section
+            key={g.key}
+            className={groupHot ? "bg-primary/[0.03]" : undefined}
+          >
             {showHeader && (
-              <button
-                type="button"
-                onClick={() => toggle(g.key)}
-                className="tech-transition sticky top-0 z-10 flex w-full items-center gap-1.5 border-b border-border bg-secondary/60 px-3.5 py-1.5 text-left backdrop-blur"
+              <div
+                className={[
+                  "sticky top-0 z-10 flex items-center gap-2 border-b border-border border-l-2 px-3 py-1.5 backdrop-blur",
+                  accent.soft,
+                  accent.bar,
+                ].join(" ")}
               >
-                <ChevronRight
-                  className={[
-                    "h-3.5 w-3.5 text-muted-foreground transition-transform",
-                    isCollapsed ? "" : "rotate-90",
-                  ].join(" ")}
-                />
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
-                  {g.label}
-                </span>
-                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
-                  {rows.length}
-                </span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => toggle(g.key)}
+                  className="tech-transition flex min-w-0 flex-1 items-center gap-2 text-left"
+                >
+                  <ChevronRight
+                    className={[
+                      "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+                      isCollapsed ? "" : "rotate-90",
+                    ].join(" ")}
+                  />
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${accent.dot}`} />
+                  <span
+                    className={`truncate text-[11px] font-semibold uppercase tracking-wide ${accent.text}`}
+                  >
+                    {g.label}
+                  </span>
+                  <span
+                    className={[
+                      "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+                      "bg-background/60 text-muted-foreground",
+                    ].join(" ")}
+                  >
+                    {rows.length}
+                  </span>
+                  {isDone && (
+                    <span className="shrink-0 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-success">
+                      Done
+                    </span>
+                  )}
+                </button>
+              </div>
             )}
             {!isCollapsed && (
               <div>
@@ -143,7 +175,8 @@ export function TaskListGrouped({
                     onDropGap={() => onDrop(g.key, idx)}
                   />
                 ))}
-                {/* trailing gap → drop at the end of the group */}
+                {/* trailing gap → drop at the end of the group. Taller when a
+                    drag is active so an empty/short stage is an easy target. */}
                 {manual && (
                   <div
                     onDragOver={(e) => {
@@ -153,16 +186,17 @@ export function TaskListGrouped({
                     }}
                     onDrop={() => onDrop(g.key, rows.length)}
                     className={[
-                      "h-3 transition-colors",
+                      "transition-all",
+                      dragId ? "h-6" : "h-2",
                       dropAt === `${g.key}:${rows.length}`
-                        ? "bg-primary/20"
-                        : "",
+                        ? "border-t-2 border-primary bg-primary/10"
+                        : "border-t-2 border-transparent",
                     ].join(" ")}
                   />
                 )}
                 {rows.length === 0 && showHeader && (
-                  <p className="px-8 py-2 text-[11px] text-muted-foreground/60">
-                    Nothing in this stage.
+                  <p className="px-9 py-2.5 text-[11px] italic text-muted-foreground/50">
+                    {dragId ? "Drop here to move to this stage" : "No tasks in this stage"}
                   </p>
                 )}
               </div>
@@ -207,12 +241,16 @@ function DraggableRow({
         onDropGap();
       }}
       className={[
-        "group/row relative flex items-stretch",
-        isDropTarget ? "border-t-2 border-primary" : "border-t-2 border-transparent",
+        "group/row relative flex items-stretch border-t-2 transition-colors",
+        isDropTarget ? "border-primary" : "border-transparent",
       ].join(" ")}
     >
+      {/* a precise drop line that reads even over a dense row */}
+      {isDropTarget && (
+        <span className="pointer-events-none absolute -top-[3px] left-0 h-1 w-1.5 rounded-full bg-primary" />
+      )}
       {manual && (
-        <span className="flex w-5 shrink-0 cursor-grab items-center justify-center text-muted-foreground/30 opacity-0 group-hover/row:opacity-100 active:cursor-grabbing">
+        <span className="flex w-5 shrink-0 cursor-grab items-center justify-center text-muted-foreground/25 transition-colors group-hover/row:text-muted-foreground/60 active:cursor-grabbing">
           <GripVertical className="h-3.5 w-3.5" />
         </span>
       )}

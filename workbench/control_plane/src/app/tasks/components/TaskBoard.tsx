@@ -5,6 +5,7 @@ import { GtdItem, ViewKey } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { TaskCard } from "./TaskCard";
 import { applySort, byManualOrder } from "../lib/ordering";
+import { stageAccent } from "../lib/stageColors";
 
 // A Kanban board over the Next Actions items (Jira/ClickUp-style). Columns are
 // the user's configured WORKFLOW STAGES (settings.workflowStages) — a single,
@@ -116,9 +117,10 @@ export function TaskBoard({ items, view }: { items: GtdItem[]; view: ViewKey }) 
 
   return (
     <div className="flex h-full gap-3 overflow-x-auto p-4">
-      {columns.map((col) => {
+      {columns.map((col, ci) => {
         const colItems = byColumn.get(col.key) ?? [];
         const isOver = overCol === col.key;
+        const accent = stageAccent(col.label || col.key, ci, columns.length);
         return (
           <div
             key={col.key}
@@ -126,15 +128,25 @@ export function TaskBoard({ items, view }: { items: GtdItem[]; view: ViewKey }) 
             onDragLeave={() => setOverCol((c) => (c === col.key ? null : c))}
             onDrop={() => dropColumn(col.key)}
             className={[
-              "flex h-full w-72 shrink-0 flex-col rounded-xl border bg-secondary/30",
+              "flex h-full w-72 shrink-0 flex-col overflow-hidden rounded-xl border bg-secondary/30",
               isOver ? "border-primary bg-primary/5" : "border-border",
             ].join(" ")}
           >
-            <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-              <span className="truncate text-xs font-semibold text-foreground">
-                {col.label}
+            {/* accent cap so each stage column is identifiable at a glance */}
+            <div className={`h-1 w-full ${accent.dot}`} />
+            <div
+              className={[
+                "flex items-center justify-between gap-2 border-b border-border px-3 py-2",
+                accent.soft,
+              ].join(" ")}
+            >
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className={`h-2 w-2 shrink-0 rounded-full ${accent.dot}`} />
+                <span className={`truncate text-xs font-semibold ${accent.text}`}>
+                  {col.label}
+                </span>
               </span>
-              <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+              <span className="shrink-0 rounded-full bg-background/60 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
                 {colItems.length}
               </span>
             </div>

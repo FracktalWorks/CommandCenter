@@ -677,12 +677,29 @@ task's edits. (3) **Rich ClickUp detail** — `provider.get_task_detail` + `GET
 /items/{id}/detail` → comments/attachments/subtasks rendered in the panel.
 (4) **Full-page view** — `TaskFocusModal` (store `focusedItemId`/`openFocus`).
 (5) **List ⇄ Board** — `TaskCard` (rich card, board + dense-row variants; click →
-focus modal) + `TaskBoard` (Kanban; columns by @context [Next] / stage
-[Waiting/Someday] / disposition; **native HTML5 drag-to-refile** → `updateItem`,
-which back-syncs to ClickUp — no DnD lib); `ItemList` gained a sticky List/Board
-toggle (Calendar stays list-only). Unit tests: `update_task` + `get_task_detail`
-(48). **Still not built (from §7 wishlist):** EngageView, WeeklyReview,
-WaitingForView (dedicated), HorizonsView, ProjectPlanner.
+focus modal) + `TaskBoard` (Kanban; columns by workflow stage [Next] / provider
+stage [Waiting/Someday] / disposition; **native HTML5 drag** — no DnD lib);
+`ItemList` gained a sticky List/Board toggle (Calendar/Archive stay list-only).
+
+(6) **Grouped list + reorder + filter/sort (2026-07-06, `jira_clone`-inspired,
+migration 58).** The list view is now **status-segmented** (`TaskListGrouped`):
+Next Actions groups rows under collapsible **workflow-stage** headers (same
+stages as the board), Waiting/Someday under provider-stage headers, each with a
+count. **Manual drag-to-reorder** works in BOTH views — a drop computes a
+fractional `gtd_items.sort_key` (`DOUBLE PRECISION`, `rankForDrop` = midpoint of
+the new neighbours; NULLS-LAST fallback to created-at) and a cross-group/column
+drop ALSO re-files the stage in the same PATCH (`store.reorderItem`). New
+**`TaskToolbar`** above both views: search (title/next-action/notes) + @context +
+assignee filters + sort field (Manual / Due / Created / Title / Energy) with an
+asc/desc toggle. "Manual" is the drag order and the ONLY mode where reordering is
+allowed — a field sort disables dragging (Jira/Linear/ClickUp behaviour). Sort/
+filter math lives in pure `lib/ordering.ts` (shared by list + board). `list_items`
+`ORDER BY (source=LOCAL) DESC, sort_key ASC NULLS LAST, created_at DESC`. GOTCHA:
+`sort_key` allows `0.0` (top-of-group rank) — every layer uses `!= null`/`is not
+None`, never truthiness, so a zero rank isn't dropped. Unit tests: `update_task`
++ `get_task_detail` + sort_key-patch/order contract (53). **Still not built (from
+§7 wishlist):** EngageView, WeeklyReview, WaitingForView (dedicated),
+HorizonsView, ProjectPlanner.
 
 ### 9.2 Backend phases (after the UI slices)
 

@@ -96,6 +96,7 @@ class ItemPatch(BaseModel):
     due_at: str | None = None
     provider_status: str | None = None   # the tool's stage, e.g. 'To-do'
     workflow_stage: str | None = None    # the local Kanban stage (board move)
+    sort_key: float | None = None        # manual (drag) rank within a group/column
     assignee: PersonModel | None = None   # a PersonModel to set; sentinel below to clear
     clear_assignee: bool = False          # explicit unassign (assignee=None is "unchanged")
     attachments: list[dict] | None = None  # replaces the whole list
@@ -239,11 +240,13 @@ async def list_items(
         # LOCAL (unprocessed / ours) rows ALWAYS sort first, so a large synced
         # mirror can never push our own captures past the row cap — the Inbox
         # invariant ("unprocessed items are always visible") holds regardless of
-        # how many tasks a connected workspace imports. Newest-first within each
-        # group.
+        # how many tasks a connected workspace imports. Within each group,
+        # manually-ranked rows (a drag set sort_key) come first in rank order;
+        # everything else falls back to newest-first.
         rows = (await db.execute(
             text(ITEM_SELECT + " WHERE " + " AND ".join(clauses)
-                 + " ORDER BY (i.source = 'LOCAL') DESC, i.created_at DESC"
+                 + " ORDER BY (i.source = 'LOCAL') DESC,"
+                 + " i.sort_key ASC NULLS LAST, i.created_at DESC"
                  + " LIMIT :limit"),
             params,
         )).fetchall()
@@ -338,8 +341,9 @@ def _build_item_update(
          (patch.provider_status or None)),
         (patch.workflow_stage, "workflow_stage = :wstage",
          (patch.workflow_stage or None)),
+        (patch.sort_key, "sort_key = :sortkey", patch.sort_key),
     ]
-    keys = ["notes", "na", "ctx", "energy", "tem", "pstatus", "wstage"]
+    keys = ["notes", "na", "ctx", "energy", "tem", "pstatus", "wstage", "sortkey"]
     for (present, clause, value), key in zip(simple, keys, strict=True):
         if present is not None:
             sets.append(clause)

@@ -20,6 +20,13 @@ import {
 } from "./mockData";
 import { isCalendarItem, isTickled } from "./utils";
 import {
+  DEFAULT_FILTERS,
+  DEFAULT_SORT,
+  rankForDrop,
+  type TaskFilters,
+  type TaskSort,
+} from "./ordering";
+import {
   accountToProviderEntry,
   apiBulkDispose,
   apiArchiveItem,
@@ -108,6 +115,7 @@ export interface ItemMetaPatch {
   dueAt?: string;              // ISO; "" clears
   providerStatus?: string;    // the tool's stage
   workflowStage?: string;     // the local Kanban stage (board move)
+  sortKey?: number;           // manual (drag) rank within a group/column
   assignee?: Person | null;   // null → unassign
 }
 
@@ -329,6 +337,15 @@ interface TaskState {
    *  mirror so your own captures aren't swamped. */
   sourceFilter: "all" | "local" | "synced";
   setSourceFilter: (f: "all" | "local" | "synced") => void;
+  /** Toolbar filters (search / context / assignee) applied to the active view
+   *  in both list and board modes. */
+  filters: TaskFilters;
+  setFilters: (patch: Partial<TaskFilters>) => void;
+  clearFilters: () => void;
+  /** Ordering of the active view. "manual" enables drag-to-reorder; a field
+   *  sort overrides manual position and disables dragging. */
+  sort: TaskSort;
+  setSort: (patch: Partial<TaskSort>) => void;
 
   /** ids of the most recent capture batch (for undo). */
   lastCaptureIds: string[];
@@ -383,6 +400,16 @@ interface TaskState {
    *  items (context/energy/estimate/due/stage/assignee/next action/notes).
    *  For a SYNCED ClickUp task, the mapped fields also back-sync upstream. */
   updateItem: (id: string, patch: ItemMetaPatch) => void;
+  /** Drag-reorder: move `id` to `toIndex` within `groupItems` (the destination
+   *  group's items in their current manual order), optionally re-filing it to a
+   *  new workflow stage / provider status. Computes a fractional sortKey between
+   *  the neighbours and patches sortKey (+ the stage change) in one write. */
+  reorderItem: (
+    id: string,
+    groupItems: GtdItem[],
+    toIndex: number,
+    refile?: { workflowStage?: string; providerStatus?: string },
+  ) => void;
   /** Inline-rename a captured item (fix a typo without clarifying). */
   renameItem: (id: string, title: string) => void;
   /** Undo the most recent dispose/clarify — restores the item(s) to the inbox. */
@@ -462,6 +489,11 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   closeFocus: () => set({ focusedItemId: null }),
   sourceFilter: "all",
   setSourceFilter: (f) => set({ sourceFilter: f }),
+  filters: DEFAULT_FILTERS,
+  setFilters: (patch) => set((s) => ({ filters: { ...s.filters, ...patch } })),
+  clearFilters: () => set({ filters: DEFAULT_FILTERS }),
+  sort: DEFAULT_SORT,
+  setSort: (patch) => set((s) => ({ sort: { ...s.sort, ...patch } })),
   selectedItemId: null,
   selectedProjectId: null,
   lastCaptureIds: [],
@@ -473,7 +505,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   undoSnapshot: null,
 
   selectView: (view) =>
-    set({ selectedView: view, selectedContext: null, selectedItemId: null, selectedProjectId: null }),
+    set({
+      selectedView: view,
+      selectedContext: null,
+      selectedItemId: null,
+      selectedProjectId: null,
+      // A search/filter is scoped to the view you set it in — reset on nav so a
+      // stale query doesn't silently hide items in the next view.
+      filters: DEFAULT_FILTERS,
+    }),
 
   selectContext: (context) =>
     set({ selectedView: "next", selectedContext: context, selectedItemId: null }),
@@ -915,6 +955,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
             patch.workflowStage !== undefined
               ? patch.workflowStage
               : i.workflowStage,
+          sortKey:
+            patch.sortKey !== undefined ? patch.sortKey : i.sortKey,
           // Dropping on the last configured stage marks the task DONE — mirror
           // the backend optimistically so the card leaves the active board.
           disposition:
@@ -948,6 +990,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         body.provider_status = patch.providerStatus;
       if (patch.workflowStage !== undefined)
         body.workflow_stage = patch.workflowStage;
+      if (patch.sortKey !== undefined) body.sort_key = patch.sortKey;
       if (patch.assignee !== undefined) {
         if (patch.assignee === null) body.clear_assignee = true;
         else
@@ -969,6 +1012,29 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         );
       }
     }
+  },
+
+  reorderItem: (id, groupItems, toIndex, refile) => {
+    const moving = get().items.find((i) => i.id === id);
+    if (!moving) return;
+    // `toIndex` is the gap index within `groupItems` (which may still include
+    // the moved card, e.g. an intra-group drag). The neighbour set is that
+    // group WITHOUT the moved card; when the card originally sat BEFORE the
+    // gap, removing it shifts every later index down by one — adjust so the
+    // card lands in the visually-targeted slot rather than one past it.
+    const fromIndex = groupItems.findIndex((i) => i.id === id);
+    const others = groupItems.filter((i) => i.id !== id);
+    const destIndex =
+      fromIndex !== -1 && fromIndex < toIndex ? toIndex - 1 : toIndex;
+    const newKey = rankForDrop(others, destIndex);
+    // One patch carries the rank and any stage re-file, so a cross-column drag
+    // that also repositions is a single write (and one optimistic update).
+    const patch: ItemMetaPatch = { sortKey: newKey };
+    if (refile?.workflowStage !== undefined)
+      patch.workflowStage = refile.workflowStage;
+    if (refile?.providerStatus !== undefined)
+      patch.providerStatus = refile.providerStatus;
+    get().updateItem(id, patch);
   },
 
   renameItem: (id, title) => {

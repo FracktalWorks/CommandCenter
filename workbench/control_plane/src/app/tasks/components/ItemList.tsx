@@ -19,9 +19,12 @@ import {
 import { useTaskStore, itemsForView } from "../lib/taskStore";
 import { ViewKey } from "../lib/types";
 import { isOverdue } from "../lib/utils";
+import { applyFilters, applySort } from "../lib/ordering";
 import { ProjectsList } from "./ProjectsList";
 import { TaskCard } from "./TaskCard";
 import { TaskBoard } from "./TaskBoard";
+import { TaskListGrouped } from "./TaskListGrouped";
+import { TaskToolbar } from "./TaskToolbar";
 
 // View mode (list vs kanban board) for the processed-task views, sticky per
 // browser via useSyncExternalStore (SSR-safe, same recipe as the inbox density
@@ -70,12 +73,22 @@ export function ItemList() {
   const view = useTaskStore((s) => s.selectedView);
   const context = useTaskStore((s) => s.selectedContext);
   const sourceFilter = useTaskStore((s) => s.sourceFilter);
+  const filters = useTaskStore((s) => s.filters);
+  const sort = useTaskStore((s) => s.sort);
   const hasSynced = useTaskStore((s) => s.accounts.length > 0);
   const mode = useSyncExternalStore(subscribeMode, readMode, () => "list");
 
-  const visible = useMemo(
+  // The view's items (source/archive-filtered), then the toolbar's search/
+  // context/assignee filter, then the active sort. `inView` is the pre-toolbar
+  // set — used to populate the toolbar's context/assignee dropdowns so they
+  // never offer an option that returns nothing.
+  const inView = useMemo(
     () => itemsForView(items, view, context, sourceFilter),
     [items, view, context, sourceFilter],
+  );
+  const visible = useMemo(
+    () => applySort(applyFilters(inView, filters), sort),
+    [inView, filters, sort],
   );
 
   if (view === "projects") {
@@ -88,6 +101,13 @@ export function ItemList() {
   // Calendar is date-ordered and Archive is a flat recovery list; the board
   // adds nothing there, so keep them list-only. Everything else offers both.
   const boardable = view !== "calendar" && view !== "archive";
+  // The filter/sort toolbar rides above every processed-task view (inbox has
+  // its own triage UI; projects is a different surface). Calendar/Archive get
+  // it too — search/sort still help there — but they stay list-only.
+  const showToolbar = view !== "inbox";
+  // A view has a status axis to segment the list under (Next → workflow stages,
+  // Waiting/Someday → provider stage). Others render a flat list.
+  const grouped = view === "next" || view === "waiting" || view === "someday";
 
   return (
     <div className="flex h-full flex-col">
@@ -175,17 +195,27 @@ export function ItemList() {
         )}
       </header>
 
+      {showToolbar && !loading && inView.length > 0 && (
+        <TaskToolbar items={inView} />
+      )}
+
       {loading ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/60" />
           <p className="text-xs text-muted-foreground">Loading…</p>
         </div>
       ) : visible.length === 0 ? (
-        <EmptyState view={view} />
+        inView.length > 0 ? (
+          <NoMatchState />
+        ) : (
+          <EmptyState view={view} />
+        )
       ) : boardable && mode === "board" ? (
         <div className="min-h-0 flex-1">
           <TaskBoard items={visible} view={view} />
         </div>
+      ) : grouped ? (
+        <TaskListGrouped items={visible} view={view} />
       ) : (
         <div className="flex-1 overflow-y-auto">
           {visible.map((item) => (
@@ -193,6 +223,24 @@ export function ItemList() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Shown when the view has items but the toolbar filters hid them all — a
+ *  different message from the true-empty state so the user knows to clear. */
+function NoMatchState() {
+  const clearFilters = useTaskStore((s) => s.clearFilters);
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
+      <p className="text-sm text-muted-foreground">No tasks match your filters.</p>
+      <button
+        type="button"
+        onClick={clearFilters}
+        className="tech-transition rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground hover:bg-secondary"
+      >
+        Clear filters
+      </button>
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import { GtdItem, ViewKey } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { TaskCard } from "./TaskCard";
+import { applySort, byManualOrder } from "../lib/ordering";
 
 // A Kanban board over the current view's items (Jira/ClickUp-style). Columns:
 //   next     → the user's configured WORKFLOW STAGES (settings.workflowStages);
@@ -12,8 +13,11 @@ import { TaskCard } from "./TaskCard";
 //   waiting  → by provider stage (or "No stage")
 //   someday  → by provider stage (or a single column)
 //   default  → by disposition
-// Dragging a card re-files it via updateItem — for a SYNCED task that back-syncs
-// to the connected tool through the PATCH path. Native HTML5 DnD, no extra deps.
+// Cards render in manual (sortKey) order within a column and are drag-
+// reorderable: a drop computes a fractional rank between its new neighbours
+// (reorderItem), and a cross-column drop ALSO re-files the stage/status in the
+// same write. A field sort disables reordering (the sort overrides manual
+// position). Native HTML5 DnD, no extra deps.
 
 type ColumnKind = "workflow" | "stage" | "disposition";
 
@@ -28,11 +32,16 @@ const UNSET = "—"; // em-dash sentinel for the "no value" column
 export function TaskBoard({ items, view }: { items: GtdItem[]; view: ViewKey }) {
   const accounts = useTaskStore((s) => s.accounts);
   const workflowStages = useTaskStore((s) => s.settings.workflowStages);
+  const sort = useTaskStore((s) => s.sort);
+  const reorderItem = useTaskStore((s) => s.reorderItem);
   const updateItem = useTaskStore((s) => s.updateItem);
 
   const kind = columnKindFor(view);
+  const manual = sort.field === "manual";
   const [dragId, setDragId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<string | null>(null);
+  // Exact gap "<colKey>:<index>" the card would drop into (manual mode only).
+  const [dropAt, setDropAt] = useState<string | null>(null);
 
   // For the workflow board an unstaged task sits in the FIRST configured stage.
   const firstStage = workflowStages[0];
@@ -75,19 +84,48 @@ export function TaskBoard({ items, view }: { items: GtdItem[]; view: ViewKey }) 
       const k = stageOf(i);
       (m.get(k) ?? m.set(k, []).get(k)!).push(i);
     }
+    // Cards within a column follow the active sort (manual → sortKey order).
+    for (const [k, arr] of m) m.set(k, applySort(arr, sort));
     return m;
-  }, [items, columns, stageOf]);
+  }, [items, columns, stageOf, sort]);
 
-  const drop = (colKey: string) => {
+  const refileFor = (colKey: string) =>
+    kind === "workflow"
+      ? { workflowStage: colKey }
+      : kind === "stage"
+        ? { providerStatus: colKey === UNSET ? "" : colKey }
+        : undefined;
+
+  // Drop onto a specific gap (index) within a column — reorder + re-file.
+  const dropAtIndex = (colKey: string, index: number) => {
+    setDropAt(null);
     setOverCol(null);
-    if (!dragId) return;
-    const item = items.find((i) => i.id === dragId);
+    const id = dragId;
     setDragId(null);
+    if (!id) return;
+    const dest = byManualOrder(byColumn.get(colKey) ?? []);
+    reorderItem(id, dest, index, refileFor(colKey));
+  };
+
+  // Drop anywhere in a column (not on a card gap): keep the old semantics —
+  // in a field sort we can't rank, so just re-file the stage/status.
+  const dropColumn = (colKey: string) => {
+    setOverCol(null);
+    setDropAt(null);
+    const id = dragId;
+    setDragId(null);
+    if (!id) return;
+    const item = items.find((i) => i.id === id);
     if (!item) return;
+    if (manual) {
+      // append to the end of the column
+      const dest = byManualOrder(byColumn.get(colKey) ?? []);
+      reorderItem(id, dest, dest.length, refileFor(colKey));
+      return;
+    }
     if (stageOf(item) === colKey) return; // no move
-    if (kind === "workflow") updateItem(item.id, { workflowStage: colKey });
-    else if (kind === "stage")
-      updateItem(item.id, { providerStatus: colKey === UNSET ? "" : colKey });
+    const refile = refileFor(colKey);
+    if (refile) updateItem(id, refile);
   };
 
   return (
@@ -100,7 +138,7 @@ export function TaskBoard({ items, view }: { items: GtdItem[]; view: ViewKey }) 
             key={col.key}
             onDragOver={(e) => { e.preventDefault(); setOverCol(col.key); }}
             onDragLeave={() => setOverCol((c) => (c === col.key ? null : c))}
-            onDrop={() => drop(col.key)}
+            onDrop={() => dropColumn(col.key)}
             className={[
               "flex h-full w-72 shrink-0 flex-col rounded-xl border bg-secondary/30",
               isOver ? "border-primary bg-primary/5" : "border-border",
@@ -114,16 +152,35 @@ export function TaskBoard({ items, view }: { items: GtdItem[]; view: ViewKey }) 
                 {colItems.length}
               </span>
             </div>
-            <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-2">
-              {colItems.map((i) => (
-                <TaskCard
-                  key={i.id}
-                  item={i}
-                  draggable
-                  onDragStart={() => setDragId(i.id)}
-                  onDragEnd={() => { setDragId(null); setOverCol(null); }}
-                />
+            <div className="flex flex-1 flex-col overflow-y-auto p-2">
+              {colItems.map((i, idx) => (
+                <div key={i.id}>
+                  {/* drop gap ABOVE this card (manual reorder) */}
+                  {manual && (
+                    <DropGap
+                      active={dropAt === `${col.key}:${idx}`}
+                      onOver={() => dragId && setDropAt(`${col.key}:${idx}`)}
+                      onDrop={() => dropAtIndex(col.key, idx)}
+                    />
+                  )}
+                  <div className="pb-2">
+                    <TaskCard
+                      item={i}
+                      draggable
+                      onDragStart={() => setDragId(i.id)}
+                      onDragEnd={() => { setDragId(null); setOverCol(null); setDropAt(null); }}
+                    />
+                  </div>
+                </div>
               ))}
+              {/* trailing gap → drop at the end */}
+              {manual && colItems.length > 0 && (
+                <DropGap
+                  active={dropAt === `${col.key}:${colItems.length}`}
+                  onOver={() => dragId && setDropAt(`${col.key}:${colItems.length}`)}
+                  onDrop={() => dropAtIndex(col.key, colItems.length)}
+                />
+              )}
               {colItems.length === 0 && (
                 <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-border/60 py-6 text-[11px] text-muted-foreground/60">
                   {isOver ? "Drop here" : "Empty"}
@@ -134,6 +191,36 @@ export function TaskBoard({ items, view }: { items: GtdItem[]; view: ViewKey }) 
         );
       })}
     </div>
+  );
+}
+
+/** A thin, highlight-on-hover drop target between cards for manual reorder. */
+function DropGap({
+  active,
+  onOver,
+  onDrop,
+}: {
+  active: boolean;
+  onOver: () => void;
+  onDrop: () => void;
+}) {
+  return (
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onOver();
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onDrop();
+      }}
+      className={[
+        "-my-1 h-2 rounded transition-colors",
+        active ? "bg-primary/40" : "bg-transparent",
+      ].join(" ")}
+    />
   );
 }
 

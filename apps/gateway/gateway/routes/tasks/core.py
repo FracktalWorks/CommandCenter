@@ -74,6 +74,7 @@ class GtdItemModel(BaseModel):
     assignee: PersonModel | None = None
     is_mine: bool = True
     workflow_stage: str | None = None   # local Kanban stage (see gtd_settings)
+    sort_key: float | None = None       # manual (drag) rank within a group/column
     archived_at: str | None = None      # set → archived (hidden from active views)
     waiting_on: PersonModel | None = None
     delegated_at: str | None = None
@@ -208,6 +209,7 @@ def _row_to_item(row: Any) -> GtdItemModel:
         assignee=_person(row.assignee),
         is_mine=bool(row.is_mine),
         workflow_stage=getattr(row, "workflow_stage", None),
+        sort_key=getattr(row, "sort_key", None),
         archived_at=_iso(getattr(row, "archived_at", None)),
         waiting_on=_person(getattr(row, "waiting_on", None)),
         delegated_at=_iso(getattr(row, "delegated_at", None)),

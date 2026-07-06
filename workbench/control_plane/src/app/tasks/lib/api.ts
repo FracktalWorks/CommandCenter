@@ -65,6 +65,7 @@ function mapItem(raw: Raw): GtdItem {
     assignee: asPerson(raw.assignee),
     providerStatus: raw.provider_status ? String(raw.provider_status) : undefined,
     workflowStage: raw.workflow_stage ? String(raw.workflow_stage) : undefined,
+    sortKey: raw.sort_key == null ? undefined : Number(raw.sort_key),
     archivedAt: raw.archived_at ? String(raw.archived_at) : undefined,
     providerUrl: raw.provider_url ? String(raw.provider_url) : undefined,
     syncState: (raw.sync_state ?? "local") as GtdItem["syncState"],
@@ -298,6 +299,7 @@ export async function apiPatchItem(
     due_at?: string;
     provider_status?: string;
     workflow_stage?: string;
+    sort_key?: number;
     assignee?: { name: string; email?: string; provider_user_id?: string };
     clear_assignee?: boolean;
   }

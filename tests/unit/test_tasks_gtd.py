@@ -15,7 +15,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import HTTPException
 from gateway.routes.tasks import ai as tasks_ai
-from gateway.routes.tasks.items import DISPOSITIONS, VIEW_WHERE, _parse_ts
+from gateway.routes.tasks.items import (
+    DISPOSITIONS,
+    VIEW_WHERE,
+    ItemPatch,
+    _build_item_update,
+    _parse_ts,
+)
 from gateway.routes.tasks.providers import (
     ClickUpProvider,
     build_provider,
@@ -291,6 +297,38 @@ def test_workflow_stages_normalizes_and_defaults():
     assert _stages([]) == DEFAULT_WORKFLOW_STAGES
     assert _stages("not json") == DEFAULT_WORKFLOW_STAGES
     assert DEFAULT_WORKFLOW_STAGES[-1] == "DONE"  # last stage = the done stage
+
+
+def test_patch_sets_sort_key_including_zero():
+    # A drag writes a fractional rank; 0.0 is a legitimate rank (top of a
+    # group), so the builder must emit the clause for it — a truthiness check
+    # would silently drop sort_key=0.
+    sets, params = _build_item_update("id1", "u", ItemPatch(sort_key=0.0))
+    assert "sort_key = :sortkey" in sets
+    assert params["sortkey"] == 0.0
+
+    sets, params = _build_item_update("id1", "u", ItemPatch(sort_key=1500.5))
+    assert params["sortkey"] == 1500.5
+
+
+def test_patch_omits_sort_key_when_absent():
+    # An unrelated patch (e.g. a note edit) must not touch sort_key.
+    sets, params = _build_item_update("id1", "u", ItemPatch(notes="hi"))
+    assert not any("sort_key" in s for s in sets)
+    assert "sortkey" not in params
+
+
+def test_list_items_orders_by_sort_key_before_created_at():
+    # The board/list manual order must sort ranked rows first (NULLS LAST) and
+    # keep LOCAL-first; a code read guards the ORDER BY contract.
+    import inspect
+
+    from gateway.routes.tasks import items as items_mod
+
+    src = inspect.getsource(items_mod.list_items)
+    assert "sort_key ASC NULLS LAST" in src
+    # LOCAL rows still win over the synced mirror regardless of rank.
+    assert "(i.source = 'LOCAL') DESC" in src
 
 
 def test_dispositions_are_the_canonical_set():

@@ -99,6 +99,8 @@ export interface GtdItem {
   providerStatus?: string;
   /** the task's stage on the local Kanban board (configured in settings) */
   workflowStage?: string;
+  /** manual (drag) rank within a group/column; unset → created-at ordering */
+  sortKey?: number;
   /** when set, the task is archived (hidden from active views) */
   archivedAt?: string;
   /** sync lifecycle: 'local' (ours) · 'pending' (queued to push to the PM tool,

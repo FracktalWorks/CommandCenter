@@ -417,6 +417,10 @@ export default function EmailPage() {
           t.isContentEditable);
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
       if (composeOpen || showAddModal || showOnboarding || paletteOpen) return;
+      // An automation scene (Rapid Inbox / Assistant / Chat / …) replaces the
+      // inbox panes and owns its own shortcuts — don't act on the background
+      // selectedEmail while one is open.
+      if (automationFeature) return;
 
       const em = selectedEmail;
       switch (e.key) {
@@ -461,7 +465,7 @@ export default function EmailPage() {
   }, [
     selectedEmail, navigateList, openCompose, handleToolbarAction,
     updateEmail, deleteEmail, composeOpen, showAddModal, showOnboarding,
-    paletteOpen,
+    paletteOpen, automationFeature,
   ]);
 
   // Command palette entries (Cmd/Ctrl+K).

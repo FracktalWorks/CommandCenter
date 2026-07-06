@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
-  Loader2, Reply, Clock, PenLine, Mail, Check, CheckCircle2, RotateCcw,
+  Loader2, Reply, ReplyAll, Clock, PenLine, Mail, Check, CheckCircle2, RotateCcw,
   Info, Newspaper, Megaphone, Calendar, Receipt, Bell, Snowflake,
   Archive, Trash2, ChevronRight, Send, Search, X, Sparkles, Paperclip,
   BellRing, Keyboard, CircleDashed,
@@ -12,6 +12,8 @@ import {
   updateEmail, deleteEmail, saveDraft, sendDraft, composeAssist,
   listSenders, scanFollowUps,
 } from "../../lib/api";
+import { useEmailStore } from "../../lib/emailStore";
+import { AiAssistBar } from "../ComposerAI";
 import { ReplyZeroThread, Email } from "../../lib/types";
 import { timeLabel, fullDateLabel } from "../../lib/utils";
 import { deterministicPreset, presetHex, textOn } from "../../lib/labelColors";
@@ -920,8 +922,8 @@ function RapidCard({
                     onClick={onOpenReply}
                     className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-muted-foreground border border-border hover:text-primary hover:bg-primary/10 transition-colors"
                   >
-                    <Reply size={13} />
-                    {item.draftId ? "Review draft" : cat.bucket === "awaiting" ? "Nudge" : "Reply"}
+                    <ReplyAll size={13} />
+                    {item.draftId ? "Review draft" : cat.bucket === "awaiting" ? "Nudge" : "Reply All"}
                   </button>
                 </div>
               ))}
@@ -947,22 +949,53 @@ function InlineReply({
 }) {
   const [body, setBody] = useState(item.draftPreview || "");
   const [to, setTo] = useState(item.fromEmail);
+  const [cc, setCc] = useState("");
+  const [replyAll, setReplyAll] = useState(true);
   const [drafting, setDrafting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
   const [savedTo, setSavedTo] = useState(!!item.draftId);
   const [error, setError] = useState<string | null>(null);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiInstruction, setAiInstruction] = useState("");
   // The local draft id we update in place (seeded from any auto-created draft).
   const draftIdRef = useRef<string | null>(item.draftId ?? null);
+
+  // Own email for filtering self from reply-all recipients.
+  const ownEmail = useEmailStore((s) =>
+    s.accounts.find((a) => a.id === accountId)?.emailAddress?.toLowerCase()
+  );
 
   const subject = useMemo(() => {
     const s = full?.subject || item.subject || "";
     return s.startsWith("Re:") ? s : `Re: ${s}`;
   }, [full, item.subject]);
 
+  // Build reply-all recipients: To = from + to (minus self), Cc = cc (minus self).
+  const replyAllRecips = useMemo(() => {
+    if (!full?.from?.email) return { to: item.fromEmail, cc: "" };
+    const toList = [full.from.email];
+    (full.to || []).forEach((t) => { if (t.email) toList.push(t.email); });
+    const toFiltered = [...new Set(toList)].filter((e) => e.toLowerCase() !== ownEmail);
+    const ccFiltered = (full.cc || [])
+      .map((c) => c.email)
+      .filter((e) => e && e.toLowerCase() !== ownEmail);
+    return { to: toFiltered.join(", "), cc: ccFiltered.join(", ") };
+  }, [full, ownEmail, item.fromEmail]);
+
+  // Populate To/Cc from the email data. When replyAll changes, recompute.
   useEffect(() => {
-    if (full?.from?.email) setTo(full.from.email);
-  }, [full]);
+    if (replyAll && full?.from?.email) {
+      setTo(replyAllRecips.to);
+      setCc(replyAllRecips.cc);
+    } else if (full?.from?.email) {
+      setTo(full.from.email);
+      setCc("");
+    } else {
+      setTo(item.fromEmail);
+      setCc("");
+    }
+  }, [full, replyAll, replyAllRecips, item.fromEmail]);
 
   // From scratch → the Reply Zero contextual drafter (memory + agents).
   const draftWithAi = async () => {
@@ -979,22 +1012,32 @@ function InlineReply({
     }
   };
 
-  // In place → the shared compose-assist improver (same as the main composer).
-  const improveWithAi = async () => {
+  // Run AI draft/improve with optional instruction (wired to AiAssistBar).
+  const runAiDraft = async (instruction?: string) => {
     setDrafting(true);
     setError(null);
     try {
-      const res = await composeAssist({
-        accountId,
-        body,
-        mode: "reply",
-        messageId: item.messageId,
-        to: to.split(",").map((s) => s.trim()).filter(Boolean),
-        subject,
-      });
-      if (res.draft) { setBody(res.draft); setSavedTo(false); }
+      const toList = to.split(",").map((s) => s.trim()).filter(Boolean);
+      if (!body.trim()) {
+        const res = await draftReplySmart(accountId, item.messageId, false, followUp);
+        if (res.draft) setBody(res.draft);
+      } else {
+        const res = await composeAssist({
+          accountId,
+          body,
+          mode: "reply",
+          messageId: item.messageId,
+          to: toList,
+          subject,
+          instruction: instruction || undefined,
+        });
+        if (res.draft) setBody(res.draft);
+      }
+      setSavedTo(false);
+      setAiOpen(false);
+      setAiInstruction("");
     } catch {
-      setError("AI couldn't improve this draft.");
+      setError("AI couldn't process this draft.");
     } finally {
       setDrafting(false);
     }
@@ -1002,11 +1045,12 @@ function InlineReply({
 
   /** Persist the current body as a provider draft (create or update in place). */
   const persist = async (): Promise<string | null> => {
+    const toList = to.split(",").map((s) => s.trim()).filter(Boolean);
     const saved = await saveDraft({
       accountId,
       draftId: draftIdRef.current ?? undefined,
       replyToMessageId: draftIdRef.current ? undefined : item.messageId,
-      to: to.split(",").map((s) => s.trim()).filter(Boolean),
+      to: toList,
       subject,
       body,
     });
@@ -1047,6 +1091,29 @@ function InlineReply({
 
   return (
     <div className="border-t border-border px-3 py-3 space-y-2 bg-secondary/20">
+      {/* Reply All / Sender toggle */}
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] text-muted-foreground">Reply to</span>
+        <div className="flex items-center bg-background rounded-md p-0.5">
+          <button
+            onClick={() => setReplyAll(true)}
+            className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors ${
+              replyAll ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <ReplyAll size={11} /> All
+          </button>
+          <button
+            onClick={() => setReplyAll(false)}
+            className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] transition-colors ${
+              !replyAll ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <Reply size={11} /> Sender
+          </button>
+        </div>
+      </div>
+
       <div className="flex items-center gap-2">
         <span className="text-[11px] text-muted-foreground w-10 flex-shrink-0">To</span>
         <input
@@ -1055,10 +1122,34 @@ function InlineReply({
           className="flex-1 bg-transparent text-xs text-foreground outline-none border-b border-border/60 pb-0.5"
         />
       </div>
+      {(cc || replyAll) && (
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-muted-foreground w-10 flex-shrink-0">Cc</span>
+          <input
+            value={cc}
+            onChange={(e) => setCc(e.target.value)}
+            placeholder="Optional CC"
+            className="flex-1 bg-transparent text-xs text-foreground outline-none border-b border-border/60 pb-0.5"
+          />
+        </div>
+      )}
       <div className="flex items-center gap-2">
         <span className="text-[11px] text-muted-foreground w-10 flex-shrink-0">Subj</span>
         <span className="text-xs text-foreground truncate">{subject}</span>
       </div>
+
+      {/* AI Assist Bar (shown when toggled open AND there's body text) */}
+      {aiOpen && hasText && (
+        <AiAssistBar
+          instruction={aiInstruction}
+          onInstruction={setAiInstruction}
+          busy={drafting}
+          hasText={hasText}
+          onRun={() => runAiDraft(aiInstruction || undefined)}
+          onClose={() => { setAiOpen(false); setAiInstruction(""); }}
+        />
+      )}
+
       <textarea
         value={body}
         onChange={(e) => { setBody(e.target.value); setSavedTo(false); }}
@@ -1069,15 +1160,27 @@ function InlineReply({
       />
       {error && <div className="text-[11px] text-destructive">{error}</div>}
       <div className="flex items-center gap-2 flex-wrap">
-        <button
-          onClick={hasText ? improveWithAi : draftWithAi}
-          disabled={drafting}
-          title={hasText ? "Improve this draft with AI" : "Draft a context-aware reply with memory + specialist agents"}
-          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] text-muted-foreground border border-border hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-50"
-        >
-          {drafting ? <Loader2 className="animate-spin" size={12} /> : <Sparkles size={12} />}
-          {hasText ? "Improve with AI" : followUp ? "Draft nudge" : "Draft with AI"}
-        </button>
+        {/* Sparkles: toggles AI bar when body has text; drafts from scratch when empty */}
+        {hasText ? (
+          <button
+            onClick={() => setAiOpen(!aiOpen)}
+            disabled={drafting}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] border border-border transition-colors disabled:opacity-50 ${
+              aiOpen ? "bg-primary/10 text-primary border-primary" : "text-muted-foreground hover:text-primary hover:bg-primary/10"
+            }`}
+          >
+            <Sparkles size={12} /> Improve with AI
+          </button>
+        ) : (
+          <button
+            onClick={() => runAiDraft()}
+            disabled={drafting}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] text-muted-foreground border border-border hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-50"
+          >
+            {drafting ? <Loader2 className="animate-spin" size={12} /> : <Sparkles size={12} />}
+            {followUp ? "Draft nudge" : "Draft with AI"}
+          </button>
+        )}
         {savedTo ? (
           <span className="flex items-center gap-1 text-[11px] text-emerald-400">
             <Check size={12} /> Saved to Drafts
@@ -1117,7 +1220,7 @@ function InlineReply({
 const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: "j / k", label: "Move" },
   { keys: "↵", label: "Open" },
-  { keys: "r", label: "Reply" },
+  { keys: "r", label: "Reply All" },
   { keys: "e", label: "Archive" },
   { keys: "#", label: "Delete" },
   { keys: "d", label: "Done" },

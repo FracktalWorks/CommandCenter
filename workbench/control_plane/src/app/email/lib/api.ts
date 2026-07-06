@@ -248,6 +248,9 @@ export interface ListEmailsParams {
   folder?: string;
   /** Filter to messages carrying this label/category. */
   label?: string;
+  /** Filter to messages whose SENDER has this category (email_senders) —
+   *  the always-on categorizer that also powers the Inbox Cleaner. */
+  senderCategory?: string;
   query?: string;
   page?: number;
   pageSize?: number;
@@ -267,6 +270,7 @@ export async function listEmails(
   if (params.accountId) searchParams.set("account_id", params.accountId);
   if (params.folder) searchParams.set("folder", params.folder);
   if (params.label) searchParams.set("label", params.label);
+  if (params.senderCategory) searchParams.set("sender_category", params.senderCategory);
   if (params.query) searchParams.set("query", params.query);
   if (params.page) searchParams.set("page", String(params.page));
   if (params.pageSize) searchParams.set("page_size", String(params.pageSize));

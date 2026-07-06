@@ -81,12 +81,15 @@ export function ListsSidebar({
   const openWorkspaces = useTaskStore((s) => s.openWorkspaces);
   const openSettings = useTaskStore((s) => s.openSettings);
   const loadArchive = useTaskStore((s) => s.loadArchive);
+  const loadLocalHierarchy = useTaskStore((s) => s.loadLocalHierarchy);
   const sourceFilter = useTaskStore((s) => s.sourceFilter);
   const setSourceFilter = useTaskStore((s) => s.setSourceFilter);
   const selectView: typeof selectViewRaw = (v) => {
     selectViewRaw(v);
     // Archived tasks aren't in the normal hydrate — pull them on demand.
     if (v === "archive") void loadArchive();
+    // The Projects tree (local spaces/folders) is loaded lazily on open.
+    if (v === "projects") void loadLocalHierarchy();
     onNavigate?.();
   };
   const selectContext: typeof selectContextRaw = (c) => {

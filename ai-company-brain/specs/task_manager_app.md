@@ -731,8 +731,24 @@ suggested subtasks); editable `LocalSubtasksSection` in the detail (add/complete
 open, keyed remount); subtask-count badge on `TaskCard`. Tests: `create_task`
 parent + subtask-exclusion/count contract + OrganizeRequest.subtasks (61).
 
-**Still building (Process deepening Phase 3):** Projects-view hierarchy — Local
-vs ClickUp tree (Spaces→Folders→Projects→Tasks→Subtasks), local hierarchy schema.
+(9) **Process deepening — Phase 3: Projects-view hierarchy (2026-07-06,
+migration 60).** The Projects view is now a navigable TREE, not a flat list, with
+two source-distinguished sections: one per connected workspace (**ClickUp**
+account → Space → Folder → List[=project] → Task → Subtask, from
+`account.hierarchy` + `providerRef` match) and a **Local** section (our Space →
+Folder → Project → Task → Subtask). LOCAL hierarchy schema: `gtd_spaces`,
+`gtd_folders`, `gtd_projects.space_id/folder_id` (all LOCAL-only — SYNCED
+projects' tree stays the provider's). New `hierarchy.py` module: `GET
+/tasks/hierarchy` (local spaces/folders/local-projects flat lists the client
+nests) + `POST /tasks/spaces|folders|local-projects` (a folder pins its space
+server-side). Store `localHierarchy` + `loadLocalHierarchy` (lazy on Projects
+open, like `loadArchive`) + `createLocalSpace/Folder/Project`. `ProjectsList.tsx`
+rebuilt: recursive `TreeNode`/`ProjectNode`/`TaskNode` (tasks + subtasks
+lazy-load per node via `loadSubtasks`), inline space/folder/project creators,
+not-mirrored ClickUp lists shown muted+disabled, no-next-action warning + open-
+task count per project. Tests: hierarchy routes registered + model placement +
+CreateLocalProjectRequest defaults (64). GtdProject gained `spaceId/folderId`.
+
 **Still not built (from §7 wishlist):** EngageView, WeeklyReview, WaitingForView
 (dedicated), HorizonsView, ProjectPlanner.
 

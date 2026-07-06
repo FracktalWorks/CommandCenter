@@ -100,6 +100,8 @@ class GtdProjectModel(BaseModel):
     purpose: str | None = None
     status: str = "ACTIVE"
     has_next_action: bool = False
+    space_id: str | None = None      # LOCAL tree placement (see gtd_spaces)
+    folder_id: str | None = None     # LOCAL tree placement (see gtd_folders)
     created_at: str | None = None
 
 
@@ -241,6 +243,10 @@ def _row_to_project(row: Any) -> GtdProjectModel:
         purpose=row.purpose,
         status=row.status,
         has_next_action=bool(row.has_next_action),
+        space_id=(str(row.space_id)
+                  if getattr(row, "space_id", None) else None),
+        folder_id=(str(row.folder_id)
+                   if getattr(row, "folder_id", None) else None),
         created_at=_iso(row.created_at),
     )
 

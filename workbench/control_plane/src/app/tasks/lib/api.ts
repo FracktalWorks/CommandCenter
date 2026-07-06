@@ -101,6 +101,8 @@ function mapProject(raw: Raw): GtdProject {
     provider: (raw.provider ?? undefined) as ProviderKind | undefined,
     accountId: raw.account_id ? String(raw.account_id) : undefined,
     providerRef: raw.provider_ref ? String(raw.provider_ref) : undefined,
+    spaceId: raw.space_id ? String(raw.space_id) : undefined,
+    folderId: raw.folder_id ? String(raw.folder_id) : undefined,
     outcome: String(raw.outcome ?? ""),
     purpose: raw.purpose ? String(raw.purpose) : undefined,
     status: String(raw.status ?? "ACTIVE") as GtdProject["status"],
@@ -459,6 +461,104 @@ export async function apiCreateAccountProject(
     projectId: String(r.project_id ?? ""),
     providerRef: String(r.provider_ref ?? ""),
     name: String(r.name ?? req.name),
+  };
+}
+
+// ── Local hierarchy (Spaces → Folders → Projects) ───────────────────────────
+
+export interface LocalSpace {
+  id: string;
+  name: string;
+}
+export interface LocalFolder {
+  id: string;
+  spaceId: string;
+  name: string;
+}
+export interface LocalProjectNode {
+  id: string;
+  outcome: string;
+  spaceId?: string;
+  folderId?: string;
+  hasNextAction: boolean;
+  status: string;
+}
+export interface LocalHierarchy {
+  spaces: LocalSpace[];
+  folders: LocalFolder[];
+  projects: LocalProjectNode[];
+}
+
+/** The LOCAL Space→Folder→Project tree (SYNCED projects live on their account
+ *  hierarchy, not here). */
+export async function fetchLocalHierarchy(): Promise<LocalHierarchy> {
+  const r = await gatewayFetch<Raw>(`/hierarchy`);
+  return {
+    spaces: ((r.spaces as Raw[]) ?? []).map((s) => ({
+      id: String(s.id ?? ""),
+      name: String(s.name ?? ""),
+    })),
+    folders: ((r.folders as Raw[]) ?? []).map((f) => ({
+      id: String(f.id ?? ""),
+      spaceId: String(f.space_id ?? ""),
+      name: String(f.name ?? ""),
+    })),
+    projects: ((r.projects as Raw[]) ?? []).map((p) => ({
+      id: String(p.id ?? ""),
+      outcome: String(p.outcome ?? ""),
+      spaceId: p.space_id ? String(p.space_id) : undefined,
+      folderId: p.folder_id ? String(p.folder_id) : undefined,
+      hasNextAction: Boolean(p.has_next_action),
+      status: String(p.status ?? "ACTIVE"),
+    })),
+  };
+}
+
+export async function apiCreateSpace(name: string): Promise<LocalSpace> {
+  const r = await gatewayFetch<Raw>(`/spaces`, {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+  return { id: String(r.id ?? ""), name: String(r.name ?? name) };
+}
+
+export async function apiCreateFolder(
+  spaceId: string,
+  name: string,
+): Promise<LocalFolder> {
+  const r = await gatewayFetch<Raw>(`/folders`, {
+    method: "POST",
+    body: JSON.stringify({ space_id: spaceId, name }),
+  });
+  return {
+    id: String(r.id ?? ""),
+    spaceId: String(r.space_id ?? spaceId),
+    name: String(r.name ?? name),
+  };
+}
+
+export async function apiCreateLocalProject(req: {
+  outcome: string;
+  spaceId?: string;
+  folderId?: string;
+  purpose?: string;
+}): Promise<LocalProjectNode> {
+  const r = await gatewayFetch<Raw>(`/local-projects`, {
+    method: "POST",
+    body: JSON.stringify({
+      outcome: req.outcome,
+      space_id: req.spaceId ?? null,
+      folder_id: req.folderId ?? null,
+      purpose: req.purpose ?? null,
+    }),
+  });
+  return {
+    id: String(r.id ?? ""),
+    outcome: String(r.outcome ?? req.outcome),
+    spaceId: r.space_id ? String(r.space_id) : undefined,
+    folderId: r.folder_id ? String(r.folder_id) : undefined,
+    hasNextAction: Boolean(r.has_next_action),
+    status: String(r.status ?? "ACTIVE"),
   };
 }
 

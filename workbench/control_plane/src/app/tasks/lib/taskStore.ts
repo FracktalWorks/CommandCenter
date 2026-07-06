@@ -51,6 +51,11 @@ import {
   fetchItems,
   fetchPeople,
   fetchProjects,
+  fetchLocalHierarchy,
+  apiCreateSpace,
+  apiCreateFolder,
+  apiCreateLocalProject,
+  type LocalHierarchy,
   type OrganizeBody,
   type TaskAccount,
 } from "./api";
@@ -430,6 +435,18 @@ interface TaskState {
   dismissUndo: () => void;
   /** Load live data from the gateway; silently stays on mock data if absent. */
   hydrate: () => Promise<void>;
+  /** The LOCAL Space→Folder→Project tree (Projects view). Loaded lazily when
+   *  the Projects view opens; null until then. */
+  localHierarchy: LocalHierarchy | null;
+  loadLocalHierarchy: () => Promise<void>;
+  /** Create a local space / folder / project; refreshes the tree + projects. */
+  createLocalSpace: (name: string) => Promise<void>;
+  createLocalFolder: (spaceId: string, name: string) => Promise<void>;
+  createLocalProject: (req: {
+    outcome: string;
+    spaceId?: string;
+    folderId?: string;
+  }) => Promise<void>;
   /** Re-fetch connected workspaces (after connect/refresh in the modal). */
   refreshAccounts: () => Promise<void>;
   /** Disconnect a workspace account. */
@@ -493,6 +510,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   loading: true,
   providers: CONNECTED_PROVIDERS,
   accounts: [],
+  localHierarchy: null,
 
   selectedView: "inbox",
   selectedContext: null,
@@ -874,6 +892,37 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     } catch {
       /* keep current state */
     }
+  },
+
+  loadLocalHierarchy: async () => {
+    if (get().backend !== "live") return;
+    try {
+      set({ localHierarchy: await fetchLocalHierarchy() });
+    } catch {
+      /* keep current */
+    }
+  },
+
+  createLocalSpace: async (name) => {
+    if (!name.trim() || get().backend !== "live") return;
+    await apiCreateSpace(name.trim());
+    await get().loadLocalHierarchy();
+  },
+
+  createLocalFolder: async (spaceId, name) => {
+    if (!name.trim() || get().backend !== "live") return;
+    await apiCreateFolder(spaceId, name.trim());
+    await get().loadLocalHierarchy();
+  },
+
+  createLocalProject: async (req) => {
+    if (!req.outcome.trim() || get().backend !== "live") return;
+    await apiCreateLocalProject({ ...req, outcome: req.outcome.trim() });
+    // A new project shows in BOTH the tree and the flat projects list.
+    await Promise.all([
+      get().loadLocalHierarchy(),
+      fetchProjects().then((projects) => set({ projects })).catch(() => {}),
+    ]);
   },
 
   deleteItem: (id) => {

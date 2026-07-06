@@ -407,6 +407,35 @@ def test_organize_request_accepts_subtasks():
     assert req.subtasks == ["step one", "step two"]
 
 
+def test_local_hierarchy_routes_are_registered():
+    # The Projects-view tree depends on these local hierarchy endpoints.
+    from gateway.routes.tasks import router
+
+    paths = {getattr(r, "path", "") for r in router.routes}
+    for p in ("/tasks/hierarchy", "/tasks/spaces", "/tasks/folders",
+              "/tasks/local-projects"):
+        assert p in paths, f"missing hierarchy route {p}"
+
+
+def test_create_local_project_request_defaults():
+    from gateway.routes.tasks.hierarchy import CreateLocalProjectRequest
+
+    # A project can be created ungrouped (no space/folder) — both default None.
+    req = CreateLocalProjectRequest(outcome="Ship v2")
+    assert req.space_id is None and req.folder_id is None
+    # Or placed in a folder (which pins the space server-side).
+    req2 = CreateLocalProjectRequest(outcome="Ship v2", folder_id="f1")
+    assert req2.folder_id == "f1"
+
+
+def test_project_model_carries_hierarchy_placement():
+    from gateway.routes.tasks.core import GtdProjectModel
+
+    p = GtdProjectModel(id="p1", outcome="Do the thing",
+                        space_id="s1", folder_id="f1")
+    assert p.space_id == "s1" and p.folder_id == "f1"
+
+
 def test_workflow_stages_normalizes_and_defaults():
     from gateway.routes.tasks.settings import (
         DEFAULT_WORKFLOW_STAGES,

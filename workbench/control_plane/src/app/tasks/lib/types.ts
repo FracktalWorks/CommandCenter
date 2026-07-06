@@ -54,6 +54,10 @@ export interface GtdProject {
   /** native project/list id in the tool (ClickUp list id) — the accordion
    *  picker selects by this */
   providerRef?: string;
+  /** LOCAL tree placement (Space→Folder→Project). NULL on SYNCED (their tree
+   *  is the provider's) or on an ungrouped local project. */
+  spaceId?: string;
+  folderId?: string;
   /** the desired outcome / "wild success" statement (the title) */
   outcome: string;
   /** natural-planning: why this matters */

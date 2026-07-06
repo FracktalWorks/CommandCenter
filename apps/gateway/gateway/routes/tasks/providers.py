@@ -280,6 +280,12 @@ class ClickUpProvider(BaseTaskProvider):
             body["description"] = payload["description"] or ""
         if payload.get("status"):
             body["status"] = payload["status"]
+        # Mark done → set the task's list's closed-type status (its name varies
+        # per workspace: Complete / Closed / Done …). Look it up from the task.
+        if payload.get("mark_done") and "status" not in body:
+            closed = await self._closed_status_for(provider_task_id)
+            if closed:
+                body["status"] = closed
         if "due_at_ms" in payload:
             body["due_date"] = (int(payload["due_at_ms"])
                                 if payload["due_at_ms"] else None)
@@ -312,6 +318,20 @@ class ClickUpProvider(BaseTaskProvider):
             "provider_url": t.get("url"),
             "provider_status": (t.get("status") or {}).get("status"),
         }
+
+    async def _closed_status_for(self, provider_task_id: str) -> str | None:
+        """The closed/done-type status name of a task's list (varies per
+        workspace). Best-effort: returns None if it can't be resolved."""
+        with contextlib.suppress(ProviderError, KeyError, TypeError):
+            task = await self._get(f"/task/{provider_task_id}")
+            list_id = str((task.get("list") or {}).get("id") or "")
+            if not list_id:
+                return None
+            lst = await self._get(f"/list/{list_id}")
+            for st in lst.get("statuses") or []:
+                if (st.get("type") or "").lower() in ("closed", "done"):
+                    return st.get("status")
+        return None
 
     async def list_members(self, workspace_id: str) -> list[dict[str, Any]]:
         members: list[dict[str, Any]] = []

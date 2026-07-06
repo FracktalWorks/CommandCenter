@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, Settings2, Sparkles, Inbox, RefreshCw } from "lucide-react";
+import {
+  X, Settings2, Sparkles, Inbox, RefreshCw,
+  Columns3, ChevronUp, ChevronDown, Plus,
+} from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import type { TaskSettings } from "../lib/api";
 
@@ -259,7 +262,130 @@ function SettingsPanel() {
               the Workspaces dialog.
             </p>
           </section>
+
+          {/* ── Board (Kanban stages for Next Actions) ── */}
+          <section>
+            <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <Columns3 className="h-3.5 w-3.5" /> Kanban stages
+            </h3>
+            <p className="mb-2 px-1 text-[11px] text-muted-foreground">
+              The columns of your Next Actions board. Drag a card to move it
+              between stages; the <span className="font-medium">last</span> stage
+              marks a task done (and closes it in ClickUp).
+            </p>
+            <StageEditor
+              stages={settings.workflowStages}
+              onChange={(next) => void updateSettings({ workflowStages: next })}
+            />
+          </section>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function StageEditor({
+  stages,
+  onChange,
+}: {
+  stages: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [adding, setAdding] = useState("");
+
+  const rename = (idx: number, name: string) =>
+    onChange(stages.map((s, i) => (i === idx ? name : s)));
+  const remove = (idx: number) =>
+    onChange(stages.filter((_, i) => i !== idx));
+  const move = (idx: number, dir: -1 | 1) => {
+    const j = idx + dir;
+    if (j < 0 || j >= stages.length) return;
+    const next = [...stages];
+    [next[idx], next[j]] = [next[j], next[idx]];
+    onChange(next);
+  };
+  const add = () => {
+    const name = adding.trim();
+    if (!name) return;
+    onChange([...stages, name]);
+    setAdding("");
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {stages.map((stage, idx) => {
+        const isLast = idx === stages.length - 1;
+        return (
+          <div
+            key={idx}
+            className="flex items-center gap-1.5 rounded-lg border border-border px-2 py-1.5"
+          >
+            <div className="flex flex-col">
+              <button
+                type="button"
+                aria-label="Move up"
+                disabled={idx === 0}
+                onClick={() => move(idx, -1)}
+                className="tech-transition text-muted-foreground/60 hover:text-foreground disabled:opacity-30"
+              >
+                <ChevronUp className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                aria-label="Move down"
+                disabled={isLast}
+                onClick={() => move(idx, 1)}
+                className="tech-transition text-muted-foreground/60 hover:text-foreground disabled:opacity-30"
+              >
+                <ChevronDown className="h-3 w-3" />
+              </button>
+            </div>
+            <input
+              value={stage}
+              onChange={(e) => rename(idx, e.target.value)}
+              onBlur={(e) => {
+                // Never allow an empty stage name — restore a placeholder.
+                if (!e.target.value.trim()) rename(idx, `Stage ${idx + 1}`);
+              }}
+              className="min-w-0 flex-1 rounded-md bg-transparent px-1.5 py-1 text-[13px] text-foreground focus:bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"
+            />
+            {isLast && (
+              <span className="shrink-0 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-success">
+                Done
+              </span>
+            )}
+            <button
+              type="button"
+              aria-label={`Remove ${stage}`}
+              disabled={stages.length <= 1}
+              onClick={() => remove(idx)}
+              className="tech-transition shrink-0 rounded p-1 text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive disabled:opacity-30"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        );
+      })}
+      <div className="flex items-center gap-1.5 rounded-lg border border-dashed border-border px-2 py-1.5">
+        <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <input
+          value={adding}
+          onChange={(e) => setAdding(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); add(); }
+          }}
+          placeholder="Add a stage…"
+          className="min-w-0 flex-1 bg-transparent px-0.5 py-1 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
+        />
+        {adding.trim() && (
+          <button
+            type="button"
+            onClick={add}
+            className="tech-transition shrink-0 rounded-md bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground hover:opacity-90"
+          >
+            Add
+          </button>
+        )}
       </div>
     </div>
   );

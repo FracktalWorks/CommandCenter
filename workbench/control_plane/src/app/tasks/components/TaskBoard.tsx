@@ -1,23 +1,24 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { GtdItem, ViewKey } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { TaskCard } from "./TaskCard";
 
-// A Kanban board over the current view's items. Columns are chosen by view:
-//   next     → by @context (the GTD-native grouping)
+// A Kanban board over the current view's items (Jira/ClickUp-style). Columns:
+//   next     → the user's configured WORKFLOW STAGES (settings.workflowStages);
+//              context becomes a card chip. Dropping on the LAST stage marks the
+//              task DONE (backend). Fixed columns — empty stages still show.
 //   waiting  → by provider stage (or "No stage")
 //   someday  → by provider stage (or a single column)
 //   default  → by disposition
-// Dragging a card to another column re-files it (updateItem patches the field
-// that column represents) — for a SYNCED task that back-syncs to ClickUp via
-// the existing PATCH path. Native HTML5 DnD, no extra deps.
+// Dragging a card re-files it via updateItem — for a SYNCED task that back-syncs
+// to the connected tool through the PATCH path. Native HTML5 DnD, no extra deps.
 
-type ColumnKind = "context" | "stage" | "disposition";
+type ColumnKind = "workflow" | "stage" | "disposition";
 
 function columnKindFor(view: ViewKey): ColumnKind {
-  if (view === "next") return "context";
+  if (view === "next") return "workflow";
   if (view === "waiting" || view === "someday") return "stage";
   return "disposition";
 }
@@ -25,29 +26,35 @@ function columnKindFor(view: ViewKey): ColumnKind {
 const UNSET = "—"; // em-dash sentinel for the "no value" column
 
 export function TaskBoard({ items, view }: { items: GtdItem[]; view: ViewKey }) {
-  const contexts = useTaskStore((s) => s.contexts);
   const accounts = useTaskStore((s) => s.accounts);
+  const workflowStages = useTaskStore((s) => s.settings.workflowStages);
   const updateItem = useTaskStore((s) => s.updateItem);
 
   const kind = columnKindFor(view);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<string | null>(null);
 
-  // Column keys for this view — a stable, ordered set from the schema plus any
-  // values present on the items (so nothing is hidden).
+  // For the workflow board an unstaged task sits in the FIRST configured stage.
+  const firstStage = workflowStages[0];
+  const stageOf = useCallback(
+    (i: GtdItem): string =>
+      kind === "workflow"
+        ? (i.workflowStage && workflowStages.includes(i.workflowStage)
+            ? i.workflowStage
+            : firstStage)
+        : (colValue(i, kind) ?? UNSET),
+    [kind, workflowStages, firstStage],
+  );
+
+  // Column keys for this view — a stable, ordered set.
   const columns = useMemo(() => {
+    if (kind === "workflow") {
+      return workflowStages.map((s) => ({ key: s, label: s }));
+    }
     const present = new Set<string>();
     for (const i of items) present.add(colValue(i, kind) ?? UNSET);
     const ordered: { key: string; label: string }[] = [];
-    if (kind === "context") {
-      for (const c of contexts)
-        if (present.has(c.name)) ordered.push({ key: c.name, label: c.name });
-      // any @context not in the seed list
-      for (const v of present)
-        if (v !== UNSET && !contexts.some((c) => c.name === v))
-          ordered.push({ key: v, label: v });
-      if (present.has(UNSET)) ordered.push({ key: UNSET, label: "No context" });
-    } else if (kind === "stage") {
+    if (kind === "stage") {
       const stages = accounts.flatMap((a) => a.statuses ?? []);
       const seen = new Set<string>();
       for (const s of stages)
@@ -59,17 +66,17 @@ export function TaskBoard({ items, view }: { items: GtdItem[]; view: ViewKey }) 
       for (const v of present) ordered.push({ key: v, label: v });
     }
     return ordered.length ? ordered : [{ key: UNSET, label: "All" }];
-  }, [items, kind, contexts, accounts]);
+  }, [items, kind, accounts, workflowStages]);
 
   const byColumn = useMemo(() => {
     const m = new Map<string, GtdItem[]>();
     for (const c of columns) m.set(c.key, []);
     for (const i of items) {
-      const k = colValue(i, kind) ?? UNSET;
+      const k = stageOf(i);
       (m.get(k) ?? m.set(k, []).get(k)!).push(i);
     }
     return m;
-  }, [items, columns, kind]);
+  }, [items, columns, stageOf]);
 
   const drop = (colKey: string) => {
     setOverCol(null);
@@ -77,10 +84,10 @@ export function TaskBoard({ items, view }: { items: GtdItem[]; view: ViewKey }) 
     const item = items.find((i) => i.id === dragId);
     setDragId(null);
     if (!item) return;
-    const target = colKey === UNSET ? "" : colKey;
-    if ((colValue(item, kind) ?? UNSET) === colKey) return; // no move
-    if (kind === "context") updateItem(item.id, { context: target });
-    else if (kind === "stage") updateItem(item.id, { providerStatus: target });
+    if (stageOf(item) === colKey) return; // no move
+    if (kind === "workflow") updateItem(item.id, { workflowStage: colKey });
+    else if (kind === "stage")
+      updateItem(item.id, { providerStatus: colKey === UNSET ? "" : colKey });
   };
 
   return (
@@ -130,9 +137,9 @@ export function TaskBoard({ items, view }: { items: GtdItem[]; view: ViewKey }) 
   );
 }
 
-/** The value that decides which column an item sits in, for a given kind. */
+/** The value that decides which column an item sits in, for the stage/
+ *  disposition kinds. (The "workflow" kind is handled by stageOf.) */
 function colValue(i: GtdItem, kind: ColumnKind): string | undefined {
-  if (kind === "context") return i.context || undefined;
   if (kind === "stage") return i.providerStatus || undefined;
   return i.disposition;
 }

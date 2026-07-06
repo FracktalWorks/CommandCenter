@@ -22,6 +22,7 @@ import { isCalendarItem, isTickled } from "./utils";
 import {
   accountToProviderEntry,
   apiBulkDispose,
+  apiArchiveItem,
   apiCapture,
   apiCaptureBatch,
   apiDeleteAccount,
@@ -106,6 +107,7 @@ export interface ItemMetaPatch {
   timeEstimateMins?: number;
   dueAt?: string;              // ISO; "" clears
   providerStatus?: string;    // the tool's stage
+  workflowStage?: string;     // the local Kanban stage (board move)
   assignee?: Person | null;   // null → unassign
 }
 
@@ -362,6 +364,12 @@ interface TaskState {
   quickDispose: (id: string, disposition: Disposition) => void;
   /** Apply the same disposition to many items at once (multi-select). */
   bulkDispose: (ids: string[], disposition: Disposition) => void;
+  /** Archive (hide from active views) or un-archive a task — independent of
+   *  DONE. Optimistic; the row moves to / from the Archive view. */
+  archiveItem: (id: string, archived: boolean) => void;
+  /** Lazily pull archived tasks into the store (they're excluded from the
+   *  normal hydrate) — called when the Archive view is opened. */
+  loadArchive: () => Promise<void>;
   /** PERMANENTLY delete an item (hard-remove the row, not a GTD "Trash"
    *  disposition). Optimistic + undoable (undo re-creates it). */
   deleteItem: (id: string) => void;
@@ -786,6 +794,36 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     if (get().backend === "live") sync(apiBulkDispose(ids, disposition));
   },
 
+  archiveItem: (id, archived) => {
+    const nowIso = new Date().toISOString();
+    set((s) => ({
+      items: s.items.map((i) =>
+        i.id === id
+          ? { ...i, archivedAt: archived ? nowIso : undefined, updatedAt: nowIso }
+          : i,
+      ),
+      // Close the pop-up if we're archiving the focused task.
+      focusedItemId:
+        archived && s.focusedItemId === id ? null : s.focusedItemId,
+    }));
+    if (get().backend === "live") sync(apiArchiveItem(id, archived));
+  },
+
+  loadArchive: async () => {
+    if (get().backend !== "live") return;
+    try {
+      const archived = await fetchItems("archive");
+      set((s) => {
+        // Merge: replace any existing rows by id, add the rest.
+        const byId = new Map(s.items.map((i) => [i.id, i]));
+        for (const a of archived) byId.set(a.id, a);
+        return { items: Array.from(byId.values()) };
+      });
+    } catch {
+      /* keep current state */
+    }
+  },
+
   deleteItem: (id) => {
     const target = get().items.find((i) => i.id === id);
     if (!target) return;
@@ -873,6 +911,20 @@ export const useTaskStore = create<TaskState>((set, get) => ({
             patch.providerStatus !== undefined
               ? patch.providerStatus
               : i.providerStatus,
+          workflowStage:
+            patch.workflowStage !== undefined
+              ? patch.workflowStage
+              : i.workflowStage,
+          // Dropping on the last configured stage marks the task DONE — mirror
+          // the backend optimistically so the card leaves the active board.
+          disposition:
+            patch.workflowStage !== undefined &&
+            patch.workflowStage ===
+              get().settings.workflowStages[
+                get().settings.workflowStages.length - 1
+              ]
+              ? "DONE"
+              : i.disposition,
           assignee:
             patch.assignee !== undefined
               ? patch.assignee ?? undefined
@@ -894,6 +946,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       if (patch.dueAt !== undefined) body.due_at = patch.dueAt;
       if (patch.providerStatus !== undefined)
         body.provider_status = patch.providerStatus;
+      if (patch.workflowStage !== undefined)
+        body.workflow_stage = patch.workflowStage;
       if (patch.assignee !== undefined) {
         if (patch.assignee === null) body.clear_assignee = true;
         else
@@ -1082,6 +1136,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     clarifyUseLlm: true,
     backgroundSync: true,
     mirrorDoneTasks: false,
+    workflowStages: ["TODO", "IN PROCESS", "WAITING FOR", "DONE"],
   },
 
   updateSettings: async (patch) => {
@@ -1139,6 +1194,9 @@ export function itemsForView(
 ): GtdItem[] {
   if (source === "local") items = items.filter((i) => i.source === "LOCAL");
   else if (source === "synced") items = items.filter((i) => i.source !== "LOCAL");
+  // Archived tasks are hidden everywhere except the Archive view.
+  if (view === "archive") return items.filter((i) => i.archivedAt);
+  items = items.filter((i) => !i.archivedAt);
   switch (view) {
     case "inbox":
       return items.filter((i) => i.disposition === "INBOX");
@@ -1165,9 +1223,10 @@ export function itemsForView(
 export function viewCounts(items: GtdItem[]): Record<ViewKey, number> {
   const c = {
     inbox: 0, next: 0, waiting: 0, calendar: 0, projects: 0,
-    someday: 0, reference: 0, engage: 0, horizons: 0,
+    someday: 0, reference: 0, archive: 0, engage: 0, horizons: 0,
   } as Record<ViewKey, number>;
   for (const i of items) {
+    if (i.archivedAt) continue; // archived rows never count toward active views
     if (i.disposition === "INBOX" && !isTickled(i)) c.inbox++;
     else if (i.disposition === "NEXT") c.next++;
     else if (i.disposition === "WAITING") c.waiting++;

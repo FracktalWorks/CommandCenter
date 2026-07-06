@@ -14,6 +14,7 @@ import {
   Cloud,
   LayoutList,
   Columns3,
+  Archive,
 } from "lucide-react";
 import { useTaskStore, itemsForView } from "../lib/taskStore";
 import { ViewKey } from "../lib/types";
@@ -57,6 +58,7 @@ const VIEW_META: Record<
   waiting: { title: "Waiting For", icon: Clock, hint: "Delegated or blocked on someone else." },
   calendar: { title: "Calendar", icon: Calendar, hint: "Date-specific actions — the hard landscape." },
   someday: { title: "Someday / Maybe", icon: Lightbulb, hint: "Incubating. Reviewed weekly." },
+  archive: { title: "Archive", icon: Archive, hint: "Archived tasks — hidden from active views. Restore anytime." },
 };
 
 // Fixed "now" for deterministic mock rendering (matches mockData's clock).
@@ -83,9 +85,9 @@ export function ItemList() {
   const meta = VIEW_META[view] ?? VIEW_META.inbox;
   const Icon = meta.icon;
   const overdueCount = visible.filter((i) => isOverdue(i, MOCK_NOW)).length;
-  // Calendar is inherently a date-ordered list; the board would be a single
-  // column, so keep it list-only. Everything else offers both.
-  const boardable = view !== "calendar";
+  // Calendar is date-ordered and Archive is a flat recovery list; the board
+  // adds nothing there, so keep them list-only. Everything else offers both.
+  const boardable = view !== "calendar" && view !== "archive";
 
   return (
     <div className="flex h-full flex-col">

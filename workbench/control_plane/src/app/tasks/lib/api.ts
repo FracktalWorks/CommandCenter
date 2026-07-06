@@ -64,6 +64,8 @@ function mapItem(raw: Raw): GtdItem {
     delegatedAt: raw.delegated_at ? String(raw.delegated_at) : undefined,
     assignee: asPerson(raw.assignee),
     providerStatus: raw.provider_status ? String(raw.provider_status) : undefined,
+    workflowStage: raw.workflow_stage ? String(raw.workflow_stage) : undefined,
+    archivedAt: raw.archived_at ? String(raw.archived_at) : undefined,
     providerUrl: raw.provider_url ? String(raw.provider_url) : undefined,
     syncState: (raw.sync_state ?? "local") as GtdItem["syncState"],
     dueAt: raw.due_at ? String(raw.due_at) : undefined,
@@ -295,6 +297,7 @@ export async function apiPatchItem(
     time_estimate_mins?: number;
     due_at?: string;
     provider_status?: string;
+    workflow_stage?: string;
     assignee?: { name: string; email?: string; provider_user_id?: string };
     clear_assignee?: boolean;
   }
@@ -303,6 +306,19 @@ export async function apiPatchItem(
     await gatewayFetch<Raw>(`/items/${id}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
+    })
+  );
+}
+
+/** Archive (hide from active views) or un-archive a task. */
+export async function apiArchiveItem(
+  id: string,
+  archived: boolean,
+): Promise<GtdItem> {
+  return mapItem(
+    await gatewayFetch<Raw>(`/items/${id}/archive`, {
+      method: "POST",
+      body: JSON.stringify({ archived }),
     })
   );
 }
@@ -456,6 +472,7 @@ export interface TaskSettings {
   clarifyUseLlm: boolean;
   backgroundSync: boolean;
   mirrorDoneTasks: boolean;
+  workflowStages: string[];
 }
 
 function mapSettings(r: Raw): TaskSettings {
@@ -469,6 +486,9 @@ function mapSettings(r: Raw): TaskSettings {
     clarifyUseLlm: r.clarify_use_llm !== false,
     backgroundSync: r.background_sync !== false,
     mirrorDoneTasks: r.mirror_done_tasks === true,
+    workflowStages: Array.isArray(r.workflow_stages)
+      ? (r.workflow_stages as unknown[]).map(String).filter(Boolean)
+      : ["TODO", "IN PROCESS", "WAITING FOR", "DONE"],
   };
 }
 
@@ -495,6 +515,8 @@ export async function updateTaskSettings(
     body.background_sync = patch.backgroundSync;
   if (patch.mirrorDoneTasks !== undefined)
     body.mirror_done_tasks = patch.mirrorDoneTasks;
+  if (patch.workflowStages !== undefined)
+    body.workflow_stages = patch.workflowStages;
   return mapSettings(
     await gatewayFetch<Raw>(`/settings`, {
       method: "PUT",

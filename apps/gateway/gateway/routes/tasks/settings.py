@@ -29,6 +29,9 @@ from gateway.routes.tasks.core import _get_db, _log, _uid, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
+# Default Kanban board stages for Next Actions (last stage = "done").
+DEFAULT_WORKFLOW_STAGES: list[str] = ["TODO", "IN PROCESS", "WAITING FOR", "DONE"]
+
 # Per-function default tiers (aliases resolved by acb_llm: tier-fast→tier1 …).
 DEFAULT_GTD_MODELS = {
     "chat": "tier-powerful",       # assistant rail — strong tool-caller
@@ -54,6 +57,10 @@ class GtdSettingsModel(BaseModel):
     # otherwise swamp the working views. Existing mirrored rows still flip to
     # DONE when closed upstream; this only governs importing NEW closed tasks.
     mirror_done_tasks: bool = False
+    # The user's ordered Kanban board stages for Next Actions (Jira/ClickUp
+    # style). The LAST stage is the "done" stage — dropping a card there marks
+    # the task DONE. Configurable in settings.
+    workflow_stages: list[str] = list(DEFAULT_WORKFLOW_STAGES)
 
 
 class GtdSettingsPatch(BaseModel):
@@ -66,6 +73,7 @@ class GtdSettingsPatch(BaseModel):
     clarify_use_llm: bool | None = None
     background_sync: bool | None = None
     mirror_done_tasks: bool | None = None
+    workflow_stages: list[str] | None = None
 
 
 async def gtd_models(db: Any, user_id: str) -> dict[str, str]:
@@ -110,6 +118,19 @@ async def gtd_toggles(db: Any, user_id: str) -> dict[str, bool]:
     return out
 
 
+async def gtd_workflow_stages(db: Any, user_id: str) -> list[str]:
+    """The user's ordered board stages, defaults filled in. Never raises."""
+    try:
+        row = (await db.execute(text(
+            "SELECT workflow_stages FROM gtd_settings WHERE user_id = :uid"),
+            {"uid": user_id})).fetchone()
+        if row:
+            return _stages(row.workflow_stages)
+    except Exception as exc:
+        _log.warning("tasks.settings.stages_failed", error=str(exc)[:160])
+    return list(DEFAULT_WORKFLOW_STAGES)
+
+
 async def _load(db: Any, user_id: str) -> GtdSettingsModel:
     row = (await db.execute(text(
         "SELECT * FROM gtd_settings WHERE user_id = :uid"),
@@ -128,7 +149,25 @@ async def _load(db: Any, user_id: str) -> GtdSettingsModel:
         clarify_use_llm=bool(getattr(row, "clarify_use_llm", True)),
         background_sync=bool(getattr(row, "background_sync", True)),
         mirror_done_tasks=bool(getattr(row, "mirror_done_tasks", False)),
+        workflow_stages=_stages(getattr(row, "workflow_stages", None)),
     )
+
+
+def _stages(val: Any) -> list[str]:
+    """Normalize the stored workflow_stages (JSONB list, or JSON string) into a
+    clean list of non-empty stage names; fall back to the defaults."""
+    import json
+    if isinstance(val, str):
+        try:
+            val = json.loads(val)
+        except ValueError:
+            val = None
+    if isinstance(val, list):
+        cleaned = [str(s).strip() for s in val
+                   if s is not None and str(s).strip()]
+        if cleaned:
+            return cleaned
+    return list(DEFAULT_WORKFLOW_STAGES)
 
 
 @router.get("/settings", response_model=GtdSettingsModel)
@@ -150,9 +189,21 @@ async def put_gtd_settings(
     fields = {k: v for k, v in patch.model_dump().items() if v is not None}
     db = await _get_db()
     try:
+        if "workflow_stages" in fields:
+            # Sanitize (trim, drop empties, cap) and JSON-encode for the JSONB
+            # column. Guarantee a non-empty list with a "done" stage.
+            import json
+            stages = [str(s).strip() for s in fields["workflow_stages"]
+                      if str(s).strip()][:24]
+            if not stages:
+                stages = list(DEFAULT_WORKFLOW_STAGES)
+            fields["workflow_stages"] = json.dumps(stages)
         if fields:
+            # JSONB columns need an explicit ::jsonb cast on the bind param.
+            def _ph(k: str) -> str:
+                return f":{k}::jsonb" if k == "workflow_stages" else f":{k}"
             cols = ", ".join(fields)
-            vals = ", ".join(f":{k}" for k in fields)
+            vals = ", ".join(_ph(k) for k in fields)
             sets = ", ".join(f"{k} = EXCLUDED.{k}" for k in fields)
             await db.execute(text(
                 f"""INSERT INTO gtd_settings (user_id, {cols})

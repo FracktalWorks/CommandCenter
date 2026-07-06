@@ -59,7 +59,12 @@ VIEW_WHERE: dict[str, str] = {
     # can't swamp the list and push LOCAL/open items past the row cap. Trashed
     # rows are always hidden.
     "all": "i.disposition NOT IN ('DONE', 'TRASH')",
+    # Archived tasks — hidden from every active view, shown only here.
+    "archive": "i.archived_at IS NOT NULL",
 }
+
+# Active views never show archived rows; the "archive" view shows only them.
+_ARCHIVE_EXCLUDE = "i.archived_at IS NULL"
 
 
 class CaptureRequest(BaseModel):
@@ -90,6 +95,7 @@ class ItemPatch(BaseModel):
     time_estimate_mins: int | None = None
     due_at: str | None = None
     provider_status: str | None = None   # the tool's stage, e.g. 'To-do'
+    workflow_stage: str | None = None    # the local Kanban stage (board move)
     assignee: PersonModel | None = None   # a PersonModel to set; sentinel below to clear
     clear_assignee: bool = False          # explicit unassign (assignee=None is "unchanged")
     attachments: list[dict] | None = None  # replaces the whole list
@@ -209,6 +215,9 @@ async def list_items(
         raise HTTPException(status_code=400, detail=f"Unknown view: {view}")
     params: dict[str, Any] = {"uid": _uid(user), "limit": max(1, min(limit, 1000))}
     clauses = ["i.user_id = :uid", where]
+    # Every active view hides archived rows; only the archive view shows them.
+    if view != "archive":
+        clauses.append(_ARCHIVE_EXCLUDE)
     if q.strip():
         clauses.append("(i.title ILIKE :q OR coalesce(i.description,'') ILIKE :q)")
         params["q"] = f"%{q.strip()}%"
@@ -327,8 +336,10 @@ def _build_item_update(
          (patch.time_estimate_mins or None)),
         (patch.provider_status, "provider_status = :pstatus",
          (patch.provider_status or None)),
+        (patch.workflow_stage, "workflow_stage = :wstage",
+         (patch.workflow_stage or None)),
     ]
-    keys = ["notes", "na", "ctx", "energy", "tem", "pstatus"]
+    keys = ["notes", "na", "ctx", "energy", "tem", "pstatus", "wstage"]
     for (present, clause, value), key in zip(simple, keys, strict=True):
         if present is not None:
             sets.append(clause)
@@ -374,9 +385,16 @@ async def patch_item(
     patch: ItemPatch,
     user: UserContext = Depends(get_current_user),
 ):
-    sets, params = _build_item_update(item_id, _uid(user), patch)
+    from gateway.routes.tasks.settings import gtd_workflow_stages
     db = await _get_db()
     try:
+        # Moving a card to the LAST configured stage ("done" stage) also marks
+        # the task DONE (disposition + completed_at + ClickUp close).
+        if patch.workflow_stage and patch.disposition is None:
+            stages = await gtd_workflow_stages(db, _uid(user))
+            if stages and patch.workflow_stage == stages[-1]:
+                patch.disposition = "DONE"
+        sets, params = _build_item_update(item_id, _uid(user), patch)
         # Snapshot the row BEFORE the write — we need the prior assignee id to
         # build ClickUp's assignee add/rem delta, and provider linkage.
         before = await _fetch_item(db, item_id, _uid(user))
@@ -408,10 +426,12 @@ async def _push_patch_upstream(
     if before.source == "LOCAL" or not before.provider_task_id \
             or not before.account_id:
         return
-    # Only the ClickUp-writable fields warrant a call.
+    # Only the ClickUp-writable fields warrant a call. A DONE disposition also
+    # closes the task upstream.
+    marks_done = patch.disposition == "DONE"
     writable = any(v is not None for v in (
         patch.title, patch.notes, patch.provider_status, patch.due_at,
-    )) or patch.assignee is not None or patch.clear_assignee
+    )) or patch.assignee is not None or patch.clear_assignee or marks_done
     if not writable:
         return
     try:
@@ -428,6 +448,8 @@ async def _push_patch_upstream(
         if patch.due_at is not None:
             due = _parse_ts(patch.due_at)
             payload["due_at_ms"] = int(due.timestamp() * 1000) if due else None
+        if marks_done:
+            payload["mark_done"] = True
         prev = _parse_jsonb(before.assignee) or {}
         if patch.clear_assignee:
             payload["clear_assignee"] = True
@@ -453,6 +475,38 @@ async def _push_patch_upstream(
     except Exception as exc:  # best-effort back-sync — never fail the local edit
         _log.warning("tasks.patch.backsync_failed",
                      item_id=str(before.id)[:12], error=str(exc)[:160])
+
+
+# ── Archive ──────────────────────────────────────────────────────────────────
+
+class ArchiveRequest(BaseModel):
+    archived: bool = True   # false → un-archive (restore to active views)
+
+
+@router.post("/items/{item_id}/archive", response_model=GtdItemModel)
+async def archive_item(
+    item_id: str,
+    req: ArchiveRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Archive (hide from every active view) or un-archive a task. Independent
+    of the DONE disposition — you can archive anything and restore it later."""
+    uid = _uid(user)
+    db = await _get_db()
+    try:
+        res = (await db.execute(
+            text("""UPDATE gtd_items
+                    SET archived_at = CASE WHEN :on THEN now() ELSE NULL END,
+                        updated_at = now()
+                    WHERE id = :id AND user_id = :uid RETURNING id"""),
+            {"id": item_id, "uid": uid, "on": req.archived},
+        )).fetchone()
+        if not res:
+            raise HTTPException(status_code=404, detail="Item not found")
+        await db.commit()
+        return _row_to_item(await _fetch_item(db, item_id, uid))
+    finally:
+        await db.close()
 
 
 @router.post("/items/bulk", response_model=list[GtdItemModel])

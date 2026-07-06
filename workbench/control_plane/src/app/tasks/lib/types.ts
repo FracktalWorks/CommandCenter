@@ -97,6 +97,10 @@ export interface GtdItem {
   assignee?: Person;
   /** the item's stage/status in the connected PM tool (e.g. "Backlog", "To-do") */
   providerStatus?: string;
+  /** the task's stage on the local Kanban board (configured in settings) */
+  workflowStage?: string;
+  /** when set, the task is archived (hidden from active views) */
+  archivedAt?: string;
   /** sync lifecycle: 'local' (ours) · 'pending' (queued to push to the PM tool,
    *  Action-Broker-gated) · 'synced' (written back). Lets you clarify now and
    *  finish/push to ClickUp/Jira later. */
@@ -148,6 +152,7 @@ export type ViewKey =
   | "projects"
   | "someday"
   | "reference"
+  | "archive"
   | "engage"
   | "horizons";
 

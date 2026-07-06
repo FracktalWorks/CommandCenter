@@ -274,6 +274,25 @@ def test_all_view_excludes_done_and_trash():
     assert VIEW_WHERE["done"] == "i.disposition = 'DONE'"
 
 
+def test_archive_view_shows_only_archived():
+    # The archive view is the only place archived rows appear.
+    assert VIEW_WHERE["archive"] == "i.archived_at IS NOT NULL"
+
+
+def test_workflow_stages_normalizes_and_defaults():
+    from gateway.routes.tasks.settings import (
+        DEFAULT_WORKFLOW_STAGES,
+        _stages,
+    )
+    # A stored JSON string, a real list, junk, and empties all normalize.
+    assert _stages('["A", "B"]') == ["A", "B"]
+    assert _stages([" A ", "", "B", None]) == ["A", "B"]
+    assert _stages(None) == DEFAULT_WORKFLOW_STAGES
+    assert _stages([]) == DEFAULT_WORKFLOW_STAGES
+    assert _stages("not json") == DEFAULT_WORKFLOW_STAGES
+    assert DEFAULT_WORKFLOW_STAGES[-1] == "DONE"  # last stage = the done stage
+
+
 def test_dispositions_are_the_canonical_set():
     assert {"INBOX", "NEXT", "WAITING", "SOMEDAY", "PROJECT",
                             "REFERENCE", "DONE", "TRASH"} == DISPOSITIONS

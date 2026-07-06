@@ -25,6 +25,8 @@ import {
   ListTree,
   Loader2,
   Maximize2,
+  Archive,
+  ArchiveRestore,
   type LucideIcon,
 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
@@ -186,7 +188,9 @@ export function TaskDetail({
   const updateItem = useTaskStore((s) => s.updateItem);
   const quickDispose = useTaskStore((s) => s.quickDispose);
   const deleteItem = useTaskStore((s) => s.deleteItem);
+  const archiveItem = useTaskStore((s) => s.archiveItem);
   const openFocus = useTaskStore((s) => s.openFocus);
+  const isArchived = !!item.archivedAt;
 
   const [pushState, setPushState] = useState<"idle" | "busy" | string>("idle");
 
@@ -235,13 +239,26 @@ export function TaskDetail({
           )}
           <button
             type="button"
+            title={isArchived ? "Restore from archive" : "Archive task"}
+            aria-label={isArchived ? "Restore from archive" : "Archive task"}
+            onClick={() => archiveItem(item.id, !isArchived)}
+            className={[
+              "tech-transition rounded-md p-1 text-muted-foreground/70 hover:bg-secondary hover:text-foreground",
+              focused ? "ml-auto" : "",
+            ].join(" ")}
+          >
+            {isArchived ? (
+              <ArchiveRestore className="h-4 w-4" />
+            ) : (
+              <Archive className="h-4 w-4" />
+            )}
+          </button>
+          <button
+            type="button"
             title="Delete task"
             aria-label="Delete task"
             onClick={() => deleteItem(item.id)}
-            className={[
-              "tech-transition rounded-md p-1 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive",
-              focused ? "ml-auto" : "",
-            ].join(" ")}
+            className="tech-transition rounded-md p-1 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
           >
             <Trash2 className="h-4 w-4" />
           </button>

@@ -73,6 +73,8 @@ class GtdItemModel(BaseModel):
     provider_status: str | None = None
     assignee: PersonModel | None = None
     is_mine: bool = True
+    workflow_stage: str | None = None   # local Kanban stage (see gtd_settings)
+    archived_at: str | None = None      # set → archived (hidden from active views)
     waiting_on: PersonModel | None = None
     delegated_at: str | None = None
     due_at: str | None = None
@@ -205,6 +207,8 @@ def _row_to_item(row: Any) -> GtdItemModel:
         provider_status=row.provider_status,
         assignee=_person(row.assignee),
         is_mine=bool(row.is_mine),
+        workflow_stage=getattr(row, "workflow_stage", None),
+        archived_at=_iso(getattr(row, "archived_at", None)),
         waiting_on=_person(getattr(row, "waiting_on", None)),
         delegated_at=_iso(getattr(row, "delegated_at", None)),
         due_at=_iso(row.due_at),

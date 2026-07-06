@@ -23,6 +23,7 @@ import {
   HardDrive,
   Layers,
   Sparkles,
+  Archive,
   type LucideIcon,
   Settings2,
 } from "lucide-react";
@@ -50,6 +51,7 @@ const PRIMARY: NavRow[] = [
   { view: "calendar", label: "Calendar", icon: Calendar, showCount: true },
   { view: "projects", label: "Projects", icon: FolderKanban },
   { view: "someday", label: "Someday / Maybe", icon: Lightbulb, showCount: true },
+  { view: "archive", label: "Archive", icon: Archive },
 ];
 
 const SECONDARY: NavRow[] = [
@@ -78,10 +80,13 @@ export function ListsSidebar({
   const accounts = useTaskStore((s) => s.accounts);
   const openWorkspaces = useTaskStore((s) => s.openWorkspaces);
   const openSettings = useTaskStore((s) => s.openSettings);
+  const loadArchive = useTaskStore((s) => s.loadArchive);
   const sourceFilter = useTaskStore((s) => s.sourceFilter);
   const setSourceFilter = useTaskStore((s) => s.setSourceFilter);
   const selectView: typeof selectViewRaw = (v) => {
     selectViewRaw(v);
+    // Archived tasks aren't in the normal hydrate — pull them on demand.
+    if (v === "archive") void loadArchive();
     onNavigate?.();
   };
   const selectContext: typeof selectContextRaw = (c) => {

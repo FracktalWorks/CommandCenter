@@ -31,7 +31,7 @@ export function TaskFocusModal() {
   if (!item) return null;
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-background/70 p-3 backdrop-blur-sm sm:p-8">
+    <div className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-background/70 backdrop-blur-sm sm:p-8">
       {/* backdrop */}
       <button
         type="button"
@@ -39,7 +39,9 @@ export function TaskFocusModal() {
         onClick={closeFocus}
         className="absolute inset-0 -z-10 cursor-default"
       />
-      <div className="relative flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
+      {/* Full-screen sheet on mobile; floating card from sm: up. dvh (not
+          vh) so the browser chrome on phones doesn't hide the bottom. */}
+      <div className="relative flex h-dvh max-h-dvh w-full max-w-3xl flex-col overflow-hidden border-border bg-card shadow-2xl sm:h-auto sm:max-h-[calc(100dvh-4rem)] sm:rounded-2xl sm:border">
         <button
           type="button"
           onClick={closeFocus}

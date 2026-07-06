@@ -212,7 +212,9 @@ export function TaskDetail({
     <div className="flex h-full flex-col overflow-y-auto bg-background">
       {/* Header — status chip, source, deep link, editable title */}
       <div className="border-b border-border bg-card px-5 py-4">
-        <div className="mb-2 flex flex-wrap items-center gap-2">
+        {/* focused → the modal's × occupies the top-right corner; keep the
+            archive/delete actions clear of it */}
+        <div className={`mb-2 flex flex-wrap items-center gap-2 ${focused ? "pr-9" : ""}`}>
           <StatusPicker item={item} onPick={(d) => quickDispose(item.id, d)} />
           <SourceBadge source={item.source} provider={item.provider} />
           {isSynced && item.providerUrl && (
@@ -415,13 +417,13 @@ export function TaskDetail({
 
             {/* Project (read-only link for now — re-file happens via clarify) */}
             {project && (
-              <div className="rounded-md border border-border bg-card px-3 py-2">
+              <div className="min-w-0 rounded-md border border-border bg-card px-3 py-2">
                 <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                   Project
                 </div>
-                <div className="mt-0.5 inline-flex items-center gap-1.5 text-sm text-foreground">
-                  <FolderKanban className="h-3.5 w-3.5 text-primary/70" />
-                  <span className="truncate">{project.outcome}</span>
+                <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-sm text-foreground">
+                  <FolderKanban className="h-3.5 w-3.5 shrink-0 text-primary/70" />
+                  <span className="truncate" title={project.outcome}>{project.outcome}</span>
                 </div>
               </div>
             )}
@@ -473,7 +475,7 @@ export function TaskDetail({
         {item.origin?.kind === "email" && (
           <section>
             <SectionLabel icon={Mail}>Captured from</SectionLabel>
-            <span className="text-sm text-muted-foreground">
+            <p className="text-sm text-muted-foreground">
               Email from {item.origin.fromName || item.origin.fromEmail || "someone"}
               {item.origin.subject ? ` — “${item.origin.subject}”` : ""}{"  "}
               <a
@@ -482,7 +484,7 @@ export function TaskDetail({
               >
                 Open email
               </a>
-            </span>
+            </p>
           </section>
         )}
 
@@ -675,7 +677,7 @@ function SectionLabel({
   children: React.ReactNode;
 }) {
   return (
-    <h3 className="mb-1.5 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+    <h3 className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
       {Icon && <Icon className="h-3 w-3" />}
       {children}
     </h3>
@@ -801,7 +803,7 @@ function MetaEdit({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="rounded-md border border-border bg-card px-3 py-2">
+    <div className="min-w-0 rounded-md border border-border bg-card px-3 py-2">
       <div className="flex items-center justify-between">
         <div className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
           <Icon className="h-3 w-3" />

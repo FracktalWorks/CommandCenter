@@ -585,14 +585,14 @@ export function InboxView() {
                 </div>
               ) : (
                 <div className="flex items-center gap-2 pb-2">
-                  <div className="tech-transition flex flex-1 items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 focus-within:border-primary/50">
+                  <div className="tech-transition flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 focus-within:border-primary/50">
                     <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     <input
                       value={search}
                       onChange={(e) => setSearch(e.target.value)}
                       placeholder="Search captured tasks…"
                       aria-label="Search captured tasks"
-                      className="flex-1 bg-transparent text-base text-foreground placeholder:text-muted-foreground focus:outline-none sm:text-sm"
+                      className="min-w-0 flex-1 bg-transparent text-base text-foreground placeholder:text-muted-foreground focus:outline-none sm:text-sm"
                     />
                   </div>
                   <button
@@ -604,7 +604,9 @@ export function InboxView() {
                     title="Toggle sort order"
                   >
                     <ArrowDownUp className="h-3.5 w-3.5" />
-                    {sortOrder === "newest" ? "Newest" : "Oldest"}
+                    <span className="hidden sm:inline">
+                      {sortOrder === "newest" ? "Newest" : "Oldest"}
+                    </span>
                   </button>
                   <button
                     type="button"
@@ -612,14 +614,16 @@ export function InboxView() {
                       setDensityPersist(density === "cards" ? "list" : "cards")
                     }
                     title={density === "cards" ? "Dense list view" : "Card view"}
-                    className="tech-transition inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+                    className="tech-transition inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
                   >
                     {density === "cards" ? (
                       <LayoutList className="h-3.5 w-3.5" />
                     ) : (
                       <LayoutGrid className="h-3.5 w-3.5" />
                     )}
-                    {density === "cards" ? "List" : "Cards"}
+                    <span className="hidden sm:inline">
+                      {density === "cards" ? "List" : "Cards"}
+                    </span>
                   </button>
                 </div>
               ))}

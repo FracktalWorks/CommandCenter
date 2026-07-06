@@ -227,7 +227,8 @@ export default function TasksPage() {
 
       <QuickCapture />
       <WorkspacesModal />
-        <TaskSettingsModal />
+      <TaskSettingsModal />
+      <TaskFocusModal />
     </div>
   );
 }

@@ -75,6 +75,8 @@ class GtdItemModel(BaseModel):
     is_mine: bool = True
     workflow_stage: str | None = None   # local Kanban stage (see gtd_settings)
     sort_key: float | None = None       # manual (drag) rank within a group/column
+    parent_item_id: str | None = None   # set → this item is a subtask of another
+    subtask_count: int = 0              # number of child subtasks (roll-up badge)
     archived_at: str | None = None      # set → archived (hidden from active views)
     waiting_on: PersonModel | None = None
     delegated_at: str | None = None
@@ -210,6 +212,9 @@ def _row_to_item(row: Any) -> GtdItemModel:
         is_mine=bool(row.is_mine),
         workflow_stage=getattr(row, "workflow_stage", None),
         sort_key=getattr(row, "sort_key", None),
+        parent_item_id=(str(row.parent_item_id)
+                        if getattr(row, "parent_item_id", None) else None),
+        subtask_count=int(getattr(row, "subtask_count", 0) or 0),
         archived_at=_iso(getattr(row, "archived_at", None)),
         waiting_on=_person(getattr(row, "waiting_on", None)),
         delegated_at=_iso(getattr(row, "delegated_at", None)),
@@ -243,7 +248,9 @@ def _row_to_project(row: Any) -> GtdProjectModel:
 # The SELECT used by every item read: joins the open waiting-for record (for
 # waiting_on/delegated_at) and the account's provider name (for the badge).
 ITEM_SELECT = """
-    SELECT i.*, w.waiting_on, w.delegated_at, a.provider AS account_provider
+    SELECT i.*, w.waiting_on, w.delegated_at, a.provider AS account_provider,
+           (SELECT count(*) FROM gtd_items c
+             WHERE c.parent_item_id = i.id) AS subtask_count
       FROM gtd_items i
  LEFT JOIN gtd_waiting w ON w.item_id = i.id AND w.resolved = false
  LEFT JOIN task_accounts a ON a.id = i.account_id

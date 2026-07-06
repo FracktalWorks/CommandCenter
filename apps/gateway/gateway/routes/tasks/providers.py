@@ -253,6 +253,10 @@ class ClickUpProvider(BaseTaskProvider):
         if payload.get("assignee_id"):
             with contextlib.suppress(TypeError, ValueError):
                 body["assignees"] = [int(payload["assignee_id"])]
+        # A subtask: ClickUp models children via the task's `parent` id. The
+        # subtask still POSTs to its parent's LIST, so project_ref = the list.
+        if payload.get("parent"):
+            body["parent"] = str(payload["parent"])
         async with httpx.AsyncClient(timeout=20.0) as http:
             r = await http.post(
                 f"{_CLICKUP}/list/{project_ref}/task",

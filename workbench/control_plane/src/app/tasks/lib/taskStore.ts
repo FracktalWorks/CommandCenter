@@ -30,6 +30,8 @@ import {
   accountToProviderEntry,
   apiBulkDispose,
   apiArchiveItem,
+  apiAddSubtasks,
+  apiListSubtasks,
   apiCapture,
   apiCaptureBatch,
   apiDeleteAccount,
@@ -88,6 +90,8 @@ export type ClarifyDecision =
       context: string;
       energy?: Energy;
       timeEstimateMins?: number;
+      /** break this task into concrete child subtasks (local or ClickUp). */
+      subtasks?: string[];
     } & SyncFields)
   | ({ kind: "calendar"; nextAction: string; dueAt: string; context?: string } & Omit<
       SyncFields,
@@ -152,6 +156,8 @@ function decisionToOrganizeBody(d: ClarifyDecision): OrganizeBody {
   if ("energy" in d && d.energy) body.energy = d.energy;
   if ("timeEstimateMins" in d && d.timeEstimateMins)
     body.time_estimate_mins = d.timeEstimateMins;
+  if ("subtasks" in d && d.subtasks && d.subtasks.length)
+    body.subtasks = d.subtasks;
   if (d.kind === "project") body.outcome = d.outcome;
   if (d.kind === "delegate")
     body.assignee = {
@@ -410,6 +416,12 @@ interface TaskState {
     toIndex: number,
     refile?: { workflowStage?: string; providerStatus?: string },
   ) => void;
+  /** Fetch a task's child subtasks (local rows) — the detail panel calls this
+   *  on open. Not held in the main items list (subtasks are nested). */
+  loadSubtasks: (id: string) => Promise<GtdItem[]>;
+  /** Add child subtasks to a task; returns the full ordered child list and
+   *  bumps the parent's subtaskCount optimistically. */
+  addSubtasks: (id: string, titles: string[]) => Promise<GtdItem[]>;
   /** Inline-rename a captured item (fix a typo without clarifying). */
   renameItem: (id: string, title: string) => void;
   /** Undo the most recent dispose/clarify — restores the item(s) to the inbox. */
@@ -1035,6 +1047,29 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     if (refile?.providerStatus !== undefined)
       patch.providerStatus = refile.providerStatus;
     get().updateItem(id, patch);
+  },
+
+  loadSubtasks: async (id) => {
+    if (get().backend !== "live") return [];
+    try {
+      return await apiListSubtasks(id);
+    } catch {
+      return [];
+    }
+  },
+
+  addSubtasks: async (id, titles) => {
+    const clean = titles.map((t) => t.trim()).filter(Boolean);
+    if (!clean.length) return [];
+    if (get().backend !== "live") return [];
+    const children = await apiAddSubtasks(id, clean);
+    // Reflect the new count on the parent card without a full re-hydrate.
+    set((s) => ({
+      items: s.items.map((i) =>
+        i.id === id ? { ...i, subtaskCount: children.length } : i,
+      ),
+    }));
+    return children;
   },
 
   renameItem: (id, title) => {

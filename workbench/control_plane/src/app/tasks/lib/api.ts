@@ -66,6 +66,8 @@ function mapItem(raw: Raw): GtdItem {
     providerStatus: raw.provider_status ? String(raw.provider_status) : undefined,
     workflowStage: raw.workflow_stage ? String(raw.workflow_stage) : undefined,
     sortKey: raw.sort_key == null ? undefined : Number(raw.sort_key),
+    parentItemId: raw.parent_item_id ? String(raw.parent_item_id) : undefined,
+    subtaskCount: raw.subtask_count == null ? 0 : Number(raw.subtask_count),
     archivedAt: raw.archived_at ? String(raw.archived_at) : undefined,
     providerUrl: raw.provider_url ? String(raw.provider_url) : undefined,
     syncState: (raw.sync_state ?? "local") as GtdItem["syncState"],
@@ -348,6 +350,7 @@ export interface OrganizeBody {
   project_id?: string;
   status?: string;
   assignee?: { name: string; email?: string; provider_user_id?: string };
+  subtasks?: string[];
 }
 
 export async function apiOrganize(id: string, body: OrganizeBody): Promise<GtdItem> {
@@ -357,6 +360,24 @@ export async function apiOrganize(id: string, body: OrganizeBody): Promise<GtdIt
       body: JSON.stringify(body),
     })
   );
+}
+
+/** The child subtasks of a task (local rows), in manual order. */
+export async function apiListSubtasks(id: string): Promise<GtdItem[]> {
+  const rows = await gatewayFetch<Raw[]>(`/items/${id}/subtasks`);
+  return rows.map(mapItem);
+}
+
+/** Add child subtasks to an existing task; returns the full ordered child list. */
+export async function apiAddSubtasks(
+  id: string,
+  titles: string[],
+): Promise<GtdItem[]> {
+  const rows = await gatewayFetch<Raw[]>(`/items/${id}/subtasks`, {
+    method: "POST",
+    body: JSON.stringify({ titles }),
+  });
+  return rows.map(mapItem);
 }
 
 export async function apiPushItem(id: string): Promise<GtdItem> {
@@ -626,5 +647,11 @@ export async function apiClarifyPropose(id: string): Promise<ClarifyProposal> {
     confidence: String(r.confidence ?? "medium") as Confidence,
     rationale: String(r.rationale ?? ""),
     status: r.status ? String(r.status) : undefined,
+    complexity: (["single", "subtasks", "project"].includes(String(r.complexity))
+      ? String(r.complexity)
+      : undefined) as ClarifyProposal["complexity"],
+    suggestedSubtasks: Array.isArray(r.subtasks)
+      ? (r.subtasks as unknown[]).map(String).filter(Boolean)
+      : undefined,
   };
 }

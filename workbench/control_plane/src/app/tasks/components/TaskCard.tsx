@@ -7,6 +7,7 @@ import {
   Zap,
   Mail,
   Paperclip,
+  ListTree,
   GripVertical,
 } from "lucide-react";
 import { GtdItem } from "../lib/types";
@@ -83,6 +84,15 @@ export function TaskCard({
           {atts}
         </span>
       )}
+      {item.subtaskCount ? (
+        <span
+          className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground"
+          title={`${item.subtaskCount} subtask${item.subtaskCount === 1 ? "" : "s"}`}
+        >
+          <ListTree className="h-3 w-3" />
+          {item.subtaskCount}
+        </span>
+      ) : null}
       {item.origin?.kind === "email" && (
         <span
           className="inline-flex items-center gap-1 text-[10px] text-muted-foreground"

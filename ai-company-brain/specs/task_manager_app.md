@@ -705,9 +705,36 @@ filter math lives in pure `lib/ordering.ts` (shared by list + board). `list_item
 `ORDER BY (source=LOCAL) DESC, sort_key ASC NULLS LAST, created_at DESC`. GOTCHA:
 `sort_key` allows `0.0` (top-of-group rank) — every layer uses `!= null`/`is not
 None`, never truthiness, so a zero rank isn't dropped. Unit tests: `update_task`
-+ `get_task_detail` + sort_key-patch/order contract (53). **Still not built (from
-§7 wishlist):** EngageView, WeeklyReview, WaitingForView (dedicated),
-HorizonsView, ProjectPlanner.
++ `get_task_detail` + sort_key-patch/order contract (53).
+
+(7) **Process deepening — Phase 1: Clarify LLM project-filing + decomposition
+(2026-07-06).** The Clarify LLM (`ai._llm_propose`) now files ANY actionable item
+under an existing live project (returns `project_match` as a `[P#]` token or
+name; `_resolve_project_match` maps it back — never invents one), not just
+PROJECT-classified ones; the projects brief tags each project's HOME (ClickUp vs
+local) + a `[P#]` token. New `complexity` (single | subtasks | project) +
+suggested `subtasks` signal in the proposal. `propose_with_llm` redirects
+project_id/account/disposition when the LLM matched a real project; deterministic
+`propose()` stays schema-authority + emits `complexity` for parity. Eval-locked
+(golden trajectory 21/21).
+
+(8) **Process deepening — Phase 2: Subtasks (2026-07-06, migration 59).** A
+complex capture can clarify into a task WITH subtasks (local or ClickUp), not
+only a project. `gtd_items.parent_item_id` (self-FK, CASCADE); subtasks are
+NESTED (excluded from top-level list/board via `i.parent_item_id IS NULL`) and
+carry a `subtask_count` roll-up. `ClickUpProvider.create_task` gains a `parent`
+param → real ClickUp subtasks; `push_item` creates parent then children
+(`_push_child_subtasks`, best-effort per child). `OrganizeRequest.subtasks` +
+`_create_subtasks` on clarify; `GET/POST /items/{id}/subtasks` for post-clarify
+edit. UI: Clarify panel `SubtaskEditor` (NEXT disposition, seeded from the AI's
+suggested subtasks); editable `LocalSubtasksSection` in the detail (add/complete/
+open, keyed remount); subtask-count badge on `TaskCard`. Tests: `create_task`
+parent + subtask-exclusion/count contract + OrganizeRequest.subtasks (61).
+
+**Still building (Process deepening Phase 3):** Projects-view hierarchy — Local
+vs ClickUp tree (Spaces→Folders→Projects→Tasks→Subtasks), local hierarchy schema.
+**Still not built (from §7 wishlist):** EngageView, WeeklyReview, WaitingForView
+(dedicated), HorizonsView, ProjectPlanner.
 
 ### 9.2 Backend phases (after the UI slices)
 

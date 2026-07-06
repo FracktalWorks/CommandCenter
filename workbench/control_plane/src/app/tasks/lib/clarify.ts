@@ -45,6 +45,11 @@ export interface ClarifyProposal {
   rationale: string;
   /** provider stage default for the destination (server proposal only) */
   status?: string;
+  /** the assistant's read of how big this is: one action, a task with
+   *  subtasks, or a full project (server proposal only). */
+  complexity?: "single" | "subtasks" | "project";
+  /** concrete child steps the assistant suggests, when complexity="subtasks". */
+  suggestedSubtasks?: string[];
 }
 
 /** Map a GTD disposition to a sensible provider stage/status.

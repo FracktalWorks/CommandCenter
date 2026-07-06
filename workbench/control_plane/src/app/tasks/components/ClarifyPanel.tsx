@@ -104,6 +104,11 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
   const [dueAt, setDueAt] = useState("");
   const [dest, setDest] = useState<Target>(proposal.target ?? { source: "LOCAL", provider: "local" });
   const [projectId, setProjectId] = useState<string | undefined>(proposal.projectId);
+  // Subtasks the user chose to break this task into (NEXT only). Seeded from the
+  // assistant's suggestion when it read the task as "needs subtasks".
+  const [subtasks, setSubtasks] = useState<string[]>(
+    proposal.complexity === "subtasks" ? proposal.suggestedSubtasks ?? [] : [],
+  );
   const [status, setStatus] = useState<string | undefined>(
     defaultStatus(proposal.disposition, providerStatuses(proposal.target ?? { source: "LOCAL" }, providers)),
   );
@@ -131,6 +136,9 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
         setAssignee(sp.suggestedAssignee ?? null);
         if (sp.target) setDest(sp.target);
         setProjectId(sp.projectId);
+        setSubtasks(
+          sp.complexity === "subtasks" ? sp.suggestedSubtasks ?? [] : [],
+        );
         setStatus(
           sp.status ??
             defaultStatus(
@@ -241,7 +249,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
       switch (d) {
         case "NEXT":
           return na
-            ? { kind: "next", nextAction: na, context, energy, dest, projectId, status, dueAt: dueIso, assignee: assignee ?? undefined }
+            ? { kind: "next", nextAction: na, context, energy, dest, projectId, status, dueAt: dueIso, assignee: assignee ?? undefined, subtasks: subtasks.length ? subtasks : undefined }
             : null;
         case "PROJECT":
           return na && outcome.trim()
@@ -265,7 +273,7 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
           return { kind: "trash" };
       }
     },
-    [nextAction, outcome, context, energy, assignee, dueAt, dest, projectId, status],
+    [nextAction, outcome, context, energy, assignee, dueAt, dest, projectId, status, subtasks],
   );
 
   const apply = useCallback(() => {
@@ -493,6 +501,12 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
               </Field>
             )}
 
+            {disposition === "NEXT" && (
+              <Field label="Break into subtasks (optional)">
+                <SubtaskEditor value={subtasks} onChange={setSubtasks} />
+              </Field>
+            )}
+
             {disposition === "WAITING" && (
               <Field label="Delegate to">
                 <PeoplePicker people={peopleForDelegate} value={assignee} onChange={setAssignee} />
@@ -687,6 +701,78 @@ export function ClarifyPanel({ item }: { item: GtdItem }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// A small add/remove list for breaking a NEXT task into concrete subtasks.
+// Seeded from the assistant's suggestion; the user edits before applying.
+function SubtaskEditor({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const add = () => {
+    const t = draft.trim();
+    if (!t) return;
+    onChange([...value, t]);
+    setDraft("");
+  };
+  const remove = (idx: number) => onChange(value.filter((_, i) => i !== idx));
+  const edit = (idx: number, text: string) =>
+    onChange(value.map((s, i) => (i === idx ? text : s)));
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {value.map((s, idx) => (
+        <div key={idx} className="flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary/50" />
+          <input
+            value={s}
+            onChange={(e) => edit(idx, e.target.value)}
+            onBlur={() => { if (!s.trim()) remove(idx); }}
+            className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-2 py-1.5 text-[13px] text-foreground focus:border-primary/50 focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={() => remove(idx)}
+            aria-label="Remove subtask"
+            className="tech-transition shrink-0 rounded p-1 text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ))}
+      <div className="flex items-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1.5">
+        <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); add(); }
+          }}
+          placeholder={value.length ? "Add another step…" : "Add a step…"}
+          className="min-w-0 flex-1 bg-transparent px-0.5 py-0.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
+        />
+        {draft.trim() && (
+          <button
+            type="button"
+            onClick={add}
+            className="tech-transition shrink-0 rounded-md bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground hover:opacity-90"
+          >
+            Add
+          </button>
+        )}
+      </div>
+      {value.length > 0 && (
+        <p className="text-[10px] text-muted-foreground">
+          {value.length} subtask{value.length === 1 ? "" : "s"} — created under
+          this task when you file it.
+        </p>
+      )}
     </div>
   );
 }

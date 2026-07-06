@@ -24,6 +24,7 @@ import {
   Paperclip,
   ListTree,
   Loader2,
+  Plus,
   Maximize2,
   Archive,
   ArchiveRestore,
@@ -458,6 +459,11 @@ export function TaskDetail({
           />
         </section>
 
+        {/* Subtasks — editable local children (add / complete). A SYNCED
+            parent's subtasks push to ClickUp on the next push. Keyed by id so
+            it remounts (and re-fetches) cleanly when switching tasks. */}
+        <LocalSubtasksSection key={item.id} item={item} />
+
         {/* Attachments captured with the item (local) */}
         {item.attachments && item.attachments.length > 0 && (
           <section>
@@ -526,6 +532,136 @@ export function TaskDetail({
         </p>
       </div>
     </div>
+  );
+}
+
+// ── Local subtasks — editable children (add / complete / open) ──────────────
+
+function LocalSubtasksSection({ item }: { item: GtdItem }) {
+  const backend = useTaskStore((s) => s.backend);
+  const loadSubtasks = useTaskStore((s) => s.loadSubtasks);
+  const addSubtasks = useTaskStore((s) => s.addSubtasks);
+  const quickDispose = useTaskStore((s) => s.quickDispose);
+  const openFocus = useTaskStore((s) => s.openFocus);
+  // Loading starts true (this section is keyed by item.id at the call site, so
+  // it remounts per task — no synchronous setState in the effect to reset it).
+  const [subs, setSubs] = useState<GtdItem[]>([]);
+  const [loading, setLoading] = useState(backend === "live");
+  const [adding, setAdding] = useState("");
+
+  // Load children on open / when the parent's count changes (after an add).
+  useEffect(() => {
+    if (backend !== "live") return;
+    let live = true;
+    loadSubtasks(item.id)
+      .then((rows) => { if (live) setSubs(rows); })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [item.id, item.subtaskCount, backend, loadSubtasks]);
+
+  const add = async () => {
+    const t = adding.trim();
+    if (!t) return;
+    setAdding("");
+    const rows = await addSubtasks(item.id, [t]);
+    setSubs(rows);
+  };
+
+  const toggle = (sub: GtdItem) => {
+    const next = sub.disposition === "DONE" ? "NEXT" : "DONE";
+    // Optimistic local flip; quickDispose persists the disposition change
+    // (and back-syncs a synced child's completion to ClickUp).
+    setSubs((cur) =>
+      cur.map((s) => (s.id === sub.id ? { ...s, disposition: next } : s)),
+    );
+    quickDispose(sub.id, next);
+  };
+
+  // Demo mode has no server children; hide the section unless the parent
+  // already reports some (keeps the mock UI clean).
+  if (backend !== "live" && !item.subtaskCount) return null;
+
+  const doneCount = subs.filter((s) => s.disposition === "DONE").length;
+
+  return (
+    <section>
+      <SectionLabel icon={ListTree}>
+        Subtasks{subs.length > 0 ? ` · ${doneCount}/${subs.length}` : ""}
+      </SectionLabel>
+      {loading ? (
+        <p className="text-[11px] text-muted-foreground">Loading subtasks…</p>
+      ) : (
+        <div className="flex flex-col gap-1">
+          {subs.map((s) => {
+            const done = s.disposition === "DONE";
+            return (
+              <div
+                key={s.id}
+                className="group flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-[13px]"
+              >
+                <button
+                  type="button"
+                  onClick={() => toggle(s)}
+                  title={done ? "Mark not done" : "Mark done"}
+                  className={[
+                    "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors",
+                    done
+                      ? "border-success bg-success/15 text-success"
+                      : "border-border hover:border-primary",
+                  ].join(" ")}
+                >
+                  {done && <Check className="h-2.5 w-2.5" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openFocus(s.id)}
+                  className={[
+                    "min-w-0 flex-1 truncate text-left",
+                    done ? "text-muted-foreground line-through" : "text-foreground",
+                  ].join(" ")}
+                >
+                  {s.title}
+                </button>
+                {s.providerUrl && (
+                  <a
+                    href={s.providerUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="shrink-0 text-muted-foreground/60 hover:text-foreground"
+                    title="Open in ClickUp"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+              </div>
+            );
+          })}
+          {backend === "live" && (
+            <div className="flex items-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1.5">
+              <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <input
+                value={adding}
+                onChange={(e) => setAdding(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); void add(); }
+                }}
+                placeholder="Add a subtask…"
+                className="min-w-0 flex-1 bg-transparent px-0.5 py-0.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
+              />
+              {adding.trim() && (
+                <button
+                  type="button"
+                  onClick={() => void add()}
+                  className="tech-transition shrink-0 rounded-md bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground hover:opacity-90"
+                >
+                  Add
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 

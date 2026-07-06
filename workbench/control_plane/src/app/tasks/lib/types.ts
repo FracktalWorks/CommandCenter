@@ -101,6 +101,10 @@ export interface GtdItem {
   workflowStage?: string;
   /** manual (drag) rank within a group/column; unset → created-at ordering */
   sortKey?: number;
+  /** set → this item is a subtask of another gtd_item (its parent). */
+  parentItemId?: string;
+  /** number of child subtasks (roll-up badge on the card/detail). */
+  subtaskCount?: number;
   /** when set, the task is archived (hidden from active views) */
   archivedAt?: string;
   /** sync lifecycle: 'local' (ours) · 'pending' (queued to push to the PM tool,

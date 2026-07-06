@@ -115,6 +115,7 @@ class OrganizeRequest(BaseModel):
     project_id: str | None = None        # existing project to file under
     status: str | None = None            # provider stage, e.g. 'Backlog' | 'To-do'
     assignee: PersonModel | None = None
+    subtasks: list[str] | None = None    # break this task into child subtasks
 
 
 class BulkRequest(BaseModel):
@@ -216,6 +217,9 @@ async def list_items(
         raise HTTPException(status_code=400, detail=f"Unknown view: {view}")
     params: dict[str, Any] = {"uid": _uid(user), "limit": max(1, min(limit, 1000))}
     clauses = ["i.user_id = :uid", where]
+    # Subtasks are nested under their parent in the detail panel — they never
+    # appear as standalone rows in the list/board views.
+    clauses.append("i.parent_item_id IS NULL")
     # Every active view hides archived rows; only the archive view shows them.
     if view != "archive":
         clauses.append(_ARCHIVE_EXCLUDE)
@@ -657,8 +661,117 @@ async def organize_item(
                  "who": json.dumps(req.assignee.model_dump()),
                  "expected": due},
             )
+        # Subtasks: clarify a single task INTO concrete child steps. Each becomes
+        # a NEXT child gtd_item inheriting the parent's project/home; a SYNCED
+        # parent's children push as ClickUp subtasks (see _push_child_subtasks).
+        if req.subtasks:
+            await _create_subtasks(
+                db, uid, item_id, req.subtasks, source, req.account_id,
+                project_id, sync_state)
         await db.commit()
         return _row_to_item(await _fetch_item(db, item_id, uid))
+    finally:
+        await db.close()
+
+
+async def _create_subtasks(
+    db: Any, uid: str, parent_id: str, titles: list[str],
+    source: str, account_id: str | None, project_id: str | None,
+    sync_state: str,
+) -> None:
+    """Insert child gtd_items under a parent, each a NEXT action inheriting the
+    parent's project + home. Ranked by input order so they keep their sequence."""
+    rank = 0.0
+    for title in titles:
+        t = (title or "").strip()
+        if not t:
+            continue
+        await db.execute(
+            text("""INSERT INTO gtd_items
+                    (id, user_id, parent_item_id, title, next_action,
+                     disposition, source, account_id, project_id, sync_state,
+                     sort_key, clarified_at)
+                    VALUES (:id, :uid, :pid, :title, :title, 'NEXT', :src,
+                            :aid, :proj, :sync, :rank, now())"""),
+            {"id": str(uuid4()), "uid": uid, "pid": parent_id, "title": t,
+             "src": source, "aid": account_id, "proj": project_id,
+             "sync": sync_state, "rank": rank},
+        )
+        rank += 1000.0
+
+
+# ── Subtasks (children of a clarified task) ──────────────────────────────────
+
+class SubtaskAddRequest(BaseModel):
+    titles: list[str]
+
+
+@router.get("/items/{item_id}/subtasks", response_model=list[GtdItemModel])
+async def list_subtasks(
+    item_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """The child subtasks of a task, in manual order (the detail panel list)."""
+    uid = _uid(user)
+    db = await _get_db()
+    try:
+        rows = (await db.execute(
+            text(ITEM_SELECT + " WHERE i.parent_item_id = :pid "
+                 "AND i.user_id = :uid "
+                 "ORDER BY i.sort_key ASC NULLS LAST, i.created_at ASC"),
+            {"pid": item_id, "uid": uid},
+        )).fetchall()
+        return [_row_to_item(r) for r in rows]
+    finally:
+        await db.close()
+
+
+@router.post("/items/{item_id}/subtasks", response_model=list[GtdItemModel])
+async def add_subtasks(
+    item_id: str,
+    req: SubtaskAddRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Add child subtasks to an existing task (post-clarify edit). Children
+    inherit the parent's home; a SYNCED parent's new children push on next
+    push. Returns the full, ordered child list."""
+    uid = _uid(user)
+    titles = [t.strip() for t in req.titles if t.strip()]
+    if not titles:
+        raise HTTPException(status_code=400, detail="No subtasks to add")
+    db = await _get_db()
+    try:
+        parent = await _fetch_item(db, item_id, uid)
+        # Append after the last existing child so order is preserved.
+        last = (await db.execute(
+            text("""SELECT max(sort_key) AS m FROM gtd_items
+                     WHERE parent_item_id = :pid AND user_id = :uid"""),
+            {"pid": item_id, "uid": uid},
+        )).fetchone()
+        base_rank = (last.m + 1000.0) if last and last.m is not None else 0.0
+        for offset, title in enumerate(titles):
+            await db.execute(
+                text("""INSERT INTO gtd_items
+                        (id, user_id, parent_item_id, title, next_action,
+                         disposition, source, account_id, project_id,
+                         sync_state, sort_key, clarified_at)
+                        VALUES (:id, :uid, :pid, :title, :title, 'NEXT', :src,
+                                :aid, :proj, :sync, :rank, now())"""),
+                {"id": str(uuid4()), "uid": uid, "pid": item_id, "title": title,
+                 "src": parent.source,
+                 "aid": str(parent.account_id) if parent.account_id else None,
+                 "proj": str(parent.project_id) if parent.project_id else None,
+                 "sync": "pending" if parent.source != "LOCAL" else "local",
+                 "rank": base_rank + offset * 1000.0},
+            )
+        await db.commit()
+        rows = (await db.execute(
+            text(ITEM_SELECT + " WHERE i.parent_item_id = :pid "
+                 "AND i.user_id = :uid "
+                 "ORDER BY i.sort_key ASC NULLS LAST, i.created_at ASC"),
+            {"pid": item_id, "uid": uid},
+        )).fetchall()
+        return [_row_to_item(r) for r in rows]
     finally:
         await db.close()
 
@@ -717,20 +830,63 @@ async def push_item(
             "due_at_ms": due_ms,
             "assignee_id": assignee.get("provider_user_id"),
         })
+        parent_tid = created.get("provider_task_id")
         await db.execute(
             text("""UPDATE gtd_items
                     SET provider_task_id = :tid, provider_url = :url,
                         provider_status = coalesce(:status, provider_status),
                         sync_state = 'synced', synced_at = now(), updated_at = now()
                     WHERE id = :id"""),
-            {"id": item_id, "tid": created.get("provider_task_id"),
+            {"id": item_id, "tid": parent_tid,
              "url": created.get("provider_url"),
              "status": created.get("provider_status")},
         )
+        # Push any local subtasks as ClickUp subtasks of the just-created parent
+        # (best-effort per child — a failed child never rolls back the parent).
+        if parent_tid:
+            await _push_child_subtasks(
+                db, item_id, uid, provider, project_ref, parent_tid)
         await db.commit()
         return _row_to_item(await _fetch_item(db, item_id, uid))
     finally:
         await db.close()
+
+
+async def _push_child_subtasks(
+    db: Any, parent_id: str, uid: str, provider: Any,
+    project_ref: str, parent_tid: str,
+) -> None:
+    """Create the local subtasks of a just-pushed parent as ClickUp subtasks.
+    Each child POSTs to the same list with `parent` set; a child that fails is
+    left LOCAL (its row keeps parent_item_id) so a later push can retry it."""
+    children = (await db.execute(
+        text("""SELECT id, title, next_action, description, provider_status
+                  FROM gtd_items
+                 WHERE parent_item_id = :pid AND user_id = :uid
+                   AND (provider_task_id IS NULL OR provider_task_id = '')
+                 ORDER BY sort_key ASC NULLS LAST, created_at ASC"""),
+        {"pid": parent_id, "uid": uid},
+    )).fetchall()
+    for c in children:
+        try:
+            sub = await provider.create_task(project_ref, {
+                "title": c.next_action or c.title,
+                "description": c.description or None,
+                "status": c.provider_status,
+                "parent": parent_tid,
+            })
+        except Exception:
+            _log.warning("tasks.push.subtask_failed", child_id=str(c.id))
+            continue
+        await db.execute(
+            text("""UPDATE gtd_items
+                    SET provider_task_id = :tid, provider_url = :url,
+                        sync_state = 'synced', synced_at = now(),
+                        updated_at = now()
+                    WHERE id = :id"""),
+            {"id": str(c.id), "tid": sub.get("provider_task_id"),
+             "url": sub.get("provider_url")},
+        )
 
 
 # ── Rich provider detail (comments / attachments / subtasks) ─────────────────

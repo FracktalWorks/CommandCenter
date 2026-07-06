@@ -92,6 +92,30 @@ async def test_clickup_create_task_payload_and_result():
 
 
 @pytest.mark.asyncio
+async def test_clickup_create_task_with_parent_is_a_subtask():
+    """A subtask create sends ClickUp's `parent` id and still POSTs to the
+    parent's list, so children live under the same list as the parent."""
+    provider = ClickUpProvider("pk_123", "team-9")
+    fake_resp = SimpleNamespace(
+        status_code=200,
+        json=lambda: {"id": "86sub", "url": "https://app.clickup.com/t/86sub",
+                      "status": {"status": "to do"}},
+        text="",
+    )
+    with patch("gateway.routes.tasks.providers.httpx.AsyncClient") as client_cls:
+        http = client_cls.return_value.__aenter__.return_value
+        http.post = AsyncMock(return_value=fake_resp)
+        out = await provider.create_task("list-1", {
+            "title": "Draft the spec",
+            "parent": "86abc",
+        })
+        args, kwargs = http.post.call_args
+        assert args[0].endswith("/list/list-1/task")
+        assert kwargs["json"]["parent"] == "86abc"
+    assert out["provider_task_id"] == "86sub"
+
+
+@pytest.mark.asyncio
 async def test_clickup_update_task_backsync_fields_and_assignee_delta():
     """A back-synced edit PUTs only the changed fields, and models an assignee
     change as ClickUp's add/rem delta (reassign from 7 → 42)."""
@@ -359,6 +383,28 @@ def test_all_view_excludes_done_and_trash():
 def test_archive_view_shows_only_archived():
     # The archive view is the only place archived rows appear.
     assert VIEW_WHERE["archive"] == "i.archived_at IS NOT NULL"
+
+
+def test_list_items_excludes_subtasks_and_selects_subtask_count():
+    # Subtasks are nested under their parent, never standalone rows; and every
+    # item read carries a subtask_count roll-up.
+    import inspect
+
+    from gateway.routes.tasks import core as core_mod
+    from gateway.routes.tasks import items as items_mod
+
+    src = inspect.getsource(items_mod.list_items)
+    assert "i.parent_item_id IS NULL" in src
+    assert "subtask_count" in core_mod.ITEM_SELECT
+    assert "c.parent_item_id = i.id" in core_mod.ITEM_SELECT
+
+
+def test_organize_request_accepts_subtasks():
+    from gateway.routes.tasks.items import OrganizeRequest
+
+    req = OrganizeRequest(kind="next", next_action="Ship it",
+                          subtasks=["step one", "step two"])
+    assert req.subtasks == ["step one", "step two"]
 
 
 def test_workflow_stages_normalizes_and_defaults():

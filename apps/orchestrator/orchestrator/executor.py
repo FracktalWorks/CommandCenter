@@ -209,11 +209,25 @@ def _apply_copilot_infinite_sessions(agent: Any) -> bool:
     honours it. So setting it on ``agent._default_options`` alone is not enough; we
     wrap ``_create_session`` to merge our block into the config it produces.
 
+    The effective config is computed at CALL TIME (inside ``_wrapped``), not at wrap
+    time.  This matters because BYOK provider detection sets
+    ``agent._default_options["provider"]`` AFTER ``_inject_agent_tools`` (which calls
+    this function) but BEFORE ``agent.run()`` (which calls ``_create_session``).  By
+    detecting BYOK at call time we can always apply the correct policy:
+
+    - BYOK agent (``provider`` set in ``_default_options``): ``{enabled: False}`` —
+      the Copilot backend cannot learn the real context window for a BYOK model (its
+      ``list_models()`` queries ``api.githubcopilot.com``, which has no entry for our
+      gateway-routed model), so it falls back to ~90K and any threshold × 90K is
+      useless against a 1M-window model. Disabling is the only correct policy.
+    - Copilot-native agent: relaxed thresholds from ``_copilot_infinite_session_config``
+      (backend knows the real window and its compaction is meaningful).
+
     Idempotent (guards ``__cc_inf_sessions__``); best-effort (never raises). Returns
     True if the wrap was applied.
     """
-    cfg = _copilot_infinite_session_config()
-    if cfg is None:
+    # Honour the operator opt-out at wrap time — no wrap, no runtime overhead.
+    if os.environ.get("COPILOT_INFINITE_SESSIONS", "").strip().lower() == "default":
         return False
     orig = getattr(agent, "_create_session", None)
     if not callable(orig) or getattr(agent, "__cc_inf_sessions__", False):
@@ -227,6 +241,24 @@ def _apply_copilot_infinite_sessions(agent: Any) -> bool:
         # ``client.create_session`` in one shot, dropping infinite_sessions on the
         # way. We can't edit the config it produces, so we intercept at the client:
         # swap in a create_session that merges our block, run the original, restore.
+        #
+        # Compute effective config NOW — provider may have been set after the wrap.
+        _mode = os.environ.get("COPILOT_INFINITE_SESSIONS", "").strip().lower()
+        if _mode == "default":
+            # Opt-out changed at runtime — skip injection this call.
+            return await orig(streaming, runtime_options)
+        _opts = getattr(agent, "_default_options", {}) or {}
+        _is_byok = bool(_opts.get("provider"))
+        if _mode == "off" or _is_byok:
+            # BYOK: backend window estimate is wrong → disable compaction entirely.
+            # Our C2 assembly (acb_llm.assemble_run_context) already bounds the
+            # prompt; the real provider API honours its true window.
+            effective_cfg: dict[str, Any] = {"enabled": False}
+        else:
+            # Copilot-native: backend knows the real window → relaxed thresholds
+            # are meaningful. Fall back to disabled if config returns None.
+            effective_cfg = _copilot_infinite_session_config() or {"enabled": False}
+
         client = getattr(agent, "_client", None)
         orig_client_create = getattr(client, "create_session", None) if client else None
         if not callable(orig_client_create):
@@ -234,7 +266,7 @@ def _apply_copilot_infinite_sessions(agent: Any) -> bool:
 
         async def _client_create(config: Any) -> Any:
             if isinstance(config, dict) and "infinite_sessions" not in config:
-                config = {**config, "infinite_sessions": cfg}
+                config = {**config, "infinite_sessions": effective_cfg}
             return await orig_client_create(config)
 
         try:
@@ -246,7 +278,7 @@ def _apply_copilot_infinite_sessions(agent: Any) -> bool:
     try:
         agent._create_session = _wrapped  # type: ignore[attr-defined]
         agent.__cc_inf_sessions__ = True  # type: ignore[attr-defined]
-        _log.info("executor.copilot_infinite_sessions_applied", config=cfg)
+        _log.info("executor.copilot_infinite_sessions_applied", byok_aware=True)
         return True
     except Exception:  # noqa: BLE001
         return False

@@ -87,8 +87,12 @@ class _FakeCopilotAgent:
     """Minimal shape mirroring the agent-framework Copilot agent: a _client and a
     _create_session that builds a fixed SessionConfig (dropping infinite_sessions,
     exactly like the real wrapper) and calls client.create_session."""
-    def __init__(self) -> None:
+    def __init__(self, *, byok: bool = False) -> None:
         self._client = _FakeClient()
+        # Mimic the BYOK provider dict set by _apply_byok_provider_for_copilot_sdk.
+        self._default_options: dict = {
+            "provider": {"type": "openai", "base_url": "http://gw/v1", "api_key": "k"}
+        } if byok else {}
 
     async def _create_session(self, streaming: bool, runtime_options=None):
         # Mirrors the real _create_session: a FIXED key set, no infinite_sessions.
@@ -103,7 +107,7 @@ def test_wrap_injects_infinite_sessions_into_client_config(monkeypatch) -> None:
     monkeypatch.delenv("COPILOT_COMPACTION_THRESHOLD", raising=False)
     monkeypatch.delenv("COPILOT_BUFFER_THRESHOLD", raising=False)
 
-    agent = _FakeCopilotAgent()
+    agent = _FakeCopilotAgent()  # no provider → Copilot-native path
     applied = ex._apply_copilot_infinite_sessions(agent)
     assert applied is True
     assert getattr(agent, "__cc_inf_sessions__", False) is True
@@ -119,6 +123,61 @@ def test_wrap_injects_infinite_sessions_into_client_config(monkeypatch) -> None:
 
     # client.create_session restored to the original after the call (no leak).
     assert agent._client.create_session.__name__ == "create_session"
+
+
+def test_byok_agent_disables_compaction(monkeypatch) -> None:
+    """BYOK agent (provider set in _default_options) always gets enabled:False
+    regardless of threshold env vars — the backend's wrong ~90K window estimate
+    makes any threshold×90K useless against a 1M-window model."""
+    monkeypatch.delenv("COPILOT_INFINITE_SESSIONS", raising=False)
+    monkeypatch.delenv("COPILOT_COMPACTION_THRESHOLD", raising=False)
+    monkeypatch.delenv("COPILOT_BUFFER_THRESHOLD", raising=False)
+
+    agent = _FakeCopilotAgent(byok=True)
+    applied = ex._apply_copilot_infinite_sessions(agent)
+    assert applied is True
+
+    asyncio.run(agent._create_session(True, None))
+    cfg = agent._client.received_config
+    assert cfg["infinite_sessions"] == {"enabled": False}, (
+        "BYOK agent must disable backend compaction, not just relax thresholds"
+    )
+
+
+def test_byok_detection_at_call_time(monkeypatch) -> None:
+    """Provider set AFTER the wrap (mirroring real execution order where
+    _inject_agent_tools wraps _create_session before BYOK provider is applied)
+    must still produce enabled:False at call time."""
+    monkeypatch.delenv("COPILOT_INFINITE_SESSIONS", raising=False)
+
+    agent = _FakeCopilotAgent()  # no provider yet
+    ex._apply_copilot_infinite_sessions(agent)  # wrap applied before provider
+
+    # Now simulate BYOK provider being set (as _apply_byok_provider_for_copilot_sdk does).
+    agent._default_options["provider"] = {
+        "type": "openai", "base_url": "http://gw/v1", "api_key": "k",
+    }
+
+    asyncio.run(agent._create_session(True, None))
+    assert agent._client.received_config["infinite_sessions"] == {"enabled": False}, (
+        "BYOK detected at call time even though wrap was applied before provider was set"
+    )
+
+
+def test_non_byok_uses_relaxed_thresholds(monkeypatch) -> None:
+    """Copilot-native agent (no provider) uses relaxed thresholds, not disabled."""
+    monkeypatch.delenv("COPILOT_INFINITE_SESSIONS", raising=False)
+    monkeypatch.delenv("COPILOT_COMPACTION_THRESHOLD", raising=False)
+    monkeypatch.delenv("COPILOT_BUFFER_THRESHOLD", raising=False)
+
+    agent = _FakeCopilotAgent()  # no provider → native Copilot
+    ex._apply_copilot_infinite_sessions(agent)
+
+    asyncio.run(agent._create_session(True, None))
+    inf = agent._client.received_config["infinite_sessions"]
+    assert inf["enabled"] is True, "Copilot-native should keep compaction enabled"
+    assert inf["background_compaction_threshold"] >= 0.90
+    assert inf["buffer_exhaustion_threshold"] >= 0.98
 
 
 def test_wrap_is_idempotent(monkeypatch) -> None:

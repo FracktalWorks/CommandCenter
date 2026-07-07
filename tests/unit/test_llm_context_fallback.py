@@ -24,9 +24,13 @@ def test_resolve_tier_alias_to_underlying_model() -> None:
 
 
 def test_context_window_for_tiers() -> None:
-    assert ctx.context_window_for("tier-fast") == 32_768
-    assert ctx.context_window_for("tier-balanced") == 128_000
-    assert ctx.context_window_for("tier-powerful") == 200_000
+    # Values match litellm config.yaml tier→model assignments:
+    #   tier-fast     → deepseek/deepseek-chat      (131K)
+    #   tier-balanced → deepseek/deepseek-v4-pro     (1M)
+    #   tier-powerful → deepseek/deepseek-v4-pro     (1M)
+    assert ctx.context_window_for("tier-fast") == 131_072
+    assert ctx.context_window_for("tier-balanced") == 1_000_000
+    assert ctx.context_window_for("tier-powerful") == 1_000_000
     # Unknown id never returns 0 — always a usable positive budget.
     assert ctx.context_window_for("made-up/model") > 0
 

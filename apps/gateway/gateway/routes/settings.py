@@ -1490,14 +1490,20 @@ async def list_provider_models(
 
 
 # Context windows for tier routing aliases (these route to backing models that
-# aren't in _MODEL_CAPABILITIES under their alias name).  Conservative values.
+# aren't in _MODEL_CAPABILITIES under their alias name).
+# Values match the current litellm config.yaml tier→model assignments:
+#   tier-fast     → deepseek/deepseek-chat       (131K actual)
+#   tier-balanced → deepseek/deepseek-v4-pro      (1M actual)
+#   tier-powerful → deepseek/deepseek-v4-pro      (1M actual)
+# Update here AND in acb_llm.context._TIER_CONTEXT_WINDOWS whenever the
+# tier→model mapping in infra/litellm/config.yaml changes.
 _TIER_CONTEXT_WINDOWS: dict[str, int] = {
     "tier1-local-qwen3": 32_768,
     "tier2-sonnet": 200_000,
     "tier3-opus": 200_000,
-    "tier-fast": 32_768,
-    "tier-balanced": 128_000,
-    "tier-powerful": 200_000,
+    "tier-fast": 131_072,
+    "tier-balanced": 1_000_000,
+    "tier-powerful": 1_000_000,
 }
 
 

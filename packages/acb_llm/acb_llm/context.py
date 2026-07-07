@@ -30,13 +30,21 @@ from acb_llm.message_compress import compress_message_content
 
 _log = get_logger("acb_llm.context")
 
-# Conservative input-token budgets for the gateway tier aliases. Mirrors
+# Input-token budgets for the gateway tier aliases. Mirrors
 # gateway.routes.settings._TIER_CONTEXT_WINDOWS so behaviour is identical
 # whether the budget comes from litellm's registry or this tier table.
+#
+# Values match the current litellm config.yaml tier assignments:
+#   tier-fast     → deepseek/deepseek-chat       (131K actual)
+#   tier-balanced → deepseek/deepseek-v4-pro      (1M actual)
+#   tier-powerful → deepseek/deepseek-v4-pro      (1M actual)
+#
+# Update here AND in gateway.routes.settings._TIER_CONTEXT_WINDOWS whenever
+# the tier→model mapping in infra/litellm/config.yaml changes.
 _TIER_CONTEXT_WINDOWS: dict[str, int] = {
-    "tier-fast": 32_768,
-    "tier-balanced": 128_000,
-    "tier-powerful": 200_000,
+    "tier-fast": 131_072,
+    "tier-balanced": 1_000_000,
+    "tier-powerful": 1_000_000,
 }
 
 # Substrings litellm / providers use when the prompt is too long for the model.
@@ -77,18 +85,28 @@ def resolve_underlying_model(model: str) -> str:
 
 def context_window_for(model: str) -> int:
     """Best-effort *input*-token budget for ``model`` (a tier alias or a concrete
-    litellm id). Order: curated tier table → litellm's registry for the resolved
-    model → a conservative default. Always returns a positive number."""
+    litellm id).
+
+    Resolution order:
+      1. Curated tier table (``_TIER_CONTEXT_WINDOWS``) — fastest path for the
+         three gateway tier aliases; values reflect the current litellm
+         ``config.yaml`` tier→model assignments.
+      2. litellm ``model_cost`` registry for the resolved model — used for
+         explicit ``provider/model`` ids that aren't in the tier table.
+      3. Conservative default (32 768).
+
+    Always returns a positive integer.
+    """
     m = (model or "").strip()
     if not m:
         return _DEFAULT_CONTEXT_WINDOW
-    # Tier alias → use the curated tier budget directly (the backing model may
-    # not carry a max_input_tokens entry in litellm's registry).
+    # Tier alias → curated table (values match litellm config.yaml assignments).
     if m in _TIER_CONTEXT_WINDOWS:
         return _TIER_CONTEXT_WINDOWS[m]
     resolved = resolve_underlying_model(m)
     if resolved in _TIER_CONTEXT_WINDOWS:
         return _TIER_CONTEXT_WINDOWS[resolved]
+    # Explicit provider/model id → litellm registry.
     try:
         from litellm import model_cost
         info = (model_cost.get(resolved)

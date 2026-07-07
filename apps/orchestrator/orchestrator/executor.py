@@ -3360,7 +3360,7 @@ async def run_agent_stream(
                     _prior = event_payload.get("messages") or []
                     if _prior:
                         _history_lines: list[str] = []
-                        for m in _prior[-12:]:  # last 6 exchanges
+                        for m in _prior[-30:]:  # last 15 exchanges
                             role = m.get("role", "user")
                             content = (m.get("content") or "").strip()
                             if not content:
@@ -3368,9 +3368,12 @@ async def run_agent_stream(
                             label = (
                                 "User" if role == "user" else "Assistant"
                             )
+                            # Larger budget — coding messages carry diffs and
+                            # file contents that are meaningless when cut to
+                            # a few sentences.
                             short = (
-                                content if len(content) <= 200
-                                else content[:200] + "..."
+                                content if len(content) <= 600
+                                else content[:600] + "..."
                             )
                             _history_lines.append(f"{label}: {short}")
                         if _history_lines:
@@ -3767,12 +3770,12 @@ async def run_agent_stream(
                         _prior_msgs = event_payload.get("messages") or []
                         if _prior_msgs:
                             _hist: list[str] = []
-                            for _hm in _prior_msgs[-20:]:
+                            for _hm in _prior_msgs[-30:]:
                                 _hr = _hm.get("role", "user")
                                 _hc = (_hm.get("content") or "").strip()
                                 if _hc:
                                     _hl = "User" if _hr == "user" else "Assistant"
-                                    _hs = _hc if len(_hc) <= 300 else _hc[:300] + "..."
+                                    _hs = _hc if len(_hc) <= 800 else _hc[:800] + "..."
                                     _hist.append(f"{_hl}: {_hs}")
                             if _hist:
                                 _effective_msg = (

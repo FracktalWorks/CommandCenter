@@ -117,6 +117,8 @@ export type ClarifyDecision =
       nextAction: string;
       context?: string;
       energy?: Energy;
+      /** additional steps beyond the first next action, created as subtasks. */
+      subtasks?: string[];
     } & SyncFields);
 
 /** The editable metadata of a task (post-clarify edit). Every field optional —
@@ -221,10 +223,16 @@ function applyDecision(
         dueAt: d.dueAt ?? base.dueAt,
         ...(targetFields(d.dest) ?? {}),
       };
-    case "next":
+    case "next": {
+      // OWNER is independent of SIZE (Sort→Shape): a plain "next" decision
+      // delegates too when it carries an assignee — same rule as the backend.
+      const delegated = !!d.assignee;
       return {
         ...base,
-        disposition: "NEXT",
+        disposition: delegated ? "WAITING" : "NEXT",
+        isMine: !delegated,
+        waitingOn: delegated ? d.assignee : base.waitingOn,
+        delegatedAt: delegated ? now : base.delegatedAt,
         nextAction: d.nextAction,
         context: d.context,
         energy: d.energy,
@@ -235,10 +243,15 @@ function applyDecision(
         assignee: d.assignee ?? base.assignee,
         ...(targetFields(d.dest) ?? {}),
       };
-    case "calendar":
+    }
+    case "calendar": {
+      const delegated = !!d.assignee;
       return {
         ...base,
-        disposition: "NEXT",
+        disposition: delegated ? "WAITING" : "NEXT",
+        isMine: !delegated,
+        waitingOn: delegated ? d.assignee : base.waitingOn,
+        delegatedAt: delegated ? now : base.delegatedAt,
         nextAction: d.nextAction,
         context: d.context,
         dueAt: d.dueAt,
@@ -248,6 +261,7 @@ function applyDecision(
         assignee: d.assignee ?? base.assignee,
         ...(targetFields(d.dest) ?? {}),
       };
+    }
   }
 }
 
@@ -308,9 +322,11 @@ function clarifyLabel(d: ClarifyDecision): string {
     case "someday": return "Moved to Someday";
     case "do-now": return "Marked done";
     case "delegate": return `Delegated to ${d.person.name}`;
-    case "next": return "Filed as Next action";
-    case "calendar": return "Scheduled";
-    case "project": return "Made a Project";
+    // OWNER is independent of SIZE — any of these delegates when it carries
+    // an assignee (Sort→Shape), same rule the store/backend both apply.
+    case "next": return d.assignee ? `Delegated to ${d.assignee.name}` : "Filed as Next action";
+    case "calendar": return d.assignee ? `Delegated to ${d.assignee.name}` : "Scheduled";
+    case "project": return d.assignee ? `Made a Project — delegated to ${d.assignee.name}` : "Made a Project";
   }
 }
 
@@ -767,7 +783,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       let projects = s.projects;
       let items: GtdItem[];
       if (decision.kind === "project") {
-        // Create a project and make this item its first next action.
+        // Create a project and make this item its first next action. OWNER is
+        // independent of SIZE (Sort→Shape): a project can ALSO be delegated —
+        // mirror that the same way applyDecision's "delegate" case does.
         const now = new Date().toISOString();
         const pid = nextId();
         const tf =
@@ -783,11 +801,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
           hasNextAction: true,
         };
         projects = [project, ...s.projects];
+        const delegated = !!decision.assignee;
         items = s.items.map((i) =>
           i.id === id
             ? {
                 ...i,
-                disposition: "NEXT",
+                disposition: delegated ? "WAITING" : "NEXT",
+                isMine: !delegated,
+                waitingOn: delegated ? decision.assignee : i.waitingOn,
+                delegatedAt: delegated ? now : i.delegatedAt,
                 nextAction: decision.nextAction,
                 context: decision.context,
                 energy: decision.energy,

@@ -53,6 +53,15 @@ export interface ClarifyProposal {
   /** true when re-clarifying a SYNCED task: its ClickUp destination (account +
    *  project) is locked and the "Where it goes" picker should be read-only. */
   lockedDestination?: boolean;
+  /** true when the assistant reads the TITLE itself as too vague to clarify
+   *  well (server proposal only) — drives the vague-title gate. */
+  isVague?: boolean;
+  /** a clearer rewrite of the title, offered whether or not it's vague
+   *  (server proposal only). Undefined when no improvement is offered. */
+  suggestedTitle?: string;
+  /** a model-inferred hard deadline (ISO date), when the item implies one
+   *  (server proposal only). Feeds the "When" axis. */
+  dueDate?: string;
 }
 
 /** Map a GTD disposition to a sensible provider stage/status.

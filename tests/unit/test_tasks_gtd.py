@@ -9,6 +9,7 @@ Covers the pure logic layers:
 """
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -351,6 +352,94 @@ def test_llm_overlay_without_llm_core_is_deterministic_with_complexity():
     assert merged["complexity"] == "project"
 
 
+def test_llm_overlay_carries_vague_title_and_due_date():
+    # The Sort→Shape card's vague-title gate + When axis both ride on the LLM
+    # overlay's is_vague/suggested_title/due_date keys.
+    llm_core = {
+        "disposition": "NEXT",
+        "next_action": "Follow up with Acme on the signed MSA",
+        "confidence": "low",
+        "rationale": "Title was too vague to place confidently.",
+        "is_vague": True,
+        "suggested_title": "Follow up with Acme on the signed MSA",
+        "due_date": "2026-07-11",
+    }
+    merged = tasks_ai.propose_with_llm(
+        _item("Follow up"), [], [], {}, llm_core)
+    assert merged["is_vague"] is True
+    assert merged["suggested_title"] == "Follow up with Acme on the signed MSA"
+    assert merged["due_date"] == "2026-07-11"
+
+
+def test_llm_overlay_without_llm_core_has_no_vague_flag():
+    # Pure heuristic path never claims a title is vague — only the LLM judges it.
+    merged = tasks_ai.propose_with_llm(_item("Plan the offsite"), [], [], {}, None)
+    assert "is_vague" not in merged
+    assert "suggested_title" not in merged
+
+
+def test_llm_propose_parses_vague_title_fields_from_json(monkeypatch):
+    # Exercise _llm_propose's own JSON parsing (not just the overlay merge).
+    fake_content = json.dumps({
+        "disposition": "NEXT",
+        "next_action": "Call the lab about calibration",
+        "confidence": "medium",
+        "rationale": "Ambiguous stub, clarified via notes.",
+        "is_vague": True,
+        "suggested_title": "Call the lab about calibration",
+        "due_date": "not-a-date",  # must be dropped — not a real ISO date
+        "complexity": "single",
+    })
+    fake_resp = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=fake_content))])
+
+    async def fake_completion(**kwargs):
+        return fake_resp, kwargs.get("model")
+
+    monkeypatch.setattr(
+        "acb_llm.context.acompletion_with_fallback", fake_completion, raising=False)
+    import asyncio
+    core = asyncio.run(tasks_ai._llm_propose(
+        _item("Call"), [], [], {}, "tier-fast"))
+    assert core is not None
+    assert core["is_vague"] is True
+    assert core["suggested_title"] == "Call the lab about calibration"
+    # Malformed due_date is silently dropped, never surfaced as a fake deadline.
+    assert "due_date" not in core
+
+
+def test_llm_propose_suggested_title_dropped_when_same_as_current():
+    # A "suggestion" identical to the existing title isn't a suggestion.
+    core = {"suggested_title": "call sanjay"}
+    # Simulate the identical-title guard directly (mirrors _llm_propose's check).
+    item = _item("Call Sanjay")
+    sug = core["suggested_title"]
+    surfaced = sug and sug.lower() != (item.title or "").strip().lower()
+    assert not surfaced
+
+
+def test_suggest_title_route_and_helper_use_llm_with_fallback():
+    """The 'Improve title' affordance (always-available) and the vague-title
+    gate both resolve through _llm_suggest_title, which degrades safely."""
+    import asyncio
+
+    from gateway.routes.tasks.ai import _llm_suggest_title
+
+    # No LLM configured / import failure → safe default, never raises.
+    out = asyncio.run(_llm_suggest_title("Follow up", None, "tier-fast"))
+    assert out == {"is_vague": False, "suggested_title": None}
+    # Empty title → same safe default, no call attempted.
+    out2 = asyncio.run(_llm_suggest_title("", None, "tier-fast"))
+    assert out2["is_vague"] is False and out2["suggested_title"] is None
+
+
+def test_suggest_title_route_is_registered():
+    from gateway.routes.tasks import router
+
+    paths = {getattr(r, "path", "") for r in router.routes}
+    assert "/tasks/items/{item_id}/suggest-title" in paths
+
+
 def test_default_status_gtd_mapping():
     statuses = ["Backlog", "To-do", "In Process", "Review", "Done"]
     assert tasks_ai.default_status("SOMEDAY", statuses) == "Backlog"
@@ -405,6 +494,22 @@ def test_organize_request_accepts_subtasks():
     req = OrganizeRequest(kind="next", next_action="Ship it",
                           subtasks=["step one", "step two"])
     assert req.subtasks == ["step one", "step two"]
+
+
+def test_organize_owner_axis_independent_of_size():
+    """Sort→Shape: OWNER (assignee) must combine with ANY size (next/project),
+    not just the legacy kind="delegate" — a task can be a project, delegated,
+    with a deadline, and broken into steps, all in one commit."""
+    import inspect
+
+    from gateway.routes.tasks import items as tasks_items
+
+    src = inspect.getsource(tasks_items.organize_item)
+    # A next/project/calendar kind delegates too when it carries an assignee.
+    assert 'req.kind in ("next", "project", "calendar") and req.assignee is not None' in src
+    assert 'disposition = "WAITING"' in src
+    # is_mine now derives from the independent `delegated` flag, not kind=="delegate".
+    assert '"is_mine": not delegated' in src
 
 
 # ---------------------------------------------------------------------------

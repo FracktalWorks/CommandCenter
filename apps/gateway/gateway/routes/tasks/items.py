@@ -103,7 +103,16 @@ class ItemPatch(BaseModel):
 
 
 class OrganizeRequest(BaseModel):
-    """One clarify decision — mirrors the UI's ClarifyDecision (§2.2)."""
+    """One clarify decision — mirrors the UI's ClarifyDecision (§2.2).
+
+    Sort→Shape (the redesigned Clarify card): `kind` carries the SORT decision
+    (next|project|calendar|do-now|someday|reference|trash) plus SIZE (project
+    vs next, with `subtasks`). `assignee` is the independent OWNER axis — it
+    can be set on ANY actionable kind (not just the legacy `delegate` kind), so
+    a task can be a project AND delegated AND scheduled AND broken into steps,
+    all at once. The legacy `kind="delegate"` still works unchanged (owner-only,
+    single action) for older callers.
+    """
     kind: str                            # next|project|delegate|calendar|do-now|someday|reference|trash
     next_action: str | None = None
     outcome: str | None = None           # project kind: the wild-success statement
@@ -586,6 +595,18 @@ async def organize_item(
         raise HTTPException(status_code=400,
                             detail="due_at is required for a calendar decision")
 
+    # Sort→Shape: OWNER is an axis independent of SIZE/WHEN. The legacy
+    # `kind="delegate"` always delegates; any other actionable kind (next/
+    # project/calendar) ALSO delegates when it carries an `assignee` — so a
+    # task can be a project, delegated, with a deadline, all at once. Only the
+    # disposition/is_mine/waiting-record logic changes; size (project+
+    # subtasks) and when (due_at) are untouched.
+    delegated = req.kind == "delegate" or (
+        req.kind in ("next", "project", "calendar") and req.assignee is not None
+    )
+    if delegated:
+        disposition = "WAITING"
+
     uid = _uid(user)
     db = await _get_db()
     try:
@@ -648,11 +669,11 @@ async def organize_item(
                 "sync_state": sync_state, "status": req.status,
                 "assignee": json.dumps(req.assignee.model_dump())
                 if req.assignee else None,
-                "is_mine": req.kind != "delegate",
+                "is_mine": not delegated,
                 "due": due, "hard": req.kind == "calendar",
             },
         )
-        if req.kind == "delegate":
+        if delegated:
             await db.execute(
                 text("""INSERT INTO gtd_waiting
                         (item_id, waiting_on, delegated_at, expected_by)

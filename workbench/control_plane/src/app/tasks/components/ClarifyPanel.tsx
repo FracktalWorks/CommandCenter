@@ -6,14 +6,16 @@ import {
   Check,
   ArrowRight,
   ListChecks,
+  ListTree,
   FolderKanban,
   UserPlus,
+  User,
   CalendarClock,
-  Zap,
+  CalendarDays,
   Lightbulb,
   FileText,
   Trash2,
-  SlidersHorizontal,
+  Zap,
   HardDrive,
   Cloud,
   Search,
@@ -22,6 +24,9 @@ import {
   Plus,
   Loader2,
   Lock,
+  AlertTriangle,
+  Wand2,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { useTaskStore, type ClarifyDecision } from "../lib/taskStore";
@@ -31,38 +36,74 @@ import {
   type ClarifyDisposition,
   type ClarifyProposal,
 } from "../lib/clarify";
-import { apiClarifyPropose } from "../lib/api";
+import { apiClarifyPropose, apiSuggestTitle } from "../lib/api";
 import type { ConnectedProvider } from "../lib/mockData";
-import { Energy, GtdItem, GtdProject, Person, Target, WorkspaceHierarchySpace } from "../lib/types";
+import { Energy, GtdItem, GtdProject, Person, Target } from "../lib/types";
 import type { TaskAccount } from "../lib/api";
 import { durationLabel, initials, originEmailHref, snoozeOptions } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
 import { AttachmentChips } from "./AttachmentComposer";
 
-// F2 — Clarify. AI proposes a full disposition (what it is · next action · where
-// it's stored · who owns it · which stage); you confirm in one tap or adjust any
-// part. The local heuristic renders INSTANTLY; on a live backend the server
-// proposal (org-knowledge capability match + server project auto-match +
-// destination/stage defaults, §2.2 agent seam) upgrades it in place — but only
-// while the form is still untouched (the human's edits always win).
+// F2 — Clarify, redesigned as SORT → SHAPE.
+//
+// The old card asked ONE 8-way question ("what is it: Next / Project /
+// Delegate / Schedule / ...") that silently forced disposition, size, owner,
+// and timing into a single mutually-exclusive pick — a task that was a
+// PROJECT, DELEGATED, with a DEADLINE, broken into STEPS had no way to be
+// expressed. Sort→Shape splits that into:
+//
+//   STEP 1 — Sort: the one true single-pick (is this even actionable?)
+//            Do now · Actionable · Reference · Someday · Trash
+//   STEP 2 — Shape (only when Sort=Actionable): four INDEPENDENT axes that
+//            combine freely —
+//              Size:  single | subtasks | project
+//              Owner: me | delegate → person
+//              When:  anytime | a date
+//              Where: a Space→Folder→List tree, target level driven by Size
+//                     (single/subtasks pick a LIST; project picks a
+//                     SPACE or FOLDER the new list is created under)
+//
+// A vague-title gate: the AI's cognition (owner/context/subtasks) is only as
+// good as the title. When the title reads as too unclear, a soft-gate banner
+// offers a clearer rewrite; the recommend block dims ("best-effort") until
+// accepted, but never blocks — you can also press "Improve" on any title.
 
-const DISP: Record<
-  ClarifyDisposition,
-  { label: string; icon: LucideIcon; danger?: boolean }
-> = {
-  NEXT: { label: "Next action", icon: ListChecks },
-  PROJECT: { label: "Project", icon: FolderKanban },
-  WAITING: { label: "Delegate", icon: UserPlus },
-  CALENDAR: { label: "Schedule", icon: CalendarClock },
-  DO_NOW: { label: "Do now · 2 min", icon: Zap },
-  SOMEDAY: { label: "Someday", icon: Lightbulb },
-  REFERENCE: { label: "Reference", icon: FileText },
-  TRASH: { label: "Trash", icon: Trash2, danger: true },
+type Sort = "do-now" | "actionable" | "reference" | "someday" | "trash";
+type Size = "single" | "subtasks" | "project";
+type Owner = "me" | "delegate";
+type When = "anytime" | "date";
+
+const SORT_META: Record<Sort, { label: string; icon: LucideIcon; danger?: boolean }> = {
+  "do-now": { label: "Do now · 2 min", icon: Zap },
+  actionable: { label: "Actionable", icon: ListChecks },
+  reference: { label: "Reference", icon: FileText },
+  someday: { label: "Someday", icon: Lightbulb },
+  trash: { label: "Trash", icon: Trash2, danger: true },
 };
-const DISP_ORDER: ClarifyDisposition[] = [
-  "NEXT", "PROJECT", "WAITING", "CALENDAR", "DO_NOW", "SOMEDAY", "REFERENCE", "TRASH",
-];
-const ACTIONABLE = new Set<ClarifyDisposition>(["NEXT", "PROJECT", "WAITING", "CALENDAR"]);
+const SORT_ORDER: Sort[] = ["do-now", "actionable", "reference", "someday", "trash"];
+
+const SIZE_META: Record<Size, { label: string; icon: LucideIcon }> = {
+  single: { label: "Single action", icon: ListChecks },
+  subtasks: { label: "Break into steps", icon: ListTree },
+  project: { label: "Project", icon: FolderKanban },
+};
+
+/** Map a disposition (server proposal / current item state) → the Sort bucket. */
+function sortOf(d: ClarifyDisposition): Sort {
+  if (d === "DO_NOW") return "do-now";
+  if (d === "REFERENCE") return "reference";
+  if (d === "SOMEDAY") return "someday";
+  if (d === "TRASH") return "trash";
+  return "actionable"; // NEXT / PROJECT / WAITING / CALENDAR
+}
+/** Map a disposition → the Size bucket (only meaningful when Sort=actionable). */
+function sizeOf(d: ClarifyDisposition, complexity?: string): Size {
+  if (d === "PROJECT") return "project";
+  if (complexity === "subtasks") return "subtasks";
+  if (complexity === "project") return "project";
+  return "single";
+}
+
 const short = (s: string, n = 26) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 const destEntry = (t: Target, providers: ConnectedProvider[]) =>
   t.source === "LOCAL"
@@ -95,6 +136,12 @@ export function ClarifyPanel({
   const accounts = useTaskStore((s) => s.accounts);
   const refreshAccountMembers = useTaskStore((s) => s.refreshAccountMembers);
   const createWorkspaceProject = useTaskStore((s) => s.createWorkspaceProject);
+  const localHierarchy = useTaskStore((s) => s.localHierarchy);
+  const loadLocalHierarchy = useTaskStore((s) => s.loadLocalHierarchy);
+  const createLocalSpace = useTaskStore((s) => s.createLocalSpace);
+  const createLocalFolder = useTaskStore((s) => s.createLocalFolder);
+  const createLocalProject = useTaskStore((s) => s.createLocalProject);
+  const renameItem = useTaskStore((s) => s.renameItem);
 
   // Re-clarify seeds the form from the task's CURRENT clarified state (an edit,
   // not a fresh decision). The item's own target is reconstructed so a SYNCED
@@ -111,8 +158,6 @@ export function ClarifyPanel({
       reclarify
         ? {
             ...proposeClarification(item, people, projects),
-            // Reflect what the task already IS, so nothing looks like it's about
-            // to change until the user (or the server upgrade) touches it.
             disposition:
               item.disposition === "WAITING"
                 ? ("WAITING" as ClarifyDisposition)
@@ -128,15 +173,27 @@ export function ClarifyPanel({
         : proposeClarification(item, people, projects),
     [item, people, projects, reclarify, currentTarget],
   );
-  // The proposal shown in the header (rationale/confidence/assignee chip):
-  // starts as the instant local heuristic, upgraded by the server's when it
-  // arrives (richer people/project knowledge lives behind the gateway).
+  // The proposal shown in the AI block: starts as the instant local heuristic,
+  // upgraded by the server's when it arrives (richer people/project knowledge
+  // lives behind the gateway).
   const [proposal, setProposal] = useState<ClarifyProposal>(localProposal);
   // True once the user changed ANY field — a late server proposal must never
   // stomp on human edits.
   const dirtyRef = useRef(false);
 
-  const [disposition, setDisposition] = useState<ClarifyDisposition>(proposal.disposition);
+  // ── Local title state (vague-title gate) ────────────────────────────────
+  const [title, setTitle] = useState(item.title);
+  const [vagueOpen, setVagueOpen] = useState(false);
+  const [suggestedTitle, setSuggestedTitle] = useState<string | undefined>(undefined);
+  const [titleBusy, setTitleBusy] = useState(false);
+  const titleCleared = useRef(false); // user explicitly dismissed/accepted → don't re-show
+
+  // ── Sort → Shape state ────────────────────────────────────────────────────
+  const [sort, setSort] = useState<Sort>(sortOf(proposal.disposition));
+  const [size, setSize] = useState<Size>(sizeOf(proposal.disposition, proposal.complexity));
+  const [owner, setOwner] = useState<Owner>(proposal.suggestedAssignee ? "delegate" : "me");
+  const [when, setWhen] = useState<When>("anytime");
+
   const [nextAction, setNextAction] = useState(proposal.nextAction);
   const [outcome, setOutcome] = useState(proposal.outcome ?? `${item.title} — done`);
   const [context, setContext] = useState(proposal.context ?? "@computer");
@@ -145,18 +202,22 @@ export function ClarifyPanel({
   const [dueAt, setDueAt] = useState("");
   const [dest, setDest] = useState<Target>(proposal.target ?? { source: "LOCAL", provider: "local" });
   const [projectId, setProjectId] = useState<string | undefined>(proposal.projectId);
-  // Subtasks the user chose to break this task into (NEXT only). Seeded from the
+  // The Where-axis TARGET when Size=project: create the new list under this
+  // space (and optional folder). Independent of `projectId` (the existing-list
+  // pick used for single/subtasks).
+  const [targetSpaceId, setTargetSpaceId] = useState<string | undefined>(undefined);
+  const [targetFolderId, setTargetFolderId] = useState<string | undefined>(undefined);
+  const [newListName, setNewListName] = useState(item.title);
+  // Subtasks the user chose to break this task into. Seeded from the
   // assistant's suggestion when it read the task as "needs subtasks".
   const [subtasks, setSubtasks] = useState<string[]>(
-    proposal.complexity === "subtasks" ? proposal.suggestedSubtasks ?? [] : [],
+    proposal.complexity === "subtasks" || proposal.complexity === "project"
+      ? proposal.suggestedSubtasks ?? []
+      : [],
   );
   const [status, setStatus] = useState<string | undefined>(
     defaultStatus(proposal.disposition, providerStatuses(proposal.target ?? { source: "LOCAL" }, providers)),
   );
-  const [adjust, setAdjust] = useState(false);
-  // "Where it goes" details stay collapsed by default — the assistant already
-  // filled them in, so most items are a single tap. Expand only to fine-tune.
-  const [showDetails, setShowDetails] = useState(false);
 
   // ── Server proposal upgrade (live backend only) ──────────────────────
   // The panel opened instantly on the local heuristic; swap in the server's
@@ -169,7 +230,9 @@ export function ClarifyPanel({
       .then((sp) => {
         if (cancelled || dirtyRef.current) return;
         setProposal(sp);
-        setDisposition(sp.disposition);
+        setSort(sortOf(sp.disposition));
+        setSize(sizeOf(sp.disposition, sp.complexity));
+        setOwner(sp.suggestedAssignee ? "delegate" : "me");
         setNextAction(sp.nextAction);
         setOutcome(sp.outcome ?? `${item.title} — done`);
         setContext(sp.context ?? "@computer");
@@ -178,7 +241,9 @@ export function ClarifyPanel({
         if (sp.target) setDest(sp.target);
         setProjectId(sp.projectId);
         setSubtasks(
-          sp.complexity === "subtasks" ? sp.suggestedSubtasks ?? [] : [],
+          sp.complexity === "subtasks" || sp.complexity === "project"
+            ? sp.suggestedSubtasks ?? []
+            : [],
         );
         setStatus(
           sp.status ??
@@ -187,6 +252,16 @@ export function ClarifyPanel({
               providerStatuses(sp.target ?? { source: "LOCAL" }, providers),
             ),
         );
+        if (sp.dueDate) {
+          setWhen("date");
+          setDueAt(sp.dueDate);
+        }
+        if (sp.isVague && !titleCleared.current) {
+          setVagueOpen(true);
+          setSuggestedTitle(sp.suggestedTitle);
+        } else if (sp.suggestedTitle) {
+          setSuggestedTitle(sp.suggestedTitle);
+        }
       })
       .catch(() => {
         /* server proposal is an upgrade, not a dependency — keep the local one */
@@ -198,6 +273,14 @@ export function ClarifyPanel({
     // upgrade must run exactly once per mount — not re-fire on store churn.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backend, item.id]);
+
+  // Load the local hierarchy once (Where axis, local destination) if it hasn't
+  // been fetched yet — the Projects view normally triggers this, but Clarify
+  // can open first.
+  useEffect(() => {
+    if (backend === "live" && !localHierarchy) void loadLocalHierarchy();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backend]);
 
   const selectedProject = projectId
     ? projects.find((p) => p.id === projectId)
@@ -211,9 +294,6 @@ export function ClarifyPanel({
   );
 
   // ── LIVE delegate list ────────────────────────────────────────────────
-  // When the destination is a workspace, pull its CURRENT members once per
-  // account per mount — someone removed in ClickUp disappears from the
-  // picker right here, not at the next full schema refresh.
   const refreshedAccountsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const aid = destAccount?.id;
@@ -222,9 +302,6 @@ export function ClarifyPanel({
     void refreshAccountMembers(aid);
   }, [destAccount?.id, refreshAccountMembers]);
 
-  // Delegate options: the workspace's CURRENT members (enriched with the org
-  // layer's skills-bearing Person when it matches) for a SYNCED destination;
-  // the org list only for LOCAL.
   const peopleForDelegate: Person[] = useMemo(() => {
     if (!destAccount) return people;
     return destAccount.members.map((m) => {
@@ -239,9 +316,7 @@ export function ClarifyPanel({
   }, [destAccount, people]);
 
   // A picked assignee who is no longer a member (removed in the tool) is
-  // cleared — never delegate to someone who can't receive the task.
-  // Reset-during-render (React's adjust-state-on-change pattern, keeps the
-  // set-state-in-effect lint rule happy and avoids a cascading render).
+  // cleared — reset-during-render, keeps the set-state-in-effect lint happy.
   if (destAccount && assignee) {
     const still = peopleForDelegate.some(
       (m) =>
@@ -250,6 +325,7 @@ export function ClarifyPanel({
     );
     if (!still) setAssignee(null);
   }
+
   const projectsForDest = useMemo(
     () =>
       projects.filter(
@@ -264,68 +340,136 @@ export function ClarifyPanel({
     [projects, dest],
   );
 
+  const isSynced = dest.source === "SYNCED";
+  // A re-clarified SYNCED task is two-way bound to its ClickUp list — the
+  // destination (workspace + project) can't move, only the local cognition and
+  // the break-down can change. The server flags this; lock the picker.
+  const destLocked = reclarify && !!proposal.lockedDestination;
+
   const chooseDest = (t: Target) => {
     setDest(t);
     setProjectId(undefined);
-    setStatus(defaultStatus(disposition, providerStatuses(t, providers)));
+    setTargetSpaceId(undefined);
+    setTargetFolderId(undefined);
+    setStatus(defaultStatus(sort === "actionable" ? "NEXT" : proposal.disposition, providerStatuses(t, providers)));
   };
-  const chooseDisposition = (d: ClarifyDisposition) => {
-    setDisposition(d);
-    let t = dest;
-    if (d === "WAITING" && dest.source === "LOCAL") {
-      const cu = providers.find((p) => p.source === "SYNCED");
-      if (cu) {
-        t = { source: cu.source, provider: cu.provider, accountId: cu.id };
-        setDest(t);
-        setProjectId(undefined);
+
+  const chooseSize = (s: Size) => {
+    setSize(s);
+    // The Where target level changes with size — clear the picks so the tree
+    // doesn't show a stale selection for the wrong node type.
+    setProjectId(undefined);
+    setTargetSpaceId(undefined);
+    setTargetFolderId(undefined);
+  };
+
+  // ── Build the decision from the current Sort→Shape state ────────────────
+  const buildDecision = useCallback((): ClarifyDecision | null => {
+    if (sort === "do-now") return { kind: "do-now" };
+    if (sort === "reference") return { kind: "reference" };
+    if (sort === "trash") return { kind: "trash" };
+    if (sort === "someday") return { kind: "someday", dest, projectId, status };
+
+    // Actionable — Shape applies.
+    const na = nextAction.trim();
+    if (!na) return null;
+    const dueIso = when === "date" && dueAt ? new Date(dueAt).toISOString() : undefined;
+    const delegateTo = owner === "delegate" ? (assignee ?? undefined) : undefined;
+    if (owner === "delegate" && !delegateTo) return null; // must pick someone
+
+    if (size === "project") {
+      if (!outcome.trim()) return null;
+      return {
+        kind: "project",
+        outcome: outcome.trim(),
+        nextAction: na,
+        context,
+        energy,
+        dest,
+        status,
+        dueAt: dueIso,
+        assignee: delegateTo,
+        subtasks: subtasks.length ? subtasks : undefined,
+      };
+    }
+    if (when === "date") {
+      return {
+        kind: "calendar",
+        nextAction: na,
+        dueAt: dueIso ?? snoozeOptions()[0].iso,
+        context,
+        dest,
+        status,
+        assignee: delegateTo,
+      };
+    }
+    return {
+      kind: "next",
+      nextAction: na,
+      context,
+      energy,
+      dest,
+      projectId,
+      status,
+      dueAt: dueIso,
+      assignee: delegateTo,
+      subtasks: size === "subtasks" && subtasks.length ? subtasks : undefined,
+    };
+  }, [sort, size, owner, when, nextAction, outcome, context, energy, assignee,
+      dueAt, dest, projectId, status, subtasks]);
+
+  // A pending "create the project under this space/folder" is applied FIRST
+  // (mints a real project), then the decision files into it.
+  const [creatingTarget, setCreatingTarget] = useState(false);
+  const [createTargetError, setCreateTargetError] = useState<string | null>(null);
+
+  const apply = useCallback(async () => {
+    // Size=project with no existing project picked but a Where target chosen:
+    // create the new list/local-project under that space/folder first.
+    if (sort === "actionable" && size === "project" && !projectId) {
+      const name = newListName.trim() || nextAction.trim() || item.title;
+      if (dest.source === "SYNCED" && targetSpaceId && destAccount) {
+        setCreatingTarget(true);
+        setCreateTargetError(null);
+        try {
+          const created = await createWorkspaceProject(destAccount.id, {
+            name, spaceId: targetSpaceId, folderId: targetFolderId,
+          });
+          setProjectId(created.projectId);
+        } catch (err) {
+          setCreateTargetError(err instanceof Error ? err.message : "Could not create the project");
+          setCreatingTarget(false);
+          return;
+        }
+        setCreatingTarget(false);
+      } else if (dest.source === "LOCAL" && (targetSpaceId || targetFolderId)) {
+        setCreatingTarget(true);
+        setCreateTargetError(null);
+        try {
+          await createLocalProject({ outcome: name, spaceId: targetSpaceId, folderId: targetFolderId });
+        } catch (err) {
+          setCreateTargetError(err instanceof Error ? err.message : "Could not create the project");
+          setCreatingTarget(false);
+          return;
+        }
+        setCreatingTarget(false);
       }
     }
-    setStatus(defaultStatus(d, providerStatuses(t, providers)));
-  };
-
-  const buildDecision = useCallback(
-    (d: ClarifyDisposition): ClarifyDecision | null => {
-      const na = nextAction.trim();
-      const dueIso = dueAt ? new Date(dueAt).toISOString() : undefined;
-      switch (d) {
-        case "NEXT":
-          return na
-            ? { kind: "next", nextAction: na, context, energy, dest, projectId, status, dueAt: dueIso, assignee: assignee ?? undefined, subtasks: subtasks.length ? subtasks : undefined }
-            : null;
-        case "PROJECT":
-          return na && outcome.trim()
-            ? { kind: "project", outcome: outcome.trim(), nextAction: na, context, energy, dest, status, dueAt: dueIso, assignee: assignee ?? undefined }
-            : null;
-        case "WAITING":
-          return na && assignee
-            ? { kind: "delegate", person: assignee, nextAction: na, dest, projectId, status, dueAt: dueIso }
-            : null;
-        case "CALENDAR":
-          return na
-            ? { kind: "calendar", nextAction: na, dueAt: dueIso ?? snoozeOptions()[0].iso, context, dest, status, assignee: assignee ?? undefined }
-            : null;
-        case "SOMEDAY":
-          return { kind: "someday", dest, projectId, status };
-        case "DO_NOW":
-          return { kind: "do-now" };
-        case "REFERENCE":
-          return { kind: "reference" };
-        case "TRASH":
-          return { kind: "trash" };
-      }
-    },
-    [nextAction, outcome, context, energy, assignee, dueAt, dest, projectId, status, subtasks],
-  );
-
-  const apply = useCallback(() => {
-    const decision = buildDecision(disposition);
+    const decision = buildDecision();
     if (decision) {
       clarify(item.id, decision);
       onDone?.();
     }
-  }, [buildDecision, disposition, clarify, item.id, onDone]);
+  }, [sort, size, projectId, newListName, nextAction, item.id, item.title, dest,
+      targetSpaceId, targetFolderId, destAccount, createWorkspaceProject,
+      createLocalProject, buildDecision, clarify, onDone]);
 
-  const canApply = !!buildDecision(disposition);
+  const canApply =
+    sort !== "actionable"
+      ? true
+      : size === "project"
+        ? !!(projectId || targetSpaceId) && !!buildDecision()
+        : !!buildDecision();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -335,28 +479,54 @@ export function ClarifyPanel({
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "Enter" && canApply) {
         e.preventDefault();
-        apply();
+        void apply();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [apply, canApply]);
 
-  const Meta = DISP[proposal.disposition];
+  // ── Title: "Improve" (always available) + the vague-title gate ─────────
+  const runSuggestTitle = useCallback(async () => {
+    if (backend !== "live") return;
+    setTitleBusy(true);
+    try {
+      const r = await apiSuggestTitle(item.id, title);
+      setSuggestedTitle(r.suggestedTitle);
+      if (r.suggestedTitle) setVagueOpen(true);
+    } catch {
+      /* best-effort */
+    } finally {
+      setTitleBusy(false);
+    }
+  }, [backend, item.id, title]);
+
+  const acceptTitle = () => {
+    if (suggestedTitle) {
+      setTitle(suggestedTitle);
+      renameItem(item.id, suggestedTitle);
+    }
+    titleCleared.current = true;
+    setVagueOpen(false);
+  };
+  const keepTitle = () => {
+    titleCleared.current = true;
+    setVagueOpen(false);
+  };
+
+  const trashNow = () => {
+    clarify(item.id, { kind: "trash" });
+    onDone?.();
+  };
+
+  const Meta = SORT_META[sortOf(proposal.disposition)];
+  const SizeIcon = SIZE_META[sizeOf(proposal.disposition, proposal.complexity)].icon;
   const proposedDestLabel = proposal.target
     ? destEntry(proposal.target!, providers)?.label
     : undefined;
   const proposedProject = proposal.projectId ? projects.find((p) => p.id === proposal.projectId) : undefined;
-  const proposedStatus =
-    proposal.target && proposal.target.source === "SYNCED"
-      ? defaultStatus(proposal.disposition, providerStatuses(proposal.target, providers))
-      : undefined;
-  const isSynced = dest.source === "SYNCED";
-  // A re-clarified SYNCED task is two-way bound to its ClickUp list — the
-  // destination (workspace + project) can't move, only the local cognition and
-  // the break-down can change. The server flags this; lock the picker.
-  const destLocked = reclarify && !!proposal.lockedDestination;
-  const showWhere = ACTIONABLE.has(disposition) || disposition === "SOMEDAY";
+  const dimmed = vagueOpen; // best-effort: the recommend block dims until the title is clear
+  const bigSuggestion = proposal.complexity === "subtasks" || proposal.complexity === "project";
 
   return (
     <div
@@ -370,11 +540,23 @@ export function ClarifyPanel({
       <header className="border-b border-border bg-card px-5 py-4">
         <div className="mb-2 flex items-center gap-2">
           <span className="rounded bg-primary/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary">
-            Clarify
+            {reclarify ? "Re-clarify" : "Clarify"}
           </span>
           <SourceBadge source={item.source} provider={item.provider} />
         </div>
-        <h1 className="text-lg font-bold leading-snug text-foreground">{item.title}</h1>
+        <div className="flex items-start gap-2">
+          <h1 className="flex-1 text-lg font-bold leading-snug text-foreground">{title}</h1>
+          <button
+            type="button"
+            onClick={() => void runSuggestTitle()}
+            disabled={titleBusy || backend !== "live"}
+            title="Rephrase this title with AI"
+            className="tech-transition mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/10 disabled:opacity-40"
+          >
+            {titleBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
+            Improve
+          </button>
+        </div>
         {item.origin?.kind === "email" && (
           <p className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
             <MailIcon className="h-3 w-3 shrink-0" />
@@ -396,13 +578,74 @@ export function ClarifyPanel({
           </div>
         )}
         <p className="mt-1 text-[11px] text-muted-foreground">
-          What is it, what&apos;s the next action, and where does it go?
+          {reclarify
+            ? "Refine this — or break it into next actions."
+            : "What is it — and what needs to happen next?"}
         </p>
       </header>
 
       <div className="flex flex-col gap-4 px-5 py-4">
-        {/* AI proposal — review & confirm */}
-        <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+        {/* Vague-title banner (soft gate) */}
+        {vagueOpen && (
+          <div className="flex flex-col gap-2 rounded-lg border border-warning/45 bg-warning/10 p-3">
+            <div className="flex items-start gap-2 text-[13px] font-semibold text-foreground">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+              <span>
+                {proposal.isVague
+                  ? "This title is vague — clarify it so the assistant can clarify the rest"
+                  : "A clearer title is available"}
+              </span>
+            </div>
+            {proposal.isVague && (
+              <p className="text-[11.5px] text-muted-foreground">
+                A specific title makes the owner, context, and next steps far more accurate.
+              </p>
+            )}
+            {suggestedTitle && (
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Assistant suggests
+                </span>
+                <input
+                  value={suggestedTitle}
+                  onChange={(e) => setSuggestedTitle(e.target.value)}
+                  className="w-full rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
+                />
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={acceptTitle}
+                disabled={!suggestedTitle}
+                className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
+              >
+                <Check className="h-3.5 w-3.5" />
+                Use this title
+              </button>
+              <button
+                type="button"
+                onClick={keepTitle}
+                className="tech-transition rounded-md px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
+              >
+                Keep original
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* AI proposal — review & confirm. Leads with SIZE + concrete steps. */}
+        <div
+          className={[
+            "relative rounded-lg border border-primary/30 bg-primary/5 p-3 transition-opacity",
+            dimmed ? "opacity-60" : "",
+          ].join(" ")}
+        >
+          {dimmed && (
+            <span className="absolute -top-2 right-3 rounded bg-card px-1.5 text-[9px] font-semibold uppercase tracking-wide text-warning">
+              Improves once the title is clear
+            </span>
+          )}
           <div className="mb-1.5 flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 text-xs font-semibold text-primary">
               <Sparkles className="h-3.5 w-3.5" />
@@ -426,7 +669,13 @@ export function ClarifyPanel({
           </div>
           <div className="flex items-center gap-2 text-sm font-medium text-foreground">
             <Meta.icon className="h-4 w-4 text-primary" />
-            {DISP[proposal.disposition].label}
+            {Meta.label}
+            {Meta.label === "Actionable" && (
+              <span className="inline-flex items-center gap-1 text-muted-foreground">
+                · <SizeIcon className="h-3.5 w-3.5" />
+                {SIZE_META[sizeOf(proposal.disposition, proposal.complexity)].label}
+              </span>
+            )}
             {proposal.suggestedAssignee && (
               <span className="text-muted-foreground">→ {proposal.suggestedAssignee.name}</span>
             )}
@@ -436,7 +685,7 @@ export function ClarifyPanel({
               Outcome: <span className="text-foreground">{proposal.outcome}</span>
             </p>
           )}
-          {ACTIONABLE.has(proposal.disposition) && (
+          {sortOf(proposal.disposition) === "actionable" && !bigSuggestion && (
             <p className="mt-1.5 text-sm text-foreground">
               <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
                 {proposal.disposition === "PROJECT" ? "First action" : "Next action"}
@@ -449,7 +698,12 @@ export function ClarifyPanel({
             {proposal.context && <span className="font-mono text-primary/80">{proposal.context}</span>}
             {proposal.energy && <span>{proposal.energy} energy</span>}
             {proposal.timeEstimateMins ? <span>{durationLabel(proposal.timeEstimateMins)}</span> : null}
-            {ACTIONABLE.has(proposal.disposition) && proposedDestLabel && (
+            {proposal.dueDate && (
+              <span className="inline-flex items-center gap-1">
+                <CalendarDays className="h-3 w-3" /> by {proposal.dueDate}
+              </span>
+            )}
+            {sortOf(proposal.disposition) === "actionable" && proposedDestLabel && (
               <span className="inline-flex items-center gap-1 rounded bg-secondary px-1.5 py-0.5 font-medium">
                 {proposal.target?.source === "LOCAL" ? (
                   <HardDrive className="h-3 w-3" />
@@ -458,39 +712,36 @@ export function ClarifyPanel({
                 )}
                 {proposedDestLabel}
                 {proposedProject ? ` · ${short(proposedProject.outcome, 16)}` : ""}
-                {proposedStatus ? ` · ${proposedStatus}` : ""}
               </span>
             )}
           </div>
+
+          {/* The assistant's break-down — numbered, editable, created on accept. */}
+          {bigSuggestion && (
+            <div className="mt-2.5 flex flex-col gap-1.5">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Next actions to create
+              </span>
+              <SubtaskEditor value={subtasks} onChange={setSubtasks} numbered />
+            </div>
+          )}
+
           <p className="mt-1.5 text-[11px] italic text-muted-foreground">{proposal.rationale}</p>
           <div className="mt-2.5 flex items-center gap-2">
             <button
               type="button"
-              onClick={apply}
-              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90"
+              onClick={() => void apply()}
+              disabled={creatingTarget}
+              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-60"
             >
-              <Check className="h-3.5 w-3.5" />
-              Accept &amp; next
+              {creatingTarget ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              {bigSuggestion
+                ? `Accept & create all ${subtasks.length || 1} step${subtasks.length === 1 ? "" : "s"}`
+                : "Accept & next"}
             </button>
             <button
               type="button"
-              onClick={() => setAdjust((v) => !v)}
-              className={[
-                "tech-transition inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] font-medium",
-                adjust ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground",
-              ].join(" ")}
-            >
-              <SlidersHorizontal className="h-3.5 w-3.5" />
-              Adjust
-            </button>
-            {/* Trash is a first-class outcome of clarifying — surface it here
-                instead of burying it as one pill inside Adjust. */}
-            <button
-              type="button"
-              onClick={() => {
-                clarify(item.id, { kind: "trash" });
-                onDone?.();
-              }}
+              onClick={trashNow}
               title="Trash this — it's not actionable"
               className="tech-transition ml-auto inline-flex items-center gap-1.5 rounded-md border border-transparent px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
             >
@@ -500,289 +751,282 @@ export function ClarifyPanel({
           </div>
         </div>
 
-        {/* Adjust */}
-        {adjust && (
-          <div className="flex flex-col gap-3">
-            <Field label="What is it?">
-              <div className="flex flex-wrap gap-1.5">
-                {DISP_ORDER.map((d) => {
-                  const M = DISP[d];
-                  const active = disposition === d;
-                  return (
+        {/* STEP 1 — Sort */}
+        <Field label="Sort it — what kind of thing is this?">
+          <div className="flex flex-wrap gap-1.5">
+            {SORT_ORDER.map((s) => {
+              const M = SORT_META[s];
+              const active = sort === s;
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setSort(s)}
+                  className={[
+                    "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                    active
+                      ? M.danger
+                        ? "border-destructive bg-destructive/10 text-destructive"
+                        : "border-primary bg-primary/10 text-primary"
+                      : "border-border text-muted-foreground hover:bg-secondary",
+                  ].join(" ")}
+                >
+                  <M.icon className="h-3.5 w-3.5" />
+                  {M.label}
+                </button>
+              );
+            })}
+          </div>
+        </Field>
+
+        {/* STEP 2 — Shape (only when Sort=Actionable) */}
+        {sort === "actionable" && (
+          <div className="flex flex-col gap-3.5 border-t border-border pt-3.5">
+            <Field label="Shape it — these combine freely">
+              <div className="flex flex-col gap-3">
+                <SubField label="Size">
+                  <div className="flex flex-wrap gap-1.5">
+                    {(["single", "subtasks", "project"] as Size[]).map((s) => {
+                      const M = SIZE_META[s];
+                      const active = size === s;
+                      return (
+                        <button
+                          key={s}
+                          type="button"
+                          onClick={() => chooseSize(s)}
+                          className={[
+                            "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                            active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
+                          ].join(" ")}
+                        >
+                          <M.icon className="h-3.5 w-3.5" />
+                          {M.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </SubField>
+
+                {(size === "project" ? "outcome" : "next-action") === "outcome" && (
+                  <SubField label="Outcome">
+                    <input
+                      value={outcome}
+                      onChange={(e) => setOutcome(e.target.value)}
+                      className="w-full rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
+                      placeholder="What does 'done' look like?"
+                    />
+                  </SubField>
+                )}
+
+                <SubField label={size === "project" ? "First next action" : "Next action"}>
+                  <input
+                    value={nextAction}
+                    onChange={(e) => setNextAction(e.target.value)}
+                    className="w-full rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
+                    placeholder="The next physical, visible step…"
+                  />
+                </SubField>
+
+                {(size === "subtasks" || size === "project") && (
+                  <SubField label="Steps">
+                    <SubtaskEditor value={subtasks} onChange={setSubtasks} />
+                  </SubField>
+                )}
+
+                <SubField label="Owner">
+                  <div className="flex flex-wrap gap-1.5">
                     <button
-                      key={d}
                       type="button"
-                      onClick={() => chooseDisposition(d)}
+                      onClick={() => setOwner("me")}
                       className={[
                         "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
-                        active
-                          ? M.danger
-                            ? "border-destructive bg-destructive/10 text-destructive"
-                            : "border-primary bg-primary/10 text-primary"
-                          : "border-border text-muted-foreground hover:bg-secondary",
+                        owner === "me" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
                       ].join(" ")}
                     >
-                      <M.icon className="h-3.5 w-3.5" />
-                      {M.label}
+                      <User className="h-3.5 w-3.5" /> Me
                     </button>
-                  );
-                })}
+                    <button
+                      type="button"
+                      onClick={() => setOwner("delegate")}
+                      className={[
+                        "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                        owner === "delegate" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
+                      ].join(" ")}
+                    >
+                      <UserPlus className="h-3.5 w-3.5" /> Delegate →
+                    </button>
+                  </div>
+                  {owner === "delegate" && (
+                    <div className="mt-2">
+                      <PeoplePicker people={peopleForDelegate} value={assignee} onChange={setAssignee} />
+                    </div>
+                  )}
+                </SubField>
+
+                <SubField label="When">
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setWhen("anytime")}
+                      className={[
+                        "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                        when === "anytime" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
+                      ].join(" ")}
+                    >
+                      Anytime
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setWhen("date")}
+                      className={[
+                        "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                        when === "date" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
+                      ].join(" ")}
+                    >
+                      <CalendarClock className="h-3.5 w-3.5" /> By a date →
+                    </button>
+                  </div>
+                  {when === "date" && (
+                    <input
+                      type="date"
+                      value={dueAt}
+                      onChange={(e) => setDueAt(e.target.value)}
+                      className="mt-2 rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
+                    />
+                  )}
+                </SubField>
+
+                <SubField label="Energy">
+                  <div className="flex gap-1.5">
+                    {(["low", "medium", "high"] as Energy[]).map((e) => (
+                      <Pill key={e} active={energy === e} onClick={() => setEnergy(e)}>
+                        {e}
+                      </Pill>
+                    ))}
+                  </div>
+                </SubField>
+
+                <SubField label="Context">
+                  <div className="flex flex-wrap gap-1.5">
+                    {contexts.map((c) => (
+                      <Pill key={c.name} mono active={context === c.name} onClick={() => setContext(c.name)}>
+                        {c.name}
+                      </Pill>
+                    ))}
+                  </div>
+                </SubField>
+
+                {/* Where — present for EVERY actionable task, single or broken-down.
+                    Target level follows Size: list (single/subtasks) vs space/folder (project). */}
+                <SubField label="Where">
+                  {destLocked ? (
+                    <LockedWhere dest={dest} providers={providers} selectedProject={selectedProject}
+                      statuses={statusesForDest} status={status} setStatus={setStatus} />
+                  ) : (
+                    <div className="flex flex-col gap-2.5">
+                      <div className="flex flex-wrap gap-1.5">
+                        {providers.map((cp) => {
+                          const active = destEntry(dest, providers)?.id === cp.id;
+                          return (
+                            <button
+                              key={cp.id}
+                              type="button"
+                              onClick={() =>
+                                chooseDest({
+                                  source: cp.source,
+                                  provider: cp.provider,
+                                  accountId: cp.source === "SYNCED" ? cp.id : undefined,
+                                })
+                              }
+                              className={[
+                                "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
+                                active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
+                              ].join(" ")}
+                            >
+                              {cp.source === "LOCAL" ? <HardDrive className="h-3.5 w-3.5" /> : <Cloud className="h-3.5 w-3.5" />}
+                              {cp.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {size === "project" ? (
+                        <ProjectTargetTree
+                          dest={dest}
+                          destAccount={destAccount}
+                          localHierarchy={localHierarchy}
+                          value={{ spaceId: targetSpaceId, folderId: targetFolderId }}
+                          onChange={(v) => { setTargetSpaceId(v.spaceId); setTargetFolderId(v.folderId); }}
+                          onCreateSpace={createLocalSpace}
+                          onCreateFolder={createLocalFolder}
+                        />
+                      ) : (
+                        <ProjectListTree
+                          dest={dest}
+                          destAccount={destAccount}
+                          localHierarchy={localHierarchy}
+                          projectsForDest={projectsForDest}
+                          suggestedId={proposal.projectInferred ? proposal.projectId : undefined}
+                          value={projectId}
+                          onChange={setProjectId}
+                          onCreate={async (spaceId, folderId, name) => {
+                            if (dest.source === "SYNCED" && destAccount) {
+                              const created = await createWorkspaceProject(destAccount.id, { name, spaceId, folderId });
+                              setProjectId(created.projectId);
+                            } else {
+                              await createLocalProject({ outcome: name, spaceId, folderId });
+                            }
+                          }}
+                        />
+                      )}
+
+                      {size === "project" && (targetSpaceId || targetFolderId) && (
+                        <SubField label="New project name">
+                          <input
+                            value={newListName}
+                            onChange={(e) => setNewListName(e.target.value)}
+                            className="w-full rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
+                          />
+                        </SubField>
+                      )}
+                      {createTargetError && (
+                        <p className="text-[11px] text-destructive">{createTargetError}</p>
+                      )}
+
+                      {statusesForDest.length > 0 && (
+                        <SubField label="Stage">
+                          <div className="flex flex-wrap gap-1.5">
+                            {statusesForDest.map((s) => (
+                              <Pill key={s} plain active={status === s} onClick={() => setStatus(s)}>
+                                {s}
+                              </Pill>
+                            ))}
+                          </div>
+                        </SubField>
+                      )}
+                      {!isSynced && (
+                        <p className="text-[10px] text-muted-foreground">
+                          Private to you. File it in a local space/list, or leave it loose.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </SubField>
               </div>
             </Field>
 
-            {disposition === "PROJECT" && (
-              <Field label="Successful outcome">
-                <input
-                  value={outcome}
-                  onChange={(e) => setOutcome(e.target.value)}
-                  className="w-full rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
-                  placeholder="What does 'done' look like?"
-                />
-              </Field>
-            )}
-
-            {ACTIONABLE.has(disposition) && (
-              <Field label={disposition === "PROJECT" ? "First next action" : "Next action"}>
-                <input
-                  value={nextAction}
-                  onChange={(e) => setNextAction(e.target.value)}
-                  className="w-full rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
-                  placeholder="The next physical, visible step…"
-                />
-              </Field>
-            )}
-
-            {disposition === "NEXT" && (
-              <Field label="Break into subtasks (optional)">
-                <SubtaskEditor value={subtasks} onChange={setSubtasks} />
-              </Field>
-            )}
-
-            {disposition === "WAITING" && (
-              <Field label="Delegate to">
-                <PeoplePicker people={peopleForDelegate} value={assignee} onChange={setAssignee} />
-              </Field>
-            )}
-
-            {(disposition === "NEXT" || disposition === "PROJECT" || disposition === "CALENDAR") && (
-              <Field label="Context">
-                <div className="flex flex-wrap gap-1.5">
-                  {contexts.map((c) => (
-                    <Pill key={c.name} mono active={context === c.name} onClick={() => setContext(c.name)}>
-                      {c.name}
-                    </Pill>
-                  ))}
-                </div>
-              </Field>
-            )}
-
-            {(disposition === "NEXT" || disposition === "PROJECT") && (
-              <Field label="Energy">
-                <div className="flex gap-1.5">
-                  {(["low", "medium", "high"] as Energy[]).map((e) => (
-                    <Pill key={e} active={energy === e} onClick={() => setEnergy(e)}>
-                      {e}
-                    </Pill>
-                  ))}
-                </div>
-              </Field>
-            )}
-
-            {disposition === "CALENDAR" && (
-              <Field label="On which day?">
-                <input
-                  type="date"
-                  value={dueAt}
-                  onChange={(e) => setDueAt(e.target.value)}
-                  className="rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
-                />
-              </Field>
-            )}
-
-            {/* Where it goes — dual-source + the connected tool's project/stage/owner/due (§5.1) */}
-            {showWhere && destLocked && (
-              <Field label="Where it goes">
-                <div className="flex items-center gap-2 rounded-md border border-border bg-background/40 px-3 py-2">
-                  <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-[12px] text-foreground">
-                    <Cloud className="h-3.5 w-3.5 text-primary/70" />
-                    {destEntry(dest, providers)?.label ?? "ClickUp"}
-                    {selectedProject && (
-                      <>
-                        <span className="text-border">·</span>
-                        <FolderKanban className="h-3 w-3 text-muted-foreground" />
-                        {short(selectedProject.outcome, 22)}
-                      </>
-                    )}
-                  </span>
-                </div>
-                {statusesForDest.length > 0 && (
-                  <div className="mt-2">
-                    <SubField label="Stage">
-                      <div className="flex flex-wrap gap-1.5">
-                        {statusesForDest.map((s) => (
-                          <Pill key={s} plain active={status === s} onClick={() => setStatus(s)}>
-                            {s}
-                          </Pill>
-                        ))}
-                      </div>
-                    </SubField>
-                  </div>
-                )}
-                <p className="mt-1.5 text-[10px] text-muted-foreground">
-                  Two-way synced with ClickUp — the workspace and project stay
-                  put. You can still change the stage, refine the details below,
-                  and break it into subtasks.
-                </p>
-              </Field>
-            )}
-            {showWhere && !destLocked && (
-              <Field label="Where it goes">
-                <div className="flex flex-wrap gap-1.5">
-                  {providers.map((cp) => {
-                    const active = destEntry(dest, providers)?.id === cp.id;
-                    return (
-                      <button
-                        key={cp.id}
-                        type="button"
-                        onClick={() =>
-                          chooseDest({
-                            source: cp.source,
-                            provider: cp.provider,
-                            accountId: cp.source === "SYNCED" ? cp.id : undefined,
-                          })
-                        }
-                        className={[
-                          "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]",
-                          active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-secondary",
-                        ].join(" ")}
-                      >
-                        {cp.source === "LOCAL" ? <HardDrive className="h-3.5 w-3.5" /> : <Cloud className="h-3.5 w-3.5" />}
-                        {cp.label}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {!isSynced ? (
-                  <p className="mt-1.5 text-[10px] text-muted-foreground">
-                    Private to you. Delegated or collaborative work belongs on a connected tool.
-                  </p>
-                ) : !showDetails ? (
-                  // Collapsed: one compact line of what the assistant already set.
-                  // Keeps processing calm — expand only when you want to fine-tune.
-                  <button
-                    type="button"
-                    onClick={() => setShowDetails(true)}
-                    className="tech-transition mt-2.5 flex w-full items-center justify-between gap-2 rounded-md border border-border bg-background/40 px-3 py-2 text-left hover:border-primary/40"
-                  >
-                    <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-muted-foreground">
-                      {disposition !== "PROJECT" && (
-                        <span className="inline-flex items-center gap-1 text-foreground">
-                          <FolderKanban className="h-3 w-3 text-primary/70" />
-                          {selectedProject ? short(selectedProject.outcome, 20) : "No project"}
-                          {proposal.projectInferred && projectId === proposal.projectId && (
-                            <Sparkles className="h-2.5 w-2.5 text-primary" />
-                          )}
-                        </span>
-                      )}
-                      {status && (
-                        <>
-                          <span className="text-border">·</span>
-                          <span>{status}</span>
-                        </>
-                      )}
-                      {assignee && disposition !== "PROJECT" && (
-                        <>
-                          <span className="text-border">·</span>
-                          <span>{assignee.name}</span>
-                        </>
-                      )}
-                      {dueAt && (
-                        <>
-                          <span className="text-border">·</span>
-                          <span>{dueAt}</span>
-                        </>
-                      )}
-                    </span>
-                    <span className="shrink-0 text-[11px] font-medium text-primary">Edit</span>
-                  </button>
-                ) : (
-                  <div className="mt-2.5 flex flex-col gap-2.5">
-                    {disposition !== "PROJECT" && (
-                      <SubField label="Project">
-                        {destAccount && destAccount.hierarchy.length > 0 ? (
-                          <WorkspaceProjectAccordion
-                            hierarchy={destAccount.hierarchy}
-                            projects={projectsForDest}
-                            suggestedId={
-                              proposal.projectInferred ? proposal.projectId : undefined
-                            }
-                            value={projectId}
-                            onChange={setProjectId}
-                            onCreate={async (spaceId, folderId, name) => {
-                              const created = await createWorkspaceProject(
-                                destAccount.id,
-                                { name, spaceId, folderId },
-                              );
-                              setProjectId(created.projectId);
-                            }}
-                          />
-                        ) : (
-                          <ProjectPicker
-                            projects={projectsForDest}
-                            suggestedId={
-                              proposal.projectInferred ? proposal.projectId : undefined
-                            }
-                            value={projectId}
-                            onChange={setProjectId}
-                          />
-                        )}
-                      </SubField>
-                    )}
-
-                    {statusesForDest.length > 0 && (
-                      <SubField label="Stage">
-                        <div className="flex flex-wrap gap-1.5">
-                          {statusesForDest.map((s) => (
-                            <Pill key={s} plain active={status === s} onClick={() => setStatus(s)}>
-                              {s}
-                            </Pill>
-                          ))}
-                        </div>
-                      </SubField>
-                    )}
-
-                    {disposition !== "WAITING" && (
-                      <SubField label="Assignee (optional)">
-                        <PeoplePicker people={peopleForDelegate} value={assignee} onChange={setAssignee} allowNone />
-                      </SubField>
-                    )}
-
-                    {disposition !== "CALENDAR" && (
-                      <SubField label="Due · timeline (optional)">
-                        <input
-                          type="date"
-                          value={dueAt}
-                          onChange={(e) => setDueAt(e.target.value)}
-                          className="rounded-md border border-border bg-background/60 px-3 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
-                        />
-                      </SubField>
-                    )}
-                  </div>
-                )}
-              </Field>
-            )}
-
             <button
               type="button"
-              disabled={!canApply}
-              onClick={apply}
+              disabled={!canApply || creatingTarget}
+              onClick={() => void apply()}
               className={[
                 "tech-transition inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2.5 text-sm font-medium",
-                canApply ? "bg-primary text-primary-foreground hover:opacity-90" : "cursor-not-allowed bg-secondary text-muted-foreground",
+                canApply && !creatingTarget
+                  ? "bg-primary text-primary-foreground hover:opacity-90"
+                  : "cursor-not-allowed bg-secondary text-muted-foreground",
               ].join(" ")}
             >
+              {creatingTarget ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Organize it <ArrowRight className="h-4 w-4" />
             </button>
           </div>
@@ -792,14 +1036,63 @@ export function ClarifyPanel({
   );
 }
 
-// A small add/remove list for breaking a NEXT task into concrete subtasks.
-// Seeded from the assistant's suggestion; the user edits before applying.
+function LockedWhere({
+  dest, providers, selectedProject, statuses, status, setStatus,
+}: {
+  dest: Target;
+  providers: ConnectedProvider[];
+  selectedProject?: GtdProject;
+  statuses: string[];
+  status?: string;
+  setStatus: (s: string) => void;
+}) {
+  return (
+    <div>
+      <div className="flex items-center gap-2 rounded-md border border-border bg-background/40 px-3 py-2">
+        <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-[12px] text-foreground">
+          <Cloud className="h-3.5 w-3.5 text-primary/70" />
+          {destEntry(dest, providers)?.label ?? "ClickUp"}
+          {selectedProject && (
+            <>
+              <span className="text-border">·</span>
+              <FolderKanban className="h-3 w-3 text-muted-foreground" />
+              {short(selectedProject.outcome, 22)}
+            </>
+          )}
+        </span>
+      </div>
+      {statuses.length > 0 && (
+        <div className="mt-2">
+          <SubField label="Stage">
+            <div className="flex flex-wrap gap-1.5">
+              {statuses.map((s) => (
+                <Pill key={s} plain active={status === s} onClick={() => setStatus(s)}>
+                  {s}
+                </Pill>
+              ))}
+            </div>
+          </SubField>
+        </div>
+      )}
+      <p className="mt-1.5 text-[10px] text-muted-foreground">
+        Two-way synced with ClickUp — the workspace and list stay put. You can
+        still change size, owner, timing, stage, and break it into steps.
+      </p>
+    </div>
+  );
+}
+
+// A small add/remove list for breaking a task into concrete subtasks. Seeded
+// from the assistant's suggestion; the user edits before applying.
 function SubtaskEditor({
   value,
   onChange,
+  numbered,
 }: {
   value: string[];
   onChange: (next: string[]) => void;
+  numbered?: boolean;
 }) {
   const [draft, setDraft] = useState("");
   const add = () => {
@@ -816,7 +1109,13 @@ function SubtaskEditor({
     <div className="flex flex-col gap-1.5">
       {value.map((s, idx) => (
         <div key={idx} className="flex items-center gap-1.5">
-          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary/50" />
+          {numbered ? (
+            <span className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded bg-primary/15 text-[10px] font-bold text-primary">
+              {idx + 1}
+            </span>
+          ) : (
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary/50" />
+          )}
           <input
             value={s}
             onChange={(e) => edit(idx, e.target.value)}
@@ -826,10 +1125,10 @@ function SubtaskEditor({
           <button
             type="button"
             onClick={() => remove(idx)}
-            aria-label="Remove subtask"
+            aria-label="Remove step"
             className="tech-transition shrink-0 rounded p-1 text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive"
           >
-            <Trash2 className="h-3.5 w-3.5" />
+            <X className="h-3.5 w-3.5" />
           </button>
         </div>
       ))}
@@ -854,12 +1153,6 @@ function SubtaskEditor({
           </button>
         )}
       </div>
-      {value.length > 0 && (
-        <p className="text-[10px] text-muted-foreground">
-          {value.length} subtask{value.length === 1 ? "" : "s"} — created under
-          this task when you file it.
-        </p>
-      )}
     </div>
   );
 }
@@ -868,20 +1161,13 @@ function PeoplePicker({
   people,
   value,
   onChange,
-  allowNone,
 }: {
   people: Person[];
   value: Person | null;
   onChange: (p: Person | null) => void;
-  allowNone?: boolean;
 }) {
   return (
     <div className="flex flex-wrap gap-2">
-      {allowNone && (
-        <Pill plain active={!value} onClick={() => onChange(null)}>
-          Unassigned
-        </Pill>
-      )}
       {people.map((p) => (
         <button
           key={p.name}
@@ -898,190 +1184,413 @@ function PeoplePicker({
           {p.name}
         </button>
       ))}
+      {!people.length && (
+        <p className="text-[11px] text-muted-foreground">No teammates available yet.</p>
+      )}
     </div>
   );
 }
 
-// Scales to many projects: shows the assistant's match first, then a filter box
-// so you never scan a wall of pills. Type to search; tap to file.
-/**
- * Workspace project picker — mirrors ClickUp's own navigation exactly:
- * Space → Folder → List as nested accordions, so finding the project feels
- * like finding it in ClickUp. Every level offers "+ New list here" (an
- * explicit user-approved provider write). Selecting a list resolves to the
- * mirrored gtd project (matched by providerRef).
- */
-function WorkspaceProjectAccordion({
-  hierarchy,
-  projects,
+// ── Where: a normalized Space→Folder→List tree, shared by both picker modes ──
+
+interface TNode {
+  id: string;
+  type: "space" | "folder" | "list";
+  name: string;
+  children?: TNode[];
+  /** the mirrored gtd project id, for LIST nodes only. */
+  projectId?: string;
+}
+
+/** Build one normalized tree from either a ClickUp account's hierarchy or the
+ *  LOCAL space/folder/project tables — so both picker modes share one render. */
+function buildTree(
+  dest: Target,
+  destAccount: TaskAccount | undefined,
+  localHierarchy: import("../lib/api").LocalHierarchy | null,
+  projectsForDest: GtdProject[],
+): TNode[] {
+  if (dest.source === "SYNCED") {
+    if (!destAccount || !destAccount.hierarchy.length) return [];
+    const byRef = new Map<string, GtdProject>();
+    for (const p of projectsForDest) if (p.providerRef) byRef.set(p.providerRef, p);
+    return destAccount.hierarchy.map((sp) => ({
+      id: sp.id, type: "space" as const, name: sp.name,
+      children: [
+        ...sp.lists.map((l) => ({
+          id: l.id, type: "list" as const, name: l.name, projectId: byRef.get(l.id)?.id,
+        })),
+        ...sp.folders.map((f) => ({
+          id: f.id, type: "folder" as const, name: f.name,
+          children: f.lists.map((l) => ({
+            id: l.id, type: "list" as const, name: l.name, projectId: byRef.get(l.id)?.id,
+          })),
+        })),
+      ],
+    }));
+  }
+  if (!localHierarchy) return [];
+  const foldersBySpace = new Map<string, typeof localHierarchy.folders>();
+  for (const f of localHierarchy.folders) {
+    foldersBySpace.set(f.spaceId, [...(foldersBySpace.get(f.spaceId) ?? []), f]);
+  }
+  const projByFolder = new Map<string, GtdProject[]>();
+  const projBySpaceOnly = new Map<string, GtdProject[]>();
+  for (const p of projectsForDest) {
+    if (p.folderId) projByFolder.set(p.folderId, [...(projByFolder.get(p.folderId) ?? []), p]);
+    else if (p.spaceId) projBySpaceOnly.set(p.spaceId, [...(projBySpaceOnly.get(p.spaceId) ?? []), p]);
+  }
+  return localHierarchy.spaces.map((sp) => ({
+    id: sp.id, type: "space" as const, name: sp.name,
+    children: [
+      ...(projBySpaceOnly.get(sp.id) ?? []).map((p) => ({
+        id: p.id, type: "list" as const, name: p.outcome, projectId: p.id,
+      })),
+      ...(foldersBySpace.get(sp.id) ?? []).map((f) => ({
+        id: f.id, type: "folder" as const, name: f.name,
+        children: (projByFolder.get(f.id) ?? []).map((p) => ({
+          id: p.id, type: "list" as const, name: p.outcome, projectId: p.id,
+        })),
+      })),
+    ],
+  }));
+}
+
+/** Where picker for Size=single/subtasks: navigate the tree, select a LIST
+ *  (leaf) — the task is created INTO it. Mirrors ClickUp's own navigation. */
+function ProjectListTree({
+  dest,
+  destAccount,
+  localHierarchy,
+  projectsForDest,
   suggestedId,
   value,
   onChange,
   onCreate,
 }: {
-  hierarchy: WorkspaceHierarchySpace[];
-  projects: GtdProject[];
+  dest: Target;
+  destAccount: TaskAccount | undefined;
+  localHierarchy: import("../lib/api").LocalHierarchy | null;
+  projectsForDest: GtdProject[];
   suggestedId?: string;
   value?: string;
   onChange: (id: string | undefined) => void;
   onCreate: (spaceId: string, folderId: string | undefined, name: string) => Promise<void>;
 }) {
+  const tree = useMemo(
+    () => buildTree(dest, destAccount, localHierarchy, projectsForDest),
+    [dest, destAccount, localHierarchy, projectsForDest],
+  );
+  return (
+    <TreePicker
+      tree={tree}
+      pickTypes={["list"]}
+      value={value}
+      suggestedId={suggestedId}
+      newLabel={dest.source === "SYNCED" ? "New list here…" : "New project here…"}
+      emptyLabel="No project"
+      onSelectLeaf={(node) => onChange(node?.projectId)}
+      onCreate={onCreate}
+    />
+  );
+}
+
+/** Where picker for Size=project: navigate the tree, select a SPACE **or**
+ *  FOLDER (either is valid) — the new list/local project is created under it. */
+function ProjectTargetTree({
+  dest,
+  destAccount,
+  localHierarchy,
+  value,
+  onChange,
+  onCreateSpace,
+  onCreateFolder,
+}: {
+  dest: Target;
+  destAccount: TaskAccount | undefined;
+  localHierarchy: import("../lib/api").LocalHierarchy | null;
+  value: { spaceId?: string; folderId?: string };
+  onChange: (v: { spaceId?: string; folderId?: string }) => void;
+  onCreateSpace: (name: string) => Promise<void>;
+  onCreateFolder: (spaceId: string, name: string) => Promise<void>;
+}) {
+  const tree = useMemo(
+    () => buildTree(dest, destAccount, localHierarchy, []),
+    [dest, destAccount, localHierarchy],
+  );
+  const selectedId = value.folderId ?? value.spaceId;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <TreePicker
+        tree={tree}
+        pickTypes={["space", "folder"]}
+        value={selectedId}
+        newLabel={dest.source === "SYNCED" ? "New space…" : "New space…"}
+        emptyLabel="Choose a space or folder"
+        onSelectTarget={(node) => {
+          if (!node) return onChange({});
+          if (node.type === "space") onChange({ spaceId: node.id });
+          else onChange({ spaceId: findParentSpace(tree, node.id), folderId: node.id });
+        }}
+        onCreate={async (spaceId, folderId, name) => {
+          if (folderId) return; // folders are created inline below, not via row-create
+          if (!spaceId) {
+            // top-level "new space" row.
+            await onCreateSpace(name);
+            return;
+          }
+          await onCreateFolder(spaceId, name);
+        }}
+      />
+      {dest.source === "LOCAL" && value.spaceId && !value.folderId && (
+        <InlineCreateFolder spaceId={value.spaceId} onCreate={onCreateFolder} />
+      )}
+    </div>
+  );
+}
+
+function findParentSpace(tree: TNode[], folderId: string): string | undefined {
+  for (const sp of tree) {
+    if (sp.children?.some((c) => c.id === folderId && c.type === "folder")) return sp.id;
+  }
+  return undefined;
+}
+
+function InlineCreateFolder({
+  spaceId,
+  onCreate,
+}: {
+  spaceId: string;
+  onCreate: (spaceId: string, name: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="tech-transition ml-4 flex items-center gap-1.5 text-left text-[12px] text-primary hover:underline"
+      >
+        <Plus className="h-3 w-3" /> New folder here
+      </button>
+    );
+  }
+  return (
+    <div className="ml-4 flex items-center gap-1.5">
+      <input
+        autoFocus
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="Folder name…"
+        className="flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
+      />
+      <button
+        type="button"
+        disabled={!name.trim() || busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await onCreate(spaceId, name.trim());
+            setOpen(false);
+            setName("");
+          } finally {
+            setBusy(false);
+          }
+        }}
+        className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground disabled:opacity-50"
+      >
+        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+        Create
+      </button>
+    </div>
+  );
+}
+
+/** Generic tree renderer shared by both picker modes. In "leaf" mode only LIST
+ *  nodes are selectable; in "target" mode SPACE and FOLDER nodes are (lists
+ *  are shown but disabled — navigation only). */
+function TreePicker({
+  tree,
+  pickTypes,
+  value,
+  suggestedId,
+  newLabel,
+  emptyLabel,
+  onSelectLeaf,
+  onSelectTarget,
+  onCreate,
+}: {
+  tree: TNode[];
+  pickTypes: ("space" | "folder" | "list")[];
+  value?: string;
+  suggestedId?: string;
+  newLabel: string;
+  emptyLabel: string;
+  onSelectLeaf?: (node: TNode | undefined) => void;
+  onSelectTarget?: (node: TNode | undefined) => void;
+  onCreate: (spaceId: string, folderId: string | undefined, name: string) => Promise<void>;
+}) {
   const [q, setQ] = useState("");
-  const [openSpaces, setOpenSpaces] = useState<Set<string>>(() => {
-    // Open the space containing the current/suggested selection by default.
-    const target = value ?? suggestedId;
-    const ref = target ? projects.find((p) => p.id === target)?.providerRef : undefined;
+  const [openIds, setOpenIds] = useState<Set<string>>(() => {
     const open = new Set<string>();
-    if (ref) {
-      for (const sp of hierarchy) {
-        const inSpace =
-          sp.lists.some((l) => l.id === ref) ||
-          sp.folders.some((f) => f.lists.some((l) => l.id === ref));
-        if (inSpace) open.add(sp.id);
+    if (tree.length === 1) open.add(tree[0].id);
+    // Auto-expand the ancestor of the current/suggested selection.
+    const target = value ?? suggestedId;
+    if (target) {
+      for (const sp of tree) {
+        const hasIt = (n: TNode): boolean =>
+          n.id === target || (n.children?.some(hasIt) ?? false);
+        if (hasIt(sp)) open.add(sp.id);
+        for (const c of sp.children ?? []) {
+          if (c.type === "folder" && (c.children?.some((l) => l.id === target) ?? false)) {
+            open.add(c.id);
+          }
+        }
       }
     }
-    if (!open.size && hierarchy.length === 1) open.add(hierarchy[0].id);
     return open;
   });
-  const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
-  /** Where the inline "new list" input is open: space id or `folder:<id>`. */
-  const [creatingAt, setCreatingAt] = useState<string | null>(null);
+  const [creatingAt, setCreatingAt] = useState<string | "top" | null>(null);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  const byRef = useMemo(() => {
-    const m = new Map<string, GtdProject>();
-    for (const pr of projects) if (pr.providerRef) m.set(pr.providerRef, pr);
-    return m;
-  }, [projects]);
+  const toggle = (id: string) =>
+    setOpenIds((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
-  const toggle = (set: Set<string>, id: string) => {
-    const next = new Set(set);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    return next;
+  const select = (n: TNode) => {
+    if (!pickTypes.includes(n.type)) return;
+    if (onSelectLeaf) onSelectLeaf(n);
+    if (onSelectTarget) onSelectTarget(n);
   };
 
-  const submitCreate = async (spaceId: string, folderId?: string) => {
+  const submitCreate = async (spaceId: string | undefined, folderId: string | undefined) => {
     const name = newName.trim();
     if (!name || creating) return;
     setCreating(true);
     setCreateError(null);
     try {
-      await onCreate(spaceId, folderId, name);
+      await onCreate(spaceId ?? "", folderId, name);
       setCreatingAt(null);
       setNewName("");
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : "Could not create the project");
+      setCreateError(err instanceof Error ? err.message : "Could not create it");
     } finally {
       setCreating(false);
     }
   };
 
-  const listRow = (l: { id: string; name: string }, depth: number) => {
-    const proj = byRef.get(l.id);
-    const active = !!proj && proj.id === value;
-    const isSuggested = !!proj && proj.id === suggestedId;
+  const row = (n: TNode, depth: number, ancestorSpaceId?: string) => {
+    const selectable = pickTypes.includes(n.type);
+    const active = selectable && value === n.id;
+    const isSuggested = selectable && n.id === suggestedId;
+    const hasKids = !!n.children?.length;
+    const isOpen = openIds.has(n.id);
+    const Icon = n.type === "space" ? HardDrive : n.type === "folder" ? FolderKanban : ListChecks;
     return (
-      <button
-        key={l.id}
-        type="button"
-        onClick={() => onChange(proj?.id)}
-        disabled={!proj}
-        title={proj ? undefined : "Not mirrored yet — refresh the workspace schema"}
-        className={[
-          "tech-transition flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-left text-[13px]",
-          depth === 2 ? "ml-8 w-[calc(100%-2rem)]" : "ml-4 w-[calc(100%-1rem)]",
-          active
-            ? "border-primary bg-primary/10 text-primary"
-            : "border-transparent text-foreground hover:bg-secondary disabled:opacity-40",
-        ].join(" ")}
-      >
-        <FolderKanban className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate">{l.name}</span>
-        {isSuggested && <Sparkles className="h-3 w-3 shrink-0 text-primary" />}
-        {active && <Check className="h-3.5 w-3.5 shrink-0" />}
-      </button>
-    );
-  };
-
-  const createRow = (spaceId: string, folderId: string | undefined, depth: number) => {
-    const key = folderId ? `folder:${folderId}` : spaceId;
-    if (creatingAt !== key) {
-      return (
+      <div key={n.id}>
         <button
-          key={`new-${key}`}
           type="button"
-          onClick={() => {
-            setCreatingAt(key);
-            setNewName("");
-            setCreateError(null);
-          }}
+          onClick={() => (hasKids && !selectable ? toggle(n.id) : select(n))}
+          disabled={!selectable && !hasKids}
           className={[
-            "tech-transition flex items-center gap-1.5 rounded-md px-3 py-1 text-left text-[12px] text-primary hover:underline",
-            depth === 2 ? "ml-8" : "ml-4",
+            "tech-transition flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-left text-[13px]",
+            depth === 3 ? "ml-8 w-[calc(100%-2rem)]" : depth === 2 ? "ml-4 w-[calc(100%-1rem)]" : "",
+            active
+              ? "border-primary bg-primary/10 text-primary"
+              : selectable
+                ? "border-transparent text-foreground hover:bg-secondary"
+                : "border-transparent text-foreground/80 hover:bg-secondary",
           ].join(" ")}
         >
-          <Plus className="h-3 w-3" /> New project here
+          {hasKids ? (
+            <ChevronRight
+              onClick={(e) => { e.stopPropagation(); toggle(n.id); }}
+              className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${isOpen ? "rotate-90" : ""}`}
+            />
+          ) : (
+            <span className="w-3.5 shrink-0" />
+          )}
+          <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate">{n.name}</span>
+          {isSuggested && <Sparkles className="h-3 w-3 shrink-0 text-primary" />}
+          {active && <Check className="h-3.5 w-3.5 shrink-0" />}
         </button>
-      );
-    }
-    return (
-      <div key={`new-${key}`} className={depth === 2 ? "ml-8" : "ml-4"}>
-        <div className="flex items-center gap-1.5">
-          <input
-            autoFocus
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void submitCreate(spaceId, folderId);
-              if (e.key === "Escape") setCreatingAt(null);
-            }}
-            placeholder="New project (ClickUp list) name…"
-            className="flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
-          />
-          <button
-            type="button"
-            disabled={!newName.trim() || creating}
-            onClick={() => void submitCreate(spaceId, folderId)}
-            className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground disabled:opacity-50"
-          >
-            {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-            Create
-          </button>
-        </div>
-        {createError && (
-          <p className="mt-1 text-[11px] text-destructive">{createError}</p>
+        {hasKids && isOpen && (
+          <div className="flex flex-col gap-0.5 pb-1 pt-0.5">
+            {n.children!.map((c) => row(c, depth + 1, n.type === "space" ? n.id : ancestorSpaceId))}
+            {/* "New X here" only where it's meaningful: a new list inside a
+                space/folder (leaf mode), handled by the caller's onCreate. */}
+            {onSelectLeaf && (creatingAt === n.id ? (
+              <div className={depth === 2 ? "ml-8" : "ml-4"}>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    autoFocus
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void submitCreate(n.type === "space" ? n.id : ancestorSpaceId, n.type === "folder" ? n.id : undefined);
+                      if (e.key === "Escape") setCreatingAt(null);
+                    }}
+                    placeholder="New list name…"
+                    className="flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
+                  />
+                  <button
+                    type="button"
+                    disabled={!newName.trim() || creating}
+                    onClick={() => void submitCreate(n.type === "space" ? n.id : ancestorSpaceId, n.type === "folder" ? n.id : undefined)}
+                    className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground disabled:opacity-50"
+                  >
+                    {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                    Create
+                  </button>
+                </div>
+                {createError && <p className="mt-1 text-[11px] text-destructive">{createError}</p>}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => { setCreatingAt(n.id); setNewName(""); setCreateError(null); }}
+                className={`tech-transition flex items-center gap-1.5 text-left text-[12px] text-primary hover:underline ${depth === 2 ? "ml-8" : "ml-4"}`}
+              >
+                <Plus className="h-3 w-3" /> {newLabel}
+              </button>
+            ))}
+          </div>
         )}
       </div>
     );
   };
 
-  // Search mode: flat filtered list across every space/folder.
+  // Search mode: flat filtered list across every node.
   const ql = q.trim().toLowerCase();
   if (ql) {
-    const hits: { id: string; name: string; path: string }[] = [];
-    for (const sp of hierarchy) {
-      for (const l of sp.lists)
-        if (l.name.toLowerCase().includes(ql))
-          hits.push({ ...l, path: sp.name });
-      for (const f of sp.folders)
-        for (const l of f.lists)
-          if (l.name.toLowerCase().includes(ql))
-            hits.push({ ...l, path: `${sp.name} / ${f.name}` });
-    }
+    const hits: { node: TNode; path: string }[] = [];
+    const walk = (nodes: TNode[], path: string) => {
+      for (const n of nodes) {
+        if (n.name.toLowerCase().includes(ql)) hits.push({ node: n, path });
+        if (n.children) walk(n.children, path ? `${path} / ${n.name}` : n.name);
+      }
+    };
+    walk(tree, "");
     return (
       <div className="flex flex-col gap-1.5">
         <SearchBox q={q} setQ={setQ} />
-        {hits.slice(0, 10).map((h) => (
-          <div key={h.id}>
-            <p className="ml-4 text-[10px] uppercase tracking-wide text-muted-foreground/70">{h.path}</p>
-            {listRow(h, 1)}
+        {hits.slice(0, 12).map(({ node, path }) => (
+          <div key={node.id}>
+            <p className="ml-4 text-[10px] uppercase tracking-wide text-muted-foreground/70">{path}</p>
+            {row(node, 1)}
           </div>
         ))}
         {!hits.length && (
-          <p className="px-1 py-1 text-[11px] text-muted-foreground">No matching projects.</p>
+          <p className="px-1 py-1 text-[11px] text-muted-foreground">No matches.</p>
         )}
       </div>
     );
@@ -1090,65 +1599,61 @@ function WorkspaceProjectAccordion({
   return (
     <div className="flex flex-col gap-1">
       <SearchBox q={q} setQ={setQ} />
-      <button
-        type="button"
-        onClick={() => onChange(undefined)}
-        className={[
-          "tech-transition flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-left text-[13px]",
-          value === undefined
-            ? "border-primary bg-primary/10 text-primary"
-            : "border-transparent text-foreground hover:bg-secondary",
-        ].join(" ")}
-      >
-        <FolderKanban className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="flex-1">No project</span>
-        {value === undefined && <Check className="h-3.5 w-3.5 shrink-0" />}
-      </button>
+      {onSelectLeaf && (
+        <button
+          type="button"
+          onClick={() => onSelectLeaf(undefined)}
+          className={[
+            "tech-transition flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-left text-[13px]",
+            value === undefined
+              ? "border-primary bg-primary/10 text-primary"
+              : "border-transparent text-foreground hover:bg-secondary",
+          ].join(" ")}
+        >
+          <FolderKanban className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="flex-1">{emptyLabel}</span>
+          {value === undefined && <Check className="h-3.5 w-3.5 shrink-0" />}
+        </button>
+      )}
       <div className="max-h-56 overflow-y-auto pr-0.5">
-        {hierarchy.map((sp) => (
-          <div key={sp.id}>
+        {tree.map((sp) => row(sp, 1))}
+        {onSelectTarget && (
+          creatingAt === "top" ? (
+            <div className="flex items-center gap-1.5">
+              <input
+                autoFocus
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void submitCreate(undefined, undefined);
+                  if (e.key === "Escape") setCreatingAt(null);
+                }}
+                placeholder="New space name…"
+                className="flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
+              />
+              <button
+                type="button"
+                disabled={!newName.trim() || creating}
+                onClick={() => void submitCreate(undefined, undefined)}
+                className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground disabled:opacity-50"
+              >
+                {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                Create
+              </button>
+            </div>
+          ) : (
             <button
               type="button"
-              onClick={() => setOpenSpaces((cur) => toggle(cur, sp.id))}
-              className="tech-transition flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12px] font-semibold text-foreground hover:bg-secondary"
+              onClick={() => { setCreatingAt("top"); setNewName(""); setCreateError(null); }}
+              className="tech-transition flex items-center gap-1.5 text-left text-[12px] text-primary hover:underline"
             >
-              <ChevronRight
-                className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${openSpaces.has(sp.id) ? "rotate-90" : ""}`}
-              />
-              {sp.name}
-              <span className="ml-auto text-[10px] font-normal text-muted-foreground">
-                {sp.lists.length + sp.folders.reduce((n, f) => n + f.lists.length, 0)}
-              </span>
+              <Plus className="h-3 w-3" /> {newLabel}
             </button>
-            {openSpaces.has(sp.id) && (
-              <div className="flex flex-col gap-0.5 pb-1">
-                {sp.lists.map((l) => listRow(l, 1))}
-                {sp.folders.map((f) => (
-                  <div key={f.id}>
-                    <button
-                      type="button"
-                      onClick={() => setOpenFolders((cur) => toggle(cur, f.id))}
-                      className="tech-transition ml-4 flex w-[calc(100%-1rem)] items-center gap-1.5 rounded-md px-2 py-1 text-left text-[12px] font-medium text-muted-foreground hover:bg-secondary"
-                    >
-                      <ChevronRight
-                        className={`h-3 w-3 shrink-0 transition-transform ${openFolders.has(f.id) ? "rotate-90" : ""}`}
-                      />
-                      {f.name}
-                      <span className="ml-auto text-[10px] font-normal">{f.lists.length}</span>
-                    </button>
-                    {openFolders.has(f.id) && (
-                      <div className="flex flex-col gap-0.5">
-                        {f.lists.map((l) => listRow(l, 2))}
-                        {createRow(sp.id, f.id, 2)}
-                      </div>
-                    )}
-                  </div>
-                ))}
-                {createRow(sp.id, undefined, 1)}
-              </div>
-            )}
-          </div>
-        ))}
+          )
+        )}
+        {createError && creatingAt === "top" && (
+          <p className="mt-1 text-[11px] text-destructive">{createError}</p>
+        )}
       </div>
     </div>
   );
@@ -1161,77 +1666,9 @@ function SearchBox({ q, setQ }: { q: string; setQ: (v: string) => void }) {
       <input
         value={q}
         onChange={(e) => setQ(e.target.value)}
-        placeholder="Search projects…"
+        placeholder="Search…"
         className="w-full rounded-md border border-border bg-background/60 py-1.5 pl-8 pr-3 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
       />
-    </div>
-  );
-}
-
-function ProjectPicker({
-  projects,
-  suggestedId,
-  value,
-  onChange,
-}: {
-  projects: GtdProject[];
-  suggestedId?: string;
-  value?: string;
-  onChange: (id: string | undefined) => void;
-}) {
-  const [q, setQ] = useState("");
-  const suggested = suggestedId ? projects.find((p) => p.id === suggestedId) : undefined;
-  const ql = q.trim().toLowerCase();
-  const matches = projects
-    .filter((p) => p.id !== suggestedId && (!ql || p.outcome.toLowerCase().includes(ql)))
-    .slice(0, ql ? 8 : 4);
-
-  const renderRow = (p: GtdProject | undefined, hint: boolean) => {
-    const active = (p?.id ?? undefined) === value;
-    return (
-      <button
-        key={p?.id ?? "__none"}
-        type="button"
-        onClick={() => onChange(p?.id)}
-        className={[
-          "tech-transition flex w-full items-center gap-2 rounded-md border px-3 py-2 text-left text-[13px]",
-          active
-            ? "border-primary bg-primary/10 text-primary"
-            : "border-border text-foreground hover:bg-secondary",
-        ].join(" ")}
-      >
-        {hint ? (
-          <Sparkles className="h-3.5 w-3.5 shrink-0 text-primary" />
-        ) : (
-          <FolderKanban className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        )}
-        <span className="min-w-0 flex-1 truncate">{p ? p.outcome : "No project"}</span>
-        {active && <Check className="h-3.5 w-3.5 shrink-0" />}
-      </button>
-    );
-  };
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      {projects.length > 4 && (
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search projects…"
-            className="w-full rounded-md border border-border bg-background/60 py-1.5 pl-8 pr-3 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
-          />
-        </div>
-      )}
-      {suggested &&
-        (!ql || suggested.outcome.toLowerCase().includes(ql)) &&
-        renderRow(suggested, true)}
-      {renderRow(undefined, false)}
-      {matches.map((p) => renderRow(p, false))}
-      {ql && !matches.length && !suggested && (
-        <p className="px-1 py-1 text-[11px] text-muted-foreground">No matching projects.</p>
-      )}
     </div>
   );
 }

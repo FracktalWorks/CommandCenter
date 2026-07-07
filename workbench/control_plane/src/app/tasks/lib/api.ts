@@ -761,6 +761,26 @@ export async function apiClarifyPropose(
       : undefined,
     /** true when the server locked a SYNCED task's destination (reclarify). */
     lockedDestination: Boolean(r.locked_destination),
+    isVague: Boolean(r.is_vague),
+    suggestedTitle: r.suggested_title ? String(r.suggested_title) : undefined,
+    dueDate: r.due_date ? String(r.due_date) : undefined,
+  };
+}
+
+/** Rephrase a task's title more clearly (the always-available "Improve title"
+ *  affordance) and flag whether it's vague. `title` overrides the item's
+ *  stored title when the user is editing it live in the card. */
+export async function apiSuggestTitle(
+  id: string,
+  title?: string,
+): Promise<{ isVague: boolean; suggestedTitle?: string }> {
+  const q = title ? `?title=${encodeURIComponent(title)}` : "";
+  const r = await gatewayFetch<Raw>(`/items/${id}/suggest-title${q}`, {
+    method: "POST",
+  });
+  return {
+    isVague: Boolean(r.is_vague),
+    suggestedTitle: r.suggested_title ? String(r.suggested_title) : undefined,
   };
 }
 

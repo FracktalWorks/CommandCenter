@@ -1,7 +1,7 @@
 # AGENTS.md — Planning Folder Navigation Guide
 
 > **For AI agents:** Read this file first. It tells you what this project is, what has been built, and which file to read for each concern.
-> **Organisation:** Fracktal Works · **Project:** CommandCenter · **Last updated:** 2026-06-20
+> **Organisation:** Fracktal Works · **Project:** CommandCenter · **Last updated:** 2026-07-07
 
 ---
 
@@ -107,6 +107,7 @@ Status: 🟢 live/shipped · 🔄 in progress · 🔲 planned/not started. *(Ind
 | [`vscode_tool_integration.md`](specs/vscode_tool_integration.md) | 6 VS Code Copilot-Chat tools (HITL, errors, memory, history, GitHub search) | 🔄 impl. done, verify |
 | [`artifact_viewer.md`](specs/artifact_viewer.md) | Right-sidebar file browser + inline document viewer | 🔲 M3 target |
 | [`llm_caching_memory.md`](specs/llm_caching_memory.md) | Prompt caching + session-scoped memory (ADR-008) | 🔲 Phase 2 |
+| [`multi_user_organization_research.md`](specs/multi_user_organization_research.md) | Multi-user / organization account research — identity, roles, permissions, memory, agent sharing, data-heavy app scoping (email, tasks), and SaaS multi-tenancy scaling | 🔲 research done |
 | [`mcp_plugin_integration.md`](specs/mcp_plugin_integration.md) | MCP servers vs Claude plugins vs REST — design proposal | 🔲 brainstorm |
 | [`dev_velocity_tooling_2026-07.md`](specs/dev_velocity_tooling_2026-07.md) | **Dev-velocity tooling** — keeping a large codebase agent-developable: L1 complexity/correctness/mypy gates (grandfather-and-ratchet), L2 CodeGraph MCP (`.mcp.json`), L3 weekly code-health workflow + `codebase_health_audit` skill (flag-only) | 🟢 Phases 1-3 shipped (2026-07-04) |
 

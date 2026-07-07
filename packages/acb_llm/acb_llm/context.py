@@ -30,21 +30,18 @@ from acb_llm.message_compress import compress_message_content
 
 _log = get_logger("acb_llm.context")
 
-# Input-token budgets for the gateway tier aliases. Mirrors
-# gateway.routes.settings._TIER_CONTEXT_WINDOWS so behaviour is identical
-# whether the budget comes from litellm's registry or this tier table.
+# Fallback context-window table for models litellm's model_cost registry does
+# NOT know (self-hosted, private endpoints, legacy non-gateway tier aliases).
 #
-# Values match the current litellm config.yaml tier assignments:
-#   tier-fast     → deepseek/deepseek-chat       (131K actual)
-#   tier-balanced → deepseek/deepseek-v4-pro      (1M actual)
-#   tier-powerful → deepseek/deepseek-v4-pro      (1M actual)
-#
-# Update here AND in gateway.routes.settings._TIER_CONTEXT_WINDOWS whenever
-# the tier→model mapping in infra/litellm/config.yaml changes.
+# Tier aliases (tier-fast / tier-balanced / tier-powerful) are intentionally
+# ABSENT: context_window_for() always resolves them through _TIER_MODEL —
+# the live mapping updated by acb_llm.client.set_tier_model() whenever the
+# Settings UI changes a tier.  Adding tier aliases here would make the window
+# stale the moment the tier model is changed in the UI.
 _TIER_CONTEXT_WINDOWS: dict[str, int] = {
-    "tier-fast": 131_072,
-    "tier-balanced": 1_000_000,
-    "tier-powerful": 1_000_000,
+    "tier1-local-qwen3": 32_768,   # local Qwen3 via vLLM (not in litellm registry)
+    "tier2-sonnet": 200_000,       # legacy alias for Claude Sonnet tiers
+    "tier3-opus": 200_000,         # legacy alias for Claude Opus tiers
 }
 
 # Substrings litellm / providers use when the prompt is too long for the model.
@@ -84,40 +81,58 @@ def resolve_underlying_model(model: str) -> str:
 
 
 def context_window_for(model: str) -> int:
-    """Best-effort *input*-token budget for ``model`` (a tier alias or a concrete
-    litellm id).
+    """Best-effort *input*-token budget for ``model`` (a tier alias or a
+    concrete litellm model id).
+
+    For tier aliases (``tier-fast`` / ``tier-balanced`` / ``tier-powerful``)
+    the backing model is resolved dynamically via ``resolve_underlying_model``,
+    which reads ``acb_llm.client._TIER_MODEL``.  ``_TIER_MODEL`` is populated
+    from ``infra/litellm/config.yaml`` + ``tier_overrides.yaml`` at import time
+    and updated immediately by :func:`acb_llm.client.set_tier_model` whenever
+    the Settings UI changes a tier assignment.  No hardcoded context-window
+    values for tier aliases — the budget always tracks the currently-configured
+    model.
 
     Resolution order:
-      1. Curated tier table (``_TIER_CONTEXT_WINDOWS``) — fastest path for the
-         three gateway tier aliases; values reflect the current litellm
-         ``config.yaml`` tier→model assignments.
-      2. litellm ``model_cost`` registry for the resolved model — used for
-         explicit ``provider/model`` ids that aren't in the tier table.
-      3. Conservative default (32 768).
+      1. ``resolve_underlying_model`` — tier alias → current backing model
+         (reads live ``_TIER_MODEL``; concrete ids pass through unchanged).
+      2. litellm ``model_cost`` registry — covers all known provider/model
+         combinations; tries the resolved name then its bare suffix.
+      3. ``_TIER_CONTEXT_WINDOWS`` fallback table — for self-hosted / private
+         endpoints litellm doesn't know.
+      4. Conservative 32 768-token default.
 
     Always returns a positive integer.
     """
     m = (model or "").strip()
     if not m:
         return _DEFAULT_CONTEXT_WINDOW
-    # Tier alias → curated table (values match litellm config.yaml assignments).
-    if m in _TIER_CONTEXT_WINDOWS:
-        return _TIER_CONTEXT_WINDOWS[m]
+
+    # Step 1: resolve tier alias → current backing model.  For concrete model
+    # ids, resolve_underlying_model returns the input unchanged.
     resolved = resolve_underlying_model(m)
-    if resolved in _TIER_CONTEXT_WINDOWS:
-        return _TIER_CONTEXT_WINDOWS[resolved]
-    # Explicit provider/model id → litellm registry.
+
+    # Step 2: litellm model_cost registry (covers all known provider models).
     try:
         from litellm import model_cost
-        info = (model_cost.get(resolved)
-                or model_cost.get(resolved.split("/")[-1]))
-        if info:
-            win = int(info.get("max_input_tokens")
-                      or info.get("max_tokens") or 0)
-            if win > 0:
-                return win
+        for candidate in dict.fromkeys(filter(None, [
+            resolved,
+            resolved.split("/")[-1] if "/" in resolved else None,
+        ])):
+            info = model_cost.get(candidate)
+            if info:
+                win = int(info.get("max_input_tokens")
+                          or info.get("max_tokens") or 0)
+                if win > 0:
+                    return win
     except Exception:
         pass
+
+    # Step 3: fallback table (self-hosted / private / legacy aliases).
+    for candidate in dict.fromkeys(filter(None, [resolved, m])):
+        if candidate in _TIER_CONTEXT_WINDOWS:
+            return _TIER_CONTEXT_WINDOWS[candidate]
+
     return _DEFAULT_CONTEXT_WINDOW
 
 

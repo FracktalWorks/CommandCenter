@@ -1556,7 +1556,17 @@ async def get_context_windows(
     for mid, caps in _MODEL_CAPABILITIES.items():
         _put_with_bare(mid, int(caps.get("context_window", 0) or 0))
 
-    # 3. Tier aliases (curated).
+    # 3. Tier aliases — resolved dynamically so the ring tracks the currently-
+    #    configured model (Settings UI changes propagate immediately).
+    try:
+        from acb_llm.context import context_window_for as _cwf  # noqa: PLC0415
+        for alias in ("tier-fast", "tier-balanced", "tier-powerful"):
+            cw = _cwf(alias)
+            if cw > 0:
+                _put_with_bare(alias, cw)
+    except Exception:  # noqa: BLE001
+        pass
+    # Static fallback for legacy / non-gateway tier aliases.
     for mid, cw in _TIER_CONTEXT_WINDOWS.items():
         _put_with_bare(mid, cw)
 

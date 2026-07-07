@@ -24,15 +24,41 @@ def test_resolve_tier_alias_to_underlying_model() -> None:
 
 
 def test_context_window_for_tiers() -> None:
-    # Values match litellm config.yaml tier→model assignments:
-    #   tier-fast     → deepseek/deepseek-chat      (131K)
-    #   tier-balanced → deepseek/deepseek-v4-pro     (1M)
-    #   tier-powerful → deepseek/deepseek-v4-pro     (1M)
-    assert ctx.context_window_for("tier-fast") == 131_072
-    assert ctx.context_window_for("tier-balanced") == 1_000_000
-    assert ctx.context_window_for("tier-powerful") == 1_000_000
+    """Tier aliases resolve through _TIER_MODEL → litellm model_cost.
+
+    We do NOT assert specific token counts because the actual value depends on
+    whatever model is configured in config.yaml + tier_overrides.yaml + the DB
+    (all of which can change independently).  Instead we assert:
+    1. Every tier alias returns a positive, non-trivial window.
+    2. The returned window matches context_window_for() called on the
+       backing model directly — proving the chain is correct.
+    """
+    from acb_llm.client import _TIER_ALIAS_MAP, _TIER_MODEL
+    for alias in ("tier-fast", "tier-balanced", "tier-powerful"):
+        cw = ctx.context_window_for(alias)
+        assert cw > 0, f"{alias!r} returned a zero context window"
+        # Must match what context_window_for returns for the backing model id.
+        tier_id = _TIER_ALIAS_MAP.get(alias)
+        backing = _TIER_MODEL.get(tier_id, "") if tier_id else ""
+        if backing:
+            assert cw == ctx.context_window_for(backing), (
+                f"{alias!r} (window={cw}) doesn't match backing "
+                f"model {backing!r} (window={ctx.context_window_for(backing)})"
+            )
     # Unknown id never returns 0 — always a usable positive budget.
     assert ctx.context_window_for("made-up/model") > 0
+
+
+def test_context_window_for_tiers_tracks_model_changes(monkeypatch) -> None:
+    """Changing _TIER_MODEL (as set_tier_model does) immediately changes what
+    context_window_for returns — no hardcoded values, no stale cache."""
+    from acb_llm.client import _TIER_MODEL
+    # Use two DeepSeek models with different known context sizes.
+    monkeypatch.setitem(_TIER_MODEL, "tier2", "deepseek/deepseek-v4-pro")   # 1M
+    assert ctx.context_window_for("tier-balanced") == 1_000_000
+
+    monkeypatch.setitem(_TIER_MODEL, "tier2", "deepseek/deepseek-chat")      # 131K
+    assert ctx.context_window_for("tier-balanced") == 131_072
 
 
 def test_is_context_overflow_error_detects_provider_messages() -> None:
@@ -43,23 +69,24 @@ def test_is_context_overflow_error_detects_provider_messages() -> None:
 
 
 def test_fit_messages_truncates_oversized_prompt() -> None:
-    # A user message far larger than tier-fast's 32k window must be trimmed; the
-    # system message (instructions) is short and must survive intact.
-    huge = "word " * 200_000  # ~1M chars, well over any budget
+    # Use deepseek/deepseek-chat (131K) directly so the test is independent of
+    # tier configuration — a 1M-char (~250K token) message must be trimmed to fit.
+    model = "deepseek/deepseek-chat"  # 131K context window, always in litellm
+    huge = "word " * 200_000  # ~1M chars, well over the 131K window
     messages = [
         {"role": "system", "content": "Classify this email."},
         {"role": "user", "content": huge},
     ]
     fitted, truncated = ctx.fit_messages_to_context(
-        messages, "tier-fast", max_output_tokens=500)
+        messages, model, max_output_tokens=500)
     assert truncated is True
     # Original list is not mutated.
     assert messages[1]["content"] == huge
     # System instructions preserved verbatim.
     assert fitted[0]["content"] == "Classify this email."
     # Now within budget, and the truncation marker is present.
-    budget = ctx.context_window_for("tier-fast") - 500 - 512
-    assert ctx.count_message_tokens(fitted, "tier-fast") <= budget
+    budget = ctx.context_window_for(model) - 500 - 512
+    assert ctx.count_message_tokens(fitted, model) <= budget
     assert "truncated" in fitted[1]["content"]
 
 

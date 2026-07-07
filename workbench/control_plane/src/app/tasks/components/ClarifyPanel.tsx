@@ -1256,6 +1256,15 @@ function buildTree(
   }));
 }
 
+/** The value-space id of a node. A LIST leaf is selected by its MIRRORED gtd
+ *  project id (what the card stores + sends to organize), not its own id — for
+ *  a SYNCED list `id` is the ClickUp list id while `projectId` is the local
+ *  mirror. (For LOCAL lists projectId === id, so this is a no-op there.) Every
+ *  other node is selected by its own id. Comparing against this — instead of
+ *  raw `n.id` — is what makes a picked/suggested ClickUp list actually light
+ *  up and the tree auto-expand to it. */
+const selId = (n: TNode): string | undefined => (n.type === "list" ? n.projectId : n.id);
+
 /** Where picker for Size=single/subtasks: navigate the tree, select a LIST
  *  (leaf) — the task is created INTO it. Mirrors ClickUp's own navigation. */
 function ProjectListTree({
@@ -1441,10 +1450,10 @@ function TreePicker({
     if (target) {
       for (const sp of tree) {
         const hasIt = (n: TNode): boolean =>
-          n.id === target || (n.children?.some(hasIt) ?? false);
+          selId(n) === target || (n.children?.some(hasIt) ?? false);
         if (hasIt(sp)) open.add(sp.id);
         for (const c of sp.children ?? []) {
-          if (c.type === "folder" && (c.children?.some((l) => l.id === target) ?? false)) {
+          if (c.type === "folder" && (c.children?.some((l) => selId(l) === target) ?? false)) {
             open.add(c.id);
           }
         }
@@ -1467,6 +1476,9 @@ function TreePicker({
 
   const select = (n: TNode) => {
     if (!pickTypes.includes(n.type)) return;
+    // A LIST with no mirrored gtd project id can't be a target yet (its schema
+    // refresh hasn't landed) — don't bind the task to nothing.
+    if (n.type === "list" && selId(n) === undefined) return;
     if (onSelectLeaf) onSelectLeaf(n);
     if (onSelectTarget) onSelectTarget(n);
   };
@@ -1489,8 +1501,13 @@ function TreePicker({
 
   const row = (n: TNode, depth: number, ancestorSpaceId?: string) => {
     const selectable = pickTypes.includes(n.type);
-    const active = selectable && value === n.id;
-    const isSuggested = selectable && n.id === suggestedId;
+    const sid = selId(n);
+    // A LIST whose mirrored gtd project hasn't loaded yet (schema still
+    // syncing) is shown but disabled — picking it would bind to nothing.
+    const unmirrored = n.type === "list" && sid === undefined;
+    const canSelect = selectable && !unmirrored;
+    const active = canSelect && sid === value;
+    const isSuggested = canSelect && sid === suggestedId;
     const hasKids = !!n.children?.length;
     const isOpen = openIds.has(n.id);
     const Icon = n.type === "space" ? HardDrive : n.type === "folder" ? FolderKanban : ListChecks;
@@ -1498,16 +1515,19 @@ function TreePicker({
       <div key={n.id}>
         <button
           type="button"
-          onClick={() => (hasKids && !selectable ? toggle(n.id) : select(n))}
-          disabled={!selectable && !hasKids}
+          onClick={() => (hasKids && !canSelect ? toggle(n.id) : select(n))}
+          disabled={!canSelect && !hasKids}
+          title={unmirrored ? "Still syncing from ClickUp — available in a moment" : undefined}
           className={[
             "tech-transition flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-left text-[13px]",
             depth === 3 ? "ml-8 w-[calc(100%-2rem)]" : depth === 2 ? "ml-4 w-[calc(100%-1rem)]" : "",
             active
               ? "border-primary bg-primary/10 text-primary"
-              : selectable
-                ? "border-transparent text-foreground hover:bg-secondary"
-                : "border-transparent text-foreground/80 hover:bg-secondary",
+              : unmirrored
+                ? "cursor-not-allowed border-transparent text-muted-foreground/50"
+                : selectable
+                  ? "border-transparent text-foreground hover:bg-secondary"
+                  : "border-transparent text-foreground/80 hover:bg-secondary",
           ].join(" ")}
         >
           {hasKids ? (
@@ -1520,6 +1540,11 @@ function TreePicker({
           )}
           <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate">{n.name}</span>
+          {unmirrored && (
+            <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground/70">
+              <Loader2 className="h-3 w-3 animate-spin" /> syncing…
+            </span>
+          )}
           {isSuggested && <Sparkles className="h-3 w-3 shrink-0 text-primary" />}
           {active && <Check className="h-3.5 w-3.5 shrink-0" />}
         </button>

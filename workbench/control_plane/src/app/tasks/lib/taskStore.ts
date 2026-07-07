@@ -136,6 +136,10 @@ export interface ItemMetaPatch {
   workflowStage?: string;     // the local Kanban stage (board move)
   sortKey?: number;           // manual (drag) rank within a group/column
   assignee?: Person | null;   // null → unassign
+  /** personal "My Next Actions" membership (My Next Actions = NEXT & isMine).
+   *  false drops a handed-off/unassigned task from my list without deleting it
+   *  on ClickUp; a LOCAL overlay only — never back-synced. */
+  isMine?: boolean;
 }
 
 /** Resolve a storage target into item source/provider/syncState fields.
@@ -1141,6 +1145,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
             patch.assignee !== undefined
               ? patch.assignee ?? undefined
               : i.assignee,
+          isMine: patch.isMine !== undefined ? patch.isMine : i.isMine,
           updatedAt: new Date().toISOString(),
         };
       }),
@@ -1170,6 +1175,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
             provider_user_id: patch.assignee.providerUserId,
           };
       }
+      if (patch.isMine !== undefined) body.is_mine = patch.isMine;
       if (Object.keys(body).length) {
         // Swap in the server row (authoritative — e.g. a ClickUp back-sync may
         // normalize the stage) so the optimistic edit reconciles.

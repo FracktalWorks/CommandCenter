@@ -512,6 +512,28 @@ def test_organize_owner_axis_independent_of_size():
     assert '"is_mine": not delegated' in src
 
 
+def test_item_patch_is_mine_is_local_overlay_never_pushed_upstream():
+    """Removing a handed-off/unassigned task from "My Next Actions" is a purely
+    LOCAL overlay: is_mine patches the row, but is NEVER a ClickUp-writable
+    field — the task stays put upstream. (My Next Actions = NEXT & is_mine.)"""
+    import inspect
+
+    from gateway.routes.tasks.items import (
+        ItemPatch, _build_item_update, _push_patch_upstream,
+    )
+
+    sets, params = _build_item_update("item1", "u1", ItemPatch(is_mine=False))
+    assert "is_mine = :is_mine" in sets
+    assert params["is_mine"] is False
+
+    # An unset is_mine leaves the column untouched (no accidental writes).
+    sets2, _ = _build_item_update("item1", "u1", ItemPatch(context="@calls"))
+    assert not any("is_mine" in s for s in sets2)
+
+    # is_mine must not be in the set of fields back-synced to the tool.
+    assert "is_mine" not in inspect.getsource(_push_patch_upstream)
+
+
 # ---------------------------------------------------------------------------
 # Enrich (fill missing fields) + reclarify binding + delegate promotion
 # ---------------------------------------------------------------------------

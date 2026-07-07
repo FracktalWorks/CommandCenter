@@ -306,6 +306,7 @@ export async function apiPatchItem(
     sort_key?: number;
     assignee?: { name: string; email?: string; provider_user_id?: string };
     clear_assignee?: boolean;
+    is_mine?: boolean;
   }
 ): Promise<GtdItem> {
   return mapItem(

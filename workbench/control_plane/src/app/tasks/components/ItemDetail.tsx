@@ -17,6 +17,7 @@ import {
   Gauge,
   Tag,
   UserRound,
+  UserMinus,
   CircleDot,
   Trash2,
   MessageSquare,
@@ -161,6 +162,11 @@ export function TaskDetail({
   // (a teammate can't be assigned to a private local task). Holds the picked
   // person until the destination dialog resolves.
   const [delegateTo, setDelegateTo] = useState<Person | null>(null);
+  // After reassigning/unassigning a task that's currently in MY Next Actions,
+  // offer to drop it from my list (is_mine=false) — it stays on ClickUp.
+  const [offerDropFromNext, setOfferDropFromNext] = useState(false);
+  // Reset that offer when switching to a different task.
+  useEffect(() => { setOfferDropFromNext(false); }, [item.id]);
 
   const project = item.projectId
     ? projects.find((p) => p.id === item.projectId)
@@ -395,6 +401,14 @@ export function TaskDetail({
                       setDelegateTo(p);
                     } else {
                       updateItem(item.id, { assignee: p });
+                      // Handed to someone else (or unassigned) a task that's in
+                      // MY Next Actions → offer to drop it from my list.
+                      const changedOwner =
+                        (p?.providerUserId ?? p?.name ?? null) !==
+                        (item.assignee?.providerUserId ?? item.assignee?.name ?? null);
+                      if (changedOwner && item.disposition === "NEXT" && item.isMine) {
+                        setOfferDropFromNext(true);
+                      }
                     }
                     close();
                   }}
@@ -416,6 +430,33 @@ export function TaskDetail({
             )}
           </div>
         </section>
+
+        {/* Offer to drop a just-reassigned/unassigned task from My Next Actions.
+            It stays on ClickUp — only the personal list changes. The regular
+            delete/two-way sync is untouched. */}
+        {offerDropFromNext && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+            <span className="min-w-0 flex-1 text-[12.5px] text-foreground">
+              No longer your action? Remove it from My Next Actions — it stays on ClickUp.
+            </span>
+            <button
+              type="button"
+              onClick={() => { updateItem(item.id, { isMine: false }); setOfferDropFromNext(false); }}
+              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90"
+            >
+              <UserMinus className="h-3.5 w-3.5" />
+              Remove from My Next Actions
+            </button>
+            <button
+              type="button"
+              onClick={() => setOfferDropFromNext(false)}
+              className="tech-transition rounded-md px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
+            >
+              Keep
+            </button>
+          </div>
+        )}
 
         {/* Waiting-on (delegated) */}
         {item.waitingOn && (

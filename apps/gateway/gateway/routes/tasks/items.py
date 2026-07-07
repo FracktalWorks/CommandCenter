@@ -99,6 +99,9 @@ class ItemPatch(BaseModel):
     sort_key: float | None = None        # manual (drag) rank within a group/column
     assignee: PersonModel | None = None   # a PersonModel to set; sentinel below to clear
     clear_assignee: bool = False          # explicit unassign (assignee=None is "unchanged")
+    # Personal "My Next Actions" membership (My Next Actions = NEXT & is_mine).
+    # A LOCAL overlay only — never back-synced to the connected tool.
+    is_mine: bool | None = None
     attachments: list[dict] | None = None  # replaces the whole list
 
 
@@ -387,6 +390,12 @@ def _build_item_update(
     elif patch.assignee is not None:
         sets.append("assignee = :assignee")
         params["assignee"] = json.dumps(patch.assignee.model_dump())
+    # Personal "My Next Actions" membership — a LOCAL overlay (My Next Actions =
+    # NEXT & is_mine). Lets the user drop a task they've handed off/unassigned
+    # from their own list without deleting it upstream; never back-synced.
+    if patch.is_mine is not None:
+        sets.append("is_mine = :is_mine")
+        params["is_mine"] = patch.is_mine
     if patch.attachments is not None:
         sets.append("attachments = :atts")
         params["atts"] = json.dumps(patch.attachments) or None

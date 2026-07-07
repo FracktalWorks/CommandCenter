@@ -11,7 +11,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import React from "react";
 import Link from "next/link";
-import { ArrowUp, Square, ListOrdered, CornerDownRight, ChevronDown, CheckCircle } from "lucide-react";
+import { ArrowUp, Square, ListOrdered, CornerDownRight, ChevronDown, CheckCircle, LoaderCircle } from "lucide-react";
 import { useAgentChat } from "@/hooks/useAgentChat";
 import type { ArtifactEntry, ChatMessage } from "@/hooks/useAgentChat";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
@@ -448,6 +448,39 @@ export default function AgentChat({
   // Send button, which greys out without text).
   const isRunActive =
     isLoading || recovering || (!!runStatus && runStatus !== "idle");
+
+  // ── Live working message (rotates at the bottom of the chat) ──────────
+  // Mirrors VS Code Copilot / Claude: the "thinking" indicator is always
+  // visible at the bottom of the output, not buried inside the thinking
+  // container where it disappears when the container is collapsed.
+  const _WM = [
+    "Working on it", "Thinking it through", "Processing",
+    "Crunching the details", "Pulling the data", "Putting it together",
+  ];
+  const _FM = ["Bribing the hamster", "Reticulating splines", "Summoning Clippy"];
+  const [liveWorkingMsg, setLiveWorkingMsg] = useState<string>(() =>
+    Math.random() < 1 / 12 ? _FM[Math.floor(Math.random() * _FM.length)] : _WM[Math.floor(Math.random() * _WM.length)]
+  );
+  useEffect(() => {
+    if (!isRunActive) return;
+    const t = setInterval(() => {
+      const pool = Math.random() < 1 / 12 ? _FM : _WM;
+      setLiveWorkingMsg(pool[Math.floor(Math.random() * pool.length)]);
+    }, 3000);
+    return () => clearInterval(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRunActive]);
+
+  // Current running tool name — shown in the live indicator when a tool is in flight.
+  const liveToolName = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role !== "assistant" || !m.streaming) break;
+      const running = m.toolEvents?.find((t) => t.status === "running");
+      if (running) return running.name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+    return null;
+  }, [messages]);
   const prevLoadingRef = useRef(false);
   // Guards the queue-drain effect against re-entrancy: a second isLoading→false
   // edge (e.g. a poll clearing a stale flag right as a steer lands) must not
@@ -1515,6 +1548,24 @@ export default function AgentChat({
             {queuedCount} message{queuedCount > 1 ? "s" : ""} queued
             <button type="button" onClick={() => { queueRef.current = []; setQueuedCount(0); saveQueue(sessionIdRef.current, queueRef.current); }}
               className="text-muted-foreground hover:text-foreground underline">clear</button>
+          </div>
+        )}
+
+        {/* Live working indicator — always visible at bottom of output while
+            agent is active. Mirrors Claude / GitHub Copilot style: status is
+            always in view regardless of scroll position or whether the
+            ThinkingContainer is expanded or collapsed. */}
+        {isRunActive && (
+          <div className="max-w-3xl mx-auto mb-2 flex items-center gap-2 text-[11px] text-muted-foreground chat-fade-in">
+            <LoaderCircle className="text-sky-400 animate-spin shrink-0" size={12} strokeWidth={1.5} />
+            <span className="italic truncate">
+              {liveToolName ? `Running ${liveToolName}…` : `${liveWorkingMsg}…`}
+            </span>
+            <span className="flex items-center gap-0.5 shrink-0" aria-hidden="true">
+              <span className="chat-typing-dot" />
+              <span className="chat-typing-dot" />
+              <span className="chat-typing-dot" />
+            </span>
           </div>
         )}
 

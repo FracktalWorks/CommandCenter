@@ -32,7 +32,6 @@ import {
   Wrench,
   Check,
   X,
-  LoaderCircle,
   type LucideIcon,
 } from "lucide-react";
 import type { ToolEvent } from "@/components/MarkdownMessage";
@@ -336,7 +335,6 @@ export default function ThinkingContainer({
   isActive,
 }: ThinkingContainerProps) {
   const [expanded, setExpanded] = useState(false);
-  const [workingMsg, setWorkingMsg] = useState<string>(() => pickWorkingMessage());
   const userToggledRef = useRef(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   // Per-tool expansion override (user click).  Without an override, a tool
@@ -376,13 +374,6 @@ export default function ThinkingContainer({
       setExpanded(true);
     }
   }, [hasContent, isActive]);
-
-  // Rotate the working message every few seconds while active.
-  useEffect(() => {
-    if (!isActive) return;
-    const t = setInterval(() => setWorkingMsg(pickWorkingMessage()), 3000);
-    return () => clearInterval(t);
-  }, [isActive]);
 
   // Auto-collapse shortly after completion (unless the user manually expanded).
   useEffect(() => {
@@ -513,22 +504,8 @@ export default function ThinkingContainer({
 
       {/* ── Pre-content working indicator ──────────────────────────────
           The dead-air gap between "run started" and the first tool/reasoning
-          event used to show only a static "Thinking…" header, which reads as
-          "stuck". Show a rotating working message + animated typing dots the
-          moment the agent is active with no content yet, so every chat surface
-          (this container renders for main chat, email, and task-manager alike)
-          has clear motion from the start. Hands off to the in-body spinner once
-          content arrives (this row hides when hasContent). */}
-      {isActive && !hasContent && (
-        <div className="flex items-center gap-2 px-3 pb-2 -mt-1 chat-fade-in">
-          <span className="ml-6 text-[11px] text-muted-foreground italic">{workingMsg}</span>
-          <span className="flex items-center gap-1 text-muted-foreground/70" aria-hidden="true">
-            <span className="chat-typing-dot" />
-            <span className="chat-typing-dot" />
-            <span className="chat-typing-dot" />
-          </span>
-        </div>
-      )}
+          event is now indicated by the persistent bottom bar in AgentChat
+          rather than a message inside the container. */}
 
       {/* ── Body: vertical timeline ────────────────────────────────── */}
       {expanded && hasContent && (
@@ -637,31 +614,20 @@ export default function ThinkingContainer({
                         <div className="mt-1">
                           {style.kind === "run" && (event.args || event.result) ? (
                             <div className="rounded-md bg-[#0c0c0c] border border-white/10 overflow-hidden">
-                              {/* Terminal title bar — kept dark in both themes
-                                  (a terminal reads as a terminal), so use fixed
-                                  on-dark colors instead of theme tokens. */}
-                              <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-white/10 bg-white/5">
-                                <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f56] shrink-0" />
-                                <span className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e] shrink-0" />
-                                <span className="w-2.5 h-2.5 rounded-full bg-[#27c93f] shrink-0" />
-                                <span className="text-[10px] text-zinc-400 ml-2 font-mono tracking-wide">
-                                  {event.args?.command ? "Terminal" : formatToolName(event.name)}
-                                </span>
-                                {isRunning && (
-                                  <span className="text-[9px] text-sky-400 ml-auto animate-pulse font-mono">● running</span>
-                                )}
-                                {dur !== undefined && !isRunning && (
-                                  <span className="text-[9px] text-zinc-400 ml-auto font-mono">{dur}ms</span>
-                                )}
-                              </div>
-                              {/* Terminal body */}
-                              <div className="p-2.5 font-mono text-[11px] leading-relaxed">
+                              {/* Terminal body — no title bar (no Mac circles), just the prompt */}
+                              <div className="px-2.5 pt-1.5 pb-2.5 font-mono text-[11px] leading-relaxed">
                                 {event.args && (
-                                  <div className="flex gap-2 mb-1.5">
+                                  <div className="flex items-baseline gap-2 mb-1.5">
                                     <span className="text-emerald-400 shrink-0 select-none font-medium">$</span>
-                                    <span className="text-zinc-100 break-all font-mono text-[11px] leading-relaxed">
+                                    <span className="flex-1 text-zinc-100 break-all font-mono text-[11px] leading-relaxed">
                                       {highlightCommand(extractCommand(event.args, event.name))}
                                     </span>
+                                    {isRunning && (
+                                      <span className="text-[9px] text-sky-400 animate-pulse font-mono shrink-0">running</span>
+                                    )}
+                                    {dur !== undefined && !isRunning && (
+                                      <span className="text-[9px] text-zinc-500 font-mono shrink-0">{dur}ms</span>
+                                    )}
                                   </div>
                                 )}
                                 {event.result && (
@@ -774,17 +740,9 @@ export default function ThinkingContainer({
 
               })}
 
-              {/* Live working spinner */}
-              {isActive && toolEvents.every((t) => t.status !== "running") && (
-                <div className="relative">
-                  <div className="absolute left-[5px] top-[7px] z-10">
-                    <LoaderCircle className="text-muted-foreground/50 animate-spin" size={13} strokeWidth={1.5} />
-                  </div>
-                  <div className="ml-8 mr-3 rounded-md border-l-2 border-border/50 bg-card/40 px-2.5 py-1.5">
-                    <span className="text-[11px] text-muted-foreground italic">{workingMsg}…</span>
-                  </div>
-                </div>
-              )}
+              {/* Working indicator removed from here — it now lives as a
+                  persistent bottom bar in AgentChat, always visible regardless
+                  of whether the thinking container is expanded or collapsed. */}
             </div>
           </div>
         </div>

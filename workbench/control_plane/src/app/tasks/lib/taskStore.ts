@@ -76,7 +76,6 @@ function sync(promise: Promise<unknown>): void {
  *  where they can be re-clarified or have their context auto-assigned. */
 export const NO_CONTEXT = "@no context";
 
-/** The outcome of clarifying an inbox item — the GTD decision tree (F2). */
 /** Fields shared by clarified items that can be stored on a PM tool. */
 interface SyncFields {
   /** Local vs a connected PM tool (§5.1). */
@@ -90,6 +89,7 @@ interface SyncFields {
   assignee?: Person;
 }
 
+/** The outcome of clarifying an inbox item — the GTD decision tree (F2). */
 export type ClarifyDecision =
   | { kind: "trash" }
   | { kind: "reference" }

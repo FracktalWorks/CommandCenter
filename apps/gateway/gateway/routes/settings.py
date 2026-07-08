@@ -1495,8 +1495,10 @@ async def list_provider_models(
 #   tier-fast     → deepseek/deepseek-chat       (131K actual)
 #   tier-balanced → deepseek/deepseek-v4-pro      (1M actual)
 #   tier-powerful → deepseek/deepseek-v4-pro      (1M actual)
-# Update here AND in acb_llm.context._TIER_CONTEXT_WINDOWS whenever the
-# tier→model mapping in infra/litellm/config.yaml changes.
+# Update here whenever the tier→model mapping in infra/litellm/config.yaml
+# changes.  Do NOT add tier-fast/balanced/powerful to acb_llm.context.
+# _TIER_CONTEXT_WINDOWS — they're intentionally absent there (resolved
+# dynamically via _TIER_MODEL so the runtime window tracks the live config).
 _TIER_CONTEXT_WINDOWS: dict[str, int] = {
     "tier1-local-qwen3": 32_768,
     "tier2-sonnet": 200_000,
@@ -1518,7 +1520,8 @@ async def get_context_windows(
       1. Static ``_MODEL_CAPABILITIES`` (covers all built-in models).
       2. The live provider-models cache (covers refreshed provider lists, e.g.
          the full OpenRouter catalogue with real context sizes).
-      3. Tier routing aliases (``tier1``/``tier2``/``tier3``).
+      3. Tier routing aliases (``tier-fast`` / ``tier-balanced`` /
+         ``tier-powerful``).
 
     Keys are stored under both their full id and their bare suffix (after the
     last ``/``) so lookups succeed regardless of provider-prefix differences

@@ -469,6 +469,14 @@ interface TaskState {
    *  existing ClickUp task") instead of creating a duplicate: the capture is
    *  removed locally and its info is appended to the target (back-synced). */
   mergeIntoExisting: (id: string, targetId: string) => Promise<void>;
+  /** Rename an existing task (the dedup match) to a more descriptive title
+   *  taken from the inbox capture, then drop the capture. For a SYNCED target
+   *  the new name back-syncs to the connected tool (ClickUp). */
+  renameExistingFromCapture: (
+    captureId: string,
+    existingId: string,
+    newTitle: string,
+  ) => Promise<void>;
   /** File an inbox capture as a SUB-STEP of an existing task (clarify "this is
    *  a step of X"): it becomes a nested child of the parent and leaves the
    *  flat inbox/next lists. A SYNCED parent's child pushes to ClickUp. */
@@ -520,8 +528,13 @@ interface TaskState {
     matchDisposition?: string;
     matchSource?: string;
   } | null;
-  /** Resolve the dup notice: keep both / treat as the same (remove new). */
-  resolveDupNotice: (action: "keep" | "same" | "dismiss") => void;
+  /** Resolve the dup notice: keep both / treat as the same (remove new) /
+   *  rename the existing match to a clearer title (from the new capture, back-
+   *  syncs for a SYNCED match) then drop the new copy / dismiss. */
+  resolveDupNotice: (
+    action: "keep" | "same" | "dismiss" | "rename",
+    newTitle?: string,
+  ) => void;
   /** Per-user task-manager settings (AI tiers + toggles). Defaults render
    *  immediately; hydrate() refreshes from the gateway. */
   settings: TaskSettings;
@@ -684,7 +697,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   dupNotice: null,
 
-  resolveDupNotice: (action) => {
+  resolveDupNotice: (action, newTitle) => {
     const n = get().dupNotice;
     if (!n) return;
     if (action === "keep" && n.verdict === "duplicate") {
@@ -695,6 +708,26 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       const id = n.itemId;
       set((s) => ({ items: s.items.filter((i) => i.id !== id) }));
       if (get().backend === "live") sync(apiDeleteItem(id).catch(() => {}));
+    } else if (action === "rename") {
+      // The new capture's title is clearer — rename the existing match to it
+      // (back-syncs for a SYNCED match), then drop the new copy if it's still
+      // around (verdict "similar"; a "duplicate" was already auto-removed).
+      const title = (newTitle ?? n.title).trim();
+      if (title) {
+        set((s) => ({
+          items: s.items.map((i) =>
+            i.id === n.matchId
+              ? { ...i, title, updatedAt: new Date().toISOString() }
+              : i,
+          ),
+        }));
+        if (get().backend === "live") sync(apiPatchItem(n.matchId, { title }));
+        if (n.itemId) {
+          const id = n.itemId;
+          set((s) => ({ items: s.items.filter((i) => i.id !== id) }));
+          if (get().backend === "live") sync(apiDeleteItem(id).catch(() => {}));
+        }
+      }
     }
     set({ dupNotice: null });
   },
@@ -1103,6 +1136,44 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     set((s) => ({
       items: s.items.map((i) => (i.id === target.id ? target : i)),
     }));
+  },
+
+  renameExistingFromCapture: async (captureId, existingId, newTitle) => {
+    // The inbox capture is a duplicate whose title is clearer than the task
+    // that already exists — rename the existing task to it (back-syncs to the
+    // tool for a SYNCED target) and drop the now-absorbed capture.
+    const title = newTitle.trim();
+    if (!title) return;
+    const capture = get().items.find((i) => i.id === captureId);
+    set((s) => ({
+      items: s.items
+        .filter((i) => i.id !== captureId)
+        .map((i) =>
+          i.id === existingId
+            ? { ...i, title, updatedAt: new Date().toISOString() }
+            : i,
+        ),
+      selectedItemId: s.selectedItemId === captureId ? null : s.selectedItemId,
+      undoSnapshot: capture
+        ? {
+            items: s.items,
+            projects: s.projects,
+            processed: s.processedThisSession,
+            selectedItemId: s.selectedItemId,
+            label: "Renamed existing task",
+            deletedItems: [capture],
+          }
+        : s.undoSnapshot,
+    }));
+    if (get().backend !== "live") return;
+    // Rename the existing task first (this is the write the user asked for);
+    // patch back-syncs the new name upstream when the target is SYNCED.
+    const updated = await apiPatchItem(existingId, { title });
+    set((s) => ({
+      items: s.items.map((i) => (i.id === updated.id ? updated : i)),
+    }));
+    // Then drop the absorbed capture.
+    await apiDeleteItem(captureId).catch(() => {});
   },
 
   fileUnderParent: async (id, parentId) => {

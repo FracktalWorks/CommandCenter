@@ -112,6 +112,66 @@ export function defaultStatus(
   return find(/to.?do|selected|to do/i) ?? statuses[1] ?? statuses[0];
 }
 
+/** The Sort→Shape verdict, condensed for the inbox list's "AI suggests"
+ *  column. SORT = is it actionable, and how urgent (do-now); SIZE = one
+ *  action, break into steps, or a project; DELEGATE = a hand-off to someone. */
+export type SortBucket = "do-now" | "actionable" | "reference" | "someday" | "trash";
+export type SizeBucket = "single" | "steps" | "project";
+
+export interface SortShapeSummary {
+  sort: SortBucket;
+  sortLabel: string;
+  /** SIZE only applies to plain actionable items (not a 2-minute do-now). */
+  size?: SizeBucket;
+  sizeLabel?: string;
+  /** true when the assistant reads this as a hand-off (WAITING / has assignee). */
+  delegate: boolean;
+  /** the suggested owner's first name, when delegating. */
+  delegateTo?: string;
+}
+
+const SORT_LABEL: Record<SortBucket, string> = {
+  "do-now": "Do now",
+  actionable: "Actionable",
+  reference: "Reference",
+  someday: "Someday",
+  trash: "Trash",
+};
+const SIZE_LABEL: Record<SizeBucket, string> = {
+  single: "Single action",
+  steps: "Break into steps",
+  project: "Project",
+};
+
+/** Condense a proposal into its Sort→Shape read for at-a-glance display. */
+export function sortShapeSummary(p: ClarifyProposal): SortShapeSummary {
+  const sort: SortBucket =
+    p.disposition === "DO_NOW" ? "do-now"
+      : p.disposition === "REFERENCE" ? "reference"
+        : p.disposition === "SOMEDAY" ? "someday"
+          : p.disposition === "TRASH" ? "trash"
+            : "actionable"; // NEXT / PROJECT / WAITING / CALENDAR
+
+  // SIZE is only meaningful for plain actionable work — a do-now is by
+  // definition a single quick action, and reference/someday/trash aren't shaped.
+  const size: SizeBucket | undefined =
+    sort !== "actionable"
+      ? undefined
+      : p.disposition === "PROJECT" || p.complexity === "project" ? "project"
+        : p.complexity === "subtasks" ? "steps"
+          : "single";
+
+  const delegate = p.disposition === "WAITING" || !!p.suggestedAssignee;
+  return {
+    sort,
+    sortLabel: SORT_LABEL[sort],
+    size,
+    sizeLabel: size ? SIZE_LABEL[size] : undefined,
+    delegate,
+    delegateTo: p.suggestedAssignee?.name.split(/\s+/)[0],
+  };
+}
+
 // Word-boundary hint match (mirror of gateway ai.py `_has`): bare substring
 // matching misfiled captures - "profile..." tripped the "file" reference hint.
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -193,6 +253,21 @@ const TWO_MIN_HINTS = ["reply", "confirm", "rsvp", "sign", "pay", "forward", "te
 const REFERENCE_HINTS = ["receipt", "invoice", "statement", "fyi", "file", "for the record", "article", "read:", "link", "doc:", "reference"];
 const SOMEDAY_HINTS = ["idea:", "someday", "maybe", "one day", "learn ", "explore", "evaluate", "wish", "consider "];
 const CALENDAR_HINTS = ["today", "tomorrow", "tonight", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "deadline", "due ", " at ", "o'clock", "appointment", "meeting on", "next week"];
+
+// A capture that packs several actions into one line ("book flights and hotel,
+// then email the team") reads as needing a break-down into steps, not a single
+// action. Conservative: needs a clear separator AND at least two parts that
+// each start with an action verb, so "salt and pepper" or "black & white" don't
+// trip it.
+const MULTISTEP_SPLIT = /\s+(?:and|then|&|\+)\s+|\s*[,;/]\s*|\s*(?:→|->)\s*/i;
+const STEP_VERB = /^(call|email|reply|draft|send|buy|pick|book|write|review|check|pay|sign|schedule|confirm|follow|order|renew|research|plan|prepare|update|fix|create|add|remove|set|get|ask|make|finish|finalize|finalise|design|build|test|deploy|clean|organize|organise|arrange|contact|message|ping|share|upload|download|print|scan|file|collect|drop|book)\b/i;
+function looksMultiStep(title: string): boolean {
+  const t = title.trim();
+  if (t.length < 18) return false; // too short to be several real steps
+  const parts = t.split(MULTISTEP_SPLIT).map((s) => s.trim()).filter(Boolean);
+  if (parts.length < 2) return false;
+  return parts.filter((p) => STEP_VERB.test(p)).length >= 2;
+}
 
 function coreProposal(item: GtdItem, people: Person[]): ClarifyProposal {
   const t = item.title.toLowerCase();
@@ -284,6 +359,9 @@ function coreProposal(item: GtdItem, people: Person[]): ClarifyProposal {
     energy: ctx === "@errands" ? "low" : "medium",
     timeEstimateMins: ctx === "@calls" ? 10 : ctx === "@errands" ? 20 : 25,
     confidence: "medium",
+    // A capture that packs several actions into one line reads as needing a
+    // break-down; leave it undefined (→ single action) otherwise.
+    complexity: looksMultiStep(item.title) ? "subtasks" : undefined,
     rationale: `Actionable now — a next action for ${ctx}.`,
   };
 }

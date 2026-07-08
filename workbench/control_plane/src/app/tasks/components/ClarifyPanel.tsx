@@ -26,6 +26,7 @@ import {
   Lock,
   AlertTriangle,
   Wand2,
+  Pencil,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -143,6 +144,7 @@ export function ClarifyPanel({
   const createLocalProject = useTaskStore((s) => s.createLocalProject);
   const renameItem = useTaskStore((s) => s.renameItem);
   const mergeIntoExisting = useTaskStore((s) => s.mergeIntoExisting);
+  const renameExistingFromCapture = useTaskStore((s) => s.renameExistingFromCapture);
   const fileUnderParent = useTaskStore((s) => s.fileUnderParent);
 
   // Re-clarify seeds the form from the task's CURRENT clarified state (an edit,
@@ -599,8 +601,15 @@ export function ClarifyPanel({
         {!reclarify && proposal.duplicate && !dupDismissed && (
           <DuplicateBanner
             dup={proposal.duplicate}
+            captureTitle={item.title}
             onMerge={async () => {
               await mergeIntoExisting(item.id, proposal.duplicate!.itemId);
+              onDone?.();
+            }}
+            onRename={async (newTitle) => {
+              await renameExistingFromCapture(
+                item.id, proposal.duplicate!.itemId, newTitle,
+              );
               onDone?.();
             }}
             onDrop={() => { clarify(item.id, { kind: "trash" }); onDone?.(); }}
@@ -1214,25 +1223,40 @@ function ParentSuggestBanner({
 }
 
 // The "already on ClickUp?" banner shown during inbox processing when a
-// token-free lexical match finds a likely-existing PM-tool task. Offers three
-// exits: fold this capture INTO the existing task (merge), drop this capture
-// (it's a duplicate), or dismiss and file it anyway.
+// token-free lexical match finds a likely-existing PM-tool task. Offers four
+// exits: fold this capture INTO the existing task (merge), rename the existing
+// task to this capture's clearer title (rename — back-syncs for a SYNCED
+// target, then drops the capture), drop this capture (it's a duplicate), or
+// dismiss and file it anyway (keep both).
 function DuplicateBanner({
   dup,
+  captureTitle,
   onMerge,
+  onRename,
   onDrop,
   onDismiss,
 }: {
   dup: NonNullable<ClarifyProposal["duplicate"]>;
+  captureTitle: string;
   onMerge: () => Promise<void>;
+  onRename: (newTitle: string) => Promise<void>;
   onDrop: () => void;
   onDismiss: () => void;
 }) {
-  const [busy, setBusy] = useState<null | "merge" | "drop">(null);
-  const run = async (which: "merge" | "drop", fn: () => void | Promise<void>) => {
+  const [busy, setBusy] = useState<null | "merge" | "drop" | "rename">(null);
+  // Inline rename editor: seeded with the capture's (usually more descriptive)
+  // title so one tap makes the existing task clearer.
+  const [renaming, setRenaming] = useState(false);
+  const [renameTitle, setRenameTitle] = useState(captureTitle);
+  const run = async (
+    which: "merge" | "drop" | "rename",
+    fn: () => void | Promise<void>,
+  ) => {
     setBusy(which);
     try { await fn(); } finally { setBusy(null); }
   };
+  const canRename = renameTitle.trim().length > 0
+    && renameTitle.trim() !== dup.title.trim();
   return (
     <div className="flex flex-col gap-2.5 rounded-lg border border-warning/45 bg-warning/10 p-3">
       <div className="flex items-start gap-2 text-[13px] font-semibold text-foreground">
@@ -1265,34 +1289,81 @@ function DuplicateBanner({
           </div>
         )}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          disabled={busy !== null}
-          onClick={() => void run("merge", onMerge)}
-          className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-        >
-          {busy === "merge" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-          Add to existing task
-        </button>
-        <button
-          type="button"
-          disabled={busy !== null}
-          onClick={() => void run("drop", onDrop)}
-          className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-transparent px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-        >
-          {busy === "drop" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-          Delete this inbox item
-        </button>
-        <button
-          type="button"
-          disabled={busy !== null}
-          onClick={onDismiss}
-          className="tech-transition ml-auto rounded-md px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
-        >
-          Not a duplicate
-        </button>
-      </div>
+      {renaming ? (
+        // Rename the EXISTING task to a clearer title from this capture, then
+        // drop the capture. Back-syncs upstream for a SYNCED target.
+        <div className="flex flex-col gap-2 rounded-md border border-primary/30 bg-background/50 p-2.5">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Rename the existing task to
+          </span>
+          <input
+            value={renameTitle}
+            onChange={(e) => setRenameTitle(e.target.value)}
+            autoFocus
+            className="w-full rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
+          />
+          <p className="text-[10.5px] text-muted-foreground">
+            Updates the task everywhere it lives (including ClickUp) and drops this inbox item.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={busy !== null || !canRename}
+              onClick={() => void run("rename", () => onRename(renameTitle))}
+              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            >
+              {busy === "rename" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              Save name
+            </button>
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={() => { setRenaming(false); setRenameTitle(captureTitle); }}
+              className="tech-transition rounded-md px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={() => void run("merge", onMerge)}
+            className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+          >
+            {busy === "merge" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+            Add to existing task
+          </button>
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={() => setRenaming(true)}
+            className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[12px] font-medium text-foreground hover:border-primary/40 hover:bg-primary/10 disabled:opacity-50"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+            Update its name
+          </button>
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={() => void run("drop", onDrop)}
+            className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-transparent px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+          >
+            {busy === "drop" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            Delete this inbox item
+          </button>
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={onDismiss}
+            className="tech-transition ml-auto rounded-md px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
+          >
+            Not a duplicate
+          </button>
+        </div>
+      )}
     </div>
   );
 }

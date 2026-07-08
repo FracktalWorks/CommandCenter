@@ -3,9 +3,19 @@
 import { Mail, Paperclip, ArrowRight, Trash2, Lightbulb } from "lucide-react";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
-import { proposeClarification } from "../lib/clarify";
+import { proposeClarification, sortShapeSummary, type SortBucket } from "../lib/clarify";
 import { relativeTime } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
+
+// Chip styling per SORT bucket: do-now reads loud (primary), reference/someday
+// stay quiet (muted), trash leans destructive — so the triage read is instant.
+const SORT_CHIP: Record<SortBucket, string> = {
+  "do-now": "border-primary/30 bg-primary/10 text-primary",
+  actionable: "border-border bg-secondary/60 text-foreground",
+  reference: "border-border bg-transparent text-muted-foreground",
+  someday: "border-border bg-transparent text-muted-foreground",
+  trash: "border-destructive/30 bg-destructive/10 text-destructive",
+};
 
 // Dense Notion-style list view for the inbox: one row per capture with the
 // attributes that matter at triage time as columns — far more items on
@@ -37,7 +47,7 @@ export function InboxTable({
           <tr className="border-b border-border bg-secondary/40 text-[10px] uppercase tracking-wide text-muted-foreground">
             <th className="w-7 px-2 py-1.5" aria-label="Select" />
             <th className="px-2 py-1.5 font-medium">Capture</th>
-            <th className="w-28 px-2 py-1.5 font-medium">AI suggests</th>
+            <th className="w-36 px-2 py-1.5 font-medium">AI suggests</th>
             <th className="w-32 px-2 py-1.5 font-medium">From</th>
             <th className="w-20 px-2 py-1.5 font-medium">Source</th>
             <th className="w-20 px-2 py-1.5 font-medium">Age</th>
@@ -96,9 +106,35 @@ export function InboxTable({
                   </div>
                 </td>
                 <td className="px-2 py-1.5">
-                  <span className="inline-flex items-center rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                    {p.disposition.replace("_", " ").toLowerCase()}
-                  </span>
+                  {(() => {
+                    // Sort→Shape read: the SORT verdict (actionable? do now?)
+                    // as a colored chip, with the SIZE (single / steps /
+                    // project) and any delegation shown beneath it.
+                    const s = sortShapeSummary(p);
+                    return (
+                      <div className="flex flex-col items-start gap-0.5">
+                        <span
+                          className={[
+                            "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
+                            SORT_CHIP[s.sort],
+                          ].join(" ")}
+                        >
+                          {s.sortLabel}
+                        </span>
+                        {(s.sizeLabel || s.delegate) && (
+                          <span className="text-[10px] text-muted-foreground">
+                            {s.sizeLabel}
+                            {s.delegate && (
+                              <>
+                                {s.sizeLabel ? " · " : ""}
+                                → {s.delegateTo ?? "delegate"}
+                              </>
+                            )}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </td>
                 <td className="max-w-0 truncate px-2 py-1.5 text-muted-foreground">
                   {item.origin?.kind === "email" ? (

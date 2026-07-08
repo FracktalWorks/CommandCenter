@@ -25,6 +25,8 @@ import {
   Trash2,
   CalendarClock,
   X,
+  Check,
+  Pencil,
   RotateCcw,
   Keyboard,
   LayoutGrid,
@@ -154,6 +156,10 @@ export function InboxView() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showShortcuts, setShowShortcuts] = useState(false);
+  // Inline editor for the dup-notice "rename existing" affordance: seeded with
+  // the new capture's (usually clearer) title.
+  const [dupRenaming, setDupRenaming] = useState(false);
+  const [dupRenameValue, setDupRenameValue] = useState("");
 
   const bucketCounts = useMemo(() => {
     const c = { today: 0, yesterday: 0, week: 0, older: 0 };
@@ -448,42 +454,89 @@ export function InboxView() {
                 <>&ldquo;{dupNotice.title}&rdquo; looks similar to {matchWhere(dupNotice.matchDisposition, dupNotice.matchSource)}: &ldquo;{dupNotice.matchTitle}&rdquo;. Same item?</>
               )}
             </span>
-            <span className="flex shrink-0 items-center gap-3">
-              {dupNotice.verdict === "duplicate" ? (
+            {dupRenaming ? (
+              // Rename the EXISTING match to a clearer title (seeded from the
+              // new capture). Back-syncs for a SYNCED match; drops the new copy.
+              <span className="flex w-full shrink-0 items-center gap-2 sm:w-auto">
+                <input
+                  value={dupRenameValue}
+                  onChange={(e) => setDupRenameValue(e.target.value)}
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && dupRenameValue.trim()) {
+                      resolveDupNotice("rename", dupRenameValue);
+                      setDupRenaming(false);
+                    } else if (e.key === "Escape") {
+                      setDupRenaming(false);
+                    }
+                  }}
+                  className="min-w-0 flex-1 rounded-md border border-border bg-background/70 px-2 py-1 text-[11px] text-foreground focus:border-primary/50 focus:outline-none sm:w-64"
+                />
                 <button
                   type="button"
-                  onClick={() => resolveDupNotice("keep")}
-                  className="tech-transition text-[11px] font-medium text-primary hover:underline"
+                  aria-label="Save name"
+                  disabled={!dupRenameValue.trim()}
+                  onClick={() => { resolveDupNotice("rename", dupRenameValue); setDupRenaming(false); }}
+                  className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
                 >
-                  Add anyway
+                  <Check className="h-3.5 w-3.5" />
+                  Save
                 </button>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => resolveDupNotice("same")}
-                    className="tech-transition text-[11px] font-medium text-primary hover:underline"
-                  >
-                    Same — remove it
-                  </button>
+                <button
+                  type="button"
+                  aria-label="Cancel rename"
+                  onClick={() => setDupRenaming(false)}
+                  className="tech-transition text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            ) : (
+              <span className="flex shrink-0 items-center gap-3">
+                {dupNotice.verdict === "duplicate" ? (
                   <button
                     type="button"
                     onClick={() => resolveDupNotice("keep")}
-                    className="tech-transition text-[11px] font-medium text-muted-foreground hover:underline"
+                    className="tech-transition text-[11px] font-medium text-primary hover:underline"
                   >
-                    Different — keep both
+                    Add anyway
                   </button>
-                </>
-              )}
-              <button
-                type="button"
-                aria-label="Dismiss"
-                onClick={() => resolveDupNotice("dismiss")}
-                className="tech-transition text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </span>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => resolveDupNotice("same")}
+                      className="tech-transition text-[11px] font-medium text-primary hover:underline"
+                    >
+                      Same — remove it
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => resolveDupNotice("keep")}
+                      className="tech-transition text-[11px] font-medium text-muted-foreground hover:underline"
+                    >
+                      Different — keep both
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => { setDupRenameValue(dupNotice.title); setDupRenaming(true); }}
+                  className="tech-transition inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+                >
+                  <Pencil className="h-3 w-3" />
+                  Rename existing
+                </button>
+                <button
+                  type="button"
+                  aria-label="Dismiss"
+                  onClick={() => resolveDupNotice("dismiss")}
+                  className="tech-transition text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </span>
+            )}
           </div>
         </div>
       )}

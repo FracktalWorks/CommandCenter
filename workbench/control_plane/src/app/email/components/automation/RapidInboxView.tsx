@@ -960,11 +960,34 @@ function InlineReply({
   const [aiInstruction, setAiInstruction] = useState("");
   // The local draft id we update in place (seeded from any auto-created draft).
   const draftIdRef = useRef<string | null>(item.draftId ?? null);
+  // Tracks whether we've already tried to hydrate the body from the stored
+  // draft, so we don't overwrite user edits on later renders.
+  const hydratedRef = useRef(false);
 
   // Own email for filtering self from reply-all recipients.
   const ownEmail = useEmailStore((s) =>
     s.accounts.find((a) => a.id === accountId)?.emailAddress?.toLowerCase()
   );
+
+  // If the backend surfaced a draft id but no preview text, hydrate the
+  // composer from the stored draft so the pane isn't blank on open.
+  useEffect(() => {
+    if (hydratedRef.current) return;
+    hydratedRef.current = true;
+    if (!item.draftId) return;
+    if ((item.draftPreview || "").trim()) return;
+    let cancelled = false;
+    getEmail(item.draftId)
+      .then((draft) => {
+        if (cancelled) return;
+        const text = draft.bodyText || draft.snippet || "";
+        if (text.trim()) setBody(text);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [item.draftId, item.draftPreview]);
 
   const subject = useMemo(() => {
     const s = full?.subject || item.subject || "";

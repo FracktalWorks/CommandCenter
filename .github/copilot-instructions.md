@@ -75,3 +75,22 @@ Code uses). It is a pre-indexed knowledge graph of every symbol, edge, and file.
 Prefer one `codegraph` query over a grep + read loop when locating code,
 understanding call paths, or checking a change's blast radius — it returns the
 verbatim source plus who calls it, in far fewer round-trips.
+
+## Commit review cadence
+
+After every batch of ~5 commits (or any major feature/fix wave) on `main`, run a
+review pass before moving on:
+
+1. `git log <last-review-tag>..HEAD --oneline` — list the unreviewd commits.
+2. Check each changed file for: stale/misleading comments, broken cross-references
+   in docs, logic correctness, and type-hint accuracy.
+3. Run `uv run python -m pytest tests/unit/ -x -q` to confirm nothing regressed.
+4. Mark the review done: `git tag review/YYYY-MM-DD && git push --tags`
+
+**Checking if a review is due** (run this after pushing to main):
+```bash
+rtk git log $(git describe --tags --match "review/*" --abbrev=0 2>/dev/null)..HEAD --oneline
+```
+If 5 or more commits are listed, a review is due. A GitHub Actions workflow
+(`.github/workflows/review-reminder.yml`) also auto-opens a reminder issue when
+the threshold is crossed — close the issue once the review tag is pushed.

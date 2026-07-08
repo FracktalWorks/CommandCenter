@@ -140,6 +140,16 @@ best practice:
 - Test before claiming done -- run pytest after code changes
 - Document after building -- update AGENTS.md files (DOX pass) after meaningful changes
 - No git push without explicit user request -- commit locally, mention what was committed
+- Commit review cadence -- after every batch of ~5 commits (or any major feature/fix
+  wave) on main, run a review pass over the changed files: check comments for accuracy
+  and staleness, cross-references in docs, logic/type-hint correctness, and run
+  `uv run python -m pytest tests/unit/ -x -q`. When a review is complete, mark it:
+  `git tag review/YYYY-MM-DD && git push --tags`
+  Check whether a review is currently due:
+  `git log $(git describe --tags --match "review/*" --abbrev=0 2>/dev/null || echo "")..HEAD --oneline`
+  A GitHub Actions workflow (`.github/workflows/review-reminder.yml`) auto-opens a
+  reminder issue after every 5th unreviewd commit; close the issue after the review tag
+  is pushed.
 
 ## Child DOX Index
 

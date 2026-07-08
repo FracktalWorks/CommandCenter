@@ -12,7 +12,6 @@ import { splitQuotedText } from "../lib/quoting";
 import { useEmailStore } from "../lib/emailStore";
 import { ComposerQuote, AiButton, AiAssistBar } from "./ComposerAI";
 import { MessageContent } from "./MessageContent";
-import { AttachmentList } from "./AttachmentList";
 
 const isDraft = (m: Email) =>
   (m.folder || "").toLowerCase() === "drafts" ||
@@ -161,14 +160,14 @@ export function ConversationView({
                   {onReply && (
                     <div className="flex items-center gap-0.5 flex-shrink-0 -mt-0.5">
                       <CardAction
-                        icon={ReplyAll}
-                        label="Reply all"
-                        onClick={() => onReply(view, "reply-all")}
-                      />
-                      <CardAction
                         icon={Reply}
                         label="Reply"
                         onClick={() => onReply(view, "reply")}
+                      />
+                      <CardAction
+                        icon={ReplyAll}
+                        label="Reply all"
+                        onClick={() => onReply(view, "reply-all")}
                       />
                       <CardAction
                         icon={Forward}
@@ -185,11 +184,6 @@ export function ConversationView({
                     No preview text.
                   </div>
                 )}
-                {/* This message's own attachments, in its own card. */}
-                <AttachmentList
-                  attachments={view.attachments}
-                  className="mt-4 pt-3 border-t border-border"
-                />
               </div>
             )}
           </div>

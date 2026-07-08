@@ -922,6 +922,64 @@ def test_email_capture_is_owner_checked_and_idempotent():
     assert "NOT IN ('DONE', 'TRASH')" in src    # only OPEN items block re-capture
 
 
+def test_email_capture_finds_pm_account_for_a_delegate():
+    """A delegated email capture must be staged on a PM account the assignee
+    belongs to (a teammate can't see a private LOCAL task). The matcher keys on
+    provider_user_id first, then email, then name."""
+    import asyncio
+
+    from gateway.routes.tasks import capture_email as ce
+
+    class _Res:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def fetchall(self):
+            return self._rows
+
+    class _Row:
+        def __init__(self, id_, cache):
+            self.id = id_
+            self.schema_cache = cache
+
+    class _DB:
+        def __init__(self, rows):
+            self._rows = rows
+
+        async def execute(self, *_a, **_k):
+            return _Res(self._rows)
+
+    db = _DB([_Row("acct-1", {"members": [
+        {"name": "Rahul", "email": "rahul@x.in", "provider_user_id": "7"}]})])
+    placed = asyncio.run(ce._find_pm_account_for_person(
+        db, "u1", {"name": "Rahul", "provider_user_id": "7"}))
+    assert placed is not None
+    account_id, member = placed
+    assert account_id == "acct-1"
+    assert member["provider_user_id"] == "7"
+
+    # Nobody matches → None, so the route downgrades to a local inbox item.
+    db2 = _DB([_Row("acct-1", {"members": [
+        {"name": "Someone Else", "provider_user_id": "99"}]})])
+    assert asyncio.run(ce._find_pm_account_for_person(
+        db2, "u1", {"name": "Rahul", "provider_user_id": "7"})) is None
+
+
+def test_email_capture_routes_delegations_to_the_pm_tool():
+    """Destination rule: a task handed to SOMEONE ELSE goes to the PM tool
+    (SYNCED/pending); if no account has them it must NOT be stranded as an
+    invisible local delegated task — it falls back to MY inbox."""
+    import inspect
+
+    from gateway.routes.tasks import capture_email
+
+    src = inspect.getsource(capture_email.capture_from_email)
+    assert 'source, sync_state = "SYNCED", "pending"' in src
+    assert 'assignee, disposition = None, "INBOX"' in src
+    # The staged destination is carried onto the row.
+    assert '"source": source, "account_id": account_id' in src
+
+
 def test_calendar_decision_requires_a_date():
     """GTD hard landscape: kind=calendar without due_at used to create a
     hard-date item with no date — invisible on the Calendar view."""

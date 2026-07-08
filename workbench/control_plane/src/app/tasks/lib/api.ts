@@ -254,10 +254,20 @@ export async function fetchPeople(): Promise<Person[]> {
     .filter((p) => p.name);
 }
 
+/** Optional tickler / deadline captured alongside a quick capture. */
+export interface CaptureDates {
+  /** tickler: hide the item until this date, then resurface it in the inbox. */
+  deferUntil?: string;
+  /** a deadline (ISO); pairs with isHardDate so it shows on the Calendar. */
+  dueAt?: string;
+  isHardDate?: boolean;
+}
+
 export async function apiCapture(
   title: string,
   notes?: string,
-  attachments?: TaskAttachment[]
+  attachments?: TaskAttachment[],
+  dates?: CaptureDates
 ): Promise<GtdItem> {
   return mapItem(
     await gatewayFetch<Raw>(`/items`, {
@@ -276,6 +286,9 @@ export async function apiCapture(
                 size: a.size ?? null,
               }))
             : null,
+        defer_until: dates?.deferUntil ?? null,
+        due_at: dates?.dueAt ?? null,
+        is_hard_date: dates?.isHardDate ?? false,
       }),
     })
   );
@@ -694,6 +707,7 @@ export interface AtomizedItem {
   matchId?: string;
   matchTitle?: string;
   matchDisposition?: string;
+  matchSource?: string;
   score: number;
 }
 
@@ -720,6 +734,7 @@ export async function apiAtomize(
     matchId: r.match_id ? String(r.match_id) : undefined,
     matchTitle: r.match_title ? String(r.match_title) : undefined,
     matchDisposition: r.match_disposition ? String(r.match_disposition) : undefined,
+    matchSource: r.match_source ? String(r.match_source) : undefined,
     score: Number(r.score ?? 0),
   }));
   return { items, usedLlm: Boolean(res.used_llm) };
@@ -765,7 +780,51 @@ export async function apiClarifyPropose(
     isVague: Boolean(r.is_vague),
     suggestedTitle: r.suggested_title ? String(r.suggested_title) : undefined,
     dueDate: r.due_date ? String(r.due_date) : undefined,
+    duplicate: r.duplicate
+      ? (() => {
+          const d = r.duplicate as Raw;
+          return {
+            itemId: String(d.item_id ?? ""),
+            title: String(d.title ?? ""),
+            providerUrl: d.provider_url ? String(d.provider_url) : undefined,
+            providerStatus: d.provider_status
+              ? String(d.provider_status)
+              : undefined,
+            projectName: d.project_name ? String(d.project_name) : undefined,
+            verdict: d.verdict === "duplicate" ? "duplicate" as const : "similar" as const,
+            score: Number(d.score ?? 0),
+          };
+        })()
+      : undefined,
+    parentSuggestion: r.parent_suggestion
+      ? {
+          itemId: String((r.parent_suggestion as Raw).item_id ?? ""),
+          title: String((r.parent_suggestion as Raw).title ?? ""),
+        }
+      : undefined,
   };
+}
+
+/** Fold an inbox capture into an existing synced task (dedup "add to existing")
+ *  instead of creating a duplicate. Returns the enriched target task. */
+export async function apiMergeInto(id: string, targetId: string): Promise<GtdItem> {
+  return mapItem(
+    await gatewayFetch<Raw>(`/items/${id}/merge-into`, {
+      method: "POST",
+      body: JSON.stringify({ target_id: targetId }),
+    }),
+  );
+}
+
+/** File an inbox capture as a SUB-STEP of an existing task (clarify "this is a
+ *  step of X"). Returns the parent task (now with the new child). */
+export async function apiFileUnder(id: string, parentId: string): Promise<GtdItem> {
+  return mapItem(
+    await gatewayFetch<Raw>(`/items/${id}/file-under`, {
+      method: "POST",
+      body: JSON.stringify({ parent_id: parentId }),
+    }),
+  );
 }
 
 /** Rephrase a task's title more clearly (the always-available "Improve title"

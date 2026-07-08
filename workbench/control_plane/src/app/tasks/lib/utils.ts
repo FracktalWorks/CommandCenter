@@ -125,6 +125,26 @@ export function isTickled(item: { deferUntil?: string }, nowMs = Date.now()): bo
   return !!item.deferUntil && new Date(item.deferUntil).getTime() > nowMs;
 }
 
+/** A short "where it already lives" label for a duplicate/similar match — the
+ *  feedback the user needs to decide keep/create/skip. Combines WHAT the match
+ *  is (its GTD disposition) with WHERE it lives (local vs a PM tool / ClickUp).
+ *  e.g. "a Next action on ClickUp", "in your inbox". */
+export function matchWhere(disposition?: string, source?: string): string {
+  const onClickUp = !!source && source !== "LOCAL";
+  const kind =
+    disposition === "INBOX" ? "in your inbox"
+      : disposition === "NEXT" ? "a Next action"
+      : disposition === "WAITING" ? "a Waiting-for item"
+      : disposition === "SOMEDAY" ? "in Someday / Maybe"
+      : disposition === "PROJECT" ? "a Project"
+      : disposition === "REFERENCE" ? "in Reference"
+      : "in your list";
+  // "in your inbox" already reads oddly with "on ClickUp"; only append the
+  // location for the disposition phrases that take it cleanly.
+  if (!onClickUp) return kind;
+  return kind.startsWith("in ") ? `${kind} (on ClickUp)` : `${kind} on ClickUp`;
+}
+
 /** A lightweight, local date-phrase detector — the seam where an AI capture
  *  parser will later suggest a defer/due date. Suggestion only; never acts. */
 export function detectDateHint(title: string): string | null {

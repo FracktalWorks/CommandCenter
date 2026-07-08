@@ -40,6 +40,7 @@ import {
   DateBucketKey,
   dateBucket,
   isTickled,
+  matchWhere,
   msSince,
   relativeTime,
 } from "../lib/utils";
@@ -442,9 +443,9 @@ export function InboxView() {
           <div className="mx-auto flex w-full max-w-4xl flex-wrap items-center justify-between gap-2 px-4 py-2 sm:px-6">
             <span className="min-w-0 flex-1 text-[11px] text-foreground">
               {dupNotice.verdict === "duplicate" ? (
-                <>Already in your system: &ldquo;{dupNotice.matchTitle}&rdquo; — not added again.</>
+                <>Already {matchWhere(dupNotice.matchDisposition, dupNotice.matchSource)}: &ldquo;{dupNotice.matchTitle}&rdquo; — not added again.</>
               ) : (
-                <>&ldquo;{dupNotice.title}&rdquo; looks similar to &ldquo;{dupNotice.matchTitle}&rdquo;. Same item?</>
+                <>&ldquo;{dupNotice.title}&rdquo; looks similar to {matchWhere(dupNotice.matchDisposition, dupNotice.matchSource)}: &ldquo;{dupNotice.matchTitle}&rdquo;. Same item?</>
               )}
             </span>
             <span className="flex shrink-0 items-center gap-3">

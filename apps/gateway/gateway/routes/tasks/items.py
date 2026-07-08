@@ -73,6 +73,12 @@ class CaptureRequest(BaseModel):
     # Context refs from the capture UI: {kind: file|image|link, name, url,
     # attachment_id?, mime?, size?}. Links need no upload.
     attachments: list[dict] | None = None
+    # Capture-time tickler / deadline (GTD, optional — capture stays pure):
+    # defer_until hides the item until that date, then it resurfaces in the
+    # inbox; due_at (+ is_hard_date) is a deadline that shows on the Calendar.
+    defer_until: str | None = None
+    due_at: str | None = None
+    is_hard_date: bool = False
 
 
 class CaptureBatchRequest(BaseModel):
@@ -170,11 +176,16 @@ async def capture_item(
         item_id = str(uuid4())
         await db.execute(
             text("""INSERT INTO gtd_items
-                    (id, user_id, title, description, attachments)
-                    VALUES (:id, :uid, :title, :notes, :atts)"""),
+                    (id, user_id, title, description, attachments,
+                     defer_until, due_at, is_hard_date)
+                    VALUES (:id, :uid, :title, :notes, :atts,
+                            :defer, :due, :hard)"""),
             {"id": item_id, "uid": _uid(user), "title": title,
              "notes": req.notes,
-             "atts": json.dumps(req.attachments) if req.attachments else None},
+             "atts": json.dumps(req.attachments) if req.attachments else None,
+             "defer": _parse_ts(req.defer_until),
+             "due": _parse_ts(req.due_at),
+             "hard": bool(req.is_hard_date and req.due_at)},
         )
         await db.commit()
         return _row_to_item(await _fetch_item(db, item_id, _uid(user)))
@@ -501,6 +512,112 @@ async def _push_patch_upstream(
     except Exception as exc:  # best-effort back-sync — never fail the local edit
         _log.warning("tasks.patch.backsync_failed",
                      item_id=str(before.id)[:12], error=str(exc)[:160])
+
+
+class MergeIntoRequest(BaseModel):
+    """Fold an inbox capture INTO an existing PM-tool task (the dedup
+    'add to the existing task instead of creating a duplicate' path)."""
+    target_id: str
+
+
+@router.post("/items/{item_id}/merge-into", response_model=GtdItemModel)
+async def merge_into_existing(
+    item_id: str,
+    req: MergeIntoRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Merge an inbox capture into an existing SYNCED task rather than creating
+    a duplicate: append the capture's title + notes to the target task's
+    description, back-sync that to the connected tool, then trash the capture.
+    Powers the 'a similar task already exists on ClickUp → add to it' choice."""
+    uid = _uid(user)
+    if str(req.target_id) == str(item_id):
+        raise HTTPException(status_code=400,
+                            detail="Cannot merge an item into itself")
+    db = await _get_db()
+    try:
+        source = await _fetch_item(db, item_id, uid)
+        target = await _fetch_item(db, req.target_id, uid)
+        if not source or not target:
+            raise HTTPException(status_code=404, detail="Item not found")
+        if target.source == "LOCAL":
+            raise HTTPException(status_code=400,
+                                detail="Target is not a synced task")
+        # Compose the appended note: the capture's title + its own notes.
+        addition = (source.title or "").strip()
+        src_notes = (getattr(source, "description", None) or "").strip()
+        if src_notes:
+            addition = f"{addition}\n{src_notes}" if addition else src_notes
+        prev = (getattr(target, "description", None) or "").strip()
+        merged = f"{prev}\n\n---\n{addition}".strip() if prev else addition
+        await db.execute(
+            text("""UPDATE gtd_items SET description = :d, updated_at = now()
+                    WHERE id = :id AND user_id = :uid"""),
+            {"d": merged, "id": req.target_id, "uid": uid},
+        )
+        # The capture is absorbed — trash it (hidden from views, recoverable).
+        await db.execute(
+            text("""UPDATE gtd_items SET disposition = 'TRASH', updated_at = now()
+                    WHERE id = :id AND user_id = :uid"""),
+            {"id": item_id, "uid": uid},
+        )
+        await db.commit()
+        # Best-effort: push the enriched description upstream to the tool.
+        await _push_patch_upstream(db, target, ItemPatch(notes=merged), uid)
+        return _row_to_item(await _fetch_item(db, req.target_id, uid))
+    finally:
+        await db.close()
+
+
+class FileUnderRequest(BaseModel):
+    """File an inbox capture as a SUB-STEP of an existing task (the clarify
+    'this is a step of X' path)."""
+    parent_id: str
+
+
+@router.post("/items/{item_id}/file-under", response_model=GtdItemModel)
+async def file_under_parent(
+    item_id: str,
+    req: FileUnderRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Convert an inbox capture INTO a subtask of an existing task. The capture
+    is re-homed as a NEXT-action child inheriting the parent's project + home;
+    a SYNCED parent's new child pushes to ClickUp as a subtask on next push.
+    Powers the clarify 'looks like a step of {task}' suggestion."""
+    uid = _uid(user)
+    if str(req.parent_id) == str(item_id):
+        raise HTTPException(status_code=400,
+                            detail="Cannot file an item under itself")
+    db = await _get_db()
+    try:
+        await _fetch_item(db, item_id, uid)      # 404 before any writes
+        parent = await _fetch_item(db, req.parent_id, uid)
+        if parent.parent_item_id:
+            raise HTTPException(status_code=400,
+                                detail="Target is itself a subtask")
+        await db.execute(
+            text("""UPDATE gtd_items
+                    SET parent_item_id = :pid,
+                        disposition = 'NEXT',
+                        project_id = :proj,
+                        source = :src,
+                        account_id = :aid,
+                        sync_state = :sync,
+                        clarified_at = now(),
+                        updated_at = now()
+                    WHERE id = :id AND user_id = :uid"""),
+            {"pid": req.parent_id,
+             "proj": str(parent.project_id) if parent.project_id else None,
+             "src": parent.source,
+             "aid": str(parent.account_id) if parent.account_id else None,
+             "sync": "pending" if parent.source != "LOCAL" else "local",
+             "id": item_id, "uid": uid},
+        )
+        await db.commit()
+        return _row_to_item(await _fetch_item(db, req.parent_id, uid))
+    finally:
+        await db.close()
 
 
 # ── Archive ──────────────────────────────────────────────────────────────────

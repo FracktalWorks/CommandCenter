@@ -37,6 +37,8 @@ import {
   apiDeleteAccount,
   apiDeleteItem,
   apiOrganize,
+  apiMergeInto,
+  apiFileUnder,
   apiPatchItem,
   apiPushItem,
   apiRefreshSchema,
@@ -278,7 +280,10 @@ function applyDecision(
 let idCounter = 1000;
 const nextId = () => `local-${idCounter++}`;
 
-function makeCaptureItem(title: string): GtdItem {
+function makeCaptureItem(
+  title: string,
+  dates?: import("./api").CaptureDates,
+): GtdItem {
   const ts = new Date().toISOString();
   return {
     id: nextId(),
@@ -289,6 +294,9 @@ function makeCaptureItem(title: string): GtdItem {
     isMine: true,
     createdAt: ts,
     updatedAt: ts,
+    deferUntil: dates?.deferUntil,
+    dueAt: dates?.dueAt,
+    isHardDate: dates?.isHardDate,
   };
 }
 
@@ -407,7 +415,7 @@ interface TaskState {
   selectItem: (id: string | null) => void;
   selectProject: (id: string | null) => void;
   /** Capture a new inbox item (frictionless quick-add). */
-  capture: (title: string, attachments?: import("./types").TaskAttachment[]) => void;
+  capture: (title: string, attachments?: import("./types").TaskAttachment[], dates?: import("./api").CaptureDates) => void;
   /** Capture many items at once (mind sweep) — one per non-empty line. */
   captureMany: (text: string) => void;
   /** Undo the most recent capture batch (only items still in the inbox). */
@@ -457,6 +465,14 @@ interface TaskState {
   addSubtasks: (id: string, titles: string[]) => Promise<GtdItem[]>;
   /** Inline-rename a captured item (fix a typo without clarifying). */
   renameItem: (id: string, title: string) => void;
+  /** Fold an inbox capture INTO an existing synced task (dedup "add to the
+   *  existing ClickUp task") instead of creating a duplicate: the capture is
+   *  removed locally and its info is appended to the target (back-synced). */
+  mergeIntoExisting: (id: string, targetId: string) => Promise<void>;
+  /** File an inbox capture as a SUB-STEP of an existing task (clarify "this is
+   *  a step of X"): it becomes a nested child of the parent and leaves the
+   *  flat inbox/next lists. A SYNCED parent's child pushes to ClickUp. */
+  fileUnderParent: (id: string, parentId: string) => Promise<void>;
   /** Undo the most recent dispose/clarify — restores the item(s) to the inbox. */
   undoLastChange: () => void;
   /** Dismiss the undo affordance without undoing (e.g. after a timeout). */
@@ -499,6 +515,10 @@ interface TaskState {
     itemId: string | null;
     matchTitle: string;
     matchId: string;
+    /** where the match already lives — its GTD disposition + source (local vs
+     *  ClickUp) — so the notice can say "already a Next action on ClickUp". */
+    matchDisposition?: string;
+    matchSource?: string;
   } | null;
   /** Resolve the dup notice: keep both / treat as the same (remove new). */
   resolveDupNotice: (action: "keep" | "same" | "dismiss") => void;
@@ -605,15 +625,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   selectProject: (id) =>
     set({ selectedView: "projects", selectedProjectId: id, selectedItemId: null }),
 
-  capture: (title, attachments) => {
+  capture: (title, attachments, dates) => {
     const t = title.trim();
     if (!t) return;
-    const item = { ...makeCaptureItem(t), attachments };
+    const item = { ...makeCaptureItem(t, dates), attachments };
     set((s) => ({ items: [item, ...s.items], lastCaptureIds: [item.id] }));
     if (get().backend === "live") {
       // Optimistic row already shown; swap in the server row (real id) when it lands.
       sync(
-        apiCapture(t, undefined, attachments).then((server) => {
+        apiCapture(t, undefined, attachments, dates).then((server) => {
           set((s) => ({
             items: s.items.map((i) => (i.id === item.id ? server : i)),
             lastCaptureIds: s.lastCaptureIds.map((x) =>
@@ -639,6 +659,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
                     verdict: "duplicate", title: server.title,
                     itemId: null, matchTitle: c.matchTitle ?? "",
                     matchId: c.matchId!,
+                    matchDisposition: c.matchDisposition,
+                    matchSource: c.matchSource,
                   },
                 }));
                 apiDeleteItem(server.id).catch(() => {});
@@ -648,6 +670,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
                     verdict: "similar", title: server.title,
                     itemId: server.id, matchTitle: c.matchTitle ?? "",
                     matchId: c.matchId!,
+                    matchDisposition: c.matchDisposition,
+                    matchSource: c.matchSource,
                   },
                 });
               }
@@ -681,7 +705,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       .map((l) => l.trim())
       .filter(Boolean);
     if (!lines.length) return;
-    const newItems = lines.map(makeCaptureItem);
+    const newItems = lines.map((l) => makeCaptureItem(l));
     set((s) => ({
       items: [...newItems, ...s.items],
       lastCaptureIds: newItems.map((i) => i.id),
@@ -1054,6 +1078,57 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       },
     }));
     if (get().backend === "live") sync(apiDeleteItem(id).catch(() => {}));
+  },
+
+  mergeIntoExisting: async (id, targetId) => {
+    // The capture is absorbed into an existing synced task — drop it locally
+    // right away; swap the enriched target row in when the server confirms.
+    const removed = get().items.find((i) => i.id === id);
+    set((s) => ({
+      items: s.items.filter((i) => i.id !== id),
+      selectedItemId: s.selectedItemId === id ? null : s.selectedItemId,
+      undoSnapshot: removed
+        ? {
+            items: s.items,
+            projects: s.projects,
+            processed: s.processedThisSession,
+            selectedItemId: s.selectedItemId,
+            label: "Merged into existing task",
+            deletedItems: [removed],
+          }
+        : s.undoSnapshot,
+    }));
+    if (get().backend !== "live") return;
+    const target = await apiMergeInto(id, targetId);
+    set((s) => ({
+      items: s.items.map((i) => (i.id === target.id ? target : i)),
+    }));
+  },
+
+  fileUnderParent: async (id, parentId) => {
+    // The capture becomes a nested child of the parent — subtasks aren't held
+    // in the flat list, so drop it from the inbox/next views immediately.
+    const removed = get().items.find((i) => i.id === id);
+    set((s) => ({
+      items: s.items.filter((i) => i.id !== id),
+      selectedItemId: s.selectedItemId === id ? null : s.selectedItemId,
+      undoSnapshot: removed
+        ? {
+            items: s.items,
+            projects: s.projects,
+            processed: s.processedThisSession,
+            selectedItemId: s.selectedItemId,
+            label: "Filed as a subtask",
+            deletedItems: [removed],
+          }
+        : s.undoSnapshot,
+    }));
+    if (get().backend !== "live") return;
+    // Refresh the parent's row (subtaskCount) so the detail panel reflects it.
+    const parent = await apiFileUnder(id, parentId);
+    set((s) => ({
+      items: s.items.map((i) => (i.id === parent.id ? parent : i)),
+    }));
   },
 
   deleteItems: (ids) => {

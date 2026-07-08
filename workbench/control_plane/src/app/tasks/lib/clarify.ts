@@ -62,6 +62,39 @@ export interface ClarifyProposal {
   /** a model-inferred hard deadline (ISO date), when the item implies one
    *  (server proposal only). Feeds the "When" axis. */
   dueDate?: string;
+  /** a likely-existing PM-tool (ClickUp) task this inbox capture may duplicate
+   *  — set only on a fresh inbox clarify (server proposal, token-free lexical
+   *  match). Lets the card offer "already on ClickUp: merge into it, or drop
+   *  this capture". */
+  duplicate?: DuplicateMatch;
+  /** an existing task this capture looks like a concrete SUB-STEP of (server
+   *  proposal, scoped to the matched project). Lets the card file it as a
+   *  subtask under that task instead of as a standalone. */
+  parentSuggestion?: ParentMatch;
+}
+
+/** A likely-existing PM-tool task the inbox capture may duplicate (dedup). */
+export interface DuplicateMatch {
+  /** the existing SYNCED item's local id — the merge target. */
+  itemId: string;
+  title: string;
+  /** deep link to the task in the tool (ClickUp), when known. */
+  providerUrl?: string;
+  /** the tool's current stage, when known. */
+  providerStatus?: string;
+  /** the list/project it lives in, when known. */
+  projectName?: string;
+  /** "duplicate" (confident same) | "similar" (maybe the same). */
+  verdict: "duplicate" | "similar";
+  /** lexical similarity score (transparency). */
+  score: number;
+}
+
+/** An existing task the inbox capture looks like a concrete sub-step of. */
+export interface ParentMatch {
+  /** the existing parent task's local id — the file-under target. */
+  itemId: string;
+  title: string;
 }
 
 /** Map a GTD disposition to a sensible provider stage/status.

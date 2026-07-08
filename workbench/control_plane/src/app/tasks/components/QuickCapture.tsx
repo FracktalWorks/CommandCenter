@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Plus, X, ListPlus, Wind, Check, Sparkles, ArrowLeft, ArrowRight, Trash2, Loader2, CopyX, CornerDownLeft } from "lucide-react";
+import { Plus, X, ListPlus, Wind, Check, Sparkles, ArrowLeft, ArrowRight, Trash2, Loader2, CopyX, CornerDownLeft, Bell, CalendarClock } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { apiAtomize } from "../lib/api";
+import { snoozeOptions, detectDateHint, matchWhere } from "../lib/utils";
 import { GTD_TRIGGERS } from "../lib/mockData";
 import { AttachmentComposer } from "./AttachmentComposer";
 import type { TaskAttachment } from "../lib/types";
@@ -33,6 +34,10 @@ function QuickCapturePanel() {
   const [value, setValue] = useState("");
   const [added, setAdded] = useState(0);
   const [pendingAtts, setPendingAtts] = useState<TaskAttachment[]>([]);
+  // Optional capture-time date: a "remind" tickler (defer_until — hidden until
+  // then, resurfaces in the inbox) or a "due" deadline (due_at + hard date).
+  const [dateIso, setDateIso] = useState("");
+  const [dateKind, setDateKind] = useState<"remind" | "due">("remind");
   // Sweep has a review gate: write → review the parsed items → add.
   const [phase, setPhase] = useState<"write" | "review">("write");
   /** Review candidates. Verdicts come from the AI atomizer: "duplicate"
@@ -40,7 +45,7 @@ function QuickCapturePanel() {
    *  "new". The instant line-split shows first; the atomizer upgrades the
    *  list in place unless the user already edited it. */
   const [reviewItems, setReviewItems] = useState<
-    { title: string; include: boolean; verdict: "new" | "similar" | "duplicate"; matchTitle?: string }[]
+    { title: string; include: boolean; verdict: "new" | "similar" | "duplicate"; matchTitle?: string; matchDisposition?: string; matchSource?: string }[]
   >([]);
   const [atomizing, setAtomizing] = useState(false);
   const reviewEditedRef = useRef(false);
@@ -70,9 +75,17 @@ function QuickCapturePanel() {
   const submitSingle = () => {
     const t = value.trim();
     if (!t) return;
-    capture(t, pendingAtts.length ? pendingAtts : undefined);
+    // A captured date rides along: "remind" → tickler (defer_until); "due" →
+    // deadline (due_at + hard date). No date → pure capture, unchanged.
+    const dates = dateIso
+      ? dateKind === "remind"
+        ? { deferUntil: dateIso }
+        : { dueAt: dateIso, isHardDate: true }
+      : undefined;
+    capture(t, pendingAtts.length ? pendingAtts : undefined, dates);
     setValue("");
     setPendingAtts([]);
+    setDateIso("");
     setAdded((a) => a + 1);
     inputRef.current?.focus();
   };
@@ -102,6 +115,8 @@ function QuickCapturePanel() {
           include: it.verdict !== "duplicate",
           verdict: it.verdict,
           matchTitle: it.matchTitle,
+          matchDisposition: it.matchDisposition,
+          matchSource: it.matchSource,
         })));
       })
       .catch(() => { /* keep the line split — atomizer is an upgrade */ })
@@ -194,6 +209,13 @@ function QuickCapturePanel() {
               </button>
             </div>
             <AttachmentComposer attachments={pendingAtts} onChange={setPendingAtts} compact />
+            <CaptureWhen
+              iso={dateIso}
+              kind={dateKind}
+              hint={detectDateHint(value)}
+              onChange={(iso, k) => { setDateIso(iso); setDateKind(k); }}
+              onClear={() => setDateIso("")}
+            />
             <div className="mt-2 flex items-center justify-between px-1 text-[11px] text-muted-foreground">
               <span>Enter to add · keep going · Esc to close</span>
               {added > 0 && (
@@ -317,8 +339,8 @@ function QuickCapturePanel() {
                       <CopyX className={`h-3 w-3 ${item.verdict === "duplicate" ? "text-warning" : "text-muted-foreground"}`} />
                       <span className={item.verdict === "duplicate" ? "text-warning" : "text-muted-foreground"}>
                         {item.verdict === "duplicate"
-                          ? `Already in your system: "${item.matchTitle}" — skipped (tap the box to add anyway)`
-                          : `Similar to: "${item.matchTitle}" — same item? Untick to skip.`}
+                          ? `Already ${matchWhere(item.matchDisposition, item.matchSource)}: "${item.matchTitle}" — skipped (tap the box to add anyway)`
+                          : `Similar to ${matchWhere(item.matchDisposition, item.matchSource)}: "${item.matchTitle}" — same item? Untick to skip.`}
                       </span>
                     </div>
                   )}
@@ -390,5 +412,134 @@ function ModeTab({
       <Icon className="h-3.5 w-3.5" />
       {children}
     </button>
+  );
+}
+
+// Optional capture-time date (GTD tickler / deadline). "Remind me" sets a
+// defer_until so the item is hidden until then and resurfaces in the inbox;
+// "Due date" sets a hard due_at that shows on the Calendar. Capture stays fast:
+// this is tucked below the input and never required. A detected date phrase in
+// the title surfaces a one-tap hint.
+function CaptureWhen({
+  iso,
+  kind,
+  hint,
+  onChange,
+  onClear,
+}: {
+  iso: string;
+  kind: "remind" | "due";
+  hint: string | null;
+  onChange: (iso: string, kind: "remind" | "due") => void;
+  onClear: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const opts = snoozeOptions();
+  const dateLabel = iso
+    ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    : "";
+
+  if (iso && !open) {
+    return (
+      <div className="mt-2 flex items-center gap-2 px-1">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary">
+          {kind === "remind" ? <Bell className="h-3 w-3" /> : <CalendarClock className="h-3 w-3" />}
+          {kind === "remind" ? "Remind" : "Due"} {dateLabel}
+        </span>
+        <button type="button" onClick={() => setOpen(true)} className="text-[11px] text-muted-foreground hover:text-foreground">
+          Change
+        </button>
+        <button type="button" onClick={onClear} className="text-[11px] text-muted-foreground hover:text-destructive">
+          Clear
+        </button>
+      </div>
+    );
+  }
+
+  if (!open) {
+    return (
+      <div className="mt-2 flex items-center gap-2 px-1">
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:border-primary/40 hover:text-foreground"
+        >
+          <Bell className="h-3 w-3" /> Remind me / due date
+        </button>
+        {hint && (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10.5px] font-medium text-primary"
+            title="Set a date for this capture"
+          >
+            <Sparkles className="h-3 w-3" /> “{hint}” — set a date?
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-2.5">
+      <div className="flex items-center gap-1.5">
+        {(["remind", "due"] as const).map((k) => (
+          <button
+            key={k}
+            type="button"
+            onClick={() => onChange(iso, k)}
+            className={[
+              "tech-transition inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium",
+              kind === k
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-border text-muted-foreground hover:bg-secondary",
+            ].join(" ")}
+          >
+            {k === "remind" ? <Bell className="h-3 w-3" /> : <CalendarClock className="h-3 w-3" />}
+            {k === "remind" ? "Remind me" : "Due date"}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="ml-auto text-[11px] font-medium text-muted-foreground hover:text-foreground"
+        >
+          Done
+        </button>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {opts.map((o) => (
+          <button
+            key={o.label}
+            type="button"
+            onClick={() => onChange(o.iso, kind)}
+            className={[
+              "tech-transition rounded-full border px-2.5 py-1 text-[11px]",
+              iso === o.iso
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-border text-muted-foreground hover:bg-secondary",
+            ].join(" ")}
+          >
+            {o.label}
+          </button>
+        ))}
+        <input
+          type="date"
+          value={iso ? iso.slice(0, 10) : ""}
+          onChange={(e) => {
+            if (!e.target.value) return onClear();
+            const d = new Date(e.target.value);
+            d.setHours(9, 0, 0, 0);
+            onChange(d.toISOString(), kind);
+          }}
+          className="rounded-md border border-border bg-background/60 px-2 py-1 text-[11px] text-foreground focus:border-primary/50 focus:outline-none"
+        />
+      </div>
+      <p className="text-[10px] text-muted-foreground">
+        {kind === "remind"
+          ? "Hidden from the inbox until this date, then it resurfaces."
+          : "A deadline — shows on the Calendar and flags when it's due."}
+      </p>
+    </div>
   );
 }

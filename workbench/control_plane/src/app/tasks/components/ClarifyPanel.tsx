@@ -142,6 +142,8 @@ export function ClarifyPanel({
   const createLocalFolder = useTaskStore((s) => s.createLocalFolder);
   const createLocalProject = useTaskStore((s) => s.createLocalProject);
   const renameItem = useTaskStore((s) => s.renameItem);
+  const mergeIntoExisting = useTaskStore((s) => s.mergeIntoExisting);
+  const fileUnderParent = useTaskStore((s) => s.fileUnderParent);
 
   // Re-clarify seeds the form from the task's CURRENT clarified state (an edit,
   // not a fresh decision). The item's own target is reconstructed so a SYNCED
@@ -187,6 +189,12 @@ export function ClarifyPanel({
   const [suggestedTitle, setSuggestedTitle] = useState<string | undefined>(undefined);
   const [titleBusy, setTitleBusy] = useState(false);
   const titleCleared = useRef(false); // user explicitly dismissed/accepted → don't re-show
+  // Dismiss the "already on ClickUp?" banner to file this capture anyway.
+  const [dupDismissed, setDupDismissed] = useState(false);
+  // Dismiss the "file into this project" suggestion to choose a place manually.
+  const [projectDismissed, setProjectDismissed] = useState(false);
+  // Dismiss the "this is a step of an existing task" suggestion.
+  const [parentDismissed, setParentDismissed] = useState(false);
 
   // ── Sort → Shape state ────────────────────────────────────────────────────
   const [sort, setSort] = useState<Sort>(sortOf(proposal.disposition));
@@ -585,6 +593,21 @@ export function ClarifyPanel({
       </header>
 
       <div className="flex flex-col gap-4 px-5 py-4">
+        {/* Possible duplicate already on the PM tool — offer to merge into it or
+            drop this capture before we file a second copy. Only on a fresh
+            inbox clarify (a reclarified task IS the synced task). */}
+        {!reclarify && proposal.duplicate && !dupDismissed && (
+          <DuplicateBanner
+            dup={proposal.duplicate}
+            onMerge={async () => {
+              await mergeIntoExisting(item.id, proposal.duplicate!.itemId);
+              onDone?.();
+            }}
+            onDrop={() => { clarify(item.id, { kind: "trash" }); onDone?.(); }}
+            onDismiss={() => setDupDismissed(true)}
+          />
+        )}
+
         {/* Vague-title banner (soft gate) */}
         {vagueOpen && (
           <div className="flex flex-col gap-2 rounded-lg border border-warning/45 bg-warning/10 p-3">
@@ -632,6 +655,42 @@ export function ClarifyPanel({
               </button>
             </div>
           </div>
+        )}
+
+        {/* Sub-step of an existing task — file this as a subtask under it
+            rather than a standalone (clarify-only, scoped to the matched
+            project). Takes priority over the project suggestion (filing under
+            a parent already places it in that project). */}
+        {!reclarify && !proposal.duplicate && proposal.parentSuggestion &&
+          !parentDismissed && (
+          <ParentSuggestBanner
+            parentTitle={proposal.parentSuggestion.title}
+            onFileUnder={async () => {
+              await fileUnderParent(item.id, proposal.parentSuggestion!.itemId);
+              onDone?.();
+            }}
+            onDismiss={() => setParentDismissed(true)}
+          />
+        )}
+
+        {/* Suggested project — file this into an existing local/ClickUp project
+            it logically belongs to (parallel to the duplicate check). Hidden
+            when a duplicate is already flagged (that decision comes first) or
+            when a parent-task suggestion is active (that files it too). */}
+        {!reclarify && !proposal.duplicate && proposal.projectInferred &&
+          proposal.projectId && proposedProject && !projectDismissed &&
+          (!proposal.parentSuggestion || parentDismissed) && (
+          <ProjectSuggestBanner
+            project={proposedProject}
+            providerLabel={
+              proposedProject.source !== "LOCAL" && proposal.target
+                ? destEntry(proposal.target, providers)?.label
+                : undefined
+            }
+            assignee={owner === "delegate" ? assignee : null}
+            onFile={() => void apply()}
+            onDismiss={() => setProjectDismissed(true)}
+          />
         )}
 
         {/* AI proposal — review & confirm. Leads with SIZE + concrete steps. */}
@@ -1031,6 +1090,208 @@ export function ClarifyPanel({
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// The "belongs in an existing project?" banner shown during inbox processing
+// when the assistant infers this capture logically fits a local or ClickUp
+// project. One tap files it there as a next action; the outcome line spells out
+// where it will surface (mine → My Next Actions; delegated → under that person
+// in Projects, and on ClickUp).
+function ProjectSuggestBanner({
+  project,
+  providerLabel,
+  assignee,
+  onFile,
+  onDismiss,
+}: {
+  project: GtdProject;
+  providerLabel?: string;
+  assignee: Person | null;
+  onFile: () => void;
+  onDismiss: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const synced = project.source !== "LOCAL";
+  return (
+    <div className="flex flex-col gap-2.5 rounded-lg border border-primary/35 bg-primary/5 p-3">
+      <div className="flex items-start gap-2 text-[13px] font-semibold text-foreground">
+        <FolderKanban className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+        <span>Looks like it belongs in an existing project</span>
+      </div>
+      <div className="rounded-md border border-border bg-background/50 px-3 py-2">
+        <div className="flex items-center gap-1.5 text-[12.5px] text-foreground">
+          {synced ? (
+            <Cloud className="h-3.5 w-3.5 shrink-0 text-primary/70" />
+          ) : (
+            <HardDrive className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          )}
+          <span className="min-w-0 flex-1 truncate" title={project.outcome}>{project.outcome}</span>
+        </div>
+        <div className="mt-0.5 pl-5 text-[10.5px] text-muted-foreground">
+          {synced ? (providerLabel ?? "ClickUp") : "Local project"}
+        </div>
+      </div>
+      <p className="flex items-start gap-1.5 text-[11.5px] text-muted-foreground">
+        <ArrowRight className="mt-0.5 h-3 w-3 shrink-0 text-primary/70" />
+        {assignee
+          ? `Assigned to ${assignee.name} — it'll show under them in Projects${synced ? ", and stays on ClickUp" : ""}.`
+          : `Assigned to you — it'll show up in My Next Actions${synced ? ", and on ClickUp" : ""}.`}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => { setBusy(true); onFile(); }}
+          className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+          File it here
+        </button>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="tech-transition ml-auto rounded-md px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
+        >
+          Choose another place
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// The "looks like a step of an existing task" banner shown during inbox
+// processing when the assistant infers this capture is a sub-step of a task in
+// the matched project. One tap files it as a subtask under that task.
+function ParentSuggestBanner({
+  parentTitle,
+  onFileUnder,
+  onDismiss,
+}: {
+  parentTitle: string;
+  onFileUnder: () => Promise<void>;
+  onDismiss: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="flex flex-col gap-2.5 rounded-lg border border-primary/35 bg-primary/5 p-3">
+      <div className="flex items-start gap-2 text-[13px] font-semibold text-foreground">
+        <ListTree className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+        <span>Looks like a step of an existing task</span>
+      </div>
+      <div className="rounded-md border border-border bg-background/50 px-3 py-2">
+        <div className="flex items-center gap-1.5 text-[12.5px] text-foreground">
+          <FolderKanban className="h-3.5 w-3.5 shrink-0 text-primary/70" />
+          <span className="min-w-0 flex-1 truncate" title={parentTitle}>{parentTitle}</span>
+        </div>
+      </div>
+      <p className="flex items-start gap-1.5 text-[11.5px] text-muted-foreground">
+        <ArrowRight className="mt-0.5 h-3 w-3 shrink-0 text-primary/70" />
+        File it as a subtask under this task instead of a standalone one.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={async () => { setBusy(true); try { await onFileUnder(); } finally { setBusy(false); } }}
+          className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListTree className="h-3.5 w-3.5" />}
+          File as subtask
+        </button>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="tech-transition ml-auto rounded-md px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
+        >
+          It&apos;s its own task
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// The "already on ClickUp?" banner shown during inbox processing when a
+// token-free lexical match finds a likely-existing PM-tool task. Offers three
+// exits: fold this capture INTO the existing task (merge), drop this capture
+// (it's a duplicate), or dismiss and file it anyway.
+function DuplicateBanner({
+  dup,
+  onMerge,
+  onDrop,
+  onDismiss,
+}: {
+  dup: NonNullable<ClarifyProposal["duplicate"]>;
+  onMerge: () => Promise<void>;
+  onDrop: () => void;
+  onDismiss: () => void;
+}) {
+  const [busy, setBusy] = useState<null | "merge" | "drop">(null);
+  const run = async (which: "merge" | "drop", fn: () => void | Promise<void>) => {
+    setBusy(which);
+    try { await fn(); } finally { setBusy(null); }
+  };
+  return (
+    <div className="flex flex-col gap-2.5 rounded-lg border border-warning/45 bg-warning/10 p-3">
+      <div className="flex items-start gap-2 text-[13px] font-semibold text-foreground">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+        <span>
+          {dup.verdict === "duplicate"
+            ? "This looks like a task that's already on ClickUp"
+            : "A similar task may already be on ClickUp"}
+        </span>
+      </div>
+      <div className="rounded-md border border-border bg-background/50 px-3 py-2">
+        <div className="flex items-center gap-1.5 text-[12.5px] text-foreground">
+          <Cloud className="h-3.5 w-3.5 shrink-0 text-primary/70" />
+          <span className="min-w-0 flex-1 truncate" title={dup.title}>{dup.title}</span>
+          {dup.providerUrl && (
+            <a
+              href={dup.providerUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="tech-transition shrink-0 text-[11px] font-medium text-primary hover:underline"
+            >
+              Open
+            </a>
+          )}
+        </div>
+        {(dup.projectName || dup.providerStatus) && (
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 pl-5 text-[10.5px] text-muted-foreground">
+            {dup.projectName && <span>{dup.projectName}</span>}
+            {dup.providerStatus && <span>· {dup.providerStatus}</span>}
+          </div>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void run("merge", onMerge)}
+          className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+        >
+          {busy === "merge" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+          Add to existing task
+        </button>
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void run("drop", onDrop)}
+          className="tech-transition inline-flex items-center gap-1.5 rounded-md border border-transparent px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+        >
+          {busy === "drop" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+          Delete this inbox item
+        </button>
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={onDismiss}
+          className="tech-transition ml-auto rounded-md px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
+        >
+          Not a duplicate
+        </button>
       </div>
     </div>
   );

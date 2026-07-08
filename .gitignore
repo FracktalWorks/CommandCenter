@@ -65,3 +65,7 @@ ide/
 # Playwright transient artifacts
 /test-results/
 workbench/control_plane/test-results/
+
+# Local agent configuration and observation logs
+.claude/
+skill-observations/

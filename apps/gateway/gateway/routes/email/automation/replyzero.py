@@ -715,6 +715,14 @@ def _fmt_thread_msg(
             lines.append(f"To: {to}")
         if cc:
             lines.append(f"Cc: {cc}")
+        # Deterministic recipient-role signal — don't make the model infer it from
+        # the address lists (Cc-only + no direct ask → FYI, not To-Reply).
+        from gateway.routes.email.automation.engine import (  # noqa: PLC0415
+            _recipient_role,
+        )
+        if _recipient_role(self_email, getattr(r, "to_addresses", None),
+                           getattr(r, "cc_addresses", None)) == "cc":
+            lines.append("(the user is only Cc'd here, not a direct To recipient)")
     dt = getattr(r, "received_at", None)
     if hasattr(dt, "isoformat"):
         lines.append(f"Date: {dt.isoformat()}")

@@ -37,6 +37,31 @@ def _fmt_recipients(field: Any) -> str:
     return ", ".join(out)
 
 
+def _addr_emails(field: Any) -> set[str]:
+    """Lowercased email set from a JSONB ``[{name,email}]`` list (str-tolerant)."""
+    try:
+        items = field if isinstance(field, list) else json.loads(field or "[]")
+    except Exception:  # noqa: BLE001
+        return set()
+    return {(it.get("email") or "").strip().lower()
+            for it in (items or []) if isinstance(it, dict) and it.get("email")}
+
+
+def _recipient_role(self_email: str, to_field: Any, cc_field: Any) -> str:
+    """Deterministic role of the mailbox owner on this email — a COMPUTED signal
+    so the classifier need not parse address lists to tell a direct recipient
+    from a Cc'd one. Returns 'direct' (in To), 'cc' (only in Cc), or '' (neither /
+    unknown: Bcc, a mailing list, or self not resolvable)."""
+    me = (self_email or "").strip().lower()
+    if not me:
+        return ""
+    if me in _addr_emails(to_field):
+        return "direct"
+    if me in _addr_emails(cc_field):
+        return "cc"
+    return ""
+
+
 def email_dict_from_row(
     row: Any, self_email: str = "", about: str = "", self_name: str = "",
     extra_domains: frozenset[str] | set[str] = frozenset(),
@@ -69,6 +94,11 @@ def email_dict_from_row(
         "thread_id": getattr(row, "thread_id", "") or "",
         "sender_scope": sender_scope(
             frm.get("email", ""), self_email or "", extra_domains),
+        # Deterministic recipient role (direct/cc/'') — a computed CC-vs-To signal
+        # the classifier reads instead of parsing the To/Cc lines itself.
+        "recipient_role": _recipient_role(
+            self_email or "", getattr(row, "to_addresses", None),
+            getattr(row, "cc_addresses", None)),
         # "Attachments: file.pdf (…)" line (or "") — see core._attachment_summaries.
         "attachments": attachments or "",
     }
@@ -111,11 +141,18 @@ def _email_block(email: dict[str, str]) -> str:
     from_disp = f"{email['from_name']} <{frm}>" if email.get("from_name") else frm
     attach = (email.get("attachments") or "").strip()
     attach_line = f"{attach}\n" if attach else ""
+    # Deterministic recipient-role line (computed, not inferred from the addresses).
+    role_line = {
+        "direct": "Your role: you are a DIRECT recipient (in To).\n",
+        "cc": "Your role: you are only CC'd (NOT in To) — usually informational; "
+              "a reply from you is usually not required.\n",
+    }.get(email.get("recipient_role", ""), "")
     return (
         _user_info_block(email)
         + f"EMAIL\n{prov_line}From: {from_disp}\n"
         f"To: {email.get('to', '') or '(unknown)'}\n"
         f"Cc: {email.get('cc', '') or '(none)'}\n"
+        + role_line
         + date_line
         + f"Subject: {email.get('subject', '')}\n"
         + attach_line
@@ -124,9 +161,10 @@ def _email_block(email: dict[str, str]) -> str:
 
 
 _RECIPIENT_GUIDELINE = (
-    "Consider whether the mailbox owner is a direct recipient (in To) or only "
-    "CC'd: an email where they are merely CC'd is usually informational and does "
-    "not require a reply from them."
+    "Honour the computed 'Your role' line: when the mailbox owner is only CC'd "
+    "(not in To), the email is usually informational and does not require a reply "
+    "from them — prefer an FYI/informational rule over a reply rule unless they "
+    "are directly asked something."
 )
 
 # Classification guidance ported from inbox-zero's choose-rule system prompt, so
@@ -471,7 +509,19 @@ def _pattern_hit(pat: tuple[str, str], email: dict[str, str]) -> bool:
         gv = _generalize_subject(v)
         return bool(gv) and gv in _generalize_subject(subj)
     frm = (email.get("from", "") or "").lower()  # FROM (bidirectional)
-    return bool(frm) and (v in frm or frm in v)
+    if not frm:
+        return False
+    # The full sender contained in the pattern value (e.g. value "Jo <jo@x.com>",
+    # sender "jo@x.com") is inherently specific — always allowed.
+    if frm in v:
+        return True
+    # The other direction (value is a substring of the sender) must NOT let a
+    # short/generic value match every sender: require an address- or domain-shaped
+    # token (contains '@' or '.', length >= 4). Learned FROM values are real
+    # sender addresses/domains, so this only rejects over-broad fragments.
+    if len(v) >= 4 and ("@" in v or "." in v):
+        return v in frm
+    return False
 
 
 def _patterns_excluded_rules(

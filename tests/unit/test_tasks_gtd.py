@@ -565,6 +565,23 @@ def test_enrich_heuristic_fills_only_requested_and_never_invents_due():
     assert "energy" not in out
 
 
+def test_propose_fields_is_db_free_and_fillable_without_llm():
+    # _propose_fields is the pure (no-DB) proposal core that backfill fans out
+    # concurrently. With use_llm=False it must fill @context from the heuristic
+    # alone — no DB session, no LLM — so a shared session stays untouched during
+    # the concurrent calls and the roster is loaded once by the caller.
+    import asyncio
+
+    from gateway.routes.tasks.ai import _propose_fields
+
+    item = SimpleNamespace(title="Buy printer paper", description="",
+                           context=None, energy="x", time_estimate_mins=1,
+                           due_at=object(), assignee={"name": "Bo"})
+    out = asyncio.run(_propose_fields(
+        item, {"context"}, people=[], use_llm=False, model=""))
+    assert out == {"context": "@errands"}
+
+
 def test_apply_reclarify_binding_locks_synced_destination():
     from gateway.routes.tasks.ai import _apply_reclarify_binding
 

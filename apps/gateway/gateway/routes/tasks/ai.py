@@ -13,6 +13,7 @@ the task-manager agent takes over Clarify cognition, only this module's
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
@@ -997,16 +998,10 @@ async def _llm_enrich(
     return out
 
 
-async def _enrich_fields(
-    db: Any, uid: str, item: Any, only: set[str] | None,
-) -> dict[str, Any]:
-    """Shared core: propose values for the item's missing (or `only`) fields.
-    Returns {field: value} for what could be filled (may be empty)."""
-    want = _missing_fields(item)
-    if only is not None:
-        want &= only
-    if not want:
-        return {}
+async def _enrich_people(db: Any, uid: str) -> list[dict]:
+    """The team roster the proposal uses to pick an assignee — org people first,
+    provider members as fallback. Per-USER (not per-item), so batch callers load
+    it once and reuse it across every row instead of re-querying per item."""
     from gateway.routes.tasks.people import fetch_people_for_clarify
     members: list[dict] = []
     accts = (await db.execute(
@@ -1016,17 +1011,52 @@ async def _enrich_fields(
         for m in (_parse_jsonb(a.schema_cache) or {}).get("members") or []:
             if isinstance(m, dict) and m.get("name"):
                 members.append(m)
-    people = await fetch_people_for_clarify(db) or members
+    return await fetch_people_for_clarify(db) or members
 
+
+async def _enrich_llm_config(db: Any, uid: str) -> tuple[bool, str]:
+    """The user's clarify LLM toggle + model (per-USER; loaded once by batch
+    callers). Returns (use_llm, model); model is "" when the LLM is off."""
     from gateway.routes.tasks.settings import gtd_models, gtd_toggles
+    use_llm = (await gtd_toggles(db, uid))["clarify_use_llm"]
+    model = (await gtd_models(db, uid))["clarify"] if use_llm else ""
+    return use_llm, model
+
+
+async def _propose_fields(
+    item: Any, only: set[str] | None, people: list[dict],
+    use_llm: bool, model: str,
+) -> dict[str, Any]:
+    """Pure proposal core (NO DB access): heuristic fill, then LLM cognition on
+    top when enabled. The caller pre-loads people/toggle/model, so this touches
+    no shared DB session and is safe to fan out concurrently. Returns
+    {field: value} for what could be filled (may be empty)."""
+    want = _missing_fields(item)
+    if only is not None:
+        want &= only
+    if not want:
+        return {}
     filled = enrich_heuristic(item, want, people)
-    if (await gtd_toggles(db, uid))["clarify_use_llm"]:
-        models = await gtd_models(db, uid)
-        llm = await _llm_enrich(item, want, people, models["clarify"])
+    if use_llm:
+        llm = await _llm_enrich(item, want, people, model)
         if llm:
             filled.update(llm)  # LLM cognition wins where it returned a value
     # Only ever report fields that were actually missing (never overwrite).
     return {k: v for k, v in filled.items() if k in want}
+
+
+async def _enrich_fields(
+    db: Any, uid: str, item: Any, only: set[str] | None,
+) -> dict[str, Any]:
+    """Single-item convenience wrapper: load the per-user enrich context (people,
+    LLM toggle, model) then propose. Batch callers (backfill) load that context
+    ONCE and call _propose_fields directly to avoid re-querying it per row."""
+    if not (_missing_fields(item) & (only if only is not None else {
+            "context", "energy", "time_estimate_mins", "due_at", "assignee"})):
+        return {}
+    people = await _enrich_people(db, uid)
+    use_llm, model = await _enrich_llm_config(db, uid)
+    return await _propose_fields(item, only, people, use_llm, model)
 
 
 @router.post("/items/{item_id}/enrich")
@@ -1133,10 +1163,27 @@ async def backfill_context(user: UserContext = Depends(get_current_user)):
                  AND (context IS NULL OR context = '')
                  AND archived_at IS NULL
                ORDER BY updated_at DESC LIMIT 40"""), {"uid": uid})).fetchall()
+        if not rows:
+            return {"scanned": 0, "updated": 0}
+        # Load the per-user enrich context ONCE, then fan the proposals out
+        # concurrently. A sequential loop of up to 40 LLM calls overran the API
+        # proxy's 30s timeout and the button reported "Failed"; bounded fan-out
+        # finishes well inside the window. _propose_fields is DB-free, so the
+        # shared session stays untouched during the concurrent calls (writes are
+        # sequential below), and any LLM failure degrades to the heuristic.
+        people = await _enrich_people(db, uid)
+        use_llm, model = await _enrich_llm_config(db, uid)
+        sem = asyncio.Semaphore(10)
+
+        async def _ctx_for(item: Any) -> str | None:
+            async with sem:
+                filled = await _propose_fields(
+                    item, {"context"}, people, use_llm, model)
+            return filled.get("context")
+
+        contexts = await asyncio.gather(*(_ctx_for(it) for it in rows))
         updated = 0
-        for item in rows:
-            filled = await _enrich_fields(db, uid, item, only={"context"})
-            ctx = filled.get("context")
+        for item, ctx in zip(rows, contexts, strict=True):
             if not ctx:
                 continue
             await db.execute(

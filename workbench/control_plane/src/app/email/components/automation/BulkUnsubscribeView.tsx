@@ -677,9 +677,21 @@ export function BulkUnsubscribeView({
                         </span>
                       )}
                       {s.category && s.category !== "Unknown" && (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary/15 text-primary">
-                          {s.category}
-                        </span>
+                        s.category_source === "rule" || s.category_source === "user" ? (
+                          <span
+                            title="From your rules — same categorization as the rest of the app"
+                            className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary/15 text-primary"
+                          >
+                            {s.category}
+                          </span>
+                        ) : (
+                          <span
+                            title="Provisional guess — updates to match your rules once they've labelled enough of this sender's mail"
+                            className="text-[9px] px-1.5 py-0.5 rounded-full border border-dashed border-primary/40 text-muted-foreground"
+                          >
+                            {s.category}?
+                          </span>
+                        )
                       )}
                     </div>
                     <div className="text-[11px] text-muted-foreground truncate">{s.email}</div>

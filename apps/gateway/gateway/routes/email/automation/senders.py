@@ -229,10 +229,17 @@ async def list_senders(
 
         # Merge assigned categories (same account scope as newsletters).
         cat_rows = (await db.execute(text(
-            f"SELECT LOWER(email) AS email, category FROM email_senders "
-            f"WHERE {nl_scope}"
+            f"SELECT LOWER(email) AS email, category, category_source "
+            f"FROM email_senders WHERE {nl_scope}"
         ), nl_params)).fetchall()
         category_by_email = {r.email: r.category for r in cat_rows if r.category}
+        # Where each category came from: 'rule' (projected from the rule engine),
+        # 'inferred' (provisional cold-start guess) or 'user'. Lets the UI flag a
+        # provisional tag honestly instead of implying the rules decided it.
+        source_by_email = {
+            r.email: r.category_source for r in cat_rows
+            if r.category and getattr(r, "category_source", None)
+        }
 
         return {
             "senders": [
@@ -254,6 +261,7 @@ async def list_senders(
                     # (future mail blocked at the source, not just our sweep).
                     "filter_active": r.email in filtered_emails,
                     "category": category_by_email.get(r.email),
+                    "category_source": source_by_email.get(r.email),
                 }
                 for r in rows
             ]
@@ -792,6 +800,39 @@ EMAIL_CATEGORIES = [
     "Cold Email", "Personal", "Support", "Unknown",
 ]
 
+# The sender-stable categories the RULE ENGINE writes to email_messages.categories
+# (the cleanup preset rules). A sender's category is rolled up from these — the
+# Inbox Cleaner projects the rules, it does not re-classify. Personal/Support/
+# Unknown are NOT rule categories, so they only come from the cold-start fallback.
+_CLEANUP_CATEGORIES = [
+    "Newsletter", "Marketing", "Receipt", "Calendar", "Notification", "Cold Email",
+]
+_CLEANUP_BY_LOWER = {c.lower(): c for c in _CLEANUP_CATEGORIES}
+# Reply Zero conversation labels (also rule-engine output) — a sender you
+# converse with is a person, not a bulk sender.
+_CONVERSATION_LOWER = {"to reply", "awaiting reply", "fyi", "actioned"}
+# How many of a sender's messages the rules must have labelled before we trust
+# the rollup over the cold-start guess (mirrors the auto-learn consistency bar).
+_MIN_RULE_MESSAGES = 3
+
+
+def _rule_category(label_counts: dict[str, int]) -> str | None:
+    """Project a sender's category from the rule engine's per-message labels.
+
+    ``label_counts`` maps a lowercased rule label → how many of the sender's
+    messages carry it. Returns the dominant cleanup category when the rules have
+    labelled enough of the sender's mail, else "Personal" when they're a
+    reply-active correspondent, else None (defer to the cold-start fallback)."""
+    cleanup = {proper: label_counts.get(low, 0)
+               for low, proper in _CLEANUP_BY_LOWER.items()}
+    top_cat, top_n = max(cleanup.items(), key=lambda kv: kv[1], default=(None, 0))
+    if top_cat and top_n >= _MIN_RULE_MESSAGES:
+        return top_cat
+    conv_n = sum(label_counts.get(low, 0) for low in _CONVERSATION_LOWER)
+    if conv_n >= _MIN_RULE_MESSAGES and top_n == 0:
+        return "Personal"
+    return None
+
 
 async def _llm_categorize_senders(
     items: list[dict[str, Any]], *, model: str = "tier-fast",
@@ -864,67 +905,130 @@ async def _llm_categorize_senders(
         return {}
 
 
+async def _upsert_sender_category(
+    db: Any, account_id: str, email: str, name: str, category: str, source: str,
+) -> None:
+    """Persist a sender's category + its provenance. Never overwrites a 'user'
+    override (reserved for a future manual set-category flow)."""
+    await db.execute(text(
+        """INSERT INTO email_senders
+             (account_id, email, name, category, category_source, categorized_at)
+           VALUES (:aid, :email, :name, :cat, :src, now())
+           ON CONFLICT (account_id, email) DO UPDATE SET
+             name = COALESCE(EXCLUDED.name, email_senders.name),
+             category = EXCLUDED.category,
+             category_source = EXCLUDED.category_source,
+             categorized_at = now(), updated_at = now()
+           WHERE email_senders.category_source IS DISTINCT FROM 'user'"""
+    ), {"aid": account_id, "email": email, "name": name, "cat": category,
+        "src": source})
+
+
 async def _categorize_senders_job(account_id: str, limit: int) -> None:
-    """Background: assign categories to the account's busiest uncategorized senders."""
+    """Background: assign a category to the account's busiest senders.
+
+    Convergence with the rule engine: a sender's category is PROJECTED from the
+    rules' per-message labels (email_messages.categories) — the dominant cleanup
+    category, or Personal for a reply-active correspondent. The standalone LLM
+    classifier is now only a COLD-START fallback, used for a still-uncategorized
+    sender the rules haven't labelled enough of yet. So the Inbox Cleaner agrees
+    with the rest of the app instead of running a parallel classifier."""
     db = await _get_db()
     try:
+        # Busiest senders, with their CURRENT category/source (so we can upgrade a
+        # provisional 'inferred' guess to a 'rule' projection, but never re-run the
+        # LLM on a sender that already has one and still lacks rule coverage).
         rows = (await db.execute(text(
-            """SELECT LOWER(from_address->>'email') AS email,
-                      MAX(from_address->>'name') AS name,
-                      (array_agg(subject ORDER BY received_at DESC))[1:3] AS subjects,
+            """SELECT LOWER(em.from_address->>'email') AS email,
+                      MAX(em.from_address->>'name') AS name,
+                      (array_agg(em.subject ORDER BY em.received_at DESC))[1:3]
+                        AS subjects,
                       COUNT(*) AS volume,
-                      COUNT(*) FILTER (WHERE is_read = false) AS unread,
-                      bool_or(unsubscribe_link IS NOT NULL) AS has_unsub
-               FROM email_messages
-               WHERE account_id = :aid
-                 AND COALESCE(from_address->>'email','') <> ''
-                 AND LOWER(from_address->>'email') NOT IN (
-                   SELECT email FROM email_senders
-                   WHERE account_id = :aid AND category IS NOT NULL)
-               GROUP BY LOWER(from_address->>'email')
+                      COUNT(*) FILTER (WHERE em.is_read = false) AS unread,
+                      bool_or(em.unsubscribe_link IS NOT NULL) AS has_unsub,
+                      MAX(se.category) AS cur_category,
+                      MAX(se.category_source) AS cur_source
+               FROM email_messages em
+               LEFT JOIN email_senders se
+                 ON se.account_id = em.account_id
+                AND se.email = LOWER(em.from_address->>'email')
+               WHERE em.account_id = :aid
+                 AND COALESCE(em.from_address->>'email','') <> ''
+               GROUP BY LOWER(em.from_address->>'email')
                ORDER BY COUNT(*) DESC LIMIT :limit"""
         ), {"aid": account_id, "limit": limit})).fetchall()
-        # The account's own address + configured org domains → sender_scope, so
-        # the categorizer never buckets the user's own / same-org senders into a
-        # RECEIVE category.
+        if not rows:
+            return
+        # The account's own address + configured org domains → sender_scope, so we
+        # never bucket the user's own / same-org senders into a RECEIVE category.
         acc = (await db.execute(text(
             "SELECT email_address FROM email_accounts WHERE id = :id"
         ), {"id": account_id})).fetchone()
         self_email = (acc.email_address if acc else "") or ""
         from gateway.routes.email.automation.identity import resolve_org_domains  # noqa: PLC0415
         org_domains = await resolve_org_domains(db, account_id)
-        items = [
-            {"email": r.email, "name": r.name or "",
-             "subjects": [s for s in (r.subjects or []) if s],
-             "scope": sender_scope(r.email, self_email, org_domains),
-             "volume": int(getattr(r, "volume", 0) or 0),
-             "unread": int(getattr(r, "unread", 0) or 0),
-             "has_unsub": bool(getattr(r, "has_unsub", False))}
-            for r in rows
+
+        # Never categorize the user's OWN address as a "sender". Keep teammates
+        # ('internal') — they are legitimate senders. Also skip 'user' overrides.
+        cands = [
+            r for r in rows
+            if sender_scope(r.email, self_email, org_domains) != "self"
+            and (r.cur_source or "") != "user"
         ]
-        # Never categorize the user's OWN address as a "sender" (it would persist
-        # a self sender row that surfaces as "you email yourself"). Keep teammates
-        # ('internal') — they are legitimate senders.
-        items = [it for it in items if it["scope"] != "self"]
-        if not items:
+        if not cands:
             return
-        from gateway.routes.email.automation.assistant import _account_models  # noqa: PLC0415
-        rule_model = (await _account_models(db, account_id))["rule"]
-        for i in range(0, len(items), 10):
-            batch = items[i:i + 10]
-            cats = await _llm_categorize_senders(batch, model=rule_model)
-            for it in batch:
-                await db.execute(text(
-                    """INSERT INTO email_senders
-                         (account_id, email, name, category, categorized_at)
-                       VALUES (:aid, :email, :name, :cat, now())
-                       ON CONFLICT (account_id, email) DO UPDATE SET
-                         name = COALESCE(EXCLUDED.name, email_senders.name),
-                         category = EXCLUDED.category,
-                         categorized_at = now(), updated_at = now()"""
-                ), {"aid": account_id, "email": it["email"], "name": it["name"],
-                    "cat": cats.get(it["email"], "Unknown")})
-            await db.commit()
+
+        # Roll up the rule engine's per-message labels for these senders in one
+        # pass: {email: {lowercased label: message count}}.
+        known = list(_CLEANUP_BY_LOWER) + list(_CONVERSATION_LOWER)
+        emails = [r.email for r in cands]
+        tally_rows = (await db.execute(text(
+            """SELECT LOWER(em.from_address->>'email') AS email,
+                      LOWER(TRIM(cat)) AS label, COUNT(DISTINCT em.id) AS n
+               FROM email_messages em
+               CROSS JOIN LATERAL unnest(em.categories) AS cat
+               WHERE em.account_id = :aid
+                 AND LOWER(em.from_address->>'email') = ANY(:emails)
+                 AND LOWER(TRIM(cat)) = ANY(:labels)
+               GROUP BY 1, 2"""
+        ), {"aid": account_id, "emails": emails, "labels": known})).fetchall()
+        counts: dict[str, dict[str, int]] = {}
+        for t in tally_rows:
+            counts.setdefault(t.email, {})[t.label] = int(t.n)
+
+        # Rule-projected senders first (cheap, no LLM); the rest that are still
+        # uncategorized fall through to the cold-start LLM classifier.
+        needs_llm: list[Any] = []
+        for r in cands:
+            rcat = _rule_category(counts.get(r.email, {}))
+            if rcat:
+                await _upsert_sender_category(
+                    db, account_id, r.email, r.name or "", rcat, "rule")
+            elif not (r.cur_category or "").strip():
+                needs_llm.append(r)
+            # else: keep the existing 'inferred' guess until rule coverage grows.
+        await db.commit()
+
+        if needs_llm:
+            from gateway.routes.email.automation.assistant import _account_models  # noqa: PLC0415
+            rule_model = (await _account_models(db, account_id))["rule"]
+            items = [
+                {"email": r.email, "name": r.name or "",
+                 "subjects": [s for s in (r.subjects or []) if s],
+                 "scope": sender_scope(r.email, self_email, org_domains),
+                 "volume": int(getattr(r, "volume", 0) or 0),
+                 "unread": int(getattr(r, "unread", 0) or 0),
+                 "has_unsub": bool(getattr(r, "has_unsub", False))}
+                for r in needs_llm
+            ]
+            for i in range(0, len(items), 10):
+                batch = items[i:i + 10]
+                cats = await _llm_categorize_senders(batch, model=rule_model)
+                for it in batch:
+                    await _upsert_sender_category(
+                        db, account_id, it["email"], it["name"],
+                        cats.get(it["email"], "Unknown"), "inferred")
+                await db.commit()
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.categorize_job_failed", account_id=account_id,
                      error=str(exc)[:200])

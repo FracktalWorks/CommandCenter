@@ -194,6 +194,9 @@ export interface SenderStat {
    *  (future mail blocked at the source — Gmail filter / Outlook rule). */
   filter_active?: boolean;
   category?: string | null;
+  /** Where `category` came from: 'rule' (projected from the rule engine),
+   *  'inferred' (provisional cold-start guess) or 'user'. */
+  category_source?: string | null;
 }
 
 /** Result of a real unsubscribe attempt (POST /email/unsubscribe). */

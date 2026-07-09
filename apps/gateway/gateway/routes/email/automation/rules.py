@@ -634,10 +634,38 @@ async def _upsert_rule_pattern(
 ) -> None:
     """Record a learned classification pattern (FROM sender or SUBJECT keyword)
     for a rule. Removes the opposite (include vs exclude) for the same
-    type+value so a correction never contradicts itself."""
+    type+value so a correction never contradicts itself.
+
+    Centralized backstop for two anti-patterns that every learning path (Fix,
+    auto-learn, label sync) must avoid — enforced HERE so no single path can
+    reintroduce them:
+      1. Sender-pinning a conversation-status rule (To Reply / Awaiting / FYI /
+         Actioned). Reply state is re-derived from the whole thread and overrides
+         any pattern, so "always reply to X" is both wrong and futile.
+      2. Pinning the mailbox's OWN address to any rule (e.g. "vjvarada@… →
+         To Reply") — a meaningless self-reference from a stray label delta."""
     if not (value or "").strip():
         return
     ptype = "SUBJECT" if (pattern_type or "").upper() == "SUBJECT" else "FROM"
+    # (1) Never pin a sender/subject to a conversation-status rule. Mirrors
+    #     engine._conversation_rule_key: system_type when set, else the name.
+    meta = (await db.execute(text(
+        "SELECT name, system_type FROM email_rules WHERE id = :rid"
+    ), {"rid": rule_id})).fetchone()
+    if meta is not None:
+        key = ((meta.system_type or "").upper().strip()
+               or (meta.name or "").upper().strip().replace(" ", "_"))
+        if key in {"TO_REPLY", "AWAITING_REPLY", "FYI", "ACTIONED"}:
+            return
+    # (2) Never pin the mailbox's own address (FROM patterns only).
+    if ptype == "FROM":
+        acct = (await db.execute(text(
+            "SELECT email_address FROM email_accounts WHERE id = :aid"
+        ), {"aid": account_id})).fetchone()
+        own = (getattr(acct, "email_address", "") or "").strip().lower()
+        val_l = value.strip().lower()
+        if own and (own in val_l or val_l in own):
+            return
     # Drop the opposite disposition for this (rule, type, value) first.
     await db.execute(text(
         "DELETE FROM email_rule_patterns WHERE account_id = :aid AND rule_id = :rid "

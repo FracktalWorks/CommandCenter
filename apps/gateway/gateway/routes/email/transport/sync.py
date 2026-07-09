@@ -32,21 +32,35 @@ from sqlalchemy import text
 INITIAL_SYNC_DAYS = 365
 
 
-async def _build_label_rule_map(db: Any, account_id: str) -> dict[str, str]:
-    """category-name (lower) → rule_id, from each enabled rule's name and its
-    LABEL action labels — so a manually-applied category can be traced to a rule."""
+async def _build_label_rule_map(
+    db: Any, account_id: str,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Returns ``(label_rule_map, conv_rule_keys)``.
+
+    ``label_rule_map``: category-name (lower) → rule_id, from each enabled rule's
+    name and its LABEL action labels — so a manually-applied category can be
+    traced to a rule. ``conv_rule_keys``: rule_id → conversation-status key
+    (TO_REPLY / AWAITING_REPLY / FYI / ACTIONED) for the reply-status rules, so
+    the learner can treat those differently from sender-stable cleanup rules."""
     try:
+        from gateway.routes.email.automation.engine import (  # noqa: PLC0415
+            _conversation_rule_key,
+        )
         from gateway.routes.email.automation.rules import (  # noqa: PLC0415
             _load_rules,
         )
         rules = await _load_rules(db, account_id)
     except Exception:  # noqa: BLE001
-        return {}
+        return {}, {}
     out: dict[str, str] = {}
+    conv: dict[str, str] = {}
     for r in rules:
         if not r.get("enabled"):
             continue
         rid = str(r.get("id"))
+        ck = _conversation_rule_key(r)
+        if ck:
+            conv[rid] = ck
         nm = (r.get("name") or "").strip().lower()
         if nm:
             out.setdefault(nm, rid)
@@ -54,23 +68,34 @@ async def _build_label_rule_map(db: Any, account_id: str) -> dict[str, str]:
             label = (a.get("label") or "").strip()
             if a.get("type") == "LABEL" and label:
                 out.setdefault(label.lower(), rid)
-    return out
+    return out, conv
 
 
 async def _learn_from_label_changes(
     db: Any, account_id: str, msg: Any,
     old_categories: list, new_categories: list, label_rule_map: dict[str, str],
+    conv_rule_keys: dict[str, str], status_corrections: dict[str, str],
 ) -> None:
     """When the user adds/removes a label (category) in their email client, learn
     a FROM include/exclude classification pattern for the matching rule —
     inbox-zero's LABEL_ADDED / LABEL_REMOVED learning. Best-effort.
 
     Our own rule-applied labels are written to local categories synchronously, so
-    a sync delta here reflects only changes the *user* made in their client."""
+    a sync delta here reflects only changes the *user* made in their client.
+
+    Conversation-status rules (To Reply / Awaiting / FYI / Actioned) are NEVER
+    sender-pinned: a person's mail flows between those states per-thread, so a
+    learned FROM pattern would be both wrong ("always reply to X") and futile
+    (status is re-derived from the full thread and overrides it). This mirrors the
+    guard the Fix and auto-learn paths already apply. Instead, a manually-ADDED
+    conversation label is recorded in ``status_corrections`` (thread → status) so
+    the caller can set the thread status directly — the only correction that
+    sticks — exactly as the Fix flow does. A removed conversation label carries no
+    unambiguous target status, so it's simply ignored (never pins, never guesses)."""
     sender = ""
     if getattr(msg, "from_address", None):
         sender = (msg.from_address.email or "").strip()
-    if not sender or not label_rule_map:
+    if not label_rule_map:
         return
     old_s = {str(c).strip().lower() for c in (old_categories or [])}
     new_s = {str(c).strip().lower() for c in (new_categories or [])}
@@ -93,12 +118,42 @@ async def _learn_from_label_changes(
         rid = label_rule_map.get(cat)
         if not rid:
             continue
+        conv_key = conv_rule_keys.get(rid)
+        if conv_key:
+            # Reply-status rule: set the thread status directly on an ADD; never
+            # learn a sender pattern (and skip an ambiguous removal entirely).
+            if not exclude and tid:
+                status_corrections[tid] = conv_key
+            continue
+        if not sender:
+            continue
         try:
             await _upsert_rule_pattern(
                 db, account_id, rid, sender, exclude, src, why, None, tid,
                 pattern_type="FROM")
         except Exception:  # noqa: BLE001
             pass
+
+
+async def _apply_label_status_corrections(
+    account_id: str, corrections: dict[str, str],
+) -> None:
+    """Apply the reply-status corrections the label learner queued (a user who
+    manually added a conversation label — To Reply / Awaiting / FYI / Actioned —
+    in their client). Each opens its own DB connection and swaps provider labels,
+    so this runs AFTER the sync's persistence commit, deduped by thread.
+    Best-effort — a failed correction never fails the sync."""
+    if not corrections:
+        return
+    from gateway.routes.email.automation.replyzero import (  # noqa: PLC0415
+        apply_thread_status_correction,
+    )
+    for tid, key in corrections.items():
+        try:
+            await apply_thread_status_correction(account_id, tid, key)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("email.label_status_correction_failed",
+                         account_id=account_id, error=str(exc)[:160])
 
 
 class SyncRequest(BaseModel):
@@ -200,10 +255,13 @@ async def trigger_sync(
             # Learn classification patterns from manual label changes — only on
             # incremental syncs (a deep/full sync replays history and would
             # mislearn). Empty map (no rules) disables the per-message diff.
-            label_rule_map = (
+            label_rule_map, conv_rule_keys = (
                 await _build_label_rule_map(db, req.account_id)
-                if not deep else {}
+                if not deep else ({}, {})
             )
+            # thread_id → conversation-status key for reply labels the user added
+            # in their client this sync; applied after the loop (see below).
+            status_corrections: dict[str, str] = {}
             persisted_count = 0
             skipped_count = 0
             for msg in sync_result.messages:
@@ -338,7 +396,8 @@ async def trigger_sync(
                     if old_categories is not None:
                         await _learn_from_label_changes(
                             db, req.account_id, msg, old_categories,
-                            getattr(msg, "categories", []) or [], label_rule_map)
+                            getattr(msg, "categories", []) or [], label_rule_map,
+                            conv_rule_keys, status_corrections)
 
                     # Persist attachment metadata
                     for att in msg.attachments:
@@ -367,6 +426,12 @@ async def trigger_sync(
                         )
 
             await db.commit()
+
+            # Apply reply-status corrections the label learner queued (a user who
+            # manually added "To Reply"/"Awaiting"/… in their client) — after the
+            # persistence commit, not nested in the per-message loop.
+            await _apply_label_status_corrections(
+                req.account_id, status_corrections)
 
             # Reconcile provider-side deletions on a full snapshot (Outlook).
             try:

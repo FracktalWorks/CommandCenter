@@ -4595,8 +4595,30 @@ function LearnedPreferences({ accountId }: { accountId: string | null }) {
   );
 }
 
-/** Classification patterns learned from Fix corrections (sender → rule
- *  include/exclude). The real "Learned Patterns", inbox-zero style. */
+/** Classification patterns (sender → rule include/exclude), inbox-zero style.
+ *  These come from MORE than the Fix button: a Fix correction (FIX), a
+ *  consistent AI match auto-learned over time (AI), or a label you add/remove in
+ *  your own mail client (LABEL_ADDED / LABEL_REMOVED). The `source` badge makes
+ *  which one visible, so a pattern you don't recognise isn't mistaken for a Fix
+ *  you made. Conversation-status rules (To Reply / Awaiting / FYI / Actioned)
+ *  are never sender-pinned and never appear here. */
+const _PATTERN_SOURCE_META: Record<string, { label: string; title: string }> = {
+  FIX: { label: "Fix", title: "You taught this via the Fix button" },
+  AI: {
+    label: "Auto",
+    title: "Auto-learned after this sender consistently matched one rule",
+  },
+  LABEL_ADDED: {
+    label: "Label",
+    title: "Learned when a label was added in your mail client",
+  },
+  LABEL_REMOVED: {
+    label: "Label",
+    title: "Learned when a label was removed in your mail client",
+  },
+  USER: { label: "Manual", title: "Added manually" },
+};
+
 function LearnedPatternsList({ accountId }: { accountId: string | null }) {
   const [patterns, setPatterns] = useState<LearnedRulePattern[]>([]);
   const [loading, setLoading] = useState(true);
@@ -4654,6 +4676,14 @@ function LearnedPatternsList({ accountId }: { accountId: string | null }) {
           >
             {p.exclude ? "Never match" : "Always match"}
           </span>
+          {_PATTERN_SOURCE_META[p.source] && (
+            <span
+              title={_PATTERN_SOURCE_META[p.source].title}
+              className="text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap bg-muted text-muted-foreground"
+            >
+              {_PATTERN_SOURCE_META[p.source].label}
+            </span>
+          )}
           <div className="flex-1 min-w-0 text-xs text-foreground/80 truncate">
             <span className="text-muted-foreground">From</span> {p.value}{" "}
             <span className="text-muted-foreground">→</span>{" "}

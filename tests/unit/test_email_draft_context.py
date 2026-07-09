@@ -200,3 +200,96 @@ async def test_resolve_draft_keep_when_no_original_to_compare() -> None:
         db, provider, "acc", "t1")
     assert out == "keep"
     provider.trash_message.assert_not_called()
+
+
+# ── Compose card "Draft with AI" must see the message it's replying to ────────
+# The compose card called compose-assist, which never loaded the replied-to
+# message body — so the model couldn't apply a template the trailing email
+# provided. The fix routes reply/forward through the ONE shared reply-context
+# builder and surfaces the replied-to body to the drafter.
+
+
+async def test_compose_assist_renders_reply_to_body_and_apply_rule() -> None:
+    captured: dict = {}
+    with patch("acb_llm.context.acompletion_with_fallback",
+               _fake_completion(captured)):
+        await _drafting._llm_compose_assist(
+            about="", signature="", current_body="", instruction="",
+            mode="reply", recipient="Ashish <sharma.ashish@manipal.edu>",
+            subject="Re: Evaluation", thread="",
+            reply_to_body="Use this evaluation template: TEMPLATE_MARKER "
+                          "name/score/remarks.",
+            user_email="me@x.com")
+    user_msg = captured["messages"][1]["content"]
+    sys_prompt = captured["messages"][0]["content"].lower()
+    # The replied-to email (with its template) reaches the model, and the system
+    # prompt tells it to APPLY that email's contents.
+    assert "TEMPLATE_MARKER" in user_msg
+    assert "apply" in sys_prompt
+
+
+async def test_compose_assist_reply_empty_body_uses_shared_reply_drafter() -> None:
+    ctx = {"from": "sharma.ashish@manipal.edu", "from_name": "Ashish",
+           "subject": "Re: Evaluation", "body": "TEMPLATE_BODY", "thread": ""}
+    calls: dict = {}
+
+    async def fake_agent_draft(email, *a, **k):
+        calls["agent_email"] = email
+        return "drafted from the template"
+
+    async def fake_compose(**k):
+        calls["compose"] = k
+        return "unused"
+
+    with patch.object(_drafting, "_get_db", AsyncMock(return_value=AsyncMock())), \
+            patch.object(_drafting, "_assert_account_owner", AsyncMock()), \
+            patch.object(_drafting, "_load_assistant_about",
+                         AsyncMock(return_value=("about", "sig"))), \
+            patch.object(_drafting, "_account_models",
+                         AsyncMock(return_value={"draft": "tier-powerful"})), \
+            patch.object(_drafting, "_build_reply_context",
+                         AsyncMock(return_value=ctx)), \
+            patch.object(_drafting, "_agent_draft_reply", fake_agent_draft), \
+            patch.object(_drafting, "_llm_compose_assist", fake_compose):
+        req = _drafting.ComposeAssistRequest(
+            account_id="a", body="", mode="reply", message_id="m1")
+        res = await _drafting.compose_assist(req, SimpleNamespace(email="me@x.com"))
+
+    # Draft-from-scratch reply → the shared reply drafter, NOT the lighter compose
+    # path — and the replied-to body (the template) reaches it.
+    assert res["draft"] == "drafted from the template"
+    assert "compose" not in calls
+    assert calls["agent_email"]["body"] == "TEMPLATE_BODY"
+
+
+async def test_compose_assist_improve_passes_reply_to_body() -> None:
+    ctx = {"from": "sharma.ashish@manipal.edu", "from_name": "Ashish",
+           "subject": "Re: Evaluation", "body": "TEMPLATE_BODY",
+           "thread": "earlier context"}
+    calls: dict = {}
+
+    async def fake_compose(**k):
+        calls.update(k)
+        return "improved draft"
+
+    async def fake_agent_draft(*a, **k):
+        raise AssertionError("improve mode must not use the reply drafter")
+
+    with patch.object(_drafting, "_get_db", AsyncMock(return_value=AsyncMock())), \
+            patch.object(_drafting, "_assert_account_owner", AsyncMock()), \
+            patch.object(_drafting, "_load_assistant_about",
+                         AsyncMock(return_value=("about", "sig"))), \
+            patch.object(_drafting, "_account_models",
+                         AsyncMock(return_value={"draft": "tier-powerful"})), \
+            patch.object(_drafting, "_build_reply_context",
+                         AsyncMock(return_value=ctx)), \
+            patch.object(_drafting, "_agent_draft_reply", fake_agent_draft), \
+            patch.object(_drafting, "_llm_compose_assist", fake_compose):
+        req = _drafting.ComposeAssistRequest(
+            account_id="a", body="my rough draft", mode="reply", message_id="m1")
+        res = await _drafting.compose_assist(req, SimpleNamespace(email="me@x.com"))
+
+    # Improve-in-place keeps the compose path, now WITH the replied-to body.
+    assert res["draft"] == "improved draft"
+    assert calls["reply_to_body"] == "TEMPLATE_BODY"
+    assert calls["current_body"] == "my rough draft"

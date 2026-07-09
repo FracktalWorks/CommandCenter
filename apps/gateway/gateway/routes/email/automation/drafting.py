@@ -68,14 +68,20 @@ async def _fetch_thread_context(
     if not thread_id:
         return ""
     try:
+        # Keep the most RECENT `limit` messages (a long thread's trailing emails
+        # carry the current ask/template), then present them oldest→newest. A bare
+        # `ORDER BY received_at ASC LIMIT n` would instead drop the newest ones.
         rows = (await db.execute(text(
             """SELECT from_address, body_text, snippet, received_at,
-                      provider_message_id, folder
-               FROM email_messages
-               WHERE account_id = :aid AND thread_id = :tid
-                 AND LOWER(COALESCE(folder, '')) NOT IN ('drafts', 'draft')
-               ORDER BY received_at ASC NULLS FIRST
-               LIMIT :lim"""
+                      provider_message_id, folder FROM (
+                SELECT from_address, body_text, snippet, received_at,
+                       provider_message_id, folder
+                FROM email_messages
+                WHERE account_id = :aid AND thread_id = :tid
+                  AND LOWER(COALESCE(folder, '')) NOT IN ('drafts', 'draft')
+                ORDER BY received_at DESC NULLS LAST
+                LIMIT :lim
+              ) t ORDER BY received_at ASC NULLS FIRST"""
         ), {"aid": account_id, "tid": thread_id, "lim": limit})).fetchall()
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.thread_context_failed", error=str(exc)[:160])
@@ -690,7 +696,7 @@ async def _llm_draft_reply(
 async def _llm_compose_assist(
     *, about: str, signature: str, current_body: str, instruction: str,
     mode: str, recipient: str = "", subject: str = "", thread: str = "",
-    user_email: str = "", model: str = "tier-powerful",
+    reply_to_body: str = "", user_email: str = "", model: str = "tier-powerful",
 ) -> str:
     """Draft OR improve an outgoing email body for the compose box.
 
@@ -739,8 +745,10 @@ async def _llm_compose_assist(
             "- Never use placeholders for names (e.g. [Your Name], [Name]). "
             f"{sig_rule}\n"
             "- If the context contains <personal_instructions> or <writing_style>, "
-            "follow them. The prior thread (if any) is context ONLY — do not quote, "
-            "restate, or reply to it line by line."
+            "follow them. The email being replied to (if shown) is what you must "
+            "ADDRESS — answer its questions and APPLY any template, format or "
+            "instructions it contains. The earlier thread is background context "
+            "ONLY — do not quote, restate, or reply to it line by line."
         )
         owner = f"You are writing as: {user_email}\n" if user_email else ""
         ctx = f"{owner}User context:\n{about}\n\n" if (about or owner) else ""
@@ -753,9 +761,17 @@ async def _llm_compose_assist(
             parts.append(f"Recipient: {recipient}\n")
         if subject:
             parts.append(f"Subject: {subject}\n")
+        # The message being replied to — the immediate email to address/apply
+        # (e.g. a template it provides), distinct from the earlier thread.
+        if reply_to_body.strip():
+            parts.append(
+                "\nThe email you are replying to — read it in full and "
+                "address/apply its contents:\n"
+                f"{reply_to_body[:_DRAFT_BODY_MAX_CHARS]}\n"
+            )
         if thread:
             parts.append(
-                "\nPrior conversation for context only (do NOT quote it):\n"
+                "\nEarlier in the thread, for context only (do NOT quote it):\n"
                 f"{thread[:_DRAFT_THREAD_MAX_CHARS]}\n"
             )
         if improving:
@@ -1118,6 +1134,65 @@ async def _orchestrate_draft(
     return draft
 
 
+async def _build_reply_context(
+    db: Any, account_id: str, message_id: str, user_email: str,
+) -> dict[str, Any] | None:
+    """Assemble the FULL reply context for one message — the SINGLE source of
+    truth every drafting entry point uses (/draft-reply and the compose card's
+    "Draft with AI"), so the same context and rules apply everywhere.
+
+    Includes: the hydrated body of the message being replied to (the immediate
+    email — e.g. one carrying a template to apply), the earlier thread, the
+    owner's direction/recipient-role signals (self / sender_scope / To / Cc),
+    attachment metadata, past replies to this sender, and reply memories. Returns
+    None when the message doesn't exist."""
+    row = (await db.execute(text(
+        """SELECT em.id, em.provider_message_id, em.thread_id, em.subject,
+                  em.body_text, em.snippet, em.from_address,
+                  em.to_addresses, em.cc_addresses
+           FROM email_messages em
+           WHERE em.id = :mid AND em.account_id = :aid"""
+    ), {"mid": message_id, "aid": account_id})).fetchone()
+    if not row:
+        return None
+    frm = row.from_address if isinstance(row.from_address, dict) \
+        else json.loads(row.from_address or "{}")
+    # Ensure the FULL incoming body is present before drafting. Header-only rows
+    # (Outlook/Graph sync) store an empty body_text + a ~200-char snippet; without
+    # this the drafter sees the message cut off. Hydrate, then fall back to snippet.
+    from gateway.routes.email.core import hydrate_message_body  # noqa: PLC0415
+    hydrated = await hydrate_message_body(db, str(row.id), user_email)
+    # The mailbox's own address + org domains → direction (self/internal/external)
+    # and recipient role (To vs Cc-only).
+    self_row = (await db.execute(text(
+        "SELECT email_address FROM email_accounts WHERE id = :id"
+    ), {"id": account_id})).fetchone()
+    self_email = (self_row.email_address if self_row else "") or ""
+    from gateway.routes.email.automation.identity import (  # noqa: PLC0415
+        resolve_org_domains,
+        sender_scope,
+    )
+    org_domains = await resolve_org_domains(db, account_id)
+    email: dict[str, Any] = {
+        "subject": row.subject or "", "from": frm.get("email", ""),
+        "from_name": frm.get("name", "") or "",
+        "self": self_email,
+        "sender_scope": sender_scope(frm.get("email", ""), self_email, org_domains),
+        "to": _fmt_addr_list(row.to_addresses),
+        "cc": _fmt_addr_list(row.cc_addresses),
+        "attachments": (await _attachment_summaries(
+            db, [row.id])).get(str(row.id), ""),
+        "body": (hydrated or "").strip() or row.body_text or row.snippet or "",
+        "thread_id": row.thread_id or "",
+        "thread": await _fetch_thread_context(
+            db, account_id, row.thread_id or "", row.provider_message_id or ""),
+        "sender_examples": await _fetch_sender_reply_examples(
+            db, account_id, frm.get("email", "")),
+    }
+    email["reply_memories"] = await _fetch_reply_memories(db, account_id, email)
+    return email
+
+
 class DraftReplyRequest(BaseModel):
     account_id: str
     message_id: str
@@ -1136,57 +1211,10 @@ async def draft_reply_smart(
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
-        row = (await db.execute(text(
-            """SELECT em.id, em.provider_message_id, em.thread_id, em.subject,
-                      em.body_text, em.snippet, em.from_address,
-                      em.to_addresses, em.cc_addresses
-               FROM email_messages em
-               WHERE em.id = :mid AND em.account_id = :aid"""
-        ), {"mid": req.message_id, "aid": req.account_id})).fetchone()
-        if not row:
+        email = await _build_reply_context(
+            db, req.account_id, req.message_id, user.email or "anonymous")
+        if email is None:
             raise HTTPException(status_code=404, detail="Message not found")
-        frm = row.from_address if isinstance(row.from_address, dict) \
-            else json.loads(row.from_address or "{}")
-        # Ensure the FULL incoming body is present before drafting. Header-only
-        # rows (Outlook/Graph sync) store an empty body_text + a ~200-char
-        # snippet; without this the drafter saw the message cut off mid-sentence
-        # and wrote that truncation into the reply. Hydrate from the provider,
-        # then fall back to snippet only if the body is genuinely empty.
-        from gateway.routes.email.core import hydrate_message_body  # noqa: PLC0415
-        _hydrated_body = await hydrate_message_body(
-            db, str(row.id), user.email or "anonymous")
-        # The mailbox's own address + org domains → direction (self/internal/
-        # external) and recipient role (To vs Cc-only), so this manual/Rapid-Inbox
-        # draft path carries the same signals the auto-run path already does.
-        self_row = (await db.execute(text(
-            "SELECT email_address FROM email_accounts WHERE id = :id"
-        ), {"id": req.account_id})).fetchone()
-        self_email = (self_row.email_address if self_row else "") or ""
-        from gateway.routes.email.automation.identity import (  # noqa: PLC0415
-            resolve_org_domains,
-            sender_scope,
-        )
-        org_domains = await resolve_org_domains(db, req.account_id)
-        email = {
-            "subject": row.subject or "", "from": frm.get("email", ""),
-            "from_name": frm.get("name", "") or "",
-            "self": self_email,
-            "sender_scope": sender_scope(
-                frm.get("email", ""), self_email, org_domains),
-            "to": _fmt_addr_list(row.to_addresses),
-            "cc": _fmt_addr_list(row.cc_addresses),
-            "attachments": (await _attachment_summaries(
-                db, [row.id])).get(str(row.id), ""),
-            "body": (_hydrated_body or "").strip() or row.body_text or row.snippet or "",
-            "thread_id": row.thread_id or "",
-            "thread": await _fetch_thread_context(
-                db, req.account_id, row.thread_id or "",
-                row.provider_message_id or ""),
-            "sender_examples": await _fetch_sender_reply_examples(
-                db, req.account_id, frm.get("email", "")),
-        }
-        email["reply_memories"] = await _fetch_reply_memories(
-            db, req.account_id, email)
         about, signature = await _load_assistant_about(db, req.account_id)
         models = await _account_models(db, req.account_id)
         # Synchronous request → keep the orchestration budget under the proxy
@@ -1274,34 +1302,44 @@ async def compose_assist(
         recipient = ""
         subject = req.subject or ""
         thread = ""
-        if req.message_id:
-            row = (await db.execute(text(
-                """SELECT provider_message_id, thread_id, subject, from_address
-                   FROM email_messages
-                   WHERE id = :mid AND account_id = :aid"""
-            ), {"mid": req.message_id, "aid": req.account_id})).fetchone()
-            if row:
-                # For a reply, the recipient is the message's sender. For a
-                # forward, the recipient is whoever the user is forwarding TO
-                # (req.to) — NOT the original sender — so only derive it here for
-                # replies; the thread/subject are loaded for context either way.
-                if req.mode != "forward":
-                    frm = row.from_address if isinstance(row.from_address, dict) \
-                        else json.loads(row.from_address or "{}")
-                    nm, addr = frm.get("name", "") or "", frm.get("email", "") or ""
-                    recipient = (f"{nm} <{addr}>" if nm else addr).strip()
-                subject = subject or (row.subject or "")
-                thread = await _fetch_thread_context(
-                    db, req.account_id, row.thread_id or "",
-                    row.provider_message_id or "")
+        reply_to_body = ""
+        # Reply/forward: load the FULL reply context (the message being replied to
+        # + thread + direction/recipients) via the ONE shared builder — the same
+        # one /draft-reply uses. This is what was missing: the compose card never
+        # loaded the replied-to message body, so "Draft with AI" couldn't apply a
+        # template the trailing email provided.
+        ctx = None
+        if req.message_id and req.mode in ("reply", "forward"):
+            ctx = await _build_reply_context(
+                db, req.account_id, req.message_id, user.email or "")
+        if ctx is not None:
+            # Draft-from-scratch REPLY → route through the SAME reply drafter as
+            # /draft-reply, so full context + identical rules apply (one method,
+            # not a separate lighter one). Improve-in-place and forward keep the
+            # compose path, now WITH the replied-to body in view.
+            if req.mode == "reply" and not (req.body or "").strip():
+                draft = await _agent_draft_reply(
+                    ctx, about, signature, user.email or "",
+                    max_agents=1, agent_timeout=18.0,
+                    model=models["draft"], account_id=req.account_id,
+                )
+                if _is_no_draft(draft):
+                    return {"draft": "", "skipped": "low_confidence"}
+                return {"draft": draft}
+            subject = subject or ctx.get("subject", "")
+            thread = ctx.get("thread", "")
+            reply_to_body = ctx.get("body", "")
+            if req.mode != "forward":  # reply recipient is the original sender
+                nm, addr = ctx.get("from_name", ""), ctx.get("from", "")
+                recipient = (f"{nm} <{addr}>" if nm else addr).strip()
         if not recipient and req.to:
             recipient = ", ".join([a for a in req.to if a])
 
         draft = await _llm_compose_assist(
             about=about, signature=signature, current_body=req.body,
             instruction=req.instruction, mode=req.mode, recipient=recipient,
-            subject=subject, thread=thread, user_email=user.email or "",
-            model=models["draft"],
+            subject=subject, thread=thread, reply_to_body=reply_to_body,
+            user_email=user.email or "", model=models["draft"],
         )
         if _is_no_draft(draft):
             return {"draft": "", "skipped": "low_confidence"}

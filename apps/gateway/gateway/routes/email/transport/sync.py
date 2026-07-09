@@ -40,7 +40,7 @@ async def _build_label_rule_map(
     ``label_rule_map``: category-name (lower) → rule_id, from each enabled rule's
     name and its LABEL action labels — so a manually-applied category can be
     traced to a rule. ``conv_rule_keys``: rule_id → conversation-status key
-    (TO_REPLY / AWAITING_REPLY / FYI / ACTIONED) for the reply-status rules, so
+    (REPLY / AWAITING_REPLY / FYI / DONE) for the reply-status rules, so
     the learner can treat those differently from sender-stable cleanup rules."""
     try:
         from gateway.routes.email.automation.engine import (  # noqa: PLC0415
@@ -83,7 +83,7 @@ async def _learn_from_label_changes(
     Our own rule-applied labels are written to local categories synchronously, so
     a sync delta here reflects only changes the *user* made in their client.
 
-    Conversation-status rules (To Reply / Awaiting / FYI / Actioned) are NEVER
+    Conversation-status rules (Reply / Awaiting / FYI / Done) are NEVER
     sender-pinned: a person's mail flows between those states per-thread, so a
     learned FROM pattern would be both wrong ("always reply to X") and futile
     (status is re-derived from the full thread and overrides it). This mirrors the
@@ -139,7 +139,7 @@ async def _apply_label_status_corrections(
     account_id: str, corrections: dict[str, str],
 ) -> None:
     """Apply the reply-status corrections the label learner queued (a user who
-    manually added a conversation label — To Reply / Awaiting / FYI / Actioned —
+    manually added a conversation label — Reply / Awaiting / FYI / Done —
     in their client). Each opens its own DB connection and swaps provider labels,
     so this runs AFTER the sync's persistence commit, deduped by thread.
     Best-effort — a failed correction never fails the sync."""
@@ -428,7 +428,7 @@ async def trigger_sync(
             await db.commit()
 
             # Apply reply-status corrections the label learner queued (a user who
-            # manually added "To Reply"/"Awaiting"/… in their client) — after the
+            # manually added "Reply"/"Awaiting"/… in their client) — after the
             # persistence commit, not nested in the per-message loop.
             await _apply_label_status_corrections(
                 req.account_id, status_corrections)
@@ -508,7 +508,7 @@ async def trigger_sync(
             # Recompute Reply-Zero thread status on newly-synced mail so the
             # category/status pill reflects reality — in particular an upstream
             # reply the user sent from Outlook/Gmail (a new "sent"-folder message
-            # in the thread) flips the thread To-Reply → Actioned. Without this,
+            # in the thread) flips the thread Reply → Done. Without this,
             # a manual/pull-to-refresh sync persisted the reply but left the pill
             # stale until the background scheduler poll ran (the scheduler does
             # this; the UI-triggered sync did not — that was the gap). Best-effort

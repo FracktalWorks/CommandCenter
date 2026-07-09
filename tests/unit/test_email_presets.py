@@ -13,13 +13,13 @@ _actions_for_preset = m.automation.rules._actions_for_preset
 def test_preset_set_matches_inbox_zero_system_rules() -> None:
     names = [p["name"] for p in m._PRESET_RULES]
     assert names == [
-        "To Reply", "Awaiting Reply", "Actioned", "FYI", "Newsletter",
+        "Reply", "Awaiting Reply", "Done", "FYI", "Newsletter",
         "Marketing", "Calendar", "Receipt", "Notification", "Cold Email",
     ]
-    # To Reply drafts a reply; FYI/To Reply run on threads.
-    to_reply = next(p for p in m._PRESET_RULES if p["name"] == "To Reply")
-    assert to_reply["run_on_threads"] is True
-    actions = _actions_for_preset(to_reply, "gmail")
+    # Reply drafts a reply; FYI/Reply run on threads.
+    reply = next(p for p in m._PRESET_RULES if p["name"] == "Reply")
+    assert reply["run_on_threads"] is True
+    actions = _actions_for_preset(reply, "gmail")
     assert any(a["type"] == "DRAFT_EMAIL" for a in actions)
 
 
@@ -89,10 +89,10 @@ async def test_install_presets_creates_only_missing() -> None:
     with patch.object(m.automation.rules, "_get_db", AsyncMock(return_value=db)), \
             patch.object(m.automation.rules, "_assert_account_owner", AsyncMock()), \
             patch.object(m.automation.rules, "_load_rules",
-                         AsyncMock(return_value=[{"name": "To Reply"}])), \
+                         AsyncMock(return_value=[{"name": "Reply"}])), \
             patch.object(m.automation.rules, "_replace_actions", AsyncMock()):
         res = await m.install_preset_rules(account_id="acc-1", user=user)
-    assert "To Reply" not in res["installed"]   # already present → skipped
+    assert "Reply" not in res["installed"]   # already present → skipped
     assert "FYI" in res["installed"]
     assert len(res["installed"]) == 9
     assert res["total_presets"] == 10

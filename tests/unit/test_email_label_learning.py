@@ -1,7 +1,7 @@
 """Unit tests for learning classification patterns from manual label changes
 made in the user's email client (inbox-zero LABEL_ADDED / LABEL_REMOVED).
 
-Conversation-status rules (To Reply / Awaiting / FYI / Actioned) are NEVER
+Conversation-status rules (Reply / Awaiting / FYI / Done) are NEVER
 sender-pinned — a manually-added reply label routes to a direct thread-status
 correction instead, and a removed one is ignored. Only sender-stable cleanup
 rules (Newsletter/Receipt/…) learn FROM patterns."""
@@ -44,8 +44,8 @@ async def test_conversation_label_is_never_sender_pinned() -> None:
     db = AsyncMock()
     msg = SimpleNamespace(
         from_address=SimpleNamespace(email="alice@acme.com"), thread_id="t1")
-    label_map = {"to reply": "rule-reply"}
-    conv_keys = {"rule-reply": "TO_REPLY"}
+    label_map = {"reply": "rule-reply"}
+    conv_keys = {"rule-reply": "REPLY"}
     captured: list[tuple] = []
     status_corrections: dict[str, str] = {}
 
@@ -53,24 +53,24 @@ async def test_conversation_label_is_never_sender_pinned() -> None:
         captured.append(a)
 
     with patch.object(m.automation.rules, "_upsert_rule_pattern", _fake_upsert):
-        # User manually ADDS "To Reply" in their client.
+        # User manually ADDS "Reply" in their client.
         await _sync._learn_from_label_changes(
-            db, "acc-1", msg, old_categories=[], new_categories=["To Reply"],
+            db, "acc-1", msg, old_categories=[], new_categories=["Reply"],
             label_rule_map=label_map, conv_rule_keys=conv_keys,
             status_corrections=status_corrections)
 
     # No sender pattern is ever learned for a conversation rule; instead the
     # thread status is queued for a direct correction (the only thing that sticks).
     assert not captured
-    assert status_corrections == {"t1": "TO_REPLY"}
+    assert status_corrections == {"t1": "REPLY"}
 
 
 async def test_removed_conversation_label_is_ignored() -> None:
     db = AsyncMock()
     msg = SimpleNamespace(
         from_address=SimpleNamespace(email="alice@acme.com"), thread_id="t1")
-    label_map = {"to reply": "rule-reply"}
-    conv_keys = {"rule-reply": "TO_REPLY"}
+    label_map = {"reply": "rule-reply"}
+    conv_keys = {"rule-reply": "REPLY"}
     captured: list[tuple] = []
     status_corrections: dict[str, str] = {}
 
@@ -80,7 +80,7 @@ async def test_removed_conversation_label_is_ignored() -> None:
     with patch.object(m.automation.rules, "_upsert_rule_pattern", _fake_upsert):
         # Removing a conversation label carries no unambiguous target status.
         await _sync._learn_from_label_changes(
-            db, "acc-1", msg, old_categories=["To Reply"], new_categories=[],
+            db, "acc-1", msg, old_categories=["Reply"], new_categories=[],
             label_rule_map=label_map, conv_rule_keys=conv_keys,
             status_corrections=status_corrections)
 

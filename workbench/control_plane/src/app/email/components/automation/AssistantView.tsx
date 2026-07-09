@@ -166,13 +166,13 @@ type PresetRule = Omit<AutomationRule, "account_id">;
 
 const PRESET_RULES: PresetRule[] = [
   {
-    name: "To Reply",
+    name: "Reply",
     instructions: "Emails I need to respond to.",
     enabled: true,
     automated: true,
     run_on_threads: true,
     conditional_operator: "AND",
-    actions: [{ type: "LABEL", label: "To Reply" }, { type: "DRAFT_EMAIL" }],
+    actions: [{ type: "LABEL", label: "Reply" }, { type: "DRAFT_EMAIL" }],
   },
   {
     name: "Awaiting Reply",
@@ -186,7 +186,7 @@ const PRESET_RULES: PresetRule[] = [
     actions: [{ type: "LABEL", label: "Awaiting Reply" }],
   },
   {
-    name: "Actioned",
+    name: "Done",
     instructions:
       "Emails I've already handled or replied to that need no further action " +
       "from me.",
@@ -194,7 +194,7 @@ const PRESET_RULES: PresetRule[] = [
     automated: true,
     run_on_threads: true,
     conditional_operator: "AND",
-    actions: [{ type: "LABEL", label: "Actioned" }],
+    actions: [{ type: "LABEL", label: "Done" }],
   },
   {
     name: "FYI",
@@ -761,7 +761,7 @@ function RulesTab({
           <div className="flex flex-col items-center text-center py-10 gap-3">
             <Sparkles size={22} className="text-primary/60" />
             <div className="text-sm text-muted-foreground max-w-xs">
-              No rules yet. Install the recommended set (To Reply, FYI,
+              No rules yet. Install the recommended set (Reply, FYI,
               Newsletter, Marketing, Calendar, Receipt, Notification, Cold Email)
               or create your own.
             </div>
@@ -1150,7 +1150,7 @@ function RuleEditor({
                 <span className="text-xs text-foreground">Apply to threads</span>
                 <span className="block text-[11px] text-muted-foreground">
                   Run on every reply in a conversation, not just the first
-                  message (recommended for “To Reply” / “FYI”).
+                  message (recommended for “Reply” / “FYI”).
                 </span>
               </span>
             </label>
@@ -2482,7 +2482,7 @@ function FixDialog({
   const [error, setError] = useState<string | null>(null);
   // The sender is taught by default so an existing-rule / "None" correction is
   // applied DIRECTLY (no chat round-trip): for cleanup rules it learns a
-  // sender→rule pattern; for conversation rules (To Reply/FYI/…) the backend
+  // sender→rule pattern; for conversation rules (Reply/FYI/…) the backend
   // sets the thread status instead (a sender pin there is wrong + overridden).
   // Uncheck "from <sender>" to fix just this email without learning the sender.
   const [useSender, setUseSender] = useState(true);
@@ -3760,7 +3760,7 @@ function SettingsTab({ accountId }: { accountId: string | null }) {
                 </h3>
                 <p className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">
                   Delete all your rules and restore the default Inbox Zero set
-                  (To Reply, Newsletter, Marketing, Calendar, Receipt,
+                  (Reply, Newsletter, Marketing, Calendar, Receipt,
                   Notification, Cold Email…). On Outlook the cleanup categories
                   are both labeled and filed into folders; on Gmail they apply
                   labels.
@@ -3975,7 +3975,7 @@ function PersonalInstructionsDialog({
           value={draft.about}
           onChange={(e) => setDraft({ ...draft, about: e.target.value })}
           rows={4}
-          placeholder="e.g. I'm the founder of Acme. If I'm CC'd, it's not To Reply. Emails from jane@accounting.com aren't Notifications."
+          placeholder="e.g. I'm the founder of Acme. If I'm CC'd, it's not a Reply. Emails from jane@accounting.com aren't Notifications."
           className={`${INPUT_CLS} resize-none`}
         />
       </Field>
@@ -4600,7 +4600,7 @@ function LearnedPreferences({ accountId }: { accountId: string | null }) {
  *  consistent AI match auto-learned over time (AI), or a label you add/remove in
  *  your own mail client (LABEL_ADDED / LABEL_REMOVED). The `source` badge makes
  *  which one visible, so a pattern you don't recognise isn't mistaken for a Fix
- *  you made. Conversation-status rules (To Reply / Awaiting / FYI / Actioned)
+ *  you made. Conversation-status rules (Reply / Awaiting / FYI / Done)
  *  are never sender-pinned and never appear here. */
 const _PATTERN_SOURCE_META: Record<string, { label: string; title: string }> = {
   FIX: { label: "Fix", title: "You taught this via the Fix button" },

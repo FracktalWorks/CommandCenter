@@ -20,13 +20,13 @@ def test_below_threshold_defers_to_fallback() -> None:
 
 def test_reply_active_sender_projects_personal() -> None:
     # No cleanup labels, but the rules put this thread through Reply Zero → human.
-    counts = {"to reply": 2, "awaiting reply": 1}
+    counts = {"reply": 2, "awaiting reply": 1}
     assert _rule_category(counts) == "Personal"
 
 
 def test_cleanup_wins_over_conversation_when_dominant() -> None:
     # A vendor you also reply to: a strong cleanup signal takes precedence.
-    counts = {"receipt": 4, "to reply": 5}
+    counts = {"receipt": 4, "reply": 5}
     assert _rule_category(counts) == "Receipt"
 
 
@@ -39,5 +39,5 @@ def test_no_signal_defers_to_fallback() -> None:
 def test_conversation_only_projects_personal_only_without_cleanup() -> None:
     # A single cleanup label present (top_n != 0) blocks the Personal shortcut,
     # so a sender with mixed-but-thin signal defers rather than guessing Personal.
-    counts = {"to reply": 3, "marketing": 1}
+    counts = {"reply": 3, "marketing": 1}
     assert _rule_category(counts) is None

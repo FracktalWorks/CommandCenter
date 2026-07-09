@@ -16,7 +16,7 @@ def test_rules_sort_canonically_not_by_user_order() -> None:
     on seeded presets, so the rule name is used as a fallback rank."""
     rules = [
         {"name": "Cold Email", "enabled": True, "system_type": "COLD_EMAIL"},
-        {"name": "To Reply", "enabled": True, "system_type": "TO_REPLY"},
+        {"name": "Reply", "enabled": True, "system_type": "REPLY"},
         {"name": "FYI", "enabled": True, "system_type": "FYI"},
         # system_type missing → ranked by name ("Newsletter" → NEWSLETTER).
         {"name": "Newsletter", "enabled": True, "system_type": None},
@@ -27,7 +27,7 @@ def test_rules_sort_canonically_not_by_user_order() -> None:
     ]
     out = [r["name"] for r in m.automation.rules._sort_rules_canonical(rules)]
     assert out == [
-        "To Reply", "FYI", "Newsletter", "Cold Email",
+        "Reply", "FYI", "Newsletter", "Cold Email",
         "Alpha custom", "Zeta custom",
         "Awaiting Reply",
     ]

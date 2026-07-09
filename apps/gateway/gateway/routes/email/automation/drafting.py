@@ -1555,7 +1555,7 @@ async def send_draft_endpoint(
         await _persist_rotated_creds(db, store, req.account_id, provider)
         await db.commit()
         # Reply complete: learn from the sent body and move the thread out of
-        # "To Reply" → Awaiting Reply (same hooks as the full /send path).
+        # "Reply" → Awaiting Reply (same hooks as the full /send path).
         if drow.thread_id:
             from gateway.routes.email.automation.replyzero import (  # noqa: PLC0415
                 _mark_thread_replied,

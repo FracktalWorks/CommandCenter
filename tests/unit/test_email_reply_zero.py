@@ -80,13 +80,13 @@ async def test_gate_allows_low_volume_sender() -> None:
 
 def test_gate_drops_only_conversation_rules_when_blocked() -> None:
     rules = [
-        {"id": "1", "name": "To Reply", "system_type": None},
+        {"id": "1", "name": "Reply", "system_type": None},
         {"id": "2", "name": "Awaiting Reply", "system_type": None},
         {"id": "3", "name": "Newsletter", "system_type": None},
         {"id": "4", "name": "Custom rule", "system_type": None},
     ]
     kept = {r["name"] for r in _eng._gate_conversation_rules(rules, allowed=False)}
-    assert "To Reply" not in kept and "Awaiting Reply" not in kept
+    assert "Reply" not in kept and "Awaiting Reply" not in kept
     assert "Newsletter" in kept and "Custom rule" in kept
     # allowed → untouched
     assert _eng._gate_conversation_rules(rules, allowed=True) == rules
@@ -103,18 +103,18 @@ async def test_project_status_maps_rule_to_status_with_priority() -> None:
         recorded.append((tid, status))
 
     with patch.object(_rz, "_upsert_thread_status", AsyncMock(side_effect=rec)):
-        # To Reply rule → NEEDS_REPLY
+        # Reply rule → NEEDS_REPLY
         await _rz.project_reply_status_from_matches(
-            db, "acc-1", row, [{"rule": {"name": "To Reply"}, "reason": "asks"}])
-        # No conversation rule (Newsletter) → FYI (kept out of To Reply)
+            db, "acc-1", row, [{"rule": {"name": "Reply"}, "reason": "asks"}])
+        # No conversation rule (Newsletter) → FYI (kept out of Reply)
         await _rz.project_reply_status_from_matches(
             db, "acc-1", row, [{"rule": {"name": "Newsletter"}}])
         # No match at all → FYI
         await _rz.project_reply_status_from_matches(db, "acc-1", row, [])
-        # TO_REPLY beats AWAITING_REPLY/FYI when several match
+        # REPLY beats AWAITING_REPLY/FYI when several match
         await _rz.project_reply_status_from_matches(
             db, "acc-1", row,
-            [{"rule": {"name": "FYI"}}, {"rule": {"name": "To Reply"}}])
+            [{"rule": {"name": "FYI"}}, {"rule": {"name": "Reply"}}])
 
     assert recorded == [
         ("t1", "NEEDS_REPLY"), ("t1", "FYI"), ("t1", "FYI"), ("t1", "NEEDS_REPLY")]
@@ -123,7 +123,7 @@ async def test_project_status_maps_rule_to_status_with_priority() -> None:
 async def test_reconcile_thread_labels_enforces_single_status() -> None:
     rows = [
         SimpleNamespace(id="m1", provider_message_id="p1", folder="inbox",
-                        categories=["To Reply", "Follow-up"]),
+                        categories=["Reply", "Follow-up"]),
         SimpleNamespace(id="m2", provider_message_id="p2", folder="inbox",
                         categories=["Awaiting Reply"]),
         SimpleNamespace(id="m3", provider_message_id="p3", folder="sent",
@@ -139,15 +139,15 @@ async def test_reconcile_thread_labels_enforces_single_status() -> None:
     provider = AsyncMock()
     provider.set_labels.side_effect = set_labels
 
-    await _rz._reconcile_thread_labels(db, provider, "acc", "t1", "Actioned")
+    await _rz._reconcile_thread_labels(db, provider, "acc", "t1", "Done")
 
     removed = {pmid: rem for pmid, _add, rem in calls if rem}
     added = {pmid: add for pmid, add, _rem in calls if add}
     # Every OTHER conversation label + Follow-up cleared (keep != Awaiting Reply).
-    assert "To Reply" in removed["p1"] and "Follow-up" in removed["p1"]
+    assert "Reply" in removed["p1"] and "Follow-up" in removed["p1"]
     assert "Awaiting Reply" in removed["p2"]
     # The new status label lands on the latest inbound message (m2).
-    assert added["p2"] == ("Actioned",)
+    assert added["p2"] == ("Done",)
     # Sent message untouched.
     assert "p3" not in removed and "p3" not in added
 
@@ -155,7 +155,7 @@ async def test_reconcile_thread_labels_enforces_single_status() -> None:
 async def test_reconcile_thread_labels_keeps_follow_up_while_awaiting() -> None:
     rows = [
         SimpleNamespace(id="m1", provider_message_id="p1", folder="inbox",
-                        categories=["To Reply", "Follow-up"]),
+                        categories=["Reply", "Follow-up"]),
     ]
     db = AsyncMock()
     db.execute.return_value = _result(fetchall=rows)
@@ -171,8 +171,8 @@ async def test_reconcile_thread_labels_keeps_follow_up_while_awaiting() -> None:
         db, provider, "acc", "t1", "Awaiting Reply")
 
     removed = {pmid: rem for pmid, _add, rem in calls if rem}
-    # "To Reply" cleared, but "Follow-up" KEPT because the thread is awaiting.
-    assert "To Reply" in removed["p1"]
+    # "Reply" cleared, but "Follow-up" KEPT because the thread is awaiting.
+    assert "Reply" in removed["p1"]
     assert "Follow-up" not in removed.get("p1", ())
 
 
@@ -214,20 +214,20 @@ async def test_resolve_uses_full_thread_status_over_per_message_pick() -> None:
         _result(fetchall=[]),                              # attachments (none)
     ]
     row = SimpleNamespace(thread_id="t1")
-    actioned = {"id": "r1", "name": "Actioned", "system_type": None,
+    actioned = {"id": "r1", "name": "Done", "system_type": None,
                 "enabled": True}
-    # Per-message pick said To Reply; full-thread says the thread is concluded.
-    matches = [{"rule": {"name": "To Reply"}, "reason": "picked"}]
+    # Per-message pick said Reply; full-thread says the thread is concluded.
+    matches = [{"rule": {"name": "Reply"}, "reason": "picked"}]
     with patch.object(_rz, "_load_assistant_about",
                       AsyncMock(return_value=("", ""))), \
             patch.object(_rz, "_llm_determine_thread_status",
-                         AsyncMock(return_value=("ACTIONED", True))), \
+                         AsyncMock(return_value=("DONE", True))), \
             patch.object(_rz, "_conversation_rule_for_status",
                          AsyncMock(return_value=actioned)):
         out = await _rz.resolve_conversation_status_matches(
             db, "acc", row, matches)
     assert len(out) == 1
-    assert out[0]["rule"]["name"] == "Actioned"
+    assert out[0]["rule"]["name"] == "Done"
     assert out[0]["source"] == "thread_status"
 
 
@@ -242,13 +242,13 @@ async def test_resolve_keeps_original_when_no_rule_for_status() -> None:
         _result(fetchall=[]),                              # attachments (none)
     ]
     row = SimpleNamespace(thread_id="t1")
-    matches = [{"rule": {"name": "To Reply"}, "reason": "picked"}]
+    matches = [{"rule": {"name": "Reply"}, "reason": "picked"}]
     with patch.object(_rz, "_load_assistant_about",
                       AsyncMock(return_value=("", ""))), \
             patch.object(_rz, "_llm_determine_thread_status",
-                         AsyncMock(return_value=("ACTIONED", True))), \
+                         AsyncMock(return_value=("DONE", True))), \
             patch.object(_rz, "_conversation_rule_for_status",
-                         AsyncMock(return_value=None)):  # no enabled Actioned rule
+                         AsyncMock(return_value=None)):  # no enabled Done rule
         out = await _rz.resolve_conversation_status_matches(
             db, "acc", row, matches)
     assert out == matches  # degrade to the per-message pick
@@ -286,7 +286,7 @@ async def test_backfill_handles_outbound_reply_and_engine_for_inbound() -> None:
     def rec(_db, _aid, tid, status, *_a, **_kw):
         recorded.append((tid, status))
 
-    to_reply_match = {"rule": {"name": "To Reply", "system_type": None},
+    to_reply_match = {"rule": {"name": "Reply", "system_type": None},
                       "reason": "asks a question", "source": "ai"}
     mark = AsyncMock()
     with patch.object(_rz, "_get_db", AsyncMock(return_value=db)), \
@@ -358,7 +358,7 @@ def test_clip_thread_keeps_tail_with_last_message() -> None:
     last = "From: me@x.com (you sent)\nSubject: s\nTHE_LAST_REPLY"
     thread = sep.join([*older, last])
     clipped = _rz._clip_thread_for_prompt(thread, limit=3000)
-    # The closing reply (what decides Awaiting vs Actioned) survives the clip…
+    # The closing reply (what decides Awaiting vs Done) survives the clip…
     assert "THE_LAST_REPLY" in clipped
     # …and the OLDEST messages are the ones dropped, with an elision marker.
     assert clipped.startswith("[… earlier messages omitted …]")
@@ -556,15 +556,15 @@ async def test_recompute_outbound_writes_and_may_move_done() -> None:
         cap.update(status=status, reason=reason,
                    preserve_done=kw.get("preserve_done"))
 
-    det = AsyncMock(return_value=("ACTIONED", True))
+    det = AsyncMock(return_value=("DONE", True))
     with patch.object(_rz, "_llm_determine_thread_status", det), \
             patch.object(_rz, "_upsert_thread_status",
                          AsyncMock(side_effect=fake_upsert)):
         out = await _rz.recompute_thread_status(
             db, "acc", "t1", trigger="outbound", acc_email="me@acme.com")
-    assert out == ("DONE", "Actioned")
+    assert out == ("DONE", "Done")
     assert cap["status"] == "DONE"
-    assert cap["reason"] == "Replied — ACTIONED"
+    assert cap["reason"] == "Replied — DONE"
     assert cap["preserve_done"] is False        # owner reply may move DONE
     # user_sent_last derived True (last message is owner-sent).
     assert det.await_args.kwargs["user_sent_last"] is True

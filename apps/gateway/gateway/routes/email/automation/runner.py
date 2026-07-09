@@ -737,7 +737,7 @@ async def _apply_and_log_match(
         # misclassification can't entrench itself. Best-effort.
         #
         # NEVER auto-learn a sender→rule pattern for the conversation-status rules
-        # (To Reply / Awaiting / FYI / Actioned): a person's mail flows between
+        # (Reply / Awaiting / FYI / Done): a person's mail flows between
         # those states per-thread, so pinning a sender to one (e.g. "accounts team
         # → always FYI") is wrong — and futile, since reply status is re-derived
         # from the full thread and overrides any learned pattern. Sender→rule only
@@ -960,7 +960,7 @@ async def _run_rules_job(
                 matches = [m] if m else []
             # Reply Zero (inbox-zero determineConversationStatus parity): when the
             # match is a conversation, re-determine the status from the FULL thread
-            # and apply the determined status rule's actions (so an Actioned thread
+            # and apply the determined status rule's actions (so an Done thread
             # doesn't auto-draft). Live runs only — skip the dry-run preview.
             if matches and not dry_run:
                 from gateway.routes.email.automation.replyzero import (  # noqa: PLC0415
@@ -1006,7 +1006,7 @@ async def _run_rules_job(
                     keep_label = await project_reply_status_from_matches(
                         db, account_id, r, matches)
                     # Collapse the thread to that one conversation label, clearing
-                    # any stale To Reply / Awaiting / FYI / Follow-up left on
+                    # any stale Reply / Awaiting / FYI / Follow-up left on
                     # earlier messages (inbox-zero mutually-exclusive labels).
                     if keep_label and provider is not None:
                         await _reconcile_thread_labels(

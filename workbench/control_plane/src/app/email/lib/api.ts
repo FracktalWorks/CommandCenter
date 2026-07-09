@@ -1158,7 +1158,7 @@ export async function getReplyZero(
 
 /**
  * Rebuild Reply Zero from scratch with the current rules-based logic. Clears the
- * derived statuses (To Reply / Awaiting / FYI) but keeps threads marked Done,
+ * derived statuses (Reply / Awaiting / FYI) but keeps threads marked Done,
  * then reclassifies in the background. Poll getReplyZero afterwards.
  */
 export async function reclassifyReplyZero(

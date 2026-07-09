@@ -1,4 +1,4 @@
-"""The "Auto draft replies" toggle ↔ the To Reply rule's DRAFT_EMAIL action.
+"""The "Auto draft replies" toggle ↔ the Reply rule's DRAFT_EMAIL action.
 
 inbox-zero parity: enabling auto-draft adds a DRAFT_EMAIL action to the "To
 Reply" rule (so to-reply mail is drafted during the normal rule run, gated by
@@ -14,7 +14,7 @@ from gateway.routes import email as m
 rules = m.automation.rules
 
 
-def _to_reply(actions, *, name="To Reply", system_type=None):
+def _to_reply(actions, *, name="Reply", system_type=None):
     return {"id": "r1", "name": name, "system_type": system_type,
             "actions": actions}
 
@@ -30,7 +30,7 @@ async def _run(enabled, rules_list):
 
 async def test_enable_adds_draft_action() -> None:
     changed, replace = await _run(
-        True, [_to_reply([{"type": "LABEL", "label": "To Reply"}])])
+        True, [_to_reply([{"type": "LABEL", "label": "Reply"}])])
     assert changed is True
     replace.assert_awaited_once()
     rid, actions = replace.await_args.args[1], replace.await_args.args[2]
@@ -70,10 +70,10 @@ async def test_noop_when_no_to_reply_rule() -> None:
 
 
 async def test_matches_by_system_type() -> None:
-    # A rule named differently but flagged TO_REPLY still gets the action.
+    # A rule named differently but flagged REPLY still gets the action.
     changed, replace = await _run(
         True, [_to_reply([{"type": "LABEL"}], name="Respond",
-                         system_type="TO_REPLY")])
+                         system_type="REPLY")])
     assert changed is True
     types = [a.type for a in replace.await_args.args[2]]
     assert "DRAFT_EMAIL" in types

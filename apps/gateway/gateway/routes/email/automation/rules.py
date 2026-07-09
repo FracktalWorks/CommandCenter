@@ -69,7 +69,7 @@ class RuleModel(BaseModel):
 # NOT a user-defined "priority". Matching is AI-first: the most specific rule
 # wins regardless of position; order is only a deterministic, stable arrangement.
 _SYSTEM_RULE_ORDER = [
-    "TO_REPLY", "AWAITING_REPLY", "FYI", "ACTIONED", "NEWSLETTER",
+    "REPLY", "AWAITING_REPLY", "FYI", "DONE", "NEWSLETTER",
     "MARKETING", "CALENDAR", "RECEIPT", "NOTIFICATION", "COLD_EMAIL",
 ]
 
@@ -160,7 +160,7 @@ async def list_rules(
 # mirroring upstream inbox-zero's ``categoryAction`` / ``categoryActionMicrosoft``
 # (reference/.../utils/rule/consts.ts). On Outlook, "cleanup" categories file the
 # mail into a same-named FOLDER; on Gmail they apply a LABEL. "Action" categories
-# (To Reply / Awaiting Reply / FYI / Actioned / Calendar) stay LABEL/category on
+# (Reply / Awaiting Reply / FYI / Done / Calendar) stay LABEL/category on
 # both so they remain in the inbox. ``extra`` holds non-categorization actions.
 #
 # On Outlook a cleanup category is BOTH tagged with the category (a colored
@@ -174,14 +174,14 @@ async def list_rules(
 # category_action values: "label" | "label_archive" | "move_folder"
 # (on Outlook "move_folder" expands to LABEL + MOVE_FOLDER)
 _PRESET_RULES: list[dict[str, Any]] = [
-    {"name": "To Reply", "instructions": "Emails I need to respond to.",
+    {"name": "Reply", "instructions": "Emails I need to respond to.",
      "run_on_threads": True, "category_action": "label",
      "extra": [{"type": "DRAFT_EMAIL"}]},
     {"name": "Awaiting Reply", "run_on_threads": True,
      "instructions": "Threads where I've already replied and am now waiting to "
                      "hear back from the other person.",
      "category_action": "label"},
-    {"name": "Actioned", "run_on_threads": True,
+    {"name": "Done", "run_on_threads": True,
      "instructions": "Emails I've already handled or replied to that need no "
                      "further action from me.",
      "category_action": "label"},
@@ -360,20 +360,20 @@ async def _replace_actions(db: Any, rule_id: str, actions: list[RuleActionModel]
 
 async def sync_draft_reply_action(db: Any, account_id: str, enabled: bool) -> bool:
     """Mirror inbox-zero's ``enableDraftRepliesAction``: the "Auto draft replies"
-    toggle adds (or removes) a ``DRAFT_EMAIL`` action on the account's "To Reply"
-    rule. With the action present, To-Reply mail gets an AI draft during the
+    toggle adds (or removes) a ``DRAFT_EMAIL`` action on the account's "Reply"
+    rule. With the action present, Reply mail gets an AI draft during the
     normal rule run (gated by ``draft_confidence``); without it, no draft —
-    exactly how inbox-zero couples auto-drafting to the To Reply system rule.
+    exactly how inbox-zero couples auto-drafting to the Reply system rule.
 
     Returns True if the rule's actions changed. No-ops (returns False) when the
-    account has no "To Reply" rule, or the action is already in the desired
+    account has no "Reply" rule, or the action is already in the desired
     state. Caller commits.
     """
     rules = await _load_rules(db, account_id)
     target = next(
         (r for r in rules
-         if (r.get("system_type") or "").upper() == "TO_REPLY"
-         or (r.get("name") or "").strip().lower() == "to reply"),
+         if (r.get("system_type") or "").upper() in ("REPLY", "TO_REPLY")
+         or (r.get("name") or "").strip().lower() in ("reply", "to reply")),
         None,
     )
     if not target:
@@ -639,11 +639,11 @@ async def _upsert_rule_pattern(
     Centralized backstop for two anti-patterns that every learning path (Fix,
     auto-learn, label sync) must avoid — enforced HERE so no single path can
     reintroduce them:
-      1. Sender-pinning a conversation-status rule (To Reply / Awaiting / FYI /
-         Actioned). Reply state is re-derived from the whole thread and overrides
+      1. Sender-pinning a conversation-status rule (Reply / Awaiting / FYI /
+         Done). Reply state is re-derived from the whole thread and overrides
          any pattern, so "always reply to X" is both wrong and futile.
       2. Pinning the mailbox's OWN address to any rule (e.g. "vjvarada@… →
-         To Reply") — a meaningless self-reference from a stray label delta."""
+         Reply") — a meaningless self-reference from a stray label delta."""
     if not (value or "").strip():
         return
     ptype = "SUBJECT" if (pattern_type or "").upper() == "SUBJECT" else "FROM"
@@ -655,7 +655,10 @@ async def _upsert_rule_pattern(
     if meta is not None:
         key = ((meta.system_type or "").upper().strip()
                or (meta.name or "").upper().strip().replace(" ", "_"))
-        if key in {"TO_REPLY", "AWAITING_REPLY", "FYI", "ACTIONED"}:
+        # + legacy TO_REPLY / ACTIONED so an un-migrated conversation rule is
+        # still recognised and never sender-pinned (the anti-pattern this guards).
+        if key in {"REPLY", "AWAITING_REPLY", "FYI", "DONE",
+                   "TO_REPLY", "ACTIONED"}:
             return
     # (2) Never pin the mailbox's own address (FROM patterns only).
     if ptype == "FROM":
@@ -720,7 +723,7 @@ async def rule_feedback(
         if req.expected == "new":
             return {"created": False, "action": "new"}
 
-        # Conversation-status rules (To Reply / Awaiting / FYI / Actioned) are
+        # Conversation-status rules (Reply / Awaiting / FYI / Done) are
         # re-derived from the full thread, so a learned sender/subject pattern is
         # OVERRIDDEN and pinning a person to one is wrong. For those, the fix that
         # sticks is to set the thread status directly. Cleanup categories
@@ -740,8 +743,8 @@ async def rule_feedback(
             r = meta.get(str(rid)) or {}
             k = ((r.get("system_type") or "").upper().strip()
                  or (r.get("name") or "").upper().strip().replace(" ", "_"))
-            return k if k in {"TO_REPLY", "AWAITING_REPLY", "FYI", "ACTIONED"} \
-                else ""
+            return k if k in {"REPLY", "AWAITING_REPLY", "FYI", "DONE",
+                              "TO_REPLY", "ACTIONED"} else ""
 
         # Pattern signals (only meaningful for cleanup rules).
         signals: list[tuple[str, str]] = []

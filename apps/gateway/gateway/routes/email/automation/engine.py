@@ -356,14 +356,18 @@ async def _llm_pick_rules(
 # ── Conversation-status (Reply Zero) pre-filter ───────────────────────────────
 # A faithful port of inbox-zero's filterConversationStatusRulesWithMetadata
 # (utils/reply-tracker/match-rules.ts). Before the AI is even asked, we decide
-# whether the conversation-status rules (To Reply / Awaiting Reply / FYI /
-# Actioned) are eligible at all. Without this gate every newsletter, notification
-# and one-way broadcast that the classifier mis-reads becomes "To Reply" — the
-# root cause of "everything shows up in the To Reply tab".
+# whether the conversation-status rules (Reply / Awaiting Reply / FYI /
+# Done) are eligible at all. Without this gate every newsletter, notification
+# and one-way broadcast that the classifier mis-reads becomes "Reply" — the
+# root cause of "everything shows up in the Reply tab".
 
 # System rules that track a thread's reply status (Reply Zero). Identified by
 # system_type, falling back to the name (seeded presets store system_type NULL).
-_CONVERSATION_SYSTEM_KEYS = {"TO_REPLY", "AWAITING_REPLY", "FYI", "ACTIONED"}
+# Current keys plus the pre-rename legacy tokens (TO_REPLY / ACTIONED), so a
+# straggler rule that predates the "To Reply"→"Reply" / "Actioned"→"Done" rename
+# is still recognised as a conversation rule (and thus still gated / never pinned).
+_CONVERSATION_SYSTEM_KEYS = {"REPLY", "AWAITING_REPLY", "FYI", "DONE",
+                             "TO_REPLY", "ACTIONED"}
 
 # Senders that never expect a reply (inbox-zero's NO_REPLY_PREFIXES + a few
 # obvious extras). Matched as a case-insensitive prefix of the full address.
@@ -375,8 +379,8 @@ _NO_REPLY_PREFIXES = (
 )
 
 # Never replied to a sender but received at least this many from them → it's a
-# one-way broadcast, not a conversation (inbox-zero TO_REPLY_RECEIVED_THRESHOLD).
-_TO_REPLY_RECEIVED_THRESHOLD = 10
+# one-way broadcast, not a conversation (inbox-zero REPLY_RECEIVED_THRESHOLD).
+_REPLY_RECEIVED_THRESHOLD = 10
 
 
 def _conversation_rule_key(rule: dict[str, Any]) -> str:
@@ -421,8 +425,8 @@ async def _is_reply_candidate(
             "WHERE account_id = :aid AND LOWER(from_address->>'email') = :s "
             "AND LOWER(COALESCE(folder, '')) = 'inbox' LIMIT :thr) t"
         ), {"aid": account_id, "s": sender,
-            "thr": _TO_REPLY_RECEIVED_THRESHOLD})).fetchone()
-        if recv and int(recv.c) >= _TO_REPLY_RECEIVED_THRESHOLD:
+            "thr": _REPLY_RECEIVED_THRESHOLD})).fetchone()
+        if recv and int(recv.c) >= _REPLY_RECEIVED_THRESHOLD:
             replied = (await db.execute(text(
                 "SELECT 1 FROM email_messages WHERE account_id = :aid "
                 "AND LOWER(COALESCE(folder, '')) = 'sent' "
@@ -558,8 +562,8 @@ async def _match_email_to_rule(
         return None
 
     # Reply Zero gate (inbox-zero parity): drop the conversation-status rules
-    # (To Reply / Awaiting / FYI / Actioned) for no-reply, mass and broadcast
-    # mail so they can never match "To Reply".
+    # (Reply / Awaiting / FYI / Done) for no-reply, mass and broadcast
+    # mail so they can never match "Reply".
     allowed, _why = await _is_reply_candidate(db, account_id, email)
     rules = _gate_conversation_rules(rules, allowed)
     if not rules:

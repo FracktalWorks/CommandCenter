@@ -350,7 +350,7 @@ async def put_assistant_settings(
             "orgd": org_domains})
         await db.commit()
         # inbox-zero parity: the "Auto draft replies" toggle adds/removes the
-        # DRAFT_EMAIL action on the "To Reply" rule (like inbox-zero's
+        # DRAFT_EMAIL action on the "Reply" rule (like inbox-zero's
         # enableDraftRepliesAction), so to-reply mail is auto-drafted when on.
         try:
             from gateway.routes.email.automation.rules import (  # noqa: PLC0415

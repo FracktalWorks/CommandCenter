@@ -810,7 +810,8 @@ _CLEANUP_CATEGORIES = [
 _CLEANUP_BY_LOWER = {c.lower(): c for c in _CLEANUP_CATEGORIES}
 # Reply Zero conversation labels (also rule-engine output) — a sender you
 # converse with is a person, not a bulk sender.
-_CONVERSATION_LOWER = {"to reply", "awaiting reply", "fyi", "actioned"}
+_CONVERSATION_LOWER = {"reply", "awaiting reply", "fyi", "done",
+                       "to reply", "actioned"}  # + legacy names, pre-rename
 # How many of a sender's messages the rules must have labelled before we trust
 # the rollup over the cold-start guess (mirrors the auto-learn consistency bar).
 _MIN_RULE_MESSAGES = 3

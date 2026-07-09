@@ -98,7 +98,7 @@ async def test_projects_rule_category_without_an_llm_call() -> None:
 
 async def test_reply_active_sender_projects_personal() -> None:
     db = _FakeDB([_srow("colleague@x.com")],
-                 tally=[_trow("colleague@x.com", "to reply", 3)])
+                 tally=[_trow("colleague@x.com", "reply", 3)])
     llm = AsyncMock()
     p1, p2, p3 = _run(db, llm=llm)
     with p1, p2, p3:

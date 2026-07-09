@@ -460,12 +460,27 @@ async def _upsert_thread_status(
 
 
 # Reply Zero status → (our thread status, the category label) mapping.
+# NOTE: the map/rule KEYS are REPLY / AWAITING_REPLY / FYI / DONE (the user-facing
+# labels are "Reply" / "Awaiting Reply" / "FYI" / "Done"). Legacy tokens
+# (TO_REPLY / ACTIONED) are still accepted via ``_LEGACY_STATUS_KEYS`` so a stale
+# provider label delta or an un-migrated rule name still resolves.
 _THREAD_STATUS_MAP = {
-    "TO_REPLY": ("NEEDS_REPLY", "To Reply"),
+    "REPLY": ("NEEDS_REPLY", "Reply"),
     "AWAITING_REPLY": ("AWAITING", "Awaiting Reply"),
-    "ACTIONED": ("DONE", "Actioned"),
+    "DONE": ("DONE", "Done"),
     "FYI": ("FYI", "FYI"),
 }
+
+# Pre-rename conversation-status tokens → current keys. Applied wherever a
+# system_type / rule-name / LLM status token is normalised, so old data keeps
+# working after the "To Reply"→"Reply" / "Actioned"→"Done" rename.
+_LEGACY_STATUS_KEYS = {"TO_REPLY": "REPLY", "ACTIONED": "DONE"}
+
+
+def _canon_status_key(key: str | None) -> str:
+    """Upper-case a status token and fold any legacy alias to its current key."""
+    k = (key or "").upper().strip()
+    return _LEGACY_STATUS_KEYS.get(k, k)
 
 # Friendly reason prefix per recompute_thread_status trigger (shown in the UI).
 _TRIGGER_REASON = {
@@ -480,7 +495,10 @@ _TRIGGER_REASON = {
 # changes, the other three must be cleared so an old label never lingers on the
 # previous emails. "Follow-up" is a separate reminder label, cleared whenever the
 # thread is no longer awaiting the other person.
-_CONVERSATION_LABELS = ("To Reply", "Awaiting Reply", "Actioned", "FYI")
+_CONVERSATION_LABELS = ("Reply", "Awaiting Reply", "Done", "FYI")
+# Pre-rename label strings still living on the provider / local mirror. Always
+# swept alongside the current labels so a resync clears the orphaned old tags.
+_LEGACY_CONVERSATION_LABELS = ("To Reply", "Actioned")
 _FOLLOW_UP_LABEL = "Follow-up"
 
 # Conversation-status rule key → stored Reply Zero status. The rules pipeline is
@@ -488,24 +506,24 @@ _FOLLOW_UP_LABEL = "Follow-up"
 # inbound message, the runner projects the corresponding status here (Reply Zero
 # is a projection of the rules, not a parallel classifier).
 _CONVERSATION_RULE_STATUS = {
-    "TO_REPLY": "NEEDS_REPLY",
+    "REPLY": "NEEDS_REPLY",
     "AWAITING_REPLY": "AWAITING",
     "FYI": "FYI",
-    "ACTIONED": "DONE",
+    "DONE": "DONE",
 }
 # Priority when several conversation rules match the same email (most actionable
-# first) — TO_REPLY must win over AWAITING/FYI/ACTIONED.
-_CONVERSATION_PRIORITY = ("TO_REPLY", "AWAITING_REPLY", "FYI", "ACTIONED")
+# first) — REPLY must win over AWAITING/FYI/DONE.
+_CONVERSATION_PRIORITY = ("REPLY", "AWAITING_REPLY", "FYI", "DONE")
 
 
 def _match_conversation_key(match: dict[str, Any] | None) -> str:
-    """The conversation-status key (TO_REPLY/…) of a matched rule, or ""."""
+    """The conversation-status key (REPLY/…) of a matched rule, or ""."""
     if not match:
         return ""
     rule = match.get("rule") or {}
-    key = (rule.get("system_type") or "").upper().strip()
+    key = _canon_status_key(rule.get("system_type"))
     if not key:
-        key = (rule.get("name") or "").upper().strip().replace(" ", "_")
+        key = _canon_status_key((rule.get("name") or "").replace(" ", "_"))
     return key if key in _CONVERSATION_RULE_STATUS else ""
 
 
@@ -518,9 +536,9 @@ async def project_reply_status_from_matches(
     of the rules (no parallel classifier). Called by the rule runner on live runs.
 
     Picks the highest-priority conversation rule among ``matches``; when none
-    matched, stores FYI so the thread stays out of the To Reply view and isn't
+    matched, stores FYI so the thread stays out of the Reply view and isn't
     re-evaluated by the backfill. Returns the conversation-status LABEL applied
-    (e.g. "To Reply") when a conversation rule matched — so the caller can
+    (e.g. "Reply") when a conversation rule matched — so the caller can
     reconcile the mutually-exclusive thread labels — else None. Best-effort;
     caller commits. Only call for inbound mail (sends → ``_mark_thread_replied``)."""
     thread_id = getattr(message_row, "thread_id", None)
@@ -586,8 +604,8 @@ async def _llm_determine_thread_status(
     """Determine an email thread's status from the user's perspective — a faithful
     port of inbox-zero's aiDetermineThreadStatus.
 
-    Returns ``(status, confident)`` where status is TO_REPLY / AWAITING_REPLY /
-    ACTIONED (and FYI only when the user did NOT send last). ``confident`` is
+    Returns ``(status, confident)`` where status is REPLY / AWAITING_REPLY /
+    DONE (and FYI only when the user did NOT send last). ``confident`` is
     False when the call FELL BACK (LLM error, unparseable, or out-of-set) — the
     fallback is always AWAITING_REPLY/FYI, a one-directional bias, so callers
     should treat a non-confident status as PROVISIONAL (mark it for re-check)
@@ -602,31 +620,31 @@ async def _llm_determine_thread_status(
             "\n- FYI: ONLY when there are absolutely no questions, requests, or "
             "pending actions anywhere in the thread, and the user RECEIVED the "
             "last message. A message where the user is only on Cc (not in To) "
-            "and isn't directly asked anything is FYI, not TO_REPLY.")
+            "and isn't directly asked anything is FYI, not REPLY.")
         last_rule = (
             "\n- Because the user sent the last email, FYI is NOT an option: "
-            "choose AWAITING_REPLY if waiting on a response, or ACTIONED if the "
+            "choose AWAITING_REPLY if waiting on a response, or DONE if the "
             "thread is complete. If the user's last message asks no question and "
             "makes no commitment (e.g. a thank-you, acknowledgement, or 'sounds "
-            "good'), prefer ACTIONED." if user_sent_last else "")
+            "good'), prefer DONE." if user_sent_last else "")
         sys_prompt = (
             "You analyze an email thread and determine its current status from "
             "the user's perspective. It is in ONE of these mutually exclusive "
             "states:\n"
-            "* TO_REPLY - the user needs to reply\n"
+            "* REPLY - the user needs to reply\n"
             "* AWAITING_REPLY - waiting for the other person to respond/act"
-            f"{fyi_state}\n* ACTIONED - the thread is complete\n\n"
+            f"{fyi_state}\n* DONE - the thread is complete\n\n"
             "CRITERIA:\n"
-            "- TO_REPLY: someone asked the user a direct question or requested "
+            "- REPLY: someone asked the user a direct question or requested "
             "info/action and the user hasn't addressed it; OR the user promised "
             "a follow-up/deliverable and hasn't sent it. A clarifying question "
             "that got answered while a commitment is still pending is still "
-            "TO_REPLY.\n"
+            "REPLY.\n"
             "- AWAITING_REPLY: the ball is in the OTHER person's court — the user "
             "asked/requested and is still waiting, or someone else owes an "
             "action. If the user's request was already fulfilled, they are NO "
             "longer awaiting.\n"
-            "- ACTIONED: all questions answered and requests fulfilled, the "
+            "- DONE: all questions answered and requests fulfilled, the "
             "conversation concluded, or the user sent info/recommendations and "
             "isn't waiting for anything. Taking ownership ('I'll handle it') "
             "fulfils a request unless it promises a later deliverable."
@@ -638,10 +656,10 @@ async def _llm_determine_thread_status(
             "a reply from the user's own organisation counts as your side having "
             "acted, so the ball is then in the OTHER party's court. If "
             "SOMEONE ELSE promised something → AWAITING_REPLY; if the USER "
-            "promised a future reply/deliverable → TO_REPLY."
+            "promised a future reply/deliverable → REPLY."
             f"{last_rule}\n\n"
-            'Respond with ONLY a JSON object: {"status": "<one of TO_REPLY, '
-            f'AWAITING_REPLY, {fyi_opt}ACTIONED>", "rationale": "<one line>"}}.'
+            'Respond with ONLY a JSON object: {"status": "<one of REPLY, '
+            f'AWAITING_REPLY, {fyi_opt}DONE>", "rationale": "<one line>"}}.'
         )
         ctx = f"You are acting on behalf of: {user_email}\n"
         if (about or "").strip():
@@ -651,7 +669,7 @@ async def _llm_determine_thread_status(
             f"{_clip_thread_for_prompt(thread_text)}\n\n"
             "Determine the current status of this thread."
         )
-        allowed = {"TO_REPLY", "AWAITING_REPLY", "ACTIONED"}
+        allowed = {"REPLY", "AWAITING_REPLY", "DONE"}
         if not user_sent_last:
             allowed.add("FYI")
         messages = [{"role": "system", "content": sys_prompt},
@@ -667,7 +685,7 @@ async def _llm_determine_thread_status(
             )
             data = _safe_json(resp.choices[0].message.content or "")
             st = ((data.get("status") if isinstance(data, dict) else "") or "")
-            st = st.strip().upper()
+            st = _canon_status_key(st)  # tolerate a legacy TO_REPLY/ACTIONED reply
             if st in allowed:
                 return st, True
         return fallback, False
@@ -707,7 +725,7 @@ def _fmt_thread_msg(
     }.get(scope, "")
     lines = [f"From: {sender}{direction}"]
     # Recipients on INBOUND messages so the determiner can tell a direct (To)
-    # recipient from a Cc-only one (Cc-only + no ask → FYI, not To-Reply).
+    # recipient from a Cc-only one (Cc-only + no ask → FYI, not Reply).
     if scope == "external":
         to = _fmt_addr_list(getattr(r, "to_addresses", None))
         cc = _fmt_addr_list(getattr(r, "cc_addresses", None))
@@ -716,7 +734,7 @@ def _fmt_thread_msg(
         if cc:
             lines.append(f"Cc: {cc}")
         # Deterministic recipient-role signal — don't make the model infer it from
-        # the address lists (Cc-only + no direct ask → FYI, not To-Reply).
+        # the address lists (Cc-only + no direct ask → FYI, not Reply).
         from gateway.routes.email.automation.engine import (  # noqa: PLC0415
             _recipient_role,
         )
@@ -738,7 +756,7 @@ async def _conversation_rule_for_status(
     db: Any, account_id: str, status: str,
 ) -> dict[str, Any] | None:
     """The account's enabled conversation rule for a determined status
-    (TO_REPLY / AWAITING_REPLY / FYI / ACTIONED), matched by system_type or name.
+    (REPLY / AWAITING_REPLY / FYI / DONE), matched by system_type or name.
     None when no such rule is enabled."""
     from gateway.routes.email.automation.rules import _load_rules  # noqa: PLC0415
     for r in await _load_rules(db, account_id):
@@ -757,9 +775,9 @@ async def resolve_conversation_status_matches(
     (it picked one of the conversation-status rules). When it did, re-determine the
     status from the FULL thread (via ``build_thread_context`` — the same context
     the other triggers use, with ``user_sent_last`` taken from the real last
-    message, so a thread your side already replied to can resolve to ACTIONED) and
+    message, so a thread your side already replied to can resolve to DONE) and
     replace the conversation match with the rule for the determined status — so the
-    RIGHT rule's actions run (e.g. an Actioned thread doesn't auto-draft a reply)
+    RIGHT rule's actions run (e.g. an Done thread doesn't auto-draft a reply)
     and the right label is applied. Non-conversation matches pass through
     unchanged. On any failure (or no enabled rule for the determined status)
     returns the input unchanged, so classification degrades to the per-message
@@ -802,7 +820,7 @@ async def _reconcile_thread_labels(
     """Enforce inbox-zero's mutually-exclusive conversation labels on a thread.
 
     Across EVERY message in the thread, remove the conversation-status labels
-    other than ``keep_label`` (To Reply / Awaiting Reply / Actioned / FYI) — plus
+    other than ``keep_label`` (Reply / Awaiting Reply / Done / FYI) — plus
     the "Follow-up" reminder unless the thread is still awaiting — so an old label
     never lingers on the previous emails after the thread changes hands. Then
     ensure ``keep_label`` is present on the latest inbound message. Mirrors the
@@ -816,7 +834,8 @@ async def _reconcile_thread_labels(
     ), {"aid": account_id, "tid": thread_id})).fetchall()
     if not rows:
         return
-    stale = {lab for lab in _CONVERSATION_LABELS if lab != keep_label}
+    stale = {lab for lab in (*_CONVERSATION_LABELS, *_LEGACY_CONVERSATION_LABELS)
+             if lab != keep_label}
     if keep_label != "Awaiting Reply":  # follow-up only applies while awaiting
         stale.add(_FOLLOW_UP_LABEL)
     for r in rows:
@@ -846,8 +865,8 @@ async def _reconcile_thread_labels(
     if keep_label in list(target.categories or []):
         return
     # Mirror first (see above), then best-effort provider apply — so a thread
-    # that's just been replied to flips to "Actioned"/"Awaiting Reply" in the UI
-    # at once instead of losing "To Reply" and showing no tag at all.
+    # that's just been replied to flips to "Done"/"Awaiting Reply" in the UI
+    # at once instead of losing "Reply" and showing no tag at all.
     await db.execute(text(
         "UPDATE email_messages SET categories = CASE "
         "WHEN :lbl = ANY(categories) THEN categories "
@@ -873,7 +892,7 @@ class ThreadContext:
 
     ``our_side_last`` — the last message was sent by YOUR side (the owner or the
     owner's organisation), so FYI is off and the determiner weighs Awaiting vs
-    Actioned. ``thread_text`` is direction-annotated (you / your organisation /
+    Done. ``thread_text`` is direction-annotated (you / your organisation /
     external) and ``last_message_id``/``last_message_at`` are what the status row
     should be stamped with (``now()`` when an unsynced just-sent reply is folded
     in)."""
@@ -966,7 +985,7 @@ async def recompute_thread_status(
         ctx.thread_text, acc_email, about,
         user_sent_last=ctx.our_side_last, model=model)
     rz_status, label = _THREAD_STATUS_MAP.get(
-        status, ("AWAITING", "Awaiting Reply"))
+        _canon_status_key(status), ("AWAITING", "Awaiting Reply"))
     prefix = _TRIGGER_REASON.get(trigger, trigger.capitalize())
     # A low-confidence (fallback) determination keeps the "· auto" marker so the
     # backfill re-checks it instead of trusting a guessed AWAITING.
@@ -985,14 +1004,14 @@ async def _mark_thread_replied(
     """After the user sends a reply, re-determine the thread's status with the
     AI (exact inbox-zero aiDetermineThreadStatus parity) and reconcile labels:
     set the Reply Zero status and collapse the thread to a SINGLE conversation
-    label (removing any stale To Reply / Awaiting / FYI / Follow-up). Since the
+    label (removing any stale Reply / Awaiting / FYI / Follow-up). Since the
     user just sent, FYI is excluded — the AI picks AWAITING_REPLY (waiting on
-    them) or ACTIONED (done). Best-effort.
+    them) or DONE (done). Best-effort.
 
     ``sent_body``/``sent_subject`` carry the reply the user just sent. It usually
     isn't mirrored into email_messages yet (it lands on the next sync), so pass it
     here and we append it to the thread the AI reads — making the Awaiting-vs-
-    Actioned call accurate immediately (inbox-zero sees the sent message at once)
+    Done call accurate immediately (inbox-zero sees the sent message at once)
     instead of defaulting to Awaiting and only correcting on the next sync."""
     if not thread_id:
         return
@@ -1018,7 +1037,7 @@ async def _mark_thread_replied(
         _rz_status, new_cat = result
 
         # Reconcile the thread to a SINGLE conversation label (mutually exclusive,
-        # inbox-zero parity): clear any stale To Reply / Awaiting / FYI / Follow-up
+        # inbox-zero parity): clear any stale Reply / Awaiting / FYI / Follow-up
         # across the thread and apply the new status label. Needs the provider.
         if not acc:
             return
@@ -1047,7 +1066,7 @@ async def _reconcile_labels_bg(
 
     Used by Mark Done / Reopen so the provider + local labels match the new
     status — without this the status row alone moved the thread in our view but
-    left the stale To Reply / Awaiting / Follow-up labels behind on the provider.
+    left the stale Reply / Awaiting / Follow-up labels behind on the provider.
     Best-effort."""
     if not thread_id:
         return
@@ -1082,12 +1101,14 @@ async def apply_thread_status_correction(
 ) -> dict[str, Any]:
     """Force a thread's Reply Zero status to a user-corrected value (the Fix flow).
 
-    Conversation status (To Reply / Awaiting / FYI / Actioned) is re-derived from
+    Conversation status (Reply / Awaiting / FYI / Done) is re-derived from
     the full thread by the classifier, so a learned sender/subject pattern would be
     OVERRIDDEN — the only correction that sticks is to set the status directly and
-    swap the labels. ``status_key`` is TO_REPLY / AWAITING_REPLY / FYI / ACTIONED.
+    swap the labels. ``status_key`` is REPLY / AWAITING_REPLY / FYI / DONE
+    (legacy TO_REPLY / ACTIONED still accepted).
     Best-effort; returns ``{ok, status, label}``."""
-    rz_status, label = _THREAD_STATUS_MAP.get(status_key, ("", ""))
+    rz_status, label = _THREAD_STATUS_MAP.get(
+        _canon_status_key(status_key), ("", ""))
     if not rz_status or not thread_id:
         return {"ok": False}
     db = await _get_db()
@@ -1150,12 +1171,12 @@ async def _maybe_classify_threads(account_id: str) -> None:
     Sent-last GAP threads mean a NEW outbound message arrived — whether sent via
     Command Center OR the user's native email client. They get the SAME AI status
     determination + label swap as a CC-initiated reply (``_mark_thread_replied``),
-    so a reply sent from Gmail/Outlook directly still reaches Awaiting/Actioned and
-    loses its "To Reply" label — inbox-zero handleOutboundMessage parity. This is
+    so a reply sent from Gmail/Outlook directly still reaches Awaiting/Done and
+    loses its "Reply" label — inbox-zero handleOutboundMessage parity. This is
     capped per cycle; sent threads beyond the cap are left UNWRITTEN and re-tried
     next cycle (never blind-stamped AWAITING). Inbound-last gap threads are matched
     by the engine (which applies the Reply Zero pre-filter that keeps newsletters/
-    broadcasts out of "To Reply") and projected via the matched conversation-status
+    broadcasts out of "Reply") and projected via the matched conversation-status
     rule (FYI when none matches). Touches threads whose latest message changed OR
     whose stored status is provisional ("· auto" — a prior LLM fallback), so a
     guessed AWAITING self-heals. Caps work per cycle. Best-effort (never raises)."""
@@ -1283,13 +1304,13 @@ async def resolve_thread(
     """Mark a thread done (inbox-zero's "Mark Done" / resolved=true) or reopen it.
 
     Done → status='DONE' (shows under the Done tab) and the provider/local labels
-    are collapsed to "Actioned" (clearing stale To Reply / Awaiting / Follow-up).
+    are collapsed to "Done" (clearing stale Reply / Awaiting / Follow-up).
     Reopen → re-derive NEEDS_REPLY/AWAITING from the latest message's folder and
-    swap the label back to To Reply / Awaiting Reply."""
+    swap the label back to Reply / Awaiting Reply."""
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
-        keep_label = "Actioned"
+        keep_label = "Done"
         if req.done:
             res = await db.execute(text(
                 "UPDATE email_thread_status SET status = 'DONE', "
@@ -1324,14 +1345,14 @@ async def resolve_thread(
             new_status = "AWAITING" if (
                 lm and (lm.folder or "").lower() == "sent") else "NEEDS_REPLY"
             keep_label = (
-                "Awaiting Reply" if new_status == "AWAITING" else "To Reply")
+                "Awaiting Reply" if new_status == "AWAITING" else "Reply")
             await db.execute(text(
                 "UPDATE email_thread_status SET status = :st, classified_at = now() "
                 "WHERE account_id = :aid AND thread_id = :tid"
             ), {"st": new_status, "aid": req.account_id, "tid": req.thread_id})
         await db.commit()
         # Collapse the provider/local labels to match the new status (clears the
-        # stale To Reply / Awaiting / Follow-up that the status update alone left).
+        # stale Reply / Awaiting / Follow-up that the status update alone left).
         background.add_task(
             _reconcile_labels_bg, req.account_id, req.thread_id, keep_label)
         return {"ok": True, "thread_id": req.thread_id, "done": req.done}
@@ -1351,7 +1372,7 @@ async def reclassify_reply_zero(
 ):
     """Rebuild Reply Zero from scratch with the current rules-based logic.
 
-    Clears the derived statuses (To Reply / Awaiting / FYI) — preserving threads
+    Clears the derived statuses (Reply / Awaiting / FYI) — preserving threads
     you've marked Done — then re-runs classification through the rules engine.
     Useful after the classifier changed. Runs in the background; poll
     GET /email/reply-zero to see the rebuilt buckets."""
@@ -1378,7 +1399,7 @@ async def reply_zero(
     Reply Zero is a PROJECTION of the rules pipeline — a thread shows up only once
     a rule has classified it. There is deliberately NO inbox fallback (the old
     "show every inbox thread until the first pass runs" behaviour is what made
-    every email appear under "To Reply"). On a cold account with nothing
+    every email appear under "Reply"). On a cold account with nothing
     classified yet we kick off a one-off background backfill so the next poll is
     populated; an existing draft for the thread is surfaced (``draft_id``) so the
     UI offers "View draft" instead of drafting a second reply."""

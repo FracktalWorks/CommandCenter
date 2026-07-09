@@ -1,6 +1,6 @@
 """Unit tests for the Fix-classification feedback routing.
 
-Conversation-status rules (To Reply / Awaiting / FYI / Actioned) are re-derived
+Conversation-status rules (Reply / Awaiting / FYI / Done) are re-derived
 from the full thread, so a learned sender/subject pattern is overridden — fixing
 to one must SET THE THREAD STATUS directly, not pin the sender. Cleanup-category
 rules (Newsletter/Receipt/…) are sender-stable → learn FROM/SUBJECT patterns.
@@ -41,7 +41,7 @@ async def _run_feedback(req, *, rules, status_result=None):
     async def fake_status(aid, tid, key):
         status_calls.append((aid, tid, key))
         return status_result or {"ok": True, "status": "NEEDS_REPLY",
-                                 "label": "To Reply"}
+                                 "label": "Reply"}
 
     user = SimpleNamespace(email="u@example.com")
     with patch.object(_rules, "_get_db", AsyncMock(return_value=db)), \
@@ -56,14 +56,14 @@ async def _run_feedback(req, *, rules, status_result=None):
 
 
 async def test_fix_to_conversation_rule_sets_status_not_pattern() -> None:
-    rules = [_rule("r-toreply", "To Reply"), _rule("r-news", "Newsletter")]
+    rules = [_rule("r-toreply", "Reply"), _rule("r-news", "Newsletter")]
     req = m.RuleFeedbackRequest(
         account_id="acc-1", sender="jo@x.com", expected="r-toreply",
         matched_rule_ids=["r-news"], message_id="m1")
     resp, upserts, status_calls = await _run_feedback(req, rules=rules)
 
     # The conversation correction set the thread status directly…
-    assert status_calls == [("acc-1", "t1", "TO_REPLY")]
+    assert status_calls == [("acc-1", "t1", "REPLY")]
     # …and did NOT pin the sender to the conversation rule.
     assert not any(rid == "r-toreply" for rid, _v, _e in upserts)
     # The wrongly-matched CLEANUP rule (Newsletter) is excluded for the sender.

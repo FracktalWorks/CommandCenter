@@ -28,8 +28,8 @@ interface RapidInboxViewProps {
 /**
  * A Rapid Inbox category. It is a lens over classification the RULE ENGINE has
  * ALREADY done — never a re-classifier, and never a *separate* classifier:
- *  - "bucket"  reads the Reply Zero thread-status projection (To Reply /
- *              Awaiting / Actioned), carrying the reason + any auto-draft.
+ *  - "bucket"  reads the Reply Zero thread-status projection (Reply /
+ *              Awaiting / Done), carrying the reason + any auto-draft.
  *  - "label"   reads the rule engine's per-message categories/labels
  *              (email_messages.categories) — Newsletter / Marketing / Receipt /
  *              Calendar / Notification / Cold Email / FYI are all the labels the
@@ -58,13 +58,13 @@ interface Category {
 }
 
 const CATEGORIES: Category[] = [
-  { key: "to_reply", label: "To Reply", icon: Reply, source: "bucket",
+  { key: "reply", label: "Reply", icon: Reply, source: "bucket",
     group: "needs", bucket: "needs_reply",
     cls: "bg-violet-500/15 text-violet-600 dark:text-violet-400" },
   { key: "awaiting", label: "Awaiting", icon: Clock, source: "bucket",
     group: "needs", bucket: "awaiting",
     cls: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
-  { key: "actioned", label: "Actioned", icon: CheckCircle2, source: "bucket",
+  { key: "done", label: "Done", icon: CheckCircle2, source: "bucket",
     group: "needs", bucket: "done",
     cls: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" },
   { key: "fyi", label: "FYI", icon: Info, source: "label", match: "FYI",
@@ -106,7 +106,9 @@ const SORTS: { key: SortKey; label: string }[] = [
 const KNOWN_CATEGORY_LABELS = new Set(
   [
     "Newsletter", "Marketing", "Calendar", "Receipt", "Notification",
-    "Cold Email", "FYI", "To Reply", "Awaiting Reply", "Actioned",
+    "Cold Email", "FYI", "Reply", "Awaiting Reply", "Done",
+    // legacy names still on un-resynced local/provider mirrors (pre-rename)
+    "To Reply", "Actioned",
   ].map((s) => s.toLowerCase()),
 );
 
@@ -163,7 +165,7 @@ function fromEmail(e: Email): RapidItem {
 }
 
 export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
-  const [catKey, setCatKey] = useState<string>("to_reply");
+  const [catKey, setCatKey] = useState<string>("reply");
   const cat = useMemo(
     () => CATEGORIES.find((c) => c.key === catKey) ?? CATEGORIES[0],
     [catKey],
@@ -664,7 +666,7 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
         ) : visible.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2 text-sm px-6 text-center">
             <Mail size={22} className="opacity-40" />
-            {cat.key === "to_reply"
+            {cat.key === "reply"
               ? "Nothing needs a reply. Inbox zero! 🎉"
               : cat.key === "unclassified"
                 ? "Everything in your inbox is sorted. 🎉"

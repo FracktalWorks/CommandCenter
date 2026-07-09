@@ -1,8 +1,8 @@
 """Unit tests for the centralized guards in `_upsert_rule_pattern` — the single
 write choke point for learned classification patterns. It must refuse to:
-  1. sender-pin a conversation-status rule (To Reply / Awaiting / FYI / Actioned);
+  1. sender-pin a conversation-status rule (Reply / Awaiting / FYI / Done);
   2. pin the mailbox's OWN address to any rule.
-Both anti-patterns were seen live ("vjvarada@… → To Reply") from the (formerly
+Both anti-patterns were seen live ("vjvarada@… → Reply") from the (formerly
 unguarded) label-sync learner; the guard here is the backstop for every path."""
 from __future__ import annotations
 
@@ -42,8 +42,8 @@ class _FakeDB:
 
 
 async def test_conversation_rule_is_never_pinned_by_name() -> None:
-    # system_type NULL → recognized by name fallback ("To Reply" → TO_REPLY).
-    db = _FakeDB(SimpleNamespace(name="To Reply", system_type=None),
+    # system_type NULL → recognized by name fallback ("Reply" → REPLY).
+    db = _FakeDB(SimpleNamespace(name="Reply", system_type=None),
                  SimpleNamespace(email_address="me@fracktal.in"))
     await _upsert(db, "acc-1", "rule-reply", "souradeep@iisc.ac.in", False,
                   "LABEL_ADDED", "why", None, None, pattern_type="FROM")

@@ -83,6 +83,38 @@ def test_compute_cost_returns_none_for_unknown_model():
     assert _compute_cost("totally-made-up-model-xyz", resp, resp["usage"]) is None
 
 
+def test_emit_usage_from_v1_compat_prices_and_tags_source(monkeypatch):
+    # v1_compat (the agent-completion choke point) calls _emit_usage with an
+    # explicit source and, on the streaming path, a bare {"usage": …} dict. This
+    # is what makes chat-agent model calls + cost observable — assert it emits a
+    # priced model activation attributed to the given source.
+    import acb_common
+
+    captured: list[dict] = []
+    monkeypatch.setattr(acb_common, "publish_activity",
+                        lambda **kw: captured.append(kw))
+
+    # Streaming shape: usage-only dict (what v1_compat captures from the chunk).
+    llm_client._emit_usage(
+        "gpt-4o-mini", "",
+        {"usage": {"prompt_tokens": 1000, "completion_tokens": 500,
+                   "total_tokens": 1500}},
+        source="chat",
+    )
+    assert len(captured) == 1
+    ev = captured[0]
+    assert ev["kind"] == "model"
+    assert ev["source"] == "chat"
+    assert ev["tokens"] == 1500
+    assert isinstance(ev["cost_usd"], float) and ev["cost_usd"] > 0
+
+
+def test_emit_usage_never_raises_on_bad_response():
+    # A malformed response must never take down the completion that produced it.
+    llm_client._emit_usage("gpt-4o-mini", "", object(), source="chat")
+    llm_client._emit_usage("gpt-4o-mini", "", {"usage": None}, source="memory")
+
+
 # ── App-source inference (zero-touch cross-app attribution) ──────────────────
 
 def test_infer_app_source_reads_the_originating_app_module():

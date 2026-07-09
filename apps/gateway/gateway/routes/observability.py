@@ -86,6 +86,15 @@ async def roster(
         _log.warning("observability.roster_registry_failed", error=str(exc))
         registry = []
 
+    # The orchestrator is the default-chat agent but isn't a registered
+    # specialist — seed it so it's always on stage (idle between chats, working
+    # during them).
+    registry = [{
+        "name": "orchestrator",
+        "description": "Core orchestrator — routes chat to the right specialist",
+        "agent_runtime": "maf",
+    }] + registry
+
     runs = await active_runs()
     live_by_agent: dict[str, list[dict[str, Any]]] = {}
     for r in runs:
@@ -108,6 +117,25 @@ async def roster(
             "last_ts": live[0].get("ts") if live else None,
             "source": live[0].get("source") if live else None,
         })
+
+    # Include agents that are LIVE but not in the registry — most importantly the
+    # "orchestrator" (the default-chat agent, which isn't a registered specialist)
+    # and any ad-hoc sub-agent. Without this the primary agent never shows in the
+    # office even while it's clearly working.
+    for name, live in live_by_agent.items():
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        agents.append({
+            "name": name,
+            "description": "Core orchestrator" if name == "orchestrator" else "",
+            "runtime": "maf",
+            "status": "working",
+            "active_runs": len(live),
+            "last_ts": live[0].get("ts") if live else None,
+            "source": live[0].get("source") if live else None,
+        })
+
     agents.sort(key=lambda e: (e["status"] != "working", e["name"]))
     return {"agents": agents, "count": len(agents)}
 

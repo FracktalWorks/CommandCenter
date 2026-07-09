@@ -227,6 +227,38 @@ Turns the live feed into the full "complete visibility" app the user asked for.
   `acompletion_with_fallback` (or runs an agent), it shows up attributed. Only
   add a `sourceClass()` colour in the page if you want a custom app badge.
 
+### Phase 6.1 — review + fixes (agent/chat wiring)
+A full trace of how activations connect to the CHAT agents surfaced three gaps,
+now fixed:
+- **Agent model calls + cost were invisible.** MAF agents (both the default
+  orchestrator and named agents) don't call `acb_llm.complete` — their
+  `OpenAIChatCompletionClient` POSTs to the gateway's own `/v1/chat/completions`
+  (`routes/v1_compat.py`, the gateway binds :8080; no separate proxy), which
+  called litellm directly and emitted NOTHING. Fixed: v1_compat now emits the
+  model activation + cost on both the non-streaming and streaming paths
+  (streaming rebuilds usage via litellm's `stream_chunk_builder` AFTER the
+  stream, so the provider request + forwarded bytes are unchanged — zero risk to
+  the agent stream). source="chat".
+- **The orchestrator never showed as working.** The default chat
+  (`main.py::copilot_chat`) runs the MAF agent via `protocol_runner.run`, NOT
+  `run_agent_stream`, so the executor's start/end events never fired for it.
+  Fixed: copilot_chat emits agent start/end (end via `run_detached`'s shielded
+  `on_complete`, so it fires on every terminal outcome; a miss self-heals via the
+  presence TTL).
+- **The orchestrator wasn't in the roster.** It isn't a registered specialist,
+  so `/observability/roster` omitted it. Fixed: the roster seeds "orchestrator"
+  as a baseline entry AND merges any live-but-unregistered agent (sub-agents),
+  so the primary agent is always on stage.
+- Mem0's OpenAI-compat endpoint (`main.py`) also emits now (source="memory";
+  defensive — normally shadowed by v1_compat's same-path route).
+- Verified: `_usage_stats` reads litellm `ModelResponse` (`.get` present); +4
+  tests incl. an end-to-end v1_compat TestClient drive (811 total green).
+- **Known limitation:** model calls made via v1_compat aren't correlated to the
+  specific agent/run (separate HTTP request → no run context), so they show
+  source="chat" without an agent name; the agent start/end events carry the
+  agent. Copilot-SDK mutation traffic also lands in the "chat" bucket. Per-agent
+  model correlation (forward run_id as a header) is a future refinement.
+
 ## Status
 - 2026-07-03 — Phases 1+2 shipped. E2 C+ → B+.
 - 2026-07-03 — Phases 3+4 shipped. E2 B+ → A−. `/debug/runs` diagnostics API
@@ -246,3 +278,8 @@ Turns the live feed into the full "complete visibility" app the user asked for.
   run/error drill-down. +9 tests (807 total); `next build` + `tsc` + eslint clean.
   Deferred: durable Postgres cost table (Redis rollup is ~45-day, non-durable
   across a Redis flush); sprite art polish.
+- 2026-07-09 — Phase 6.1 (review + fixes). Traced the full agent→model path:
+  chat-agent completions + cost were bypassing instrumentation via v1_compat, and
+  the orchestrator wasn't shown as an agent. Instrumented v1_compat (stream +
+  non-stream) + copilot_chat lifecycle + roster orchestrator/sub-agent inclusion.
+  +4 tests incl. an end-to-end v1_compat drive (811 total green).

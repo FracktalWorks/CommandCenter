@@ -19,8 +19,7 @@ _log = get_logger("gateway")
 # running asyncio event loop.  Importing here (module level, before uvicorn
 # starts the loop) avoids the deadlock entirely.
 try:
-    from orchestrator.agents import \
-        build_orchestrator_agent as _build_orchestrator_agent
+    from orchestrator.agents import build_orchestrator_agent as _build_orchestrator_agent
     _HAS_MAF = True
 except ImportError:
     _HAS_MAF = False
@@ -111,12 +110,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # them on startup so their workspace is browsable without a manual pull.
     async def _warm_clone_agents() -> None:
         try:
-            from acb_skills.loader import (  # noqa: PLC0415
-                _install_agent_deps, load_agent)
-            from gateway.routes.agent import (  # noqa: PLC0415
-                _AGENT_REGISTRY, _load_dynamic_agents)
-            from gateway.routes.workspace import \
-                _agent_workspace_dir  # noqa: PLC0415
+            from acb_skills.loader import _install_agent_deps, load_agent  # noqa: PLC0415
+
+            from gateway.routes.agent import _AGENT_REGISTRY, _load_dynamic_agents  # noqa: PLC0415
+            from gateway.routes.workspace import _agent_workspace_dir  # noqa: PLC0415
 
             entries = list(_AGENT_REGISTRY)
             try:
@@ -363,8 +360,7 @@ if _HAS_MAF:
     try:
         from ag_ui.core.events import RunErrorEvent as _RunErrorEvent
         from ag_ui.encoder import EventEncoder as _EventEncoder
-        from agent_framework.ag_ui import \
-            AgentFrameworkAgent as _AgentFrameworkAgent
+        from agent_framework.ag_ui import AgentFrameworkAgent as _AgentFrameworkAgent
         from agent_framework_ag_ui import AGUIRequest as _AGUIRequest
 
         @app.post("/copilot/chat", tags=["AG-UI"], response_model=None)
@@ -387,16 +383,17 @@ if _HAS_MAF:
             frontend's row id for this turn; the run-end fold-and-persist
             (core_loop_unification Phase 1) upserts that same row.
             """
-            from orchestrator.agents import (build_orchestrator_agent,
-                                             enrich_instructions_with_memory)
+            from orchestrator.agents import (
+                build_orchestrator_agent,
+                enrich_instructions_with_memory,
+            )
 
             user_id: str = getattr(user, "email", "") or "anonymous"
             input_data = request_body.model_dump(exclude_none=True)
 
             # ── Set user context for memory tools (remember / save_memory / etc.) ──
             try:
-                from acb_skills.memory_tools import \
-                    _set_memory_user_id  # noqa: PLC0415
+                from acb_skills.memory_tools import _set_memory_user_id  # noqa: PLC0415
                 _set_memory_user_id(user_id)
             except ImportError:
                 pass
@@ -442,8 +439,7 @@ if _HAS_MAF:
             # policy (empty/bare → tier-balanced or copilot_chat_model).
             _resolved_model = ""
             try:
-                from orchestrator.executor import (  # noqa: PLC0415
-                    _apply_model_for_maf_agent)
+                from orchestrator.executor import _apply_model_for_maf_agent  # noqa: PLC0415
                 _resolved_model = _apply_model_for_maf_agent(
                     agent, (model or "").strip(), get_settings())
             except Exception:  # noqa: BLE001
@@ -457,8 +453,7 @@ if _HAS_MAF:
                 # HERE (inside the streaming generator) so the tools' ContextVar
                 # lookup sees it — the handler body runs in a different context.
                 try:
-                    from orchestrator.executor import (  # noqa: PLC0415
-                        _active_run_model)
+                    from orchestrator.executor import _active_run_model  # noqa: PLC0415
                     if _resolved_model:
                         _active_run_model.set(_resolved_model)
                 except Exception:  # noqa: BLE001
@@ -493,8 +488,7 @@ if _HAS_MAF:
             # against the translator's own time-based fallback id.
             _persist_cb = None
             if _thread_id and assistant_message_id:
-                from gateway.chat_fold import \
-                    persist_final_assistant_message  # noqa: PLC0415
+                from gateway.chat_fold import persist_final_assistant_message  # noqa: PLC0415
 
                 # Snapshot the input conversation for run-boundary memory
                 # extraction (P1-9) — captured here so the callback below has it
@@ -524,7 +518,8 @@ if _HAS_MAF:
                         return
                     try:
                         from acb_memory import (  # noqa: PLC0415
-                            add_episode, add_memories_background,
+                            add_episode,
+                            add_memories_background,
                         )
 
                         from gateway.chat_fold import (  # noqa: PLC0415
@@ -553,15 +548,57 @@ if _HAS_MAF:
                             thread_id=_thread_id[:12],
                         )
 
+            # ── Observability (E2): orchestrator lifecycle ───────────────────
+            # The default chat runs the MAF agent directly (protocol_runner.run),
+            # NOT run_agent_stream — so the executor's start/end activity events
+            # don't fire here. Emit them explicitly, otherwise the orchestrator
+            # (the primary agent) never appears working in the live office/feed.
+            # End fires from run_detached's shielded on_complete (every terminal
+            # outcome); a missed end self-heals via the presence-key TTL.
+            import time as _obs_time  # noqa: PLC0415
+            _obs_run_id = assistant_message_id or _thread_id or None
+            _obs_started = _obs_time.monotonic()
+            try:
+                from acb_common import publish_activity  # noqa: PLC0415
+                publish_activity(
+                    kind="agent", phase="start", agent="orchestrator",
+                    run_id=_obs_run_id, thread_id=_thread_id or None,
+                    user=user_id or None, model=(_resolved_model or model or None),
+                    source="chat",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+            _prior_cb = _persist_cb
+
+            async def _obs_on_complete() -> None:
+                try:
+                    if _prior_cb is not None:
+                        await _prior_cb()
+                finally:
+                    try:
+                        from acb_common import publish_activity  # noqa: PLC0415
+                        publish_activity(
+                            kind="agent", phase="end", agent="orchestrator",
+                            run_id=_obs_run_id, thread_id=_thread_id or None,
+                            status="completed",
+                            duration_ms=int((_obs_time.monotonic() - _obs_started) * 1000),
+                            source="chat",
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+
             async def relayed_generator():
                 import json as _json  # noqa: PLC0415
 
                 from orchestrator.stream_relay import (  # noqa: PLC0415
-                    get_detached_task, run_detached)
+                    get_detached_task,
+                    run_detached,
+                )
                 try:
                     async for evt in run_detached(
                         _thread_id, event_generator(), tee=True,
-                        on_complete=_persist_cb,
+                        on_complete=_obs_on_complete,
                     ):
                         yield f"data: {_json.dumps(evt)}\n\n"
                 except Exception:  # noqa: BLE001
@@ -581,8 +618,10 @@ if _HAS_MAF:
             # extraction when that callback is wired.
             if _persist_cb is None:
                 try:
-                    from acb_memory import add_episode  # noqa: PLC0415
-                    from acb_memory import add_memories_background
+                    from acb_memory import (
+                        add_episode,  # noqa: PLC0415
+                        add_memories_background,
+                    )
                     if last_user_msg and messages:
                         conv = [
                             {"role": m.get("role", "user"), "content": m.get("content", "")}
@@ -818,6 +857,14 @@ async def chat_completions(
             api_base=settings.litellm_base_url,
             api_key=settings.litellm_master_key,
         )
+        # Observability (E2): attribute this OpenAI-compat call (Mem0 memory
+        # extraction + other OpenAI clients) to the "memory" source. Best-effort.
+        try:
+            from acb_llm.client import _emit_usage  # noqa: PLC0415
+            _emit_usage(getattr(response, "model", "") or req.model, "", response,
+                        source="memory")
+        except Exception:  # noqa: BLE001
+            pass
         choice = response.choices[0]
         return {
             "id": response.id,
@@ -1038,15 +1085,13 @@ async def pull(req: PullRequest, _user: UserContext = Depends(get_current_user))
     import asyncio
     import uuid
 
-    from acb_llm.guardrails import \
-        CITATION_RE  # local import to avoid cold-start cost
+    from acb_llm.guardrails import CITATION_RE  # local import to avoid cold-start cost
 
     trace_id = uuid.uuid4().hex
     user_id: str = req.user_email or getattr(_user, "email", "") or "anonymous"
     _log.info("pull.received", query=req.query, user=user_id, trace_id=trace_id)
     try:
-        from orchestrator.agents import (build_orchestrator_agent,
-                                         enrich_instructions_with_memory)
+        from orchestrator.agents import build_orchestrator_agent, enrich_instructions_with_memory
         agent = build_orchestrator_agent(with_history=False)
         # Inject Mem0 + Graphiti context for this user + query (no-op if disabled)
         enriched = await enrich_instructions_with_memory(agent, user_id, req.query)
@@ -1064,8 +1109,10 @@ async def pull(req: PullRequest, _user: UserContext = Depends(get_current_user))
     citations = sorted({m.group(0) for m in CITATION_RE.finditer(text)})
     # Background: extract facts from this exchange into Mem0
     try:
-        from acb_memory import add_episode  # noqa: PLC0415
-        from acb_memory import add_memories_background
+        from acb_memory import (
+            add_episode,  # noqa: PLC0415
+            add_memories_background,
+        )
         messages = [
             {"role": "user", "content": req.query},
             {"role": "assistant", "content": text},

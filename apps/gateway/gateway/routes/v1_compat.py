@@ -207,9 +207,16 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
 
     if stream:
         async def event_generator():
+            # Keep the raw chunks so we can rebuild the full response (with usage)
+            # AFTER the stream, WITHOUT changing the provider request — this is
+            # THE choke point every agent runtime streams through, so it must stay
+            # byte-identical for the client. Observability is derived, never
+            # intrusive.
+            _chunks: list[Any] = []
             try:
                 response = await acompletion(**common, stream=True)
                 async for chunk in response:
+                    _chunks.append(chunk)
                     # litellm returns Pydantic ModelResponseStream — convert to dict
                     data = chunk.model_dump() if hasattr(chunk, "model_dump") else dict(chunk)
                     yield f"data: {json.dumps(data)}\n\n"
@@ -217,6 +224,20 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
             except Exception as exc:
                 _log.exception("v1.stream_error")
                 yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            finally:
+                # Observability (E2): rebuild usage from the streamed chunks
+                # (litellm's own stream aggregator) → emit the model activation +
+                # cost. This is what makes chat-agent model calls observable.
+                # Best-effort; source="chat" (interactive agent traffic).
+                if _chunks:
+                    try:
+                        from litellm import stream_chunk_builder  # noqa: PLC0415
+                        rebuilt = stream_chunk_builder(_chunks, messages=messages)
+                        if rebuilt is not None:
+                            from acb_llm.client import _emit_usage  # noqa: PLC0415
+                            _emit_usage(model, "", rebuilt, source="chat")
+                    except Exception:  # noqa: BLE001
+                        pass
 
         return StreamingResponse(
             event_generator(),
@@ -230,6 +251,13 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
     # Non-streaming
     try:
         response = await acompletion(**common)
+        # Observability (E2): emit the model activation + cost for this agent
+        # completion. Best-effort; never affects the response.
+        try:
+            from acb_llm.client import _emit_usage  # noqa: PLC0415
+            _emit_usage(model, "", response, source="chat")
+        except Exception:  # noqa: BLE001
+            pass
         return dict(response) if hasattr(response, "items") else response  # type: ignore[return-value]
     except Exception as exc:
         _log.exception("v1.completion_error")

@@ -513,6 +513,32 @@ async def _maybe_refresh_learned_style(db: Any, account_id: str) -> None:
         _log.warning("email.refresh_style_failed", error=str(exc)[:160])
 
 
+def _draft_direction_note(email: dict[str, str], to_line: str, cc_line: str) -> str:
+    """A one-line steer on the reply's DIRECTION (internal colleague vs external
+    party) and the owner's RECIPIENT ROLE (a direct To recipient vs merely Cc'd).
+
+    Both signals are already computed for the classifier (sender_scope + To/Cc);
+    the drafter was dropping them, so a reply to an internal colleague read the
+    same as one to an external customer, and a mail the owner was only Cc'd on
+    still got a full draft. Surfacing them keeps the tone appropriate and
+    discourages a needless reply. Returns "" when there's no signal."""
+    bits: list[str] = []
+    scope = (email.get("sender_scope") or "").strip().lower()
+    if scope == "internal":
+        bits.append("This is INTERNAL mail (the owner's own organisation / a "
+                    "colleague) — keep the tone collegial.")
+    elif scope and scope != "self":
+        bits.append("This is EXTERNAL mail (an outside party — customer, vendor "
+                    "or similar) — keep it professional.")
+    self_addr = (email.get("self") or "").strip().lower()
+    if (self_addr and self_addr in cc_line.lower()
+            and self_addr not in to_line.lower()):
+        bits.append("The owner was only CC'd (not a direct To recipient), so this "
+                    "is likely informational — reply only if a response is "
+                    "genuinely warranted from them; otherwise keep it brief.")
+    return (" ".join(bits) + "\n") if bits else ""
+
+
 async def _llm_draft_reply(
     email: dict[str, str], about: str, signature: str,
     instructions: str = "", context: str = "", user_email: str = "",
@@ -610,6 +636,8 @@ async def _llm_draft_reply(
             if cc_line:
                 recip_block += f"; Cc: {cc_line}"
             recip_block += "\n"
+        # Direction (internal/external) + the owner's recipient role (To vs Cc).
+        direction_block = _draft_direction_note(email, to_line, cc_line)
         # Attachment metadata on the message being replied to (already formatted
         # as "Attachments: file.pdf (…)") so the reply can acknowledge them.
         attach_block = ""
@@ -625,6 +653,7 @@ async def _llm_draft_reply(
             f"{email.get('from_name') or email.get('from', '')} "
             f"<{email.get('from', '')}>\n"
             f"{recip_block}"
+            f"{direction_block}"
             f"Subject: {email.get('subject', '')}\n"
             f"{attach_block}\n"
             f"{memories_block}"
@@ -1126,9 +1155,24 @@ async def draft_reply_smart(
         from gateway.routes.email.core import hydrate_message_body  # noqa: PLC0415
         _hydrated_body = await hydrate_message_body(
             db, str(row.id), user.email or "anonymous")
+        # The mailbox's own address + org domains → direction (self/internal/
+        # external) and recipient role (To vs Cc-only), so this manual/Rapid-Inbox
+        # draft path carries the same signals the auto-run path already does.
+        self_row = (await db.execute(text(
+            "SELECT email_address FROM email_accounts WHERE id = :id"
+        ), {"id": req.account_id})).fetchone()
+        self_email = (self_row.email_address if self_row else "") or ""
+        from gateway.routes.email.automation.identity import (  # noqa: PLC0415
+            resolve_org_domains,
+            sender_scope,
+        )
+        org_domains = await resolve_org_domains(db, req.account_id)
         email = {
             "subject": row.subject or "", "from": frm.get("email", ""),
             "from_name": frm.get("name", "") or "",
+            "self": self_email,
+            "sender_scope": sender_scope(
+                frm.get("email", ""), self_email, org_domains),
             "to": _fmt_addr_list(row.to_addresses),
             "cc": _fmt_addr_list(row.cc_addresses),
             "attachments": (await _attachment_summaries(

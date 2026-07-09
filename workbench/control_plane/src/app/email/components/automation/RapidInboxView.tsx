@@ -10,7 +10,7 @@ import {
 import {
   getReplyZero, draftReplySmart, resolveThread, listEmails, getEmail,
   updateEmail, deleteEmail, saveDraft, sendDraft, composeAssist,
-  listSenders, scanFollowUps,
+  scanFollowUps,
 } from "../../lib/api";
 import { useEmailStore } from "../../lib/emailStore";
 import { AiAssistBar } from "../ComposerAI";
@@ -26,18 +26,22 @@ interface RapidInboxViewProps {
 }
 
 /**
- * A Rapid Inbox category. It is a lens over classification the system has
- * ALREADY done — never a re-classifier:
+ * A Rapid Inbox category. It is a lens over classification the RULE ENGINE has
+ * ALREADY done — never a re-classifier, and never a *separate* classifier:
  *  - "bucket"  reads the Reply Zero thread-status projection (To Reply /
  *              Awaiting / Actioned), carrying the reason + any auto-draft.
- *  - "label"   reads a per-message rule label (FYI).
- *  - "sender"  reads the always-on sender categorizer (email_senders.category),
- *              the same source that powers the Inbox Cleaner — so Newsletter /
- *              Receipt / Notification populate without any manual pass.
- *  - "unclassified" is inbox mail nothing has sorted yet.
+ *  - "label"   reads the rule engine's per-message categories/labels
+ *              (email_messages.categories) — Newsletter / Marketing / Receipt /
+ *              Calendar / Notification / Cold Email / FYI are all the labels the
+ *              user's rules applied to each message, so Rapid Inbox agrees with
+ *              the rest of the app exactly (same rules, same reasons).
+ *  - "unclassified" is inbox mail the rules haven't labeled yet.
+ * We intentionally do NOT read the sender categorizer (email_senders.category)
+ * here: that's a coarse per-SENDER heuristic powering the Inbox Cleaner, and it
+ * pinned whole senders to "Marketing", surfacing non-marketing mail under it.
  * Every source collapses to the same `RapidItem` so one card renders them all.
  */
-type CatSource = "bucket" | "label" | "sender" | "unclassified";
+type CatSource = "bucket" | "label" | "unclassified";
 type Bucket = "needs_reply" | "awaiting" | "done";
 
 interface Category {
@@ -66,22 +70,22 @@ const CATEGORIES: Category[] = [
   { key: "fyi", label: "FYI", icon: Info, source: "label", match: "FYI",
     group: "needs",
     cls: "bg-sky-500/15 text-sky-600 dark:text-sky-400" },
-  { key: "newsletter", label: "Newsletter", icon: Newspaper, source: "sender",
+  { key: "newsletter", label: "Newsletter", icon: Newspaper, source: "label",
     match: "Newsletter", group: "sorted",
     cls: "bg-blue-500/15 text-blue-600 dark:text-blue-400" },
-  { key: "marketing", label: "Marketing", icon: Megaphone, source: "sender",
+  { key: "marketing", label: "Marketing", icon: Megaphone, source: "label",
     match: "Marketing", group: "sorted",
     cls: "bg-orange-500/15 text-orange-600 dark:text-orange-400" },
-  { key: "calendar", label: "Calendar", icon: Calendar, source: "sender",
+  { key: "calendar", label: "Calendar", icon: Calendar, source: "label",
     match: "Calendar", group: "sorted",
     cls: "bg-teal-500/15 text-teal-600 dark:text-teal-400" },
-  { key: "receipt", label: "Receipt", icon: Receipt, source: "sender",
+  { key: "receipt", label: "Receipt", icon: Receipt, source: "label",
     match: "Receipt", group: "sorted",
     cls: "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400" },
-  { key: "notification", label: "Notification", icon: Bell, source: "sender",
+  { key: "notification", label: "Notification", icon: Bell, source: "label",
     match: "Notification", group: "sorted",
     cls: "bg-slate-500/15 text-slate-600 dark:text-slate-300" },
-  { key: "cold", label: "Cold Email", icon: Snowflake, source: "sender",
+  { key: "cold", label: "Cold Email", icon: Snowflake, source: "label",
     match: "Cold Email", group: "sorted",
     cls: "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400" },
   { key: "unclassified", label: "Unclassified", icon: CircleDashed,
@@ -96,11 +100,21 @@ const SORTS: { key: SortKey; label: string }[] = [
   { key: "unread", label: "Unread" },
 ];
 
-/** A sender category counts as "sorted" (i.e. not unclassified) unless it's blank
- *  or the catch-all Unknown. */
-function isCategorized(cat: string | undefined): boolean {
-  const c = (cat || "").trim().toLowerCase();
-  return c !== "" && c !== "unknown";
+/** Every category label the rule engine can put on a message (the cleanup
+ *  categories + FYI + the conversation-status labels). "Unclassified" is inbox
+ *  mail carrying none of these — i.e. the rules haven't sorted it yet. */
+const KNOWN_CATEGORY_LABELS = new Set(
+  [
+    "Newsletter", "Marketing", "Calendar", "Receipt", "Notification",
+    "Cold Email", "FYI", "To Reply", "Awaiting Reply", "Actioned",
+  ].map((s) => s.toLowerCase()),
+);
+
+/** True once any rule has labelled this message (so it's not "Unclassified"). */
+function hasRuleCategory(categories: string[] | undefined): boolean {
+  return (categories || []).some((c) =>
+    KNOWN_CATEGORY_LABELS.has((c || "").trim().toLowerCase()),
+  );
 }
 
 /** The one shape every category's rows render as. */
@@ -175,38 +189,24 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; undo?: () => void } | null>(null);
 
-  // Sender→category map (fetched once per account) — used to define
-  // "Unclassified" as inbox mail whose sender isn't categorized.
-  const sendersRef = useRef<Record<string, string> | null>(null);
-  const ensureSenders = useCallback(async (): Promise<Record<string, string>> => {
-    if (sendersRef.current) return sendersRef.current;
-    const list = await listSenders(accountId!, "inbox", 300).catch(() => []);
-    const map: Record<string, string> = {};
-    for (const s of list) if (s.category) map[s.email.toLowerCase()] = s.category;
-    sendersRef.current = map;
-    return map;
-  }, [accountId]);
-
-  // ── Fetch the items for one category from its existing classification ──
+  // ── Fetch the items for one category from the rule engine's classification ──
   const fetchCategory = useCallback(
     async (c: Category): Promise<RapidItem[]> => {
       if (!accountId) return [];
       if (c.source === "bucket")
         return (await getReplyZero(accountId, c.bucket!, 100)).map(fromThread);
       if (c.source === "label")
+        // Reads em.categories/labels — the same per-message labels the rules
+        // applied everywhere else in the app (never the sender categorizer).
         return (await listEmails({ accountId, label: c.match, pageSize: 60 }))
           .emails.map(fromEmail);
-      if (c.source === "sender")
-        return (await listEmails({ accountId, senderCategory: c.match, pageSize: 60 }))
-          .emails.map(fromEmail);
-      // unclassified: inbox mail with no rule label and an uncategorized sender.
-      const map = await ensureSenders();
+      // unclassified: inbox mail the rules haven't labelled with any category yet.
       const r = await listEmails({ accountId, folder: "inbox", pageSize: 100 });
       return r.emails
-        .filter((e) => !isCategorized(map[(e.from.email || "").toLowerCase()]))
+        .filter((e) => !hasRuleCategory(e.categories))
         .map(fromEmail);
     },
-    [accountId, ensureSenders],
+    [accountId],
   );
 
   // ── Load the active category ──
@@ -243,8 +243,6 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
         p = getReplyZero(accountId, c.bucket!, 100).then((ts) => ts.length);
       else if (c.source === "label")
         p = listEmails({ accountId, label: c.match, pageSize: 1 }).then((r) => r.total);
-      else if (c.source === "sender")
-        p = listEmails({ accountId, senderCategory: c.match, pageSize: 1 }).then((r) => r.total);
       // unclassified is counted on load (no cheap total).
       p?.then((n) => setCounts((prev) => ({ ...prev, [c.key]: n }))).catch(() => undefined);
     }
@@ -252,7 +250,6 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
 
   useEffect(() => {
     setCounts({});
-    sendersRef.current = null;
     loadCounts();
   }, [loadCounts]);
 

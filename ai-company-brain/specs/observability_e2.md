@@ -1,10 +1,13 @@
 # E2 — Observability & Debugging (interaction logging + run traces)
 
-> **Status:** Phases 1–4 **shipped** (2026-07-03). E2 C+ → A−.
+> **Status:** Phases 1–4 **shipped** (2026-07-03). Phase 5 (live activity feed)
+> **shipped** (2026-07-09). E2 C+ → A.
 > **Module:** E2 (core_module_map.md).
 > **Goal (user request):** log every agent/model interaction so an engineer can
-> debug "error X happened with agent Y" after the fact, and eventually run
-> feature tests against the live VPS.
+> debug "error X happened with agent Y" after the fact (Phases 1–4); AND give
+> operators a live, cross-app view of "whenever any agent or model is activated"
+> across chats and every app (Phase 5); and eventually run feature tests against
+> the live VPS.
 
 ## ⏩ RUNBOOK — the user reports "error X with agent Y" (start here)
 
@@ -149,6 +152,45 @@ needed (SSH `journalctl` remains available for the correlated log stream).
   `_persist_row` write/read-back proving the errored-vs-successful retention
   policy. Full suite: 664 green, zero regressions.
 
+## Phase 5 — Live activity feed (operator-facing, cross-app)
+Phases 1–4 are an *engineer's post-hoc* view (logs + `agent_run` + `/debug`).
+Phase 5 adds the *operator's live* view the user asked for: "see whenever any
+agent or model is activated," across chat AND every app (email, tasks, …).
+
+- **Global activity bus** (`packages/acb_common/acb_common/activity.py`): one
+  process-wide Redis stream `cc:activity` that every activation publishes a
+  small event to. `publish_activity(**fields)` is best-effort + non-blocking +
+  never raises (a dropped event can never affect the run that emitted it — the
+  durable record stays in `agent_run`). Presence keys `cc:activity:live:{run_id}`
+  (TTL `LIVE_TTL_SECONDS`) track in-flight runs and self-heal if an "end" is
+  lost. Cross-app coverage is automatic because the two publish sites are shared
+  libraries:
+  - **Agent activations** — the executor run boundary (`executor.py`
+    `run_agent_stream`): a `kind="agent" phase="start"` event right after
+    `bind_run_context`, and a `phase="end"` event (status + duration_ms) in the
+    `finally`.
+  - **Model activations** — `acb_llm._emit_usage` fires `kind="model"`
+    (model/tier/tokens) on EVERY completion → chat, email automation, and tasks
+    all covered with no per-app wiring.
+  - **Source attribution** — `bind_run_context(..., source=)` adds `source` to
+    the run-context contextvars (chat / email / tasks / webhook); model calls
+    inside a run inherit it, so the feed shows which app triggered each call.
+- **Live API** (`apps/gateway/gateway/routes/observability.py`, EXECUTIVE/AGENT-
+  gated like `/debug`): `GET /observability/activity/recent` (backfill),
+  `GET /observability/activity/stream` (SSE tail with heartbeats),
+  `GET /observability/active` (runs in flight now).
+- **UI** — new `/observability` page ("Live Activity", nav under Apps): backfills
+  via `recent`, live-tails via `EventSource` on the SSE proxy, and polls
+  `active` for the "running now" panel. Next proxies:
+  `src/app/api/observability/{activity/recent,activity/stream,active}/route.ts`.
+- **Tests** — `tests/unit/test_activity_bus.py` (7): event shaping + run-context
+  inheritance + source binding + the best-effort/non-blocking publish contract
+  (never raises on shaping or write failure). Full unit suite green (801).
+- **Relation to Phase 3** — `/observability` is the *live signal* (ephemeral,
+  Redis); `/debug` stays the *durable trace* (Postgres `agent_run`). Cost/token
+  rollups + per-agent history are the next increment (read `agent_run` +
+  `audit_event`; needs `LLM_USAGE_AUDIT=1`).
+
 ## Status
 - 2026-07-03 — Phases 1+2 shipped. E2 C+ → B+.
 - 2026-07-03 — Phases 3+4 shipped. E2 B+ → A−. `/debug/runs` diagnostics API
@@ -156,3 +198,9 @@ needed (SSH `journalctl` remains available for the correlated log stream).
   one-command live sweep. 9 debug-route integration tests (TestClient vs live
   DB) + 3 harness unit tests; full suite 667 green. OTLP trace-backend export
   remains the only deferred item (dormant, gated on `OTEL_EXPORTER_OTLP_ENDPOINT`).
+- 2026-07-09 — Phase 5 shipped. E2 A− → A. Live cross-app activity feed: global
+  `cc:activity` bus (`acb_common.activity`), publish at the executor run
+  boundary + `acb_llm._emit_usage`, `/observability` gateway API (recent / SSE
+  stream / active) + a new `/observability` Control Plane page. 7 activity-bus
+  unit tests; full unit suite 801 green. Next: cost/token rollups + per-agent
+  history (the "full dashboard" increment).

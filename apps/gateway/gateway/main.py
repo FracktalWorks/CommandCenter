@@ -656,6 +656,14 @@ except Exception:  # pragma: no cover
     pass
 
 try:
+    # E2 live — real-time agent/model activity feed (activity bus).
+    from gateway.routes.observability import router as _observability_router
+
+    app.include_router(_observability_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
     from gateway.routes.oauth import router as _oauth_router
 
     app.include_router(_oauth_router)

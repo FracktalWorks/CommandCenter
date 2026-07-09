@@ -2723,19 +2723,40 @@ async def run_agent_stream(
     # line this run emits (across all tiers + injected tools on this context)
     # carries them — the thing that makes "show me all logs for run X / agent Y"
     # possible. Cleared in the finally below.
+    _corr_source = "chat"
+    _corr_user = ""
     try:
         from acb_common import bind_run_context  # noqa: PLC0415
-        _corr_user = ""
         if isinstance(event_payload, dict):
             _corr_user = str(
                 event_payload.get("user_email")
                 or event_payload.get("user_id") or ""
             )
+            # Originating surface (chat / email / tasks / webhook / …) so the
+            # live activity feed can attribute this run to the app that fired it.
+            _corr_source = str(event_payload.get("source") or "").strip() or "chat"
         bind_run_context(
             run_id=run_id, thread_id=thread_id,
-            agent=agent_name, user=_corr_user or None,
+            agent=agent_name, user=_corr_user or None, source=_corr_source,
         )
     except Exception:  # noqa: BLE001 — logging correlation must never block a run
+        pass
+
+    # ── Live activity feed (E2): agent activation START ───────────────────────
+    # Publish to the global bus so /observability shows this run the instant it
+    # begins — across chat and every app. Best-effort; the matching END event is
+    # emitted in the finally below. Duration is measured from here.
+    import time as _time  # noqa: PLC0415
+    _activity_started = _time.monotonic()
+    try:
+        from acb_common import publish_activity  # noqa: PLC0415
+        publish_activity(
+            kind="agent", phase="start",
+            agent=agent_name, run_id=run_id, thread_id=thread_id,
+            user=(_corr_user or None), model=(model or None),
+            source=_corr_source,
+        )
+    except Exception:  # noqa: BLE001
         pass
 
     # ── Stream relay: tee all SSE events to Redis for reconnection support ─
@@ -4272,6 +4293,23 @@ async def run_agent_stream(
         })
         return
     finally:
+        # ── Live activity feed (E2): agent activation END ────────────────────
+        # Clears this run from the "running now" panel and stamps duration +
+        # status. sys.exc_info() is set here iff we're unwinding an exception.
+        try:
+            import sys as _sys  # noqa: PLC0415
+            import time as _time  # noqa: PLC0415
+            from acb_common import publish_activity  # noqa: PLC0415
+            _status = "error" if _sys.exc_info()[0] is not None else "completed"
+            _dur_ms = int((_time.monotonic() - _activity_started) * 1000)
+            publish_activity(
+                kind="agent", phase="end",
+                agent=agent_name, run_id=run_id, thread_id=thread_id,
+                status=_status, duration_ms=_dur_ms, source=_corr_source,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
         # Deactivate stream relay so the reconnect endpoint knows the run
         # has finished and can drain remaining events from the Redis stream.
         # Wait for any in-flight ordered pushes first so RUN_FINISHED lands

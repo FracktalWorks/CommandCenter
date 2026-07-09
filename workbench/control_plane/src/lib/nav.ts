@@ -71,6 +71,12 @@ export const NAV_SECTIONS: NavSection[] = [
         note: "Company overview",
       },
       {
+        href: "/observability",
+        label: "Live Activity",
+        icon: "Activity",
+        note: "Agent & model activations in real time",
+      },
+      {
         href: "/artifacts",
         label: "Artifacts",
         icon: "FolderOpen",

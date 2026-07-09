@@ -22,7 +22,9 @@ webhook receivers, OAuth callbacks, and the Control Plane API.
 7. routes/settings.py -- LLM settings, model config
 8. routes/email.py -- Email account CRUD, message listing/search, send, sync, AI chat, OAuth flow for Gmail/Microsoft/IMAP. Background sync scheduler hooks (refresh/remove) on account PATCH/DELETE.
 9. routes/v1_compat.py -- OpenAI-compatible /v1/chat/completions endpoint (used by Copilot SDK BYOK provider and MAF OpenAIChatCompletionClient). Includes message sanitization for providers with strict validation (e.g. DeepSeek rejects assistant messages with neither content nor tool_calls).
-10. agents.json -- Dynamic agent registry (persisted alongside pyproject.toml)
+10. routes/debug.py -- E2 post-hoc diagnostics over the agent_run trace store (GET /debug/runs, /debug/runs/{id}, POST .../flag). EXECUTIVE/AGENT-gated.
+11. routes/observability.py -- E2 LIVE activity feed over the global activity bus (cc:activity): GET /observability/activity/recent (backfill), /observability/activity/stream (SSE, agent+model activations across chat and all apps), /observability/active (runs in flight now). EXECUTIVE/AGENT-gated. Publish side lives in acb_common.activity + the executor run boundary + acb_llm._emit_usage.
+12. agents.json -- Dynamic agent registry (persisted alongside pyproject.toml)
 
 ## Work Guidance
 
@@ -54,6 +56,10 @@ webhook receivers, OAuth callbacks, and the Control Plane API.
   cc:stream:{tid} keeps growing; reconnect endpoint replays to RUN_FINISHED
   (E2E: uv run python scripts/_test_reconnect_e2e.py <agent> "<prompt>")
 - Active sessions: GET /chat/active-sessions lists running thread IDs
+- Live activity: GET /observability/active lists agent runs in flight; GET
+  /observability/activity/stream is an SSE feed of every agent/model activation
+  (start a chat or trigger an app → events appear); backfill via
+  /observability/activity/recent. EXECUTIVE/AGENT-gated.
 - Workspace files: GET /agent/workspace/{id} lists files; only inputs/, outputs/, and agent-data/ are visible to the frontend user (agent source code is hidden)
 - File download: GET /agent/workspace/{id}/file?path= serves raw bytes (50 MB cap)
 - Global artifacts: GET /agent/artifacts?agent=&category= lists all files from all agent workspaces; GET /agent/artifacts/file?agent=&path= serves raw bytes

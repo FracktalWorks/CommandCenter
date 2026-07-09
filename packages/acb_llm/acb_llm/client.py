@@ -464,6 +464,20 @@ def _emit_usage(model: str, tier: str, response: Any) -> None:
     except Exception:  # noqa: BLE001
         _run_ctx = {}
     _log.info("acb_llm.usage", model=model, tier=tier, **stats)
+    # Live activity feed (E2): surface every model call on the global bus so the
+    # /observability view shows model activations in real time, across every app.
+    # Best-effort + non-blocking (never raises); run/agent/user/source are
+    # inherited from the run context when this call is inside an agent run.
+    try:
+        from acb_common import publish_activity  # noqa: PLC0415
+        publish_activity(
+            kind="model",
+            model=model,
+            tier=tier,
+            tokens=stats.get("total_tokens"),
+        )
+    except Exception:  # noqa: BLE001
+        pass
     if os.environ.get("LLM_USAGE_AUDIT", "0") != "1":
         return
     try:

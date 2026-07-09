@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import redis.asyncio as aioredis
@@ -39,8 +39,10 @@ from acb_common.settings import get_settings
 
 ACTIVITY_STREAM = "cc:activity"
 LIVE_PREFIX = "cc:activity:live"
+COST_PREFIX = "cc:cost"        # per-day rollup hash: cc:cost:{YYYY-MM-DD}
 STREAM_MAXLEN = 2_000          # ~ last N activations; bounds memory
 LIVE_TTL_SECONDS = 900         # presence key self-heals if an "end" is lost
+COST_TTL_SECONDS = 60 * 60 * 24 * 45   # keep ~45 days of daily cost rollups
 
 # Fields copied from the run-correlation context when the caller omits them, so
 # a model call inside an agent run inherits that run's agent/user/thread/source.
@@ -66,6 +68,49 @@ def _get_client() -> aioredis.Redis:
 
 def _live_key(run_id: str) -> str:
     return f"{LIVE_PREFIX}:{run_id}"
+
+
+def _cost_key(day: str) -> str:
+    return f"{COST_PREFIX}:{day}"
+
+
+def _today() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+async def _record_cost(r: aioredis.Redis, evt: dict[str, Any]) -> None:
+    """Fold one priced model call into today's rollup hash. Best-effort.
+
+    One hash per UTC day (``cc:cost:{date}``) with additive fields so a daily
+    cost breakdown by model / app / agent is a single HGETALL — no migration,
+    no per-call Postgres write (the deliberate default; LLM_USAGE_AUDIT stays
+    the opt-in durable path). Fields:
+        total|cost|tokens|calls
+        model|<m>|cost|tokens|calls
+        source|<s>|cost   ·   agent|<a>|cost
+    """
+    cost = evt.get("cost_usd")
+    if not isinstance(cost, (int, float)):
+        return
+    tokens = int(evt.get("tokens") or 0)
+    model = str(evt.get("model") or "unknown")
+    source = str(evt.get("source") or "unattributed")
+    agent = str(evt.get("agent") or "")
+    key = _cost_key(_today())
+    pipe = r.pipeline(transaction=False)
+    pipe.hincrbyfloat(key, "total|cost", float(cost))
+    pipe.hincrby(key, "total|tokens", tokens)
+    pipe.hincrby(key, "total|calls", 1)
+    pipe.hincrbyfloat(key, f"model|{model}|cost", float(cost))
+    pipe.hincrby(key, f"model|{model}|tokens", tokens)
+    pipe.hincrby(key, f"model|{model}|calls", 1)
+    pipe.hincrbyfloat(key, f"source|{source}|cost", float(cost))
+    pipe.hincrby(key, f"source|{source}|calls", 1)
+    if agent:
+        pipe.hincrbyfloat(key, f"agent|{agent}|cost", float(cost))
+        pipe.hincrby(key, f"agent|{agent}|calls", 1)
+    pipe.expire(key, COST_TTL_SECONDS)
+    await pipe.execute()
 
 
 def _build_event(fields: dict[str, Any]) -> dict[str, Any]:
@@ -107,6 +152,12 @@ async def _axadd(evt: dict[str, Any]) -> None:
                         ex=LIVE_TTL_SECONDS)
         elif evt.get("phase") == "end":
             await r.delete(_live_key(run_id))
+    # Cost rollup: fold priced model calls into today's daily hash.
+    if evt.get("kind") == "model" and evt.get("cost_usd") is not None:
+        try:
+            await _record_cost(r, evt)
+        except Exception:  # noqa: BLE001 — cost rollup is best-effort
+            pass
 
 
 def publish_activity(**fields: Any) -> None:
@@ -239,3 +290,91 @@ async def active_runs() -> list[dict[str, Any]]:
         return out
     out.sort(key=lambda e: str(e.get("ts", "")), reverse=True)
     return out
+
+
+def _split_field(field: str) -> tuple[str, str, str]:
+    """Parse a rollup hash field ``dim|name|metric`` → (dim, name, metric).
+
+    ``name`` may itself contain ``/`` (provider-prefixed models) but not ``|``,
+    so joining the middle segments is safe. ``total|cost`` → ("total","","cost").
+    """
+    parts = field.split("|")
+    if len(parts) < 2:
+        return field, "", ""
+    return parts[0], "|".join(parts[1:-1]), parts[-1]
+
+
+async def cost_summary(days: int = 7) -> dict[str, Any]:
+    """Aggregate the last *days* daily cost rollups for the /observability cost view.
+
+    Returns per-day totals (chronological), plus by-model and by-source rollups
+    and grand totals. Costs are in USD (best-effort litellm pricing). Never
+    raises — missing/short history just yields zeroes.
+    """
+    days = max(1, min(days, 90))
+    r = _get_client()
+    today = datetime.now(timezone.utc).date()
+    out_days: list[dict[str, Any]] = []
+    by_model: dict[str, dict[str, float]] = {}
+    by_source: dict[str, dict[str, float]] = {}
+    totals = {"cost": 0.0, "tokens": 0, "calls": 0}
+
+    for i in range(days):
+        d = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+        try:
+            h = await r.hgetall(_cost_key(d))
+        except Exception:  # noqa: BLE001
+            h = {}
+        day_rec: dict[str, Any] = {
+            "date": d, "cost": 0.0, "tokens": 0, "calls": 0, "by_model": {},
+        }
+        for field, raw in (h or {}).items():
+            try:
+                v = float(raw)
+            except (TypeError, ValueError):
+                continue
+            dim, name, metric = _split_field(field)
+            if dim == "total":
+                if metric == "cost":
+                    day_rec["cost"] = round(v, 6)
+                    totals["cost"] += v
+                elif metric == "tokens":
+                    day_rec["tokens"] = int(v)
+                    totals["tokens"] += int(v)
+                elif metric == "calls":
+                    day_rec["calls"] = int(v)
+                    totals["calls"] += int(v)
+            elif dim == "model" and name:
+                m = by_model.setdefault(name, {"cost": 0.0, "tokens": 0, "calls": 0})
+                dm = day_rec["by_model"].setdefault(
+                    name, {"cost": 0.0, "tokens": 0, "calls": 0})
+                if metric == "cost":
+                    m["cost"] += v
+                    dm["cost"] = round(v, 6)
+                elif metric == "tokens":
+                    m["tokens"] += int(v)
+                    dm["tokens"] = int(v)
+                elif metric == "calls":
+                    m["calls"] += int(v)
+                    dm["calls"] = int(v)
+            elif dim == "source" and name:
+                s = by_source.setdefault(name, {"cost": 0.0, "calls": 0})
+                if metric == "cost":
+                    s["cost"] += v
+                elif metric == "calls":
+                    s["calls"] += int(v)
+        out_days.append(day_rec)
+
+    out_days.reverse()  # oldest → newest for a left-to-right chart
+    for m in by_model.values():
+        m["cost"] = round(m["cost"], 6)
+    for s in by_source.values():
+        s["cost"] = round(s["cost"], 6)
+    totals["cost"] = round(totals["cost"], 6)
+    return {
+        "days": out_days,
+        "by_model": by_model,
+        "by_source": by_source,
+        "totals": totals,
+        "window_days": days,
+    }

@@ -191,6 +191,42 @@ agent or model is activated," across chat AND every app (email, tasks, …).
   rollups + per-agent history are the next increment (read `agent_run` +
   `audit_event`; needs `LLM_USAGE_AUDIT=1`).
 
+## Phase 6 — Cross-app coverage, live cost, agent office
+Turns the live feed into the full "complete visibility" app the user asked for.
+
+- **Universal app coverage (zero-touch).** Email and the task manager reach the
+  model through `acb_llm.context.acompletion_with_fallback` (not `client.complete`,
+  which covers agent runs), and it previously emitted nothing. It now calls
+  `_emit_usage(...)` on success, and `_infer_app_source()` walks the stack for
+  the caller's `gateway.routes.<app>` module → attributes the call to
+  `email` / `tasks` / **any future app** with NO per-call-site changes. Agent
+  runs keep their `source` from the run context (chat/…). Verified: email→email,
+  tasks→tasks, a hypothetical `newapp`→newapp, orchestrator→None.
+- **Live cost.** `_emit_usage` prices every call via litellm (`completion_cost`
+  → `cost_per_token` fallback; unknown model → `None`, shown as "—", never a
+  misleading $0) and puts `cost_usd` on the model activation. `activity._axadd`
+  folds priced calls into a per-UTC-day Redis hash `cc:cost:{date}` (additive
+  `total|` / `model|` / `source|` / `agent|` fields, ~45-day TTL) — an always-on
+  rollup with NO per-call Postgres write (that stays the `LLM_USAGE_AUDIT` opt-in).
+  `cost_summary(days)` reads it; `GET /observability/cost` serves per-day totals
+  + by-model + by-app.
+- **Roster / office.** `GET /observability/roster` merges the agent registry with
+  the live presence set → each agent reports `working` / `idle`. Powers the
+  8-bit office.
+- **UI.** `/observability` is now a 3-view app: **Office** (an 8-bit room —
+  each agent is a character at a desk that works/sleeps/errors live; a server
+  rack lights up per active model; today's $ ticker), **Live feed** (stream +
+  per-call cost), **Cost** (daily bars, by-model, by-app). Click any agent →
+  drawer with recent runs + errors (proxied from `/debug/runs?agent=`). All
+  dependency-free (CSS keyframes, no chart lib). New proxies:
+  `api/observability/{cost,roster,runs}/route.ts`.
+- **Tests.** +9 (cost pricing incl. unknown-model→None, source inference across
+  apps, cost-rollup field parsing + aggregation, empty history). Full unit suite
+  807 green. Frontend: `next build` clean (page + 6 API routes), `tsc`/eslint clean.
+- **To make a NEW app observable:** nothing — if it calls models via
+  `acompletion_with_fallback` (or runs an agent), it shows up attributed. Only
+  add a `sourceClass()` colour in the page if you want a custom app badge.
+
 ## Status
 - 2026-07-03 — Phases 1+2 shipped. E2 C+ → B+.
 - 2026-07-03 — Phases 3+4 shipped. E2 B+ → A−. `/debug/runs` diagnostics API
@@ -202,5 +238,11 @@ agent or model is activated," across chat AND every app (email, tasks, …).
   `cc:activity` bus (`acb_common.activity`), publish at the executor run
   boundary + `acb_llm._emit_usage`, `/observability` gateway API (recent / SSE
   stream / active) + a new `/observability` Control Plane page. 7 activity-bus
-  unit tests; full unit suite 801 green. Next: cost/token rollups + per-agent
-  history (the "full dashboard" increment).
+  unit tests; full unit suite 801 green.
+- 2026-07-09 — Phase 6 shipped. Universal app coverage (email/tasks + any future
+  app via `_infer_app_source`), live per-call cost pricing + daily Redis rollup
+  (`/observability/cost`), agent roster (`/observability/roster`), and a redesigned
+  3-view `/observability` page (8-bit office · live feed · cost) with per-agent
+  run/error drill-down. +9 tests (807 total); `next build` + `tsc` + eslint clean.
+  Deferred: durable Postgres cost table (Redis rollup is ~45-day, non-durable
+  across a Redis flush); sprite art polish.

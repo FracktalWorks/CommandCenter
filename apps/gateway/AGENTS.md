@@ -23,7 +23,7 @@ webhook receivers, OAuth callbacks, and the Control Plane API.
 8. routes/email.py -- Email account CRUD, message listing/search, send, sync, AI chat, OAuth flow for Gmail/Microsoft/IMAP. Background sync scheduler hooks (refresh/remove) on account PATCH/DELETE.
 9. routes/v1_compat.py -- OpenAI-compatible /v1/chat/completions endpoint (used by Copilot SDK BYOK provider and MAF OpenAIChatCompletionClient). Includes message sanitization for providers with strict validation (e.g. DeepSeek rejects assistant messages with neither content nor tool_calls).
 10. routes/debug.py -- E2 post-hoc diagnostics over the agent_run trace store (GET /debug/runs, /debug/runs/{id}, POST .../flag). EXECUTIVE/AGENT-gated.
-11. routes/observability.py -- E2 LIVE activity feed over the global activity bus (cc:activity): GET /observability/activity/recent (backfill), /observability/activity/stream (SSE, agent+model activations across chat and all apps), /observability/active (runs in flight now). EXECUTIVE/AGENT-gated. Publish side lives in acb_common.activity + the executor run boundary + acb_llm._emit_usage.
+11. routes/observability.py -- E2 LIVE observability over the global activity bus (cc:activity): GET /observability/activity/recent (backfill), /observability/activity/stream (SSE, agent+model activations across chat and ALL apps), /observability/active (runs in flight), /observability/roster (all agents + working/idle status for the office view), /observability/cost (daily LLM $ rollup by model/app). EXECUTIVE/AGENT-gated. Publish side: acb_common.activity + the executor run boundary + acb_llm._emit_usage (which also prices each call via litellm). App attribution is automatic — acb_llm.context._infer_app_source() reads the caller's gateway.routes.<app> module, so any new app is observable with zero wiring.
 12. agents.json -- Dynamic agent registry (persisted alongside pyproject.toml)
 
 ## Work Guidance
@@ -59,7 +59,10 @@ webhook receivers, OAuth callbacks, and the Control Plane API.
 - Live activity: GET /observability/active lists agent runs in flight; GET
   /observability/activity/stream is an SSE feed of every agent/model activation
   (start a chat or trigger an app → events appear); backfill via
-  /observability/activity/recent. EXECUTIVE/AGENT-gated.
+  /observability/activity/recent. GET /observability/roster = all agents +
+  status; GET /observability/cost?days=N = daily $ rollup. EXECUTIVE/AGENT-gated.
+  Cross-app check: trigger an email/tasks LLM call and confirm it appears with
+  the right `source` and a non-null `cost_usd`.
 - Workspace files: GET /agent/workspace/{id} lists files; only inputs/, outputs/, and agent-data/ are visible to the frontend user (agent source code is hidden)
 - File download: GET /agent/workspace/{id}/file?path= serves raw bytes (50 MB cap)
 - Global artifacts: GET /agent/artifacts?agent=&category= lists all files from all agent workspaces; GET /agent/artifacts/file?agent=&path= serves raw bytes

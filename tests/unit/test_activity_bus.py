@@ -107,3 +107,65 @@ def test_publish_write_failure_is_swallowed(monkeypatch):
     # The scheduled task raises internally; the done-callback retrieves the
     # exception so it never surfaces as an unhandled error.
     asyncio.run(_run())
+
+
+# ── Cost rollup ──────────────────────────────────────────────────────────────
+
+def test_split_field_parses_rollup_hash_fields():
+    from acb_common.activity import _split_field
+    assert _split_field("total|cost") == ("total", "", "cost")
+    assert _split_field("total|tokens") == ("total", "", "tokens")
+    # Provider-prefixed model names contain "/" but never "|".
+    assert _split_field("model|deepseek/deepseek-chat|cost") == (
+        "model", "deepseek/deepseek-chat", "cost")
+    assert _split_field("source|email|calls") == ("source", "email", "calls")
+
+
+def test_cost_summary_aggregates_daily_rollups(monkeypatch):
+    from acb_common import activity
+
+    today = activity._today()
+
+    class _FakeRedis:
+        async def hgetall(self, key):
+            if key == activity._cost_key(today):
+                return {
+                    "total|cost": "0.5",
+                    "total|tokens": "1500",
+                    "total|calls": "3",
+                    "model|gpt-4o-mini|cost": "0.2",
+                    "model|gpt-4o-mini|tokens": "1000",
+                    "model|gpt-4o-mini|calls": "2",
+                    "model|deepseek/deepseek-chat|cost": "0.3",
+                    "model|deepseek/deepseek-chat|calls": "1",
+                    "source|email|cost": "0.2",
+                    "source|chat|cost": "0.3",
+                }
+            return {}
+
+    monkeypatch.setattr(activity, "_get_client", lambda: _FakeRedis())
+
+    out = asyncio.run(activity.cost_summary(days=3))
+    assert out["window_days"] == 3
+    assert len(out["days"]) == 3
+    assert out["days"][-1]["date"] == today          # newest last (chart L→R)
+    assert out["days"][-1]["cost"] == 0.5
+    assert out["totals"]["cost"] == 0.5
+    assert out["totals"]["calls"] == 3
+    assert out["by_model"]["gpt-4o-mini"]["cost"] == 0.2
+    assert out["by_model"]["deepseek/deepseek-chat"]["calls"] == 1
+    assert out["by_source"]["email"]["cost"] == 0.2
+    assert out["by_source"]["chat"]["cost"] == 0.3
+
+
+def test_cost_summary_empty_history_is_all_zero(monkeypatch):
+    from acb_common import activity
+
+    class _Empty:
+        async def hgetall(self, key):
+            return {}
+
+    monkeypatch.setattr(activity, "_get_client", lambda: _Empty())
+    out = asyncio.run(activity.cost_summary(days=7))
+    assert out["totals"] == {"cost": 0.0, "tokens": 0, "calls": 0}
+    assert out["by_model"] == {}

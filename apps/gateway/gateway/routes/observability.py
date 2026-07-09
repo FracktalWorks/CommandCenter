@@ -22,7 +22,13 @@ import json
 from typing import Any, AsyncIterator
 
 from acb_auth import UserContext, UserRole, require_role
-from acb_common import active_runs, get_logger, read_activity_since, recent_activity
+from acb_common import (
+    active_runs,
+    cost_summary,
+    get_logger,
+    read_activity_since,
+    recent_activity,
+)
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
@@ -58,6 +64,65 @@ async def active(
     """
     runs = await active_runs()
     return {"runs": runs, "count": len(runs)}
+
+
+@router.get("/roster")
+async def roster(
+    _admin: UserContext = _ADMIN,
+) -> dict[str, Any]:
+    """Every registered agent + its live status — the office view's cast list.
+
+    Merges the static + dynamically-registered agent registry with the live
+    presence set so each agent reports ``working`` (an active run) or ``idle``.
+    Deep per-agent history/errors come from ``/debug/runs?agent=`` on demand.
+    """
+    try:
+        from gateway.routes.agent import (  # noqa: PLC0415
+            _AGENT_REGISTRY,
+            _load_dynamic_agents,
+        )
+        registry = list(_load_dynamic_agents()) + list(_AGENT_REGISTRY)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("observability.roster_registry_failed", error=str(exc))
+        registry = []
+
+    runs = await active_runs()
+    live_by_agent: dict[str, list[dict[str, Any]]] = {}
+    for r in runs:
+        live_by_agent.setdefault(str(r.get("agent") or ""), []).append(r)
+
+    seen: set[str] = set()
+    agents: list[dict[str, Any]] = []
+    for a in registry:
+        name = str(a.get("name") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        live = live_by_agent.get(name, [])
+        agents.append({
+            "name": name,
+            "description": str(a.get("description") or ""),
+            "runtime": a.get("agent_runtime") or a.get("runtime") or "maf",
+            "status": "working" if live else "idle",
+            "active_runs": len(live),
+            "last_ts": live[0].get("ts") if live else None,
+            "source": live[0].get("source") if live else None,
+        })
+    agents.sort(key=lambda e: (e["status"] != "working", e["name"]))
+    return {"agents": agents, "count": len(agents)}
+
+
+@router.get("/cost")
+async def cost(
+    days: int = 7,
+    _admin: UserContext = _ADMIN,
+) -> dict[str, Any]:
+    """Daily LLM cost rollup (USD) for the last *days* days.
+
+    Per-day totals + by-model + by-source breakdowns, from the always-on Redis
+    rollup (best-effort litellm pricing). ``days`` is clamped to [1, 90].
+    """
+    return await cost_summary(days=days)
 
 
 async def _sse_activity() -> AsyncIterator[bytes]:

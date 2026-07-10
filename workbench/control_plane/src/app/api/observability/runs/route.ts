@@ -1,10 +1,10 @@
 /**
  * GET /api/observability/runs
  *
- * Proxies the gateway's E2 diagnostics list (GET /debug/runs) for the per-agent
- * drill-down: recent runs + errors for a single agent. Forwards agent / status
- * / since_hours / limit filters. EXECUTIVE/AGENT-gated at the gateway (a run
- * row can carry error detail).
+ * Durable activity history from the gateway (GET /observability/runs → the
+ * agent_run store). Powers the History tab and the per-agent drill-down.
+ * Forwards agent / status / since_hours / limit filters. Open to any
+ * authenticated operator; returns lean metadata rows (no full trace content).
  */
 import { NextRequest, NextResponse } from "next/server";
 import { auth, isAuthEnabled } from "@/auth";
@@ -54,7 +54,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     if (v) qs.set(k, v);
   }
   try {
-    const res = await fetch(`${GATEWAY_URL}/debug/runs?${qs.toString()}`, {
+    // Durable run history from the observability route (open to any authed
+    // operator) — NOT /debug/runs, which is EXECUTIVE-gated and returns full
+    // message-content traces. This endpoint returns lean metadata rows only.
+    const res = await fetch(`${GATEWAY_URL}/observability/runs?${qs.toString()}`, {
       headers: await gatewayHeaders(),
       signal: AbortSignal.timeout(6_000),
     });

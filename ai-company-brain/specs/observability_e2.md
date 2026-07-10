@@ -277,6 +277,28 @@ Verified via TestClient (header present → agent tagged; absent → chat fallba
   handler in `main.py` (v1_compat's registers first and is the full
   implementation); `/v1/embeddings` stays.
 
+### Phase 6.3 — access fix + durable history ("it doesn't work")
+Symptom: the page showed nothing for the operator while chat/email worked.
+Root cause: the observability + `/debug` routes were `require_role(EXECUTIVE,
+AGENT)`, but the SSO proxy only sends `X-User-Role: executive` when the email is
+in `EXECUTIVE_EMAILS` (empty by default, and the operator's domain isn't the
+`fracktal.in` default) — so every observability call 403'd and the proxies
+degrade to empty → a silent blank page. chat/memory/tasks were unaffected (no
+role gate).
+- **Fix:** the live observability views (`recent`/`stream`/`active`/`roster`/
+  `cost`/`runs`) now allow any AUTHENTICATED caller (EXECUTIVE + AGENT +
+  EMPLOYEE) — they expose operational METADATA only. The full message-content
+  trace stays EXECUTIVE-gated at `/debug/runs/{id}`.
+- **Durable history (answers "can I see history of activity?"):** the live feed
+  is the ephemeral Redis stream (~2000 events, lost on flush). Added
+  `GET /observability/runs` over the durable `agent_run` table (lean rows:
+  metadata + error message, no trace blob) + a **History** tab (durable,
+  filter All/Errors) and repointed the per-agent drawer at it. This shows runs
+  going back as far as retention — including data recorded since E2 Phase 2,
+  before the live bus existed.
+- Tests: +4 (employee-role 200 on runs/cost, DB-less degrade to [], bad-status
+  ignored). Full unit suite 817. `next build` + tsc + eslint clean.
+
 ### What v1_compat IS (not legacy)
 `routes/v1_compat.py` is the gateway's **OpenAI-compatible LLM egress** — the
 single `/v1/chat/completions` every agent runtime (MAF `OpenAIChatCompletionClient`,

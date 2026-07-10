@@ -550,6 +550,109 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// History view — DURABLE run log (agent_run), survives restarts / Redis flush
+// ───────────────────────────────────────────────────────────────────────────
+
+function HistoryView({ onOpen }: { onOpen: (name: string) => void }) {
+  const [runs, setRuns] = useState<RunRow[] | null>(null);
+  const [filter, setFilter] = useState<"all" | "error">("all");
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const q = filter === "error" ? "&status=error" : "";
+        const res = await fetch(`/api/observability/runs?limit=100${q}`);
+        const data = await res.json();
+        if (!cancelled) setRuns(Array.isArray(data.runs) ? data.runs : []);
+      } catch {
+        if (!cancelled) setRuns([]);
+      }
+    };
+    load();
+    const id = setInterval(load, 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [filter]);
+
+  return (
+    <div className="flex flex-col gap-3 p-1">
+      <div className="flex items-center gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Run history</h3>
+        <span className="text-[11px] text-muted-foreground/60">durable · newest first</span>
+        <span className="flex-1" />
+        {(["all", "error"] as const).map((f) => (
+          <button
+            key={f}
+            onClick={() => setFilter(f)}
+            className={`text-xs px-2.5 py-1 rounded-lg transition-colors ${
+              filter === f ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary/50"
+            }`}
+          >
+            {f === "all" ? "All" : "Errors"}
+          </button>
+        ))}
+      </div>
+      {runs === null ? (
+        <p className="text-sm text-muted-foreground p-4 animate-pulse">Loading history…</p>
+      ) : runs.length === 0 ? (
+        <div className="flex flex-col items-center justify-center h-40 text-center gap-2">
+          <span className="text-2xl">🗂️</span>
+          <p className="text-sm text-muted-foreground">No runs recorded yet.</p>
+          <p className="text-xs text-muted-foreground/60">
+            Completed agent runs appear here — this list is durable (it survives restarts, unlike the live feed).
+          </p>
+        </div>
+      ) : (
+        <ul className="flex flex-col divide-y divide-border/40">
+          {runs.map((r, i) => (
+            <li key={r.run_id ?? i} className="flex items-center gap-3 py-2 px-2 rounded-lg hover:bg-secondary/30">
+              <span
+                className={`h-2 w-2 shrink-0 rounded-full ${
+                  r.status === "error"
+                    ? "bg-destructive"
+                    : r.status === "completed"
+                      ? "bg-success/70"
+                      : r.status === "running"
+                        ? "bg-amber-500 obs-led"
+                        : "bg-muted-foreground/50"
+                }`}
+              />
+              <button
+                onClick={() => r.agent && onOpen(r.agent)}
+                className="font-mono text-sm text-foreground truncate hover:underline shrink-0 max-w-[28%]"
+              >
+                {r.agent ?? "agent"}
+              </button>
+              {r.model && (
+                <span className="font-mono text-[11px] text-muted-foreground/70 truncate shrink-0">{shortModel(r.model)}</span>
+              )}
+              {r.error_message ? (
+                <span className="text-[11px] text-destructive/80 truncate flex-1">
+                  {r.error_type ? `${r.error_type}: ` : ""}
+                  {r.error_message}
+                </span>
+              ) : (
+                <span className="flex-1" />
+              )}
+              {r.total_tokens != null && (
+                <span className="text-[11px] font-mono text-muted-foreground shrink-0">{fmtTokens(r.total_tokens)}t</span>
+              )}
+              {r.duration_ms != null && (
+                <span className="text-[11px] font-mono text-muted-foreground shrink-0 w-12 text-right">{fmtDuration(r.duration_ms)}</span>
+              )}
+              <span className="text-[10px] text-muted-foreground/60 shrink-0 w-16 text-right">{relativeTime(r.started_at)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // Agent drill-down drawer
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -686,7 +789,7 @@ function AgentDrawer({
 // Page
 // ───────────────────────────────────────────────────────────────────────────
 
-type Tab = "office" | "feed" | "cost";
+type Tab = "office" | "feed" | "cost" | "history";
 
 export default function ObservabilityPage() {
   const [tab, setTab] = useState<Tab>("office");
@@ -842,6 +945,7 @@ export default function ObservabilityPage() {
   const TABS: Array<{ id: Tab; label: string; icon: string }> = [
     { id: "office", label: "Office", icon: "🏢" },
     { id: "feed", label: "Live feed", icon: "📡" },
+    { id: "history", label: "History", icon: "📜" },
     { id: "cost", label: "Cost", icon: "💰" },
   ];
 
@@ -902,6 +1006,11 @@ export default function ObservabilityPage() {
         {tab === "feed" && (
           <div className="h-full overflow-y-auto">
             <FeedView feed={feed} onOpen={setSelected} />
+          </div>
+        )}
+        {tab === "history" && (
+          <div className="h-full overflow-y-auto">
+            <HistoryView onOpen={setSelected} />
           </div>
         )}
         {tab === "cost" && (

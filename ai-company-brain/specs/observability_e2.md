@@ -262,12 +262,20 @@ forwards `agent`/`source` into `_emit_usage`, so the orchestrator's model calls
 + cost now attribute to `agent="orchestrator"` (→ per-agent cost). **Fail-soft:**
 no header → source="chat", no agent (prior behaviour) — it cannot regress.
 Verified via TestClient (header present → agent tagged; absent → chat fallback).
-- **Still app-level:** named specialists build their client in their own repo, so
-  their model calls aren't header-tagged (they show source="chat", no agent) —
-  but their start/end lifecycle events DO carry the agent, and they aren't
-  mislabelled as orchestrator (they delegate through the executor, not the
-  orchestrator's client). Copilot-SDK mutation traffic also lands in "chat".
-  Threading the header through named-agent/mutation clients is the next step.
+- **Extended to native MAF named agents.** `agent-email-assistant` builds its own
+  `OpenAIChatCompletionClient` (in-repo) → tagged with
+  `default_headers` (agent="email-assistant"), so its model calls + cost now
+  correlate too.
+- **Still app-level (by design):** agents that run on `GitHubCopilotAgent`
+  (task-manager, apis-config) reach the model through the Copilot SDK's BYOK
+  provider, which doesn't expose a client-header hook here — their model calls
+  show source="chat"/no agent, but their start/end lifecycle events DO carry the
+  agent (via the executor), and they're never mislabelled as orchestrator.
+  Copilot-SDK mutation traffic also lands in "chat". Per-agent model correlation
+  for those needs an SDK-level header pass-through (upstream) — deferred.
+- **Cleanup:** removed the permanently-shadowed duplicate `/v1/chat/completions`
+  handler in `main.py` (v1_compat's registers first and is the full
+  implementation); `/v1/embeddings` stays.
 
 ### What v1_compat IS (not legacy)
 `routes/v1_compat.py` is the gateway's **OpenAI-compatible LLM egress** — the

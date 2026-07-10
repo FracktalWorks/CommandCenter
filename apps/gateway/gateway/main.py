@@ -820,78 +820,12 @@ async def health_runtime() -> dict:
     return {"ok": all(c["ok"] for c in checks.values()), "checks": checks}
 
 
-# ── OpenAI-compatible /v1/chat/completions (for Mem0 + other OpenAI clients) ──
-# Mem0's OpenAI client needs a standard /v1/chat/completions endpoint.
-# We expose our LiteLLM tier models through this endpoint so Mem0 can use
-# tier-fast (DeepSeek) without needing an OPENAI_API_KEY.
-
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-
-class ChatCompletionRequest(BaseModel):
-    model: str = "tier-fast"
-    messages: list[ChatMessage]
-    max_tokens: int = 2000
-    temperature: float = 0.1
-
-@app.post("/v1/chat/completions", tags=["openai"])
-async def chat_completions(
-    req: ChatCompletionRequest,
-    user: UserContext = Depends(get_current_user),
-) -> dict:
-    """OpenAI-compatible chat completions via LiteLLM tier models."""
-    try:
-        import litellm  # noqa: PLC0415
-
-        settings = get_settings()
-        litellm.drop_params = True
-        litellm.suppress_debug_info = True
-
-        msgs = [{"role": m.role, "content": m.content} for m in req.messages]
-        response = await litellm.acompletion(
-            model=req.model,
-            messages=msgs,
-            max_tokens=req.max_tokens,
-            temperature=req.temperature,
-            api_base=settings.litellm_base_url,
-            api_key=settings.litellm_master_key,
-        )
-        # Observability (E2): attribute this OpenAI-compat call (Mem0 memory
-        # extraction + other OpenAI clients) to the "memory" source. Best-effort.
-        try:
-            from acb_llm.client import _emit_usage  # noqa: PLC0415
-            _emit_usage(getattr(response, "model", "") or req.model, "", response,
-                        source="memory")
-        except Exception:  # noqa: BLE001
-            pass
-        choice = response.choices[0]
-        return {
-            "id": response.id,
-            "object": "chat.completion",
-            "created": getattr(response, "created", 0),
-            "model": response.model or req.model,
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": choice.message.content or "",
-                },
-                "finish_reason": choice.finish_reason or "stop",
-            }],
-            "usage": {
-                "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
-                "completion_tokens": getattr(response.usage, "completion_tokens", 0),
-                "total_tokens": getattr(response.usage, "total_tokens", 0),
-            },
-        }
-    except Exception as exc:
-        _log.exception("v1.chat_completions_error")
-        from fastapi.responses import JSONResponse
-        return JSONResponse(
-            status_code=500,
-            content={"error": {"message": str(exc), "type": "server_error"}},
-        )
+# NOTE: /v1/chat/completions is served by routes/v1_compat.py (the full
+# implementation: streaming, tools, provider message-sanitization, prompt-cache
+# breakpoints, AND observability emission). It is registered before this module
+# body runs, so a duplicate handler here would be permanently shadowed — it was
+# removed (2026-07-09). Mem0 + every other OpenAI client already resolve to
+# v1_compat. Only /v1/embeddings remains below (v1_compat doesn't serve it).
 
 
 class EmbeddingRequest(BaseModel):

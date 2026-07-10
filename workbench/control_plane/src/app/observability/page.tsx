@@ -23,6 +23,8 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { ConferenceScene, PIXEL_ART_STYLE, PixelWorker, type WorkerState } from "./pixel";
+
 // ───────────────────────────────────────────────────────────────────────────
 // Types
 // ───────────────────────────────────────────────────────────────────────────
@@ -212,41 +214,21 @@ function Desk({
   onOpen: (name: string) => void;
 }) {
   const working = agent.status === "working" || hot;
-  const state = working ? "obs-working" : "obs-idle";
+  const spriteState: WorkerState =
+    agent.status === "error" ? "error" : working ? "working" : "idle";
   return (
     <button
       onClick={() => onOpen(agent.name)}
-      className={`obs-desk ${state} group text-left rounded-xl border p-3 flex flex-col items-center gap-2 w-full ${
+      className={`obs-desk group text-left rounded-xl border p-2 pt-3 flex flex-col items-center gap-1.5 w-full ${
         working
           ? "border-amber-500/40 bg-amber-500/5 shadow-[0_0_0_1px_rgba(245,158,11,0.15)]"
           : "border-border bg-card/60 hover:border-border"
       }`}
       title={agent.description || agent.name}
     >
-      {/* Character + zzz */}
-      <div className="relative">
-        <div className="obs-char text-3xl leading-none select-none">{agentEmoji(agent.name)}</div>
-        {!working && (
-          <span className="obs-zzz absolute -right-2 -top-1 text-[10px] text-muted-foreground">z</span>
-        )}
-        {working && (
-          <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-500 obs-led" />
-        )}
-      </div>
-
-      {/* Monitor / desk */}
-      <div
-        className={`obs-monitor w-full h-8 rounded-md border ${
-          agent.status === "error"
-            ? "border-destructive/50 bg-destructive/10"
-            : working
-              ? "border-emerald-500/40 bg-emerald-500/10"
-              : "border-border bg-secondary/30"
-        }`}
-      >
-        {working && (
-          <span className="obs-scan block h-full w-6 bg-emerald-400/25" />
-        )}
+      {/* Pixel-art agent at their desk (working / sleeping / error) */}
+      <div className="w-full max-w-[104px]">
+        <PixelWorker seed={agent.name} state={spriteState} />
       </div>
 
       <div className="obs-pixel text-[11px] font-semibold text-foreground truncate max-w-full">
@@ -305,6 +287,35 @@ function ServerRack({ blades }: { blades: ModelBlade[] }) {
   );
 }
 
+// When ≥2 agents are working at once (multi-agent orchestration), pull them into
+// a shared "war room" card at a conference table — collaboration made visible.
+function ConferenceCard({ names, onOpen }: { names: string[]; onOpen: (name: string) => void }) {
+  return (
+    <div className="mb-4 rounded-2xl border border-amber-500/30 bg-amber-500/[0.06] p-3">
+      <div className="obs-pixel text-[11px] uppercase tracking-wide text-amber-500 mb-2 flex items-center gap-2">
+        <span className="h-2 w-2 rounded-full bg-amber-500 obs-led" />
+        War room · {names.length} agents collaborating
+      </div>
+      <div className="flex flex-col sm:flex-row items-center gap-3">
+        <div className="w-full sm:w-64 shrink-0">
+          <ConferenceScene seeds={names} />
+        </div>
+        <div className="flex flex-wrap gap-1.5 min-w-0">
+          {names.map((n) => (
+            <button
+              key={n}
+              onClick={() => onOpen(n)}
+              className="obs-pixel text-[11px] px-2 py-1 rounded-lg border border-border bg-card/60 text-foreground hover:border-amber-500/40 transition-colors"
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OfficeView({
   roster,
   hotAgents,
@@ -318,9 +329,10 @@ function OfficeView({
   todayCost: number;
   onOpen: (name: string) => void;
 }) {
-  const workingCount = roster.filter(
-    (a) => a.status === "working" || hotAgents.has(a.name),
-  ).length;
+  const workingNames = roster
+    .filter((a) => a.status === "working" || hotAgents.has(a.name))
+    .map((a) => a.name);
+  const workingCount = workingNames.length;
   return (
     <div className="flex flex-col lg:flex-row gap-4 h-full min-h-0">
       <div className="obs-room flex-1 min-w-0 overflow-y-auto rounded-2xl border border-border bg-background/40 p-4">
@@ -330,6 +342,7 @@ function OfficeView({
           </div>
           <div className="obs-pixel text-[11px] text-emerald-500">Today {fmtCost(todayCost)}</div>
         </div>
+        {workingCount >= 2 && <ConferenceCard names={workingNames} onOpen={onOpen} />}
         {roster.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-center gap-2">
             <span className="text-3xl">🏗️</span>
@@ -951,7 +964,7 @@ export default function ObservabilityPage() {
 
   return (
     <div className="flex flex-col h-full max-h-full">
-      <style>{PIXEL_STYLE}</style>
+      <style>{PIXEL_STYLE + PIXEL_ART_STYLE}</style>
 
       {/* Header */}
       <header className="flex items-center justify-between gap-3 px-5 py-3 border-b border-border flex-wrap">

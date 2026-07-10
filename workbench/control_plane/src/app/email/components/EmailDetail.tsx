@@ -19,6 +19,7 @@ import { ArtifactAttachPicker } from "./ArtifactAttachPicker";
 import { ComposerQuote, AiButton, AiAssistBar } from "./ComposerAI";
 import { MessageContent } from "./MessageContent";
 import { AttachmentList } from "./AttachmentList";
+import { SignaturePreview } from "./SignaturePreview";
 import { ConversationView, DraftCard, isDraftEmail } from "./ConversationView";
 import { LabelMenu } from "./LabelMenu";
 import { LabelChip } from "./LabelChip";
@@ -839,8 +840,9 @@ export function EmailDetail({ email }: EmailDetailProps) {
             onSent={refreshThreadAfterSend}
           />
         ) : isDraftEmail(email) ? (
-          /* Standalone draft — editable composer */
-          <DraftCard draft={email} />
+          /* Standalone draft — editable composer. Pass the reply target so the
+             Reply / Reply All toggle can appear when it's a reply to a message. */
+          <DraftCard draft={email} replyTo={replyTarget} />
         ) : (
         <>
         {/* Sender info */}
@@ -1084,6 +1086,10 @@ export function EmailDetail({ email }: EmailDetailProps) {
                   </span>
                 ))}
               </div>
+            )}
+            {/* Signature as it will be appended on send (Outlook/Gmail style). */}
+            {replyMode !== "forward" && (
+              <SignaturePreview accountId={selectedAccountId} />
             )}
             {/* Quoted trailing email — collapsed, read-only (reattached on send) */}
             <ComposerQuote quote={replyQuote} />

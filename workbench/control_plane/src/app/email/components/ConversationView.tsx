@@ -12,6 +12,7 @@ import { splitQuotedText } from "../lib/quoting";
 import { useEmailStore } from "../lib/emailStore";
 import { ComposerQuote, AiButton, AiAssistBar } from "./ComposerAI";
 import { MessageContent } from "./MessageContent";
+import { SignaturePreview } from "./SignaturePreview";
 
 const isDraft = (m: Email) =>
   (m.folder || "").toLowerCase() === "drafts" ||
@@ -239,7 +240,10 @@ export function DraftCard({
   const ownEmail = accounts
     .find((a) => a.id === (draft.accountId || selectedAccountId))
     ?.emailAddress?.toLowerCase();
-  // Default to REPLY-ALL: the original sender + everyone on To, minus yourself;
+  // A real inbound message to reply to (vs a from-scratch / compose draft) —
+  // gates the Reply / Reply All toggle and the reply-all recipient maths.
+  const hasReplyTarget = !!replyTo && replyTo.id !== draft.id;
+  // REPLY-ALL recipients: the original sender + everyone on To, minus yourself;
   // original Cc carried over. Falls back to whatever the draft already has.
   const replyAllTo = (() => {
     if (!replyTo) return draft.to.map((t) => t.email).filter(Boolean);
@@ -255,6 +259,12 @@ export function DraftCard({
   const replyAllCc = (replyTo?.cc || [])
     .map((c) => c.email)
     .filter((e) => e && e.toLowerCase() !== ownEmail);
+  // REPLY (sender only) recipients.
+  const replyOnlyTo = (() => {
+    const from = replyTo?.from?.email;
+    if (from && from.toLowerCase() !== ownEmail) return [from];
+    return draft.to.map((t) => t.email).filter(Boolean);
+  })();
 
   // Split any quoted trailing chain out of the draft body so the editable box
   // holds only the new text (and AI never rewrites the quote); it's reattached
@@ -266,7 +276,26 @@ export function DraftCard({
   const [to, setTo] = useState(replyAllTo.join(", "));
   const [cc, setCc] = useState(replyAllCc.join(", "));
   const [bcc, setBcc] = useState("");
-  const [showCc, setShowCc] = useState(replyAllCc.length > 0);
+  // Default to reply-all when replying to a real message (parity with EmailDetail
+  // and Rapid Inbox); the toggle narrows to the sender only.
+  const [replyAll, setReplyAll] = useState(hasReplyTarget);
+  // Show Cc/Bcc up-front on a reply so they're always visible; keep them behind
+  // the reveal button only for a from-scratch draft.
+  const [showCc, setShowCc] = useState(hasReplyTarget || replyAllCc.length > 0);
+
+  /** Flip Reply ↔ Reply All, recomputing To/Cc from the original message. */
+  const applyReplyAll = (next: boolean) => {
+    setReplyAll(next);
+    dirty.current = true;
+    if (next) {
+      setTo(replyAllTo.join(", "));
+      setCc(replyAllCc.join(", "));
+      if (replyAllCc.length) setShowCc(true);
+    } else {
+      setTo(replyOnlyTo.join(", "));
+      setCc("");
+    }
+  };
   const [sending, setSending] = useState(false);
   const dirty = useRef(false);
   const [draftStatus, setDraftStatus] = useState<"idle" | "saving" | "saved">("idle");
@@ -442,7 +471,31 @@ export function DraftCard({
       <div className="flex items-center gap-1.5 mb-2">
         <PenLine size={12} className="text-primary" />
         <span className="text-xs font-medium text-primary">Draft</span>
-        <span className="text-[10px] text-muted-foreground ml-auto">
+        {hasReplyTarget && (
+          <div className="flex items-center bg-background border border-border rounded-md p-0.5 ml-1.5">
+            <button
+              type="button"
+              onClick={() => applyReplyAll(false)}
+              title="Reply to sender only"
+              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors ${
+                !replyAll ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Reply size={11} /> Reply
+            </button>
+            <button
+              type="button"
+              onClick={() => applyReplyAll(true)}
+              title="Reply to everyone"
+              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors ${
+                replyAll ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <ReplyAll size={11} /> Reply All
+            </button>
+          </div>
+        )}
+        <span className="text-[10px] text-muted-foreground ml-auto truncate max-w-[45%]">
           {draft.subject}
         </span>
       </div>
@@ -487,6 +540,8 @@ export function DraftCard({
           placeholder="Write your reply…"
           className={`${INPUT} resize-y leading-relaxed`}
         />
+        {/* Signature as it will be appended on send (Outlook/Gmail style). */}
+        <SignaturePreview accountId={draft.accountId || selectedAccountId} />
         {/* Quoted trailing email — collapsed, read-only (reattached on send) */}
         <ComposerQuote quote={quote} className="" />
       </div>

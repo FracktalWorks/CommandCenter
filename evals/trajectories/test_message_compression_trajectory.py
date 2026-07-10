@@ -23,7 +23,6 @@ import json
 
 from acb_llm import (
     compress_message_content,
-    context_window_for,
     count_message_tokens,
     fit_messages_to_context,
 )
@@ -101,17 +100,32 @@ def test_never_raises_on_malformed_json():
 
 # ── 4. Integration through the fitter ────────────────────────────────────────
 
-def test_oversized_email_thread_fits_window_and_keeps_newest():
+def test_oversized_email_thread_fits_window_and_keeps_newest(monkeypatch):
+    # Pin a small window so this deterministically exercises the fitter's
+    # over-budget path, independent of whatever model the tier currently resolves
+    # to. A fixed 200k-char payload silently stopped overflowing once tier-fast's
+    # backing model grew a large (1M-token) window — a window-table drift that
+    # made the assertion vacuous. The invariant under test is window-agnostic
+    # ("a single over-budget message is trimmed and its newest message survives"),
+    # so we control the window rather than chase the tier config.
+    window = 4096
+    monkeypatch.setattr(
+        "acb_llm.context.context_window_for", lambda _model: window)
+
     newest = "Final decision: we ship Friday. Please confirm resourcing."
-    # One giant message that overflows tier-fast's window on its own.
-    huge_thread = _email_thread(newest, quoted_chars=200_000)
+    # ~15k tokens on its own — comfortably over the pinned window.
+    huge_thread = _email_thread(newest, quoted_chars=40_000)
     messages = [
         {"role": "system", "content": "You are the email assistant."},
         {"role": "user", "content": huge_thread},
     ]
+    # Precondition: the raw prompt really is over the window (guards against the
+    # payload silently shrinking below budget again).
+    assert count_message_tokens(messages, "tier-fast") > window
+
     fitted, truncated = fit_messages_to_context(messages, "tier-fast")
     assert truncated, "an over-window single message must be trimmed"
-    assert count_message_tokens(fitted, "tier-fast") <= context_window_for("tier-fast")
+    assert count_message_tokens(fitted, "tier-fast") <= window
     # Structure-aware win: the newest message survives the fit (a blind slice
     # from the top would too, but this also proves the thread wasn't dropped).
     user_msg = next(m for m in fitted if m["role"] == "user")

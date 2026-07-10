@@ -9,11 +9,15 @@ agent run and model call as it happens, across chat AND every app, plus a
     GET /observability/activity/recent?limit=   → recent activations (backfill)
     GET /observability/activity/stream          → SSE live feed (new events)
     GET /observability/active                    → agent runs in flight now
+    GET /observability/roster                    → all agents + working/idle
+    GET /observability/cost?days=                → daily LLM cost rollup
+    GET /observability/runs?agent=&status=       → DURABLE history (agent_run)
 
-Gated to EXECUTIVE (humans) + AGENT (internal tooling): activation *metadata*
-(agent / model / tier / user / duration / tokens) is far less sensitive than a
-full trace, but it still names users and internal agents, so it stays behind
-the same role wall as ``/debug``.
+Open to any AUTHENTICATED caller (this is the operator's own dashboard). It
+returns operational *metadata* — agent/model/tier/user/duration/tokens/cost and
+error messages — but NEVER the full message-content trace, which stays
+EXECUTIVE-gated behind ``/debug/runs/{id}``. The Redis feed (recent/stream) is
+ephemeral (~2000 events, latest-first); ``/runs`` is the durable timeline.
 """
 from __future__ import annotations
 
@@ -34,8 +38,12 @@ from fastapi.responses import StreamingResponse
 
 _log = get_logger("gateway.observability")
 
-# EXECUTIVE (humans) + AGENT (internal service calls / CI harness) may read.
-_ADMIN = require_role(UserRole.EXECUTIVE, UserRole.AGENT)
+# Any AUTHENTICATED caller may read the live views. These expose operational
+# METADATA (agent/model/tokens/cost/status/duration) — NOT message content — so
+# unlike /debug (full traces, EXECUTIVE-only) this is the operator's own
+# dashboard and must not silently 403 for a non-"executive" logged-in operator.
+# EMPLOYEE is the default role the SSO proxy sends; AGENT is internal tooling.
+_VIEWER = require_role(UserRole.EXECUTIVE, UserRole.AGENT, UserRole.EMPLOYEE)
 
 router = APIRouter(prefix="/observability", tags=["observability"])
 
@@ -43,7 +51,7 @@ router = APIRouter(prefix="/observability", tags=["observability"])
 @router.get("/activity/recent")
 async def activity_recent(
     limit: int = 100,
-    _admin: UserContext = _ADMIN,
+    _viewer: UserContext = _VIEWER,
 ) -> dict[str, Any]:
     """Recent activations, oldest-first — used to backfill the feed on load.
 
@@ -55,7 +63,7 @@ async def activity_recent(
 
 @router.get("/active")
 async def active(
-    _admin: UserContext = _ADMIN,
+    _viewer: UserContext = _VIEWER,
 ) -> dict[str, Any]:
     """Agent runs currently in flight (the "running right now" panel).
 
@@ -68,7 +76,7 @@ async def active(
 
 @router.get("/roster")
 async def roster(
-    _admin: UserContext = _ADMIN,
+    _viewer: UserContext = _VIEWER,
 ) -> dict[str, Any]:
     """Every registered agent + its live status — the office view's cast list.
 
@@ -143,7 +151,7 @@ async def roster(
 @router.get("/cost")
 async def cost(
     days: int = 7,
-    _admin: UserContext = _ADMIN,
+    _viewer: UserContext = _VIEWER,
 ) -> dict[str, Any]:
     """Daily LLM cost rollup (USD) for the last *days* days.
 
@@ -151,6 +159,76 @@ async def cost(
     rollup (best-effort litellm pricing). ``days`` is clamped to [1, 90].
     """
     return await cost_summary(days=days)
+
+
+_RUN_STATUSES = frozenset({"running", "completed", "error", "cancelled"})
+
+
+@router.get("/runs")
+async def runs(
+    agent: str | None = None,
+    status: str | None = None,
+    since_hours: int | None = None,
+    limit: int = 50,
+    _viewer: UserContext = _VIEWER,
+) -> dict[str, Any]:
+    """DURABLE activity history from the ``agent_run`` trace store.
+
+    Unlike the ephemeral Redis feed (recent/stream, ~2000 events lost on a Redis
+    flush), this reads the persisted per-run rows — so it survives restarts and
+    goes back as far as retention keeps them. Lean rows only: metadata + error
+    message, NEVER the full trace blob (that stays EXECUTIVE-gated at
+    ``/debug/runs/{id}``). Powers the History tab + the per-agent drawer.
+    Newest-first; ``limit`` clamped to [1, 200].
+    """
+    limit = max(1, min(limit, 200))
+    where: list[str] = []
+    params: dict[str, Any] = {"limit": limit}
+    if agent:
+        where.append("agent_name = :agent")
+        params["agent"] = agent
+    if status in _RUN_STATUSES:
+        where.append("status = :status")
+        params["status"] = status
+    if since_hours:
+        where.append("started_at > now() - make_interval(hours => :sh)")
+        params["sh"] = int(since_hours)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+
+        with get_session() as s:
+            rows = s.execute(
+                text(
+                    "SELECT run_id, thread_id, agent_name, user_id, model, "
+                    "status, started_at, ended_at, duration_ms, total_tokens, "
+                    "tool_count, error_type, error_message FROM agent_run"
+                    + clause + " ORDER BY started_at DESC LIMIT :limit"
+                ),
+                params,
+            ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — degrade to empty, never 500 the UI
+        _log.warning("observability.runs_failed", error=str(exc))
+        return {"runs": [], "count": 0}
+
+    out = [{
+        "run_id": r.run_id,
+        "thread_id": r.thread_id,
+        "agent": r.agent_name,
+        "user": r.user_id,
+        "model": r.model,
+        "status": r.status,
+        "started_at": r.started_at.isoformat() if r.started_at else None,
+        "ended_at": r.ended_at.isoformat() if r.ended_at else None,
+        "duration_ms": r.duration_ms,
+        "total_tokens": r.total_tokens,
+        "tool_count": r.tool_count,
+        "error_type": r.error_type,
+        "error_message": r.error_message,
+    } for r in rows]
+    return {"runs": out, "count": len(out)}
 
 
 async def _sse_activity() -> AsyncIterator[bytes]:
@@ -185,7 +263,7 @@ async def _sse_activity() -> AsyncIterator[bytes]:
 
 @router.get("/activity/stream")
 async def activity_stream(
-    _admin: UserContext = _ADMIN,
+    _viewer: UserContext = _VIEWER,
 ) -> StreamingResponse:
     """Server-Sent Events stream of live activations (agent + model)."""
     return StreamingResponse(

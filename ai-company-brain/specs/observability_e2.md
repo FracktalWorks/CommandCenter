@@ -1,7 +1,8 @@
 # E2 — Observability & Debugging (interaction logging + run traces)
 
 > **Status:** Phases 1–4 **shipped** (2026-07-03). Phase 5 (live activity feed)
-> **shipped** (2026-07-09). E2 C+ → A.
+> **shipped** (2026-07-09). Phase 6 (cross-app cost + agent office) + 6.8 (real
+> Pixel Lab sprites + Avatar Studio) **shipped** (2026-07-09/10). E2 C+ → A.
 > **Module:** E2 (core_module_map.md).
 > **Goal (user request):** log every agent/model interaction so an engineer can
 > debug "error X happened with agent Y" after the fact (Phases 1–4); AND give
@@ -363,6 +364,43 @@ The office now composes each agent as a **layered scene inside a themed room**
   X-CC-Agent header is set — orchestrator + email-assistant today.)
 - Live feed / header / tabs / office / server-rack / empty states use Lucide
   icons instead of emoji, consistent with the app theme.
+
+### Phase 6.8 — real pixel-art sprites + Avatar Studio (2026-07-10)
+The office is now **real pixel art**, and each agent's look is **customizable**.
+Pixel Lab turned out to be reachable from the operator's own machine (the egress
+403 was only on the web env), so the whole pipeline in `pixel_art_office_pipeline.md`
+was unblocked and shipped:
+- **Real role cast.** `scripts/gen_office_sprites.py` generates a transparent,
+  waist-up pixel-art bust per role (coder / sales / planner / triage / reconciler
+  / orchestrator / default) via Pixel Lab `generate-image-pixflux`, trims the
+  margins, and embeds them as data-URIs in `sprites.generated.ts` (CSP-safe, no
+  external asset host, ~156 KB).
+- **Seam.** `scene.tsx` gains `spriteFor(name, config)` (per-agent pinned sprite →
+  role sprite → null). When a sprite resolves, `AgentScene` renders it as an
+  `<image>` inside the themed room with a contact shadow and the working/idle/error
+  animations (breathe/dim+Zzz/red-shake); with no sprite it falls back to the
+  procedural rects — so a brand-new agent is never broken. Validated headless.
+- **Backend override layer.** `agent_avatars` table (migration 64) keyed by agent
+  name — covers built-ins like `orchestrator`, not just `dynamic_agents`. New
+  endpoints on the observability router: `GET /observability/avatars`,
+  `PUT/DELETE /observability/avatars/{name}`, and `POST /observability/avatars/
+  generate` (calls Pixel Lab with `PIXELLAB_API_KEY` held **server-side** — the
+  browser never sees the key; degrades 503 when unset). Writes are gated to any
+  authenticated caller (the Phase 6.3 lesson: EXECUTIVE-gating silently 403s the
+  operator). `/roster` merges `avatar:{config,sprite}` so every viewer sees the
+  pinned look; the office applies it as a `deriveAvatar` override.
+- **Avatar Studio.** New tab on `/observability`: agent picker · live `AgentScene`
+  preview (toggle working/sleeping/error) · look controls (skin, hair style+colour,
+  outfit type+colour, accessory, room, wall, desk props) · a "Generate with Pixel
+  Lab" panel (prompt → sprite → pin). `avatar-studio.tsx`; 3 Next proxies under
+  `api/observability/avatars/`. Keyed child editor seeds from the stored override
+  via `useState` initializers (no set-state-in-effect).
+- **Tests** — +4 unit (name-regex validation, `_load_avatars` DB-down → {}
+  degradation, generate 503-without-key / 400-empty-desc). `next build` + tsc +
+  eslint clean; full observability+activity unit suites green (27).
+- **Still procedural/whole-character** (not per-layer): the sprites are complete
+  busts, not mix-and-match layers, so recolour/animation-strip/room-tileset (the
+  §4 ASSET SPEC) remain the future upgrade; the seam is ready for them.
 
 ### Observability plumbing — landscape review (Phase 6.7 recommendation)
 Where our bespoke layer (activity bus + `agent_run` + cost rollup + the office

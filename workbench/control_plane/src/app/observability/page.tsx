@@ -24,11 +24,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  Bot, Building2, Coins, Cpu, History as HistoryIcon, Radio, Server, Users,
+  Bot, Building2, Coins, Cpu, History as HistoryIcon, Radio, Server, Sparkles, Users,
 } from "lucide-react";
 
+import { AvatarStudio } from "./avatar-studio";
 import { PIXEL_ART_STYLE } from "./pixel";
-import { AgentScene, SCENE_STYLE, type SceneState, WarRoomScene } from "./scene";
+import {
+  AgentScene, type AvatarConfig, deriveAvatar, SCENE_STYLE, type SceneState, WarRoomScene,
+} from "./scene";
 
 // ───────────────────────────────────────────────────────────────────────────
 // Types
@@ -60,6 +63,7 @@ interface AgentRow {
   active_runs?: number;
   last_ts?: string | null;
   source?: string | null;
+  avatar?: { config?: Partial<AvatarConfig>; sprite?: string | null } | null;
 }
 
 interface RunRow {
@@ -222,6 +226,18 @@ function Desk({
   const working = agent.status === "working" || hot;
   const sceneState: SceneState =
     agent.status === "error" ? "error" : working ? "working" : "idle";
+  // Apply the saved avatar override (Avatar Studio) if any. Precedence:
+  //   custom Pixel Lab sprite  >  styled procedural look  >  default role sprite.
+  // A non-empty `config` means the operator styled a procedural character, so we
+  // force procedural (sprite=null) unless a custom sprite is also pinned.
+  const av = agent.avatar;
+  const hasConfig = Boolean(av?.config && Object.keys(av.config).length > 0);
+  const sceneConfig = hasConfig ? deriveAvatar(agent.name, av!.config!) : undefined;
+  const spriteProp: string | null | undefined = av?.sprite
+    ? av.sprite
+    : hasConfig
+      ? null
+      : undefined;
   return (
     <button
       onClick={() => onOpen(agent.name)}
@@ -234,7 +250,7 @@ function Desk({
     >
       {/* Roomed, layered, configurable agent scene (working / sleeping / error) */}
       <div className="w-full">
-        <AgentScene name={agent.name} state={sceneState} />
+        <AgentScene name={agent.name} state={sceneState} config={sceneConfig} sprite={spriteProp} />
       </div>
 
       <div className="obs-pixel text-[11px] font-semibold text-foreground truncate max-w-full">
@@ -823,7 +839,7 @@ function AgentDrawer({
 // Page
 // ───────────────────────────────────────────────────────────────────────────
 
-type Tab = "office" | "feed" | "cost" | "history";
+type Tab = "office" | "feed" | "cost" | "history" | "avatars";
 
 export default function ObservabilityPage() {
   const [tab, setTab] = useState<Tab>("office");
@@ -909,6 +925,18 @@ export default function ObservabilityPage() {
     return () => es.close();
   }, [pushEvents]);
 
+  // Event-only roster refresh for the Avatar Studio (called from onSaved, never
+  // from an effect body — keeps the set-state-in-effect lint happy).
+  const reloadRoster = useCallback(async () => {
+    try {
+      const res = await fetch("/api/observability/roster");
+      const data = await res.json();
+      if (Array.isArray(data.agents)) setRoster(data.agents);
+    } catch {
+      /* degrade */
+    }
+  }, []);
+
   // Roster + cost polling
   useEffect(() => {
     let cancelled = false;
@@ -981,6 +1009,7 @@ export default function ObservabilityPage() {
     { id: "feed", label: "Live feed", Icon: Radio },
     { id: "history", label: "History", Icon: HistoryIcon },
     { id: "cost", label: "Cost", Icon: Coins },
+    { id: "avatars", label: "Avatars", Icon: Sparkles },
   ];
 
   return (
@@ -1050,6 +1079,11 @@ export default function ObservabilityPage() {
         {tab === "cost" && (
           <div className="h-full overflow-y-auto">
             <CostView cost={cost} />
+          </div>
+        )}
+        {tab === "avatars" && (
+          <div className="h-full min-h-0">
+            <AvatarStudio agents={roster} onSaved={reloadRoster} />
           </div>
         )}
       </div>

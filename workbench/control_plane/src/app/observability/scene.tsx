@@ -151,26 +151,37 @@ function character(c: AvatarConfig, state: SceneState): Desc[] {
   if (c.outfit.type === "suit") o.push(r(31, 23, 2, 11, "#e8edf2"), r(31, 23, 2, 4, c.accentA), r(25, 23, 3, 11, "#2b3340"), r(37, 23, 3, 11, "#2b3340"));
   if (c.outfit.type === "hoodie") o.push(r(25, 23, 14, 2, oc2), r(24, 25, 2, 6, oc2), r(38, 25, 2, 6, oc2), r(30, 23, 4, 3, oc2));
   if (c.outfit.type === "sweater") o.push(r(25, 31, 14, 1, oc2), r(25, 23, 14, 1, oc2));
-  // arms + hands (typing)
-  o.push(r(24, 28, 2, 6, oc), r(38, 28, 2, 6, oc), r(25, 36, 4, 2, skin, "sc-hand-l"), r(35, 36, 4, 2, skin, "sc-hand-r"));
-  // neck + head + ears
-  o.push(r(29, 20, 6, 3, skin), r(27, 11, 10, 10, OUT), r(28, 12, 8, 8, skin), r(27, 15, 1, 2, skin), r(36, 15, 1, 2, skin));
-  // eyes + mouth
-  if (state === "idle") o.push(r(29, 16, 2, 1, OUT), r(33, 16, 2, 1, OUT));
-  else o.push({ t: "g", cls: "sc-eyes", kids: [r(29, 15, 2, 2, OUT), r(33, 15, 2, 2, OUT)] });
-  o.push(r(30, 18, 4, 1, "#9c5b4d"));
-  // hair
+  // arms + hands (typing) — hands are their own groups so they alternate
+  o.push(r(24, 28, 2, 6, oc), r(38, 28, 2, 6, oc));
+  o.push({ t: "g", cls: "sc-hand-l", kids: [r(25, 36, 4, 2, skin)] });
+  o.push({ t: "g", cls: "sc-hand-r", kids: [r(35, 36, 4, 2, skin)] });
+  // neck (behind head)
+  o.push(r(29, 20, 6, 3, skin));
+
+  // ── HEAD (grouped so it can bob while typing / slump while asleep) ──────────
+  const head: Desc[] = [];
+  head.push(r(27, 11, 10, 10, OUT), r(28, 12, 8, 8, skin), r(27, 15, 1, 2, skin), r(36, 15, 1, 2, skin));
+  if (state === "idle") head.push(r(29, 16, 2, 1, OUT), r(33, 16, 2, 1, OUT));   // closed
+  else head.push({ t: "g", cls: "sc-eyes", kids: [r(29, 15, 2, 2, OUT), r(33, 15, 2, 2, OUT)] });
+  head.push(r(30, 18, 4, 1, "#9c5b4d"));
   const hc = c.hair.color;
-  if (c.hair.style === "spiky") o.push(r(27, 9, 10, 3, hc), r(28, 7, 2, 2, hc), r(31, 6, 2, 3, hc), r(34, 7, 2, 2, hc), r(27, 11, 1, 3, hc), r(36, 11, 1, 3, hc));
-  else if (c.hair.style === "bun") o.push(r(27, 10, 10, 2, hc), r(30, 7, 4, 3, hc), r(27, 11, 1, 4, hc), r(36, 11, 1, 4, hc));
-  else if (c.hair.style === "short") o.push(r(27, 10, 10, 2, hc), r(28, 9, 8, 1, hc));
-  else o.push(r(27, 9, 10, 3, hc), r(26, 11, 2, 7, hc), r(36, 11, 2, 7, hc));
-  // accessory
-  if (c.accessory === "glasses") o.push(r(28, 15, 3, 3, "#0d1117"), r(33, 15, 3, 3, "#0d1117"), r(31, 16, 2, 1, "#0d1117"), r(29, 16, 1, 1, "#8fd3ff"), r(34, 16, 1, 1, "#8fd3ff"));
-  if (c.accessory === "headset") o.push(r(26, 11, 1, 6, "#2b2330"), r(25, 15, 2, 3, c.accentA), r(27, 9, 10, 1, "#2b2330"), r(26, 18, 4, 1, "#2b2330"));
-  if (c.accessory === "beanie") o.push(r(27, 8, 10, 4, c.accentA), r(27, 7, 10, 1, c.accentA2), r(26, 11, 12, 1, c.accentA2));
-  // sleeping Zzz
-  if (state === "idle") { const g = "#8b949e"; o.push(r(38, 8, 2, 1, g), r(39, 9, 1, 1, g), r(38, 10, 2, 1, g), r(41, 5, 3, 1, g), r(42, 6, 1, 1, g), r(41, 7, 3, 1, g)); }
+  if (c.hair.style === "spiky") head.push(r(27, 9, 10, 3, hc), r(28, 7, 2, 2, hc), r(31, 6, 2, 3, hc), r(34, 7, 2, 2, hc), r(27, 11, 1, 3, hc), r(36, 11, 1, 3, hc));
+  else if (c.hair.style === "bun") head.push(r(27, 10, 10, 2, hc), r(30, 7, 4, 3, hc), r(27, 11, 1, 4, hc), r(36, 11, 1, 4, hc));
+  else if (c.hair.style === "short") head.push(r(27, 10, 10, 2, hc), r(28, 9, 8, 1, hc));
+  else head.push(r(27, 9, 10, 3, hc), r(26, 11, 2, 7, hc), r(36, 11, 2, 7, hc));
+  if (c.accessory === "glasses") head.push(r(28, 15, 3, 3, "#0d1117"), r(33, 15, 3, 3, "#0d1117"), r(31, 16, 2, 1, "#0d1117"), r(29, 16, 1, 1, "#8fd3ff"), r(34, 16, 1, 1, "#8fd3ff"));
+  if (c.accessory === "headset") head.push(r(26, 11, 1, 6, "#2b2330"), r(25, 15, 2, 3, c.accentA), r(27, 9, 10, 1, "#2b2330"), r(26, 18, 4, 1, "#2b2330"));
+  if (c.accessory === "beanie") head.push(r(27, 8, 10, 4, c.accentA), r(27, 7, 10, 1, c.accentA2), r(26, 11, 12, 1, c.accentA2));
+  o.push({ t: "g", cls: "sc-head", kids: head });
+
+  // sleeping Zzz — own group so it floats independently of the head
+  if (state === "idle") {
+    const g = "#8b949e";
+    o.push({ t: "g", cls: "sc-zzz", kids: [
+      r(38, 8, 2, 1, g), r(39, 9, 1, 1, g), r(38, 10, 2, 1, g),
+      r(41, 5, 3, 1, g), r(42, 6, 1, 1, g), r(41, 7, 3, 1, g),
+    ] });
+  }
   return o;
 }
 
@@ -203,37 +214,108 @@ export function AgentScene({
 }) {
   const c = config ?? deriveAvatar(name);
   const parts = [...room(c), ...character(c, state), ...desk(c, state)];
-  const rect = (d: Extract<Desc, { t: "r" }>, key: React.Key) => (
-    <rect key={key} x={d.x} y={d.y} width={d.w} height={d.h} fill={d.f} className={d.cls} />
-  );
   return (
     <svg viewBox="0 0 64 56" shapeRendering="crispEdges" className={`sc-scene ${state} ${className}`}
       xmlns="http://www.w3.org/2000/svg">
-      {parts.map((d, i) =>
-        d.t === "g"
-          ? <g key={i} className={d.cls}>{d.kids.map((k, j) => rect(k as Extract<Desc, { t: "r" }>, j))}</g>
-          : rect(d, i),
-      )}
+      {parts.map((d, i) => renderDesc(d, i))}
     </svg>
   );
 }
 
+// Recursive so groups can nest (e.g. the blinking eyes inside the bobbing head).
+function renderDesc(d: Desc, key: React.Key): React.ReactNode {
+  if (d.t === "g") {
+    return <g key={key} className={d.cls}>{d.kids.map((k, i) => renderDesc(k, i))}</g>;
+  }
+  return <rect key={key} x={d.x} y={d.y} width={d.w} height={d.h} fill={d.f} className={d.cls} />;
+}
+
+// ── Collaboration room (multi-agent orchestration) ───────────────────────────
+// A shared conference ROOM (not a bare table): the working agents sit around a
+// table facing a presentation screen that shows their joint work, heads nodding
+// as they "discuss". Uses each agent's derived palette so you recognise them.
+
+export function WarRoomScene({ names }: { names: string[] }) {
+  const seats = names.slice(0, 6);
+  const top = seats.slice(0, Math.ceil(seats.length / 2));
+  const bot = seats.slice(Math.ceil(seats.length / 2));
+  const xAt = (i: number, n: number) => 34 + (n > 1 ? (i * 32) / (n - 1) : 16);
+  return (
+    <svg viewBox="0 0 100 60" shapeRendering="crispEdges" className="sc-warroom" xmlns="http://www.w3.org/2000/svg">
+      {/* room */}
+      <rect x={0} y={0} width={100} height={38} fill="#20222e" />
+      <rect x={0} y={34} width={100} height={4} fill="#171922" />
+      <rect x={0} y={38} width={100} height={22} fill="#2b2e3c" />
+      {/* presentation screen */}
+      <rect x={38} y={4} width={24} height={15} fill="#0d1117" />
+      <rect x={39} y={5} width={22} height={13} fill="#182b1f" />
+      <g className="sc-glow">
+        <rect x={41} y={7} width={9} height={1} fill="#7ee787" />
+        <rect x={41} y={10} width={14} height={1} fill="#58a6ff" />
+        <rect x={41} y={13} width={11} height={1} fill="#d2a8ff" />
+      </g>
+      {/* conference table */}
+      <rect x={24} y={30} width={52} height={16} fill="#5a4326" />
+      <rect x={20} y={34} width={60} height={8} fill="#6b4f30" />
+      <rect x={30} y={33} width={40} height={9} fill="#3a2c1a" />
+      {/* seated agents */}
+      {top.map((n, i) => renderDesc(seatedNod(n, xAt(i, top.length), 26, i), `t${i}`))}
+      {bot.map((n, i) => renderDesc(seatedNod(n, xAt(i, bot.length), 50, i + 3), `b${i}`))}
+      {/* chatter */}
+      <g className="sc-talk">
+        <circle cx={47} cy={38} r={1.4} fill="#7ee787" />
+        <circle cx={51} cy={38} r={1.4} fill="#58a6ff" />
+        <circle cx={55} cy={38} r={1.4} fill="#d2a8ff" />
+      </g>
+    </svg>
+  );
+}
+
+function seatedNod(name: string, cx: number, cy: number, idx: number): Desc {
+  const a = deriveAvatar(name);
+  const kids: Desc[] = [
+    r(cx - 4, cy + 3, 8, 6, a.outfit.color),
+    { t: "g", cls: "sc-nod", kids: [
+      r(cx - 4, cy - 4, 8, 7, OUT), r(cx - 3, cy - 3, 6, 6, a.skin),
+      r(cx - 2, cy - 1, 1, 1, OUT), r(cx + 1, cy - 1, 1, 1, OUT),
+      r(cx - 4, cy - 5, 8, 3, a.hair.color),
+    ] },
+  ];
+  // stagger the nod so they don't move in lockstep
+  return { t: "g", cls: `sc-seat sc-d${idx % 4}`, kids };
+}
+
 /** Keyframes + animation classes for the scenes. Injected once by the page. */
 export const SCENE_STYLE = `
-.sc-scene{width:100%;height:auto;image-rendering:pixelated;display:block;border-radius:8px;overflow:hidden}
-.sc-scene.idle{filter:saturate(.6) brightness(.82)}
+.sc-scene,.sc-warroom{width:100%;height:auto;image-rendering:pixelated;display:block;border-radius:8px;overflow:hidden}
+.sc-scene.idle{filter:saturate(.55) brightness(.78)}
 .sc-scene.error{animation:sc-shake .45s steps(2) 3}
-.sc-hand-l{transform-box:fill-box;transform-origin:center;animation:sc-t1 .5s steps(2) infinite}
-.sc-hand-r{transform-box:fill-box;transform-origin:center;animation:sc-t2 .5s steps(2) infinite}
+.sc-hand-l{transform-box:fill-box;transform-origin:center;animation:sc-t1 .42s steps(2) infinite}
+.sc-hand-r{transform-box:fill-box;transform-origin:center;animation:sc-t2 .42s steps(2) infinite}
 .sc-eyes{transform-box:fill-box;transform-origin:center;animation:sc-blink 4s steps(1) infinite}
+.sc-head{transform-box:fill-box;transform-origin:center bottom}
+.sc-scene.working .sc-head{animation:sc-headwork 2.4s ease-in-out infinite}
 .sc-glow{animation:sc-flick 1.4s steps(3) infinite}
 .sc-steam{transform-box:fill-box;animation:sc-steam 3s ease-in-out infinite}
+.sc-zzz{transform-box:fill-box;animation:sc-zfloat 2.8s ease-in-out infinite}
+/* sleeping: head slumps + slow breathe, hands rest, screen off */
+.sc-scene.idle .sc-head{transform-box:fill-box;transform-origin:center bottom;animation:sc-breathe 4s ease-in-out infinite}
 .sc-scene.idle .sc-hand-l,.sc-scene.idle .sc-hand-r,.sc-scene.idle .sc-glow,.sc-scene.idle .sc-steam,.sc-scene.idle .sc-eyes{animation:none}
-@keyframes sc-t1{0%,100%{transform:translateY(0)}50%{transform:translateY(-1px)}}
-@keyframes sc-t2{0%,100%{transform:translateY(-1px)}50%{transform:translateY(0)}}
+/* war room */
+.sc-nod{transform-box:fill-box;transform-origin:center bottom;animation:sc-nod 2.2s ease-in-out infinite}
+.sc-seat.sc-d1 .sc-nod{animation-delay:.4s}.sc-seat.sc-d2 .sc-nod{animation-delay:.9s}.sc-seat.sc-d3 .sc-nod{animation-delay:1.3s}
+.sc-talk circle{animation:sc-blinkdot 1s steps(2) infinite}
+.sc-talk circle:nth-child(2){animation-delay:.16s}.sc-talk circle:nth-child(3){animation-delay:.32s}
+@keyframes sc-t1{0%,100%{transform:translateY(0)}50%{transform:translateY(-1.2px)}}
+@keyframes sc-t2{0%,100%{transform:translateY(-1.2px)}50%{transform:translateY(0)}}
 @keyframes sc-blink{0%,94%,100%{transform:scaleY(1)}96%{transform:scaleY(.1)}}
+@keyframes sc-headwork{0%,100%{transform:translate(0,0) rotate(0deg)}30%{transform:translate(-.4px,-.3px) rotate(-2deg)}65%{transform:translate(.4px,.2px) rotate(2deg)}}
+@keyframes sc-breathe{0%,100%{transform:translateY(1.6px)}50%{transform:translateY(2.6px)}}
+@keyframes sc-zfloat{0%{opacity:0;transform:translate(0,0)}30%{opacity:.9}100%{opacity:0;transform:translate(3px,-6px)}}
 @keyframes sc-flick{0%,100%{opacity:1}50%{opacity:.72}}
 @keyframes sc-steam{0%{opacity:0;transform:translateY(0)}40%{opacity:.7}100%{opacity:0;transform:translateY(-4px)}}
 @keyframes sc-shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-2%)}75%{transform:translateX(2%)}}
-@media (prefers-reduced-motion: reduce){.sc-hand-l,.sc-hand-r,.sc-eyes,.sc-glow,.sc-steam,.sc-scene.error{animation:none}}
+@keyframes sc-nod{0%,100%{transform:translateY(0) rotate(0deg)}50%{transform:translateY(-.6px) rotate(-3deg)}}
+@keyframes sc-blinkdot{0%,100%{opacity:1}50%{opacity:.2}}
+@media (prefers-reduced-motion: reduce){.sc-hand-l,.sc-hand-r,.sc-eyes,.sc-glow,.sc-steam,.sc-zzz,.sc-head,.sc-nod,.sc-talk circle,.sc-scene.error{animation:none}}
 `;

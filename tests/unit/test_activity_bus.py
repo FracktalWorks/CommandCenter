@@ -140,6 +140,9 @@ def test_cost_summary_aggregates_daily_rollups(monkeypatch):
                     "model|deepseek/deepseek-chat|calls": "1",
                     "source|email|cost": "0.2",
                     "source|chat|cost": "0.3",
+                    "agent|orchestrator|cost": "0.35",
+                    "agent|orchestrator|calls": "2",
+                    "agent|email-assistant|cost": "0.15",
                 }
             return {}
 
@@ -156,6 +159,9 @@ def test_cost_summary_aggregates_daily_rollups(monkeypatch):
     assert out["by_model"]["deepseek/deepseek-chat"]["calls"] == 1
     assert out["by_source"]["email"]["cost"] == 0.2
     assert out["by_source"]["chat"]["cost"] == 0.3
+    assert out["by_agent"]["orchestrator"]["cost"] == 0.35
+    assert out["by_agent"]["orchestrator"]["calls"] == 2
+    assert out["by_agent"]["email-assistant"]["cost"] == 0.15
 
 
 def test_cost_summary_empty_history_is_all_zero(monkeypatch):

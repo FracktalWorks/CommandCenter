@@ -317,6 +317,7 @@ async def cost_summary(days: int = 7) -> dict[str, Any]:
     out_days: list[dict[str, Any]] = []
     by_model: dict[str, dict[str, float]] = {}
     by_source: dict[str, dict[str, float]] = {}
+    by_agent: dict[str, dict[str, float]] = {}
     totals = {"cost": 0.0, "tokens": 0, "calls": 0}
 
     for i in range(days):
@@ -363,6 +364,12 @@ async def cost_summary(days: int = 7) -> dict[str, Any]:
                     s["cost"] += v
                 elif metric == "calls":
                     s["calls"] += int(v)
+            elif dim == "agent" and name:
+                a = by_agent.setdefault(name, {"cost": 0.0, "calls": 0})
+                if metric == "cost":
+                    a["cost"] += v
+                elif metric == "calls":
+                    a["calls"] += int(v)
         out_days.append(day_rec)
 
     out_days.reverse()  # oldest → newest for a left-to-right chart
@@ -370,11 +377,14 @@ async def cost_summary(days: int = 7) -> dict[str, Any]:
         m["cost"] = round(m["cost"], 6)
     for s in by_source.values():
         s["cost"] = round(s["cost"], 6)
+    for a in by_agent.values():
+        a["cost"] = round(a["cost"], 6)
     totals["cost"] = round(totals["cost"], 6)
     return {
         "days": out_days,
         "by_model": by_model,
         "by_source": by_source,
+        "by_agent": by_agent,
         "totals": totals,
         "window_days": days,
     }

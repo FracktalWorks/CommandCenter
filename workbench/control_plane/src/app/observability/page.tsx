@@ -23,8 +23,12 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { ConferenceScene, PIXEL_ART_STYLE } from "./pixel";
-import { AgentScene, SCENE_STYLE, type SceneState } from "./scene";
+import {
+  Bot, Building2, Coins, Cpu, History as HistoryIcon, Radio, Server, Users,
+} from "lucide-react";
+
+import { PIXEL_ART_STYLE } from "./pixel";
+import { AgentScene, SCENE_STYLE, type SceneState, WarRoomScene } from "./scene";
 
 // ───────────────────────────────────────────────────────────────────────────
 // Types
@@ -90,6 +94,7 @@ interface CostData {
   }>;
   by_model: Record<string, { cost: number; tokens: number; calls: number }>;
   by_source: Record<string, { cost: number; calls: number }>;
+  by_agent?: Record<string, { cost: number; calls: number }>;
   totals: { cost: number; tokens: number; calls: number };
 }
 
@@ -258,7 +263,8 @@ function Desk({
 function ServerRack({ blades }: { blades: ModelBlade[] }) {
   return (
     <div className="rounded-xl border border-border bg-card/60 p-3">
-      <div className="obs-pixel text-[10px] uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-2">
+      <div className="obs-pixel text-[10px] uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
+        <Server size={12} />
         <span>Model servers</span>
         <span className="rounded bg-secondary/50 px-1.5 py-0.5">{blades.length} live</span>
       </div>
@@ -293,13 +299,13 @@ function ServerRack({ blades }: { blades: ModelBlade[] }) {
 function ConferenceCard({ names, onOpen }: { names: string[]; onOpen: (name: string) => void }) {
   return (
     <div className="mb-4 rounded-2xl border border-amber-500/30 bg-amber-500/[0.06] p-3">
-      <div className="obs-pixel text-[11px] uppercase tracking-wide text-amber-500 mb-2 flex items-center gap-2">
-        <span className="h-2 w-2 rounded-full bg-amber-500 obs-led" />
+      <div className="obs-pixel text-[11px] uppercase tracking-wide text-amber-500 mb-2 flex items-center gap-1.5">
+        <Users size={13} className="obs-led" />
         War room · {names.length} agents collaborating
       </div>
       <div className="flex flex-col sm:flex-row items-center gap-3">
-        <div className="w-full sm:w-64 shrink-0">
-          <ConferenceScene seeds={names} />
+        <div className="w-full sm:w-80 shrink-0">
+          <WarRoomScene names={names} />
         </div>
         <div className="flex flex-wrap gap-1.5 min-w-0">
           {names.map((n) => (
@@ -338,15 +344,15 @@ function OfficeView({
     <div className="flex flex-col lg:flex-row gap-4 h-full min-h-0">
       <div className="obs-room flex-1 min-w-0 overflow-y-auto rounded-2xl border border-border bg-background/40 p-4">
         <div className="flex items-center justify-between mb-3">
-          <div className="obs-pixel text-[11px] uppercase tracking-wide text-muted-foreground">
-            🏢 The Office · {workingCount}/{roster.length} at work
+          <div className="obs-pixel text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+            <Building2 size={13} /> The Office · {workingCount}/{roster.length} at work
           </div>
-          <div className="obs-pixel text-[11px] text-emerald-500">Today {fmtCost(todayCost)}</div>
+          <div className="obs-pixel text-[11px] text-emerald-500 flex items-center gap-1"><Coins size={12} /> Today {fmtCost(todayCost)}</div>
         </div>
         {workingCount >= 2 && <ConferenceCard names={workingNames} onOpen={onOpen} />}
         {roster.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-center gap-2">
-            <span className="text-3xl">🏗️</span>
+            <Building2 size={30} className="text-muted-foreground/50" />
             <p className="obs-pixel text-sm text-muted-foreground">No agents registered yet.</p>
           </div>
         ) : (
@@ -386,10 +392,11 @@ function ActivityRow({ e, onOpen }: { e: ActivityEvent; onOpen: (name: string) =
     <li className="flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-secondary/30 transition-colors">
       <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
       <span
-        className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide border ${
+        className={`shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide border ${
           isAgent ? "bg-secondary/40 text-foreground border-border" : "bg-violet-500/10 text-violet-500 border-violet-500/20"
         }`}
       >
+        {isAgent ? <Bot size={11} /> : <Cpu size={11} />}
         {isAgent ? "Agent" : "Model"}
       </span>
       <div className="min-w-0 flex-1">
@@ -613,7 +620,7 @@ function HistoryView({ onOpen }: { onOpen: (name: string) => void }) {
         <p className="text-sm text-muted-foreground p-4 animate-pulse">Loading history…</p>
       ) : runs.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-40 text-center gap-2">
-          <span className="text-2xl">🗂️</span>
+          <HistoryIcon size={26} className="text-muted-foreground/50" />
           <p className="text-sm text-muted-foreground">No runs recorded yet.</p>
           <p className="text-xs text-muted-foreground/60">
             Completed agent runs appear here — this list is durable (it survives restarts, unlike the live feed).
@@ -673,9 +680,13 @@ function HistoryView({ onOpen }: { onOpen: (name: string) => void }) {
 function AgentDrawer({
   name,
   onClose,
+  spend,
+  windowDays,
 }: {
   name: string;
   onClose: () => void;
+  spend?: { cost: number; calls: number } | null;
+  windowDays?: number;
 }) {
   const [runs, setRuns] = useState<RunRow[] | null>(null);
   const [tab, setTab] = useState<"all" | "errors">("all");
@@ -716,6 +727,15 @@ function AgentDrawer({
           <div className="min-w-0 flex-1">
             <h2 className="font-semibold text-foreground truncate">{name}</h2>
             <p className="text-xs text-muted-foreground">Recent runs &amp; errors</p>
+          </div>
+          <div className="text-right shrink-0">
+            <div className="flex items-center gap-1 justify-end text-emerald-500 text-sm font-semibold">
+              <Coins size={13} />
+              {spend ? fmtCost(spend.cost) : "—"}
+            </div>
+            <div className="text-[10px] text-muted-foreground/70">
+              spend{windowDays ? ` · ${windowDays}d` : ""}{spend?.calls ? ` · ${spend.calls}×` : ""}
+            </div>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-lg px-2" aria-label="Close">
             ✕
@@ -956,11 +976,11 @@ export default function ObservabilityPage() {
   const todayCost = cost?.days.length ? cost.days[cost.days.length - 1].cost : 0;
   const workingNow = roster.filter((a) => a.status === "working" || hotSet.has(a.name)).length;
 
-  const TABS: Array<{ id: Tab; label: string; icon: string }> = [
-    { id: "office", label: "Office", icon: "🏢" },
-    { id: "feed", label: "Live feed", icon: "📡" },
-    { id: "history", label: "History", icon: "📜" },
-    { id: "cost", label: "Cost", icon: "💰" },
+  const TABS: Array<{ id: Tab; label: string; Icon: typeof Bot }> = [
+    { id: "office", label: "Office", Icon: Building2 },
+    { id: "feed", label: "Live feed", Icon: Radio },
+    { id: "history", label: "History", Icon: HistoryIcon },
+    { id: "cost", label: "Cost", Icon: Coins },
   ];
 
   return (
@@ -976,12 +996,12 @@ export default function ObservabilityPage() {
           </p>
         </div>
         <div className="flex items-center gap-4 text-xs">
-          <div className="flex items-center gap-1.5">
-            <span className="text-muted-foreground">🤖 {workingNow} working</span>
+          <div className="flex items-center gap-2">
+            <span className="flex items-center gap-1 text-muted-foreground"><Bot size={13} /> {workingNow} working</span>
             <span className="text-muted-foreground/40">·</span>
-            <span className="text-violet-500">🧠 {blades.length} models</span>
+            <span className="flex items-center gap-1 text-violet-500"><Cpu size={13} /> {blades.length} models</span>
             <span className="text-muted-foreground/40">·</span>
-            <span className="text-emerald-500">💰 {fmtCost(todayCost)} today</span>
+            <span className="flex items-center gap-1 text-emerald-500"><Coins size={13} /> {fmtCost(todayCost)} today</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className={`h-2 w-2 rounded-full ${connected ? "bg-success/80 obs-led" : "bg-muted-foreground/40"}`} />
@@ -996,11 +1016,11 @@ export default function ObservabilityPage() {
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            className={`text-sm px-3 py-1.5 rounded-lg transition-colors ${
+            className={`flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg transition-colors ${
               tab === t.id ? "bg-secondary text-foreground font-medium" : "text-muted-foreground hover:bg-secondary/50"
             }`}
           >
-            <span className="mr-1">{t.icon}</span>
+            <t.Icon size={14} />
             {t.label}
           </button>
         ))}
@@ -1034,7 +1054,15 @@ export default function ObservabilityPage() {
         )}
       </div>
 
-      {selected && <AgentDrawer key={selected} name={selected} onClose={() => setSelected(null)} />}
+      {selected && (
+        <AgentDrawer
+          key={selected}
+          name={selected}
+          spend={cost?.by_agent?.[selected] ?? null}
+          windowDays={cost?.days.length}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </div>
   );
 }

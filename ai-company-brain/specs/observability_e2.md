@@ -321,6 +321,12 @@ so hand-authored art drops in without touching the page. Verified by rendering
 the sprites headless (Playwright/Chromium) before shipping; `next build` + tsc +
 eslint clean.
 
+> **Continuing the pixel-art art pipeline** (generating real sprites via Pixel
+> Lab, wiring the swap seam, backend avatar config): see
+> [`pixel_art_office_pipeline.md`](pixel_art_office_pipeline.md) — the handoff
+> guide (ASSET SPEC, anchors, seam, Pixel Lab plan, TODOs). Pixel Lab is blocked
+> by egress policy on the web environment; continue on a system with API access.
+
 ### Phase 6.5 — roomed, layered, configurable agent scenes
 The office now composes each agent as a **layered scene inside a themed room**
 (`src/app/observability/scene.tsx`), replacing the "floating box" desks:

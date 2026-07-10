@@ -24,13 +24,13 @@ from acb_common import get_logger, get_settings
 from acb_graph import get_session
 from agent_framework import Agent, WorkflowBuilder
 from agent_framework.openai import OpenAIChatCompletionClient
+
 from orchestrator.retrieval import format_context, retrieve
 from orchestrator.sales_views import sales_context as _sales_context_fn
 
 # Memory layer (WBS 2.5) — imported lazily; graceful if acb_memory not installed.
 try:
-    from acb_memory import (add_memories_background, get_memory_context,
-                            search_entity_timeline)
+    from acb_memory import add_memories_background, get_memory_context, search_entity_timeline
     _MEMORY_AVAILABLE = True
 except ImportError:
     _MEMORY_AVAILABLE = False
@@ -169,8 +169,10 @@ async def spawn_copilot_agent(    task: str,
     """
     import uuid as _uuid  # noqa: PLC0415
 
-    from orchestrator.mutation import _build_telemetry  # noqa: PLC0415
-    from orchestrator.mutation import _run_mutation_sandbox
+    from orchestrator.mutation import (
+        _build_telemetry,  # noqa: PLC0415
+        _run_mutation_sandbox,
+    )
 
     run_id = str(_uuid.uuid4())
     settings = get_settings()
@@ -243,8 +245,11 @@ async def delegate_to_agent(agent_name: str, message: str) -> str:
     """
     import uuid as _uuid  # noqa: PLC0415
 
-    from orchestrator.executor import AgentRunError  # noqa: PLC0415
-    from orchestrator.executor import _active_run_queue, _active_run_model
+    from orchestrator.executor import (
+        AgentRunError,  # noqa: PLC0415
+        _active_run_model,
+        _active_run_queue,
+    )
 
     run_id = str(_uuid.uuid4())
     # Inherit the orchestrator's resolved tier so the specialist runs on the
@@ -255,8 +260,7 @@ async def delegate_to_agent(agent_name: str, message: str) -> str:
     event_queue = _active_run_queue.get(None)
     if event_queue is not None:
         try:
-            from orchestrator.executor import \
-                _run_sub_agent_streaming  # noqa: PLC0415
+            from orchestrator.executor import _run_sub_agent_streaming  # noqa: PLC0415
             return await _run_sub_agent_streaming(
                 agent_name, message, run_id, event_queue, model=_parent_model,
             )
@@ -298,8 +302,10 @@ def _load_specialist_agents_as_tools() -> list[Any]:
     """
     tools: list[Any] = []
     try:
-        from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
-        from gateway.routes.agent import _load_dynamic_agents
+        from gateway.routes.agent import (
+            _AGENT_REGISTRY,  # noqa: PLC0415
+            _load_dynamic_agents,
+        )
         all_agents = _load_dynamic_agents() + _AGENT_REGISTRY
     except ImportError:
         return tools
@@ -340,15 +346,15 @@ def _load_specialist_agents_as_tools() -> list[Any]:
                 import uuid as _uuid  # noqa: PLC0415
                 run_id = str(_uuid.uuid4())
                 from orchestrator.executor import (  # noqa: PLC0415
-                    _active_run_queue, _active_run_model,
+                    _active_run_model,
+                    _active_run_queue,
                 )
                 eq = _active_run_queue.get(None)
                 # Inherit the orchestrator's resolved tier for the specialist.
                 _pm = _active_run_model.get(None)
                 if eq is not None:
                     try:
-                        from orchestrator.executor import \
-                            _run_sub_agent_streaming  # noqa: PLC0415
+                        from orchestrator.executor import _run_sub_agent_streaming  # noqa: PLC0415
                         return await _run_sub_agent_streaming(
                             _n, task, run_id, eq, model=_pm,
                         )
@@ -385,11 +391,19 @@ def _load_specialist_agents_as_tools() -> list[Any]:
 # Agent factory
 # ---------------------------------------------------------------------------
 
-def _make_openai_client() -> OpenAIChatCompletionClient:
+def _make_openai_client(
+    agent_name: str = "orchestrator", source: str = "chat",
+) -> OpenAIChatCompletionClient:
     """Build an OpenAIChatCompletionClient pointing at the gateway's own /v1 endpoint.
 
     The gateway's /v1/chat/completions reads keys from the encrypted Postgres
     store — no separate proxy process needed.  Internal-only (localhost:8080).
+
+    ``default_headers`` stamps the agent identity on every completion request so
+    the gateway (v1_compat) can attribute the model call + cost back to THIS
+    agent on the observability bus — otherwise a completion arrives as a bare
+    HTTP request with no run context and can only be tagged by app. Fail-soft:
+    if the header is ever stripped, v1_compat just falls back to source="chat".
     """
     settings = get_settings()
     gateway_base = getattr(settings, "litellm_base_url", "http://127.0.0.1:8080")
@@ -398,6 +412,7 @@ def _make_openai_client() -> OpenAIChatCompletionClient:
         base_url=f"{gateway_base}/v1",
         api_key=gateway_key,
         model="tier-balanced",
+        default_headers={"X-CC-Agent": agent_name, "X-CC-Source": source},
     )
 
 
@@ -432,11 +447,13 @@ def build_orchestrator_agent(
     # Gives the orchestrator the same memory capabilities that injected
     # tools provide to named agents via executor._inject_agent_tools().
     try:
+        from acb_skills.memory_tools import (
+            recall_timeline as _recall_timeline_tool,
+        )
         from acb_skills.memory_tools import (  # noqa: PLC0415
             remember,
-            recall_timeline as _recall_timeline_tool,
-            save_memory,
             save_episode,
+            save_memory,
         )
         _memory_tools: list[Any] = [
             remember, _recall_timeline_tool, save_memory, save_episode,

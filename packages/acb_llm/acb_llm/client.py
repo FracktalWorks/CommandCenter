@@ -476,15 +476,17 @@ def _compute_cost(model: str, response: Any, stats: dict[str, int]) -> float | N
 
 
 def _emit_usage(
-    model: str, tier: str, response: Any, *, source: str | None = None,
+    model: str, tier: str, response: Any, *,
+    source: str | None = None, agent: str | None = None,
 ) -> None:
     """Log per-call token/cache usage + USD cost; optionally persist to audit.
 
     Always emits a structured log line (the cost/cache dashboards read these)
     and publishes a live model activation (with cost) to the activity bus.
     ``source`` attributes the call to the originating app (email / tasks / …)
-    when the caller knows it; otherwise the run context supplies it. Set
-    ``LLM_USAGE_AUDIT=1`` to also append an ``audit_event`` row per call.
+    and ``agent`` to a specific agent (e.g. v1_compat forwarding the X-CC-Agent
+    header) when the caller knows them; otherwise the run context supplies them.
+    Set ``LLM_USAGE_AUDIT=1`` to also append an ``audit_event`` row per call.
     Never raises.
     """
     stats = _usage_stats(response)
@@ -513,6 +515,7 @@ def _emit_usage(
             tokens=stats.get("total_tokens"),
             cost_usd=cost,
             source=source,
+            agent=agent,
         )
     except Exception:  # noqa: BLE001
         pass
@@ -521,9 +524,11 @@ def _emit_usage(
     try:
         from acb_audit import AuditEvent, record  # noqa: PLC0415
 
+        _actor_agent = agent or _run_ctx.get("agent")
+
         def _persist() -> None:
             record(AuditEvent(
-                actor=f"agent:{_run_ctx.get('agent')}" if _run_ctx.get("agent")
+                actor=f"agent:{_actor_agent}" if _actor_agent
                 else "system:acb_llm",
                 action="llm_completion",
                 target=f"model:{model}",

@@ -253,11 +253,34 @@ now fixed:
   defensive — normally shadowed by v1_compat's same-path route).
 - Verified: `_usage_stats` reads litellm `ModelResponse` (`.get` present); +4
   tests incl. an end-to-end v1_compat TestClient drive (811 total green).
-- **Known limitation:** model calls made via v1_compat aren't correlated to the
-  specific agent/run (separate HTTP request → no run context), so they show
-  source="chat" without an agent name; the agent start/end events carry the
-  agent. Copilot-SDK mutation traffic also lands in the "chat" bucket. Per-agent
-  model correlation (forward run_id as a header) is a future refinement.
+### Phase 6.2 — per-agent model correlation (v1_compat headers)
+v1_compat runs as a bare HTTP request (no run context), so model calls could only
+be tagged by app. Fixed for the primary agent: the orchestrator's
+`OpenAIChatCompletionClient` is built with `default_headers={"X-CC-Agent",
+"X-CC-Source"}` (`agents.py::_make_openai_client`), v1_compat reads them and
+forwards `agent`/`source` into `_emit_usage`, so the orchestrator's model calls
++ cost now attribute to `agent="orchestrator"` (→ per-agent cost). **Fail-soft:**
+no header → source="chat", no agent (prior behaviour) — it cannot regress.
+Verified via TestClient (header present → agent tagged; absent → chat fallback).
+- **Still app-level:** named specialists build their client in their own repo, so
+  their model calls aren't header-tagged (they show source="chat", no agent) —
+  but their start/end lifecycle events DO carry the agent, and they aren't
+  mislabelled as orchestrator (they delegate through the executor, not the
+  orchestrator's client). Copilot-SDK mutation traffic also lands in "chat".
+  Threading the header through named-agent/mutation clients is the next step.
+
+### What v1_compat IS (not legacy)
+`routes/v1_compat.py` is the gateway's **OpenAI-compatible LLM egress** — the
+single `/v1/chat/completions` every agent runtime (MAF `OpenAIChatCompletionClient`,
+Copilot SDK, Mem0) POSTs through. It is NOT legacy; it deliberately REPLACES a
+standalone LiteLLM proxy process: the gateway serves the OpenAI wire protocol
+itself, reading provider keys from encrypted Postgres, resolving tier aliases
+(tier-fast/balanced/powerful → concrete models), sanitising messages for provider
+quirks (e.g. DeepSeek null-content), and applying prompt-cache breakpoints — "THE
+choke point every agent runtime POSTs through". The name ("compat") undersells it
+(it's the LLM gateway, not a throwaway shim). No refactor needed for correctness;
+optional cleanups: (a) the shadowed duplicate `/v1/chat/completions` in `main.py`
+(Mem0) could be removed, (b) a clearer name like `llm_gateway.py` — both cosmetic.
 
 ## Status
 - 2026-07-03 — Phases 1+2 shipped. E2 C+ → B+.

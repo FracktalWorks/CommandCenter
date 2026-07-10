@@ -147,6 +147,13 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
     """OpenAI-compatible chat completions. Supports streaming and tools."""
     await _ensure_keys_loaded()
 
+    # Observability attribution (E2): the agent runtime stamps its identity on the
+    # request via default_headers so we can tie this model call + cost back to the
+    # specific agent (otherwise it's a bare request with no run context). Fail-soft
+    # — absent headers just fall back to source="chat", no agent.
+    _obs_agent = request.headers.get("x-cc-agent") or None
+    _obs_source = request.headers.get("x-cc-source") or "chat"
+
     body = await request.json()
     model = _resolve_model(body.get("model", "tier-balanced"))
     messages = body.get("messages", [])
@@ -235,7 +242,8 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
                         rebuilt = stream_chunk_builder(_chunks, messages=messages)
                         if rebuilt is not None:
                             from acb_llm.client import _emit_usage  # noqa: PLC0415
-                            _emit_usage(model, "", rebuilt, source="chat")
+                            _emit_usage(model, "", rebuilt,
+                                        source=_obs_source, agent=_obs_agent)
                     except Exception:  # noqa: BLE001
                         pass
 
@@ -255,7 +263,7 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
         # completion. Best-effort; never affects the response.
         try:
             from acb_llm.client import _emit_usage  # noqa: PLC0415
-            _emit_usage(model, "", response, source="chat")
+            _emit_usage(model, "", response, source=_obs_source, agent=_obs_agent)
         except Exception:  # noqa: BLE001
             pass
         return dict(response) if hasattr(response, "items") else response  # type: ignore[return-value]

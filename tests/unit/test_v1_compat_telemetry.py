@@ -68,6 +68,37 @@ def test_v1_compat_nonstreaming_emits_priced_model_activation(monkeypatch):
     assert isinstance(ev["cost_usd"], float) and ev["cost_usd"] > 0
 
 
+def test_v1_compat_attributes_agent_from_header(monkeypatch):
+    # The agent runtime stamps X-CC-Agent / X-CC-Source via default_headers so
+    # the model call + cost tie back to the specific agent (not just the app).
+    captured: list[dict] = []
+    client = _mk_app(monkeypatch, captured)
+
+    resp = client.post(
+        "/v1/chat/completions",
+        headers={"X-CC-Agent": "sales", "X-CC-Source": "chat"},
+        json={"model": "gpt-4o-mini",
+              "messages": [{"role": "user", "content": "hi"}], "stream": False},
+    )
+    assert resp.status_code == 200
+    ev = [e for e in captured if e.get("kind") == "model"][0]
+    assert ev["agent"] == "sales"
+    assert ev["source"] == "chat"
+
+
+def test_v1_compat_without_header_falls_back_to_chat(monkeypatch):
+    # Fail-soft: no attribution header → source="chat", no agent (today's behaviour).
+    captured: list[dict] = []
+    client = _mk_app(monkeypatch, captured)
+    resp = client.post("/v1/chat/completions", json={
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}], "stream": False})
+    assert resp.status_code == 200
+    ev = [e for e in captured if e.get("kind") == "model"][0]
+    assert ev["source"] == "chat"
+    assert ev.get("agent") is None
+
+
 def test_v1_compat_completion_error_does_not_emit(monkeypatch):
     captured: list[dict] = []
 

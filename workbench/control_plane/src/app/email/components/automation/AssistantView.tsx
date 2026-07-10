@@ -32,6 +32,7 @@ import {
 } from "../../lib/types";
 import { useEmailStore } from "../../lib/emailStore";
 import { EmailPreviewModal } from "../EmailPreviewModal";
+import { SignatureEditor } from "../SignatureEditor";
 import {
   Modal, Toggle, LabeledToggle, HoverPopover, SettingCard, SectionHeader,
 } from "./ui";
@@ -4005,7 +4006,7 @@ function SignatureDialog({
   return (
     <Modal
       title="Email signature"
-      description="Included at the bottom of drafted messages."
+      description="Appended to the bottom of your replies. Use rich text or full HTML — links and images supported."
       onClose={onClose}
       footer={
         <button
@@ -4016,12 +4017,9 @@ function SignatureDialog({
         </button>
       }
     >
-      <textarea
-        value={draft.signature}
-        onChange={(e) => setDraft({ ...draft, signature: e.target.value })}
-        rows={4}
-        placeholder={"Best,\nAlex"}
-        className={`${INPUT_CLS} resize-none`}
+      <SignatureEditor
+        value={draft.signature || ""}
+        onChange={(html) => setDraft({ ...draft, signature: html })}
       />
     </Modal>
   );

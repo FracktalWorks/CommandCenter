@@ -201,6 +201,9 @@ async def ai_chat(
         "account_id": account_id,
         "email_context_id": req.email_context_id,
         "user_email": user_id,
+        # Attribute this agent run to the email app on the observability bus
+        # (executor reads event_payload["source"]; defaults to "chat" otherwise).
+        "source": "email",
     }
 
     # ── Resolve which LiteLLM tier the email CHAT should use (per-account) ──

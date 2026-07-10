@@ -298,6 +298,12 @@ role gate).
   before the live bus existed.
 - Tests: +4 (employee-role 200 on runs/cost, DB-less degrade to [], bad-status
   ignored). Full unit suite 817. `next build` + tsc + eslint clean.
+- **Background-agent coverage confirmed:** chat (orchestrator via `copilot_chat`
+  + named agents via `run_agent_stream`) AND the email app (Reply Zero runs the
+  `email-assistant` through `run_agent_stream`) both emit start/end + presence,
+  so a background run is observable in the office/feed/active even after the
+  browser closes (presence is server-side Redis). Email agent runs now set
+  `payload["source"]="email"` so they're attributed to the email app, not "chat".
 
 ### What v1_compat IS (not legacy)
 `routes/v1_compat.py` is the gateway's **OpenAI-compatible LLM egress** — the

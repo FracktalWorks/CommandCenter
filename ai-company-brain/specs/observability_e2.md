@@ -321,6 +321,31 @@ so hand-authored art drops in without touching the page. Verified by rendering
 the sprites headless (Playwright/Chromium) before shipping; `next build` + tsc +
 eslint clean.
 
+### Phase 6.5 — roomed, layered, configurable agent scenes
+The office now composes each agent as a **layered scene inside a themed room**
+(`src/app/observability/scene.tsx`), replacing the "floating box" desks:
+- **Layered composition** (room → rug → chair → outfit → hands → head → face →
+  hair → accessory → desk props → desk), each layer driven by an `AvatarConfig`.
+- **Semantic + per-agent look:** `deriveAvatar(name)` maps the agent's role
+  (coder / sales / planner / triage / reconciler / orchestrator) to a **room +
+  outfit + accessory + props signature**, with per-agent variation (skin, hair
+  style/colour) from a name hash — a brand-new agent gets a fitting avatar with
+  zero config. `override` pins any field for when backend avatar config lands.
+- **Real environment:** each agent sits in a room (wall + window/board/whiteboard
+  + floor tiles + rug + desk + monitor(s) + props), not a void.
+- **Animation:** hands **type** on the keyboard, eyes **blink**, screen
+  **flickers**, mug **steams**; sleeping dims + `Zzz`; error shakes. All CSS,
+  `prefers-reduced-motion` aware. Descriptor-based rects (stable keys) so no
+  hydration churn.
+- **Asset swap seam (for Higgsfield/hand-authored art):** the layer order +
+  anchor grid is the contract; replace a layer's rects with `<image href=…>` at
+  the same coords. The ASSET SPEC (cell, anchors, z-order, recolor, animation
+  strips, manifest) is the mix-and-match contract for externally-generated
+  sprites. `.mcp.json` carries a (auth-gated, inert until connected) `higgsfield`
+  http entry for when we generate real assets to that spec.
+- Verified via headless render (Playwright/Chromium) of the composed scenes;
+  `next build` + tsc + eslint clean.
+
 ### What v1_compat IS (not legacy)
 `routes/v1_compat.py` is the gateway's **OpenAI-compatible LLM egress** — the
 single `/v1/chat/completions` every agent runtime (MAF `OpenAIChatCompletionClient`,

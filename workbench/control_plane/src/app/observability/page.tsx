@@ -23,7 +23,8 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { ConferenceScene, PIXEL_ART_STYLE, PixelWorker, type WorkerState } from "./pixel";
+import { ConferenceScene, PIXEL_ART_STYLE } from "./pixel";
+import { AgentScene, SCENE_STYLE, type SceneState } from "./scene";
 
 // ───────────────────────────────────────────────────────────────────────────
 // Types
@@ -214,21 +215,21 @@ function Desk({
   onOpen: (name: string) => void;
 }) {
   const working = agent.status === "working" || hot;
-  const spriteState: WorkerState =
+  const sceneState: SceneState =
     agent.status === "error" ? "error" : working ? "working" : "idle";
   return (
     <button
       onClick={() => onOpen(agent.name)}
-      className={`obs-desk group text-left rounded-xl border p-2 pt-3 flex flex-col items-center gap-1.5 w-full ${
+      className={`obs-desk group text-left rounded-xl border p-1.5 pb-2 flex flex-col items-center gap-1.5 w-full overflow-hidden ${
         working
           ? "border-amber-500/40 bg-amber-500/5 shadow-[0_0_0_1px_rgba(245,158,11,0.15)]"
           : "border-border bg-card/60 hover:border-border"
       }`}
       title={agent.description || agent.name}
     >
-      {/* Pixel-art agent at their desk (working / sleeping / error) */}
-      <div className="w-full max-w-[104px]">
-        <PixelWorker seed={agent.name} state={spriteState} />
+      {/* Roomed, layered, configurable agent scene (working / sleeping / error) */}
+      <div className="w-full">
+        <AgentScene name={agent.name} state={sceneState} />
       </div>
 
       <div className="obs-pixel text-[11px] font-semibold text-foreground truncate max-w-full">
@@ -349,7 +350,7 @@ function OfficeView({
             <p className="obs-pixel text-sm text-muted-foreground">No agents registered yet.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
             {roster.map((a) => (
               <Desk key={a.name} agent={a} hot={hotAgents.has(a.name)} onOpen={onOpen} />
             ))}
@@ -964,7 +965,7 @@ export default function ObservabilityPage() {
 
   return (
     <div className="flex flex-col h-full max-h-full">
-      <style>{PIXEL_STYLE + PIXEL_ART_STYLE}</style>
+      <style>{PIXEL_STYLE + PIXEL_ART_STYLE + SCENE_STYLE}</style>
 
       {/* Header */}
       <header className="flex items-center justify-between gap-3 px-5 py-3 border-b border-border flex-wrap">

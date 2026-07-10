@@ -305,6 +305,22 @@ role gate).
   browser closes (presence is server-side Redis). Email agent runs now set
   `payload["source"]="email"` so they're attributed to the email app, not "chat".
 
+### Phase 6.4 — pixel-art office UX
+The office view now renders a **procedural pixel-art character at a desk per
+agent** (`src/app/observability/pixel.tsx`): deterministic palette per agent
+(skin/hair/shirt/hair-style from a name hash), with three states —
+**working** (green monitor, gentle bob, screen flicker), **sleeping** (dimmed +
+desaturated, floating Zzz, dark monitor), **error** (red monitor, shake). When
+**≥2 agents are working at once** (multi-agent orchestration) a separate **war
+room** card appears with the collaborating agents seated at a **conference
+table** (collaboration chatter dots + clickable name chips). Sprites are
+generated inline SVG — no external assets (CSP-safe), crisp, theme-agnostic,
+`prefers-reduced-motion` aware. **Swap seam:** `<PixelWorker src=…>` accepts a
+real sprite PNG/data-URI per agent+state and keeps the same animation classes,
+so hand-authored art drops in without touching the page. Verified by rendering
+the sprites headless (Playwright/Chromium) before shipping; `next build` + tsc +
+eslint clean.
+
 ### What v1_compat IS (not legacy)
 `routes/v1_compat.py` is the gateway's **OpenAI-compatible LLM egress** — the
 single `/v1/chat/completions` every agent runtime (MAF `OpenAIChatCompletionClient`,

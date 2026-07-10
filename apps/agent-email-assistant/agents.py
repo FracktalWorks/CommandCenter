@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-
 from acb_common import get_logger, get_settings
 
 try:
@@ -1712,6 +1711,10 @@ def build_agents() -> list[Any]:
         model=os.environ.get("EMAIL_AGENT_MODEL", "tier-balanced"),
         api_key=prov["api_key"],
         base_url=prov["base_url"],
+        # Stamp identity so the gateway (v1_compat) attributes this agent's model
+        # calls + cost to it on the observability bus. Fail-soft (absent header →
+        # source="chat", no agent). See specs/observability_e2.md Phase 6.2.
+        default_headers={"X-CC-Agent": "email-assistant", "X-CC-Source": "chat"},
     )
     return [
         Agent(

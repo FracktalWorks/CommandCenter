@@ -21,6 +21,7 @@ emails. The fitting + fallback logic lives here so every in-gateway LLM call
 """
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -29,6 +30,35 @@ from acb_common import get_logger
 from acb_llm.message_compress import compress_message_content
 
 _log = get_logger("acb_llm.context")
+
+
+def _infer_app_source(max_depth: int = 12) -> str | None:
+    """Infer the originating app from the call stack, for activity attribution.
+
+    Walks up the stack for the first frame whose module lives under
+    ``gateway.routes.<app>`` and returns ``<app>`` (e.g. ``email``, ``tasks``).
+    This is what makes every app observable WITHOUT touching its call sites —
+    a new app under ``routes/<name>/`` is attributed automatically. Returns
+    ``None`` when no such frame is found (e.g. an agent run, whose ``source``
+    already rides the run context). Never raises.
+    """
+    marker = ".routes."
+    try:
+        frame = sys._getframe(2)  # skip this fn + acompletion_with_fallback
+    except Exception:  # noqa: BLE001
+        return None
+    depth = 0
+    while frame is not None and depth < max_depth:
+        mod = frame.f_globals.get("__name__", "")
+        idx = mod.find(marker)
+        if idx != -1:
+            rest = mod[idx + len(marker):]
+            app = rest.split(".", 1)[0].strip()
+            if app:
+                return app
+        frame = frame.f_back
+        depth += 1
+    return None
 
 # Fallback context-window table for models litellm's model_cost registry does
 # NOT know (self-hosted, private endpoints, legacy non-gateway tier aliases).
@@ -244,9 +274,12 @@ async def acompletion_with_fallback(
     from litellm import acompletion
 
     from acb_llm.client import (
+        _emit_usage,
         _ensure_keys_loaded,
         ensure_model_registered,
     )
+
+    _source = _infer_app_source()
 
     _litellm.drop_params = True
     _litellm.suppress_debug_info = True
@@ -272,6 +305,13 @@ async def acompletion_with_fallback(
             if is_fallback:
                 _log.info("acb_llm.fallback_succeeded",
                           model=resolved, truncated=was_truncated)
+            # Usage + cost + live activation. This is the completion path email
+            # and the task manager use (client.complete covers agent runs), so
+            # emitting here is what makes those apps observable. Best-effort.
+            try:
+                _emit_usage(resolved, "", resp, source=_source)
+            except Exception:  # noqa: BLE001
+                pass
             return resp, resolved
         except Exception as exc:
             last_exc = exc

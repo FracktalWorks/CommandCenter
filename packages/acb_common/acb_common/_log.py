@@ -63,7 +63,9 @@ def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
 
 # The context keys bound per run. Kept small + stable so every log line during a
 # run gains the same joinable fields (and so bind/clear stay symmetric).
-_RUN_CONTEXT_KEYS = ("run_id", "thread_id", "agent", "user")
+# ``source`` is the originating app (chat / email / tasks / …) so the live
+# activity feed can attribute an activation to the surface that triggered it.
+_RUN_CONTEXT_KEYS = ("run_id", "thread_id", "agent", "user", "source")
 
 
 def bind_run_context(
@@ -72,6 +74,7 @@ def bind_run_context(
     thread_id: str | None = None,
     agent: str | None = None,
     user: str | None = None,
+    source: str | None = None,
 ) -> None:
     """Bind run-correlation fields into structlog contextvars.
 
@@ -87,6 +90,7 @@ def bind_run_context(
             ("thread_id", thread_id),
             ("agent", agent),
             ("user", user),
+            ("source", source),
         )
         if v
     }

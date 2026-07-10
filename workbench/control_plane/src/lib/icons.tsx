@@ -21,6 +21,7 @@ import {
   PlusSquare,
   Zap,
   FolderOpen,
+  Activity,
   type LucideIcon,
 } from "lucide-react";
 
@@ -38,6 +39,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   PlusSquare,
   Zap,
   FolderOpen,
+  Activity,
 };
 
 /** Returns the Lucide component for a given icon name, or Zap as fallback. */

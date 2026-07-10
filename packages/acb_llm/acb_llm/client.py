@@ -446,16 +446,53 @@ def _usage_stats(response: Any) -> dict[str, int]:
     return stats
 
 
-def _emit_usage(model: str, tier: str, response: Any) -> None:
-    """Log per-call token/cache usage; optionally persist to audit_event.
+def _compute_cost(model: str, response: Any, stats: dict[str, int]) -> float | None:
+    """Best-effort USD cost for one completion, via litellm's price map.
 
-    Always emits a structured log line (the cost/cache dashboards read these).
+    Tries the response-aware ``completion_cost`` first (accounts for cache
+    read/write pricing when the provider reports it), then falls back to
+    ``cost_per_token`` on the raw token counts. Returns ``None`` when the model
+    isn't in litellm's catalogue (unknown price) so the UI can show "—" rather
+    than a misleading $0. Never raises.
+    """
+    try:
+        from litellm import completion_cost  # noqa: PLC0415
+        c = completion_cost(completion_response=response, model=model)
+        if isinstance(c, (int, float)) and c >= 0:
+            return round(float(c), 8)
+    except Exception:  # noqa: BLE001 — unknown model / bad shape → try fallback
+        pass
+    try:
+        from litellm import cost_per_token  # noqa: PLC0415
+        p, comp = cost_per_token(
+            model=model,
+            prompt_tokens=int(stats.get("prompt_tokens", 0) or 0),
+            completion_tokens=int(stats.get("completion_tokens", 0) or 0),
+        )
+        total = float(p or 0.0) + float(comp or 0.0)
+        return round(total, 8) if total >= 0 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _emit_usage(
+    model: str, tier: str, response: Any, *,
+    source: str | None = None, agent: str | None = None,
+) -> None:
+    """Log per-call token/cache usage + USD cost; optionally persist to audit.
+
+    Always emits a structured log line (the cost/cache dashboards read these)
+    and publishes a live model activation (with cost) to the activity bus.
+    ``source`` attributes the call to the originating app (email / tasks / …)
+    and ``agent`` to a specific agent (e.g. v1_compat forwarding the X-CC-Agent
+    header) when the caller knows them; otherwise the run context supplies them.
     Set ``LLM_USAGE_AUDIT=1`` to also append an ``audit_event`` row per call.
     Never raises.
     """
     stats = _usage_stats(response)
     if not stats:
         return
+    cost = _compute_cost(model, response, stats)
     # Run correlation (E2): merge_contextvars already tags this LOG line with
     # run_id/agent/user; pull them explicitly so the AUDIT row is joinable too.
     try:
@@ -463,19 +500,39 @@ def _emit_usage(model: str, tier: str, response: Any) -> None:
         _run_ctx = get_run_context()
     except Exception:  # noqa: BLE001
         _run_ctx = {}
-    _log.info("acb_llm.usage", model=model, tier=tier, **stats)
+    _log.info("acb_llm.usage", model=model, tier=tier, cost_usd=cost, **stats)
+    # Live activity feed (E2): surface every model call on the global bus so the
+    # /observability view shows model activations + cost in real time, across
+    # every app. Best-effort + non-blocking (never raises); run/agent/user are
+    # inherited from the run context when this call is inside an agent run, and
+    # `source` is inherited too unless the caller passes it explicitly.
+    try:
+        from acb_common import publish_activity  # noqa: PLC0415
+        publish_activity(
+            kind="model",
+            model=model,
+            tier=tier or None,
+            tokens=stats.get("total_tokens"),
+            cost_usd=cost,
+            source=source,
+            agent=agent,
+        )
+    except Exception:  # noqa: BLE001
+        pass
     if os.environ.get("LLM_USAGE_AUDIT", "0") != "1":
         return
     try:
         from acb_audit import AuditEvent, record  # noqa: PLC0415
 
+        _actor_agent = agent or _run_ctx.get("agent")
+
         def _persist() -> None:
             record(AuditEvent(
-                actor=f"agent:{_run_ctx.get('agent')}" if _run_ctx.get("agent")
+                actor=f"agent:{_actor_agent}" if _actor_agent
                 else "system:acb_llm",
                 action="llm_completion",
                 target=f"model:{model}",
-                payload={"tier": tier, **stats, **_run_ctx},
+                payload={"tier": tier, "cost_usd": cost, **stats, **_run_ctx},
             ))
 
         try:

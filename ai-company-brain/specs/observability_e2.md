@@ -1,10 +1,13 @@
 # E2 — Observability & Debugging (interaction logging + run traces)
 
-> **Status:** Phases 1–4 **shipped** (2026-07-03). E2 C+ → A−.
+> **Status:** Phases 1–4 **shipped** (2026-07-03). Phase 5 (live activity feed)
+> **shipped** (2026-07-09). E2 C+ → A.
 > **Module:** E2 (core_module_map.md).
 > **Goal (user request):** log every agent/model interaction so an engineer can
-> debug "error X happened with agent Y" after the fact, and eventually run
-> feature tests against the live VPS.
+> debug "error X happened with agent Y" after the fact (Phases 1–4); AND give
+> operators a live, cross-app view of "whenever any agent or model is activated"
+> across chats and every app (Phase 5); and eventually run feature tests against
+> the live VPS.
 
 ## ⏩ RUNBOOK — the user reports "error X with agent Y" (start here)
 
@@ -149,6 +152,144 @@ needed (SSH `journalctl` remains available for the correlated log stream).
   `_persist_row` write/read-back proving the errored-vs-successful retention
   policy. Full suite: 664 green, zero regressions.
 
+## Phase 5 — Live activity feed (operator-facing, cross-app)
+Phases 1–4 are an *engineer's post-hoc* view (logs + `agent_run` + `/debug`).
+Phase 5 adds the *operator's live* view the user asked for: "see whenever any
+agent or model is activated," across chat AND every app (email, tasks, …).
+
+- **Global activity bus** (`packages/acb_common/acb_common/activity.py`): one
+  process-wide Redis stream `cc:activity` that every activation publishes a
+  small event to. `publish_activity(**fields)` is best-effort + non-blocking +
+  never raises (a dropped event can never affect the run that emitted it — the
+  durable record stays in `agent_run`). Presence keys `cc:activity:live:{run_id}`
+  (TTL `LIVE_TTL_SECONDS`) track in-flight runs and self-heal if an "end" is
+  lost. Cross-app coverage is automatic because the two publish sites are shared
+  libraries:
+  - **Agent activations** — the executor run boundary (`executor.py`
+    `run_agent_stream`): a `kind="agent" phase="start"` event right after
+    `bind_run_context`, and a `phase="end"` event (status + duration_ms) in the
+    `finally`.
+  - **Model activations** — `acb_llm._emit_usage` fires `kind="model"`
+    (model/tier/tokens) on EVERY completion → chat, email automation, and tasks
+    all covered with no per-app wiring.
+  - **Source attribution** — `bind_run_context(..., source=)` adds `source` to
+    the run-context contextvars (chat / email / tasks / webhook); model calls
+    inside a run inherit it, so the feed shows which app triggered each call.
+- **Live API** (`apps/gateway/gateway/routes/observability.py`, EXECUTIVE/AGENT-
+  gated like `/debug`): `GET /observability/activity/recent` (backfill),
+  `GET /observability/activity/stream` (SSE tail with heartbeats),
+  `GET /observability/active` (runs in flight now).
+- **UI** — new `/observability` page ("Live Activity", nav under Apps): backfills
+  via `recent`, live-tails via `EventSource` on the SSE proxy, and polls
+  `active` for the "running now" panel. Next proxies:
+  `src/app/api/observability/{activity/recent,activity/stream,active}/route.ts`.
+- **Tests** — `tests/unit/test_activity_bus.py` (7): event shaping + run-context
+  inheritance + source binding + the best-effort/non-blocking publish contract
+  (never raises on shaping or write failure). Full unit suite green (801).
+- **Relation to Phase 3** — `/observability` is the *live signal* (ephemeral,
+  Redis); `/debug` stays the *durable trace* (Postgres `agent_run`). Cost/token
+  rollups + per-agent history are the next increment (read `agent_run` +
+  `audit_event`; needs `LLM_USAGE_AUDIT=1`).
+
+## Phase 6 — Cross-app coverage, live cost, agent office
+Turns the live feed into the full "complete visibility" app the user asked for.
+
+- **Universal app coverage (zero-touch).** Email and the task manager reach the
+  model through `acb_llm.context.acompletion_with_fallback` (not `client.complete`,
+  which covers agent runs), and it previously emitted nothing. It now calls
+  `_emit_usage(...)` on success, and `_infer_app_source()` walks the stack for
+  the caller's `gateway.routes.<app>` module → attributes the call to
+  `email` / `tasks` / **any future app** with NO per-call-site changes. Agent
+  runs keep their `source` from the run context (chat/…). Verified: email→email,
+  tasks→tasks, a hypothetical `newapp`→newapp, orchestrator→None.
+- **Live cost.** `_emit_usage` prices every call via litellm (`completion_cost`
+  → `cost_per_token` fallback; unknown model → `None`, shown as "—", never a
+  misleading $0) and puts `cost_usd` on the model activation. `activity._axadd`
+  folds priced calls into a per-UTC-day Redis hash `cc:cost:{date}` (additive
+  `total|` / `model|` / `source|` / `agent|` fields, ~45-day TTL) — an always-on
+  rollup with NO per-call Postgres write (that stays the `LLM_USAGE_AUDIT` opt-in).
+  `cost_summary(days)` reads it; `GET /observability/cost` serves per-day totals
+  + by-model + by-app.
+- **Roster / office.** `GET /observability/roster` merges the agent registry with
+  the live presence set → each agent reports `working` / `idle`. Powers the
+  8-bit office.
+- **UI.** `/observability` is now a 3-view app: **Office** (an 8-bit room —
+  each agent is a character at a desk that works/sleeps/errors live; a server
+  rack lights up per active model; today's $ ticker), **Live feed** (stream +
+  per-call cost), **Cost** (daily bars, by-model, by-app). Click any agent →
+  drawer with recent runs + errors (proxied from `/debug/runs?agent=`). All
+  dependency-free (CSS keyframes, no chart lib). New proxies:
+  `api/observability/{cost,roster,runs}/route.ts`.
+- **Tests.** +9 (cost pricing incl. unknown-model→None, source inference across
+  apps, cost-rollup field parsing + aggregation, empty history). Full unit suite
+  807 green. Frontend: `next build` clean (page + 6 API routes), `tsc`/eslint clean.
+- **To make a NEW app observable:** nothing — if it calls models via
+  `acompletion_with_fallback` (or runs an agent), it shows up attributed. Only
+  add a `sourceClass()` colour in the page if you want a custom app badge.
+
+### Phase 6.1 — review + fixes (agent/chat wiring)
+A full trace of how activations connect to the CHAT agents surfaced three gaps,
+now fixed:
+- **Agent model calls + cost were invisible.** MAF agents (both the default
+  orchestrator and named agents) don't call `acb_llm.complete` — their
+  `OpenAIChatCompletionClient` POSTs to the gateway's own `/v1/chat/completions`
+  (`routes/v1_compat.py`, the gateway binds :8080; no separate proxy), which
+  called litellm directly and emitted NOTHING. Fixed: v1_compat now emits the
+  model activation + cost on both the non-streaming and streaming paths
+  (streaming rebuilds usage via litellm's `stream_chunk_builder` AFTER the
+  stream, so the provider request + forwarded bytes are unchanged — zero risk to
+  the agent stream). source="chat".
+- **The orchestrator never showed as working.** The default chat
+  (`main.py::copilot_chat`) runs the MAF agent via `protocol_runner.run`, NOT
+  `run_agent_stream`, so the executor's start/end events never fired for it.
+  Fixed: copilot_chat emits agent start/end (end via `run_detached`'s shielded
+  `on_complete`, so it fires on every terminal outcome; a miss self-heals via the
+  presence TTL).
+- **The orchestrator wasn't in the roster.** It isn't a registered specialist,
+  so `/observability/roster` omitted it. Fixed: the roster seeds "orchestrator"
+  as a baseline entry AND merges any live-but-unregistered agent (sub-agents),
+  so the primary agent is always on stage.
+- Mem0's OpenAI-compat endpoint (`main.py`) also emits now (source="memory";
+  defensive — normally shadowed by v1_compat's same-path route).
+- Verified: `_usage_stats` reads litellm `ModelResponse` (`.get` present); +4
+  tests incl. an end-to-end v1_compat TestClient drive (811 total green).
+### Phase 6.2 — per-agent model correlation (v1_compat headers)
+v1_compat runs as a bare HTTP request (no run context), so model calls could only
+be tagged by app. Fixed for the primary agent: the orchestrator's
+`OpenAIChatCompletionClient` is built with `default_headers={"X-CC-Agent",
+"X-CC-Source"}` (`agents.py::_make_openai_client`), v1_compat reads them and
+forwards `agent`/`source` into `_emit_usage`, so the orchestrator's model calls
++ cost now attribute to `agent="orchestrator"` (→ per-agent cost). **Fail-soft:**
+no header → source="chat", no agent (prior behaviour) — it cannot regress.
+Verified via TestClient (header present → agent tagged; absent → chat fallback).
+- **Extended to native MAF named agents.** `agent-email-assistant` builds its own
+  `OpenAIChatCompletionClient` (in-repo) → tagged with
+  `default_headers` (agent="email-assistant"), so its model calls + cost now
+  correlate too.
+- **Still app-level (by design):** agents that run on `GitHubCopilotAgent`
+  (task-manager, apis-config) reach the model through the Copilot SDK's BYOK
+  provider, which doesn't expose a client-header hook here — their model calls
+  show source="chat"/no agent, but their start/end lifecycle events DO carry the
+  agent (via the executor), and they're never mislabelled as orchestrator.
+  Copilot-SDK mutation traffic also lands in "chat". Per-agent model correlation
+  for those needs an SDK-level header pass-through (upstream) — deferred.
+- **Cleanup:** removed the permanently-shadowed duplicate `/v1/chat/completions`
+  handler in `main.py` (v1_compat's registers first and is the full
+  implementation); `/v1/embeddings` stays.
+
+### What v1_compat IS (not legacy)
+`routes/v1_compat.py` is the gateway's **OpenAI-compatible LLM egress** — the
+single `/v1/chat/completions` every agent runtime (MAF `OpenAIChatCompletionClient`,
+Copilot SDK, Mem0) POSTs through. It is NOT legacy; it deliberately REPLACES a
+standalone LiteLLM proxy process: the gateway serves the OpenAI wire protocol
+itself, reading provider keys from encrypted Postgres, resolving tier aliases
+(tier-fast/balanced/powerful → concrete models), sanitising messages for provider
+quirks (e.g. DeepSeek null-content), and applying prompt-cache breakpoints — "THE
+choke point every agent runtime POSTs through". The name ("compat") undersells it
+(it's the LLM gateway, not a throwaway shim). No refactor needed for correctness;
+optional cleanups: (a) the shadowed duplicate `/v1/chat/completions` in `main.py`
+(Mem0) could be removed, (b) a clearer name like `llm_gateway.py` — both cosmetic.
+
 ## Status
 - 2026-07-03 — Phases 1+2 shipped. E2 C+ → B+.
 - 2026-07-03 — Phases 3+4 shipped. E2 B+ → A−. `/debug/runs` diagnostics API
@@ -156,3 +297,20 @@ needed (SSH `journalctl` remains available for the correlated log stream).
   one-command live sweep. 9 debug-route integration tests (TestClient vs live
   DB) + 3 harness unit tests; full suite 667 green. OTLP trace-backend export
   remains the only deferred item (dormant, gated on `OTEL_EXPORTER_OTLP_ENDPOINT`).
+- 2026-07-09 — Phase 5 shipped. E2 A− → A. Live cross-app activity feed: global
+  `cc:activity` bus (`acb_common.activity`), publish at the executor run
+  boundary + `acb_llm._emit_usage`, `/observability` gateway API (recent / SSE
+  stream / active) + a new `/observability` Control Plane page. 7 activity-bus
+  unit tests; full unit suite 801 green.
+- 2026-07-09 — Phase 6 shipped. Universal app coverage (email/tasks + any future
+  app via `_infer_app_source`), live per-call cost pricing + daily Redis rollup
+  (`/observability/cost`), agent roster (`/observability/roster`), and a redesigned
+  3-view `/observability` page (8-bit office · live feed · cost) with per-agent
+  run/error drill-down. +9 tests (807 total); `next build` + `tsc` + eslint clean.
+  Deferred: durable Postgres cost table (Redis rollup is ~45-day, non-durable
+  across a Redis flush); sprite art polish.
+- 2026-07-09 — Phase 6.1 (review + fixes). Traced the full agent→model path:
+  chat-agent completions + cost were bypassing instrumentation via v1_compat, and
+  the orchestrator wasn't shown as an agent. Instrumented v1_compat (stream +
+  non-stream) + copilot_chat lifecycle + roster orchestrator/sub-agent inclusion.
+  +4 tests incl. an end-to-end v1_compat drive (811 total green).

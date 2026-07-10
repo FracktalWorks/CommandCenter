@@ -32,7 +32,7 @@ import {
 import type { ToolEvent } from "@/components/MarkdownMessage";
 import {
   saveDraftText, sendDraft, deleteRule, listRules, updateRule,
-  fetchFullBody, updateEmail as patchEmail, getEmail, listThread,
+  fetchFullBody, updateEmail as patchEmail, updateEmailLabels, getEmail, listThread,
   deleteLearnedPattern, deleteRulePattern,
   type FullBodyResponse,
 } from "@/app/email/lib/api";
@@ -166,7 +166,7 @@ function renderCard(
   }
   if (RULE_TOOLS.has(e.name)) return <RuleResultCard event={e} accountId={accountId} />;
   if (e.name === SETTINGS_TOOL) return <SettingsUpdatedCard event={e} />;
-  if (LIST_TOOLS.has(e.name)) return <EmailListCard event={e} />;
+  // LIST_TOOLS are merged into ONE card by the caller (see EmailToolCards loop).
   if (e.name === "apply_labels") return <LabelUpdateCard event={e} />;
   if (e.name === "manage_inbox") return <ManageInboxCard event={e} />;
   return <ActionResultCard event={e} />;
@@ -324,6 +324,9 @@ export default function EmailToolCards({
 
   const items: React.ReactNode[] = [];
   let readRun: ToolEvent[] = [];
+  // The email-list card is rendered ONCE (merging every list-tool result); this
+  // guards against pushing a second card for the next list tool in the run.
+  let listPushed = false;
   const flushReads = () => {
     if (readRun.length > 0) {
       const run = readRun;
@@ -342,6 +345,24 @@ export default function EmailToolCards({
     // Drop the search/list lookup card when a thread is shown.
     if (hasThread && LIST_TOOLS.has(e.name)) continue;
     flushReads();
+    // Merge ALL list-tool results into ONE interactive card at the position of
+    // the first list event; the rest are folded in (not rendered separately).
+    if (LIST_TOOLS.has(e.name)) {
+      if (listPushed) continue;
+      const listEvents = all.filter(
+        (x) => x.status === "done" && LIST_TOOLS.has(x.name),
+      );
+      items.push(
+        <DismissableCard
+          key={`emaillist-${e.id}`}
+          onDismiss={() => listEvents.forEach((le) => dismissToolCard(le.id))}
+        >
+          <EmailListCard events={listEvents} />
+        </DismissableCard>,
+      );
+      listPushed = true;
+      continue;
+    }
     if (e.name === READ_THREAD_TOOL) {
       items.push(<ThreadCard key={e.id} event={e} accountId={accountId} />);
       continue;
@@ -729,7 +750,16 @@ function SettingsUpdatedCard({ event: e }: { event: ToolEvent }) {
 
 // ── Email list card ───────────────────────────────────────────────────────────
 
-interface ParsedRow { id: string; sender: string; subject: string; date?: string }
+interface ParsedRow {
+  id: string;
+  sender: string;
+  subject: string;
+  date?: string;
+  /** Which list tool(s) surfaced this row — shown as chips when several tools
+   *  are merged into one card (e.g. a mail that's both "Important" and
+   *  "Needs reply"). */
+  prov?: string[];
+}
 
 /** Compact "Jun 28, 3:42 PM" for ordering messages within a thread. */
 function threadDate(iso: string): string {
@@ -783,19 +813,68 @@ const LIST_META: Record<string, { icon: React.ElementType; label: string }> = {
   find_needs_reply: { icon: Reply, label: "Needs a reply" },
 };
 
+/** Short per-tool chip shown on a row when several list tools are merged into
+ *  one card, so you can tell WHY each mail is here (important vs needs-reply…). */
+const LIST_PROV: Record<string, string> = {
+  get_important_emails: "Important",
+  find_needs_reply: "Needs reply",
+  find_urgent: "Urgent",
+  query_inbox: "Inbox",
+  search_emails: "Search",
+};
+
+/** Quick-categorize options offered per row (the rule-engine categories). */
+const QUICK_CATEGORIES = [
+  "Newsletter", "Marketing", "Receipt", "Calendar", "Notification",
+  "Cold Email", "FYI",
+];
+
+/** Merge several list-tool results into ONE deduped row set (by id), collecting
+ *  each row's provenance (which tools surfaced it). A mail returned by both
+ *  get_important_emails and find_needs_reply becomes one row with both chips —
+ *  instead of two detached cards showing the same message twice. */
+function mergeListRows(events: ToolEvent[]): ParsedRow[] {
+  const byId = new Map<string, ParsedRow>();
+  for (const e of events) {
+    const chip = LIST_PROV[e.name];
+    for (const r of parseEmailRows(e.result || "")) {
+      const existing = byId.get(r.id);
+      if (existing) {
+        if (chip && !existing.prov?.includes(chip)) {
+          existing.prov = [...(existing.prov ?? []), chip];
+        }
+      } else {
+        byId.set(r.id, { ...r, prov: chip ? [chip] : [] });
+      }
+    }
+  }
+  return [...byId.values()];
+}
+
 /** A row's optimistic triage state (lifted to the card so bulk + per-row share). */
 type RowStatus = "idle" | "busy" | "archived" | "read";
 
 /** Email results — each row expands its body inline (lazy), can be
  *  Archived / Marked-read in place (optimistic, with bulk "all" shortcuts), and
  *  has an "Open in inbox" jump. Mirrors inbox-zero's inline list. */
-function EmailListCard({ event: e }: { event: ToolEvent }) {
+function EmailListCard({ events }: { events: ToolEvent[] }) {
   const [expanded, setExpanded] = useState(false);
   const [statuses, setStatuses] = useState<Record<string, RowStatus>>({});
-  const rows = parseEmailRows(e.result || "");
+  // Merge every list-tool result into one deduped set so "important + needs
+  // reply" is a single integrated list, not two detached cards over the same mail.
+  const rows = mergeListRows(events);
   // No parseable rows (e.g. "Nothing needs a reply") → generic summary card.
-  if (rows.length === 0) return <ActionResultCard event={e} />;
-  const meta = LIST_META[e.name] ?? { icon: Mail, label: "Emails" };
+  if (rows.length === 0) return <ActionResultCard event={events[0]} />;
+  // One tool keeps its specific label; several merged tools get a combined
+  // heading and each row shows provenance chips (why it's listed).
+  const names = [...new Set(events.map((e) => e.name))];
+  const multi = names.length > 1;
+  const meta = !multi
+    ? LIST_META[names[0]] ?? { icon: Mail, label: "Emails" }
+    : names.some((n) =>
+          n === "get_important_emails" || n === "find_needs_reply" || n === "find_urgent")
+      ? { icon: Clock, label: "High-priority emails" }
+      : { icon: Mail, label: "Emails" };
   const Icon = meta.icon;
   const shown = expanded ? rows : rows.slice(0, 5);
 
@@ -859,6 +938,7 @@ function EmailListCard({ event: e }: { event: ToolEvent }) {
           <EmailRow
             key={r.id}
             row={r}
+            showProv={multi}
             status={statuses[r.id] ?? "idle"}
             onArchive={() => archive(r.id)}
             onMarkRead={() => markRead(r.id)}
@@ -887,12 +967,15 @@ function EmailRow({
   onArchive: extArchive,
   onMarkRead: extMarkRead,
   defaultOpen = false,
+  showProv = false,
 }: {
   row: ParsedRow;
   status?: RowStatus;
   onArchive?: () => void;
   onMarkRead?: () => void;
   defaultOpen?: boolean;
+  /** Show the per-row provenance chips (only meaningful in a merged card). */
+  showProv?: boolean;
 }) {
   const openEmail = useOpenEmail();
   const [open, setOpen] = useState(defaultOpen);
@@ -900,6 +983,23 @@ function EmailRow({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [localStatus, setLocalStatus] = useState<RowStatus>("idle");
+  // Per-row quick-categorize (applies a label to the message via the same
+  // PATCH the inbox uses; the inbox picks the change up on its next poll).
+  const [catOpen, setCatOpen] = useState(false);
+  const [catBusy, setCatBusy] = useState(false);
+  const [labeled, setLabeled] = useState<string | null>(null);
+  const categorize = async (cat: string) => {
+    setCatOpen(false);
+    setCatBusy(true);
+    try {
+      await updateEmailLabels(row.id, [cat], []);
+      setLabeled(cat);
+    } catch {
+      /* leave unlabeled — the user can retry */
+    } finally {
+      setCatBusy(false);
+    }
+  };
 
   const status = extStatus ?? localStatus;
   const archive =
@@ -966,11 +1066,27 @@ function EmailRow({
             >
               {row.subject}
             </span>
-            <span className="block text-[10px] text-muted-foreground truncate">
-              {row.date && (
-                <span className="text-foreground/70">{row.date} · </span>
+            <span className="flex items-center gap-1 text-[10px] text-muted-foreground min-w-0">
+              <span className="truncate">
+                {row.date && (
+                  <span className="text-foreground/70">{row.date} · </span>
+                )}
+                {row.sender}
+              </span>
+              {showProv &&
+                row.prov?.map((p) => (
+                  <span
+                    key={p}
+                    className="flex-shrink-0 px-1 py-px rounded-full bg-primary/10 text-primary text-[9px] leading-none"
+                  >
+                    {p}
+                  </span>
+                ))}
+              {labeled && (
+                <span className="flex-shrink-0 px-1 py-px rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[9px] leading-none">
+                  {labeled}
+                </span>
               )}
-              {row.sender}
             </span>
           </span>
         </button>
@@ -983,6 +1099,21 @@ function EmailRow({
             <Loader2 size={12} className="animate-spin text-muted-foreground mx-1" />
           ) : (
             <>
+              <button
+                onClick={() => setCatOpen((v) => !v)}
+                title="Categorize"
+                aria-label="Categorize"
+                aria-expanded={catOpen}
+                className={`p-1 rounded hover:text-foreground hover:bg-secondary ${
+                  catOpen ? "text-primary" : "text-muted-foreground"
+                }`}
+              >
+                {catBusy ? (
+                  <Loader2 size={11} className="animate-spin" />
+                ) : (
+                  <Tag size={11} />
+                )}
+              </button>
               <button
                 onClick={markRead}
                 title="Mark as read"
@@ -1011,6 +1142,20 @@ function EmailRow({
           )}
         </div>
       </div>
+      {catOpen && (
+        <div className="px-2 pb-2 pt-1 flex flex-wrap items-center gap-1 border-t border-border/50">
+          <span className="text-[10px] text-muted-foreground mr-0.5">Label as:</span>
+          {QUICK_CATEGORIES.map((c) => (
+            <button
+              key={c}
+              onClick={() => categorize(c)}
+              className="px-1.5 py-0.5 rounded-full border border-border text-[10px] text-foreground hover:bg-secondary"
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+      )}
       {open && (
         <div className="px-2 pb-2 pt-1.5 border-t border-border/50">
           {loading ? (

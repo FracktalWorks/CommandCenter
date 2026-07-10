@@ -772,14 +772,19 @@ async def rule_feedback(
         else:
             ck = _conv_key(req.expected)
             if ck:
-                # Conversation status → set it directly on the thread.
+                # Conversation status → set it directly on the thread. Conversation
+                # rules never get learned patterns, so with no resolvable thread
+                # there's nothing to persist — only report "learned" when the
+                # status correction actually landed (otherwise the UI would show a
+                # false "Learned — will now match …" toast).
                 if thread_id:
                     from gateway.routes.email.automation.replyzero import (  # noqa: PLC0415
                         apply_thread_status_correction,
                     )
                     status_correction = await apply_thread_status_correction(
                         req.account_id, thread_id, ck)
-                learned.append({"rule_id": req.expected, "status_set": ck})
+                    if status_correction and status_correction.get("ok"):
+                        learned.append({"rule_id": req.expected, "status_set": ck})
             elif signals:
                 await _teach(req.expected, False)
                 learned.append({"rule_id": req.expected, "exclude": False})
@@ -791,7 +796,7 @@ async def rule_feedback(
                     learned.append({"rule_id": rid, "exclude": True})
 
         await db.commit()
-        created = bool(learned or status_correction)
+        created = bool(learned or (status_correction and status_correction.get("ok")))
         return {"created": created, "learned": learned, "sender": sender,
                 "subject_keyword": subject_kw or None,
                 "signals": [t for t, _ in signals],

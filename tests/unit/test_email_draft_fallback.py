@@ -73,7 +73,9 @@ async def test_draft_runs_on_the_draft_model(monkeypatch) -> None:
     assert "Thanks" in body
 
 
-async def test_draft_appends_signature(monkeypatch) -> None:
+async def test_draft_does_not_append_signature(monkeypatch) -> None:
+    # The signature is a SEND-time concern now (signature.build_signed_bodies),
+    # not baked into the drafted body — so the drafter returns the reply only.
     async def fake_acwf(*, model, messages, **kw):
         return _resp("Hi Alice,\n\nHappy to help."), model
 
@@ -82,7 +84,41 @@ async def test_draft_appends_signature(monkeypatch) -> None:
         _EMAIL, about="", signature="— Vijay", model="tier-powerful",
     )
     assert "Happy to help" in body
-    assert body.strip().endswith("— Vijay")
+    assert "— Vijay" not in body
+
+
+def test_build_signed_bodies_html_signature() -> None:
+    from gateway.routes.email.signature import build_signed_bodies
+
+    text, html = build_signed_bodies(
+        '<b>Vijay</b> · <a href="https://fracktal.in">fracktal.in</a>',
+        "Thanks — sending pricing now.")
+    # HTML part: body rendered to HTML + the raw signature HTML appended.
+    assert "Thanks — sending pricing now." in html
+    assert '<a href="https://fracktal.in">fracktal.in</a>' in html
+    # Text fallback: tags stripped from the signature.
+    assert "Vijay · fracktal.in" in text
+    assert "<b>" not in text
+
+
+def test_build_signed_bodies_plain_signature_and_dedup() -> None:
+    from gateway.routes.email.signature import build_signed_bodies
+
+    # A plain-text signature is escaped into the HTML part and appended to text.
+    text, html = build_signed_bodies("— Vijay", "See attached.")
+    assert text.strip().endswith("— Vijay")
+    assert "— Vijay" in html
+    # Idempotent: a body that already ends with the signature isn't doubled.
+    text2, _ = build_signed_bodies("— Vijay", "See attached.\n\n— Vijay")
+    assert text2.count("— Vijay") == 1
+
+
+def test_build_signed_bodies_no_signature_is_noop() -> None:
+    from gateway.routes.email.signature import build_signed_bodies
+
+    text, html = build_signed_bodies("", "Body only.")
+    assert text == "Body only."
+    assert html is None  # stays plain-text-only when no signature is set
 
 
 async def test_no_draft_propagates_without_signature(monkeypatch) -> None:

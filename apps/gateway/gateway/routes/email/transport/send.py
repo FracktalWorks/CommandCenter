@@ -156,11 +156,22 @@ async def send_email(
         if artifact_atts:
             attachments = (attachments or []) + artifact_atts
 
+        # Append the account's HTML signature once, here at the single send
+        # choke point (with a plain-text fallback), so every reply / new message
+        # carries it. The drafter no longer bakes it into the body.
+        from gateway.routes.email.signature import build_signed_bodies  # noqa: PLC0415
+        sig_row = (await db.execute(text(
+            "SELECT signature FROM email_assistant_settings WHERE account_id = :aid"
+        ), {"aid": req.account_id})).fetchone()
+        send_text, send_html = build_signed_bodies(
+            (sig_row.signature if sig_row else "") or "",
+            req.body_text, req.body_html)
+
         msg_id = await provider.send_message(
             to=req.to,
             subject=req.subject,
-            body_text=req.body_text,
-            body_html=req.body_html,
+            body_text=send_text,
+            body_html=send_html,
             cc=req.cc,
             bcc=req.bcc,
             reply_to_message_id=req.reply_to_message_id,

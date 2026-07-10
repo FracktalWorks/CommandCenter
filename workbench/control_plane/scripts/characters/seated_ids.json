@@ -1,0 +1,11 @@
+{
+  "orchestrator": "e73706a1-afe3-48c2-bd1a-6aa8df7da86f",
+  "apis-config": "4e72914e-21eb-422c-8d7a-7070a3e5c47e",
+  "sales": "8e60fd43-0a67-4565-87ee-1630fb599da6",
+  "task-manager": "11619a50-037f-4579-a825-a41546d0db0e",
+  "email-assistant": "13c69bb6-34a0-474b-9b90-fc1e1b4430d3",
+  "reconciler": "5e923c4b-6cdd-4af8-81dd-e1f54e4a176e",
+  "delivery": "364b2ebd-1c21-412a-bcbb-b8edf1f209a2",
+  "billing": "d28984f3-0eaf-4934-95a7-08584965eced",
+  "strategy": "2285b75f-fb93-4e1a-8783-8956895ee40c"
+}

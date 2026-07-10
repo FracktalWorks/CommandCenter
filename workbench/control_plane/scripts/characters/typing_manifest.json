@@ -1,0 +1,11 @@
+{
+  "apis-config": 9,
+  "sales": 9,
+  "orchestrator": 9,
+  "email-assistant": 9,
+  "reconciler": 9,
+  "task-manager": 9,
+  "billing": 9,
+  "strategy": 9,
+  "delivery": 9
+}

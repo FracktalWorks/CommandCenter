@@ -24,13 +24,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  Bot, Building2, Coins, Cpu, History as HistoryIcon, Radio, Server, Sparkles, Users,
+  Bot, Building2, Coins, Cpu, History as HistoryIcon, Radio, Server, Sparkles,
 } from "lucide-react";
 
 import { AvatarStudio } from "./avatar-studio";
+import { TopDownOffice, TOPDOWN_STYLE } from "./office-topdown";
 import { PIXEL_ART_STYLE } from "./pixel";
 import {
-  AgentScene, type AvatarConfig, deriveAvatar, SCENE_STYLE, type SceneState, WarRoomScene,
+  type AvatarConfig, SCENE_STYLE,
 } from "./scene";
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -211,70 +212,8 @@ const PIXEL_STYLE = `
 `;
 
 // ───────────────────────────────────────────────────────────────────────────
-// Office view
+// Office view — top-down RPG room (office-topdown.tsx) + model-server rack
 // ───────────────────────────────────────────────────────────────────────────
-
-function Desk({
-  agent,
-  hot,
-  onOpen,
-}: {
-  agent: AgentRow;
-  hot: boolean;
-  onOpen: (name: string) => void;
-}) {
-  const working = agent.status === "working" || hot;
-  const sceneState: SceneState =
-    agent.status === "error" ? "error" : working ? "working" : "idle";
-  // Apply the saved avatar override (Avatar Studio) if any. Precedence:
-  //   custom Pixel Lab sprite  >  styled procedural look  >  default role sprite.
-  // A non-empty `config` means the operator styled a procedural character, so we
-  // force procedural (sprite=null) unless a custom sprite is also pinned.
-  const av = agent.avatar;
-  const hasConfig = Boolean(av?.config && Object.keys(av.config).length > 0);
-  const sceneConfig = hasConfig ? deriveAvatar(agent.name, av!.config!) : undefined;
-  const spriteProp: string | null | undefined = av?.sprite
-    ? av.sprite
-    : hasConfig
-      ? null
-      : undefined;
-  return (
-    <button
-      onClick={() => onOpen(agent.name)}
-      className={`obs-desk group text-left rounded-xl border p-1.5 pb-2 flex flex-col items-center gap-1.5 w-full overflow-hidden ${
-        working
-          ? "border-amber-500/40 bg-amber-500/5 shadow-[0_0_0_1px_rgba(245,158,11,0.15)]"
-          : "border-border bg-card/60 hover:border-border"
-      }`}
-      title={agent.description || agent.name}
-    >
-      {/* Roomed, layered, configurable agent scene (working / sleeping / error) */}
-      <div className="w-full">
-        <AgentScene name={agent.name} state={sceneState} config={sceneConfig} sprite={spriteProp} />
-      </div>
-
-      <div className="obs-pixel text-[11px] font-semibold text-foreground truncate max-w-full">
-        {agent.name}
-      </div>
-      <div className="flex items-center gap-1">
-        <span
-          className={`obs-pixel text-[9px] uppercase px-1.5 py-0.5 rounded border ${
-            working
-              ? "bg-amber-500/15 text-amber-500 border-amber-500/30"
-              : "bg-secondary/50 text-muted-foreground border-border"
-          }`}
-        >
-          {working ? "working" : "sleeping"}
-        </span>
-        {agent.source && working && (
-          <span className={`obs-pixel text-[9px] px-1 py-0.5 rounded border ${sourceClass(agent.source)}`}>
-            {agent.source}
-          </span>
-        )}
-      </div>
-    </button>
-  );
-}
 
 function ServerRack({ blades }: { blades: ModelBlade[] }) {
   return (
@@ -310,35 +249,6 @@ function ServerRack({ blades }: { blades: ModelBlade[] }) {
   );
 }
 
-// When ≥2 agents are working at once (multi-agent orchestration), pull them into
-// a shared "war room" card at a conference table — collaboration made visible.
-function ConferenceCard({ names, onOpen }: { names: string[]; onOpen: (name: string) => void }) {
-  return (
-    <div className="mb-4 rounded-2xl border border-amber-500/30 bg-amber-500/[0.06] p-3">
-      <div className="obs-pixel text-[11px] uppercase tracking-wide text-amber-500 mb-2 flex items-center gap-1.5">
-        <Users size={13} className="obs-led" />
-        War room · {names.length} agents collaborating
-      </div>
-      <div className="flex flex-col sm:flex-row items-center gap-3">
-        <div className="w-full sm:w-80 shrink-0">
-          <WarRoomScene names={names} />
-        </div>
-        <div className="flex flex-wrap gap-1.5 min-w-0">
-          {names.map((n) => (
-            <button
-              key={n}
-              onClick={() => onOpen(n)}
-              className="obs-pixel text-[11px] px-2 py-1 rounded-lg border border-border bg-card/60 text-foreground hover:border-amber-500/40 transition-colors"
-            >
-              {n}
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function OfficeView({
   roster,
   hotAgents,
@@ -352,32 +262,16 @@ function OfficeView({
   todayCost: number;
   onOpen: (name: string) => void;
 }) {
-  const workingNames = roster
-    .filter((a) => a.status === "working" || hotAgents.has(a.name))
-    .map((a) => a.name);
-  const workingCount = workingNames.length;
   return (
     <div className="flex flex-col lg:flex-row gap-4 h-full min-h-0">
-      <div className="obs-room flex-1 min-w-0 overflow-y-auto rounded-2xl border border-border bg-background/40 p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="obs-pixel text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
-            <Building2 size={13} /> The Office · {workingCount}/{roster.length} at work
-          </div>
-          <div className="obs-pixel text-[11px] text-emerald-500 flex items-center gap-1"><Coins size={12} /> Today {fmtCost(todayCost)}</div>
-        </div>
-        {workingCount >= 2 && <ConferenceCard names={workingNames} onOpen={onOpen} />}
-        {roster.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48 text-center gap-2">
-            <Building2 size={30} className="text-muted-foreground/50" />
-            <p className="obs-pixel text-sm text-muted-foreground">No agents registered yet.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-            {roster.map((a) => (
-              <Desk key={a.name} agent={a} hot={hotAgents.has(a.name)} onOpen={onOpen} />
-            ))}
-          </div>
-        )}
+      <div className="flex-1 min-w-0">
+        <TopDownOffice
+          roster={roster}
+          hotAgents={hotAgents}
+          todayCost={todayCost}
+          fmtCost={fmtCost}
+          onOpen={onOpen}
+        />
       </div>
       <div className="lg:w-72 shrink-0">
         <ServerRack blades={blades} />
@@ -1014,7 +908,7 @@ export default function ObservabilityPage() {
 
   return (
     <div className="flex flex-col h-full max-h-full">
-      <style>{PIXEL_STYLE + PIXEL_ART_STYLE + SCENE_STYLE}</style>
+      <style>{PIXEL_STYLE + PIXEL_ART_STYLE + SCENE_STYLE + TOPDOWN_STYLE}</style>
 
       {/* Header */}
       <header className="flex items-center justify-between gap-3 px-5 py-3 border-b border-border flex-wrap">

@@ -236,8 +236,8 @@ function AvatarEditor({
     });
 
   // What the preview shows (mirrors the office precedence): a pinned custom
-  // sprite wins; else if the operator has styled a look, show the procedural
-  // character so edits are visible; else the default role sprite.
+  // sprite wins; else if the operator styled a look, the procedural character
+  // (so edits show); else the default role sprite.
   const previewSprite: string | null | undefined = sprite ? sprite : touched ? null : undefined;
   const usingSprite = Boolean(sprite);
 
@@ -349,7 +349,7 @@ function AvatarEditor({
             ? "Showing a pinned Pixel Lab sprite. Clear it to fall back to the styled character."
             : touched
               ? "Styled character (procedural). Generate a sprite for higher-fidelity art."
-              : "Default role sprite. Edit the look for a styled character, or generate a custom one."}
+              : "Default role sprite. Edit the look, or generate a custom one."}
         </p>
       </div>
 

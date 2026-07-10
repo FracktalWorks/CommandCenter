@@ -346,6 +346,39 @@ The office now composes each agent as a **layered scene inside a themed room**
 - Verified via headless render (Playwright/Chromium) of the composed scenes;
   `next build` + tsc + eslint clean.
 
+### Phase 6.6 — office polish (animations, war room, per-agent cost, Lucide)
+- Richer animation: head bobs/tilts while typing (grouped, recursive renderer);
+  sleeping slumps + slow-breathes with a floating Zzz; hands alternate faster.
+- `WarRoomScene` — multi-agent collaboration is now a proper conference ROOM
+  (walls, floor, presentation screen of shared work, table) with the working
+  agents seated around it + chatter, replacing the bare table.
+- Per-agent cost: `cost_summary` returns `by_agent`; the agent drawer shows that
+  agent's spend (window + calls). (Per-agent attribution is exact only where the
+  X-CC-Agent header is set — orchestrator + email-assistant today.)
+- Live feed / header / tabs / office / server-rack / empty states use Lucide
+  icons instead of emoji, consistent with the app theme.
+
+### Observability plumbing — landscape review (Phase 6.7 recommendation)
+Where our bespoke layer (activity bus + `agent_run` + cost rollup + the office
+UI) is a **live operator** surface no off-the-shelf tool provides, DEEP tracing
+(nested spans: run → tool → LLM call, token/cost per span, replay, evals) is
+where standard tools win. Key finding: **Langfuse is already provisioned in
+`infra/docker-compose.yml` (with `.env` keys) but WIRED TO NOTHING**, and the
+LiteLLM OTel callback is gated off (`OTEL_EXPORTER_OTLP_ENDPOINT` unset). Highest-
+leverage, low-effort wins (not yet done):
+1. **Wire the dormant Langfuse** — LiteLLM has a native `langfuse` callback; set
+   `litellm.callbacks=["langfuse"]` gated on `LANGFUSE_*` keys (mirror
+   `_init_telemetry`). Every model call → a nested trace, free, with token/cost
+   analytics + eval hooks. Complements, doesn't replace, the live bus.
+2. **OTel GenAI semantic conventions** as the wire format (spans with `gen_ai.*`
+   attributes) → backend-agnostic; point the already-present OTel callback at a
+   collector/Langfuse OTLP endpoint.
+3. **Correlate** our `run_id` ↔ OTel/Langfuse `trace_id` so the office/drawer can
+   deep-link "open trace in Langfuse". Emit spans at agent/tool boundaries, not
+   just model calls.
+Split of responsibility: bespoke = live glanceability; Langfuse/OTel = deep
+post-hoc tracing + evals + analytics.
+
 ### What v1_compat IS (not legacy)
 `routes/v1_compat.py` is the gateway's **OpenAI-compatible LLM egress** — the
 single `/v1/chat/completions` every agent runtime (MAF `OpenAIChatCompletionClient`,
